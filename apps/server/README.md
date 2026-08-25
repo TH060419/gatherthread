@@ -16,7 +16,7 @@ The default bind address is `127.0.0.1`. Set `HOST` explicitly to expose the ser
 
 `POST /v1/bootstrap` creates the first user and device only while the database has no users. It returns the only copy of an opaque bearer token; SQLite stores its SHA-256 digest. An authenticated client may provision another identity with `POST /v1/users` or another token for the same user with `POST /v1/devices`. `DELETE /v1/devices/:device_id` revokes that token and its runtimes.
 
-All other endpoints require `Authorization: Bearer <token>`. WebSocket clients should also send that header. Browser clients that cannot set upgrade headers may use `?access_token=...`; URLs must therefore be kept out of logs.
+All other endpoints require `Authorization: Bearer <token>`. Native WebSocket clients may send that header. Browser clients should call `POST /v1/realtime-ticket` and use the returned 30-second, one-use, session-scoped ticket. The legacy `?access_token=...` path remains for local compatibility but leaks into URLs and should not be used in browser deployments.
 
 ## HTTP contract
 
@@ -29,9 +29,11 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 | `POST` | `/v1/users` | Provision an identity and initial device token |
 | `POST` | `/v1/devices` | Provision another token for the authenticated user |
 | `DELETE` | `/v1/devices/:device_id` | Revoke an owned device token and runtimes |
+| `GET` | `/v1/me` | Return the authenticated user and device identity |
 | `POST` | `/v1/sessions` | Create a solo or multi session; requires `idempotency_key` |
 | `GET` | `/v1/sessions` | List only sessions visible to the token user |
 | `GET/PATCH` | `/v1/sessions/:session_id` | Read or owner-update mode, state, and title |
+| `GET` | `/v1/sessions/:session_id/members` | Visible members and their most relevant active runtime |
 | `PUT/DELETE` | `/v1/sessions/:session_id/members/:user_id` | Owner-managed participant/viewer membership |
 | `POST` | `/v1/sessions/:session_id/events` | Append a validated, redacted canonical event |
 | `GET` | `/v1/sessions/:session_id/events?after_sequence=N&limit=100` | Durable replay page and cursor |
@@ -39,8 +41,9 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 | `POST` | `/v1/runtimes/:runtime_id/heartbeat` | Mark an owned runtime online |
 | `POST` | `/v1/sessions/:session_id/agent-requests/:event_id/claim` | Atomically claim the initiating user's request |
 | `POST` | `/v1/sessions/:session_id/agent-requests/:event_id/complete` | Append a provenance-labelled response and complete its claim |
+| `POST` | `/v1/realtime-ticket` | Issue a short-lived, one-use browser WebSocket ticket |
 
-The server derives actor identity from the token and always assigns event ID (unless the client supplies a stable one), sequence, and timestamp. An idempotency key is scoped to one session and one actor: the same actor receives the original event, while a collision from another actor returns `409`. `agent_response`, `tool_call`, and `tool_result` appends require an owned `runtime_id`. `human_chat` is only an event append and has no execution side effect.
+The server derives actor identity from the token and always assigns event ID (unless the client supplies a stable one), sequence, and timestamp. An idempotency key is scoped to one session and is bound to the actor, event type, visibility, reply target, payload, and runtime; only an identical retry receives the original event, while a different operation returns `409 idempotency_conflict`. `agent_response`, `tool_call`, and `tool_result` appends require an owned `runtime_id`. A runtime may hold only one active request claim. `human_chat` is only an event append and has no execution side effect.
 
 `GET /v1/sessions` returns an integration-friendly summary:
 
@@ -54,6 +57,7 @@ The server derives actor identity from the token and always assigns event ID (un
       "state": "active",
       "role": "participant",
       "current_sequence": 42,
+      "member_count": 3,
       "updated_at": "2026-08-25T12:00:00.000Z"
     }]
   }
@@ -71,6 +75,8 @@ Connect to `/v1/ws`, then send:
 ```
 
 The server sends one or more `replay` pages, then `subscribed`. Committed live writes arrive as `event`. A `cursor` frame advances across an event hidden by visibility policy. Server ping frames are emitted every 15 seconds; clients that fail the next heartbeat are terminated. Clients should use the durable HTTP replay endpoint whenever their stored cursor indicates a gap.
+
+Set `ACP_ALLOWED_ORIGINS` to a comma-separated exact Origin allowlist when the browser is hosted separately, for example `http://127.0.0.1:4173`. Cross-origin requests are denied by default.
 
 ## Security and first-release scope
 

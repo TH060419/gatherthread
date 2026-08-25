@@ -47,6 +47,11 @@ export class CollaborationService {
     return this.database.listSessions(actor.user_id);
   }
 
+  listMembers(actor: Actor, sessionId: string) {
+    this.requireMembership(actor, sessionId);
+    return this.database.listSessionMembers(sessionId);
+  }
+
   updateSession(actor: Actor, sessionId: string, input: Parameters<CollaborationDatabase["updateSession"]>[2]) {
     this.requireOwner(actor, sessionId);
     const result = this.database.updateSession(actor, sessionId, input);

@@ -48,6 +48,10 @@ class FakeApi {
   setSocketState(state) {
     this.subscriptions.at(-1).onState(state);
   }
+
+  emitCursor(cursor) {
+    this.subscriptions.at(-1).onCursor?.(cursor);
+  }
 }
 
 test("initial replay is ordered and socket subscribes after the contiguous cursor", async () => {
@@ -108,4 +112,14 @@ test("late callbacks from a previous session cannot pollute a new session", asyn
   oldSubscription.onEvent(event(2, "s1"));
   assert.equal(sync.snapshot().sessionId, "s2");
   assert.deepEqual(sync.snapshot().events.map((item) => item.sessionId), ["s2"]);
+});
+
+test("authoritative cursors can advance across owner-only events hidden from a viewer", async () => {
+  const api = new FakeApi([event(1), event(3)]);
+  const sync = new SessionSync(api);
+  await sync.connect("s1");
+  assert.equal(sync.snapshot().cursor, 3);
+  assert.deepEqual(sync.snapshot().events.map((item) => item.sequence), [1, 3]);
+  api.emitCursor(4);
+  assert.equal(sync.snapshot().cursor, 4);
 });

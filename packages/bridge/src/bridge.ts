@@ -84,10 +84,7 @@ export class LocalBridge {
     const state = await this.#cursorStore.load();
     const afterSequence = state.server[sessionId] ?? 0;
     const page = await this.#api.readEvents(sessionId, afterSequence, limit);
-    const nextSequence = page.events.reduce(
-      (highest, item) => Math.max(highest, item.sequence),
-      afterSequence,
-    );
+    const nextSequence = Math.max(afterSequence, page.nextSequence);
     await this.#cursorStore.save({
       ...state,
       server: { ...state.server, [sessionId]: nextSequence },
@@ -223,7 +220,7 @@ export class LocalBridge {
       const relevant = page.events.filter((event) => event.sequence <= throughSequence);
       history.push(...relevant);
       if (relevant.length < page.events.length || !page.hasMore) break;
-      const next = relevant.at(-1)?.sequence ?? cursor;
+      const next = Math.min(page.nextSequence, throughSequence);
       if (next <= cursor) break;
       cursor = next;
     } while (cursor < throughSequence);

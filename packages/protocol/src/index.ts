@@ -153,6 +153,7 @@ export const SessionListItemSchema = z.object({
   state: z.enum(["active", "archived"]),
   role: MembershipRoleSchema,
   current_sequence: z.number().int().nonnegative(),
+  member_count: z.number().int().nonnegative().optional(),
   updated_at: z.string().datetime(),
 });
 

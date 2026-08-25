@@ -157,10 +157,17 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
     const repeated = await api<{ data: { event: { id: string; sequence: number } } }>(running.origin, "/v1/sessions/shared/events", {
       method: "POST",
       token: memberToken,
-      body: { idempotency_key: "member-chat-0001", type: "human_chat", payload: { text: "retry changed" } },
+      body: { idempotency_key: "member-chat-0001", type: "human_chat", payload: { text: "hello" } },
     });
     assert.equal(repeated.body.data.event.id, chat.body.data.event.id);
     assert.equal(repeated.body.data.event.sequence, 3);
+    const mismatchedRetry = await api<{ error: { code: string } }>(running.origin, "/v1/sessions/shared/events", {
+      method: "POST",
+      token: memberToken,
+      body: { idempotency_key: "member-chat-0001", type: "human_chat", payload: { text: "retry changed" } },
+    });
+    assert.equal(mismatchedRetry.status, 409);
+    assert.equal(mismatchedRetry.body.error.code, "idempotency_conflict");
   } finally {
     socket?.terminate();
     await running.close();
@@ -233,6 +240,97 @@ test("token auth and solo viewer ACL are enforced over HTTP", async () => {
     assert.equal(readable.body.data.events.length, 2);
     assert.equal((await api(running.origin, "/v1/sessions/solo/events")).status, 401);
   } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("browser integration exposes identity, members, CORS, and one-use scoped realtime tickets", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "acp-browser-"));
+  const browserOrigin = "http://127.0.0.1:4173";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    allowedOrigins: [browserOrigin],
+  }, 0);
+  let socket: WebSocket | undefined;
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    const token = owner.body.data.token;
+    await api(running.origin, "/v1/sessions", {
+      method: "POST",
+      token,
+      body: { session_id: "browser-room", idempotency_key: "create-browser-room", mode: "multi", title: "Browser room" },
+    });
+    await api(running.origin, "/v1/runtimes", {
+      method: "POST",
+      token,
+      body: {
+        runtime_id: "owner-runtime",
+        session_id: "browser-room",
+        device_id: "owner-device",
+        harness: "Codex",
+        provider: "OpenAI",
+        model: "gpt-5.6-sol",
+        local_session_id: "local-browser-room",
+        capture_fidelity: "harness_transcript",
+      },
+    });
+
+    const me = await api<{ data: { id: string; username: string; device_id: string } }>(
+      running.origin,
+      "/v1/me",
+      { token },
+    );
+    assert.deepEqual(me.body.data, { id: "owner", username: "Owner", device_id: "owner-device" });
+
+    const members = await api<{ data: { members: Array<{ user_id: string; display_name: string; role: string; runtime: { model: string } | null }> } }>(
+      running.origin,
+      "/v1/sessions/browser-room/members",
+      { token },
+    );
+    assert.equal(members.body.data.members[0]?.display_name, "Owner");
+    assert.equal(members.body.data.members[0]?.runtime?.model, "gpt-5.6-sol");
+
+    const preflight = await fetch(`${running.origin}/v1/me`, {
+      method: "OPTIONS",
+      headers: { origin: browserOrigin, "access-control-request-headers": "authorization" },
+    });
+    assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get("access-control-allow-origin"), browserOrigin);
+
+    const ticketResponse = await api<{ data: { ticket: string; websocket_url: string } }>(
+      running.origin,
+      "/v1/realtime-ticket",
+      { method: "POST", token, body: { session_id: "browser-room" } },
+    );
+    const ticket = ticketResponse.body.data.ticket;
+    socket = new WebSocket(`${running.origin.replace("http", "ws")}${ticketResponse.body.data.websocket_url}?ticket=${encodeURIComponent(ticket)}`);
+    await new Promise<void>((resolve, reject) => {
+      socket?.once("open", resolve);
+      socket?.once("error", reject);
+    });
+    const subscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
+    socket.send(JSON.stringify({ type: "subscribe", session_id: "browser-room", after_sequence: 0 }));
+    assert.equal((await subscribed).session_id, "browser-room");
+    socket.close();
+    socket = undefined;
+
+    const reused = new WebSocket(`${running.origin.replace("http", "ws")}/v1/ws?ticket=${encodeURIComponent(ticket)}`);
+    reused.on("error", () => {});
+    const status = await new Promise<number>((resolve) => {
+      reused.once("unexpected-response", (_request, response) => {
+        const statusCode = response.statusCode ?? 0;
+        response.resume();
+        resolve(statusCode);
+      });
+      reused.once("open", () => resolve(101));
+    });
+    assert.equal(status, 401);
+  } finally {
+    socket?.terminate();
     await running.close();
     rmSync(directory, { recursive: true, force: true });
   }

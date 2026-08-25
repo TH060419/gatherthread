@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { randomBytes } from "node:crypto";
 import type { AddressInfo } from "node:net";
 import {
   AppendEventInputSchema,
@@ -46,9 +47,19 @@ interface SocketState {
   cursor: number;
 }
 
+interface SocketAuth {
+  actor: Actor;
+  allowedSessionId: string | null;
+}
+
+interface RealtimeTicket extends SocketAuth {
+  expiresAt: number;
+}
+
 export interface ServerOptions {
   databasePath: string;
   heartbeatIntervalMs?: number;
+  allowedOrigins?: string[];
 }
 
 export interface RunningCollaborationServer {
@@ -143,12 +154,27 @@ export async function startCollaborationServer(
   const database = new CollaborationDatabase(options.databasePath);
   const service = new CollaborationService(database);
   const sockets = new Map<WebSocket, SocketState>();
+  const realtimeTickets = new Map<string, RealtimeTicket>();
   const wsServer = new WebSocketServer({ noServer: true, maxPayload: MAX_BODY_BYTES });
 
   const httpServer = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       const parts = pathParts(url);
+      const requestOrigin = request.headers.origin;
+      if (requestOrigin) {
+        if (!options.allowedOrigins?.includes(requestOrigin)) {
+          throw new ApiError(403, "origin_forbidden", "The browser origin is not allowed");
+        }
+        response.setHeader("access-control-allow-origin", requestOrigin);
+        response.setHeader("access-control-allow-headers", "authorization, content-type");
+        response.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+        response.setHeader("vary", "Origin");
+      }
+      if (request.method === "OPTIONS") {
+        response.writeHead(204).end();
+        return;
+      }
 
       if (request.method === "GET" && url.pathname === "/health") {
         sendJson(response, 200, { data: { status: "ok", journal_mode: database.journalMode() } });
@@ -162,6 +188,15 @@ export async function startCollaborationServer(
       }
 
       const actor = database.authenticate(bearerToken(request, url));
+
+      if (request.method === "GET" && url.pathname === "/v1/me") {
+        sendJson(response, 200, { data: {
+          id: actor.user_id,
+          username: actor.display_name,
+          device_id: actor.device_id,
+        } });
+        return;
+      }
 
       if (request.method === "POST" && url.pathname === "/v1/users") {
         const input = CreateIdentityInputSchema.parse(await readJson(request));
@@ -192,6 +227,20 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/v1/realtime-ticket") {
+        const input = z.object({ session_id: z.string().trim().min(1).max(128) }).parse(await readJson(request));
+        service.requireMembership(actor, input.session_id);
+        const ticket = randomBytes(32).toString("base64url");
+        const expiresAt = Date.now() + 30_000;
+        realtimeTickets.set(ticket, { actor, allowedSessionId: input.session_id, expiresAt });
+        sendJson(response, 201, { data: {
+          ticket,
+          websocket_url: "/v1/ws",
+          expires_at: new Date(expiresAt).toISOString(),
+        } });
+        return;
+      }
+
       const sessionId = parts[0] === "v1" && parts[1] === "sessions" ? parts[2] : undefined;
       if (sessionId && request.method === "GET" && parts.length === 3) {
         sendJson(response, 200, { data: service.getSession(actor, sessionId) });
@@ -201,6 +250,11 @@ export async function startCollaborationServer(
       if (sessionId && request.method === "PATCH" && parts.length === 3) {
         const input = UpdateSessionInputSchema.parse(await readJson(request));
         sendJson(response, 200, { data: service.updateSession(actor, sessionId, input) });
+        return;
+      }
+
+      if (sessionId && parts[3] === "members" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: { members: service.listMembers(actor, sessionId) } });
         return;
       }
 
@@ -263,9 +317,18 @@ export async function startCollaborationServer(
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       if (url.pathname !== "/v1/ws") throw notFound("WebSocket route");
-      const actor = database.authenticate(bearerToken(request, url));
+      let auth: SocketAuth;
+      const ticketValue = url.searchParams.get("ticket");
+      if (ticketValue) {
+        const ticket = realtimeTickets.get(ticketValue);
+        realtimeTickets.delete(ticketValue);
+        if (!ticket || ticket.expiresAt < Date.now()) throw unauthorized("Realtime ticket is invalid or expired");
+        auth = { actor: ticket.actor, allowedSessionId: ticket.allowedSessionId };
+      } else {
+        auth = { actor: database.authenticate(bearerToken(request, url)), allowedSessionId: null };
+      }
       wsServer.handleUpgrade(request, socket, head, (webSocket) => {
-        wsServer.emit("connection", webSocket, request, actor);
+        wsServer.emit("connection", webSocket, request, auth);
       });
     } catch {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
@@ -273,7 +336,8 @@ export async function startCollaborationServer(
     }
   });
 
-  wsServer.on("connection", (socket: WebSocket, _request: IncomingMessage, actor: Actor) => {
+  wsServer.on("connection", (socket: WebSocket, _request: IncomingMessage, auth: SocketAuth) => {
+    const { actor } = auth;
     const state: SocketState = { actor, alive: true, sessionId: null, cursor: 0 };
     sockets.set(socket, state);
     socket.on("pong", () => { state.alive = true; });
@@ -283,6 +347,9 @@ export async function startCollaborationServer(
       try {
         if (isBinary) throw new ApiError(400, "invalid_message", "WebSocket messages must be JSON text");
         const message = SubscribeMessageSchema.parse(JSON.parse(data.toString()) as unknown);
+        if (auth.allowedSessionId && message.session_id !== auth.allowedSessionId) {
+          throw new ApiError(403, "ticket_scope_mismatch", "Realtime ticket is scoped to another session");
+        }
         service.requireMembership(actor, message.session_id);
         state.sessionId = message.session_id;
         state.cursor = message.after_sequence;

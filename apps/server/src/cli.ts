@@ -5,9 +5,13 @@ import { startCollaborationServer } from "./server.js";
 const databasePath = resolve(process.env.ACP_DATABASE_PATH ?? "./data/collaboration.sqlite");
 const port = Number(process.env.PORT ?? "8787");
 const host = process.env.HOST ?? "127.0.0.1";
+const allowedOrigins = (process.env.ACP_ALLOWED_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 mkdirSync(dirname(databasePath), { recursive: true });
-const running = await startCollaborationServer({ databasePath }, port, host);
+const running = await startCollaborationServer({ databasePath, allowedOrigins }, port, host);
 console.log(`Agent Cooperation server listening at ${running.origin}`);
 
 async function shutdown(): Promise<void> {

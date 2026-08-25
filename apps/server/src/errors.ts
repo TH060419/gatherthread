@@ -16,6 +16,14 @@ export function conflict(message: string): ApiError {
   return new ApiError(409, "conflict", message);
 }
 
+export function idempotencyConflict(message = "Idempotency key is already bound to another operation"): ApiError {
+  return new ApiError(409, "idempotency_conflict", message);
+}
+
+export function runtimeBusy(message = "Runtime already has an active agent request"): ApiError {
+  return new ApiError(409, "runtime_busy", message);
+}
+
 export function forbidden(message = "Insufficient session permissions"): ApiError {
   return new ApiError(403, "forbidden", message);
 }

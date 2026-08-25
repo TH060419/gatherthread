@@ -90,6 +90,7 @@ export class SessionSync {
       sessionId: this.sessionId,
       afterSequence: this.cursor,
       onEvent: (event) => this.#onSocketEvent(event, generation),
+      onCursor: (cursor) => this.#onSocketCursor(cursor, generation),
       onState: (state) => this.#onSocketState(state, generation),
     });
     if (!this.#isCurrent(generation)) {
@@ -132,10 +133,17 @@ export class SessionSync {
     }
   }
 
+  #onSocketCursor(cursor, generation) {
+    if (!this.#isCurrent(generation) || !Number.isInteger(cursor) || cursor <= this.cursor) return;
+    this.cursor = cursor;
+    this.#drainBuffer();
+  }
+
   async #recover(generation, phase) {
     this.#setPhase(phase);
     let hasMore = true;
     while (hasMore && this.#isCurrent(generation)) {
+      const cursorBeforePage = this.cursor;
       const page = normalizeReplayPage(
         await this.api.replayEvents(this.sessionId, {
           afterSequence: this.cursor,
@@ -143,15 +151,18 @@ export class SessionSync {
         }),
       );
       if (!this.#isCurrent(generation)) return;
+      let previousSequence = this.cursor;
       for (const event of page.events) {
         if (event.sequence <= this.cursor || this.eventIds.has(event.id)) continue;
-        if (event.sequence !== this.cursor + 1) {
-          throw new Error(`Replay remained discontinuous at sequence ${this.cursor + 1}.`);
+        if (event.sequence <= previousSequence) {
+          throw new Error("Replay events were not strictly ordered.");
         }
         this.#apply(event, false);
+        previousSequence = event.sequence;
       }
+      this.cursor = Math.max(this.cursor, page.nextAfterSequence);
       hasMore = page.hasMore;
-      if (hasMore && page.nextAfterSequence <= this.cursor && page.events.length === 0) {
+      if (hasMore && this.cursor <= cursorBeforePage) {
         throw new Error("Replay cursor did not advance.");
       }
     }

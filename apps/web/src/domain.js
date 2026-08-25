@@ -68,7 +68,7 @@ export function normalizeReplayPage(page) {
     events,
     headSequence: Number(page.headSequence ?? page.head_sequence ?? 0),
     nextAfterSequence: Number(
-      page.nextAfterSequence ?? page.next_after_sequence ?? events.at(-1)?.sequence ?? 0,
+      page.nextAfterSequence ?? page.next_after_sequence ?? page.cursor ?? events.at(-1)?.sequence ?? 0,
     ),
     hasMore: Boolean(page.hasMore ?? page.has_more),
   };

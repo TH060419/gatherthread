@@ -46,6 +46,22 @@ test("SQLite WAL assigns ordered sequences and replays an idempotent event", () 
       mode: "multi",
       title: "Shared work",
     });
+    const retriedCreation = f.service.createSession(f.owner, {
+      session_id: "multi-1",
+      idempotency_key: "create-multi-0001",
+      mode: "multi",
+      title: "Shared work",
+    });
+    assert.equal(retriedCreation.session.id, session.id);
+    assert.throws(
+      () => f.service.createSession(f.owner, {
+        session_id: "multi-1",
+        idempotency_key: "create-multi-0001",
+        mode: "multi",
+        title: "Changed title",
+      }),
+      (error: unknown) => error instanceof ApiError && error.code === "idempotency_conflict",
+    );
     f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "member-set-0001");
 
     const first = f.service.appendEvent(f.member, session.id, {
@@ -58,10 +74,19 @@ test("SQLite WAL assigns ordered sequences and replays an idempotent event", () 
       idempotency_key: "chat-write-0001",
       type: "human_chat",
       visibility: "session",
-      payload: { text: "different retry body" },
+      payload: { text: "hello", token: "must-not-persist", nested: "Bearer very-secret-value" },
     });
 
     assert.deepEqual(repeated, first);
+    assert.throws(
+      () => f.service.appendEvent(f.member, session.id, {
+        idempotency_key: "chat-write-0001",
+        type: "human_chat",
+        visibility: "session",
+        payload: { text: "different retry body" },
+      }),
+      (error: unknown) => error instanceof ApiError && error.code === "idempotency_conflict",
+    );
     assert.deepEqual(first.payload, {
       text: "hello",
       token: "[REDACTED]",
@@ -149,6 +174,16 @@ test("only the initiating user's runtime can claim and complete an agent request
     });
     const claim = f.service.claimAgentRequest(f.member, session.id, request.id, runtime.id);
     assert.equal(claim.status, "claimed");
+    const secondRequest = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "agent-request-0002",
+      type: "agent_request",
+      visibility: "session",
+      payload: { prompt: "do more work" },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, secondRequest.id, runtime.id),
+      (error: unknown) => error instanceof ApiError && error.code === "runtime_busy",
+    );
     const response = f.service.completeAgentRequest(
       f.member,
       session.id,

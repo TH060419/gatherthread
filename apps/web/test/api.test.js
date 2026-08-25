@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { ApiError, MockCollaborationApi } from "../src/api.js";
+import { ApiError, HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
 
 test("mock authentication derives the user from a token", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
@@ -40,4 +40,37 @@ test("created sessions retain explicit solo or multi mode", async () => {
   const detail = await api.getSession(created.id);
   assert.equal(detail.mode, "multi");
   assert.equal(detail.members[0].role, "owner");
+});
+
+test("HTTP client normalizes the production v1 envelope and canonical event shape", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const responses = [
+    { data: { id: "u1", username: "Alice", device_id: "d1" } },
+    { data: { sessions: [{ id: "s1", title: "Shared", mode: "multi", state: "active", role: "owner", current_sequence: 2, member_count: 1, updated_at: "2026-08-25T00:00:00.000Z" }] } },
+    { data: { members: [{ user_id: "u1", display_name: "Alice", role: "owner", runtime: { id: "r1", status: "online", harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }] } },
+    { data: { events: [{ id: "e2", session_id: "s1", sequence: 2, type: "agent_response", actor_user_id: "u1", created_at: "2026-08-25T00:00:01.000Z", payload: { content: "done" }, runtime_provenance: { harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }], cursor: 2, has_more: false } },
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return new Response(JSON.stringify(responses.shift()), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://relay.example" });
+    assert.equal((await api.authenticate("secret-token")).username, "Alice");
+    const sessions = await api.listSessions();
+    assert.deepEqual({ name: sessions[0].name, memberCount: sessions[0].memberCount }, { name: "Shared", memberCount: 1 });
+    assert.equal((await api.listMembers("s1"))[0].runtime.model, "gpt-5.6-sol");
+    const replay = await api.replayEvents("s1", { afterSequence: 0 });
+    assert.equal(replay.events[0].actor.username, "Alice");
+    assert.equal(replay.events[0].provenance.fidelity, "harness_transcript");
+    assert.equal(replay.next_after_sequence, 2);
+    assert.equal(requests[0].url, "https://relay.example/v1/me");
+    assert.equal(requests[0].options.headers.Authorization, "Bearer secret-token");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

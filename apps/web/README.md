@@ -1,6 +1,6 @@
 # Relayroom web client
 
-This package is a dependency-free first-release client for the collaboration protocol described in `../../docs`. It runs against an in-memory mock by default so the product flow can be reviewed before the server and shared protocol package are integrated.
+This package is a dependency-free first-release client for the collaboration protocol described in `../../docs`. It runs against an in-memory mock by default and can connect directly to the production `/v1` server.
 
 ## Run
 
@@ -10,6 +10,8 @@ npm run dev
 ```
 
 Open `http://127.0.0.1:4173` and sign in with `demo-token`.
+
+For the real server, start it with `ACP_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173/?api=http://127.0.0.1:8787`.
 
 ```bash
 npm test
@@ -29,17 +31,17 @@ The static build is written to `apps/web/dist`.
 - distinct `appendHumanChat(...)` and `appendAgentRequest(...)` methods
 - `openRealtime({ sessionId, afterSequence, onEvent, onState })`
 
-The proposed HTTP/WS endpoints are:
+The production HTTP/WS endpoints are:
 
 ```text
-GET  /api/me
-GET  /api/sessions
-POST /api/sessions
-GET  /api/sessions/:id
-GET  /api/sessions/:id/members
-GET  /api/sessions/:id/events?after_sequence=N&limit=100
-POST /api/sessions/:id/events
-POST /api/realtime-ticket
+GET  /v1/me
+GET  /v1/sessions
+POST /v1/sessions
+GET  /v1/sessions/:id
+GET  /v1/sessions/:id/members
+GET  /v1/sessions/:id/events?after_sequence=N&limit=100
+POST /v1/sessions/:id/events
+POST /v1/realtime-ticket
 WS   websocket_url?ticket=ONE_USE_SHORT_LIVED_TICKET
 ```
 
@@ -56,24 +58,14 @@ Replay pages accept either camelCase mock fields or the proposed wire fields:
 
 Every event is expected to contain a stable `id`, monotonic per-session `sequence`, `idempotencyKey`, server-derived `actor`, timestamp, visibility, optional reply target, payload, and optional runtime provenance. The UI orders exclusively by sequence.
 
-## Server integration points
+## Server integration notes
 
-Before switching `main.js` to `HttpCollaborationApi`, the server and client must agree on:
-
-1. Exact event and error schemas, including whether wire keys are snake_case.
-2. Authentication lifecycle and the one-use realtime ticket response. A long-lived bearer token must not be put in the WebSocket URL.
-3. Subscribe acknowledgement, heartbeat/control envelopes, close codes, and whether HTTP replay finishes before or races with live fan-out.
-4. Replay pagination semantics, retention-truncated cursors, and the authoritative server head.
-5. Server-calculated role/capability fields. Client-side role checks improve UX but are not a security boundary.
-6. Runtime presence/eligibility and the canonical representation of agent-request claim/completion.
-7. Provenance and fidelity field names. Reconstructed history must never be labelled as an exact provider request.
-
-`SessionSync` advances its cursor only across contiguous events. Duplicate delivery is ignored, later socket events are buffered, gaps are recovered by paginated HTTP replay, and switching sessions invalidates late callbacks from the previous generation.
+`HttpCollaborationApi` normalizes the server's snake_case `{data: ...}` envelope into the UI model. Server-calculated roles remain the security boundary. `SessionSync` ignores duplicate delivery, buffers out-of-order live events, recovers gaps by HTTP replay, accepts authoritative cursor jumps across visibility-filtered events, and invalidates callbacks from a previously selected session.
 
 ## First-release limits
 
-- The preview stores the mock token in `sessionStorage`; production credential storage requires a security decision.
+- The client stores the entered token in `sessionStorage`; hardened credential storage still requires a deployment-specific decision.
 - There is no invitation, membership editing, attachment upload, reply UI, offline outbox, search, or runtime selection yet.
-- The mock emits agent responses but does not model bridge claim/complete events or tool streams.
+- The mock emits illustrative agent responses; real responses use the local bridge claim/complete workflow.
 - Drafts survive a temporary socket loss in memory, but not a full reload.
 - The app is plain ES modules and CSS to remain independently runnable while the monorepo toolchain is still being created.

@@ -13,7 +13,7 @@ import type {
   SessionListItem,
   SessionMode,
 } from "@agent-cooperation/protocol";
-import { conflict, notFound, unauthorized } from "./errors.js";
+import { conflict, idempotencyConflict, notFound, runtimeBusy, unauthorized } from "./errors.js";
 
 export interface Actor {
   user_id: string;
@@ -44,6 +44,13 @@ export interface RuntimeRecord {
   capture_fidelity: CaptureFidelity;
   status: "online" | "offline" | "revoked";
   last_seen_at: string;
+}
+
+export interface SessionMemberRecord {
+  user_id: string;
+  display_name: string;
+  role: MembershipRole;
+  runtime: RuntimeRecord | null;
 }
 
 interface EventRow {
@@ -142,6 +149,19 @@ CREATE TABLE IF NOT EXISTS agent_request_claims (
 
 function now(): string {
   return new Date().toISOString();
+}
+
+function stableJson(value: JsonValue): string {
+  const normalize = (item: JsonValue): JsonValue => {
+    if (Array.isArray(item)) return item.map(normalize);
+    if (item !== null && typeof item === "object") {
+      return Object.fromEntries(
+        Object.keys(item).sort().map((key) => [key, normalize(item[key] as JsonValue)]),
+      );
+    }
+    return item;
+  };
+  return JSON.stringify(normalize(value));
 }
 
 function hashToken(token: string): string {
@@ -248,9 +268,27 @@ export class CollaborationDatabase {
     mode: SessionMode;
     title: string;
   }): { session: SessionRecord; event: CanonicalEvent } {
-    const sessionId = input.session_id ?? randomUUID();
+    const sessionId = input.session_id ?? `session-${createHash("sha256")
+      .update(`${actor.user_id}\0${input.idempotency_key}`)
+      .digest("hex")
+      .slice(0, 32)}`;
     const timestamp = now();
     return this.transaction(() => {
+      const creationPayload = { action: "created", mode: input.mode, title: input.title } satisfies JsonValue;
+      const existingSession = this.sqlite.prepare("SELECT id FROM sessions WHERE id = ?").get(sessionId);
+      if (existingSession) {
+        const existingEvent = this.findByIdempotencyKey(sessionId, input.idempotency_key);
+        if (!existingEvent) throw idempotencyConflict("Session ID already exists with another operation");
+        return {
+          session: this.requireSession(sessionId),
+          event: this.requireIdempotencyMatch(
+            existingEvent,
+            actor.user_id,
+            "session_state_change",
+            creationPayload,
+          ),
+        };
+      }
       this.sqlite.prepare(`
         INSERT INTO sessions(id, owner_user_id, mode, title, state, next_sequence, created_at, updated_at)
         VALUES (?, ?, ?, ?, 'active', 0, ?, ?)
@@ -263,7 +301,7 @@ export class CollaborationDatabase {
         idempotency_key: input.idempotency_key,
         type: "session_state_change",
         visibility: "session",
-        payload: { action: "created", mode: input.mode, title: input.title },
+        payload: creationPayload,
       }, null);
       return { session: this.requireSession(sessionId), event };
     });
@@ -279,12 +317,58 @@ export class CollaborationDatabase {
     return this.sqlite.prepare(`
       SELECT sessions.id, sessions.title, sessions.mode, sessions.state,
              memberships.role, sessions.next_sequence AS current_sequence,
-             sessions.updated_at
+             sessions.updated_at,
+             (SELECT COUNT(*) FROM memberships AS session_members
+              WHERE session_members.session_id = sessions.id) AS member_count
       FROM memberships
       JOIN sessions ON sessions.id = memberships.session_id
       WHERE memberships.user_id = ?
       ORDER BY sessions.updated_at DESC, sessions.id ASC
     `).all(userId) as unknown as SessionListItem[];
+  }
+
+  listSessionMembers(sessionId: string): SessionMemberRecord[] {
+    const rows = this.sqlite.prepare(`
+      SELECT memberships.user_id, users.display_name, memberships.role,
+             runtimes.id AS runtime_id, runtimes.session_id AS runtime_session_id,
+             runtimes.user_id AS runtime_user_id, runtimes.device_id,
+             runtimes.harness, runtimes.provider, runtimes.model,
+             runtimes.local_session_id, runtimes.capture_fidelity,
+             runtimes.status, runtimes.last_seen_at
+      FROM memberships
+      JOIN users ON users.id = memberships.user_id
+      LEFT JOIN runtimes ON runtimes.id = (
+        SELECT candidate.id FROM runtimes AS candidate
+        WHERE candidate.session_id = memberships.session_id
+          AND candidate.user_id = memberships.user_id
+          AND candidate.status != 'revoked'
+        ORDER BY CASE WHEN candidate.status = 'online' THEN 0 ELSE 1 END,
+                 candidate.last_seen_at DESC
+        LIMIT 1
+      )
+      WHERE memberships.session_id = ?
+      ORDER BY CASE memberships.role WHEN 'owner' THEN 0 WHEN 'participant' THEN 1 ELSE 2 END,
+               users.display_name ASC
+    `).all(sessionId) as Array<Record<string, string | null>>;
+
+    return rows.map((row) => ({
+      user_id: String(row.user_id),
+      display_name: String(row.display_name),
+      role: row.role as MembershipRole,
+      runtime: row.runtime_id === null ? null : {
+        id: String(row.runtime_id),
+        session_id: String(row.runtime_session_id),
+        user_id: String(row.runtime_user_id),
+        device_id: String(row.device_id),
+        harness: String(row.harness),
+        provider: String(row.provider),
+        model: String(row.model),
+        local_session_id: String(row.local_session_id),
+        capture_fidelity: row.capture_fidelity as CaptureFidelity,
+        status: row.status as RuntimeRecord["status"],
+        last_seen_at: String(row.last_seen_at),
+      },
+    }));
   }
 
   membershipRole(sessionId: string, userId: string): MembershipRole | null {
@@ -296,7 +380,8 @@ export class CollaborationDatabase {
   setMembership(actor: Actor, sessionId: string, userId: string, role: "participant" | "viewer", idempotencyKey: string): CanonicalEvent {
     return this.transaction(() => {
       const existing = this.findByIdempotencyKey(sessionId, idempotencyKey);
-      if (existing) return this.requireIdempotencyActor(existing, actor.user_id);
+      const payload = { action: "set", user_id: userId, role } satisfies JsonValue;
+      if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "membership_change", payload);
       const timestamp = now();
       this.sqlite.prepare(`
         INSERT INTO memberships(session_id, user_id, role, created_at, updated_at)
@@ -307,7 +392,7 @@ export class CollaborationDatabase {
         idempotency_key: idempotencyKey,
         type: "membership_change",
         visibility: "session",
-        payload: { action: "set", user_id: userId, role },
+        payload,
       }, null);
     });
   }
@@ -315,7 +400,8 @@ export class CollaborationDatabase {
   removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string): CanonicalEvent {
     return this.transaction(() => {
       const existing = this.findByIdempotencyKey(sessionId, idempotencyKey);
-      if (existing) return this.requireIdempotencyActor(existing, actor.user_id);
+      const payload = { action: "removed", user_id: userId } satisfies JsonValue;
+      if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "membership_change", payload);
       const result = this.sqlite.prepare("DELETE FROM memberships WHERE session_id = ? AND user_id = ? AND role != 'owner'")
         .run(sessionId, userId);
       if (Number(result.changes) === 0) throw notFound("Membership");
@@ -323,7 +409,7 @@ export class CollaborationDatabase {
         idempotency_key: idempotencyKey,
         type: "membership_change",
         visibility: "session",
-        payload: { action: "removed", user_id: userId },
+        payload,
       }, null);
     });
   }
@@ -338,7 +424,7 @@ export class CollaborationDatabase {
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
       if (existing) return {
         session: this.requireSession(sessionId),
-        event: this.requireIdempotencyActor(existing, actor.user_id),
+        event: this.requireIdempotencyMatch(existing, actor.user_id, "session_state_change"),
       };
       const session = this.requireSession(sessionId);
       const next = {
@@ -368,7 +454,15 @@ export class CollaborationDatabase {
   appendEvent(actor: Actor, sessionId: string, input: AppendEventInput, provenance: RuntimeProvenance | null): CanonicalEvent {
     return this.transaction(() => {
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
-      if (existing) return this.requireIdempotencyActor(existing, actor.user_id);
+      if (existing) return this.requireIdempotencyMatch(
+        existing,
+        actor.user_id,
+        input.type,
+        input.payload,
+        input.reply_to_event_id ?? null,
+        input.visibility ?? "session",
+        provenance?.runtime_id ?? null,
+      );
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
     });
   }
@@ -445,6 +539,12 @@ export class CollaborationDatabase {
         if (existing.runtime_id !== runtimeId) throw conflict("Agent request is already claimed by another runtime");
         return { request_event_id: requestEventId, runtime_id: runtimeId, status: existing.status };
       }
+      const active = this.sqlite.prepare(`
+        SELECT request_event_id FROM agent_request_claims
+        WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ?
+        LIMIT 1
+      `).get(runtimeId, requestEventId) as { request_event_id: string } | undefined;
+      if (active) throw runtimeBusy();
       this.sqlite.prepare("INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status) VALUES (?, ?, ?, 'claimed')")
         .run(requestEventId, runtimeId, now());
       return { request_event_id: requestEventId, runtime_id: runtimeId, status: "claimed" };
@@ -454,7 +554,15 @@ export class CollaborationDatabase {
   completeAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, idempotencyKey: string, payload: JsonValue): CanonicalEvent {
     return this.transaction(() => {
       const existingEvent = this.findByIdempotencyKey(sessionId, idempotencyKey);
-      if (existingEvent) return this.requireIdempotencyActor(existingEvent, actor.user_id);
+      if (existingEvent) return this.requireIdempotencyMatch(
+        existingEvent,
+        actor.user_id,
+        "agent_response",
+        payload,
+        requestEventId,
+        "session",
+        runtimeId,
+      );
       const runtime = this.getRuntime(runtimeId);
       const claim = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
@@ -503,10 +611,22 @@ export class CollaborationDatabase {
     return row ? mapEvent(row) : null;
   }
 
-  private requireIdempotencyActor(event: CanonicalEvent, actorUserId: string): CanonicalEvent {
-    if (event.actor_user_id !== actorUserId) {
-      throw conflict("Idempotency key is already owned by another actor in this session");
-    }
+  private requireIdempotencyMatch(
+    event: CanonicalEvent,
+    actorUserId: string,
+    type: EventType,
+    payload?: JsonValue,
+    replyTo: string | null = event.reply_to_event_id,
+    visibility: EventVisibility = event.visibility,
+    runtimeId: string | null = event.runtime_provenance?.runtime_id ?? null,
+  ): CanonicalEvent {
+    const matches = event.actor_user_id === actorUserId
+      && event.type === type
+      && event.reply_to_event_id === replyTo
+      && event.visibility === visibility
+      && (payload === undefined || stableJson(event.payload) === stableJson(payload))
+      && (event.runtime_provenance?.runtime_id ?? null) === runtimeId;
+    if (!matches) throw idempotencyConflict();
     return event;
   }
 

@@ -10,9 +10,11 @@ export class ApiError extends Error {
 }
 
 export class HttpCollaborationApi {
-  constructor({ baseUrl = "", token }) {
-    this.baseUrl = baseUrl;
+  constructor({ baseUrl = "", token = "" } = {}) {
+    this.baseUrl = baseUrl.replace(/\/$/, "");
     this.token = token;
+    this.actors = new Map();
+    this.sessionHeads = new Map();
   }
 
   async request(path, options = {}) {
@@ -27,40 +29,90 @@ export class HttpCollaborationApi {
     });
     if (!response.ok) {
       const body = await response.json().catch(() => ({}));
-      throw new ApiError(body.message ?? `Request failed (${response.status})`, {
+      throw new ApiError(body.error?.message ?? body.message ?? `Request failed (${response.status})`, {
         status: response.status,
-        code: body.code ?? "http_error",
+        code: body.error?.code ?? body.code ?? "http_error",
       });
     }
-    return response.status === 204 ? undefined : response.json();
+    if (response.status === 204) return undefined;
+    const body = await response.json();
+    return body.data ?? body;
   }
 
-  authenticate() {
-    return this.request("/api/me");
+  async authenticate(token = this.token) {
+    this.token = token;
+    const actor = await this.request("/v1/me");
+    this.actors.set(actor.id, actor.username);
+    return actor;
   }
 
-  listSessions() {
-    return this.request("/api/sessions");
+  async listSessions() {
+    const { sessions } = await this.request("/v1/sessions");
+    return sessions.map((session) => {
+      this.sessionHeads.set(session.id, session.current_sequence);
+      return {
+        id: session.id,
+        name: session.title,
+        mode: session.mode,
+        description: session.state === "archived" ? "Archived shared session" : "Active shared session",
+        updatedAt: session.updated_at,
+        memberCount: Number(session.member_count ?? 0),
+        role: session.role,
+        currentSequence: session.current_sequence,
+      };
+    });
   }
 
-  createSession(input) {
-    return this.request("/api/sessions", { method: "POST", body: JSON.stringify(input) });
+  async createSession(input) {
+    const { session } = await this.request("/v1/sessions", {
+      method: "POST",
+      body: JSON.stringify({
+        title: input.name,
+        mode: input.mode,
+        idempotency_key: input.idempotencyKey,
+      }),
+    });
+    return this.#sessionDetail(session, "owner");
   }
 
-  getSession(sessionId) {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}`);
+  async getSession(sessionId) {
+    const { session, role } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}`);
+    return this.#sessionDetail(session, role);
   }
 
-  listMembers(sessionId) {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/members`);
+  async listMembers(sessionId) {
+    const { members } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/members`);
+    return members.map((member) => {
+      this.actors.set(member.user_id, member.display_name);
+      return {
+        id: member.user_id,
+        userId: member.user_id,
+        username: member.display_name,
+        role: member.role,
+        runtime: member.runtime ? {
+          id: member.runtime.id,
+          status: member.runtime.status,
+          harness: member.runtime.harness,
+          provider: member.runtime.provider,
+          model: member.runtime.model,
+          fidelity: member.runtime.capture_fidelity,
+        } : null,
+      };
+    });
   }
 
-  replayEvents(sessionId, { afterSequence, limit = 100 }) {
+  async replayEvents(sessionId, { afterSequence, limit = 100 }) {
     const query = new URLSearchParams({
       after_sequence: String(afterSequence),
       limit: String(limit),
     });
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/events?${query}`);
+    const page = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/events?${query}`);
+    return {
+      events: page.events.map((event) => this.#event(event)),
+      head_sequence: this.sessionHeads.get(sessionId) ?? page.cursor,
+      next_after_sequence: page.cursor,
+      has_more: page.has_more,
+    };
   }
 
   appendHumanChat(sessionId, input) {
@@ -72,37 +124,80 @@ export class HttpCollaborationApi {
   }
 
   #append(sessionId, type, input) {
-    return this.request(`/api/sessions/${encodeURIComponent(sessionId)}/events`, {
+    return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/events`, {
       method: "POST",
       body: JSON.stringify({
         type,
-        content: input.content,
+        visibility: "session",
+        payload: { content: input.content },
         idempotency_key: input.idempotencyKey,
-        reply_to: input.replyTo,
+        reply_to_event_id: input.replyTo ?? null,
       }),
-    });
+    }).then(({ event }) => this.#event(event));
   }
 
-  async openRealtime({ sessionId, afterSequence, onEvent, onState }) {
+  async openRealtime({ sessionId, afterSequence, onEvent, onCursor, onState }) {
     // Browsers cannot attach an Authorization header to WebSocket handshakes.
     // Production integration therefore obtains a one-use, short-lived ticket.
-    const { ticket, websocket_url: websocketUrl } = await this.request("/api/realtime-ticket", {
+    const { ticket, websocket_url: websocketUrl } = await this.request("/v1/realtime-ticket", {
       method: "POST",
       body: JSON.stringify({ session_id: sessionId }),
     });
-    const socket = new WebSocket(`${websocketUrl}?ticket=${encodeURIComponent(ticket)}`);
+    const socketUrl = new URL(websocketUrl, this.baseUrl || globalThis.location?.origin);
+    socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
+    socketUrl.searchParams.set("ticket", ticket);
+    const socket = new WebSocket(socketUrl);
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({ type: "subscribe", session_id: sessionId, after_sequence: afterSequence }));
-      onState("live");
     });
     socket.addEventListener("message", ({ data }) => {
       const message = JSON.parse(data);
-      if (message.type === "event") onEvent(message.event);
-      if (message.type === "heartbeat") socket.send(JSON.stringify({ type: "heartbeat_ack" }));
+      if (message.type === "event") onEvent(this.#event(message.event));
+      if (message.type === "replay") {
+        for (const event of message.events) onEvent(this.#event(event));
+        onCursor?.(message.cursor);
+      }
+      if (message.type === "cursor") onCursor?.(message.cursor);
+      if (message.type === "subscribed") {
+        onCursor?.(message.cursor);
+        onState("live");
+      }
     });
     socket.addEventListener("close", () => onState("offline"));
     socket.addEventListener("error", () => onState("offline"));
     return { close: () => socket.close() };
+  }
+
+  #sessionDetail(session, role) {
+    return {
+      id: session.id,
+      name: session.title,
+      mode: session.mode,
+      description: session.state === "archived" ? "Archived shared session" : "Active shared session",
+      role,
+      updatedAt: session.updated_at,
+    };
+  }
+
+  #event(event) {
+    const username = this.actors.get(event.actor_user_id) ?? event.actor_user_id;
+    const provenance = event.runtime_provenance;
+    return {
+      id: event.id,
+      sessionId: event.session_id,
+      sequence: event.sequence,
+      type: event.type,
+      actor: { id: event.actor_user_id, username },
+      createdAt: event.created_at,
+      payload: event.payload,
+      provenance: provenance ? {
+        username,
+        harness: provenance.harness,
+        provider: provenance.provider,
+        model: provenance.model,
+        fidelity: provenance.capture_fidelity,
+      } : null,
+    };
   }
 }
 

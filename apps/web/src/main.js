@@ -1,4 +1,4 @@
-import { MockCollaborationApi } from "./api.js";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js";
 import {
   canAppend,
   createIdempotencyKey,
@@ -9,8 +9,20 @@ import {
 } from "./domain.js";
 import { SessionSync } from "./realtime.js";
 
-const api = new MockCollaborationApi();
+const configuredApiUrl = new URLSearchParams(location.search).get("api");
+const api = configuredApiUrl
+  ? new HttpCollaborationApi({ baseUrl: configuredApiUrl })
+  : new MockCollaborationApi();
 const sync = new SessionSync(api);
+
+if (configuredApiUrl) {
+  elementAfterReady("token-help", `Connects to ${configuredApiUrl}. The token stays in this browser tab.`);
+}
+
+function elementAfterReady(id, text) {
+  const node = document.getElementById(id);
+  if (node) node.textContent = text;
+}
 
 const state = {
   currentUser: null,
