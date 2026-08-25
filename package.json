@@ -1,0 +1,16 @@
+{
+  "name": "agent-cooperation-project",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/e2e/*.spec.mjs",
+    "test:e2e": "node scripts/run-e2e.mjs",
+    "audit:references": "node scripts/check-references.mjs",
+    "audit:licenses": "node scripts/check-dependency-licenses.mjs",
+    "audit:secrets": "node scripts/check-secrets.mjs",
+    "verify": "npm run test:e2e && npm run audit:references && npm run audit:licenses && npm run audit:secrets"
+  }
+}
