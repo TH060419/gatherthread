@@ -1,16 +1,31 @@
 {
   "name": "agent-cooperation-project",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "scripts": {
-    "test": "node --test tests/e2e/*.spec.mjs",
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "start": "node apps/server/dist/src/cli.js",
+    "test": "npm run test:unit && npm run test:e2e",
+    "test:unit": "npm run build && node --test packages/protocol/dist/test/*.test.js apps/server/dist/test/*.test.js",
     "test:e2e": "node scripts/run-e2e.mjs",
+    "typecheck": "tsc -b --pretty false",
     "audit:references": "node scripts/check-references.mjs",
     "audit:licenses": "node scripts/check-dependency-licenses.mjs",
     "audit:secrets": "node scripts/check-secrets.mjs",
-    "verify": "npm run test:e2e && npm run audit:references && npm run audit:licenses && npm run audit:secrets"
+    "verify": "npm run typecheck && npm run test && npm run audit:references && npm run audit:licenses && npm run audit:secrets"
+  },
+  "devDependencies": {
+    "@types/node": "^24.3.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.2"
   }
 }

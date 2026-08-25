@@ -9,4 +9,5 @@ coverage/
 *.db-wal
 .DS_Store
 .local/
-
+.serena/
+.codegraph/
