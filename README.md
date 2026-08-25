@@ -75,7 +75,7 @@ The first release includes hashed bearer tokens, device revocation, server-deriv
 
 Not yet implemented: invitation proofs and UI, bearer token expiry/rotation, rate limiting, multi-process WebSocket fan-out, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and a packaged daemon installer for local harness hooks.
 
-See [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
+See [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [architecture decisions](docs/adr/README.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
 
 ## License
 

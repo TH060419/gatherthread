@@ -1,5 +1,7 @@
 # Architecture v0.1
 
+Significant architectural choices and their rationale are recorded in the [ADR index](adr/README.md). The server trust boundary is defined by [ADR-0001](adr/0001-trusted-self-hosted-collaboration-server.md).
+
 ## Components
 
 ```text
@@ -51,4 +53,3 @@ MCP exposes collaboration capabilities but is not assumed to see a host's full c
 - Secret redaction before persistence plus configurable content policy.
 - No remote transfer of local tool approval authority.
 - Audit events for membership, visibility, and retention changes.
-
