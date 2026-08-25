@@ -12,7 +12,10 @@ Host loopback ── Collaboration server ── SQLite WAL                    �
                        ├── same-origin Web client                      │
                        └── MCP collaboration surface                   │
                                                                        │
-Collaborator local bridge ── transcript adapter ── local harness ──────┘
+Local project connector ── ProjectHarnessAdapter ── local harness ─────┘
+         │                         │
+         ├── private cursor/outbox/registry/spool
+         └── one Desktop projection plus one background execution projection per writable Codex session
 ```
 
 One deployment has one active authoritative host as defined by [ADR-0003](adr/0003-single-owner-hosted-deployment.md). Different collaborators keep their harnesses and credentials local; they do not share or replicate the SQLite file.
@@ -24,14 +27,20 @@ apps/server       HTTP, WebSocket, authentication, ACL, persistence
 apps/web          collaboration UI
 packages/protocol shared schemas and event contracts
 packages/mcp      MCP tools/resources over the collaboration API
-packages/bridge   local runtime registration, transcript tailing, request execution
+packages/bridge   project connector, native thread projection, outbox/reconciliation, request execution
 packages/adapters harness-specific Codex and Claude Code parsers
 tests/e2e          multi-client and bridge end-to-end tests
 ```
 
 ## Data model
 
-The durable core is an append-only `events` table keyed by `(session_id, sequence)` with a unique `(session_id, idempotency_key)` constraint. Mutable read models such as sessions, memberships, runtime presence, cursors, and invitations are derived or transactionally updated with the event append.
+`projects` and `project_memberships` define the collaboration and authorization boundary. Every session has exactly one `project_id`. Project creation inserts only the project and owner membership in one SQLite write transaction; an owner explicitly creates each `solo` or `multi` session afterward. Project invitations grant one project role across its current and future sessions; session mode determines the role's effective write permission. An owner-only session rename updates the mutable session record and publishes a metadata-only `session_state_change` event so Web clients and local harness bindings converge without rewriting canonical conversation content.
+
+The durable conversation core is an append-only `events` table keyed by `(session_id, sequence)` with a unique `(session_id, idempotency_key)` constraint. Each accepted event freezes `actor_display_name` so later profile changes cannot rewrite historical attribution. Mutable read models such as projects, sessions, memberships, runtime presence, cursors, invitations, and snapshot jobs are transactionally updated around the relevant operation.
+
+`local_turn_commits` binds one stable local harness turn to its canonical request, optional tool events, and response. The local-turn endpoint rechecks the authenticated actor, device, runtime purpose, project role, and session mode inside one SQLite write transaction; it then appends the complete turn atomically. The connector's occurrence time is retained only as payload metadata, while canonical timestamps and monotonically advancing project/session activity use the server clock. An exact retry returns the original IDs, while a mismatched retry conflicts. The returned server head indicates whether local projection reconciliation is required.
+
+`snapshot_requests` is a private, requester-scoped control plane rather than canonical conversation content. A request freezes `through_sequence`; only a same-user runtime with purpose `snapshot_connector` can claim and finish it. Every row receives a conservative 1 KiB metadata charge and result bytes are added through `snapshot_storage_usage`, without adding an event to the session history. Active jobs are also bounded per user, session, and deployment.
 
 SQLite runs in WAL mode with foreign keys enabled. A write transaction allocates the next per-session sequence and inserts the event. WebSocket fan-out happens only after commit.
 
@@ -41,9 +50,21 @@ Clients authenticate over HTTP, obtain a 30-second one-use session-scoped ticket
 
 ## Local bridge
 
-Each bridge registers a device and runtime. It maintains a server cursor and a local transcript cursor. For an `agent_request`, only the initiating user's eligible runtime can claim the turn. The bridge hydrates the canonical history, invokes the configured local harness, captures structured output, and appends events with runtime provenance.
+Each project connector authenticates one device and registers a session-scoped runtime only where that project role can write. For an `agent_request`, only the initiating user's eligible execution runtime can claim the turn. Owners have live runtimes for `solo` and `multi`; participants have them only for `multi`; viewers have none. Readable but non-writable sessions remain eligible for explicit snapshot jobs.
 
-The built-in Codex connector binds one shared session and local workspace to one persisted Codex thread. Its first turn receives full visible canonical history; resumed turns receive the canonical delta after the last covered sequence. The current server-verified local request is separated from prior untrusted shared context. Codex runs with an explicit local sandbox and no automatic privilege escalation. See [ADR-0005](adr/0005-managed-codex-thread-bridge.md).
+The connector depends on a harness-neutral `ProjectHarnessAdapter`: project authorization, session discovery, canonical cursors, scheduling, and snapshot dispatch stay independent of the local harness protocol. For Codex, each writable session is a deep module with two native capabilities. The `vscode`-source Desktop projection is owned only by Desktop and publishes through trusted Hooks. The `exec`-source background projection imports canonical history, compacts, and runs Web Agent requests through operation-scoped App Server children. Separate state files and one canonical server log join both directions without a shared native writer. Claude Code and DeepSeek Harness can implement the same adapter boundary with different native processes. [ADR-0013](adr/0013-single-writer-dual-codex-projections.md) records this boundary.
+
+### Native projection and offline reconciliation
+
+The connector stores two private atomic sidecars per writable Codex session. The Desktop sidecar contains the native task identity, Hook draft, canonical context base, and durable local-turn outbox. The background sidecar contains canonical cursor, projection and compaction generations, structured attribution, execution journal, and rebuild checkpoint. A matching retry binds returned canonical IDs without re-execution or duplicate injection.
+
+The server's event sequence is authoritative. If no canonical event appeared after a local turn's base cursor, acknowledgement advances the binding in place. If cloud history advanced, the server orders the local turn after its current head. The connector then builds a new native thread from the complete canonical log off to the side, compacts against the observed model context window or a conservative fallback, verifies coverage through the target sequence, and atomically switches its sidecar. The former native thread is preserved as an archived `offline fork`. This process reconciles conversation state only and never rewrites working-tree files.
+
+### Hooks and read-only snapshots
+
+Codex project Hook installation is explicit and required for publishing direct Desktop turns. `UserPromptSubmit` and `Stop` are merged into `.codex/hooks.json` and require trust review. `UserPromptSubmit` returns a bounded canonical delta; `Stop` supplies the final text for a durable idempotent upload. The connector does not poll or open the Desktop-owned task, and Web execution remains available independently in the background projection.
+
+Each **Download to Codex** click creates a new immutable snapshot job frozen through one server sequence. A `snapshot_connector` builds a fresh native thread, verifies that boundary, and returns bounded metadata. It cannot claim Agent requests or publish local turns, and the snapshot never starts following later canonical events.
 
 Transcript access is opt-in and path-scoped. Secrets are redacted before upload. Raw thinking and private system/developer instructions are excluded by default unless the owner explicitly changes the session policy.
 
@@ -53,15 +74,16 @@ MCP exposes collaboration capabilities but is not assumed to see a host's full c
 
 ## Security baseline
 
-- Private-by-default sessions and revocable invitations.
+- Private-by-default projects and revocable project invitations.
 - Local-only first-owner bootstrap; no public registration.
-- One-use session invitations with fixed 1h, 24h, or 7d expiry.
+- One-use project invitations with fixed 1h, 24h, or 7d expiry.
 - One-use ten-minute authorization for each additional device.
 - Server-derived actor identity; clients cannot forge usernames.
 - Peppered HMAC device credentials with use tracking, rotation, and per-device revocation.
 - Strict schema validation and payload size limits.
-- Bounded JSON depth/nodes, byte-paged replay, slow-client cutoff, per-device rate limits, and per-user/session/deployment event quotas.
+- Bounded JSON depth/nodes, byte-paged replay, slow-client cutoff, per-device rate limits, and per-user/session/deployment event and complete snapshot-job quotas.
 - Secret redaction before persistence plus configurable content policy.
 - No remote transfer of local tool approval authority.
-- Audit events for membership, visibility, and retention changes.
+- Project role enforcement on every session write and runtime registration.
+- Content-free invitation audit metadata plus canonical session event history.
 - Loopback-only owner host behind tailnet-only HTTPS; no default public ingress.

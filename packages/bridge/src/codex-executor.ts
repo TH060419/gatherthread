@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { redactText, type TranscriptEvent } from "@gatherthread/adapters";
+import { redactText, redactValue, type TranscriptEvent } from "@gatherthread/adapters";
 import type {
   CanonicalEvent,
   HarnessExecutionInput,
@@ -78,7 +78,7 @@ export class CodexCliExecutor implements HarnessExecutor {
   constructor(options: CodexCliExecutorOptions) {
     if (!options.workspacePath.trim()) throw new Error("Codex workspace path must be non-empty");
     if (!options.statePath.trim()) throw new Error("Codex state path must be non-empty");
-    validateModel(options.model);
+    validateCodexModel(options.model);
     if (options.command?.includes("\0")) throw new Error("Codex command cannot contain a null byte");
     if (options.sandbox !== undefined
       && options.sandbox !== "read-only"
@@ -105,7 +105,7 @@ export class CodexCliExecutor implements HarnessExecutor {
   }
 
   async preflight(): Promise<{ version: string; authentication: string; workspacePath: string }> {
-    const workspacePath = await validateWorkspace(this.#workspacePath);
+    const workspacePath = await validateCodexWorkspace(this.#workspacePath);
     const common = {
       command: this.#command,
       cwd: workspacePath,
@@ -138,7 +138,7 @@ export class CodexCliExecutor implements HarnessExecutor {
     if (input.request.type !== "agent_request") {
       throw new Error("Codex executor requires an agent_request");
     }
-    const workspacePath = await validateWorkspace(this.#workspacePath);
+    const workspacePath = await validateCodexWorkspace(this.#workspacePath);
     const state = await this.#loadState(input.request.sessionId, workspacePath);
     const afterSequence = state?.coveredThroughSequence ?? 0;
     const history = input.canonicalHistory.filter((event) =>
@@ -231,7 +231,7 @@ export class CodexCliExecutor implements HarnessExecutor {
   }
 }
 
-function renderCodexPrompt(
+export function renderCodexPrompt(
   input: HarnessExecutionInput,
   history: CanonicalEvent[],
   afterSequence: number,
@@ -339,6 +339,100 @@ function parseCodexJsonl(
   return { threadId, events: [...toolEvents, finalAssistant] };
 }
 
+export function parseCodexAppServerItems(
+  items: readonly unknown[],
+  options: { shareToolEvents: boolean; maxToolOutputBytes: number },
+): TranscriptEvent[] {
+  const toolEvents: TranscriptEvent[] = [];
+  const assistantEvents: TranscriptEvent[] = [];
+  for (const [index, value] of items.entries()) {
+    if (!isObject(value)) continue;
+    const fallbackItemId = `codex-app-server-${index + 1}`;
+    const itemId = safeLocalEventId(value.id, fallbackItemId);
+    if (value.type === "agentMessage" && typeof value.text === "string" && value.text.trim()) {
+      if (value.phase !== "commentary") {
+        assistantEvents.push(transcript("assistant", itemId, { content: value.text }));
+      }
+      continue;
+    }
+    if (options.shareToolEvents) {
+      toolEvents.push(...toToolEvents(normalizeAppServerToolItem(value), itemId, options.maxToolOutputBytes));
+    }
+  }
+  const finalAssistant = assistantEvents.at(-1);
+  if (!finalAssistant) throw new Error("Codex App Server turn omitted a completed assistant message");
+  return [...toolEvents, finalAssistant];
+}
+
+function normalizeAppServerToolItem(item: Record<string, unknown>): Record<string, unknown> {
+  if (item.type === "commandExecution") {
+    return {
+      ...item,
+      type: "command_execution",
+      exit_code: item.exitCode,
+      aggregated_output: item.aggregatedOutput,
+    };
+  }
+  if (item.type === "mcpToolCall") {
+    return {
+      ...item,
+      type: "mcp_tool_call",
+      call_id: item.id,
+    };
+  }
+  if (item.type === "fileChange") return { ...item, type: "file_change" };
+  if (item.type === "dynamicToolCall") {
+    return {
+      type: "dynamic_tool_call",
+      call_id: item.id,
+      namespace: item.namespace,
+      tool: item.tool,
+      arguments: item.arguments,
+      status: item.status,
+      content_items: item.contentItems,
+      success: item.success,
+      duration_ms: item.durationMs,
+    };
+  }
+  if (item.type === "collabAgentToolCall") {
+    return {
+      type: "collab_agent_tool_call",
+      call_id: item.id,
+      tool: item.tool,
+      status: item.status,
+      prompt: item.prompt,
+      model: item.model,
+      reasoning_effort: item.reasoningEffort,
+      receiver_thread_ids: item.receiverThreadIds,
+      agents_states: item.agentsStates,
+    };
+  }
+  if (item.type === "webSearch") {
+    return {
+      type: "web_search",
+      call_id: item.id,
+      query: item.query,
+      action: item.action,
+      results: item.results,
+    };
+  }
+  if (item.type === "imageGeneration") {
+    return {
+      type: "image_generation",
+      call_id: item.id,
+      status: item.status,
+      revised_prompt: item.revisedPrompt,
+      transparent_background: item.transparentBackground,
+      result: item.result,
+      failure: item.failure,
+    };
+  }
+  if (item.type === "sleep") {
+    return { type: "sleep_tool", call_id: item.id, duration_ms: item.durationMs };
+  }
+  return item;
+}
+
 function toToolEvents(
   item: Record<string, unknown>,
   itemId: string,
@@ -380,13 +474,114 @@ function toToolEvents(
       }),
     ];
   }
+  if (item.type === "dynamic_tool_call") {
+    const toolCallId = stableToolCallId("dynamic", item.call_id, itemId);
+    const namespace = safeToolNamePart(item.namespace);
+    const tool = safeToolNamePart(item.tool) || "dynamic_tool";
+    const result = {
+      status: item.status,
+      success: item.success,
+      content_items: normalizeDynamicToolContent(item.content_items),
+      duration_ms: item.duration_ms,
+    };
+    return [
+      transcript("tool_call", `${itemId}:call`, {
+        toolName: namespace ? `${namespace}/${tool}` : tool,
+        toolCallId,
+        arguments: truncateValue(item.arguments, maxToolOutputBytes),
+      }),
+      transcript("tool_result", `${itemId}:result`, {
+        toolCallId,
+        result: truncateValue(result, maxToolOutputBytes),
+        isError: item.success === false || item.status === "failed",
+      }),
+    ];
+  }
+  if (item.type === "collab_agent_tool_call") {
+    const toolCallId = stableToolCallId("collab", item.call_id, itemId);
+    return [
+      transcript("tool_call", `${itemId}:call`, {
+        toolName: `collab_agent/${safeToolNamePart(item.tool) || "tool"}`,
+        toolCallId,
+        arguments: truncateValue({
+          prompt: item.prompt,
+          model: item.model,
+          reasoning_effort: item.reasoning_effort,
+          receiver_refs: anonymizeIdentifiers(item.receiver_thread_ids),
+        }, maxToolOutputBytes),
+      }),
+      transcript("tool_result", `${itemId}:result`, {
+        toolCallId,
+        result: truncateValue({
+          status: item.status,
+          agents: normalizeCollabAgentStates(item.agents_states),
+        }, maxToolOutputBytes),
+        isError: item.status === "failed",
+      }),
+    ];
+  }
+  if (item.type === "web_search") {
+    const toolCallId = stableToolCallId("web-search", item.call_id, itemId);
+    return [
+      transcript("tool_call", `${itemId}:call`, {
+        toolName: "web_search",
+        toolCallId,
+        arguments: truncateValue({
+          query: item.query,
+          action: normalizeWebSearchAction(item.action),
+        }, maxToolOutputBytes),
+      }),
+      transcript("tool_result", `${itemId}:result`, {
+        toolCallId,
+        result: truncateValue({ results: item.results }, maxToolOutputBytes),
+        isError: false,
+      }),
+    ];
+  }
+  if (item.type === "image_generation") {
+    const toolCallId = stableToolCallId("image-generation", item.call_id, itemId);
+    return [
+      transcript("tool_call", `${itemId}:call`, {
+        toolName: "image_generation",
+        toolCallId,
+        arguments: truncateValue({
+          revised_prompt: item.revised_prompt,
+          transparent_background: item.transparent_background,
+        }, maxToolOutputBytes),
+      }),
+      transcript("tool_result", `${itemId}:result`, {
+        toolCallId,
+        result: truncateValue({
+          status: item.status,
+          artifact: summarizeOpaqueArtifact(item.result),
+          failure: item.failure,
+        }, maxToolOutputBytes),
+        isError: item.failure !== undefined && item.failure !== null || item.status === "failed",
+      }),
+    ];
+  }
+  if (item.type === "sleep_tool") {
+    const toolCallId = stableToolCallId("sleep", item.call_id, itemId);
+    return [
+      transcript("tool_call", `${itemId}:call`, {
+        toolName: "clock/sleep",
+        toolCallId,
+        arguments: truncateValue({ duration_ms: item.duration_ms }, maxToolOutputBytes),
+      }),
+      transcript("tool_result", `${itemId}:result`, {
+        toolCallId,
+        result: { status: "completed" },
+        isError: false,
+      }),
+    ];
+  }
   if (item.type === "file_change") {
     const toolCallId = `file-change:${itemId}`;
     return [
       transcript("tool_call", `${itemId}:call`, {
         toolName: "file_change",
         toolCallId,
-        arguments: truncateValue(item.changes ?? item, maxToolOutputBytes),
+        arguments: truncateValue(item.changes ?? [], maxToolOutputBytes),
       }),
       transcript("tool_result", `${itemId}:result`, {
         toolCallId,
@@ -395,6 +590,100 @@ function toToolEvents(
     ];
   }
   return [];
+}
+
+function normalizeDynamicToolContent(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  const normalized: unknown[] = [];
+  for (const entry of value) {
+    if (!isObject(entry)) continue;
+    if (entry.type === "inputText" && typeof entry.text === "string") {
+      normalized.push({ type: "text", text: entry.text });
+      continue;
+    }
+    if (entry.type === "inputImage" && typeof entry.imageUrl === "string") {
+      normalized.push({ type: "image", reference: summarizeOpaqueArtifact(entry.imageUrl) });
+      continue;
+    }
+    if (entry.type === "inputAudio" && typeof entry.audioUrl === "string") {
+      normalized.push({ type: "audio", reference: summarizeOpaqueArtifact(entry.audioUrl) });
+    }
+  }
+  return normalized;
+}
+
+function normalizeWebSearchAction(value: unknown): unknown {
+  if (!isObject(value) || typeof value.type !== "string") return undefined;
+  if (value.type === "search") {
+    return {
+      type: "search",
+      ...(typeof value.query === "string" ? { query: value.query } : {}),
+      ...(Array.isArray(value.queries)
+        ? { queries: value.queries.filter((query): query is string => typeof query === "string") }
+        : {}),
+    };
+  }
+  if (value.type === "openPage") {
+    return { type: "open_page", ...(typeof value.url === "string" ? { url: value.url } : {}) };
+  }
+  if (value.type === "findInPage") {
+    return {
+      type: "find_in_page",
+      ...(typeof value.url === "string" ? { url: value.url } : {}),
+      ...(typeof value.pattern === "string" ? { pattern: value.pattern } : {}),
+    };
+  }
+  return { type: "other" };
+}
+
+function normalizeCollabAgentStates(value: unknown): unknown[] {
+  if (!isObject(value)) return [];
+  return Object.entries(value).flatMap(([threadId, state]) => {
+    if (!isObject(state)) return [];
+    return [{
+      agent_ref: hashIdentifier(threadId),
+      ...(typeof state.status === "string" ? { status: state.status } : {}),
+      ...(typeof state.message === "string" ? { message: state.message } : {}),
+    }];
+  });
+}
+
+function anonymizeIdentifiers(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map(hashIdentifier);
+}
+
+function hashIdentifier(value: string): string {
+  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+}
+
+function safeToolNamePart(value: unknown): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/[^A-Za-z0-9_.-]/g, "_").slice(0, 128);
+}
+
+function stableToolCallId(prefix: string, value: unknown, fallback: string): string {
+  return `${prefix}:${safeLocalEventId(value, fallback)}`;
+}
+
+function safeLocalEventId(value: unknown, fallback: string): string {
+  const raw = typeof value === "string" && value ? value : fallback;
+  const redacted = redactText(raw);
+  return redacted === raw && !/[\0\r\n]/.test(raw) && Buffer.byteLength(raw) <= 256
+    ? raw
+    : hashIdentifier(raw);
+}
+
+function summarizeOpaqueArtifact(value: unknown): unknown {
+  if (typeof value !== "string" || !value) return undefined;
+  const sanitized = redactText(value);
+  return {
+    redacted: true,
+    original_bytes: Buffer.byteLength(value),
+    sha256: createHash("sha256").update(sanitized).digest("hex"),
+  };
 }
 
 function transcript(
@@ -413,20 +702,52 @@ function transcript(
 
 function truncateValue(value: unknown, maxBytes: number): unknown {
   if (value === undefined) return undefined;
-  const encoded = typeof value === "string" ? value : JSON.stringify(value);
-  if (Buffer.byteLength(encoded) <= maxBytes) return value;
+  const sanitized = redactValue(value);
+  const encoded = typeof sanitized === "string" ? sanitized : JSON.stringify(sanitized);
+  if (Buffer.byteLength(encoded) <= maxBytes) return sanitized;
   const digest = createHash("sha256").update(encoded).digest("hex");
-  let end = Math.min(encoded.length, maxBytes);
-  while (end > 0 && Buffer.byteLength(encoded.slice(0, end)) > maxBytes) end -= 1;
-  return {
+  const metadata = {
     truncated: true,
     original_bytes: Buffer.byteLength(encoded),
     sha256: digest,
-    preview: encoded.slice(0, end),
   };
+  if (jsonByteLength(metadata) > maxBytes) {
+    if (maxBytes < 2) return 0;
+    return utf8Prefix("[TRUNCATED]", maxBytes - 2);
+  }
+  if (jsonByteLength({ ...metadata, preview: "" }) > maxBytes) return metadata;
+  let low = 0;
+  let high = encoded.length;
+  let preview = "";
+  while (low <= high) {
+    const middle = Math.floor((low + high) / 2);
+    const candidate = utf8Prefix(encoded, middle);
+    if (jsonByteLength({ ...metadata, preview: candidate }) <= maxBytes) {
+      preview = candidate;
+      low = middle + 1;
+    } else {
+      high = middle - 1;
+    }
+  }
+  return { ...metadata, preview };
 }
 
-async function validateWorkspace(workspacePath: string): Promise<string> {
+function jsonByteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value));
+}
+
+function utf8Prefix(value: string, maxCharacters: number): string {
+  let result = "";
+  let characters = 0;
+  for (const character of value) {
+    if (characters >= maxCharacters) break;
+    result += character;
+    characters += 1;
+  }
+  return result;
+}
+
+export async function validateCodexWorkspace(workspacePath: string): Promise<string> {
   let resolved: string;
   try {
     resolved = await realpath(workspacePath);
@@ -550,7 +871,7 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
   return error instanceof Error && "code" in error;
 }
 
-function validateModel(model: string): void {
+export function validateCodexModel(model: string): void {
   if (!model.trim() || model.length > 200 || model.startsWith("-") || /[\0\r\n]/.test(model)) {
     throw new Error("Codex model must be a valid non-empty model identifier");
   }

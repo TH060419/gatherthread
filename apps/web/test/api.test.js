@@ -26,8 +26,9 @@ test("append is idempotent and chat never fabricates an agent response", async (
   assert.equal(after.events.at(-1).type, "human_chat");
 });
 
-test("solo viewers cannot append", async () => {
+test("project participants cannot append to solo sessions", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
+  api.currentUser = { id: "user-maya", username: "Maya Ortiz" };
   await assert.rejects(
     () => api.appendHumanChat("session-notes", { content: "should fail", idempotencyKey: "forbidden" }),
     (error) => error.status === 403 && error.code === "forbidden",
@@ -36,10 +37,169 @@ test("solo viewers cannot append", async () => {
 
 test("created sessions retain explicit solo or multi mode", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
-  const created = await api.createSession({ name: "New multi", mode: "multi" });
+  const created = await api.createSession("project-orbit", { name: "New multi", mode: "multi" });
   const detail = await api.getSession(created.id);
   assert.equal(detail.mode, "multi");
   assert.equal(detail.members[0].role, "owner");
+});
+
+test("mock project creation leaves an empty project until the owner creates a session", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const project = await api.createProject({ name: "New research" });
+  const sessions = await api.listProjectSessions(project.id);
+  assert.equal(project.sessionCount, 0);
+  assert.deepEqual(sessions, []);
+});
+
+test("mock session rename updates summaries and publishes metadata without the previous name", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const project = await api.createProject({ name: "New research" });
+  const session = await api.createSession(project.id, { name: "Before", mode: "multi" });
+  const received = [];
+  const socket = await api.openRealtime({
+    sessionId: session.id,
+    afterSequence: 0,
+    onEvent: (event) => received.push(event),
+    onState: () => {},
+  });
+  try {
+    const renamed = await api.renameSession(session.id, {
+      name: "After 🚀",
+      idempotencyKey: "rename-session-0001",
+    });
+    assert.equal(renamed.name, "After 🚀");
+    assert.equal((await api.listProjectSessions(project.id))[0].name, "After 🚀");
+    assert.deepEqual(received.at(-1).payload, { action: "renamed", title: "After 🚀" });
+    assert.equal(JSON.stringify(received.at(-1).payload).includes("Before"), false);
+  } finally {
+    socket.close();
+  }
+});
+
+test("mock project, session, and rename titles reject C0/C1 controls but keep Unicode", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const project = await api.createProject({ name: "量子项目 🚀" });
+  const session = await api.createSession(project.id, { name: "Unicode 会话", mode: "multi" });
+  assert.equal((await api.renameSession(session.id, {
+    name: "重命名 🚀",
+    idempotencyKey: "unicode-rename-0001",
+  })).name, "重命名 🚀");
+  for (const [index, name] of ["line\nbreak", "nul\u0000byte", "c1\u0085control"].entries()) {
+    await assert.rejects(() => api.createProject({ name }), (error) => error.status === 422);
+    await assert.rejects(() => api.createSession(project.id, { name, mode: "multi" }), (error) => error.status === 422);
+    await assert.rejects(() => api.renameSession(session.id, {
+      name,
+      idempotencyKey: `control-rename-${index}`,
+    }), (error) => error.status === 422);
+  }
+});
+
+test("HTTP session rename uses the existing PATCH contract", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: {
+      session: {
+        id: "s1", project_id: "p1", title: "After", mode: "multi", state: "active",
+        updated_at: "2026-08-25T10:00:00.000Z",
+      },
+      event: { id: "e1" },
+    } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const renamed = await api.renameSession("s1", { name: "After", idempotencyKey: "rename-session-0001" });
+    assert.equal(renamed.name, "After");
+    assert.equal(captured.url, "https://gatherthread.example/v1/sessions/s1");
+    assert.equal(captured.options.method, "PATCH");
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      title: "After",
+      idempotency_key: "rename-session-0001",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("snapshot API creates independent frozen jobs and polls one record", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const record = {
+    id: "snapshot-1",
+    session_id: "s1",
+    requested_by_user_id: "u1",
+    through_sequence: 17,
+    status: "pending",
+    claimed_by_runtime_id: null,
+    created_at: "2026-08-25T10:00:00.000Z",
+    claimed_at: null,
+    completed_at: null,
+    failed_at: null,
+    result: null,
+    failure: null,
+  };
+  const responses = [
+    { data: { snapshot_request: record } },
+    { data: { snapshot_request: { ...record, id: "snapshot-2" } } },
+    { data: { snapshot_request: { ...record, status: "completed", result: { thread_id: "local-codex-task" } } } },
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return Response.json(responses.shift());
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.createSnapshotRequest("s1")).throughSequence, 17);
+    assert.equal((await api.createSnapshotRequest("s1")).id, "snapshot-2");
+    assert.equal((await api.getSnapshotRequest("snapshot-1")).localTaskName, "local-codex-task");
+    assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
+      ["POST", "https://gatherthread.example/v1/sessions/s1/snapshot-requests"],
+      ["POST", "https://gatherthread.example/v1/sessions/s1/snapshot-requests"],
+      ["GET", "https://gatherthread.example/v1/snapshot-requests/snapshot-1"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[0].options.body), {});
+    assert.deepEqual(JSON.parse(requests[1].options.body), {});
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("snapshot list requests one session and restores its newest active jobs after a page refresh", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  const record = {
+    session_id: "s1",
+    requested_by_user_id: "u1",
+    through_sequence: 23,
+    claimed_by_runtime_id: null,
+    created_at: "2026-08-25T10:00:00.000Z",
+    claimed_at: null,
+    completed_at: null,
+    failed_at: null,
+    result: null,
+    failure: null,
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: { snapshot_requests: [
+      { ...record, id: "snapshot-queued", status: "pending", created_at: "2026-08-25T10:01:00.000Z" },
+      { ...record, id: "snapshot-other", session_id: "s2", status: "claimed", created_at: "2026-08-25T10:03:00.000Z" },
+      { ...record, id: "snapshot-claimed", status: "claimed", created_at: "2026-08-25T10:02:00.000Z" },
+    ] } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const requests = await api.listSnapshotRequests({ sessionId: "s1", limit: 40 });
+    assert.deepEqual(requests.map((request) => [request.id, request.status]), [
+      ["snapshot-claimed", "claimed"],
+      ["snapshot-queued", "queued"],
+    ]);
+    assert.equal(captured.url, "https://gatherthread.example/v1/snapshot-requests?session_id=s1&limit=40");
+    assert.equal(captured.options.method, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("HTTP client normalizes the production v1 envelope and canonical event shape", async () => {
@@ -49,7 +209,7 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
     { data: { actor: { id: "u1", username: "Alice", device_id: "d1" }, expires_at: "2026-08-26T00:00:00.000Z" } },
     { data: { sessions: [{ id: "s1", title: "Shared", mode: "multi", state: "active", role: "owner", current_sequence: 2, member_count: 1, updated_at: "2026-08-25T00:00:00.000Z" }] } },
     { data: { members: [{ user_id: "u1", display_name: "Alice", role: "owner", runtime: { id: "r1", status: "online", harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }] } },
-    { data: { events: [{ id: "e2", session_id: "s1", sequence: 2, type: "agent_response", actor_user_id: "u1", created_at: "2026-08-25T00:00:01.000Z", payload: { content: "done" }, runtime_provenance: { harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }], cursor: 2, has_more: false } },
+    { data: { events: [{ id: "e2", session_id: "s1", sequence: 2, type: "agent_response", actor_user_id: "u1", actor_display_name: "Frozen Alice", created_at: "2026-08-25T00:00:01.000Z", reply_to_event_id: "e1", payload: { content: "done" }, runtime_provenance: { harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }], cursor: 2, has_more: false } },
   ];
   globalThis.fetch = async (url, options = {}) => {
     requests.push({ url: String(url), options });
@@ -65,8 +225,10 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
     assert.deepEqual({ name: sessions[0].name, memberCount: sessions[0].memberCount }, { name: "Shared", memberCount: 1 });
     assert.equal((await api.listMembers("s1"))[0].runtime.model, "gpt-5.6-sol");
     const replay = await api.replayEvents("s1", { afterSequence: 0 });
-    assert.equal(replay.events[0].actor.username, "Alice");
+    assert.equal(replay.events[0].actor.username, "Frozen Alice");
+    assert.equal(replay.events[0].provenance.username, "Frozen Alice");
     assert.equal(replay.events[0].provenance.fidelity, "harness_transcript");
+    assert.equal(replay.events[0].replyTo, "e1");
     assert.equal(replay.next_after_sequence, 2);
     assert.equal(requests[0].url, "https://gatherthread.example/v1/browser-sessions");
     assert.equal(requests[0].options.method, "POST");
@@ -78,12 +240,46 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
   }
 });
 
+test("HTTP project API groups sessions and updates member roles at the project boundary", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const timestamp = "2026-08-25T00:00:00.000Z";
+  const responses = [
+    { data: { projects: [{ id: "p1", title: "Alpha", state: "active", role: "owner", session_count: 1, updated_at: timestamp }] } },
+    { data: { project: { id: "p1", title: "Alpha", state: "active", updated_at: timestamp }, role: "owner" } },
+    { data: { sessions: [{ id: "s1", project_id: "p1", title: "Build", mode: "multi", state: "active", role: "owner", current_sequence: 1, member_count: 2, updated_at: timestamp }] } },
+    { data: { members: [{ user_id: "u1", display_name: "Alice", role: "owner" }, { user_id: "u2", display_name: "Bob", role: "participant" }] } },
+    { data: { member: { user_id: "u2", display_name: "Bob", role: "viewer" } } },
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return Response.json(responses.shift());
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.listProjects())[0].name, "Alpha");
+    assert.equal((await api.getProject("p1")).role, "owner");
+    assert.equal((await api.listProjectSessions("p1"))[0].projectId, "p1");
+    assert.equal((await api.listProjectMembers("p1"))[1].username, "Bob");
+    assert.equal((await api.setProjectMemberRole("p1", "u2", "viewer")).role, "viewer");
+    assert.deepEqual(requests.map((item) => [item.options.method ?? "GET", item.url]), [
+      ["GET", "https://gatherthread.example/v1/projects"],
+      ["GET", "https://gatherthread.example/v1/projects/p1"],
+      ["GET", "https://gatherthread.example/v1/projects/p1/sessions"],
+      ["GET", "https://gatherthread.example/v1/projects/p1/members"],
+      ["PUT", "https://gatherthread.example/v1/projects/p1/members/u2"],
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("HTTP invitation API uses exact routes, keeps secrets out of list records, and adopts claimed credentials in memory", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
   const record = {
     id: "i1",
-    session_id: "s1",
+    project_id: "p1",
     inviter_user_id: "owner",
     role: "participant",
     created_at: "2026-08-25T00:00:00.000Z",
@@ -110,12 +306,12 @@ test("HTTP invitation API uses exact routes, keeps secrets out of list records, 
     assert.equal(created.inviteToken, "invite-secret-value-that-is-long-enough");
     assert.equal((await api.listInvitations("s1"))[0].status, "pending");
     assert.equal((await api.revokeInvitation("s1", "i1")).status, "revoked");
-    assert.equal((await api.acceptInvitation("existing-secret")).invitation.sessionId, "s1");
+    assert.equal((await api.acceptInvitation("existing-secret")).invitation.projectId, "p1");
 
     assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
-      ["POST", "https://gatherthread.example/v1/sessions/s1/invitations"],
-      ["GET", "https://gatherthread.example/v1/sessions/s1/invitations"],
-      ["DELETE", "https://gatherthread.example/v1/sessions/s1/invitations/i1"],
+      ["POST", "https://gatherthread.example/v1/projects/s1/invitations"],
+      ["GET", "https://gatherthread.example/v1/projects/s1/invitations"],
+      ["DELETE", "https://gatherthread.example/v1/projects/s1/invitations/i1"],
       ["POST", "https://gatherthread.example/v1/invitations/accept"],
     ]);
     assert.deepEqual(JSON.parse(requests[0].options.body), { role: "participant", ttl: "7d" });
@@ -135,7 +331,7 @@ test("new-user invitation claim requests a browser session without retaining the
       token: "new-device-token",
       invitation: {
         id: "i1",
-        session_id: "s1",
+        project_id: "p1",
         inviter_user_id: "owner",
         role: "viewer",
         created_at: "2026-08-25T00:00:00.000Z",

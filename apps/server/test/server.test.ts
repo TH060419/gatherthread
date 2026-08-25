@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -203,7 +204,80 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
   }
 });
 
-test("token auth and solo viewer ACL are enforced over HTTP", async () => {
+test("owner session rename validates input and reaches another client as metadata-only control", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-rename-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  let socket: WebSocket | undefined;
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "rename-owner", display_name: "Owner", device_id: "rename-owner-device", device_name: "Laptop" },
+    });
+    await api(running.origin, "/v1/projects", {
+      method: "POST", token: owner.body.data.token,
+      body: { project_id: "rename-project", idempotency_key: "rename-project-create", title: "Rename" },
+    });
+    await api(running.origin, "/v1/projects/rename-project/sessions", {
+      method: "POST", token: owner.body.data.token,
+      body: { session_id: "rename-room", idempotency_key: "rename-room-create", mode: "multi", title: "Before" },
+    });
+    const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/projects/rename-project/invitations", {
+      method: "POST", token: owner.body.data.token, body: { role: "participant", ttl: "1h" },
+    });
+    const member = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+      method: "POST",
+      body: { invite_token: invitation.body.data.invite_token, user_id: "rename-member", display_name: "Member", device_id: "rename-member-device", device_name: "Phone" },
+    });
+    socket = await realtimeSocket(running.origin, member.body.data.token, "rename-room");
+    const subscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
+    socket.send(JSON.stringify({ type: "subscribe", session_id: "rename-room", after_sequence: 0 }));
+    await subscribed;
+    const delivered = waitForSocketMessage(socket, (message) => message.type === "event");
+    const renamed = await api<{ data: { session: { title: string }; event: { payload: unknown } } }>(running.origin, "/v1/sessions/rename-room", {
+      method: "PATCH", token: owner.body.data.token,
+      body: { title: "After 🚀", idempotency_key: "rename-room-title-0001" },
+    });
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.body.data.session.title, "After 🚀");
+    assert.deepEqual(renamed.body.data.event.payload, { action: "renamed", title: "After 🚀" });
+    const message = await delivered;
+    assert.deepEqual((message.event as { payload: unknown }).payload, { action: "renamed", title: "After 🚀" });
+    assert.equal(JSON.stringify(message).includes("Before"), false);
+
+    assert.equal((await api(running.origin, "/v1/sessions/rename-room", {
+      method: "PATCH", token: member.body.data.token,
+      body: { title: "Denied", idempotency_key: "rename-room-denied" },
+    })).status, 403);
+    assert.equal((await api(running.origin, "/v1/sessions/rename-room", {
+      method: "PATCH", token: owner.body.data.token,
+      body: { title: "   ", idempotency_key: "rename-room-invalid" },
+    })).status, 422);
+    for (const [index, title] of ["line\nbreak", "nul\u0000byte", "c1\u0085control"].entries()) {
+      assert.equal((await api(running.origin, "/v1/sessions/rename-room", {
+        method: "PATCH", token: owner.body.data.token,
+        body: { title, idempotency_key: `rename-room-control-${index}` },
+      })).status, 422);
+      assert.equal((await api(running.origin, "/v1/projects", {
+        method: "POST", token: owner.body.data.token,
+        body: { title, idempotency_key: `control-project-${index}` },
+      })).status, 422);
+      assert.equal((await api(running.origin, "/v1/projects/rename-project/sessions", {
+        method: "POST", token: owner.body.data.token,
+        body: { title, mode: "multi", idempotency_key: `control-session-${index}` },
+      })).status, 422);
+    }
+  } finally {
+    socket?.terminate();
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("project invitations grant current and future sessions while viewer ACL stays read only", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-acl-"));
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
@@ -215,18 +289,28 @@ test("token auth and solo viewer ACL are enforced over HTTP", async () => {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
-    await api(running.origin, "/v1/sessions", {
+    const createdProject = await api<{ data: { project: { id: string; role: string; session_count: number } } }>(running.origin, "/v1/projects", {
+      method: "POST",
+      token: owner.body.data.token,
+      body: { project_id: "acl-project", idempotency_key: "create-acl-project", title: "ACL project" },
+    });
+    assert.equal(createdProject.status, 201);
+    assert.equal(createdProject.body.data.project.role, "owner");
+    assert.equal(createdProject.body.data.project.session_count, 0);
+    const projectList = await api<{ data: { projects: Array<{ id: string; session_count: number }> } }>(
+      running.origin, "/v1/projects", { token: owner.body.data.token },
+    );
+    assert.equal(projectList.body.data.projects.find((project) => project.id === "acl-project")?.session_count, 0);
+    const initialSessions = await api<{ data: { sessions: Array<{ id: string; title: string; mode: string }> } }>(
+      running.origin, "/v1/projects/acl-project/sessions", { token: owner.body.data.token },
+    );
+    assert.deepEqual(initialSessions.body.data.sessions, []);
+    await api(running.origin, "/v1/projects/acl-project/sessions", {
       method: "POST",
       token: owner.body.data.token,
       body: { session_id: "solo", idempotency_key: "create-solo-http-1", mode: "solo", title: "Solo" },
     });
-    const invalidParticipantInvitation = await api<{ error: { code: string } }>(running.origin, "/v1/sessions/solo/invitations", {
-      method: "POST",
-      token: owner.body.data.token,
-      body: { role: "participant", ttl: "1h" },
-    });
-    assert.equal(invalidParticipantInvitation.status, 403);
-    const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/sessions/solo/invitations", {
+    const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/projects/acl-project/invitations", {
       method: "POST",
       token: owner.body.data.token,
       body: { role: "viewer", ttl: "24h" },
@@ -241,7 +325,7 @@ test("token auth and solo viewer ACL are enforced over HTTP", async () => {
         device_name: "Phone",
       },
     });
-    await api(running.origin, "/v1/sessions", {
+    await api(running.origin, "/v1/projects/acl-project/sessions", {
       method: "POST",
       token: owner.body.data.token,
       body: { session_id: "private", idempotency_key: "create-private-1", mode: "multi", title: "Private" },
@@ -251,24 +335,21 @@ test("token auth and solo viewer ACL are enforced over HTTP", async () => {
       "/v1/sessions",
       { token: viewer.body.data.token },
     );
-    assert.equal(viewerSessions.body.data.sessions.length, 1);
-    assert.deepEqual({
-      id: viewerSessions.body.data.sessions[0]?.id,
-      mode: viewerSessions.body.data.sessions[0]?.mode,
-      role: viewerSessions.body.data.sessions[0]?.role,
-      current_sequence: viewerSessions.body.data.sessions[0]?.current_sequence,
-    }, {
-      id: "solo",
-      mode: "solo",
-      role: "viewer",
-      current_sequence: 2,
-    });
+    assert.equal(viewerSessions.body.data.sessions.length, 2);
+    assert.deepEqual(
+      new Set(viewerSessions.body.data.sessions.map((session) => session.id)),
+      new Set(["solo", "private"]),
+    );
+    assert.ok(viewerSessions.body.data.sessions.every((session) => session.role === "viewer"));
     const ownerSessions = await api<{ data: { sessions: Array<{ id: string }> } }>(
       running.origin,
       "/v1/sessions",
       { token: owner.body.data.token },
     );
-    assert.deepEqual(new Set(ownerSessions.body.data.sessions.map((session) => session.id)), new Set(["solo", "private"]));
+    assert.deepEqual(
+      new Set(ownerSessions.body.data.sessions.map((session) => session.id)),
+      new Set(["solo", "private"]),
+    );
     const denied = await api<{ error: { code: string } }>(running.origin, "/v1/sessions/solo/events", {
       method: "POST",
       token: viewer.body.data.token,
@@ -276,11 +357,31 @@ test("token auth and solo viewer ACL are enforced over HTTP", async () => {
     });
     assert.equal(denied.status, 403);
     assert.equal(denied.body.error.code, "forbidden");
+    const promoted = await api<{ data: { member: { role: string } } }>(
+      running.origin,
+      "/v1/projects/acl-project/members/viewer",
+      {
+        method: "PUT",
+        token: owner.body.data.token,
+        body: { role: "participant", idempotency_key: "promote-viewer-http" },
+      },
+    );
+    assert.equal(promoted.body.data.member.role, "participant");
+    assert.equal((await api(running.origin, "/v1/sessions/private/events", {
+      method: "POST",
+      token: viewer.body.data.token,
+      body: { idempotency_key: "participant-multi-write", type: "human_chat", payload: { text: "yes" } },
+    })).status, 201);
+    assert.equal((await api(running.origin, "/v1/sessions/solo/events", {
+      method: "POST",
+      token: viewer.body.data.token,
+      body: { idempotency_key: "participant-solo-write", type: "human_chat", payload: { text: "no" } },
+    })).status, 403);
     const readable = await api<{ data: { events: unknown[] } }>(running.origin, "/v1/sessions/solo/events", {
       token: viewer.body.data.token,
     });
     assert.equal(readable.status, 200);
-    assert.equal(readable.body.data.events.length, 2);
+    assert.equal(readable.body.data.events.length, 1);
     assert.equal((await api(running.origin, "/v1/sessions/solo/events?limit=0", {
       token: viewer.body.data.token,
     })).status, 400);
@@ -496,6 +597,85 @@ test("browser sessions survive refresh, reject CSRF writes, and revoke on logout
     });
     assert.equal(revoked.status, 204);
     assert.equal((await api(running.origin, "/v1/me", { cookie: reopenedCookie })).status, 401);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("blocked snapshot mutation revalidates browser session after logout before committing", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-browser-session-race-"));
+  const browserOrigin = "http://127.0.0.1:8787";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    allowedOrigins: [browserOrigin],
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    await api(running.origin, "/v1/sessions", {
+      method: "POST",
+      token: owner.body.data.token,
+      body: { session_id: "race-room", idempotency_key: "race-room-create", mode: "multi", title: "Race" },
+    });
+    const opened = await api(running.origin, "/v1/browser-sessions", {
+      method: "POST",
+      token: owner.body.data.token,
+      origin: browserOrigin,
+    });
+    const cookie = (opened.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
+    const browserSession = running.database.sqlite.prepare("SELECT id, last_used_at FROM browser_sessions LIMIT 1")
+      .get() as { id: string; last_used_at: string | null };
+    assert.equal(browserSession.last_used_at, null);
+
+    let blockedRequest!: ReturnType<typeof httpRequest>;
+    const blockedResponse = new Promise<{ status: number; body: { error?: { code?: string } } }>((resolve, reject) => {
+      blockedRequest = httpRequest(`${running.origin}/v1/sessions/race-room/snapshot-requests`, {
+        method: "POST",
+        headers: {
+          cookie,
+          origin: browserOrigin,
+          "content-type": "application/json",
+          "content-length": "2",
+        },
+      }, (response) => {
+        const chunks: Buffer[] = [];
+        response.on("data", (chunk: Buffer) => chunks.push(chunk));
+        response.on("end", () => resolve({
+          status: response.statusCode ?? 0,
+          body: JSON.parse(Buffer.concat(chunks).toString("utf8")) as { error?: { code?: string } },
+        }));
+      });
+      blockedRequest.on("error", reject);
+      blockedRequest.write("{");
+    });
+
+    let bodyReadStarted = false;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const row = running.database.sqlite.prepare("SELECT last_used_at FROM browser_sessions WHERE id = ?")
+        .get(browserSession.id) as { last_used_at: string | null };
+      if (row.last_used_at !== null) {
+        bodyReadStarted = true;
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    assert.equal(bodyReadStarted, true);
+    assert.equal((await api(running.origin, "/v1/browser-sessions/current", {
+      method: "DELETE",
+      cookie,
+      origin: browserOrigin,
+    })).status, 204);
+    blockedRequest.end("}");
+    const rejected = await blockedResponse;
+    assert.equal(rejected.status, 401);
+    assert.equal(rejected.body.error?.code, "unauthorized");
+    assert.equal((running.database.sqlite.prepare("SELECT count(*) AS count FROM snapshot_requests")
+      .get() as { count: number }).count, 0);
   } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });
@@ -726,6 +906,182 @@ test("revoking a device closes its realtime socket and invalidates delegated aut
     assert.equal(recovered.body.error.code, "unauthorized");
   } finally {
     socket?.terminate();
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("project membership removal closes realtime immediately without leaking a cursor", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-membership-revoke-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    heartbeatIntervalMs: 50,
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  let socket: WebSocket | undefined;
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    const created = await api<{ data: { session: { id: string; project_id: string } } }>(running.origin, "/v1/sessions", {
+      method: "POST",
+      token: owner.body.data.token,
+      body: { session_id: "membership-room", idempotency_key: "membership-room-create", mode: "multi", title: "Room" },
+    });
+    const member = running.database.createIdentity({
+      user_id: "member", display_name: "Member", device_id: "member-device", device_name: "Phone",
+    });
+    running.service.setMembership(
+      running.database.authenticate(owner.body.data.token),
+      created.body.data.session.id,
+      member.actor.user_id,
+      "participant",
+      "membership-room-member",
+    );
+
+    socket = await realtimeSocket(running.origin, member.token, created.body.data.session.id);
+    const subscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
+    socket.send(JSON.stringify({ type: "subscribe", session_id: created.body.data.session.id, after_sequence: 0 }));
+    await subscribed;
+    const messagesAfterRemoval: Record<string, unknown>[] = [];
+    socket.on("message", (data) => messagesAfterRemoval.push(JSON.parse(data.toString()) as Record<string, unknown>));
+    const closed = new Promise<number>((resolve) => socket?.once("close", resolve));
+    const removed = await api(running.origin, `/v1/projects/${created.body.data.session.project_id}/members/${member.actor.user_id}`, {
+      method: "DELETE", token: owner.body.data.token, body: {},
+    });
+    assert.equal(removed.status, 204);
+    assert.equal(await closed, 1008);
+    socket = undefined;
+
+    assert.equal((await api(running.origin, `/v1/sessions/${created.body.data.session.id}/events`, {
+      method: "POST", token: owner.body.data.token,
+      body: { idempotency_key: "after-membership-removal", type: "human_chat", payload: { text: "private now" } },
+    })).status, 201);
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.deepEqual(messagesAfterRemoval, []);
+    const replay = await api<{ error: { code: string } }>(
+      running.origin, `/v1/sessions/${created.body.data.session.id}/events`, { token: member.token },
+    );
+    assert.equal(replay.status, 404);
+    assert.equal(replay.body.error.code, "not_found");
+  } finally {
+    socket?.terminate();
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("HTTP exposes idempotent local turns and snapshot request control-plane", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-sync-http-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"), authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST", body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    const token = owner.body.data.token;
+    await api(running.origin, "/v1/sessions", {
+      method: "POST", token,
+      body: { session_id: "sync-http", idempotency_key: "sync-http-create", mode: "multi", title: "Sync" },
+    });
+    for (const runtime of [
+      { runtime_id: "execution-http", purpose: "execution", harness: "codex", local_session_id: "exec-local" },
+      { runtime_id: "snapshot-http", purpose: "snapshot_connector", harness: "connector", local_session_id: "snapshot-local" },
+    ]) {
+      assert.equal((await api(running.origin, "/v1/runtimes", {
+        method: "POST", token, body: {
+          ...runtime, session_id: "sync-http", device_id: "owner-device", provider: "local", model: "test",
+          capture_fidelity: "canonical_history",
+        },
+      })).status, 201);
+    }
+    const executionPresence = await api<{ data: { members: Array<{ user_id: string; runtime: { id: string; purpose: string } | null }> } }>(
+      running.origin, "/v1/sessions/sync-http/members", { token },
+    );
+    assert.equal(executionPresence.body.data.members[0]?.runtime?.id, "execution-http");
+    assert.equal(executionPresence.body.data.members[0]?.runtime?.purpose, "execution");
+    const turn = {
+      local_turn_id: "http-turn-1", runtime_id: "execution-http", based_on_sequence: 0,
+      occurred_at: "2026-08-25T12:00:00.000Z", request_payload: { text: "q" }, response_payload: { text: "a" },
+    };
+    const first = await api<{ data: { request_event: { id: string; actor_display_name: string }; response_event: { sequence: number; actor_display_name: string } } }>(
+      running.origin, "/v1/sessions/sync-http/local-turns", { method: "POST", token, body: turn },
+    );
+    const retry = await api<typeof first.body>(running.origin, "/v1/sessions/sync-http/local-turns", {
+      method: "POST", token, body: turn,
+    });
+    assert.equal(first.status, 201);
+    assert.equal(first.body.data.request_event.actor_display_name, "Owner");
+    assert.equal(first.body.data.response_event.actor_display_name, "Owner");
+    assert.deepEqual(retry.body, first.body);
+    const created = await api<{ data: { snapshot_request: { id: string; through_sequence: number } } }>(
+      running.origin, "/v1/sessions/sync-http/snapshot-requests", { method: "POST", token, body: {} },
+    );
+    assert.equal(created.body.data.snapshot_request.through_sequence, first.body.data.response_event.sequence);
+    const id = created.body.data.snapshot_request.id;
+    assert.equal((await api(running.origin, `/v1/snapshot-requests/${id}/claim`, {
+      method: "POST", token, body: { runtime_id: "snapshot-http" },
+    })).status, 200);
+    const completed = await api<{ data: { snapshot_request: { status: string } } }>(
+      running.origin, `/v1/snapshot-requests/${id}/complete`, {
+        method: "POST", token, body: { runtime_id: "snapshot-http", result: { summary: "ready" } },
+      },
+    );
+    assert.equal(completed.body.data.snapshot_request.status, "completed");
+    assert.equal((await api(running.origin, `/v1/snapshot-requests/${id}`, { token })).status, 200);
+    const filteredSnapshots = await api<{ data: { snapshot_requests: Array<{ id: string }> } }>(
+      running.origin, "/v1/snapshot-requests?status=completed&session_id=sync-http&limit=40", { token },
+    );
+    assert.deepEqual(filteredSnapshots.body.data.snapshot_requests.map((request) => request.id), [id]);
+    const oversizedRequest = await api<{ data: { snapshot_request: { id: string } } }>(
+      running.origin, "/v1/sessions/sync-http/snapshot-requests", { method: "POST", token, body: {} },
+    );
+    const oversizedId = oversizedRequest.body.data.snapshot_request.id;
+    await api(running.origin, `/v1/snapshot-requests/${oversizedId}/claim`, {
+      method: "POST", token, body: { runtime_id: "snapshot-http" },
+    });
+    const oversizedResult = await api<{ error: { code: string } }>(
+      running.origin, `/v1/snapshot-requests/${oversizedId}/complete`, {
+        method: "POST", token,
+        body: { runtime_id: "snapshot-http", result: { content: "x".repeat(100_000) } },
+      },
+    );
+    assert.equal(oversizedResult.status, 400);
+    assert.equal(oversizedResult.body.error.code, "validation_error");
+    const oversizedStored = running.database.sqlite.prepare("SELECT status, storage_bytes FROM snapshot_requests WHERE id = ?")
+      .get(oversizedId) as { status: string; storage_bytes: number };
+    assert.equal(oversizedStored.status, "claimed");
+    assert.equal(oversizedStored.storage_bytes, 1_024);
+
+    const viewer = running.database.createIdentity({
+      user_id: "viewer", display_name: "Viewer", device_id: "viewer-device", device_name: "Browser",
+    });
+    running.service.setMembership(
+      running.database.authenticate(token), "sync-http", viewer.actor.user_id, "viewer", "sync-http-viewer-add",
+    );
+    assert.equal((await api(running.origin, "/v1/runtimes", {
+      method: "POST", token: viewer.token, body: {
+        runtime_id: "viewer-snapshot-http", session_id: "sync-http", device_id: "viewer-device",
+        purpose: "snapshot_connector", harness: "viewer-connector", provider: "local", model: "snapshot",
+        local_session_id: "viewer-snapshot-local", capture_fidelity: "canonical_history",
+      },
+    })).status, 201);
+    const viewerMembers = await api<{ data: { members: Array<{ user_id: string; runtime: { id: string; purpose: string; status: string } | null }> } }>(
+      running.origin, "/v1/sessions/sync-http/members", { token: viewer.token },
+    );
+    const viewerPresence = viewerMembers.body.data.members.find((member) => member.user_id === "viewer")?.runtime;
+    assert.equal(viewerPresence?.id, "viewer-snapshot-http");
+    assert.equal(viewerPresence?.purpose, "snapshot_connector");
+    assert.equal(viewerPresence?.status, "online");
+    assert.equal((await api(running.origin, "/v1/sessions/sync-http/local-turns", {
+      method: "POST", token: viewer.token, body: {
+        ...turn, local_turn_id: "viewer-cannot-execute", runtime_id: "viewer-snapshot-http",
+      },
+    })).status, 403);
+  } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });
   }

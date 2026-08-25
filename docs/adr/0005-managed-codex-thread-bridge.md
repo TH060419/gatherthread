@@ -1,7 +1,7 @@
 # ADR-0005: Manage one local Codex thread per GatherThread session mapping
 
 **Date**: 2026-08-25
-**Status**: accepted
+**Status**: superseded by [ADR-0006](0006-project-first-collaboration-boundary.md) and [ADR-0007](0007-project-harness-adapter-and-codex-app-server.md)
 **Deciders**: Yuhan He
 
 ## Context

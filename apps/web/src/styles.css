@@ -160,12 +160,13 @@ textarea:focus-visible,
   font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(3.25rem, 7vw, 8.25rem);
   font-weight: 400;
-  line-height: 0.95;
-  letter-spacing: -0.06em;
+  line-height: 1.08;
+  letter-spacing: -0.05em;
 }
 
 .headline-line {
   display: block;
+  padding-block: 0.02em;
   white-space: nowrap;
 }
 
@@ -495,6 +496,41 @@ code {
   font-weight: 400;
 }
 
+.project-select {
+  min-width: 0;
+  margin-top: 6px;
+  border-color: transparent;
+  background: var(--paper-raised);
+  font-family: Georgia, serif;
+  font-size: 1rem;
+}
+
+.project-connect-button {
+  display: grid;
+  width: 100%;
+  justify-items: start;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-color: #b8d7cf;
+  background: var(--teal-wash);
+  color: var(--teal-dark);
+  line-height: 1.1;
+}
+
+.project-connect-button span[lang] {
+  margin-top: 3px;
+  font-size: 0.66rem;
+  font-weight: 700;
+}
+
+.project-connect-button[hidden] {
+  display: none;
+}
+
+.session-heading {
+  margin-top: 24px;
+}
+
 .session-list,
 .member-list,
 .event-timeline {
@@ -594,11 +630,33 @@ code {
 .session-view {
   height: 100%;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr) auto;
 }
 
 .session-header {
+  grid-row: 1;
   padding: 28px 34px 20px;
+}
+
+.session-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.button-download {
+  display: grid;
+  justify-items: start;
+  border-color: var(--teal-dark);
+  background: var(--teal-wash);
+  color: var(--teal-dark);
+  line-height: 1.05;
+}
+
+.button-download span[lang] {
+  margin-top: 4px;
+  font-size: 0.65rem;
+  font-weight: 700;
 }
 
 .session-header h1,
@@ -620,6 +678,7 @@ code {
 }
 
 .sync-banner {
+  grid-row: 3;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -629,6 +688,113 @@ code {
   border-radius: 9px;
   background: var(--paper);
   font-size: 0.76rem;
+}
+
+.connector-status {
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 34px 10px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--teal);
+  background: var(--teal-wash);
+  font-size: 0.75rem;
+}
+
+.connector-status > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+}
+
+.connector-status span:not(.status-dot) {
+  color: var(--ink-soft);
+}
+
+.connector-status[data-state="offline"],
+.connector-status[data-state="local_fork"] {
+  border-left-color: var(--coral);
+  background: var(--coral-wash);
+}
+
+.connector-status[data-state="reconciling"],
+.connector-status[data-state="rebuilding"] {
+  border-left-color: #b77a19;
+  background: var(--amber-wash);
+}
+
+.snapshot-download-panel {
+  grid-row: 4;
+  max-height: 36vh;
+  overflow-y: auto;
+  margin: 0 34px 12px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+}
+
+.snapshot-download-panel h2 {
+  margin: 3px 0 7px;
+  font-family: Georgia, serif;
+  font-size: 1.15rem;
+  font-weight: 400;
+}
+
+.snapshot-download-panel p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.snapshot-connector-hint {
+  margin-top: 7px !important;
+}
+
+.snapshot-request-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.snapshot-request {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.snapshot-request > div,
+.snapshot-request strong,
+.snapshot-request span,
+.snapshot-request small {
+  display: block;
+}
+
+.snapshot-request span,
+.snapshot-request small {
+  margin-top: 3px;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+}
+
+.snapshot-request-completed strong {
+  color: var(--teal-dark);
+}
+
+.snapshot-request-failed strong {
+  color: var(--coral);
+}
+
+.snapshot-request-empty[hidden],
+.snapshot-download-panel[hidden],
+.connector-status[hidden],
+.button-download[hidden] {
+  display: none;
 }
 
 .sync-banner > div {
@@ -661,6 +827,7 @@ code {
 }
 
 .timeline-region {
+  grid-row: 5;
   overflow-y: auto;
   padding: 10px 34px 24px;
   scroll-behavior: smooth;
@@ -732,6 +899,72 @@ code {
   background: #f4faf7;
 }
 
+.agent-pending-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: fit-content;
+  margin: 9px 0 0 18px;
+  padding: 7px 11px;
+  border: 1px solid #b8d7cf;
+  border-radius: 999px;
+  color: var(--teal-dark);
+  background: #f4faf7;
+  font-size: 0.72rem;
+}
+
+.agent-pending-status[data-state="queued"] {
+  border-color: #d4ad67;
+  color: var(--ink-soft);
+  background: var(--amber-wash);
+}
+
+.agent-thinking-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 27px;
+}
+
+.agent-thinking-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: agent-thinking-pulse 1.15s ease-in-out infinite;
+}
+
+.agent-thinking-dots i:nth-child(2) {
+  animation-delay: 0.14s;
+}
+
+.agent-thinking-dots i:nth-child(3) {
+  animation-delay: 0.28s;
+}
+
+.agent-pending-status[data-state="queued"] .agent-thinking-dots i {
+  animation: none;
+  opacity: 0.45;
+}
+
+@keyframes agent-thinking-pulse {
+  0%, 70%, 100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  35% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-thinking-dots i {
+    animation: none;
+    opacity: 0.72;
+  }
+}
+
 .event-context_snapshot,
 .event-membership_change,
 .event-session_state_change {
@@ -778,6 +1011,7 @@ code {
 }
 
 .composer {
+  grid-row: 6;
   padding: 18px 34px 22px;
   border-top: 1px solid var(--line);
   background: var(--paper);
@@ -838,6 +1072,14 @@ code {
 .member-copy strong,
 .member-copy small {
   display: block;
+}
+
+.member-role-select {
+  min-height: 30px;
+  margin-top: 4px;
+  padding: 3px 28px 3px 7px;
+  font-size: 0.68rem;
+  text-transform: capitalize;
 }
 
 .member-copy strong {
@@ -1070,6 +1312,95 @@ code {
   padding: 28px;
 }
 
+.codex-connect-dialog {
+  width: min(720px, calc(100vw - 28px));
+  max-height: min(88vh, 780px);
+}
+
+.codex-connect-content {
+  padding: 28px;
+}
+
+.codex-connect-content > p {
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+  line-height: 1.55;
+}
+
+.codex-connect-notice {
+  padding: 12px 14px;
+  border-left: 3px solid #b77a19;
+  background: var(--amber-wash);
+}
+
+.codex-desktop-activation-guide {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid #d5aa65;
+  border-radius: 10px;
+  background: var(--amber-wash);
+}
+
+.codex-desktop-activation-guide h3,
+.codex-desktop-activation-guide p {
+  margin: 0;
+}
+
+.codex-desktop-activation-guide h3 {
+  font-family: Georgia, serif;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.codex-desktop-activation-guide p {
+  margin-top: 8px;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.command-card {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: white;
+}
+
+.command-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.command-heading h3 {
+  margin: 0;
+  font-family: Georgia, serif;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.connector-command {
+  display: block;
+  max-height: 8.5rem;
+  overflow: auto;
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 7px;
+  background: #f2efe7;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  user-select: all;
+  white-space: pre-wrap;
+}
+
+.copy-command-status {
+  min-height: 1.1em;
+  margin: 7px 0 0;
+}
+
 .create-dialog fieldset {
   margin: 24px 0 0;
   padding: 0;
@@ -1210,6 +1541,24 @@ code {
     margin-top: 12px;
   }
 
+  .project-connect-button {
+    width: auto;
+    align-self: flex-start;
+  }
+
+  .codex-connect-content {
+    padding: 20px;
+  }
+
+  .command-heading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .command-heading .button {
+    width: 100%;
+  }
+
   .session-list li + li {
     margin: 0;
   }
@@ -1232,6 +1581,20 @@ code {
 
   .sync-banner {
     margin: 0 18px 10px;
+  }
+
+  .connector-status,
+  .snapshot-download-panel {
+    margin-right: 18px;
+    margin-left: 18px;
+  }
+
+  .session-header-actions {
+    align-items: stretch;
+  }
+
+  .button-download {
+    padding-inline: 10px;
   }
 
   .sync-banner span:not(.status-dot) {

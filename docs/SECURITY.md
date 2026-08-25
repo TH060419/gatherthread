@@ -8,7 +8,7 @@ The repository contains an executable single-process alpha server and owner-host
 
 ## Assets and trust boundaries
 
-Protected assets are canonical event content, membership and visibility state, bearer credentials, runtime registrations, local transcript paths, attachments, model/provider metadata, retention settings, backups, and audit records.
+Protected assets are canonical event content, membership and visibility state, bearer credentials, runtime registrations, snapshot jobs and result metadata, local transcript paths, connector cursors and outboxes, hook registry/spool content, attachments, model/provider metadata, retention settings, backups, and audit records.
 
 The main trust boundaries are:
 
@@ -18,32 +18,40 @@ The main trust boundaries are:
 4. Bridge to local harness transcripts, provider context, filesystem, and tool approvals.
 5. CI and dependency sources to the build and release artifacts.
 6. Tailscale identity and grants to the loopback-only owner host exposed through Serve.
+7. Codex project hooks and local App Server processes to the connector's private socket, registry, spool, and native-thread state.
 
 The collaboration service never inherits authority to approve local tools. Transcript access is opt-in and path-scoped. A remote request cannot broaden filesystem access or bypass the harness approval boundary.
 
 ## Security invariants
 
-- Sessions are private by default. Public discovery and anonymous access are disabled.
+- Projects are private by default. Public discovery and anonymous access are disabled.
 - Public registration and production HTTP bootstrap are disabled. The first owner is created directly on the host.
 - Invitation and device-authorization secrets are single-use, expire, are stored only as peppered digests, and never appear in URLs or logs.
 - Browser session secrets are stored only as peppered HMAC digests. They have a 24-hour absolute lifetime, use `HttpOnly; SameSite=Strict; Path=/`, add `Secure` and `__Host-` under HTTPS, and are revoked by logout, device revocation, or device-token rotation.
 - The server derives actor and runtime identity from authenticated credentials. A runtime is bound to the exact authenticated device, not merely another device belonging to the same user.
 - Device revocation also revokes its runtimes and unused delegated authorizations, removes unused realtime tickets, and closes or revalidates active sockets.
-- Authorization is checked on every implemented read, replay, subscribe, append, claim, completion, invitation, and device operation.
-- A solo viewer cannot append any event. Rejection happens before sequence allocation or fan-out.
+- Authorization is checked on every implemented project, session, replay page, subscribe, live fan-out, socket heartbeat, append, claim, completion, invitation, and device operation. Membership removal closes affected sockets before another event or cursor is emitted.
+- A project participant can write `multi` and reads `solo`; a project viewer reads every session. Rejection happens before sequence allocation or fan-out.
+- Only the project owner can create sessions, issue invitations, or change another member's project role. Role changes cover current and future sessions and revoke newly ineligible runtimes.
 - Agent requests can be claimed only by an eligible runtime owned by the initiating user. Claim and completion transitions are atomic.
+- A direct local harness turn is accepted only from the authenticated actor's exact execution runtime. Its request, bounded tool events, and response commit in one transaction; an exact retry returns the original event set and a mismatched retry conflicts.
+- Runtime purpose is server-validated. A `snapshot_connector` may read and project only its authenticated user's requested frozen session snapshot; it cannot claim an Agent request or publish a local turn.
+- Snapshot jobs are private requester-scoped control-plane records, not canonical conversation events. Every job is charged a conservative 1 KiB metadata allowance, one completion/failure result is limited to 8 KiB UTF-8 JSON, and cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment. Unfinished jobs are additionally capped at 64 per user, 256 per session, and 4096 per deployment.
 - Events become visible only after the database transaction commits. The durable log, not WebSocket delivery, is authoritative.
 - Secrets, raw thinking, and private system or developer instructions are removed before persistence, logs, metrics, traces, and fan-out.
 - Fidelity labels are server-validated. Reconstructed history cannot claim `provider_request` fidelity.
+- Shared attribution keeps the username, harness, provider, model, and fidelity needed for collaboration. A non-owner reading another user's activity receives placeholders instead of local device, runtime, and native-session identifiers; canonical event storage never retains a raw native-session identifier.
 - The built-in Codex connector treats prior shared events as untrusted data, accepts execution only for the server-verified initiating user's request, retains a bounded local sandbox, and disables automatic privilege escalation.
+- Codex hook installation is explicit and subject to project trust review. A private registry allowlists managed execution thread IDs before relay or offline spooling; unrelated tasks and immutable snapshot threads are rejected locally.
+- Conversation reconciliation can replace only the connector's native-thread binding. It does not reset, check out, or overwrite the local source working tree, and the previous thread is preserved as an offline fork.
 
 ## Threat model
 
 | ID | Threat | Required mitigation | Verification gate |
 |---|---|---|---|
 | T1 | Forged actor or runtime provenance | derive identity from credential; bind device and runtime server-side; reject client actor overrides | authorization and runtime-claim E2E |
-| T2 | Cross-session IDOR | membership check for every session-scoped resource, including replay cursors and attachments | two-user negative API tests |
-| T3 | Solo viewer write or privilege escalation | role and mode check in the append transaction; owner-only membership changes | solo viewer E2E |
+| T2 | Cross-project or cross-session IDOR | project-membership check for every project/session resource, including replay cursors and attachments | two-user negative API tests |
+| T3 | Project role or solo-mode privilege escalation | project role and session mode check at the mutation boundary; owner-only role changes | participant/viewer and solo/multi E2E |
 | T4 | Idempotency poisoning | scope uniqueness to session; require the same actor, operation, and canonical payload hash on retry; return conflict for mismatches | retry and mismatch tests |
 | T5 | Runtime claim theft or duplicate work | bind request, user, device, session, and runtime; atomic claim; one active turn per runtime | runtime claim and device-binding tests; abandoned-claim recovery remains open |
 | T6 | Reorder, gap, or phantom event | allocate sequence in a write transaction; publish after commit; detect gaps and replay over authenticated HTTP | concurrent append and reconnect E2E |
@@ -54,6 +62,10 @@ The collaboration service never inherits authority to approve local tools. Trans
 | T11 | SQLite corruption or inconsistent backup | WAL and foreign keys; bounded transactions; online SQLite backup API; integrity check and restore drill | operational restore drill |
 | T12 | Dependency or CI compromise | lockfiles, dependency review, license gate, secret scan, least-privilege workflow permissions, reviewed updates | CI checks and release review |
 | T13 | Shared-history prompt injection causes unintended local action | separate the authenticated current request from prior untrusted context; claim only the initiating user's request; retain read-only/workspace-write sandbox; disable automatic escalation; allow final-answer-only sharing | Codex prompt/argument tests and real CLI smoke test |
+| T14 | Local turn retry triggers duplicate shared work or loses cloud order | durable stable-ID outbox; atomic local-turn commit; exact-retry payload match; server reports divergence; rebuild and verify canonical projection before switching | local-turn idempotency, offline-divergence, and rebuild tests |
+| T15 | Project hook captures an unrelated or read-only Codex task | explicit hook installation/trust; private workspace-bound registry; allowlist execution thread IDs before relay/spool; reject snapshot thread IDs | hook merge, registry, unrelated-task, and snapshot-isolation tests |
+| T16 | Snapshot worker gains write authority or exhausts storage | distinct runtime purpose; same-user/device/session checks; frozen sequence; no canonical event; per-row metadata charge; active-count, per-result, and cumulative quotas; byte-bounded listing | snapshot ACL, purpose, idempotency, quota, and integration tests |
+| T17 | A role downgrade or project removal later uploads work created while read-only | reconcile only from a successful authoritative ACL response; remove affected execution bindings and clear unpublished local state; preserve but never retroactively upload the native transcript; explicit 403/404 project cleanup | owner-to-viewer, participant-solo, removal, transient-failure, and regrant tests |
 
 ## Authentication and authorization requirements
 
@@ -63,21 +75,29 @@ The private owner-host exchanges a manually entered device bearer for a separate
 
 Invitation claim plus optional browser-session issuance is one SQLite transaction, so a Cookie issuance failure cannot consume the invitation while losing the new identity. The newly issued device token is still returned once to the invitee and displayed in a blocking copy dialog; it is not persisted by the page. This credential is the recovery path after the browser session ends.
 
-Invitation tokens are single-purpose, one-use, and stored as peppered digests. Owners choose one hour, 24 hours, or seven days, with 24 hours as the default. Acceptance is transactional and audits the inviter, recipient, role, session, and time without logging the token. Additional devices use a separate ten-minute one-use authorization.
+Invitation tokens are project-scoped, single-purpose, one-use, and stored as peppered digests. Owners choose `participant` or `viewer` and an expiry of one hour, 24 hours, or seven days, with 24 hours as the default. Acceptance is transactional and audits the inviter, recipient, role, project, and time without logging the token. Owners may later change another member's role; that authorization is enforced across current and future sessions. Additional devices use a separate ten-minute one-use authorization.
 
 The browser-session controls follow the [OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html), the [OWASP CSRF Prevention Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html), and [MDN Set-Cookie guidance](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Set-Cookie).
 
 ## Persistence and redaction requirements
 
-Validate all events against a strict schema and reject unknown fields where practical. Enforce request byte, JSON depth/node, single-event, replay-page, and cumulative storage limits. Per-user, per-session, and deployment event usage is charged in the same SQLite transaction as sequence allocation and insertion. Database queries use parameters and SQLite foreign keys are enabled.
+Validate all events against a strict schema and reject unknown fields where practical. Enforce request byte, JSON depth/node, single-event, replay-page, snapshot-result, active-job, and cumulative storage limits. Per-user, per-session, and deployment event usage is charged in the same SQLite transaction as sequence allocation and insertion. Snapshot row metadata is charged at creation and completion/failure bytes are added atomically to a separate cumulative ledger; list responses are newest-first and bounded to 128 KiB by default. Database queries use parameters and SQLite foreign keys are enabled.
 
 Redaction must happen at the earliest trusted boundary, before persistence and fan-out. It should combine an event-type allowlist with recursive sensitive-key handling and credential patterns. Regex-only redaction is insufficient. Redaction failures must fail closed for transcript and provider-context uploads. Store a redaction policy version and fidelity label, not the removed value.
 
 Logs may contain request ID, hashed user or session identifier, event type, sequence, status, latency, byte count, and redaction count. Logs must not contain authorization headers, cookies, invitation tokens, raw request bodies, event payloads, transcript paths, query strings, model prompts, tool arguments, tool results, stack traces returned to clients, or database rows.
 
+## Local connector and hook boundary
+
+The connector strips GatherThread credentials from the Codex child environment and never writes them to hook configuration, process arguments, native threads, registry, or spool. Local projection state, outbox, registry, and spool files are written atomically with mode `0600`; containing directories and the Unix socket path must be private. These files can contain local or shared conversation content even when they contain no bearer token, so host-account and disk protection remain required.
+
+`--install-hooks` merges only GatherThread's `UserPromptSubmit` and `Stop` definitions into the existing project configuration. These trusted hooks are required before a direct Codex desktop turn may be published; the connector does not infer uploadable turns from arbitrary App Server history. The operator must inspect `.codex/hooks.json` and trust that exact project hook in Codex. The registry is bound to the selected workspace and labels each native thread as `execution` or `snapshot_connector`; only an allowlisted execution thread may reach relay or spool. Hook input, response, and additional context are bounded, malformed events fail closed, and an active non-stale relay socket is never replaced.
+
+A hook draft queues connector-side canonical injection, compaction, reconciliation, and Web-triggered execution until the matching desktop `Stop` exposes the final turn. App Server thread status is a second point-in-time check, not a proven atomic lock across independent App Server processes. Operators must not start a Web Agent request on the same managed desktop task while its direct desktop turn is running. `thread/unsubscribe` is lifecycle cleanup and must not be treated as a lock.
+
 ## Default private deployment
 
-The application binds to loopback, serves Web/API/WebSocket on one origin, sets session visibility to private, and disables anonymous/public sessions and network bootstrap. Production startup fails without declared HTTPS termination, an exact public origin, a non-placeholder credential pepper, explicit HTTP/WebSocket origins, a static build, and a writable database directory with restrictive permissions.
+The application binds to loopback, serves Web/API/WebSocket on one origin, keeps projects private, and disables anonymous/public discovery and network bootstrap. Production startup fails without declared HTTPS termination, an exact public origin, a non-placeholder credential pepper, explicit HTTP/WebSocket origins, a static build, and a writable database directory with restrictive permissions.
 
 The supported alpha path is Tailscale Serve inside a private tailnet. The application port remains on loopback, Funnel is disabled, and tailnet grants allow only named collaborators to TCP 443. HTTP and WebSocket paths still require GatherThread authentication and ACL checks. Direct Internet exposure is unsupported. See `SELF_HOSTING.md` and `OPERATIONS.md` for the preflight and backup gates.
 

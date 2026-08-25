@@ -29,6 +29,7 @@ const SENSITIVE_KEY_NAMES = new Set([
   "rawthinking",
   "systemprompt",
   "developerprompt",
+  "localsessionid",
 ]);
 
 export interface RedactionOptions {

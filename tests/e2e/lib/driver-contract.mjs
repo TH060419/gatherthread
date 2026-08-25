@@ -8,6 +8,8 @@
  * registerRuntime({ user, deviceId, harness, provider, model, localSessionId }) -> Runtime
  * claimRequest({ runtime, requestId }) -> { request, canonicalHistory }
  * completeClaim({ runtime, requestId, content, idempotencyKey }) -> Event
+ * commitLocalTurn({ session, runtime, localTurnId, basedOnSequence, request, response })
+ *   -> { headBeforeCommit, reconciliationRequired, requestEvent, responseEvent }
  * listEvents({ session, afterSequence? }) -> Event[]
  * close() -> void
  *
@@ -18,8 +20,8 @@
  *   disconnect() -> void
  *
  * Rejections must expose a stable `error.code`. Required codes are:
- * `forbidden`, `claim_not_owned`, `runtime_busy`, `idempotency_conflict`, and
- * `disconnected`.
+ * `forbidden`, `claim_not_owned`, `runtime_busy`, `already_completed`,
+ * `idempotency_conflict`, and `disconnected`.
  */
 export const REQUIRED_DRIVER_METHODS = [
   'createUser',
@@ -29,6 +31,7 @@ export const REQUIRED_DRIVER_METHODS = [
   'registerRuntime',
   'claimRequest',
   'completeClaim',
+  'commitLocalTurn',
   'listEvents',
   'close',
 ]

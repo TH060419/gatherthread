@@ -1,7 +1,7 @@
 # ADR-0002: Use device-bound identity and single-use session invitations
 
 **Date**: 2026-08-25
-**Status**: accepted
+**Status**: superseded by [ADR-0006](0006-project-first-collaboration-boundary.md)
 **Deciders**: Yuhan He
 
 ## Context

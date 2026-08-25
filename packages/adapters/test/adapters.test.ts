@@ -64,6 +64,7 @@ test("redaction covers secret-bearing strings and nested structured values", () 
       nested: "password=hunter2 GATHERTHREAD_TOKEN=gta_01234567890123456789012345678901 browser=gtb_01234567890123456789012345678901 legacy=acp_01234567890123456789012345678901",
       systemPrompt: "private instructions",
       privateKey: "private material",
+      localSessionId: "/private/local/thread.jsonl",
       GATHERTHREAD_AUTH_TOKEN_PEPPER: "private pepper",
       tokenCount: 12,
     },
@@ -74,6 +75,7 @@ test("redaction covers secret-bearing strings and nested structured values", () 
     nested: "password=[REDACTED] GATHERTHREAD_TOKEN=[REDACTED] browser=[REDACTED] legacy=[REDACTED]",
     systemPrompt: "[REDACTED]",
     privateKey: "[REDACTED]",
+    localSessionId: "[REDACTED]",
     GATHERTHREAD_AUTH_TOKEN_PEPPER: "[REDACTED]",
     tokenCount: 12,
   });

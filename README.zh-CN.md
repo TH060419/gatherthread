@@ -9,7 +9,11 @@
 - `solo`：一位所有者发布完整的规范化会话事件流，其他协作者只能查看。
 - `multi`：多人共享一个有序的项目会话。普通聊天消息只进入共享会话，不会调用 Agent；Agent 请求只由发送者自己的本地 runtime 领取，回复会标注用户名、设备、harness、provider、模型、本地会话和上下文保真度。
 
-服务器使用 SQLite WAL 持久化只追加的规范事件日志，为每个会话分配权威序号，执行基于角色的访问控制，并提供可持久重放的历史记录和 WebSocket 实时推送。本地 bridge 可以运行自动注入规范历史的持久化 Codex thread，也可以增量导入 Codex 和 Claude Code JSONL，清除常见敏感信息，分别维护服务器游标和本地游标，并通过 MCP 工具与资源开放协作能力。
+服务器使用 SQLite WAL 持久化只追加的规范事件日志，为每个会话分配权威序号，执行基于角色的访问控制，并提供可持久重放的历史记录和 WebSocket 实时推送。对每个可编辑 Codex 会话，本地 bridge 会分别维护一个由 Desktop 独占写入的交互任务和一个后台执行投影。可信 Hook 通过持久、幂等的 outbox 上传桌面回合；网页请求与规范历史导入只在后台投影运行，避免两个进程争抢同一个原生 writer。
+
+## 项目与权限模型
+
+项目是协作、邀请和权限的边界。项目 Owner 创建其中的 `solo` 与 `multi` 会话，并可随时把其他成员调整为 `participant` 或 `viewer`。Participant 可以在所有 `multi` 会话中聊天并请求自己的本地 Agent，但对所有 `solo` 会话只读；Viewer 对整个项目只读。一次项目邀请会把所选角色授予该项目现有和未来的全部会话，首版不提供单独覆盖某个会话权限的机制。
 
 ## “完整上下文”的含义
 
@@ -61,22 +65,26 @@ npm run owner-host
 
 ## 接入本地 Codex Agent
 
-每位协作者使用自己的 GatherThread 设备 Token 和本地 Codex 登录运行连接器：
+每位协作者在 GatherThread 网页中选择项目，点击 **Connect Codex / 连接 Codex**，复制与自己系统对应的命令，并在本地 GatherThread 仓库根目录运行。命令类似：
 
 ```bash
 npm run codex:connect -- \
   --url https://your-host.your-tailnet.ts.net \
-  --workspace "/本地项目绝对路径" \
-  --model gpt-5.6-sol
+  --project PROJECT_ID \
+  --create-workspace \
+  --model gpt-5.6-sol \
+  --install-hooks
 ```
 
-命令会隐藏输入 Token；如果拥有多个可写会话，再选择一个会话并保持终端运行。网页会自动发现 runtime。之后点击 **Request my agent** 会调用当前用户自己的本地 Codex，而普通聊天只更新共享上下文。
+命令不含任何 Token；连接器会在终端中隐藏输入自己的设备 Token，在 `~/GatherThread Projects/` 下安全创建或复用与云端项目同名的本地工作区，并在 Codex Desktop 中打开它。每个可编辑会话会得到一个名为 `GatherThread · 项目名 · 会话名` 的 Desktop 任务，以及一个实现私有的 `exec` 后台投影。Desktop 是可见任务的唯一 writer；网页 **Request my agent** 在后台投影执行，再通过规范历史汇合。连接器会自动发现后续新会话，请保持终端运行。若要绑定已有源码目录，请改用 `--workspace "/本地项目绝对路径"`。
 
-第一次请求会读取当前用户可见的完整规范历史，后续请求继续同一个本地 Codex thread，并按顺序补齐全部新增事件。GatherThread 凭据不会进入 Codex 子进程环境，自动权限提升始终禁用，并且不支持 `danger-full-access`。详细流程参见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)和 [ADR-0005](docs/adr/0005-managed-codex-thread-bridge.md)。
+规范事件会按顺序导入后台投影，并使用冻结且按类型区分的前缀：`用户名 · Human Chat：`、`用户名 · Agent Request：` 和 `用户名 · Agent Response · harness · model：`。安装并信任项目 Hook 后，`UserPromptSubmit` 会把有界的规范增量作为上下文交给 Desktop Agent，`Stop` 则把这次 prompt 与最终回复恰好上传一次。当前公开 Hook 不提供完整结构化工具流，因此桌面端工具事件会被省略，而不是通过争抢 writer 去补读。远端事件始终显示在 GatherThread Web，并在下一次本地 prompt 时进入 Desktop 上下文；当前公开 Codex API 无法把它们补画成 Desktop 已有任务中的历史气泡。后台长历史会独立 compact，会话对齐不会回滚源码文件。
+
+只读会话不显示输入框，而显示 **Download to Codex**。每次点击都会冻结一个新的 `through_sequence`，创建互相独立的本地快照任务，之后绝不向云端回传。Owner 同步全部会话；Participant 同步 `multi`、下载 `solo`；Viewer 下载全部会话。若要回传 Desktop prompt，必须检查生成工作区中的 `.codex/hooks.json`，再通过 Codex `/hooks` 信任准确的项目 Hook。GatherThread 凭据不会进入 Codex 子进程环境，自动权限提升始终禁用，并且不支持 `danger-full-access`。当前流程参见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)和[ADR-0013](docs/adr/0013-single-writer-dual-codex-projections.md)。
 
 ## 安全机制与当前限制
 
-首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备撤销后立即使其浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、可配置的事件存储配额、断线重放，以及 SQLite 备份/恢复脚本。新邀请用户的设备 Token 只展示一次，必须在关闭提示前妥善保存。
+首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。非 Owner 成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。新邀请用户的设备 Token 只展示一次，必须在关闭提示前妥善保存。
 
 当前支持的零成本 Alpha 部署方式是：由一位参与者提供主机，服务器仅绑定 loopback，再通过 Tailscale Serve 在私有网络中共享。参见[单主机部署指南](docs/SELF_HOSTING.md)。不要通过路由器端口转发、Tailscale Funnel 或未经身份验证的公网隧道暴露当前服务。
 

@@ -6,7 +6,10 @@ const root = process.cwd();
 const excludedDirectories = new Set([
   ".git", ".local", "coverage", "dist", "node_modules", "playwright-report", "test-results",
 ]);
-const excludedFiles = new Set(["scripts/check-branding.mjs"]);
+const excludedFiles = new Set([
+  ".codex/hooks.json",
+  "scripts/check-branding.mjs",
+]);
 const textExtensions = new Set([
   "", ".cjs", ".css", ".env", ".example", ".html", ".js", ".json", ".jsx", ".md", ".mjs",
   ".sh", ".ts", ".tsx", ".txt", ".yaml", ".yml",

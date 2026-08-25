@@ -11,6 +11,7 @@ const projects = new Set()
 const acceptedLicenseFormats = [
   /^(?:MIT|ISC|Apache-2\.0|BSD-[23]-Clause|MPL-2\.0|CC-BY-4\.0)$/,
   /^Apache-2\.0 code \/ CC-BY-4\.0 specification$/,
+  /^NOASSERTION \(no license file detected; reference only, no code copied\)$/,
 ]
 
 if (!rows.length) errors.push('No attribution table rows were found')

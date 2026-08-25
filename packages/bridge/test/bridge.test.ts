@@ -5,6 +5,8 @@ import path from "node:path";
 import test from "node:test";
 import {
   BridgeDaemon,
+  CollaborationHttpError,
+  HarnessExecutionTerminatedError,
   LocalBridge,
   MemoryCursorStore,
   type AppendEventInput,
@@ -103,6 +105,37 @@ test("server cursor resumes incremental history", async () => {
   await bridge.connect();
   assert.equal((await bridge.readServerIncrement("session-1")).length, 2);
   assert.equal((await bridge.readServerIncrement("session-1")).length, 0);
+});
+
+test("authoritative first materialization resumes per event after a partial failure", async () => {
+  const api = new FakeApi();
+  api.history.push(
+    canonical("session-1", 1, { type: "human_chat", idempotencyKey: "1", payload: {} }),
+    canonical("session-1", 2, { type: "human_chat", idempotencyKey: "2", payload: {} }),
+    canonical("session-1", 3, { type: "human_chat", idempotencyKey: "3", payload: {} }),
+  );
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const firstAttempt: number[] = [];
+  await assert.rejects(bridge.materializeAuthoritativeHistory({
+    async execute() { throw new Error("not used"); },
+    async projectCanonicalEvents(events) {
+      const sequence = events[0]?.sequence ?? 0;
+      if (sequence === 2) throw new Error("injection interrupted");
+      firstAttempt.push(sequence);
+    },
+  }, 3), /injection interrupted/);
+  assert.deepEqual(firstAttempt, [1]);
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
+
+  const resumed: number[] = [];
+  assert.equal(await bridge.materializeAuthoritativeHistory({
+    async execute() { throw new Error("not used"); },
+    async projectCanonicalEvents(events) { resumed.push(...events.map((event) => event.sequence)); },
+  }, 3), 3);
+  assert.deepEqual(resumed, [2, 3]);
+  assert.equal((await cursorStore.load()).server["session-1"], 3);
 });
 
 test("provider_request snapshots require explicit capture authorization and exact observation", async () => {
@@ -211,6 +244,126 @@ test("pending request polling persists the server cursor only after execution co
   });
   assert.equal(result.claimed, 1);
   assert.equal((await cursorStore.load()).server["session-1"], 2);
+});
+
+test("known terminal harness failure completes the server claim with a bounded failed response", async () => {
+  const api = new FakeApi();
+  const cursorStore = new MemoryCursorStore();
+  api.history.push(canonical("session-1", 1, {
+    type: "agent_request",
+    idempotencyKey: "terminal-request",
+    payload: { text: "run" },
+  }));
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const result = await bridge.processPendingAgentRequests({
+    async execute() {
+      throw new HarnessExecutionTerminatedError("codex_turn_failed", `failed token=${"x".repeat(40)}`);
+    },
+  });
+  assert.equal(result.claimed, 1);
+  assert.equal(result.completed, 1);
+  assert.equal((api.completeInput?.payload as any).status, "failed");
+  assert.equal((api.completeInput?.payload as any).error.code, "codex_turn_failed");
+  assert.doesNotMatch(JSON.stringify(api.completeInput?.payload), /token=x/);
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
+});
+
+test("losing a cross-device claim race projects and advances only for the typed claimed conflict", async () => {
+  const request = canonical("session-1", 1, {
+    type: "agent_request",
+    idempotencyKey: "raced-request",
+    payload: { text: "work once" },
+  });
+  const api = new FakeApi();
+  api.history.push(request);
+  api.claimAgentRequest = async () => {
+    throw new CollaborationHttpError(409, "already claimed", "agent_request_already_claimed");
+  };
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const projected: number[] = [];
+  const result = await bridge.processPendingAgentRequests({
+    async execute() { throw new Error("claim loser must not execute"); },
+    async projectCanonicalEvents(events) { projected.push(...events.map((event) => event.sequence)); },
+  });
+  assert.deepEqual(projected, [1]);
+  assert.equal(result.claimed, 0);
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
+
+  const otherApi = new FakeApi();
+  otherApi.history.push(request);
+  otherApi.claimAgentRequest = async () => {
+    throw new CollaborationHttpError(409, "runtime busy", "runtime_busy");
+  };
+  const otherCursor = new MemoryCursorStore();
+  const otherBridge = new LocalBridge({ api: otherApi, cursorStore: otherCursor, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await otherBridge.connect();
+  await assert.rejects(otherBridge.processPendingAgentRequests({
+    async execute() { throw new Error("must not execute"); },
+    async projectCanonicalEvents() { throw new Error("unrelated 409 must not be projected"); },
+  }), (error: unknown) => error instanceof CollaborationHttpError && error.code === "runtime_busy");
+  assert.equal((await otherCursor.load()).server["session-1"] ?? 0, 0);
+});
+
+test("request polling projects remote requests and advances without claiming them", async () => {
+  const api = new FakeApi();
+  let claims = 0;
+  api.claimAgentRequest = async (...args) => {
+    claims += 1;
+    return { claimed: true, status: "claimed" as const, requestId: args[1], runtimeId: args[2] };
+  };
+  const cursorStore = new MemoryCursorStore();
+  const chat = canonical("session-1", 1, { type: "human_chat", idempotencyKey: "chat", payload: { text: "shared" } });
+  const remoteRequest = { ...canonical("session-1", 2, {
+    type: "agent_request",
+    idempotencyKey: "remote-request",
+    payload: { text: "remote work" },
+  }), actorId: "user-2" };
+  const remoteResponse = { ...canonical("session-1", 3, {
+    type: "agent_response",
+    idempotencyKey: "remote-response",
+    payload: { text: "remote answer" },
+  }), actorId: "user-2" };
+  api.history.push(chat, remoteRequest, remoteResponse);
+  const projected: number[] = [];
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const result = await bridge.processPendingAgentRequests({
+    async execute() { throw new Error("remote requests must not execute locally"); },
+    async projectCanonicalEvents(events) { projected.push(...events.map((event) => event.sequence)); },
+  });
+  assert.deepEqual(projected, [1, 2, 3]);
+  assert.equal(claims, 0);
+  assert.equal(result.claimed, 0);
+  assert.equal((await cursorStore.load()).server["session-1"], 3);
+});
+
+test("executor eligibility can skip a locally committed request without blocking the cursor", async () => {
+  const api = new FakeApi();
+  let claims = 0;
+  api.claimAgentRequest = async (...args) => {
+    claims += 1;
+    return { claimed: true, status: "claimed" as const, requestId: args[1], runtimeId: args[2] };
+  };
+  api.history.push(canonical("session-1", 1, {
+    type: "agent_request",
+    idempotencyKey: "committed-local-request",
+    payload: { text: "already completed on desktop" },
+  }));
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const projected: number[] = [];
+  await bridge.processPendingAgentRequests({
+    async execute() { throw new Error("bound local request must not execute again"); },
+    shouldExecute: async () => false,
+    projectCanonicalEvents: async (events) => { projected.push(...events.map((event) => event.sequence)); },
+  });
+  assert.equal(claims, 0);
+  assert.deepEqual(projected, [1]);
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
 });
 
 test("bridge daemon exits cleanly when its abort signal is raised", async () => {

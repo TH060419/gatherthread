@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { redactText, redactValue } from "@gatherthread/adapters";
 import type {
   CollaborationApi,
@@ -34,6 +34,10 @@ export interface CollaborationMcpServiceOptions {
 }
 
 const TOOL_DEFINITIONS = [
+  tool("collaboration_list_projects", "List collaboration projects visible to the authenticated user", {}),
+  tool("collaboration_list_project_sessions", "List sessions in one visible collaboration project", {
+    project_id: stringSchema("Project identifier"),
+  }, ["project_id"]),
   tool("collaboration_list_sessions", "List collaboration sessions visible to the authenticated user", {}),
   tool("collaboration_read_history", "Read canonical session events after a durable server sequence", {
     session_id: stringSchema("Session identifier"),
@@ -80,7 +84,7 @@ const TOOL_DEFINITIONS = [
     content: {},
     idempotency_key: idempotencySchema("Stable retry key; generated if omitted"),
     covers_through_sequence: integerSchema("Required for canonical_history", 0),
-    local_session_id: stringSchema("Required for harness_transcript"),
+    local_session_id: stringSchema("Required for harness_transcript; fingerprinted before append"),
     exact_provider_request: { type: "boolean" },
     observed_by: enumSchema(["harness_hook", "authorized_proxy"]),
     runtime_id: stringSchema("Runtime that observed the snapshot"),
@@ -142,6 +146,12 @@ export class CollaborationMcpService {
   async #callTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     let result: unknown;
     switch (name) {
+      case "collaboration_list_projects":
+        result = await this.#requireProjectApi("listProjects")();
+        break;
+      case "collaboration_list_project_sessions":
+        result = await this.#requireProjectApi("listProjectSessions")(requiredString(args, "project_id"));
+        break;
       case "collaboration_list_sessions":
         result = await this.#api.listSessions();
         break;
@@ -212,7 +222,9 @@ export class CollaborationMcpService {
     if (fidelity === "canonical_history") {
       payload.covers_through_sequence = requiredInteger(args, "covers_through_sequence");
     } else if (fidelity === "harness_transcript") {
-      payload.local_session_id = requiredString(args, "local_session_id");
+      payload.local_session_fingerprint = createHash("sha256")
+        .update(requiredString(args, "local_session_id"))
+        .digest("hex");
     } else {
       if (!this.#allowProviderRequestCapture
         || args.exact_provider_request !== true
@@ -236,7 +248,18 @@ export class CollaborationMcpService {
 
   async #listResources(): Promise<unknown[]> {
     const sessions = await this.#api.listSessions();
+    const projects = this.#api.listProjects ? await this.#api.listProjects() : [];
     return [
+      ...(this.#api.listProjects ? [{
+        uri: "collaboration://projects",
+        name: "Collaboration projects",
+        mimeType: "application/json",
+      }] : []),
+      ...projects.map((project) => ({
+        uri: `collaboration://projects/${encodeURIComponent(project.id)}/sessions`,
+        name: `${project.name} sessions`,
+        mimeType: "application/json",
+      })),
       {
         uri: "collaboration://sessions",
         name: "Collaboration sessions",
@@ -253,6 +276,17 @@ export class CollaborationMcpService {
   async #readResource(uri: string): Promise<unknown> {
     const parsed = new URL(uri);
     if (parsed.protocol !== "collaboration:") throw new Error("Unsupported resource URI");
+    if (parsed.hostname === "projects" && (parsed.pathname === "" || parsed.pathname === "/")) {
+      return resourceResult(uri, await this.#requireProjectApi("listProjects")());
+    }
+    if (parsed.hostname === "projects") {
+      const projectMatch = parsed.pathname.match(/^\/([^/]+)\/sessions$/);
+      if (!projectMatch) throw new Error("Unsupported resource URI");
+      return resourceResult(
+        uri,
+        await this.#requireProjectApi("listProjectSessions")(decodeURIComponent(projectMatch[1] ?? "")),
+      );
+    }
     if (parsed.hostname === "sessions" && (parsed.pathname === "" || parsed.pathname === "/")) {
       return resourceResult(uri, await this.#api.listSessions());
     }
@@ -263,6 +297,14 @@ export class CollaborationMcpService {
     const after = optionalInteger(parsed.searchParams.get("after_sequence"), 0);
     const limit = optionalPositiveInteger(parsed.searchParams.get("limit"), 200);
     return resourceResult(uri, await this.#api.readEvents(sessionId, after, limit));
+  }
+
+  #requireProjectApi<K extends "listProjects" | "listProjectSessions">(
+    name: K,
+  ): NonNullable<CollaborationApi[K]> {
+    const operation = this.#api[name];
+    if (!operation) throw new Error(`The configured collaboration API does not support ${name}`);
+    return operation.bind(this.#api) as NonNullable<CollaborationApi[K]>;
   }
 }
 

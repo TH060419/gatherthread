@@ -4,10 +4,19 @@ import {
   AppendEventInputSchema,
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
+  CommitLocalTurnInputSchema,
+  CompleteSnapshotRequestInputSchema,
   CreateInvitationInputSchema,
+  CreateProjectInputSchema,
   InvitationRecordSchema,
+  ProjectInvitationRecordSchema,
+  ProjectListItemSchema,
+  RegisterRuntimeInputSchema,
   RuntimeProvenanceSchema,
+  SessionTitleSchema,
+  SnapshotRequestRecordSchema,
   SubscribeMessageSchema,
+  UpdateSessionInputSchema,
 } from "../src/index.js";
 
 test("append input rejects unknown event types and short idempotency keys", () => {
@@ -19,6 +28,70 @@ test("append input rejects unknown event types and short idempotency keys", () =
     }).success,
     false,
   );
+});
+
+test("project contracts keep invitations and session grouping project-scoped", () => {
+  assert.equal(CreateProjectInputSchema.safeParse({
+    title: "Shared implementation",
+    idempotency_key: "project-create-0001",
+  }).success, true);
+  const timestamp = new Date().toISOString();
+  assert.equal(ProjectListItemSchema.safeParse({
+    id: "project-1",
+    title: "Shared implementation",
+    state: "active",
+    role: "participant",
+    session_count: 2,
+    created_at: timestamp,
+    updated_at: timestamp,
+  }).success, true);
+  assert.equal(ProjectInvitationRecordSchema.safeParse({
+    id: "invite-1",
+    project_id: "project-1",
+    inviter_user_id: "owner",
+    role: "participant",
+    created_at: timestamp,
+    expires_at: timestamp,
+    revoked_at: null,
+    expired_at: null,
+    claimed_at: null,
+    claimed_by_user_id: null,
+    claimed_by_device_id: null,
+  }).success, true);
+});
+
+test("session rename uses the same trimmed Unicode title contract as creation", () => {
+  assert.equal(SessionTitleSchema.parse("  研究计划 🚀  "), "研究计划 🚀");
+  assert.equal(CreateProjectInputSchema.parse({
+    title: "  量子项目 🚀  ",
+    idempotency_key: "unicode-project-0001",
+  }).title, "量子项目 🚀");
+  assert.deepEqual(UpdateSessionInputSchema.parse({
+    title: "  Renamed session  ",
+    idempotency_key: "rename-session-0001",
+  }), {
+    title: "Renamed session",
+    idempotency_key: "rename-session-0001",
+  });
+  assert.equal(UpdateSessionInputSchema.safeParse({
+    title: "   ",
+    idempotency_key: "rename-session-0002",
+  }).success, false);
+  assert.equal(UpdateSessionInputSchema.safeParse({
+    title: "x".repeat(201),
+    idempotency_key: "rename-session-0003",
+  }).success, false);
+  for (const title of ["line\nbreak", "nul\u0000byte", "c1\u0085control"]) {
+    assert.equal(SessionTitleSchema.safeParse(title).success, false);
+    assert.equal(CreateProjectInputSchema.safeParse({
+      title,
+      idempotency_key: "control-project-0001",
+    }).success, false);
+    assert.equal(UpdateSessionInputSchema.safeParse({
+      title,
+      idempotency_key: "control-rename-0001",
+    }).success, false);
+  }
 });
 
 test("invitation inputs allow only fixed TTLs and participant/viewer roles", () => {
@@ -77,6 +150,7 @@ test("canonical events and reconnect subscriptions round-trip", () => {
     idempotency_key: "request-0001",
     type: "human_chat",
     actor_user_id: "user-1",
+    actor_display_name: "User One",
     created_at: new Date().toISOString(),
     visibility: "session",
     reply_to_event_id: null,
@@ -84,8 +158,39 @@ test("canonical events and reconnect subscriptions round-trip", () => {
     runtime_provenance: null,
   };
   assert.deepEqual(CanonicalEventSchema.parse(event), event);
+  const { actor_display_name: _omitted, ...legacyEvent } = event;
+  assert.equal(CanonicalEventSchema.safeParse(legacyEvent).success, true);
   assert.deepEqual(
     SubscribeMessageSchema.parse({ type: "subscribe", session_id: "session-1" }),
     { type: "subscribe", session_id: "session-1", after_sequence: 0 },
   );
+});
+
+test("local turn, snapshot request, and runtime purpose contracts are bounded", () => {
+  const runtime = {
+    runtime_id: "runtime-1", session_id: "session-1", device_id: "device-1",
+    harness: "codex", provider: "openai", model: "gpt-5", local_session_id: "local-1",
+    capture_fidelity: "canonical_history",
+  };
+  assert.equal(RegisterRuntimeInputSchema.parse(runtime).purpose, "execution");
+  assert.equal(RegisterRuntimeInputSchema.parse({ ...runtime, purpose: "snapshot_connector" }).purpose, "snapshot_connector");
+  const turn = {
+    local_turn_id: "turn-1", runtime_id: "runtime-1", based_on_sequence: 0,
+    occurred_at: "2026-08-25T12:00:00.000Z", request_payload: {}, response_payload: {},
+  };
+  assert.equal(CommitLocalTurnInputSchema.safeParse(turn).success, true);
+  assert.equal(CommitLocalTurnInputSchema.safeParse({
+    ...turn,
+    tool_events: Array.from({ length: 33 }, () => ({ type: "tool_result", payload: {} })),
+  }).success, false);
+  const record = {
+    id: "snapshot-1", session_id: "session-1", requested_by_user_id: "user-1", through_sequence: 1,
+    status: "pending", claimed_by_runtime_id: null, created_at: "2026-08-25T12:00:00.000Z",
+    claimed_at: null, completed_at: null, failed_at: null, result: null, failure: null,
+  };
+  assert.deepEqual(SnapshotRequestRecordSchema.parse(record), record);
+  assert.equal(CompleteSnapshotRequestInputSchema.safeParse({ runtime_id: "runtime-1", result: {} }).success, true);
+  assert.equal(CompleteSnapshotRequestInputSchema.safeParse({
+    runtime_id: "runtime-1", result: { content: "x".repeat(100_000) },
+  }).success, false);
 });

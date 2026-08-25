@@ -129,6 +129,8 @@ export function createDriver() {
         members: new Map([[owner.id, 'owner']]),
         events: [],
         idempotency: new Map(),
+        localTurns: new Map(),
+        completedRequestIds: new Set(),
       }
       sessions.set(session.id, session)
       return { id: session.id, mode, lastSequence: 0 }
@@ -222,6 +224,9 @@ export function createDriver() {
         }
       }
       if (!found) throw new ContractError('not_found', 'agent request not found')
+      if (containingSession.completedRequestIds.has(requestId)) {
+        throw new ContractError('already_completed', 'agent request was completed before publication')
+      }
       if (found.actor.userId !== registered.user.id) {
         throw new ContractError('claim_not_owned', 'request belongs to another user')
       }
@@ -259,7 +264,65 @@ export function createDriver() {
         runtime: registered,
       })
       registered.activeRequestId = null
+      session.completedRequestIds.add(requestId)
       return event
+    },
+
+    async commitLocalTurn({ session, runtime, localTurnId, basedOnSequence, request, response }) {
+      const state = getSession(session.id)
+      const registered = runtimes.get(runtime.id)
+      if (!registered) throw new ContractError('forbidden', 'runtime is not registered')
+      if (typeof localTurnId !== 'string' || !localTurnId || localTurnId.length > 128) {
+        throw new ContractError('invalid_input', 'localTurnId is invalid')
+      }
+      if (!Number.isSafeInteger(basedOnSequence) || basedOnSequence < 0) {
+        throw new ContractError('invalid_input', 'basedOnSequence is invalid')
+      }
+      const sanitizedRequest = redact(structuredClone(request ?? {}))
+      const sanitizedResponse = redact(structuredClone(response ?? {}))
+      const operationKey = `${registered.id}\0${localTurnId}`
+      const existing = state.localTurns.get(operationKey)
+      if (existing) {
+        const sameOperation = existing.basedOnSequence === basedOnSequence
+          && JSON.stringify(existing.requestEvent.payload) === JSON.stringify(sanitizedRequest)
+          && JSON.stringify(existing.responseEvent.payload) === JSON.stringify(sanitizedResponse)
+        if (!sameOperation) {
+          throw new ContractError('idempotency_conflict', 'local turn id was reused for different content')
+        }
+        return existing
+      }
+
+      const headBeforeCommit = state.events.length
+      if (basedOnSequence > headBeforeCommit) {
+        throw new ContractError('invalid_input', 'basedOnSequence is ahead of canonical history')
+      }
+      const requestEvent = appendCommitted({
+        session: state,
+        user: registered.user,
+        type: 'agent_request',
+        payload: sanitizedRequest,
+        idempotencyKey: `local-turn:${registered.id}:${localTurnId}:request`,
+        runtime: registered,
+      })
+      const responseEvent = appendCommitted({
+        session: state,
+        user: registered.user,
+        type: 'agent_response',
+        payload: sanitizedResponse,
+        idempotencyKey: `local-turn:${registered.id}:${localTurnId}:response`,
+        replyTo: requestEvent.id,
+        runtime: registered,
+      })
+      state.completedRequestIds.add(requestEvent.id)
+      const committed = Object.freeze({
+        headBeforeCommit,
+        reconciliationRequired: headBeforeCommit > basedOnSequence,
+        basedOnSequence,
+        requestEvent,
+        responseEvent,
+      })
+      state.localTurns.set(operationKey, committed)
+      return committed
     },
 
     async listEvents({ session, afterSequence = 0 }) {

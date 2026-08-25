@@ -224,7 +224,7 @@ https://gatherthread-host.example-tailnet.ts.net
 https://gatherthread-host.example-tailnet.ts.net/health
 ```
 
-正常时应返回包含 `"status":"ok"` 的 JSON。健康检查成功只说明网络与服务存活，不代表用户已经加入协作会话。
+正常时应返回包含 `"status":"ok"` 的 JSON。健康检查成功只说明网络与服务存活，不代表用户已经加入协作项目。
 
 如果协作者无法访问，按以下顺序检查：
 
@@ -235,19 +235,18 @@ https://gatherthread-host.example-tailnet.ts.net/health
 5. `.env` 中 `GATHERTHREAD_PUBLIC_BASE_URL` 是否与浏览器地址完全一致。
 6. 主机名是否在配置完成后被修改。
 
-## 10. 创建 GatherThread 多人邀请
+## 10. 创建 GatherThread 项目和邀请
 
 主机用户：
 
 1. 打开 GatherThread 的 `.ts.net` 地址。
 2. 输入 owner 设备 Token 登录。页面会把它交换为 `HttpOnly` 浏览器会话，不会保存到 Web Storage。
-3. 点击 **Create session**。
-4. 选择 `multi`。
-5. 创建会话。
-6. 在 **Invitations** 中选择 `Participant`。
-7. 同步测试建议有效期选择 `1 hour`。
-8. 点击 **Create invitation**。
-9. 复制一次性 invitation secret。
+3. 点击 **Create project**，创建这次协作使用的项目。
+4. 在项目中点击 **Create session**，选择 `multi` 并创建测试会话。
+5. 在项目的 **Invitations** 中选择 `Participant`。Participant 可以编辑该项目的 multi 会话，但对 solo 会话只读。
+6. 同步测试建议有效期选择 `1 hour`。
+7. 点击 **Create invitation**。
+8. 复制一次性 invitation secret。这个邀请授予整个项目权限，也会覆盖之后新建的会话。
 
 主机向协作者分别发送：
 
@@ -267,7 +266,7 @@ https://gatherthread-host.example-tailnet.ts.net/health
 4. 填写容易识别的 Device name，例如 `Alice MacBook`。
 5. 点击 **Join workspace**。
 6. 保存页面只显示一次的个人设备 Token。
-7. 进入主机创建的 `multi` 会话。
+7. 进入主机创建的项目及其中的 `multi` 会话。
 
 协作者不能使用主机的 owner Token。每个用户和设备必须有自己的凭据，方便独立归因和撤销。
 
@@ -288,6 +287,7 @@ https://gatherthread-host.example-tailnet.ts.net/health
 - [ ] 同一个 invitation secret 不能再次领取。
 - [ ] 主机看不到协作者的设备 Token。
 - [ ] 双方刷新网页后保持登录并恢复工作区。
+- [ ] Owner 可以把协作者在 Participant 和 Viewer 之间切换，刷新后仍保持新权限。
 
 ### C. Multi 实时会话
 
@@ -307,15 +307,18 @@ https://gatherthread-host.example-tailnet.ts.net/health
 ### E. Solo 权限
 
 - [ ] 主机创建一个 `solo` 会话。
-- [ ] Solo 邀请只能选择 `Viewer`。
-- [ ] Viewer 能查看完整可见历史。
-- [ ] Viewer 不能发送 Chat 或 Agent 请求。
+- [ ] 同一项目的 Participant 自动能看到该会话，但不能发送 Chat 或 Agent 请求。
+- [ ] Owner 把协作者调整为 Viewer 后，该用户在 multi 和 solo 中都只读。
+- [ ] Owner 再调整为 Participant 后，该用户恢复 multi 写权限，solo 仍只读。
 
 ### F. Agent 路径
 
 - [ ] 每位用户使用自己的设备 Token。
-- [ ] 每位用户在自己的电脑运行内置 Codex 连接器，并保持终端开启。
-- [ ] 连接器使用完整的 HTTPS 主机地址和各自的本地项目目录。
+- [ ] 每位 Participant 在自己的电脑运行一个项目级 Codex 连接器，并保持终端开启。
+- [ ] 连接器使用完整的 HTTPS 主机地址和各自的本地项目目录，并选择正确的 GatherThread 项目。
+- [ ] 同一连接器自动发现该项目中新建的 multi 会话；各会话使用独立 Codex thread。
+- [ ] 发送 Agent 请求后、回复到达前，网页显示回答动画；runtime 断线时改为排队提示。
+- [ ] 第一次请求完成后，Codex 桌面端显示 `GatherThread · 项目名 · 会话名`，后续网页请求继续同一 thread。
 - [ ] runtime 显示用户名、设备、harness、provider 和模型。
 - [ ] 普通 Chat 会进入后续上下文，但不会触发本地 Codex。
 - [ ] Agent 请求只由发出者自己的 runtime 领取。

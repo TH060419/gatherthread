@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   CodexCliExecutor,
+  parseCodexAppServerItems,
   type CanonicalEvent,
   type RegisteredRuntime,
 } from "../src/index.js";
@@ -124,6 +125,137 @@ test("Codex executor rejects oversized hydration before starting the harness", a
     canonicalHistory: [canonical(1, "human_chat", { content: "x".repeat(1_000) }), request],
     runtime: registeredRuntime(),
   }), /hydration prompt exceeds/);
+});
+
+test("Codex App Server tool variants normalize to bounded public contract events", () => {
+  const imageResult = "image-result-opaque";
+  const events = parseCodexAppServerItems([
+    {
+      type: "dynamicToolCall",
+      id: "dynamic-1",
+      namespace: "workspace",
+      tool: "inspect",
+      arguments: { path: "src/index.ts" },
+      status: "completed",
+      contentItems: [
+        { type: "inputText", text: "inspection complete" },
+        { type: "inputImage", imageUrl: "data:image/png;base64,PRIVATE-IMAGE" },
+        { type: "futurePrivateContent", internal: "must not escape" },
+      ],
+      success: true,
+      durationMs: 12,
+    },
+    {
+      type: "collabAgentToolCall",
+      id: "collab-1",
+      tool: "spawnAgent",
+      status: "completed",
+      senderThreadId: "private-sender-thread",
+      receiverThreadIds: ["private-receiver-thread"],
+      prompt: "review the bridge",
+      model: "gpt-test",
+      reasoningEffort: "high",
+      agentsStates: {
+        "private-receiver-thread": { status: "completed", message: "reviewed" },
+      },
+    },
+    {
+      type: "webSearch",
+      id: "search-1",
+      query: "GatherThread protocol",
+      action: { type: "search", query: "GatherThread protocol", privateMetadata: "drop me" },
+      results: [{ title: "Result", url: "https://example.test/result" }],
+    },
+    {
+      type: "imageGeneration",
+      id: "image-1",
+      status: "completed",
+      revisedPrompt: "a safe architecture diagram",
+      result: imageResult,
+      transparentBackground: true,
+      failure: null,
+      savedPath: "/private/local/path/image.png",
+    },
+    { type: "sleep", id: "sleep-1", durationMs: 250 },
+    { type: "reasoning", id: "reasoning-1", content: ["hidden chain of thought"] },
+    { type: "imageView", id: "view-1", path: "/private/local/path/input.png" },
+    { type: "futurePrivateItem", id: "unknown-1", raw: "must not escape" },
+    { type: "agentMessage", id: "answer-1", phase: "final_answer", text: "done" },
+  ], { shareToolEvents: true, maxToolOutputBytes: 2_048 });
+
+  assert.deepEqual(events.map((event) => event.kind), [
+    "tool_call", "tool_result",
+    "tool_call", "tool_result",
+    "tool_call", "tool_result",
+    "tool_call", "tool_result",
+    "tool_call", "tool_result",
+    "assistant",
+  ]);
+  assert.deepEqual(events.filter((event) => event.kind === "tool_call").map((event) => ({
+    name: event.toolName,
+    id: event.toolCallId,
+  })), [
+    { name: "workspace/inspect", id: "dynamic:dynamic-1" },
+    { name: "collab_agent/spawnAgent", id: "collab:collab-1" },
+    { name: "web_search", id: "web-search:search-1" },
+    { name: "image_generation", id: "image-generation:image-1" },
+    { name: "clock/sleep", id: "sleep:sleep-1" },
+  ]);
+
+  const serialized = JSON.stringify(events);
+  assert.doesNotMatch(serialized, /hidden chain of thought|must not escape|private-sender-thread|private-receiver-thread/);
+  assert.doesNotMatch(serialized, /PRIVATE-IMAGE|image-result-opaque|\/private\/local\/path/);
+  assert.match(serialized, /sha256/);
+  assert.equal(events.at(-1)?.content, "done");
+});
+
+test("Codex App Server tool payloads redact secrets and truncate on UTF-8 boundaries", () => {
+  const accessToken = `gta_${"a".repeat(32)}`;
+  const events = parseCodexAppServerItems([
+    {
+      type: "dynamicToolCall",
+      id: accessToken,
+      namespace: "安全",
+      tool: "检查 tool",
+      arguments: {
+        token: accessToken,
+        password: ["super", "secret", "password"].join("-"),
+        content: `密🙂${"界".repeat(200)}`,
+      },
+      status: "failed",
+      contentItems: [{ type: "inputText", text: `token=${accessToken} ${"🙂".repeat(200)}` }],
+      success: false,
+      durationMs: 42,
+    },
+    { type: "agentMessage", id: "answer-secret", phase: "final_answer", text: "safe answer" },
+  ], { shareToolEvents: true, maxToolOutputBytes: 192 });
+
+  const toolCall = events[0];
+  const toolResult = events[1];
+  assert.equal(toolCall?.toolName, "__/___tool");
+  assert.match(toolCall?.toolCallId ?? "", /^dynamic:sha256:[a-f0-9]{64}$/);
+  assert.equal(toolResult?.isError, true);
+  assert.doesNotMatch(JSON.stringify(events), new RegExp(accessToken));
+  for (const value of [toolCall?.arguments, toolResult?.result]) {
+    const serialized = JSON.stringify(value);
+    assert.ok(Buffer.byteLength(serialized) <= 192, `payload exceeded byte limit: ${Buffer.byteLength(serialized)}`);
+    assert.doesNotMatch(serialized, new RegExp(accessToken));
+    assert.doesNotMatch(serialized, /super-secret-password/);
+    assert.doesNotMatch(serialized, /\uFFFD/);
+  }
+
+  const tiny = parseCodexAppServerItems([
+    {
+      type: "webSearch",
+      id: "tiny-search",
+      query: "密🙂",
+      action: { type: "search", query: "密🙂" },
+      results: [{ text: "界".repeat(40) }],
+    },
+    { type: "agentMessage", id: "tiny-answer", phase: "final_answer", text: "ok" },
+  ], { shareToolEvents: true, maxToolOutputBytes: 1 });
+  assert.ok([tiny[0]?.arguments, tiny[1]?.result]
+    .every((value) => Buffer.byteLength(JSON.stringify(value)) <= 1));
 });
 
 function registeredRuntime(): RegisteredRuntime {

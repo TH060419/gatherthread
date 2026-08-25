@@ -15,6 +15,7 @@ const PRIVATE_KEY_NAMES = new Set([
   "systemprompt",
   "developerprompt",
   "privatekey",
+  "localsessionid",
 ]);
 const STRING_PATTERNS: readonly [RegExp, string][] = [
   [/-----BEGIN (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH |DSA )?PRIVATE KEY-----/g, "[REDACTED]"],

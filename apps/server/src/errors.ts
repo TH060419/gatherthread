@@ -24,6 +24,10 @@ export function runtimeBusy(message = "Runtime already has an active agent reque
   return new ApiError(409, "runtime_busy", message);
 }
 
+export function agentRequestAlreadyClaimed(): ApiError {
+  return new ApiError(409, "agent_request_already_claimed", "Agent request is already claimed by another runtime");
+}
+
 export function forbidden(message = "Insufficient session permissions"): ApiError {
   return new ApiError(403, "forbidden", message);
 }
@@ -38,6 +42,17 @@ export function unauthorized(message = "A valid bearer token is required"): ApiE
 
 export function storageQuotaExceeded(scope: "event" | "user" | "session" | "deployment", limitBytes: number): ApiError {
   return new ApiError(507, "storage_quota_exceeded", `${scope} event storage quota exceeded`, {
+    scope,
+    limit_bytes: limitBytes,
+  });
+}
+
+export function snapshotStorageQuotaExceeded(
+  scope: "result" | "user" | "session" | "deployment",
+  limitBytes: number,
+): ApiError {
+  return new ApiError(507, "storage_quota_exceeded", `${scope} snapshot storage quota exceeded`, {
+    resource: "snapshot",
     scope,
     limit_bytes: limitBytes,
   });

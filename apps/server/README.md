@@ -14,9 +14,9 @@ The default bind address is `127.0.0.1`. Set `HOST` explicitly to expose the ser
 
 ## Authentication
 
-`POST /v1/bootstrap` creates the first user and device only while the database has no users. It returns the only copy of an opaque bearer token; SQLite stores its SHA-256 digest. An authenticated client may provision another identity with `POST /v1/users` or another token for the same user with `POST /v1/devices`. `DELETE /v1/devices/:device_id` revokes that token and its runtimes.
+`POST /v1/bootstrap` is a development-only first-user path. Production creates the first owner directly with `npm run owner-host:init`. The first device credential is returned once; SQLite stores only its peppered HMAC-SHA256 digest. New identities enter through a single-use project invitation. Additional devices use a separate ten-minute device authorization. `DELETE /v1/devices/:device_id` revokes that credential, its runtimes, delegated authorizations, browser sessions, and active sockets.
 
-All other endpoints require `Authorization: Bearer <token>`. Native WebSocket clients may send that header. Browser clients should call `POST /v1/realtime-ticket` and use the returned 30-second, one-use, session-scoped ticket. The legacy `?access_token=...` path remains for local compatibility but leaks into URLs and should not be used in browser deployments.
+All other endpoints require `Authorization: Bearer <token>` or the same-origin HttpOnly browser session. Native WebSocket clients may send the bearer header. Browser clients call `POST /v1/realtime-ticket` and carry the returned 30-second, one-use, session-scoped ticket in the `Sec-WebSocket-Protocol` header. Credentials in WebSocket query strings are not accepted.
 
 ## HTTP contract
 
@@ -26,32 +26,44 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 |---|---|---|
 | `GET` | `/health` | Health and active SQLite journal mode |
 | `POST` | `/v1/bootstrap` | One-time first identity and device token |
-| `POST` | `/v1/users` | Provision an identity and initial device token |
-| `POST` | `/v1/devices` | Provision another token for the authenticated user |
+| `POST` | `/v1/browser-sessions` | Exchange a device credential for an HttpOnly browser session |
+| `POST/GET` | `/v1/device-authorizations` | Create or list delegated device authorizations |
+| `POST` | `/v1/device-authorizations/claim` | Claim a delegated authorization on a new device |
 | `DELETE` | `/v1/devices/:device_id` | Revoke an owned device token and runtimes |
 | `GET` | `/v1/me` | Return the authenticated user and device identity |
-| `POST` | `/v1/sessions` | Create a solo or multi session; requires `idempotency_key` |
-| `GET` | `/v1/sessions` | List only sessions visible to the token user |
+| `POST/GET` | `/v1/projects` | Create an empty project or list projects visible to the actor |
+| `GET` | `/v1/projects/:project_id` | Read one visible project and the actor's role |
+| `POST/GET` | `/v1/projects/:project_id/sessions` | Owner-create or list project sessions |
+| `GET` | `/v1/projects/:project_id/members` | List project members |
+| `PUT/DELETE` | `/v1/projects/:project_id/members/:user_id` | Owner-change or remove another member |
+| `POST/GET/DELETE` | `/v1/projects/:project_id/invitations[/invite_id]` | Owner-manage project invitations |
+| `POST` | `/v1/invitations/claim` | Atomically claim a project invitation as a new identity/device |
+| `POST` | `/v1/invitations/accept` | Accept a project invitation as an authenticated identity |
+| `GET` | `/v1/sessions` | Compatibility list of all visible sessions |
 | `GET/PATCH` | `/v1/sessions/:session_id` | Read or owner-update mode, state, and title |
 | `GET` | `/v1/sessions/:session_id/members` | Visible members and their most relevant active runtime |
-| `PUT/DELETE` | `/v1/sessions/:session_id/members/:user_id` | Owner-managed participant/viewer membership |
 | `POST` | `/v1/sessions/:session_id/events` | Append a validated, redacted canonical event |
 | `GET` | `/v1/sessions/:session_id/events?after_sequence=N&limit=100` | Durable replay page and cursor |
+| `POST` | `/v1/sessions/:session_id/local-turns` | Atomically commit one trusted local request, bounded tool events, and response |
+| `POST` | `/v1/sessions/:session_id/snapshot-requests` | Freeze a new requester-owned read-only snapshot job |
+| `GET` | `/v1/snapshot-requests[/:request_id]` | List or read requester-owned snapshot jobs |
+| `POST` | `/v1/snapshot-requests/:request_id/{claim,complete,fail}` | Advance a job with an exact owned snapshot connector |
 | `POST` | `/v1/runtimes` | Register or refresh an owned local runtime |
 | `POST` | `/v1/runtimes/:runtime_id/heartbeat` | Mark an owned runtime online |
 | `POST` | `/v1/sessions/:session_id/agent-requests/:event_id/claim` | Atomically claim the initiating user's request |
 | `POST` | `/v1/sessions/:session_id/agent-requests/:event_id/complete` | Append a provenance-labelled response and complete its claim |
 | `POST` | `/v1/realtime-ticket` | Issue a short-lived, one-use browser WebSocket ticket |
 
-The server derives actor identity from the token and always assigns event ID (unless the client supplies a stable one), sequence, and timestamp. An idempotency key is scoped to one session and is bound to the actor, event type, visibility, reply target, payload, and runtime; only an identical retry receives the original event, while a different operation returns `409 idempotency_conflict`. `agent_response`, `tool_call`, and `tool_result` appends require an owned `runtime_id`. A runtime may hold only one active request claim. `human_chat` is only an event append and has no execution side effect.
+The server derives actor identity from the credential and always assigns event ID (unless the client supplies a stable one), sequence, and canonical server timestamp. A local capture time is retained only as payload metadata and cannot change project ordering. An idempotency key is scoped to one session and is bound to the actor, event type, visibility, reply target, payload, and runtime; only an identical retry receives the original event, while a different operation returns `409 idempotency_conflict`. `agent_response`, `tool_call`, and `tool_result` appends require an owned execution `runtime_id`. A runtime may hold only one active request claim. `human_chat` is only an event append and has no execution side effect.
 
-`GET /v1/sessions` returns an integration-friendly summary:
+`GET /v1/projects/:project_id/sessions` returns integration-friendly summaries with their project ID:
 
 ```json
 {
   "data": {
     "sessions": [{
       "id": "session-id",
+      "project_id": "project-id",
       "title": "Shared work",
       "mode": "multi",
       "state": "active",
@@ -64,7 +76,9 @@ The server derives actor identity from the token and always assigns event ID (un
 }
 ```
 
-The membership join is the ACL boundary: sessions for which the actor has no current membership are omitted.
+Project membership is the ACL boundary. A participant can write `multi` sessions and reads `solo`; a viewer reads all project sessions. The project owner creates sessions and can change or remove every other member. The same role governs current and future sessions in that project.
+
+Project creation inserts only the project and its owner membership, so a new project's `session_count` is `0`. The owner explicitly creates its first session; existing sessions named `General` are preserved and no migration backfills one. Project creation, session creation, and owner-only `PATCH /v1/sessions/:session_id` share a trimmed 1–200 character, control-character-free `title` policy; invalid title mutations return `422 validation_error`. A title-only change emits a metadata-only `session_state_change` event with `{ "action": "renamed", "title": "..." }`, allowing subscribed clients to refresh their title and session list without exposing the previous name or conversation content.
 
 ## WebSocket contract
 
@@ -74,10 +88,10 @@ Connect to `/v1/ws`, then send:
 {"type":"subscribe","session_id":"session-id","after_sequence":42}
 ```
 
-The server sends one or more `replay` pages, then `subscribed`. Committed live writes arrive as `event`. A `cursor` frame advances across an event hidden by visibility policy. Server ping frames are emitted every 15 seconds; clients that fail the next heartbeat are terminated. Clients should use the durable HTTP replay endpoint whenever their stored cursor indicates a gap.
+The server sends one or more `replay` pages, then `subscribed`. Committed live writes arrive as `event`. A `cursor` frame advances across an event hidden by visibility policy while the actor remains a member. Device or project-membership revocation closes the socket with policy code 1008 before another event or cursor is sent. Server ping frames are emitted every 15 seconds; clients that fail the next heartbeat are terminated. Clients should use the durable HTTP replay endpoint whenever their stored cursor indicates a gap.
 
 Set `GATHERTHREAD_ALLOWED_ORIGINS` to a comma-separated exact Origin allowlist when the browser is hosted separately, for example `http://127.0.0.1:4173`. Cross-origin requests are denied by default.
 
 ## Security and first-release scope
 
-Sessions are membership-only and owner-managed. Solo writes are owner-only; multi writes allow owners and participants; viewers are read-only. Payloads redact common credentials and default-private thinking/system/developer fields before persistence. Tokens are revocable, but the first release does not yet include invitation proofs, token expiry/rotation, rate limiting, TLS termination, multi-process fan-out, configurable retention, or attachment blob storage. Put the service behind an HTTPS reverse proxy for non-local deployment.
+Projects are private and owner-managed. Solo writes are owner-only; multi writes allow owners and participants; viewers are read-only. Project invitations are single-use, peppered, and expire after one hour, 24 hours, or seven days. Payloads redact common credentials and default-private thinking/system/developer fields before persistence. A non-owner member reading another user's activity receives public attribution rather than local device, runtime, or native-session identifiers. Snapshot jobs are charged at least 1 KiB each, completion data is bounded to 8 KiB, cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment, and unfinished jobs default to 64/256/4096 respectively. The first release still lacks multi-process fan-out, automatic retention jobs, attachment blob storage, and public-Internet deployment support. Use the documented loopback plus private Tailscale Serve topology.

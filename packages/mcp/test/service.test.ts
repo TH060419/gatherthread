@@ -11,6 +11,10 @@ import { CollaborationMcpService, createMcpHttpHandler } from "../src/index.js";
 
 class FakeApi implements CollaborationApi {
   appended: AppendEventInput[] = [];
+  async listProjects() { return [{ id: "p1", name: "Project", role: "owner" as const, state: "active" as const, sessionCount: 1 }]; }
+  async listProjectSessions(projectId: string) {
+    return [{ id: "s1", projectId, name: "Demo", mode: "multi" as const, role: "owner" as const }];
+  }
   async listSessions() { return [{ id: "s1", name: "Demo", mode: "multi" as const }]; }
   async readEvents(_sessionId: string, after: number) {
     return { events: [], nextSequence: after, hasMore: false };
@@ -39,6 +43,8 @@ test("MCP exposes the required collaboration tools and resources", async () => {
   assert.ok(tools && "result" in tools);
   const names = (tools as any).result.tools.map((item: any) => item.name);
   assert.deepEqual(names, [
+    "collaboration_list_projects",
+    "collaboration_list_project_sessions",
     "collaboration_list_sessions",
     "collaboration_read_history",
     "collaboration_append_chat",
@@ -51,7 +57,25 @@ test("MCP exposes the required collaboration tools and resources", async () => {
 
   const resources = await service.handle({ jsonrpc: "2.0", id: 2, method: "resources/list" });
   assert.ok(resources && "result" in resources);
-  assert.equal((resources as any).result.resources.length, 2);
+  assert.equal((resources as any).result.resources.length, 4);
+});
+
+test("project tools preserve project grouping before session-level history access", async () => {
+  const service = new CollaborationMcpService({ api: new FakeApi() });
+  const projects = await service.handle({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "collaboration_list_projects", arguments: {} },
+  });
+  const sessions = await service.handle({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: { name: "collaboration_list_project_sessions", arguments: { project_id: "p1" } },
+  });
+  assert.equal((projects as any).result.structuredContent.result[0].id, "p1");
+  assert.equal((sessions as any).result.structuredContent.result[0].projectId, "p1");
 });
 
 test("chat and agent request tools append distinct canonical events and redact secrets", async () => {
@@ -83,6 +107,30 @@ test("provider request fidelity is rejected unless exact capture is explicitly a
   const success = await callSnapshot(allowed);
   assert.ok(success && "result" in success);
   assert.equal((api.appended.at(-1)?.payload as any).capture_fidelity, "provider_request");
+});
+
+test("harness transcript snapshots fingerprint native session identifiers before append", async () => {
+  const api = new FakeApi();
+  const service = new CollaborationMcpService({ api });
+  const localSessionId = "/private/local/codex/thread.jsonl";
+  const response = await service.handle({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/call",
+    params: {
+      name: "collaboration_upload_context_snapshot",
+      arguments: {
+        session_id: "s1",
+        capture_fidelity: "harness_transcript",
+        content: { messages: [] },
+        local_session_id: localSessionId,
+      },
+    },
+  });
+  assert.ok(response && "result" in response);
+  const serialized = JSON.stringify(api.appended.at(-1)?.payload);
+  assert.doesNotMatch(serialized, new RegExp(localSessionId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(serialized, /local_session_fingerprint/);
 });
 
 test("resource reads support incremental history cursors", async () => {

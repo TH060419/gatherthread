@@ -1,15 +1,21 @@
+import { createHash } from "node:crypto";
 import type {
   AgentRequestClaim,
   AppendEventInput,
   CanonicalEvent,
   CollaborationApi,
   CompleteAgentRequestInput,
+  CommitLocalTurnInput,
+  CommitLocalTurnResult,
   CurrentActor,
+  ProjectSummary,
   ReadEventsResult,
   RegisteredRuntime,
   RuntimeProvenance,
   RuntimeRegistration,
   SessionSummary,
+  SnapshotRequestStatus,
+  SnapshotRequestSummary,
 } from "./types.js";
 
 export interface HttpCollaborationClientOptions {
@@ -18,6 +24,18 @@ export interface HttpCollaborationClientOptions {
   fetch?: typeof globalThis.fetch;
   signal?: AbortSignal;
   requestTimeoutMs?: number;
+}
+
+export class CollaborationHttpError extends Error {
+  readonly status: number;
+  readonly code: string | undefined;
+
+  constructor(status: number, message: string, code?: string) {
+    super(message);
+    this.name = "CollaborationHttpError";
+    this.status = status;
+    this.code = code;
+  }
 }
 
 export class HttpCollaborationClient implements CollaborationApi {
@@ -48,6 +66,34 @@ export class HttpCollaborationClient implements CollaborationApi {
     const sessions = isObject(body) && Array.isArray(body.sessions) ? body.sessions : body;
     if (!Array.isArray(sessions)) throw new Error("Collaboration API returned an invalid session list");
     return sessions.map(fromWireSession);
+  }
+
+  async listProjects(): Promise<ProjectSummary[]> {
+    const body = await this.#request("/projects");
+    const projects = isObject(body) && Array.isArray(body.projects) ? body.projects : body;
+    if (!Array.isArray(projects)) throw new Error("Collaboration API returned an invalid project list");
+    return projects.map(fromWireProject);
+  }
+
+  async listProjectSessions(projectId: string): Promise<SessionSummary[]> {
+    const body = await this.#request(`/projects/${encodeURIComponent(projectId)}/sessions`);
+    const sessions = isObject(body) && Array.isArray(body.sessions) ? body.sessions : body;
+    if (!Array.isArray(sessions)) throw new Error("Collaboration API returned an invalid project session list");
+    return sessions.map(fromWireSession);
+  }
+
+  async updateSession(
+    sessionId: string,
+    input: { title: string; idempotencyKey: string },
+  ): Promise<SessionSummary> {
+    const body = requiredObject(await this.#request(`/sessions/${encodeURIComponent(sessionId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        title: input.title,
+        idempotency_key: input.idempotencyKey,
+      }),
+    }));
+    return fromWireSession(body.session ?? body);
   }
 
   async getCurrentActor(): Promise<CurrentActor> {
@@ -129,10 +175,84 @@ export class HttpCollaborationClient implements CollaborationApi {
       body: JSON.stringify({
         runtime_id: input.runtimeId,
         idempotency_key: input.idempotencyKey,
-        payload: input.payload,
+        payload: truncateJsonValue(input.payload, 160 * 1024),
       }),
     }));
     return fromWireEvent(body.event ?? body);
+  }
+
+  async commitLocalTurn(sessionId: string, input: CommitLocalTurnInput): Promise<CommitLocalTurnResult> {
+    const toolEvents = (input.toolEvents ?? []).slice(0, 32).map(boundLocalToolEvent);
+    const body = requiredObject(await this.#request(`/sessions/${encodeURIComponent(sessionId)}/local-turns`, {
+      method: "POST",
+      body: JSON.stringify({
+        local_turn_id: input.localTurnId,
+        runtime_id: input.runtimeId,
+        based_on_sequence: input.basedOnSequence,
+        occurred_at: input.occurredAt,
+        request_payload: truncateJsonValue(input.requestPayload, 32 * 1024),
+        response_payload: truncateJsonValue(input.responsePayload, 112 * 1024),
+        ...(input.toolEvents === undefined ? {} : { tool_events: toolEvents }),
+      }),
+    }));
+    return {
+      localTurnId: requiredString(body.local_turn_id, "local_turn.local_turn_id"),
+      runtimeId: requiredString(body.runtime_id, "local_turn.runtime_id"),
+      headBeforeCommit: requiredNumber(body.head_before_commit, "local_turn.head_before_commit"),
+      reconciliationRequired: body.reconciliation_required === true,
+      requestEvent: fromWireEvent(body.request_event),
+      responseEvent: fromWireEvent(body.response_event),
+      toolEvents: Array.isArray(body.tool_events) ? body.tool_events.map(fromWireEvent) : [],
+    };
+  }
+
+  async getSnapshotRequest(requestId: string): Promise<SnapshotRequestSummary> {
+    const body = requiredObject(await this.#request(`/snapshot-requests/${encodeURIComponent(requestId)}`));
+    return fromWireSnapshotRequest(body.snapshot_request ?? body);
+  }
+
+  async createSnapshotRequest(sessionId: string): Promise<SnapshotRequestSummary> {
+    const body = requiredObject(await this.#request(`/sessions/${encodeURIComponent(sessionId)}/snapshot-requests`, {
+      method: "POST",
+      body: "{}",
+    }));
+    return fromWireSnapshotRequest(body.snapshot_request ?? body);
+  }
+
+  async listSnapshotRequests(status: SnapshotRequestStatus, limit = 20): Promise<SnapshotRequestSummary[]> {
+    const query = new URLSearchParams({ status, limit: String(limit) });
+    const body = await this.#request(`/snapshot-requests?${query}`);
+    const requests = isObject(body) && Array.isArray(body.snapshot_requests) ? body.snapshot_requests : body;
+    if (!Array.isArray(requests)) throw new Error("Collaboration API returned an invalid snapshot request list");
+    return requests.map(fromWireSnapshotRequest);
+  }
+
+  async claimSnapshotRequest(requestId: string, runtimeId: string): Promise<SnapshotRequestSummary> {
+    return this.#mutateSnapshotRequest(requestId, "claim", { runtime_id: runtimeId });
+  }
+
+  async completeSnapshotRequest(requestId: string, runtimeId: string, result: unknown): Promise<SnapshotRequestSummary> {
+    return this.#mutateSnapshotRequest(requestId, "complete", { runtime_id: runtimeId, result });
+  }
+
+  async failSnapshotRequest(
+    requestId: string,
+    runtimeId: string,
+    error: { code: string; message: string },
+  ): Promise<SnapshotRequestSummary> {
+    return this.#mutateSnapshotRequest(requestId, "fail", { runtime_id: runtimeId, error });
+  }
+
+  async #mutateSnapshotRequest(
+    requestId: string,
+    action: "claim" | "complete" | "fail",
+    input: Record<string, unknown>,
+  ): Promise<SnapshotRequestSummary> {
+    const body = requiredObject(await this.#request(`/snapshot-requests/${encodeURIComponent(requestId)}/${action}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    }));
+    return fromWireSnapshotRequest(body.snapshot_request ?? body);
   }
 
   async #request(path: string, init: RequestInit = {}): Promise<unknown> {
@@ -159,7 +279,14 @@ export class HttpCollaborationClient implements CollaborationApi {
         : isObject(body) && isObject(body.error) && typeof body.error.message === "string"
           ? body.error.message
           : response.statusText;
-      throw new Error(`Collaboration API ${response.status}: ${redactCredential(detail, this.#bearerToken)}`);
+      const code = isObject(body) && isObject(body.error) && typeof body.error.code === "string"
+        ? body.error.code
+        : undefined;
+      throw new CollaborationHttpError(
+        response.status,
+        `Collaboration API ${response.status}: ${redactCredential(detail, this.#bearerToken)}`,
+        code,
+      );
     }
     return isObject(body) && "data" in body ? body.data : body;
   }
@@ -210,6 +337,7 @@ function toSnakeCase(value: Record<string, unknown>): Record<string, unknown> {
 
 function fromWireEvent(value: unknown): CanonicalEvent {
   const input = requiredObject(value);
+  const actorDisplayName = optionalWireString(input.actor_display_name) ?? optionalWireString(input.actor_username);
   const runtime = input.runtime_provenance === null || input.runtime_provenance === undefined
     ? undefined
     : fromWireProvenance(input.runtime_provenance);
@@ -219,9 +347,35 @@ function fromWireEvent(value: unknown): CanonicalEvent {
     sequence: requiredNumber(input.sequence, "event.sequence"),
     type: requiredString(input.type, "event.type") as CanonicalEvent["type"],
     actorId: requiredString(input.actor_user_id, "event.actor_user_id"),
+    ...(actorDisplayName === undefined ? {} : { actorDisplayName }),
     timestamp: requiredString(input.created_at, "event.created_at"),
     payload: input.payload,
     ...(runtime === undefined ? {} : { runtime }),
+  };
+}
+
+function fromWireSnapshotRequest(value: unknown): SnapshotRequestSummary {
+  const input = requiredObject(value);
+  const status = requiredString(input.status, "snapshot_request.status");
+  if (status !== "pending" && status !== "claimed" && status !== "completed" && status !== "failed") {
+    throw new Error("Collaboration API returned an invalid snapshot request status");
+  }
+  const failureInput = isObject(input.failure) ? input.failure : isObject(input.error) ? input.error : undefined;
+  const failure = failureInput
+    ? {
+        code: requiredString(failureInput.code, "snapshot_request.failure.code"),
+        message: requiredString(failureInput.message, "snapshot_request.failure.message"),
+      }
+    : undefined;
+  const createdAt = optionalWireString(input.created_at) ?? optionalWireString(input.requested_at);
+  return {
+    id: requiredString(input.id, "snapshot_request.id"),
+    sessionId: requiredString(input.session_id, "snapshot_request.session_id"),
+    throughSequence: requiredNumber(input.through_sequence, "snapshot_request.through_sequence"),
+    status,
+    ...(createdAt === undefined ? {} : { createdAt }),
+    ...("result" in input ? { result: input.result } : {}),
+    ...(failure === undefined ? {} : { failure }),
   };
 }
 
@@ -236,15 +390,29 @@ function fromWireSession(value: unknown): SessionSummary {
       : undefined;
   return {
     id: requiredString(input.id, "session.id"),
+    ...(typeof input.project_id === "string" ? { projectId: input.project_id } : {}),
     mode: requiredString(input.mode, "session.mode") as SessionSummary["mode"],
+    ...(input.state === "active" || input.state === "archived" ? { state: input.state } : {}),
     ...(name === undefined ? {} : { name }),
     ...(role === undefined ? {} : { role }),
     ...(latestSequence === undefined ? {} : { latestSequence }),
   };
 }
 
+function fromWireProject(value: unknown): ProjectSummary {
+  const input = requiredObject(value);
+  return {
+    id: requiredString(input.id, "project.id"),
+    name: requiredString(input.title, "project.title"),
+    role: requiredString(input.role, "project.role") as ProjectSummary["role"],
+    state: requiredString(input.state, "project.state") as ProjectSummary["state"],
+    sessionCount: requiredNumber(input.session_count, "project.session_count"),
+  };
+}
+
 function fromWireRuntime(value: unknown): RegisteredRuntime {
   const input = requiredObject(value);
+  const purpose = input.purpose === "snapshot_connector" ? "snapshot_connector" : "execution";
   return {
     id: requiredString(input.id, "runtime.id"),
     userId: requiredString(input.user_id, "runtime.user_id"),
@@ -256,6 +424,7 @@ function fromWireRuntime(value: unknown): RegisteredRuntime {
     model: requiredString(input.model, "runtime.model"),
     localSessionId: requiredString(input.local_session_id, "runtime.local_session_id"),
     captureFidelity: requiredString(input.capture_fidelity, "runtime.capture_fidelity") as RegisteredRuntime["captureFidelity"],
+    purpose,
   };
 }
 
@@ -295,6 +464,32 @@ function requiredNumber(value: unknown, field: string): number {
 
 function optionalWireString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
+}
+
+function truncateJsonValue(value: unknown, maxBytes: number): unknown {
+  let encoded: string;
+  try {
+    encoded = JSON.stringify(value);
+  } catch {
+    encoded = JSON.stringify("[unserializable]");
+  }
+  if (Buffer.byteLength(encoded) <= maxBytes) return value;
+  const originalBytes = Buffer.byteLength(encoded);
+  const sha256 = createHash("sha256").update(encoded).digest("hex");
+  let end = Math.min(encoded.length, Math.max(0, maxBytes - 256));
+  while (end > 0 && Buffer.byteLength(encoded.slice(0, end)) > maxBytes - 256) end -= 1;
+  return { truncated: true, original_bytes: originalBytes, sha256, preview: encoded.slice(0, end) };
+}
+
+function boundLocalToolEvent(value: unknown): unknown {
+  if (!isObject(value) || (value.type !== "tool_call" && value.type !== "tool_result")) {
+    return { type: "tool_result", payload: truncateJsonValue(value, 768) };
+  }
+  return {
+    type: value.type,
+    payload: truncateJsonValue(value.payload, 768),
+    ...(typeof value.occurred_at === "string" ? { occurred_at: value.occurred_at } : {}),
+  };
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {

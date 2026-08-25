@@ -7,9 +7,13 @@
 **GatherThread** is a harness-neutral collaboration layer for people who each work with their own local AI agent.
 
 - `solo`: one owner publishes a complete canonical session stream; collaborators follow it read-only.
-- `multi`: people share one ordered project conversation. A human chat message is shared without invoking an agent. An agent request is claimed only by the sender's local runtime, and the response is labelled with username, device, harness, provider, model, local session, and capture fidelity.
+- `multi`: people share one ordered project conversation. A human chat message is shared without invoking an agent. An agent request is claimed only by the sender's local runtime, and the response is labelled with username, harness, provider, model, and capture fidelity; local device and native-session identifiers are not exposed to non-owner collaborators reading another user's activity.
 
-The server persists an append-only canonical event log in SQLite WAL, assigns authoritative per-session sequence numbers, enforces role-based access, and provides durable replay plus WebSocket live delivery. The local bridge can run a persistent Codex thread with automatic canonical-history hydration, imports Codex and Claude Code JSONL incrementally, redacts common secrets, maintains separate server/local cursors, and exposes collaboration through MCP tools and resources.
+The server persists an append-only canonical event log in SQLite WAL, assigns authoritative per-session sequence numbers, enforces role-based access, and provides durable replay plus WebSocket live delivery. For each writable Codex session, the local bridge keeps a Desktop-owned interactive task and a separate background execution projection. Trusted hooks publish Desktop turns through a durable idempotent outbox, while Web requests and canonical-history hydration run only on the background projection, so two processes never compete for one native writer.
+
+## Project and role model
+
+A project is the collaboration and invitation boundary. The project owner creates both `solo` and `multi` sessions and may change any other member between `participant` and `viewer` later. A participant can write and run their own agent in every `multi` session, but follows every `solo` session read-only. A viewer is read-only across the entire project. One project invitation therefore grants the selected role for existing and future sessions in that project; there are no per-session permission overrides in the first release.
 
 ## What “complete context” means
 
@@ -61,22 +65,26 @@ For UI-only development, `npm --workspace apps/web run dev` starts the loopback 
 
 ## Connect a local Codex agent
 
-Each collaborator runs their own connector with their own GatherThread device token and local Codex login:
+Each collaborator selects a project in the GatherThread Web UI, opens **Connect Codex**, copies the command for their operating system, and runs it from the local GatherThread checkout. It resembles:
 
 ```bash
 npm run codex:connect -- \
   --url https://your-host.your-tailnet.ts.net \
-  --workspace "/absolute/path/to/the/local/project" \
-  --model gpt-5.6-sol
+  --project PROJECT_ID \
+  --create-workspace \
+  --model gpt-5.6-sol \
+  --install-hooks
 ```
 
-The token is requested through a hidden prompt. Choose a writable session when asked and keep the terminal open. The Web UI discovers the runtime automatically; **Request my agent** then invokes that user's local Codex, while ordinary chat only updates shared context.
+The copied command contains no token. The connector prompts for the user's device token without echoing it, safely creates or reuses a same-name workspace under `~/GatherThread Projects/`, and opens that local project in Codex Desktop. Each editable session gets a Desktop task named `GatherThread · <project> · <session>` plus an implementation-private `exec` projection. Codex Desktop is the sole writer of the visible task; Web **Request my agent** turns execute in the background projection and converge through canonical history. Later sessions are discovered automatically. Keep the connector terminal running. To bind an existing source checkout instead, omit `--create-workspace` and pass `--workspace "/absolute/path/to/project"` explicitly.
 
-The first request receives complete visible canonical history. Later requests resume the same local Codex thread and receive every new canonical event in order. GatherThread credentials are stripped from the Codex child environment, automatic privilege escalation is disabled, and `danger-full-access` is unsupported. See the [Codex connector guide](docs/CODEX_CONNECT.md) and [ADR-0005](docs/adr/0005-managed-codex-thread-bridge.md).
+Canonical events are imported into the background projection in order with frozen, type-specific visible prefixes: `username · Human Chat：`, `username · Agent Request：`, and `username · Agent Response · harness · model：`. With reviewed project hooks installed and trusted, `UserPromptSubmit` supplies the bounded canonical delta to the Desktop Agent as context, and `Stop` uploads that exact prompt and final response once. Public Codex hooks do not expose the completed structured tool stream, so Desktop-originated tool events are omitted rather than recovered by opening a competing writer. Remote canonical events remain visible in GatherThread Web and enter Desktop context at the next prompt boundary; current public Codex APIs cannot insert them as historical bubbles into a Desktop-owned task. Background imports compact locally, and local source files are never rolled back.
+
+Read-only sessions show **Download to Codex** instead of a composer. Every click freezes a new `through_sequence` and creates an independent local snapshot task that never uploads later changes. Owners synchronize all sessions; participants synchronize `multi` and download `solo`; viewers download every session. To publish prompts typed directly in Codex desktop, inspect the generated workspace's `.codex/hooks.json` and approve the exact project hook with Codex `/hooks`; this trust-sensitive capability is never enabled implicitly. Unrelated Codex tasks and immutable snapshot tasks are excluded by a private thread registry. GatherThread credentials are stripped from the Codex child environment, automatic privilege escalation is disabled, and `danger-full-access` is unsupported. See the current [Codex connector guide](docs/CODEX_CONNECT.md) and [ADR-0013](docs/adr/0013-single-writer-dual-codex-projections.md).
 
 ## Security and current limits
 
-The first release includes peppered device credentials, HMAC-protected and revocable browser sessions, strict Cookie-write Origin checks, single-use invitations and device authorization, device-bound runtime provenance, immediate session/socket/authorization invalidation on device revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, configurable event-storage quotas, reconnect replay, and SQLite backup/restore scripts. A newly invited user sees the new device credential once and must save it before dismissing the dialog.
+The first release includes peppered device credentials, HMAC-protected and revocable browser sessions, strict Cookie-write Origin checks, single-use invitations and device authorization, device-bound runtime provenance, immediate session/socket/authorization invalidation on device or membership revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, event and snapshot-job storage quotas, reconnect replay, and SQLite backup/restore scripts. A newly invited user sees the new device credential once and must save it before dismissing the dialog.
 
 The supported zero-cost alpha topology is one participant-owned host bound to loopback and shared privately through Tailscale Serve. See the [owner-hosting guide](docs/SELF_HOSTING.md). Do not expose the current service through router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
 
