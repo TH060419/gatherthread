@@ -146,7 +146,7 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   response.writeHead(200, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
     "content-length": stat.size,
-    "cache-control": relative === "index.html" ? "no-store" : "public, max-age=3600",
+    "cache-control": relative === "index.html" ? "no-store" : "no-cache",
   });
   if (request.method === "HEAD") response.end();
   else createReadStream(resolved).pipe(response);

@@ -42,23 +42,18 @@ npm install
 npm run verify
 ```
 
-`verify` 会运行严格的 TypeScript 检查、server/protocol/adapter/bridge/MCP 测试、Web 测试和构建、真实的 server-to-bridge Agent 回合、协作契约测试、参考项目与许可证检查、密钥扫描和 npm 漏洞审计。
+`verify` 会运行严格的 TypeScript 检查、server/protocol/adapter/bridge/MCP 测试、Web 测试和构建、真实的 server-to-bridge Agent 回合、协作契约测试、参考项目与许可证检查、密钥扫描和 npm 漏洞审计。密钥扫描检查所有可能被 Git 提交的文件，但不会读取 `.gitignore` 已排除的本地 `.env`；如果有人强制跟踪 `.env`，扫描仍会阻止提交。
 
 ## 本地端到端运行
 
-创建不会被 Git 跟踪的环境文件，并设置一个稳定、随机、至少32字节的 `GATHERTHREAD_AUTH_TOKEN_PEPPER`：
-
-```bash
-cp .env.example .env
-chmod 600 .env
-```
-
-在主机上直接创建第一位所有者，然后启动同源的 Web/API/WebSocket 服务：
+首次初始化会在缺少 `.env` 或 Pepper 留空时自动生成权限为 `0600` 的私有 `.env` 和稳定随机 Pepper。直接创建第一位所有者，然后启动同源的 Web/API/WebSocket 服务：
 
 ```bash
 npm run owner-host:init -- --display-name "Alice" --device-name "Alice laptop"
 npm run owner-host
 ```
+
+如需自定义端口或路径，可以在初始化前手动复制 `.env.example`；`owner-host:init` 会只填充空的 Pepper，不会覆盖其他设置。`owner-host` 每次启动都会自动构建当前源码。
 
 在 `http://127.0.0.1:8787` 输入命令一次性显示的设备凭据。Web 客户端只在内存中保存该凭据。它会为 WebSocket 身份验证获取一个30秒有效、一次性、限定会话的 ticket，长期 bearer token 永远不会放入 URL。
 

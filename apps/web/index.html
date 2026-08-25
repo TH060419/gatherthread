@@ -9,7 +9,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260825-2" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to conversation</a>
@@ -17,7 +17,10 @@
     <main id="auth-view" class="auth-shell" aria-labelledby="login-title">
       <section class="auth-story" aria-hidden="true">
         <p class="eyebrow">Human + agent workspace</p>
-        <h1>One room.<br />Many minds.</h1>
+        <h1>
+          <span class="headline-line">One room.</span>
+          <span class="headline-line">Many minds.</span>
+        </h1>
         <p>
           Keep every collaborator in their own harness while the shared history
           stays ordered, attributable, and live.
@@ -249,10 +252,11 @@
               <div class="invitation-options">
                 <div>
                   <label for="invitation-role">Role</label>
-                  <select id="invitation-role" name="role">
+                  <select id="invitation-role" name="role" aria-describedby="invitation-role-help">
                     <option value="participant">Participant</option>
                     <option value="viewer">Viewer</option>
                   </select>
+                  <p id="invitation-role-help" class="field-help">Multi sessions can invite participants or read-only viewers.</p>
                 </div>
                 <div>
                   <label for="invitation-ttl">Expires in</label>
@@ -320,6 +324,6 @@
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js"></script>
+    <script type="module" src="./src/main.js?v=20260825-3"></script>
   </body>
 </html>

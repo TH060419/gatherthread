@@ -56,6 +56,23 @@ export function canAppend({ session, currentUser, connectionPhase, kind }) {
   return { allowed: true, reason: "" };
 }
 
+export function invitationRolePolicy(sessionMode) {
+  if (sessionMode === "solo") {
+    return {
+      allowedRoles: ["viewer"],
+      defaultRole: "viewer",
+      locked: true,
+      help: "Solo sessions allow read-only viewer invitations only.",
+    };
+  }
+  return {
+    allowedRoles: ["participant", "viewer"],
+    defaultRole: "participant",
+    locked: false,
+    help: "Multi sessions can invite participants or read-only viewers.",
+  };
+}
+
 export function createIdempotencyKey(prefix = "web") {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `${prefix}:${random}`;
@@ -82,6 +99,12 @@ export function eventLabel(type) {
     membership_change: "Membership",
     session_state_change: "Session update",
   }[type] ?? type.replaceAll("_", " ");
+}
+
+export function isTimelineEventVisible(event) {
+  const isControlEvent = event?.type === "membership_change" || event?.type === "session_state_change";
+  const content = event?.payload?.content;
+  return !isControlEvent || (typeof content === "string" && content.trim().length > 0);
 }
 
 export function formatTimestamp(value) {

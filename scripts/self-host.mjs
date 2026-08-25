@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
+import { ensureLocalOwnerHostEnvironment } from "./local-env.mjs";
 
 const mode = process.argv[2] ?? "start";
 const forwardedArguments = process.argv.slice(3);
@@ -9,6 +10,13 @@ if (!new Set(["start", "init", "bootstrap"]).has(mode)) {
 }
 
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+
+if (mode !== "start") {
+  const localEnvironment = await ensureLocalOwnerHostEnvironment();
+  if (localEnvironment.generated) {
+    process.stdout.write("Created private .env with a generated GatherThread authentication pepper.\n");
+  }
+}
 
 function run(command, args) {
   return new Promise((resolve, reject) => {

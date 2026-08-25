@@ -11,6 +11,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   const html = await readFile(htmlPath, "utf8");
   for (const requirement of [
     'class="skip-link"',
+    '<span class="headline-line">One room.</span>',
+    '<span class="headline-line">Many minds.</span>',
     '<nav class="session-rail"',
     'id="main-content"',
     '<aside id="member-panel"',

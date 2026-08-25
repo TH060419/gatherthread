@@ -5,10 +5,12 @@ import {
   eventLabel,
   formatTimestamp,
   initials,
+  isTimelineEventVisible,
   invitationStatusLabel,
+  invitationRolePolicy,
   normalizeInvitation,
   runtimeLabel,
-} from "./domain.js";
+} from "./domain.js?v=20260825-3";
 import { SessionSync } from "./realtime.js";
 
 const query = new URLSearchParams(location.search);
@@ -184,6 +186,8 @@ createInvitationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!state.session) return;
   const data = new FormData(createInvitationForm);
+  const rolePolicy = invitationRolePolicy(state.session.mode);
+  const requestedRole = data.get("role")?.toString() ?? "";
   const errorNode = element("create-invitation-error");
   const submit = createInvitationForm.querySelector("button[type='submit']");
   errorNode.textContent = "";
@@ -192,7 +196,7 @@ createInvitationForm.addEventListener("submit", async (event) => {
   clearCreatedInvitationSecret();
   try {
     const result = await api.createInvitation(state.session.id, {
-      role: data.get("role")?.toString() ?? "participant",
+      role: rolePolicy.allowedRoles.includes(requestedRole) ? requestedRole : rolePolicy.defaultRole,
       ttl: data.get("ttl")?.toString() ?? "24h",
     });
     createdInvitationSecret = result.inviteToken;
@@ -387,11 +391,25 @@ function renderMembers() {
 async function renderInvitationControls() {
   const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
   const ownerControls = element("owner-invitations");
+  renderInvitationRoleControl();
   ownerControls.hidden = membership?.role !== "owner";
   state.invitations = [];
   invitationList.replaceChildren();
   element("invitation-list-status").textContent = "";
   if (membership?.role === "owner") await loadInvitations();
+}
+
+function renderInvitationRoleControl() {
+  const roleSelect = element("invitation-role");
+  const policy = invitationRolePolicy(state.session?.mode);
+  for (const option of roleSelect.options) {
+    const allowed = policy.allowedRoles.includes(option.value);
+    option.disabled = !allowed;
+    option.hidden = !allowed;
+  }
+  roleSelect.value = policy.defaultRole;
+  roleSelect.disabled = policy.locked;
+  element("invitation-role-help").textContent = policy.help;
 }
 
 async function loadInvitations() {
@@ -509,7 +527,7 @@ function renderSyncState() {
 
 function renderTimeline() {
   timeline.replaceChildren();
-  const events = state.sync.events;
+  const events = state.sync.events.filter(isTimelineEventVisible);
   timelineEmpty.hidden = events.length > 0;
 
   for (const event of events) {

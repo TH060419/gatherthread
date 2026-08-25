@@ -8,7 +8,7 @@ This guide covers the executable single-process alpha. The canonical environment
 
 The safe local baseline is one process bound to loopback with an on-disk SQLite database under a directory readable only by the service account. Sessions are private, public discovery is disabled, payload logging is disabled, and transcript upload excludes raw thinking and private instructions.
 
-Copy `.env.example` to the ignored `.env`, restrict it to the host account, and set a fresh stable pepper. Never commit the populated file. See `SELF_HOSTING.md` for the exact bootstrap and startup commands.
+Copy `.env.example` to the ignored `.env` and restrict it to the host account. A blank Pepper is generated atomically by `owner-host:init`, or a stable value may be injected by a secret manager. Never commit the populated file. See `SELF_HOSTING.md` for the exact bootstrap and startup commands.
 
 Production preflight must fail if any of these are absent or unsafe:
 

@@ -42,23 +42,18 @@ npm install
 npm run verify
 ```
 
-`verify` runs strict TypeScript checks, server/protocol/adapter/bridge/MCP tests, Web tests and build, a real server-to-bridge agent turn, collaboration contract tests, reference/license checks, a secret scan, and an npm vulnerability audit.
+`verify` runs strict TypeScript checks, server/protocol/adapter/bridge/MCP tests, Web tests and build, a real server-to-bridge agent turn, collaboration contract tests, reference/license checks, a secret scan, and an npm vulnerability audit. The secret scan covers every Git-visible file while excluding the ignored local `.env`; a force-tracked `.env` is still scanned and rejected.
 
 ## Local end-to-end run
 
-Create the ignored environment file and set a stable random `GATHERTHREAD_AUTH_TOKEN_PEPPER` of at least 32 bytes:
-
-```bash
-cp .env.example .env
-chmod 600 .env
-```
-
-Create the first owner directly on the host, then start the same-origin Web/API/WebSocket service:
+On first initialization, a missing `.env` or blank pepper is filled automatically with a stable random value in a private `0600` file. Create the first owner directly on the host, then start the same-origin Web/API/WebSocket service:
 
 ```bash
 npm run owner-host:init -- --display-name "Alice" --device-name "Alice laptop"
 npm run owner-host
 ```
+
+To customize ports or paths, copy `.env.example` before initialization. `owner-host:init` fills only a blank pepper and preserves every other setting. `owner-host` builds the current source automatically on every start.
 
 Enter the one-time displayed device credential at `http://127.0.0.1:8787`. The Web client keeps it only in memory. It obtains a 30-second, one-use, session-scoped ticket for WebSocket authentication and never places the long-lived bearer token in a URL.
 

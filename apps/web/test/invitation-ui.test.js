@@ -10,9 +10,21 @@ test("invitation UI offers the required roles and TTLs with 24 hours selected by
   const html = await readFile(htmlPath, "utf8");
   assert.match(html, /<option value="participant">Participant<\/option>/);
   assert.match(html, /<option value="viewer">Viewer<\/option>/);
+  assert.match(html, /id="invitation-role"[^>]*aria-describedby="invitation-role-help"/);
+  assert.match(html, /id="invitation-role-help"/);
   assert.match(html, /<option value="1h">1 hour<\/option>/);
   assert.match(html, /<option value="24h" selected>24 hours<\/option>/);
   assert.match(html, /<option value="7d">7 days<\/option>/);
+});
+
+test("invitation role control locks solo sessions to viewer and restores both multi roles", async () => {
+  const main = await readFile(mainPath, "utf8");
+  assert.match(main, /function renderInvitationRoleControl\(\)/);
+  assert.match(main, /invitationRolePolicy\(state\.session\?\.mode\)/);
+  assert.match(main, /option\.disabled = !allowed/);
+  assert.match(main, /option\.hidden = !allowed/);
+  assert.match(main, /roleSelect\.disabled = policy\.locked/);
+  assert.match(main, /rolePolicy\.allowedRoles\.includes\(requestedRole\)/);
 });
 
 test("owner secret is rendered only from create response and cleared on session changes and logout", async () => {

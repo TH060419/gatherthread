@@ -518,11 +518,13 @@ test("owner host serves only the configured static tree without authentication",
     const index = await fetch(`${running.origin}/`);
     assert.equal(index.status, 200);
     assert.equal(index.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.equal(index.headers.get("cache-control"), "no-store");
     assert.match(await index.text(), /GatherThread/);
 
     const asset = await fetch(`${running.origin}/assets/app.js`);
     assert.equal(asset.status, 200);
     assert.equal(asset.headers.get("content-type"), "text/javascript; charset=utf-8");
+    assert.equal(asset.headers.get("cache-control"), "no-cache");
 
     const traversal = await fetch(`${running.origin}/..%2Fprivate.txt`);
     assert.notEqual(traversal.status, 200);

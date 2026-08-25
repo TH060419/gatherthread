@@ -5,6 +5,8 @@ import {
   canAppend,
   invitationStatus,
   invitationStatusLabel,
+  invitationRolePolicy,
+  isTimelineEventVisible,
   normalizeInvitation,
   normalizeReplayPage,
   runtimeLabel,
@@ -50,6 +52,28 @@ test("viewer and incomplete-history states are read only", () => {
   });
   assert.equal(recovering.allowed, false);
   assert.match(recovering.reason, /synced/i);
+});
+
+test("invitation roles follow solo and multi session semantics", () => {
+  assert.deepEqual(invitationRolePolicy("solo"), {
+    allowedRoles: ["viewer"],
+    defaultRole: "viewer",
+    locked: true,
+    help: "Solo sessions allow read-only viewer invitations only.",
+  });
+  assert.deepEqual(invitationRolePolicy("multi"), {
+    allowedRoles: ["participant", "viewer"],
+    defaultRole: "participant",
+    locked: false,
+    help: "Multi sessions can invite participants or read-only viewers.",
+  });
+});
+
+test("empty control events stay in canonical history but not in the conversation timeline", () => {
+  assert.equal(isTimelineEventVisible({ type: "session_state_change", payload: { state: "active" } }), false);
+  assert.equal(isTimelineEventVisible({ type: "membership_change", payload: { role: "viewer" } }), false);
+  assert.equal(isTimelineEventVisible({ type: "session_state_change", payload: { content: "Session archived" } }), true);
+  assert.equal(isTimelineEventVisible({ type: "human_chat", payload: { content: "Hello" } }), true);
 });
 
 test("replay pages normalize wire keys and sort by sequence", () => {
