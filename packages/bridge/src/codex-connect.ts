@@ -942,7 +942,7 @@ export function resolveCodexHookRelayPath(
   }
   return platform === "win32"
     ? `\\\\.\\pipe\\gatherthread-${mappingId}-hook-relay`
-    : path.join(stateRoot, "hook-relay.sock");
+    : path.posix.join(stateRoot, "hook-relay.sock");
 }
 
 function deactivationReason(session: SessionSummary | undefined): ProjectHarnessDeactivationReason {

@@ -612,20 +612,31 @@ async function sendRelay(socketPath: string, event: CodexHookEvent, maxBytes: nu
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let buffer = Buffer.alloc(0);
-    socket.once("error", reject);
+    let settled = false;
+    const fail = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    socket.once("error", fail);
     socket.on("data", (chunk: Buffer) => {
       buffer = Buffer.concat([buffer, chunk]);
       if (buffer.length > maxBytes) socket.destroy(new Error("Codex hook relay response exceeded its limit"));
     });
     socket.once("connect", () => socket.end(JSON.stringify(event)));
-    socket.once("close", () => {
+    socket.once("end", () => {
+      if (settled) return;
       try {
         const parsed = JSON.parse(buffer.toString("utf8")) as unknown;
         const additionalContext = requiredObject(parsed).additionalContext;
+        settled = true;
         resolve(typeof additionalContext === "string" ? { additionalContext } : {});
       } catch (error) {
-        reject(error);
+        fail(error);
       }
+    });
+    socket.once("close", () => {
+      if (!settled) fail(new Error("Codex hook relay closed before returning a complete response"));
     });
   });
 }

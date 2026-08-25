@@ -327,7 +327,13 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
     model: "gpt-test",
     revealThread: async (threadId) => {
       const lifecycle = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-      assert.equal(lifecycle.at(-1)?.event, "stop", "Desktop reveal must happen only after the App Server writer exits");
+      const writerPid = lifecycle.filter((event) => event.event === "start").at(-1)?.pid;
+      assert.equal(typeof writerPid, "number");
+      assert.throws(
+        () => process.kill(writerPid, 0),
+        (error: unknown) => error instanceof Error && "code" in error && error.code === "ESRCH",
+        "Desktop reveal must happen only after the App Server writer exits",
+      );
       revealed.push(threadId);
       return true;
     },
@@ -336,13 +342,20 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
 
   assert.equal(await executor.prepareCanonicalProjection(runtime), 2);
   let lifecycle = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-  assert.deepEqual(lifecycle.map((event) => event.event), ["start", "stop"]);
+  assert.deepEqual(
+    lifecycle.map((event) => event.event),
+    process.platform === "win32" ? ["start"] : ["start", "stop"],
+  );
   assert.deepEqual(revealed, ["old-thread"]);
   assert.equal(await executor.prepareCanonicalProjection(runtime), 2);
   lifecycle = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
-  assert.deepEqual(lifecycle.map((event) => event.event), ["start", "stop", "start", "stop"]);
+  assert.deepEqual(
+    lifecycle.map((event) => event.event),
+    process.platform === "win32" ? ["start", "start"] : ["start", "stop", "start", "stop"],
+  );
   assert.deepEqual(revealed, ["old-thread"], "a revealed native task must not steal focus on every poll");
-  assert.notEqual(lifecycle[0]?.pid, lifecycle[2]?.pid, "a later operation must use a fresh App Server process");
+  const starts = lifecycle.filter((event) => event.event === "start");
+  assert.notEqual(starts[0]?.pid, starts[1]?.pid, "a later operation must use a fresh App Server process");
 });
 
 test("concurrent close is single-flight, restart waits for exit, and dispose is terminal", async (t) => {
