@@ -73,6 +73,12 @@ export class CollaborationService {
     return result;
   }
 
+  claimInvitationWithBrowserSession(input: Parameters<CollaborationDatabase["claimInvitation"]>[0]) {
+    const result = this.database.claimInvitation(input, { browserSession: true });
+    this.publish(result.event);
+    return result;
+  }
+
   claimInvitationForActor(actor: Actor, inviteToken: string) {
     const result = this.database.claimInvitationForActor(actor, inviteToken);
     this.publish(result.event);

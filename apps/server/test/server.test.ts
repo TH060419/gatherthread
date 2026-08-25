@@ -15,17 +15,27 @@ const TEST_PEPPER = "server-test-pepper-that-is-long-and-random-enough";
 async function api<T>(origin: string, path: string, options: {
   method?: string;
   token?: string;
+  cookie?: string;
+  origin?: string;
+  headers?: Record<string, string>;
   body?: unknown;
-} = {}): Promise<{ status: number; body: T }> {
+} = {}): Promise<{ status: number; body: T; headers: Headers }> {
   const response = await fetch(`${origin}${path}`, {
     method: options.method ?? "GET",
     headers: {
       ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
+      ...(options.cookie ? { cookie: options.cookie } : {}),
+      ...(options.origin ? { origin: options.origin } : {}),
       ...(options.body === undefined ? {} : { "content-type": "application/json" }),
+      ...options.headers,
     },
     ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
   });
-  return { status: response.status, body: response.status === 204 ? undefined as T : await response.json() as T };
+  return {
+    status: response.status,
+    body: response.status === 204 ? undefined as T : await response.json() as T,
+    headers: response.headers,
+  };
 }
 
 function waitForSocketMessage(socket: WebSocket, predicate: (message: Record<string, unknown>) => boolean): Promise<Record<string, unknown>> {
@@ -377,6 +387,145 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
     assert.equal(status, 401);
   } finally {
     socket?.terminate();
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("browser sessions survive refresh, reject CSRF writes, and revoke on logout or device revocation", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-browser-session-"));
+  const browserOrigin = "http://127.0.0.1:8787";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    allowedOrigins: [browserOrigin],
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    const opened = await api<{ data: { actor: { id: string }; expires_at: string } }>(
+      running.origin,
+      "/v1/browser-sessions",
+      { method: "POST", token: owner.body.data.token, origin: browserOrigin },
+    );
+    assert.equal(opened.status, 201);
+    assert.equal(opened.body.data.actor.id, "owner");
+    const setCookie = opened.headers.get("set-cookie") ?? "";
+    assert.match(setCookie, /^gatherthread_session=gtb_[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict$/);
+    assert.doesNotMatch(setCookie, /Secure|Max-Age|Expires/i);
+    assert.equal(JSON.stringify(opened.body).includes(owner.body.data.token), false);
+    assert.equal(opened.headers.get("access-control-allow-credentials"), "true");
+    const cookie = setCookie.split(";", 1)[0] ?? "";
+
+    const restored = await api<{ data: { id: string; username: string; device_id: string } }>(
+      running.origin,
+      "/v1/me",
+      { cookie },
+    );
+    assert.deepEqual(restored.body.data, { id: "owner", username: "Owner", device_id: "owner-device" });
+
+    const csrfDenied = await api<{ error: { code: string } }>(running.origin, "/v1/sessions", {
+      method: "POST",
+      cookie,
+      body: { session_id: "csrf-room", idempotency_key: "create-csrf-room", mode: "multi", title: "Denied" },
+    });
+    assert.equal(csrfDenied.status, 403);
+    assert.equal(csrfDenied.body.error.code, "csrf_origin_required");
+    const wrongOrigin = await api<{ error: { code: string } }>(running.origin, "/v1/sessions", {
+      method: "POST",
+      cookie,
+      origin: "https://attacker.invalid",
+      body: { session_id: "wrong-origin", idempotency_key: "create-wrong-origin", mode: "multi", title: "Denied" },
+    });
+    assert.equal(wrongOrigin.status, 403);
+    assert.equal(wrongOrigin.body.error.code, "origin_forbidden");
+    const allowedWrite = await api<{ data: { session: { id: string } } }>(running.origin, "/v1/sessions", {
+      method: "POST",
+      cookie,
+      origin: browserOrigin,
+      body: { session_id: "cookie-room", idempotency_key: "create-cookie-room", mode: "multi", title: "Allowed" },
+    });
+    assert.equal(allowedWrite.status, 201);
+
+    const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/sessions/cookie-room/invitations", {
+      method: "POST",
+      cookie,
+      origin: browserOrigin,
+      body: { role: "participant", ttl: "1h" },
+    });
+    const claimed = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+      method: "POST",
+      origin: browserOrigin,
+      headers: { "x-gatherthread-browser-session": "1" },
+      body: {
+        invite_token: invitation.body.data.invite_token,
+        user_id: "member",
+        display_name: "Member",
+        device_id: "member-device",
+        device_name: "Browser",
+      },
+    });
+    assert.match(claimed.body.data.token, /^gta_/);
+    const memberSetCookie = claimed.headers.get("set-cookie") ?? "";
+    assert.match(memberSetCookie, /^gatherthread_session=gtb_/);
+    assert.equal(JSON.stringify(claimed.body).includes(memberSetCookie.split("=", 2)[1]?.split(";", 1)[0] ?? ""), false);
+    const memberCookie = memberSetCookie.split(";", 1)[0] ?? "";
+    assert.equal((await api<{ data: { id: string } }>(running.origin, "/v1/me", { cookie: memberCookie })).body.data.id, "member");
+
+    const logout = await api(running.origin, "/v1/browser-sessions/current", {
+      method: "DELETE",
+      cookie,
+      origin: browserOrigin,
+    });
+    assert.equal(logout.status, 204);
+    assert.match(logout.headers.get("set-cookie") ?? "", /^gatherthread_session=;.*HttpOnly;.*SameSite=Strict;.*Max-Age=0;/);
+    assert.equal((await api(running.origin, "/v1/me", { cookie })).status, 401);
+
+    const reopened = await api(running.origin, "/v1/browser-sessions", {
+      method: "POST",
+      token: owner.body.data.token,
+      origin: browserOrigin,
+    });
+    const reopenedCookie = (reopened.headers.get("set-cookie") ?? "").split(";", 1)[0] ?? "";
+    const revoked = await api(running.origin, "/v1/devices/owner-device", {
+      method: "DELETE",
+      token: owner.body.data.token,
+    });
+    assert.equal(revoked.status, 204);
+    assert.equal((await api(running.origin, "/v1/me", { cookie: reopenedCookie })).status, 401);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("secure owner hosts issue __Host- browser session cookies", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-secure-cookie-"));
+  const browserOrigin = "https://gatherthread.example.ts.net";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    allowedOrigins: [browserOrigin],
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+    secureTransport: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    const opened = await api(running.origin, "/v1/browser-sessions", {
+      method: "POST",
+      token: owner.body.data.token,
+      origin: browserOrigin,
+    });
+    const setCookie = opened.headers.get("set-cookie") ?? "";
+    assert.match(setCookie, /^__Host-gatherthread_session=gtb_[A-Za-z0-9_-]{43}; Path=\/; HttpOnly; SameSite=Strict; Secure$/);
+    assert.doesNotMatch(setCookie, /Domain=/i);
+  } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });
   }

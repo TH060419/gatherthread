@@ -417,6 +417,106 @@ test("device credentials use peppered HMAC digests and track use, expiry, revoca
   }
 });
 
+test("browser sessions store only peppered digests and expire or revoke with their device", () => {
+  let instant = new Date("2026-08-25T00:00:00.000Z");
+  const f = fixture({ clock: () => instant });
+  try {
+    const first = f.database.createBrowserSession(f.owner);
+    assert.match(first.token, /^gtb_[A-Za-z0-9_-]{43}$/);
+    assert.equal(
+      new Date(first.expires_at).getTime() - instant.getTime(),
+      24 * 60 * 60 * 1_000,
+    );
+    const stored = f.database.sqlite.prepare("SELECT token_digest FROM browser_sessions WHERE id = ?")
+      .get(first.session_id) as { token_digest: string };
+    assert.equal(
+      stored.token_digest,
+      createHmac("sha256", "unit-test-auth-token-pepper").update(first.token).digest("hex"),
+    );
+    assert.equal(JSON.stringify(f.database.sqlite.prepare("SELECT * FROM browser_sessions").all()).includes(first.token), false);
+    assert.deepEqual(f.database.authenticateBrowserSession(first.token).actor, f.owner);
+
+    const replacement = f.database.createBrowserSession(f.owner);
+    assert.throws(
+      () => f.database.authenticateBrowserSession(first.token),
+      (error: unknown) => error instanceof ApiError && error.status === 401,
+    );
+    assert.deepEqual(f.database.authenticateBrowserSession(replacement.token).actor, f.owner);
+    f.database.revokeBrowserSession(replacement.session_id, f.owner);
+    assert.throws(
+      () => f.database.authenticateBrowserSession(replacement.token),
+      (error: unknown) => error instanceof ApiError && error.status === 401,
+    );
+
+    const expired = f.database.createBrowserSession(f.owner);
+    instant = new Date(expired.expires_at);
+    assert.throws(
+      () => f.database.authenticateBrowserSession(expired.token),
+      (error: unknown) => error instanceof ApiError && error.status === 401,
+    );
+
+    instant = new Date("2026-08-27T00:00:00.000Z");
+    const invalidatedByRotation = f.database.createBrowserSession(f.owner);
+    f.service.rotateDeviceToken(f.owner, f.owner.device_id);
+    assert.throws(
+      () => f.database.authenticateBrowserSession(invalidatedByRotation.token),
+      (error: unknown) => error instanceof ApiError && error.status === 401,
+    );
+
+    const invalidatedByRevocation = f.database.createBrowserSession(f.owner);
+    f.service.revokeDevice(f.owner, f.owner.device_id);
+    assert.throws(
+      () => f.database.authenticateBrowserSession(invalidatedByRevocation.token),
+      (error: unknown) => error instanceof ApiError && error.status === 401,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("invitation claim and requested browser session commit atomically", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "atomic-browser-invite",
+      idempotency_key: "create-atomic-browser-invite",
+      mode: "multi",
+      title: "Atomic browser invite",
+    });
+    const invitation = f.service.createInvitation(f.owner, session.id, { role: "participant" });
+    f.database.sqlite.exec(`
+      CREATE TRIGGER fail_browser_session_insert
+      BEFORE INSERT ON browser_sessions
+      BEGIN SELECT RAISE(ABORT, 'simulated browser session failure'); END;
+    `);
+    assert.throws(() => f.database.claimInvitation({
+      invite_token: invitation.invite_token,
+      user_id: "atomic-invitee",
+      display_name: "Atomic Invitee",
+      device_id: "atomic-invitee-device",
+      device_name: "Browser",
+    }, { browserSession: true }));
+    const afterFailure = f.database.sqlite.prepare("SELECT claimed_at FROM invitations WHERE id = ?")
+      .get(invitation.invitation.id) as { claimed_at: string | null };
+    assert.equal(afterFailure.claimed_at, null);
+    const userCount = f.database.sqlite.prepare("SELECT count(*) AS count FROM users WHERE id = ?")
+      .get("atomic-invitee") as { count: number };
+    assert.equal(userCount.count, 0);
+    f.database.sqlite.exec("DROP TRIGGER fail_browser_session_insert");
+
+    const claimed = f.database.claimInvitation({
+      invite_token: invitation.invite_token,
+      user_id: "atomic-invitee",
+      display_name: "Atomic Invitee",
+      device_id: "atomic-invitee-device",
+      device_name: "Browser",
+    }, { browserSession: true });
+    assert.deepEqual(f.database.authenticateBrowserSession(claimed.browser_session.token).actor, claimed.actor);
+  } finally {
+    f.close();
+  }
+});
+
 test("new and existing users claim invitation-bound membership without exposing an invitee credential to the owner", () => {
   const f = fixture();
   try {

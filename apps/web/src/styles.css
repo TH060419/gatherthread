@@ -948,6 +948,21 @@ code {
   flex: none;
 }
 
+.device-credential-dialog > div {
+  display: grid;
+  gap: 1rem;
+  padding: 28px;
+}
+
+.device-credential-dialog h2,
+.device-credential-dialog p {
+  margin: 0;
+}
+
+.device-credential-dialog .secret-copy-row {
+  margin: 0.35rem 0;
+}
+
 .invitation-list {
   margin: 0;
   padding: 0;

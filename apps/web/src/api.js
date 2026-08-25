@@ -20,6 +20,7 @@ export class HttpCollaborationApi {
   async request(path, options = {}) {
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...options,
+      credentials: "include",
       headers: {
         Accept: "application/json",
         ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
@@ -42,12 +43,30 @@ export class HttpCollaborationApi {
   async authenticate(token = this.token) {
     this.token = token;
     try {
+      const { actor } = await this.request("/v1/browser-sessions", { method: "POST" });
+      this.actors.set(actor.id, actor.username);
+      return actor;
+    } finally {
+      this.token = "";
+    }
+  }
+
+  async restoreSession() {
+    try {
       const actor = await this.request("/v1/me");
       this.actors.set(actor.id, actor.username);
       return actor;
     } catch (error) {
-      this.token = "";
+      if (error instanceof ApiError && error.status === 401) return null;
       throw error;
+    }
+  }
+
+  async logout() {
+    try {
+      await this.request("/v1/browser-sessions/current", { method: "DELETE" });
+    } finally {
+      this.clearCredential();
     }
   }
 
@@ -137,6 +156,7 @@ export class HttpCollaborationApi {
   async claimInvitation({ inviteToken, displayName, deviceName, userId, deviceId }) {
     const result = await this.request("/v1/invitations/claim", {
       method: "POST",
+      headers: { "X-GatherThread-Browser-Session": "1" },
       body: JSON.stringify({
         invite_token: inviteToken,
         display_name: displayName,
@@ -145,14 +165,13 @@ export class HttpCollaborationApi {
         ...(deviceId ? { device_id: deviceId } : {}),
       }),
     });
-    this.token = result.token;
     const actor = {
       id: result.actor.user_id,
       username: result.actor.display_name,
       device_id: result.actor.device_id,
     };
     this.actors.set(actor.id, actor.username);
-    return { actor, invitation: normalizeInvitation(result.invitation) };
+    return { actor, invitation: normalizeInvitation(result.invitation), accessToken: result.token };
   }
 
   async acceptInvitation(inviteToken) {
@@ -371,6 +390,16 @@ export class MockCollaborationApi {
     return structuredClone(this.currentUser);
   }
 
+  async restoreSession() {
+    await this.#wait();
+    return null;
+  }
+
+  async logout() {
+    await this.#wait();
+    this.clearCredential();
+  }
+
   clearCredential() {
     this.credential = "";
   }
@@ -480,7 +509,13 @@ export class MockCollaborationApi {
     session.members.push({ ...actor, userId: actor.id, role: invitation.role, runtime: null });
     invitation.claimedAt = new Date().toISOString();
     invitation.claimedByUserId = actor.id;
-    return { actor: structuredClone(actor), invitation: structuredClone(normalizeInvitation(invitation)) };
+    const accessToken = this.credential;
+    this.credential = "";
+    return {
+      actor: structuredClone(actor),
+      invitation: structuredClone(normalizeInvitation(invitation)),
+      accessToken,
+    };
   }
 
   async acceptInvitation(inviteToken) {

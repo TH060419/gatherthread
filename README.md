@@ -55,17 +55,17 @@ npm run owner-host
 
 To customize ports or paths, copy `.env.example` before initialization. `owner-host:init` fills only a blank pepper and preserves every other setting. `owner-host` builds the current source automatically on every start.
 
-Enter the one-time displayed device credential at `http://127.0.0.1:8787`. The Web client keeps it only in memory. It obtains a 30-second, one-use, session-scoped ticket for WebSocket authentication and never places the long-lived bearer token in a URL.
+Enter the one-time displayed device credential at `http://127.0.0.1:8787`. The page exchanges it for an opaque `HttpOnly; SameSite=Strict` browser session cookie and immediately clears the credential from JavaScript memory. Reloading restores the signed-in workspace without `localStorage` or `sessionStorage`. The browser session has a 24-hour absolute server-side lifetime and uses a non-persistent session cookie; explicit logout, device revocation, or device-token rotation revokes it. HTTPS deployments add `Secure` and the `__Host-` cookie prefix. WebSockets still use a separate 30-second, one-use, session-scoped ticket, and no credential is placed in a URL.
 
 For UI-only development, `npm --workspace apps/web run dev` starts the loopback preview and proxies the local API. Explicit mock mode is available only at `http://127.0.0.1:4173/?mock=1` with `demo-token`.
 
 ## Security and current limits
 
-The first release includes peppered device credentials, single-use invitations and device authorization, device-bound runtime provenance, immediate socket/authorization invalidation on device revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, configurable event-storage quotas, reconnect replay, and SQLite backup/restore scripts.
+The first release includes peppered device credentials, HMAC-protected and revocable browser sessions, strict Cookie-write Origin checks, single-use invitations and device authorization, device-bound runtime provenance, immediate session/socket/authorization invalidation on device revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, configurable event-storage quotas, reconnect replay, and SQLite backup/restore scripts. A newly invited user sees the new device credential once and must save it before dismissing the dialog.
 
 The supported zero-cost alpha topology is one participant-owned host bound to loopback and shared privately through Tailscale Serve. See the [owner-hosting guide](docs/SELF_HOSTING.md). Do not expose the current service through router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
 
-Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, browser HttpOnly-cookie sessions, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers.
+Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers.
 
 See [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [architecture decisions](docs/adr/README.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
 

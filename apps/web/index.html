@@ -9,7 +9,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260825-2" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260825-3" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to conversation</a>
@@ -323,7 +323,25 @@
       </form>
     </dialog>
 
+    <dialog id="device-credential-dialog" class="create-dialog device-credential-dialog" aria-labelledby="device-credential-title">
+      <div>
+        <p class="eyebrow">One-time credential</p>
+        <h2 id="device-credential-title">Save your access token</h2>
+        <p>
+          Your secure browser session is active. Save this device token in a password manager so you can sign in again after the browser session ends. It will not be shown again.
+        </p>
+        <div class="secret-copy-row">
+          <code id="new-device-access-token"></code>
+          <button id="copy-device-access-token-button" class="button button-secondary" type="button">Copy</button>
+        </div>
+        <p id="copy-device-access-token-status" class="field-help" role="status" aria-live="polite"></p>
+        <button id="acknowledge-device-access-token-button" class="button button-primary button-wide" type="button">
+          I saved it
+        </button>
+      </div>
+    </dialog>
+
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260825-3"></script>
+    <script type="module" src="./src/main.js?v=20260825-4"></script>
   </body>
 </html>

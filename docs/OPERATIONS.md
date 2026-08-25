@@ -20,7 +20,7 @@ Production preflight must fail if any of these are absent or unsafe:
 - Request, event, replay-page, attachment, and WebSocket queue limits.
 - A tested backup plus a restore drill completed for the release schema.
 
-The browser alpha keeps its bearer credential only in JavaScript memory and clears it on reload. A future public deployment requires an HttpOnly secure-cookie session design and a separate security review; memory-only bearer entry is not authorization to expose the service publicly.
+The browser uses a server-side session after login. A device bearer is present in JavaScript only for the single exchange request, then cleared; it is never written to Web Storage. The opaque browser credential is a non-persistent `HttpOnly; SameSite=Strict; Path=/` Cookie backed by a peppered digest and a 24-hour absolute database expiry. A normal refresh restores the session. Closing the browser session is intended to discard the Cookie, while logout revokes it immediately; device revocation or device-token rotation revokes all browser sessions for that device. Production HTTPS adds `Secure` and `__Host-`. Keep the exact public origin allowlisted because Cookie-authenticated writes fail without it. This improvement does not authorize public Internet ingress; the private Tailscale Serve boundary remains mandatory for the alpha.
 
 The default event limits are 256 KiB per event, 256 MiB per attributed user, 512 MiB per session, and 2 GiB for the deployment. They are logical event charges, not a guarantee of the SQLite/WAL file size. A quota breach returns `storage_quota_exceeded` without allocating a sequence or deleting history. Keep independent free-disk monitoring and raise a limit only with a verified backup and capacity plan.
 
