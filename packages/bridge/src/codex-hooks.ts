@@ -99,11 +99,10 @@ export class CodexHookRelayServer {
     let buffer = Buffer.alloc(0);
     socket.setTimeout(5_000, () => socket.destroy());
     socket.on("error", () => undefined);
-    socket.on("data", (chunk: Buffer) => {
-      buffer = Buffer.concat([buffer, chunk]);
-      if (buffer.length > maxBytes) socket.destroy();
-    });
-    socket.once("end", () => {
+    let handling = false;
+    const handleFrame = () => {
+      if (handling) return;
+      handling = true;
       void (async () => {
         let event: CodexHookEvent;
         try {
@@ -124,7 +123,23 @@ export class CodexHookRelayServer {
           socket.destroy();
         }
       })();
+    };
+    socket.on("data", (chunk: Buffer) => {
+      if (handling) {
+        socket.destroy();
+        return;
+      }
+      buffer = Buffer.concat([buffer, chunk]);
+      if (buffer.length > maxBytes) {
+        socket.destroy();
+        return;
+      }
+      if (buffer.includes(0x0a)) handleFrame();
     });
+    // Keep accepting the pre-framing client until all installed project hooks
+    // have been regenerated. Windows named pipes use the newline path because
+    // they do not reliably support a request half-close followed by a response.
+    socket.once("end", handleFrame);
   }
 }
 
@@ -623,7 +638,7 @@ async function sendRelay(socketPath: string, event: CodexHookEvent, maxBytes: nu
       buffer = Buffer.concat([buffer, chunk]);
       if (buffer.length > maxBytes) socket.destroy(new Error("Codex hook relay response exceeded its limit"));
     });
-    socket.once("connect", () => socket.end(JSON.stringify(event)));
+    socket.once("connect", () => socket.write(`${JSON.stringify(event)}\n`));
     socket.once("end", () => {
       if (settled) return;
       try {
