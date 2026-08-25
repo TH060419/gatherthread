@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readFile, readdir, stat } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { extname, relative, resolve, sep } from "node:path";
 
 const root = process.cwd();
 const excludedDirectories = new Set([
@@ -37,7 +37,7 @@ async function walk(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (excludedDirectories.has(entry.name)) continue;
     const absolute = resolve(directory, entry.name);
-    const name = relative(root, absolute);
+    const name = relative(root, absolute).split(sep).join("/");
     if (entry.isDirectory()) {
       await walk(absolute);
       continue;
