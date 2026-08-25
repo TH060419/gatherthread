@@ -26,7 +26,7 @@ async function request(origin, path, { method = "GET", token, body } = {}) {
 }
 
 test("production server and local bridge complete a provenance-labelled agent turn", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-production-stack-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-production-stack-"));
   const running = await startCollaborationServer({ databasePath: join(directory, "stack.sqlite") }, 0);
   try {
     const identity = running.database.bootstrapIdentity({

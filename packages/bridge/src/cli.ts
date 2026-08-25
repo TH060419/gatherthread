@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { redactText } from "@agent-cooperation/adapters";
+import { redactText } from "@gatherthread/adapters";
 import { LocalBridge } from "./bridge.js";
 import { loadBridgeDaemonConfig } from "./config.js";
 import { BridgeDaemon } from "./daemon.js";
@@ -39,7 +39,7 @@ export async function runBridgeCli(env: NodeJS.ProcessEnv = process.env): Promis
       pollLimit: config.pollLimit,
       signal: shutdown.signal,
       onPollError(error) {
-        process.stderr.write(`relayroom-bridge: ${safeError(error, config.connection.bearerToken)}; retrying\n`);
+        process.stderr.write(`gatherthread-bridge: ${safeError(error, config.connection.bearerToken)}; retrying\n`);
       },
     });
     await daemon.run();
@@ -56,7 +56,7 @@ function safeError(error: unknown, bearerToken: string): string {
 
 if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
   runBridgeCli().catch(() => {
-    process.stderr.write("relayroom-bridge: startup failed; check environment configuration and Relayroom availability\n");
+    process.stderr.write("gatherthread-bridge: startup failed; check environment configuration and GatherThread availability\n");
     process.exitCode = 1;
   });
 }

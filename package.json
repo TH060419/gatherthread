@@ -1,5 +1,5 @@
 {
-  "name": "agent-cooperation-project",
+  "name": "gatherthread",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "private": true,
@@ -28,9 +28,10 @@
     "typecheck": "tsc -b --pretty false",
     "audit:references": "node scripts/check-references.mjs",
     "audit:licenses": "node scripts/check-dependency-licenses.mjs",
+    "audit:branding": "node scripts/check-branding.mjs",
     "audit:secrets": "node scripts/check-secrets.mjs",
     "audit:vulnerabilities": "npm audit --audit-level=moderate",
-    "verify": "npm run typecheck && npm run build:web && npm run test && npm run audit:references && npm run audit:licenses && npm run audit:secrets && npm run audit:vulnerabilities"
+    "verify": "npm run typecheck && npm run build:web && npm run test && npm run audit:references && npm run audit:licenses && npm run audit:branding && npm run audit:secrets && npm run audit:vulnerabilities"
   },
   "devDependencies": {
     "@types/node": "^24.3.0",

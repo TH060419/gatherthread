@@ -12,7 +12,7 @@ import {
   type TranscriptAdapter,
   type TranscriptEvent,
   type TranscriptFile,
-} from "@agent-cooperation/adapters";
+} from "@gatherthread/adapters";
 import type { CursorStore } from "./cursors.js";
 import type {
   AppendEventInput,

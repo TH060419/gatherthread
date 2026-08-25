@@ -72,7 +72,7 @@ Logs may contain request ID, hashed user or session identifier, event type, sequ
 
 The application binds to loopback, serves Web/API/WebSocket on one origin, sets session visibility to private, and disables anonymous/public sessions and network bootstrap. Production startup fails without declared HTTPS termination, an exact public origin, a non-placeholder credential pepper, explicit HTTP/WebSocket origins, a static build, and a writable database directory with restrictive permissions.
 
-The supported alpha path is Tailscale Serve inside a private tailnet. The application port remains on loopback, Funnel is disabled, and tailnet grants allow only named collaborators to TCP 443. HTTP and WebSocket paths still require Relayroom authentication and ACL checks. Direct Internet exposure is unsupported. See `SELF_HOSTING.md` and `OPERATIONS.md` for the preflight and backup gates.
+The supported alpha path is Tailscale Serve inside a private tailnet. The application port remains on loopback, Funnel is disabled, and tailnet grants allow only named collaborators to TCP 443. HTTP and WebSocket paths still require GatherThread authentication and ACL checks. Direct Internet exposure is unsupported. See `SELF_HOSTING.md` and `OPERATIONS.md` for the preflight and backup gates.
 
 ## Supply chain, attribution, and licenses
 

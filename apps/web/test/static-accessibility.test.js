@@ -30,6 +30,9 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   ]) {
     assert.match(html, new RegExp(requirement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+  assert.equal((html.match(/class="brand-mark(?: brand-mark-small)?"/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"[^>]*>R</);
+  assert.equal((html.match(/class="brand-mark(?: brand-mark-small)?"[^>]*>G</g) ?? []).length, 2);
 });
 
 test("the real API is the default and bearer credentials are never persisted", async () => {

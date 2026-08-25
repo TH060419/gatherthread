@@ -6,7 +6,7 @@ import test from "node:test";
 import { FileCursorStore } from "../src/index.js";
 
 test("file cursor store persists atomically in a private file", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "relayroom-cursor-"));
+  const root = await mkdtemp(path.join(tmpdir(), "gatherthread-cursor-"));
   const cursorPath = path.join(root, "state", "cursor.json");
   const store = new FileCursorStore(cursorPath);
   await store.save({

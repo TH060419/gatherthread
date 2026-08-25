@@ -20,26 +20,26 @@ Agent completion follows the server's single-response contract: tool events are 
 
 ## Local worker executable
 
-Build the workspace and run `relayroom-bridge` (or `npm --workspace packages/bridge start`). The executable accepts no command-line configuration. Relayroom credentials are read only from `RELAYROOM_TOKEN`, are removed from the adapter child process environment, and are never printed or passed as process arguments.
+Build the workspace and run `gatherthread-bridge` (or `npm --workspace packages/bridge start`). The executable accepts no command-line configuration. GatherThread credentials are read only from `GATHERTHREAD_TOKEN`, are removed from the adapter child process environment, and are never printed or passed as process arguments.
 
 Required environment:
 
-- `RELAYROOM_API_URL`: complete Relayroom API root, such as `https://relay.example/v1`; plain HTTP is accepted only for a loopback host
-- `RELAYROOM_TOKEN`: bearer token
-- `RELAYROOM_SESSION_ID`, `RELAYROOM_DEVICE_ID`, `RELAYROOM_LOCAL_SESSION_ID`: session-scoped runtime identity
-- `RELAYROOM_HARNESS`: `codex` or `claude-code`
-- `RELAYROOM_PROVIDER`, `RELAYROOM_MODEL`: runtime provenance
-- `RELAYROOM_ADAPTER_COMMAND`: an explicit executable path or command name implementing the adapter contract below
+- `GATHERTHREAD_API_URL`: complete GatherThread API root, such as `https://gatherthread.example/v1`; plain HTTP is accepted only for a loopback host
+- `GATHERTHREAD_TOKEN`: bearer token
+- `GATHERTHREAD_SESSION_ID`, `GATHERTHREAD_DEVICE_ID`, `GATHERTHREAD_LOCAL_SESSION_ID`: session-scoped runtime identity
+- `GATHERTHREAD_HARNESS`: `codex` or `claude-code`
+- `GATHERTHREAD_PROVIDER`, `GATHERTHREAD_MODEL`: runtime provenance
+- `GATHERTHREAD_ADAPTER_COMMAND`: an explicit executable path or command name implementing the adapter contract below
 
 Optional environment:
 
-- `RELAYROOM_ADAPTER_ARGS_JSON`: JSON string array of adapter arguments; the Relayroom token is rejected if embedded here
-- `RELAYROOM_CURSOR_PATH`: durable cursor file; defaults to `~/.relayroom/bridge-cursor.json`
-- `RELAYROOM_CAPABILITIES_JSON`: JSON string array registered with the runtime
-- `RELAYROOM_POLL_INTERVAL_MS`, `RELAYROOM_POLL_LIMIT`
-- `RELAYROOM_REQUEST_TIMEOUT_MS`, `RELAYROOM_ADAPTER_TIMEOUT_MS`, `RELAYROOM_ADAPTER_MAX_OUTPUT_BYTES`
+- `GATHERTHREAD_ADAPTER_ARGS_JSON`: JSON string array of adapter arguments; the GatherThread token is rejected if embedded here
+- `GATHERTHREAD_CURSOR_PATH`: durable cursor file; defaults to `~/.gatherthread/bridge-cursor.json`
+- `GATHERTHREAD_CAPABILITIES_JSON`: JSON string array registered with the runtime
+- `GATHERTHREAD_POLL_INTERVAL_MS`, `GATHERTHREAD_POLL_LIMIT`
+- `GATHERTHREAD_REQUEST_TIMEOUT_MS`, `GATHERTHREAD_ADAPTER_TIMEOUT_MS`, `GATHERTHREAD_ADAPTER_MAX_OUTPUT_BYTES`
 
-The worker registers exactly one runtime for one Relayroom session, reads canonical events after the persisted server cursor, claims each `agent_request`, supplies canonical history through that request to the configured adapter, validates and redacts the adapter result, then completes the claim. The cursor advances only after the corresponding event has been handled. `SIGINT` and `SIGTERM` abort in-flight HTTP and adapter work and close the polling loop.
+The worker registers exactly one runtime for one GatherThread session, reads canonical events after the persisted server cursor, claims each `agent_request`, supplies canonical history through that request to the configured adapter, validates and redacts the adapter result, then completes the claim. The cursor advances only after the corresponding event has been handled. `SIGINT` and `SIGTERM` abort in-flight HTTP and adapter work and close the polling loop.
 
 The adapter is a real executable boundary, not a built-in Codex or Claude Code invocation. For each claim it receives one `HarnessExecutionInput` JSON object followed by a newline on stdin. It must write one `HarnessExecutionResult` JSON object to stdout and exit successfully. stdout must contain only that object. A minimal result is:
 

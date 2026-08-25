@@ -1,10 +1,10 @@
-# Agent Cooperation Project
+# GatherThread
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Agent Cooperation Project, working UI name **Relayroom**, is a harness-neutral collaboration layer for people who each work with their own local AI agent.
+**GatherThread** is a harness-neutral collaboration layer for people who each work with their own local AI agent.
 
 - `solo`: one owner publishes a complete canonical session stream; collaborators follow it read-only.
 - `multi`: people share one ordered project conversation. A human chat message is shared without invoking an agent. An agent request is claimed only by the sender's local runtime, and the response is labelled with username, device, harness, provider, model, local session, and capture fidelity.
@@ -46,7 +46,7 @@ npm run verify
 
 ## Local end-to-end run
 
-Create the ignored environment file and set a stable random `ACP_AUTH_TOKEN_PEPPER` of at least 32 bytes:
+Create the ignored environment file and set a stable random `GATHERTHREAD_AUTH_TOKEN_PEPPER` of at least 32 bytes:
 
 ```bash
 cp .env.example .env

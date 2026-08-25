@@ -59,7 +59,7 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
     });
   };
   try {
-    const api = new HttpCollaborationApi({ baseUrl: "https://relay.example" });
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
     assert.equal((await api.authenticate("secret-token")).username, "Alice");
     const sessions = await api.listSessions();
     assert.deepEqual({ name: sessions[0].name, memberCount: sessions[0].memberCount }, { name: "Shared", memberCount: 1 });
@@ -68,7 +68,7 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
     assert.equal(replay.events[0].actor.username, "Alice");
     assert.equal(replay.events[0].provenance.fidelity, "harness_transcript");
     assert.equal(replay.next_after_sequence, 2);
-    assert.equal(requests[0].url, "https://relay.example/v1/me");
+    assert.equal(requests[0].url, "https://gatherthread.example/v1/me");
     assert.equal(requests[0].options.headers.Authorization, "Bearer secret-token");
     api.clearCredential();
     assert.equal(api.token, "");
@@ -104,7 +104,7 @@ test("HTTP invitation API uses exact routes, keeps secrets out of list records, 
     return new Response(JSON.stringify(responses.shift()), { status: 200, headers: { "content-type": "application/json" } });
   };
   try {
-    const api = new HttpCollaborationApi({ baseUrl: "https://relay.example", token: "member-token" });
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example", token: "member-token" });
     const created = await api.createInvitation("s1", { role: "participant", ttl: "7d" });
     assert.equal(created.inviteToken, "invite-secret-value-that-is-long-enough");
     assert.equal((await api.listInvitations("s1"))[0].status, "pending");
@@ -112,10 +112,10 @@ test("HTTP invitation API uses exact routes, keeps secrets out of list records, 
     assert.equal((await api.acceptInvitation("existing-secret")).invitation.sessionId, "s1");
 
     assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
-      ["POST", "https://relay.example/v1/sessions/s1/invitations"],
-      ["GET", "https://relay.example/v1/sessions/s1/invitations"],
-      ["DELETE", "https://relay.example/v1/sessions/s1/invitations/i1"],
-      ["POST", "https://relay.example/v1/invitations/accept"],
+      ["POST", "https://gatherthread.example/v1/sessions/s1/invitations"],
+      ["GET", "https://gatherthread.example/v1/sessions/s1/invitations"],
+      ["DELETE", "https://gatherthread.example/v1/sessions/s1/invitations/i1"],
+      ["POST", "https://gatherthread.example/v1/invitations/accept"],
     ]);
     assert.deepEqual(JSON.parse(requests[0].options.body), { role: "participant", ttl: "7d" });
     assert.deepEqual(JSON.parse(requests[3].options.body), { invite_token: "existing-secret" });
@@ -148,7 +148,7 @@ test("new-user invitation claim is unauthenticated and stores only the returned 
     } }), { status: 201, headers: { "content-type": "application/json" } });
   };
   try {
-    const api = new HttpCollaborationApi({ baseUrl: "https://relay.example" });
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
     const claimed = await api.claimInvitation({
       inviteToken: "one-use-invitation-secret-that-is-long",
       displayName: "New User",
@@ -157,7 +157,7 @@ test("new-user invitation claim is unauthenticated and stores only the returned 
     assert.equal(claimed.actor.username, "New User");
     assert.equal(claimed.invitation.status, "claimed");
     assert.equal(api.token, "new-device-token");
-    assert.equal(captured.url, "https://relay.example/v1/invitations/claim");
+    assert.equal(captured.url, "https://gatherthread.example/v1/invitations/claim");
     assert.equal(captured.options.headers.Authorization, undefined);
     assert.deepEqual(JSON.parse(captured.options.body), {
       invite_token: "one-use-invitation-secret-that-is-long",
@@ -193,16 +193,16 @@ test("realtime ticket is carried by WebSocket subprotocol and never placed in th
     close() {}
   };
   try {
-    const api = new HttpCollaborationApi({ baseUrl: "https://relay.example", token: "member-token" });
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example", token: "member-token" });
     await api.openRealtime({
       sessionId: "s1",
       afterSequence: 0,
       onEvent() {},
       onState() {},
     });
-    assert.equal(sockets[0].url, "wss://relay.example/v1/ws");
+    assert.equal(sockets[0].url, "wss://gatherthread.example/v1/ws");
     assert.equal(new URL(sockets[0].url).search, "");
-    assert.deepEqual(sockets[0].protocols, ["relayroom-v1", "relayroom-ticket.one-use-ticket-secret"]);
+    assert.deepEqual(sockets[0].protocols, ["gatherthread-v1", "gatherthread-ticket.one-use-ticket-secret"]);
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.WebSocket = OriginalWebSocket;

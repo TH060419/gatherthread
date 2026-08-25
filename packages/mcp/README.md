@@ -23,12 +23,12 @@ The handler is intentionally stateless and POST-only. It does not implement serv
 
 ## Local stdio executable
 
-Build the workspace and configure an MCP host to launch `relayroom-mcp` (or `npm --workspace packages/mcp start`) with `RELAYROOM_API_URL` and `RELAYROOM_TOKEN` in its environment. The executable accepts no credential arguments and writes no logs to stdout; stdout is reserved for newline-delimited MCP JSON-RPC responses. `RELAYROOM_API_URL` must be HTTPS except for a loopback host and cannot contain URL credentials.
+Build the workspace and configure an MCP host to launch `gatherthread-mcp` (or `npm --workspace packages/mcp start`) with `GATHERTHREAD_API_URL` and `GATHERTHREAD_TOKEN` in its environment. The executable accepts no credential arguments and writes no logs to stdout; stdout is reserved for newline-delimited MCP JSON-RPC responses. `GATHERTHREAD_API_URL` must be HTTPS except for a loopback host and cannot contain URL credentials.
 
 Optional environment:
 
-- `RELAYROOM_REQUEST_TIMEOUT_MS`: upstream HTTP timeout
-- `RELAYROOM_MCP_MAX_MESSAGE_BYTES`: maximum stdio JSON-RPC line size
-- `RELAYROOM_ALLOW_PROVIDER_REQUEST_CAPTURE`: `true` only when an authorized hook/proxy provides exact provider requests
+- `GATHERTHREAD_REQUEST_TIMEOUT_MS`: upstream HTTP timeout
+- `GATHERTHREAD_MCP_MAX_MESSAGE_BYTES`: maximum stdio JSON-RPC line size
+- `GATHERTHREAD_ALLOW_PROVIDER_REQUEST_CAPTURE`: `true` only when an authorized hook/proxy provides exact provider requests
 
-Each stdio line is one JSON-RPC request or batch. Notifications produce no response. `SIGINT` and `SIGTERM` stop input processing and abort in-flight Relayroom HTTP calls. Authentication and identity still come from the Relayroom bearer token and server-side authorization; tool arguments cannot override them.
+Each stdio line is one JSON-RPC request or batch. Notifications produce no response. `SIGINT` and `SIGTERM` stop input processing and abort in-flight GatherThread HTTP calls. Authentication and identity still come from the GatherThread bearer token and server-side authorization; tool arguments cannot override them.

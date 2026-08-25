@@ -10,7 +10,7 @@ import { ApiError } from "../src/errors.js";
 import { CollaborationService } from "../src/service.js";
 
 function fixture(options: DatabaseOptions = {}) {
-  const directory = mkdtempSync(join(tmpdir(), "acp-db-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-db-"));
   const database = new CollaborationDatabase(join(directory, "test.sqlite"), {
     authTokenPepper: "unit-test-auth-token-pepper",
     ...options,
@@ -204,7 +204,7 @@ test("replay and storage quotas bound bytes without breaking cursor or idempoten
 });
 
 test("existing event logs backfill the quota ledger and remain replayable when grandfathered over a new limit", () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-quota-migration-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-quota-migration-"));
   const path = join(directory, "legacy.sqlite");
   const pepper = "legacy-quota-ledger-test-pepper";
   let database = new CollaborationDatabase(path, { authTokenPepper: pepper });
@@ -433,6 +433,7 @@ test("new and existing users claim invitation-bound membership without exposing 
       24 * 60 * 60 * 1_000,
     );
     assert.deepEqual(Object.keys(created).sort(), ["invitation", "invite_token"]);
+    assert.match(created.invite_token, /^gti_/);
     const stored = f.database.sqlite.prepare("SELECT token_digest FROM invitations WHERE id = ?")
       .get(created.invitation.id) as { token_digest: string };
     assert.equal(
@@ -448,6 +449,7 @@ test("new and existing users claim invitation-bound membership without exposing 
       device_id: "invitee-device",
       device_name: "Invitee laptop",
     });
+    assert.match(claimed.token, /^gta_/);
     assert.equal(f.database.membershipRole(session.id, "invitee"), "participant");
     assert.deepEqual(f.database.authenticate(claimed.token), claimed.actor);
     assert.equal("token" in created, false);
@@ -474,7 +476,7 @@ test("new and existing users claim invitation-bound membership without exposing 
 });
 
 test("expired and revoked invitations fail closed and leave content-free audit records", () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-expiry-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-expiry-"));
   let instant = new Date("2026-01-01T00:00:00.000Z");
   const database = new CollaborationDatabase(join(directory, "test.sqlite"), {
     authTokenPepper: "unit-test-auth-token-pepper",
@@ -530,11 +532,13 @@ test("device authorization is short-lived, single-use, and returns the new crede
   try {
     const created = f.service.createDeviceAuthorization(f.owner);
     assert.deepEqual(Object.keys(created).sort(), ["authorization", "authorization_token"]);
+    assert.match(created.authorization_token, /^gtd_/);
     const claimed = f.service.claimDeviceAuthorization({
       authorization_token: created.authorization_token,
       device_id: "owner-second-device",
       device_name: "Owner tablet",
     });
+    assert.match(claimed.token, /^gta_/);
     assert.equal(claimed.actor.user_id, f.owner.user_id);
     assert.deepEqual(f.database.authenticate(claimed.token), claimed.actor);
     assert.equal("token" in created, false);
@@ -656,7 +660,7 @@ test("runtime provenance and delegated device authorization remain bound to the 
 });
 
 test("concurrent invitation claims commit exactly one identity, membership, and credential", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-invite-race-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-invite-race-"));
   const databasePath = join(directory, "test.sqlite");
   const pepper = "unit-test-race-auth-token-pepper";
   const database = new CollaborationDatabase(databasePath, { authTokenPepper: pepper });

@@ -1,4 +1,4 @@
-# Relayroom web client
+# GatherThread web client
 
 This package is a dependency-free first-release client for the collaboration protocol described in `../../docs`. It uses the real, same-origin `/v1` API by default. The in-memory mock is available only when explicitly requested.
 
@@ -9,7 +9,7 @@ cd apps/web
 npm run dev
 ```
 
-Start the API with `ACP_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173` and enter an access token from the owner host. The development server proxies same-origin `/v1` and `/health` requests to `ACP_WEB_API_ORIGIN` (default `http://127.0.0.1:8787`).
+Start the API with `GATHERTHREAD_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173` and enter an access token from the owner host. The development server proxies same-origin `/v1` and `/health` requests to `GATHERTHREAD_WEB_API_ORIGIN` (default `http://127.0.0.1:8787`).
 
 For the isolated mock preview, explicitly open `http://127.0.0.1:4173/?mock=1` and sign in with `demo-token`.
 
@@ -44,7 +44,7 @@ GET  /v1/sessions/:id/members
 GET  /v1/sessions/:id/events?after_sequence=N&limit=100
 POST /v1/sessions/:id/events
 POST /v1/realtime-ticket
-WS   websocket_url with relayroom-ticket.ONE_USE_SHORT_LIVED_TICKET subprotocol
+WS   websocket_url with gatherthread-ticket.ONE_USE_SHORT_LIVED_TICKET subprotocol
 ```
 
 Replay pages accept either camelCase mock fields or the proposed wire fields:

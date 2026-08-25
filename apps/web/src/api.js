@@ -207,7 +207,7 @@ export class HttpCollaborationApi {
     });
     const socketUrl = new URL(websocketUrl, this.baseUrl || globalThis.location?.origin);
     socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(socketUrl, ["relayroom-v1", `relayroom-ticket.${ticket}`]);
+    const socket = new WebSocket(socketUrl, ["gatherthread-v1", `gatherthread-ticket.${ticket}`]);
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({ type: "subscribe", session_id: sessionId, after_sequence: afterSequence }));
     });

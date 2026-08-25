@@ -25,7 +25,7 @@ Commands:
   bootstrap   Create the first owner directly in SQLite and print its credential once
   init        Alias for bootstrap
 
-Configuration is read from NODE_ENV and the ACP_* variables documented in .env.example.
+Configuration is read from NODE_ENV and the GATHERTHREAD_* variables documented in .env.example.
 `;
 
 function requireOption(args: string[], name: string): string {
@@ -107,7 +107,7 @@ async function start(config: ServerConfig): Promise<void> {
     maxTotalEventBytes: config.maxTotalEventBytes,
     maxEventBytes: config.maxEventBytes,
   }, config.port, config.host);
-  process.stdout.write(`Relayroom owner host listening at ${running.origin}\n`);
+  process.stdout.write(`GatherThread owner host listening at ${running.origin}\n`);
 
   let closing = false;
   const shutdown = async (): Promise<void> => {

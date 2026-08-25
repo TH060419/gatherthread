@@ -21,7 +21,7 @@ import {
   type ApiErrorBody,
   type CanonicalEvent,
   type JsonValue,
-} from "@agent-cooperation/protocol";
+} from "@gatherthread/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import { z, ZodError } from "zod";
 import { CollaborationDatabase, type Actor } from "./database.js";
@@ -197,9 +197,9 @@ function realtimeTicketFromProtocols(request: IncomingMessage): string {
     ?.split(",")
     .map((value) => value.trim())
     .filter(Boolean) ?? [];
-  if (!protocols.includes("relayroom-v1")) throw unauthorized("Relayroom WebSocket protocol is required");
-  const ticketProtocol = protocols.find((protocol) => protocol.startsWith("relayroom-ticket."));
-  const ticket = ticketProtocol?.slice("relayroom-ticket.".length);
+  if (!protocols.includes("gatherthread-v1")) throw unauthorized("GatherThread WebSocket protocol is required");
+  const ticketProtocol = protocols.find((protocol) => protocol.startsWith("gatherthread-ticket."));
+  const ticket = ticketProtocol?.slice("gatherthread-ticket.".length);
   if (!ticket) throw unauthorized("A one-use realtime ticket is required");
   return ticket;
 }
@@ -295,7 +295,7 @@ export async function startCollaborationServer(
     noServer: true,
     maxPayload: MAX_BODY_BYTES,
     handleProtocols(protocols) {
-      return protocols.has("relayroom-v1") ? "relayroom-v1" : false;
+      return protocols.has("gatherthread-v1") ? "gatherthread-v1" : false;
     },
   });
   const requestLimiter = new FixedWindowRateLimiter(options.requestRateLimit ?? { windowMs: 60_000, limit: 6_000 });

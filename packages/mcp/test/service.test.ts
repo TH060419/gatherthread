@@ -6,7 +6,7 @@ import type {
   CollaborationApi,
   CompleteAgentRequestInput,
   RuntimeRegistration,
-} from "@agent-cooperation/bridge";
+} from "@gatherthread/bridge";
 import { CollaborationMcpService, createMcpHttpHandler } from "../src/index.js";
 
 class FakeApi implements CollaborationApi {

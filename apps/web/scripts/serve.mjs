@@ -26,24 +26,24 @@ const types = {
 };
 
 export function loadWebServerConfig(env = process.env) {
-  const host = env.ACP_WEB_HOST?.trim() || "127.0.0.1";
-  if (!LOOPBACK_HOSTS.has(host)) throw new Error("ACP_WEB_HOST must be a loopback host");
+  const host = env.GATHERTHREAD_WEB_HOST?.trim() || "127.0.0.1";
+  if (!LOOPBACK_HOSTS.has(host)) throw new Error("GATHERTHREAD_WEB_HOST must be a loopback host");
 
-  const rawPort = env.ACP_WEB_PORT ?? "4173";
-  if (!/^\d+$/.test(rawPort)) throw new Error("ACP_WEB_PORT must be an integer from 1 to 65535");
+  const rawPort = env.GATHERTHREAD_WEB_PORT ?? "4173";
+  if (!/^\d+$/.test(rawPort)) throw new Error("GATHERTHREAD_WEB_PORT must be an integer from 1 to 65535");
   const port = Number(rawPort);
-  if (port < 1 || port > 65_535) throw new Error("ACP_WEB_PORT must be an integer from 1 to 65535");
+  if (port < 1 || port > 65_535) throw new Error("GATHERTHREAD_WEB_PORT must be an integer from 1 to 65535");
 
-  const upstream = new URL(env.ACP_WEB_API_ORIGIN?.trim() || "http://127.0.0.1:8787");
+  const upstream = new URL(env.GATHERTHREAD_WEB_API_ORIGIN?.trim() || "http://127.0.0.1:8787");
   if (upstream.protocol !== "http:" || !LOOPBACK_HOSTS.has(upstream.hostname) || upstream.username || upstream.password) {
-    throw new Error("ACP_WEB_API_ORIGIN must be an unauthenticated loopback HTTP origin");
+    throw new Error("GATHERTHREAD_WEB_API_ORIGIN must be an unauthenticated loopback HTTP origin");
   }
   if (upstream.pathname !== "/" || upstream.search || upstream.hash) {
-    throw new Error("ACP_WEB_API_ORIGIN must not contain a path, query, or fragment");
+    throw new Error("GATHERTHREAD_WEB_API_ORIGIN must not contain a path, query, or fragment");
   }
 
   const packageRoot = resolve(fileURLToPath(new URL("..", import.meta.url)));
-  const root = resolve(packageRoot, env.ACP_WEB_STATIC_DIRECTORY?.trim() || "dist");
+  const root = resolve(packageRoot, env.GATHERTHREAD_WEB_STATIC_DIRECTORY?.trim() || "dist");
   return { host, port, upstream, root };
 }
 
@@ -183,6 +183,6 @@ if (isEntrypoint) {
   const config = loadWebServerConfig();
   const server = createWebServer(config);
   server.listen(config.port, config.host, () => {
-    console.log(`Relayroom preview: http://${config.host.includes(":") ? `[${config.host}]` : config.host}:${config.port}`);
+    console.log(`GatherThread preview: http://${config.host.includes(":") ? `[${config.host}]` : config.host}:${config.port}`);
   });
 }

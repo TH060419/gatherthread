@@ -12,9 +12,9 @@ Copy `.env.example` to the ignored `.env`, restrict it to the host account, and 
 
 Production preflight must fail if any of these are absent or unsafe:
 
-- `NODE_ENV=production` with `ACP_SERVER_HOST` restricted to loopback behind Tailscale Serve HTTPS.
-- A cryptographically random `ACP_AUTH_TOKEN_PEPPER` of at least 32 bytes.
-- An exact HTTPS `ACP_PUBLIC_BASE_URL`, explicit origin allowlist, and `ACP_TLS_TERMINATED_BY_PROXY=true`.
+- `NODE_ENV=production` with `GATHERTHREAD_SERVER_HOST` restricted to loopback behind Tailscale Serve HTTPS.
+- A cryptographically random `GATHERTHREAD_AUTH_TOKEN_PEPPER` of at least 32 bytes.
+- An exact HTTPS `GATHERTHREAD_PUBLIC_BASE_URL`, explicit origin allowlist, and `GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true`.
 - Private session default and public sessions disabled.
 - Existing writable database and backup directories owned by the service account.
 - Request, event, replay-page, attachment, and WebSocket queue limits.
@@ -45,8 +45,8 @@ WebSocket clients must reconnect with their last durable sequence. Operators sho
 Never copy only the main database file while SQLite WAL writes are active. Use the SQLite online backup API through the provided script:
 
 ```sh
-scripts/backup-sqlite.sh .local/collaboration.db /secure/backups/agent-cooperation
-scripts/verify-sqlite-backup.sh /secure/backups/agent-cooperation/collaboration-YYYYMMDDTHHMMSSZ-PID.db
+scripts/backup-sqlite.sh .local/collaboration.db /secure/backups/gatherthread
+scripts/verify-sqlite-backup.sh /secure/backups/gatherthread/collaboration-YYYYMMDDTHHMMSSZ-PID.db
 ```
 
 The backup script runs `PRAGMA integrity_check`, restricts file permissions, and writes a SHA-256 checksum. Store backups encrypted on a separate failure domain. Restrict access to the service operator and record backup creation, verification, schema version, and retention expiry without recording event content.

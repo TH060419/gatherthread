@@ -63,7 +63,7 @@ async function realtimeSocket(origin: string, token: string, sessionId: string, 
   });
   const socket = new WebSocket(
     `${origin.replace("http", "ws")}${ticket.body.data.websocket_url}`,
-    ["relayroom-v1", `relayroom-ticket.${ticket.body.data.ticket}`],
+    ["gatherthread-v1", `gatherthread-ticket.${ticket.body.data.ticket}`],
     originHeader ? { origin: originHeader } : undefined,
   );
   await new Promise<void>((resolve, reject) => {
@@ -74,7 +74,7 @@ async function realtimeSocket(origin: string, token: string, sessionId: string, 
 }
 
 test("HTTP replay and WebSocket reconnect provide ordered multi-client updates", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-http-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-http-"));
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
     heartbeatIntervalMs: 100,
@@ -194,7 +194,7 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
 });
 
 test("token auth and solo viewer ACL are enforced over HTTP", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-acl-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-acl-"));
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
     authTokenPepper: TEST_PEPPER,
@@ -282,7 +282,7 @@ test("token auth and solo viewer ACL are enforced over HTTP", async () => {
 });
 
 test("browser integration exposes identity, members, CORS, and one-use scoped realtime tickets", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-browser-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-browser-"));
   const browserOrigin = "http://127.0.0.1:4173";
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
@@ -347,7 +347,7 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
     const ticket = ticketResponse.body.data.ticket;
     socket = new WebSocket(
       `${running.origin.replace("http", "ws")}${ticketResponse.body.data.websocket_url}`,
-      ["relayroom-v1", `relayroom-ticket.${ticket}`],
+      ["gatherthread-v1", `gatherthread-ticket.${ticket}`],
       { origin: browserOrigin },
     );
     await new Promise<void>((resolve, reject) => {
@@ -362,7 +362,7 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
 
     const reused = new WebSocket(
       `${running.origin.replace("http", "ws")}/v1/ws`,
-      ["relayroom-v1", `relayroom-ticket.${ticket}`],
+      ["gatherthread-v1", `gatherthread-ticket.${ticket}`],
       { origin: browserOrigin },
     );
     reused.on("error", () => {});
@@ -383,8 +383,8 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
 });
 
 test("network bootstrap, URL credentials, direct bearer sockets, and unapproved origins fail closed", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-boundary-"));
-  const allowedOrigin = "https://relayroom.example.ts.net";
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-boundary-"));
+  const allowedOrigin = "https://gatherthread.example.ts.net";
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
     allowedOrigins: [allowedOrigin],
@@ -450,7 +450,7 @@ test("network bootstrap, URL credentials, direct bearer sockets, and unapproved 
     });
     const wrongOrigin = new WebSocket(
       `${running.origin.replace("http", "ws")}${ticket.body.data.websocket_url}`,
-      ["relayroom-v1", `relayroom-ticket.${ticket.body.data.ticket}`],
+      ["gatherthread-v1", `gatherthread-ticket.${ticket.body.data.ticket}`],
       { origin: "https://attacker.invalid" },
     );
     wrongOrigin.on("error", () => {});
@@ -465,7 +465,7 @@ test("network bootstrap, URL credentials, direct bearer sockets, and unapproved 
 
     const missingOrigin = new WebSocket(
       `${running.origin.replace("http", "ws")}${ticket.body.data.websocket_url}`,
-      ["relayroom-v1", `relayroom-ticket.${ticket.body.data.ticket}`],
+      ["gatherthread-v1", `gatherthread-ticket.${ticket.body.data.ticket}`],
     );
     missingOrigin.on("error", () => {});
     const missingOriginStatus = await new Promise<number>((resolve) => {
@@ -476,6 +476,26 @@ test("network bootstrap, URL credentials, direct bearer sockets, and unapproved 
       missingOrigin.once("open", () => resolve(101));
     });
     assert.equal(missingOriginStatus, 401);
+
+    const legacyTicket = await api<{ data: { ticket: string; websocket_url: string } }>(running.origin, "/v1/realtime-ticket", {
+      method: "POST",
+      token: owner.token,
+      body: { session_id: "room" },
+    });
+    const legacyProtocol = new WebSocket(
+      `${running.origin.replace("http", "ws")}${legacyTicket.body.data.websocket_url}`,
+      ["relayroom-v1", `gatherthread-ticket.${legacyTicket.body.data.ticket}`],
+      { origin: allowedOrigin },
+    );
+    legacyProtocol.on("error", () => {});
+    const legacyProtocolStatus = await new Promise<number>((resolve) => {
+      legacyProtocol.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      legacyProtocol.once("open", () => resolve(101));
+    });
+    assert.equal(legacyProtocolStatus, 401);
   } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });
@@ -483,10 +503,10 @@ test("network bootstrap, URL credentials, direct bearer sockets, and unapproved 
 });
 
 test("owner host serves only the configured static tree without authentication", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-static-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-static-"));
   const staticDirectory = join(directory, "public");
   mkdirSync(join(staticDirectory, "assets"), { recursive: true });
-  writeFileSync(join(staticDirectory, "index.html"), "<!doctype html><title>Relayroom</title>");
+  writeFileSync(join(staticDirectory, "index.html"), "<!doctype html><title>GatherThread</title>");
   writeFileSync(join(staticDirectory, "assets", "app.js"), "export const ready = true;\n");
   writeFileSync(join(directory, "private.txt"), "must not leak");
   const running = await startCollaborationServer({
@@ -498,7 +518,7 @@ test("owner host serves only the configured static tree without authentication",
     const index = await fetch(`${running.origin}/`);
     assert.equal(index.status, 200);
     assert.equal(index.headers.get("content-type"), "text/html; charset=utf-8");
-    assert.match(await index.text(), /Relayroom/);
+    assert.match(await index.text(), /GatherThread/);
 
     const asset = await fetch(`${running.origin}/assets/app.js`);
     assert.equal(asset.status, 200);
@@ -514,7 +534,7 @@ test("owner host serves only the configured static tree without authentication",
 });
 
 test("revoking a device closes its realtime socket and invalidates delegated authorizations", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-revoke-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-revoke-"));
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
     authTokenPepper: TEST_PEPPER,

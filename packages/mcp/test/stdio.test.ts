@@ -6,7 +6,7 @@ import type {
   CollaborationApi,
   CompleteAgentRequestInput,
   RuntimeRegistration,
-} from "@agent-cooperation/bridge";
+} from "@gatherthread/bridge";
 import { CollaborationMcpService, StdioMcpServer } from "../src/index.js";
 
 const api: CollaborationApi = {

@@ -7,7 +7,7 @@ The first-release server is a Node 24 ESM service built with TypeScript, Node's 
 ```sh
 npm install --package-lock=false
 npm run build
-ACP_DATABASE_PATH=./data/collaboration.sqlite PORT=8787 npm start
+GATHERTHREAD_DATABASE_PATH=./data/collaboration.sqlite GATHERTHREAD_SERVER_PORT=8787 npm start
 ```
 
 The default bind address is `127.0.0.1`. Set `HOST` explicitly to expose the service beyond the local machine.
@@ -76,7 +76,7 @@ Connect to `/v1/ws`, then send:
 
 The server sends one or more `replay` pages, then `subscribed`. Committed live writes arrive as `event`. A `cursor` frame advances across an event hidden by visibility policy. Server ping frames are emitted every 15 seconds; clients that fail the next heartbeat are terminated. Clients should use the durable HTTP replay endpoint whenever their stored cursor indicates a gap.
 
-Set `ACP_ALLOWED_ORIGINS` to a comma-separated exact Origin allowlist when the browser is hosted separately, for example `http://127.0.0.1:4173`. Cross-origin requests are denied by default.
+Set `GATHERTHREAD_ALLOWED_ORIGINS` to a comma-separated exact Origin allowlist when the browser is hosted separately, for example `http://127.0.0.1:4173`. Cross-origin requests are denied by default.
 
 ## Security and first-release scope
 

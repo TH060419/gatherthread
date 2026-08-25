@@ -7,3 +7,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0001](0001-trusted-self-hosted-collaboration-server.md) | Trust the self-hosted collaboration server with canonical plaintext | accepted | 2026-08-25 |
 | [0002](0002-device-bound-identity-and-session-invitations.md) | Use device-bound identity and single-use session invitations | accepted | 2026-08-25 |
 | [0003](0003-single-owner-hosted-deployment.md) | Use one owner-hosted authoritative server per deployment | accepted | 2026-08-25 |
+| [0004](0004-adopt-gatherthread-project-name.md) | Adopt GatherThread as the project name | accepted | 2026-08-25 |

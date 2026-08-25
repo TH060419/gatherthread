@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import type { HarnessName, TranscriptEvent } from "@agent-cooperation/adapters";
+import type { HarnessName, TranscriptEvent } from "@gatherthread/adapters";
 import type {
   HarnessExecutionInput,
   HarnessExecutionResult,
@@ -37,7 +37,7 @@ export class SubprocessHarnessExecutor implements HarnessExecutor {
     this.#timeoutMs = options.timeoutMs ?? 300_000;
     this.#maxOutputBytes = options.maxOutputBytes ?? 4_194_304;
     this.#signal = options.signal;
-    this.#env = withoutRelayroomCredentials(options.env ?? process.env);
+    this.#env = withoutGatherThreadCredentials(options.env ?? process.env);
   }
 
   async execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
@@ -193,8 +193,13 @@ function copyOptionalString(
   target[key] = value;
 }
 
-function withoutRelayroomCredentials(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+function withoutGatherThreadCredentials(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const blocked = new Set([
+    "GATHERTHREAD_AUTH_TOKEN_PEPPER",
+    "GATHERTHREAD_AUTHORIZATION_TOKEN",
+    "GATHERTHREAD_BEARER_TOKEN",
+    "GATHERTHREAD_TOKEN",
+    // Strip pre-GatherThread alpha names too, so a stale shell cannot leak an old credential.
     "ACP_AUTH_TOKEN_PEPPER",
     "RELAYROOM_AUTHORIZATION_TOKEN",
     "RELAYROOM_BEARER_TOKEN",

@@ -1,5 +1,5 @@
 {
-  "name": "@agent-cooperation/mcp",
+  "name": "@gatherthread/mcp",
   "version": "0.1.0",
   "license": "Apache-2.0",
   "private": true,
@@ -7,7 +7,7 @@
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
   "bin": {
-    "relayroom-mcp": "dist/src/cli.js"
+    "gatherthread-mcp": "dist/src/cli.js"
   },
   "exports": {
     ".": {
@@ -16,8 +16,8 @@
     }
   },
   "dependencies": {
-    "@agent-cooperation/adapters": "*",
-    "@agent-cooperation/bridge": "*"
+    "@gatherthread/adapters": "*",
+    "@gatherthread/bridge": "*"
   },
   "scripts": {
     "build": "tsc -b",

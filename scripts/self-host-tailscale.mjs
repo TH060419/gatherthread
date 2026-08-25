@@ -1,22 +1,22 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 
-const host = process.env.ACP_SERVER_HOST?.trim() || "127.0.0.1";
-const rawPort = process.env.ACP_SERVER_PORT ?? "8787";
-const publicBaseUrl = process.env.ACP_PUBLIC_BASE_URL?.trim();
+const host = process.env.GATHERTHREAD_SERVER_HOST?.trim() || "127.0.0.1";
+const rawPort = process.env.GATHERTHREAD_SERVER_PORT ?? "8787";
+const publicBaseUrl = process.env.GATHERTHREAD_PUBLIC_BASE_URL?.trim();
 
 if (process.env.NODE_ENV !== "production") {
   throw new Error("Tailscale Serve setup requires NODE_ENV=production so owner-host security checks cannot be skipped");
 }
-if (host !== "127.0.0.1") throw new Error("Tailscale Serve setup requires ACP_SERVER_HOST=127.0.0.1");
+if (host !== "127.0.0.1") throw new Error("Tailscale Serve setup requires GATHERTHREAD_SERVER_HOST=127.0.0.1");
 if (!/^\d+$/.test(rawPort) || Number(rawPort) < 1 || Number(rawPort) > 65_535) {
-  throw new Error("ACP_SERVER_PORT must be an integer from 1 to 65535");
+  throw new Error("GATHERTHREAD_SERVER_PORT must be an integer from 1 to 65535");
 }
 let publicUrl;
 try {
   publicUrl = publicBaseUrl ? new URL(publicBaseUrl) : undefined;
 } catch {
-  throw new Error("ACP_PUBLIC_BASE_URL must be this device's exact https://*.ts.net origin");
+  throw new Error("GATHERTHREAD_PUBLIC_BASE_URL must be this device's exact https://*.ts.net origin");
 }
 if (
   !publicUrl
@@ -28,10 +28,10 @@ if (
   || publicUrl.search
   || publicUrl.hash
 ) {
-  throw new Error("Set ACP_PUBLIC_BASE_URL to this device's https://*.ts.net origin first");
+  throw new Error("Set GATHERTHREAD_PUBLIC_BASE_URL to this device's https://*.ts.net origin first");
 }
-if (process.env.ACP_TLS_TERMINATED_BY_PROXY !== "true") {
-  throw new Error("Set ACP_TLS_TERMINATED_BY_PROXY=true before configuring Tailscale Serve");
+if (process.env.GATHERTHREAD_TLS_TERMINATED_BY_PROXY !== "true") {
+  throw new Error("Set GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true before configuring Tailscale Serve");
 }
 
 const target = `http://127.0.0.1:${rawPort}`;

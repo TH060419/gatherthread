@@ -2,13 +2,13 @@
 import {
   HttpCollaborationClient,
   booleanEnv,
-  loadRelayroomConnectionConfig,
-} from "@agent-cooperation/bridge";
+  loadGatherThreadConnectionConfig,
+} from "@gatherthread/bridge";
 import { CollaborationMcpService } from "./service.js";
 import { StdioMcpServer } from "./stdio.js";
 
 export async function runMcpCli(env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  const config = loadRelayroomConnectionConfig(env);
+  const config = loadGatherThreadConnectionConfig(env);
   const shutdown = new AbortController();
   const stop = () => shutdown.abort(new Error("MCP shutdown requested"));
   process.once("SIGINT", stop);
@@ -24,13 +24,13 @@ export async function runMcpCli(env: NodeJS.ProcessEnv = process.env): Promise<v
       api,
       allowProviderRequestCapture: booleanEnv(
         env,
-        "RELAYROOM_ALLOW_PROVIDER_REQUEST_CAPTURE",
+        "GATHERTHREAD_ALLOW_PROVIDER_REQUEST_CAPTURE",
         false,
       ),
     });
     await new StdioMcpServer(service).run({
       signal: shutdown.signal,
-      maxMessageBytes: integerEnv(env, "RELAYROOM_MCP_MAX_MESSAGE_BYTES", 1_048_576),
+      maxMessageBytes: integerEnv(env, "GATHERTHREAD_MCP_MAX_MESSAGE_BYTES", 1_048_576),
     });
   } finally {
     process.removeListener("SIGINT", stop);
@@ -51,7 +51,7 @@ function integerEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): num
 if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
   runMcpCli().catch(() => {
     // stdout is reserved exclusively for MCP JSON-RPC frames.
-    process.stderr.write("relayroom-mcp: startup or transport failure\n");
+    process.stderr.write("gatherthread-mcp: startup or transport failure\n");
     process.exitCode = 1;
   });
 }

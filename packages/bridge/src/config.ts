@@ -1,16 +1,16 @@
 import { homedir } from "node:os";
 import path from "node:path";
-import type { HarnessName } from "@agent-cooperation/adapters";
+import type { HarnessName } from "@gatherthread/adapters";
 import type { RuntimeRegistration } from "./types.js";
 
-export interface RelayroomConnectionConfig {
+export interface GatherThreadConnectionConfig {
   apiUrl: string;
   bearerToken: string;
   requestTimeoutMs: number;
 }
 
 export interface BridgeDaemonConfig {
-  connection: RelayroomConnectionConfig;
+  connection: GatherThreadConnectionConfig;
   runtime: RuntimeRegistration;
   cursorPath: string;
   pollIntervalMs: number;
@@ -23,53 +23,53 @@ export interface BridgeDaemonConfig {
   };
 }
 
-export function loadRelayroomConnectionConfig(
+export function loadGatherThreadConnectionConfig(
   env: NodeJS.ProcessEnv = process.env,
-): RelayroomConnectionConfig {
-  const apiUrl = normalizeApiUrl(requiredEnv(env, "RELAYROOM_API_URL"));
-  const bearerToken = requiredEnv(env, "RELAYROOM_TOKEN", false);
+): GatherThreadConnectionConfig {
+  const apiUrl = normalizeApiUrl(requiredEnv(env, "GATHERTHREAD_API_URL"));
+  const bearerToken = requiredEnv(env, "GATHERTHREAD_TOKEN", false);
   if (!bearerToken.trim() || /[\r\n]/.test(bearerToken)) {
-    throw new Error("RELAYROOM_TOKEN must be non-empty and cannot contain line breaks");
+    throw new Error("GATHERTHREAD_TOKEN must be non-empty and cannot contain line breaks");
   }
   return {
     apiUrl,
     bearerToken,
-    requestTimeoutMs: integerEnv(env, "RELAYROOM_REQUEST_TIMEOUT_MS", 30_000, 100, 600_000),
+    requestTimeoutMs: integerEnv(env, "GATHERTHREAD_REQUEST_TIMEOUT_MS", 30_000, 100, 600_000),
   };
 }
 
 export function loadBridgeDaemonConfig(
   env: NodeJS.ProcessEnv = process.env,
 ): BridgeDaemonConfig {
-  const connection = loadRelayroomConnectionConfig(env);
-  const harness = enumEnv(env, "RELAYROOM_HARNESS", ["codex", "claude-code"] as const);
-  const args = jsonStringArrayEnv(env, "RELAYROOM_ADAPTER_ARGS_JSON", []);
+  const connection = loadGatherThreadConnectionConfig(env);
+  const harness = enumEnv(env, "GATHERTHREAD_HARNESS", ["codex", "claude-code"] as const);
+  const args = jsonStringArrayEnv(env, "GATHERTHREAD_ADAPTER_ARGS_JSON", []);
   if (args.some((argument) => argument.includes(connection.bearerToken))) {
-    throw new Error("RELAYROOM_TOKEN must not be included in adapter arguments");
+    throw new Error("GATHERTHREAD_TOKEN must not be included in adapter arguments");
   }
-  const capabilities = optionalJsonStringArrayEnv(env, "RELAYROOM_CAPABILITIES_JSON");
+  const capabilities = optionalJsonStringArrayEnv(env, "GATHERTHREAD_CAPABILITIES_JSON");
   const runtime: RuntimeRegistration = {
-    sessionId: requiredEnv(env, "RELAYROOM_SESSION_ID"),
-    deviceId: requiredEnv(env, "RELAYROOM_DEVICE_ID"),
+    sessionId: requiredEnv(env, "GATHERTHREAD_SESSION_ID"),
+    deviceId: requiredEnv(env, "GATHERTHREAD_DEVICE_ID"),
     harness,
-    provider: requiredEnv(env, "RELAYROOM_PROVIDER"),
-    model: requiredEnv(env, "RELAYROOM_MODEL"),
-    localSessionId: requiredEnv(env, "RELAYROOM_LOCAL_SESSION_ID"),
+    provider: requiredEnv(env, "GATHERTHREAD_PROVIDER"),
+    model: requiredEnv(env, "GATHERTHREAD_MODEL"),
+    localSessionId: requiredEnv(env, "GATHERTHREAD_LOCAL_SESSION_ID"),
     captureFidelity: "harness_transcript",
     ...(capabilities === undefined ? {} : { capabilities }),
   };
   return {
     connection,
     runtime,
-    cursorPath: path.resolve(env.RELAYROOM_CURSOR_PATH?.trim()
-      || path.join(homedir(), ".relayroom", "bridge-cursor.json")),
-    pollIntervalMs: integerEnv(env, "RELAYROOM_POLL_INTERVAL_MS", 1_000, 50, 60_000),
-    pollLimit: integerEnv(env, "RELAYROOM_POLL_LIMIT", 200, 1, 500),
+    cursorPath: path.resolve(env.GATHERTHREAD_CURSOR_PATH?.trim()
+      || path.join(homedir(), ".gatherthread", "bridge-cursor.json")),
+    pollIntervalMs: integerEnv(env, "GATHERTHREAD_POLL_INTERVAL_MS", 1_000, 50, 60_000),
+    pollLimit: integerEnv(env, "GATHERTHREAD_POLL_LIMIT", 200, 1, 500),
     adapter: {
-      command: requiredEnv(env, "RELAYROOM_ADAPTER_COMMAND"),
+      command: requiredEnv(env, "GATHERTHREAD_ADAPTER_COMMAND"),
       args,
-      timeoutMs: integerEnv(env, "RELAYROOM_ADAPTER_TIMEOUT_MS", 300_000, 100, 3_600_000),
-      maxOutputBytes: integerEnv(env, "RELAYROOM_ADAPTER_MAX_OUTPUT_BYTES", 4_194_304, 1_024, 67_108_864),
+      timeoutMs: integerEnv(env, "GATHERTHREAD_ADAPTER_TIMEOUT_MS", 300_000, 100, 3_600_000),
+      maxOutputBytes: integerEnv(env, "GATHERTHREAD_ADAPTER_MAX_OUTPUT_BYTES", 4_194_304, 1_024, 67_108_864),
     },
   };
 }
@@ -91,16 +91,16 @@ function normalizeApiUrl(value: string): string {
   try {
     url = new URL(value);
   } catch {
-    throw new Error("RELAYROOM_API_URL must be an absolute HTTP(S) URL");
+    throw new Error("GATHERTHREAD_API_URL must be an absolute HTTP(S) URL");
   }
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new Error("RELAYROOM_API_URL must use HTTP or HTTPS");
+    throw new Error("GATHERTHREAD_API_URL must use HTTP or HTTPS");
   }
   if (url.username || url.password || url.search || url.hash) {
-    throw new Error("RELAYROOM_API_URL cannot contain credentials, a query, or a fragment");
+    throw new Error("GATHERTHREAD_API_URL cannot contain credentials, a query, or a fragment");
   }
   if (url.protocol === "http:" && !isLoopbackHostname(url.hostname)) {
-    throw new Error("RELAYROOM_API_URL must use HTTPS except for a loopback host");
+    throw new Error("GATHERTHREAD_API_URL must use HTTPS except for a loopback host");
   }
   return url.toString().replace(/\/$/, "");
 }

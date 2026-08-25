@@ -1,6 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import type { TranscriptCursor } from "@agent-cooperation/adapters";
+import type { TranscriptCursor } from "@gatherthread/adapters";
 
 export interface BridgeCursorState {
   server: Record<string, number>;

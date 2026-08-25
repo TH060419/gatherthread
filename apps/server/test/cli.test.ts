@@ -9,12 +9,12 @@ import test from "node:test";
 const cliPath = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 
 test("local bootstrap creates the first owner and emits its credential exactly once", () => {
-  const directory = mkdtempSync(join(tmpdir(), "acp-cli-"));
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-cli-"));
   const environment = {
     ...process.env,
     NODE_ENV: "test",
-    ACP_DATABASE_PATH: join(directory, "owner.sqlite"),
-    ACP_AUTH_TOKEN_PEPPER: "test-only-pepper-not-for-production",
+    GATHERTHREAD_DATABASE_PATH: join(directory, "owner.sqlite"),
+    GATHERTHREAD_AUTH_TOKEN_PEPPER: "test-only-pepper-not-for-production",
   };
   const argumentsList = [
     cliPath,
@@ -28,14 +28,14 @@ test("local bootstrap creates the first owner and emits its credential exactly o
     const first = spawnSync(process.execPath, argumentsList, { env: environment, encoding: "utf8" });
     assert.equal(first.status, 0, first.stderr);
     const credential = JSON.parse(first.stdout) as { access_token: string };
-    assert.match(credential.access_token, /^acp_/);
+    assert.match(credential.access_token, /^gta_/);
     assert.equal(first.stdout.split(credential.access_token).length - 1, 1);
     assert.doesNotMatch(first.stderr, new RegExp(credential.access_token));
 
     const repeated = spawnSync(process.execPath, argumentsList, { env: environment, encoding: "utf8" });
     assert.equal(repeated.status, 1);
     assert.match(repeated.stderr, /Bootstrap is available only for an empty database/);
-    assert.doesNotMatch(repeated.stdout, /acp_/);
+    assert.doesNotMatch(repeated.stdout, /gta_/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

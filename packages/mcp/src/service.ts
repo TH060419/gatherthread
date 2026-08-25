@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { redactText, redactValue } from "@agent-cooperation/adapters";
+import { redactText, redactValue } from "@gatherthread/adapters";
 import type {
   CollaborationApi,
   RuntimeRegistration,
-} from "@agent-cooperation/bridge";
+} from "@gatherthread/bridge";
 
 interface JsonRpcRequest {
   jsonrpc: "2.0";
@@ -95,7 +95,7 @@ export class CollaborationMcpService {
 
   constructor(options: CollaborationMcpServiceOptions) {
     this.#api = options.api;
-    this.#serverName = options.serverName ?? "agent-cooperation";
+    this.#serverName = options.serverName ?? "gatherthread";
     this.#serverVersion = options.serverVersion ?? "0.1.0";
     this.#allowProviderRequestCapture = options.allowProviderRequestCapture === true;
   }

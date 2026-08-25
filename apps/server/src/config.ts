@@ -60,7 +60,7 @@ function parseByteLimit(name: string, raw: string | undefined, fallback: number,
 function parseLoopbackHost(raw: string | undefined): string {
   const host = raw?.trim() || "127.0.0.1";
   if (!LOOPBACK_HOSTS.has(host)) {
-    throw new ConfigurationError("ACP_SERVER_HOST must be a loopback host (127.0.0.1, ::1, or localhost)");
+    throw new ConfigurationError("GATHERTHREAD_SERVER_HOST must be a loopback host (127.0.0.1, ::1, or localhost)");
   }
   return host;
 }
@@ -88,9 +88,9 @@ function parseOrigins(raw: string | undefined, requireHttps: boolean): string[] 
   if (raw === undefined || raw.trim() === "") return [];
   const origins = raw.split(",").map((item) => item.trim());
   if (origins.some((origin) => origin === "")) {
-    throw new ConfigurationError("ACP_ALLOWED_ORIGINS must not contain empty entries");
+    throw new ConfigurationError("GATHERTHREAD_ALLOWED_ORIGINS must not contain empty entries");
   }
-  return [...new Set(origins.map((origin) => parseOrigin("ACP_ALLOWED_ORIGINS", origin, requireHttps)))];
+  return [...new Set(origins.map((origin) => parseOrigin("GATHERTHREAD_ALLOWED_ORIGINS", origin, requireHttps)))];
 }
 
 function resolvePath(raw: string | undefined, fallback: string, cwd: string): string {
@@ -113,52 +113,52 @@ export function loadServerConfig(
   }
   const environment = environmentResult.data;
   const isProduction = environment === "production";
-  const host = parseLoopbackHost(env.ACP_SERVER_HOST);
-  const port = parsePort("ACP_SERVER_PORT", env.ACP_SERVER_PORT, 8787);
-  const databasePath = resolvePath(env.ACP_DATABASE_PATH, ".local/collaboration.sqlite", cwd);
-  const staticDirectory = resolvePath(env.ACP_STATIC_DIRECTORY, "apps/web/dist", cwd);
-  const configuredPublicBaseUrl = env.ACP_PUBLIC_BASE_URL?.trim();
+  const host = parseLoopbackHost(env.GATHERTHREAD_SERVER_HOST);
+  const port = parsePort("GATHERTHREAD_SERVER_PORT", env.GATHERTHREAD_SERVER_PORT, 8787);
+  const databasePath = resolvePath(env.GATHERTHREAD_DATABASE_PATH, ".local/collaboration.sqlite", cwd);
+  const staticDirectory = resolvePath(env.GATHERTHREAD_STATIC_DIRECTORY, "apps/web/dist", cwd);
+  const configuredPublicBaseUrl = env.GATHERTHREAD_PUBLIC_BASE_URL?.trim();
   if (isProduction && !configuredPublicBaseUrl) {
-    throw new ConfigurationError("ACP_PUBLIC_BASE_URL is required in production");
+    throw new ConfigurationError("GATHERTHREAD_PUBLIC_BASE_URL is required in production");
   }
   const publicBaseUrl = parseOrigin(
-    "ACP_PUBLIC_BASE_URL",
+    "GATHERTHREAD_PUBLIC_BASE_URL",
     configuredPublicBaseUrl || `http://127.0.0.1:${port}`,
     isProduction,
   );
-  const configuredOrigins = parseOrigins(env.ACP_ALLOWED_ORIGINS, isProduction);
+  const configuredOrigins = parseOrigins(env.GATHERTHREAD_ALLOWED_ORIGINS, isProduction);
   const allowedOrigins = [...new Set([publicBaseUrl, ...configuredOrigins])];
-  const secureTransport = parseBoolean("ACP_TLS_TERMINATED_BY_PROXY", env.ACP_TLS_TERMINATED_BY_PROXY, false);
-  const allowHttpBootstrap = parseBoolean("ACP_ALLOW_HTTP_BOOTSTRAP", env.ACP_ALLOW_HTTP_BOOTSTRAP, false);
-  const maxUserEventBytes = parseByteLimit("ACP_MAX_USER_EVENT_BYTES", env.ACP_MAX_USER_EVENT_BYTES, 256 * 1024 * 1024);
-  const maxSessionEventBytes = parseByteLimit("ACP_MAX_SESSION_EVENT_BYTES", env.ACP_MAX_SESSION_EVENT_BYTES, 512 * 1024 * 1024);
-  const maxTotalEventBytes = parseByteLimit("ACP_MAX_TOTAL_EVENT_BYTES", env.ACP_MAX_TOTAL_EVENT_BYTES, 2 * 1024 * 1024 * 1024);
-  const maxEventBytes = parseByteLimit("ACP_MAX_EVENT_BYTES", env.ACP_MAX_EVENT_BYTES, 256 * 1024, 1024);
-  const rawAuthTokenPepper = env.ACP_AUTH_TOKEN_PEPPER;
+  const secureTransport = parseBoolean("GATHERTHREAD_TLS_TERMINATED_BY_PROXY", env.GATHERTHREAD_TLS_TERMINATED_BY_PROXY, false);
+  const allowHttpBootstrap = parseBoolean("GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP", env.GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP, false);
+  const maxUserEventBytes = parseByteLimit("GATHERTHREAD_MAX_USER_EVENT_BYTES", env.GATHERTHREAD_MAX_USER_EVENT_BYTES, 256 * 1024 * 1024);
+  const maxSessionEventBytes = parseByteLimit("GATHERTHREAD_MAX_SESSION_EVENT_BYTES", env.GATHERTHREAD_MAX_SESSION_EVENT_BYTES, 512 * 1024 * 1024);
+  const maxTotalEventBytes = parseByteLimit("GATHERTHREAD_MAX_TOTAL_EVENT_BYTES", env.GATHERTHREAD_MAX_TOTAL_EVENT_BYTES, 2 * 1024 * 1024 * 1024);
+  const maxEventBytes = parseByteLimit("GATHERTHREAD_MAX_EVENT_BYTES", env.GATHERTHREAD_MAX_EVENT_BYTES, 256 * 1024, 1024);
+  const rawAuthTokenPepper = env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
   if (rawAuthTokenPepper !== undefined && rawAuthTokenPepper !== rawAuthTokenPepper.trim()) {
-    throw new ConfigurationError("ACP_AUTH_TOKEN_PEPPER must not have leading or trailing whitespace");
+    throw new ConfigurationError("GATHERTHREAD_AUTH_TOKEN_PEPPER must not have leading or trailing whitespace");
   }
   const authTokenPepper = rawAuthTokenPepper || undefined;
 
   if (databasePath === staticDirectory || isWithin(staticDirectory, databasePath)) {
-    throw new ConfigurationError("ACP_DATABASE_PATH must not be inside ACP_STATIC_DIRECTORY");
+    throw new ConfigurationError("GATHERTHREAD_DATABASE_PATH must not be inside GATHERTHREAD_STATIC_DIRECTORY");
   }
   if (maxSessionEventBytes > maxTotalEventBytes || maxUserEventBytes > maxTotalEventBytes
     || maxEventBytes > Math.min(maxUserEventBytes, maxSessionEventBytes, maxTotalEventBytes)) {
-    throw new ConfigurationError("Event, per-user, and per-session limits must fit within ACP_MAX_TOTAL_EVENT_BYTES");
+    throw new ConfigurationError("Event, per-user, and per-session limits must fit within GATHERTHREAD_MAX_TOTAL_EVENT_BYTES");
   }
   if (isProduction) {
     if (!secureTransport) {
-      throw new ConfigurationError("ACP_TLS_TERMINATED_BY_PROXY=true is required in production");
+      throw new ConfigurationError("GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true is required in production");
     }
     if (allowHttpBootstrap) {
-      throw new ConfigurationError("ACP_ALLOW_HTTP_BOOTSTRAP cannot be enabled in production; use the local bootstrap command");
+      throw new ConfigurationError("GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP cannot be enabled in production; use the local bootstrap command");
     }
     if (!authTokenPepper || Buffer.byteLength(authTokenPepper, "utf8") < 32 || PLACEHOLDER_SECRET.test(authTokenPepper)) {
-      throw new ConfigurationError("ACP_AUTH_TOKEN_PEPPER must be a non-placeholder secret of at least 32 bytes in production");
+      throw new ConfigurationError("GATHERTHREAD_AUTH_TOKEN_PEPPER must be a non-placeholder secret of at least 32 bytes in production");
     }
-    if (env.ACP_DATABASE_PATH?.trim() === ":memory:") {
-      throw new ConfigurationError("ACP_DATABASE_PATH must be durable in production");
+    if (env.GATHERTHREAD_DATABASE_PATH?.trim() === ":memory:") {
+      throw new ConfigurationError("GATHERTHREAD_DATABASE_PATH must be durable in production");
     }
   }
 
@@ -196,7 +196,7 @@ export function prepareDatabaseDirectory(config: ServerConfig): void {
 export function assertPersistentCredentialPepper(config: ServerConfig): asserts config is ServerConfig & { authTokenPepper: string } {
   if (!config.authTokenPepper || Buffer.byteLength(config.authTokenPepper, "utf8") < 32) {
     throw new ConfigurationError(
-      "ACP_AUTH_TOKEN_PEPPER must contain at least 32 bytes so credentials remain valid across owner-host restarts",
+      "GATHERTHREAD_AUTH_TOKEN_PEPPER must contain at least 32 bytes so credentials remain valid across owner-host restarts",
     );
   }
 }

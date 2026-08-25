@@ -7,7 +7,7 @@ const DEFAULT_SECRET_PATTERNS: readonly RegExp[] = [
   /\bAKIA[0-9A-Z]{16}\b/g,
   /\b(?:ghp|github_pat|glpat|sk|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b/g,
   /\bBearer\s+[A-Za-z0-9._~+/=-]{8,}\b/gi,
-  /\bacp(?:i|d)?_[A-Za-z0-9_-]{20,}\b/g,
+  /\b(?:gt[aid]|acp(?:i|d)?)_[A-Za-z0-9_-]{20,}\b/g,
   /\b((?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|secret|token)\s*[=:]\s*)[^\s,;]+/gi,
   /\b([A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|AUTH_TOKEN_PEPPER)\s*[=:]\s*)[^\s,;]+/g,
 ];

@@ -18,7 +18,7 @@ import type {
   RuntimeProvenance,
   SessionListItem,
   SessionMode,
-} from "@agent-cooperation/protocol";
+} from "@gatherthread/protocol";
 import { conflict, idempotencyConflict, notFound, runtimeBusy, storageQuotaExceeded, unauthorized } from "./errors.js";
 
 export interface Actor {
@@ -289,19 +289,19 @@ function stableJson(value: JsonValue): string {
 }
 
 function issueDeviceToken(): string {
-  return `acp_${randomBytes(32).toString("base64url")}`;
+  return `gta_${randomBytes(32).toString("base64url")}`;
 }
 
 function issueInvitationToken(): string {
-  return `acpi_${randomBytes(32).toString("base64url")}`;
+  return `gti_${randomBytes(32).toString("base64url")}`;
 }
 
 function issueDeviceAuthorizationToken(): string {
-  return `acpd_${randomBytes(32).toString("base64url")}`;
+  return `gtd_${randomBytes(32).toString("base64url")}`;
 }
 
 function resolveAuthTokenPepper(path: string, configured?: string): string {
-  const explicit = configured ?? process.env.ACP_AUTH_TOKEN_PEPPER;
+  const explicit = configured ?? process.env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
   if (explicit) return explicit;
   if (path === ":memory:") return PROCESS_CREDENTIAL_PEPPER;
   const pepperPath = `${path}.auth-token-pepper`;

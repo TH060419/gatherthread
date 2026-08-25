@@ -14,10 +14,10 @@ test("Web preview binds to loopback and proxies only owner-host API paths", () =
 });
 
 test("Web preview refuses network-wide binds and non-loopback upstreams", () => {
-  assert.throws(() => loadWebServerConfig({ ACP_WEB_HOST: "0.0.0.0" }), /loopback/);
-  assert.throws(() => loadWebServerConfig({ ACP_WEB_PORT: "0" }), /1 to 65535/);
-  assert.throws(() => loadWebServerConfig({ ACP_WEB_API_ORIGIN: "https://api.example.com" }), /loopback HTTP origin/);
-  assert.throws(() => loadWebServerConfig({ ACP_WEB_API_ORIGIN: "http://127.0.0.1:8787/v1" }), /must not contain a path/);
+  assert.throws(() => loadWebServerConfig({ GATHERTHREAD_WEB_HOST: "0.0.0.0" }), /loopback/);
+  assert.throws(() => loadWebServerConfig({ GATHERTHREAD_WEB_PORT: "0" }), /1 to 65535/);
+  assert.throws(() => loadWebServerConfig({ GATHERTHREAD_WEB_API_ORIGIN: "https://api.example.com" }), /loopback HTTP origin/);
+  assert.throws(() => loadWebServerConfig({ GATHERTHREAD_WEB_API_ORIGIN: "http://127.0.0.1:8787/v1" }), /must not contain a path/);
 });
 
 test("Web preview rejects absolute and malformed request targets without proxying or crashing", async () => {

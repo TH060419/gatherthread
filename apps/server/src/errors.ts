@@ -1,4 +1,4 @@
-import type { JsonValue } from "@agent-cooperation/protocol";
+import type { JsonValue } from "@gatherthread/protocol";
 
 export class ApiError extends Error {
   constructor(

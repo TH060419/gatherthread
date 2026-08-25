@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { SubprocessHarnessExecutor } from "../src/index.js";
 
-test("subprocess adapter receives hydrated input while Relayroom credentials are removed", async () => {
+test("subprocess adapter receives hydrated input while GatherThread credentials are removed", async () => {
   const script = `
 let input = "";
 process.stdin.setEncoding("utf8");
@@ -17,6 +17,10 @@ process.stdin.on("end", () => {
       harness: parsed.runtime.harness,
       captureFidelity: "harness_transcript",
       content: [
+        process.env.GATHERTHREAD_TOKEN,
+        process.env.GATHERTHREAD_BEARER_TOKEN,
+        process.env.GATHERTHREAD_AUTHORIZATION_TOKEN,
+        process.env.GATHERTHREAD_AUTH_TOKEN_PEPPER,
         process.env.RELAYROOM_TOKEN,
         process.env.RELAYROOM_BEARER_TOKEN,
         process.env.RELAYROOM_AUTHORIZATION_TOKEN,
@@ -31,10 +35,14 @@ process.stdin.on("end", () => {
     harness: "codex",
     env: {
       ...process.env,
-      RELAYROOM_TOKEN: "secret-token",
-      RELAYROOM_BEARER_TOKEN: "secret-bearer",
-      RELAYROOM_AUTHORIZATION_TOKEN: "secret-authorization",
-      ACP_AUTH_TOKEN_PEPPER: "secret-pepper"
+      GATHERTHREAD_TOKEN: "secret-token",
+      GATHERTHREAD_BEARER_TOKEN: "secret-bearer",
+      GATHERTHREAD_AUTHORIZATION_TOKEN: "secret-authorization",
+      GATHERTHREAD_AUTH_TOKEN_PEPPER: "secret-pepper",
+      RELAYROOM_TOKEN: "legacy-secret-token",
+      RELAYROOM_BEARER_TOKEN: "legacy-secret-bearer",
+      RELAYROOM_AUTHORIZATION_TOKEN: "legacy-secret-authorization",
+      ACP_AUTH_TOKEN_PEPPER: "legacy-secret-pepper"
     },
   });
   const result = await executor.execute({

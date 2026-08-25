@@ -2,7 +2,7 @@ import type {
   CaptureFidelity,
   HarnessName,
   TranscriptEvent,
-} from "@agent-cooperation/adapters";
+} from "@gatherthread/adapters";
 
 export type CanonicalEventType =
   | "human_chat"

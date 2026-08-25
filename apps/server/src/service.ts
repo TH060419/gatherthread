@@ -4,7 +4,7 @@ import type {
   JsonValue,
   MembershipRole,
   ReplayResponse,
-} from "@agent-cooperation/protocol";
+} from "@gatherthread/protocol";
 import { CollaborationDatabase, type Actor, type RuntimeRecord, type SessionRecord } from "./database.js";
 import { conflict, forbidden, notFound } from "./errors.js";
 import { redactJson } from "./redaction.js";

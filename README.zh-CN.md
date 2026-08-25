@@ -1,10 +1,10 @@
-# Agent Cooperation Project
+# GatherThread
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Agent Cooperation Project 的界面名称为 **Relayroom**。它是一个与具体 Agent harness 无关的协作层，让每位协作者都能继续使用各自本地的 AI Agent。
+**GatherThread** 是一个与具体 Agent harness 无关的协作层，让每位协作者都能继续使用各自本地的 AI Agent。
 
 - `solo`：一位所有者发布完整的规范化会话事件流，其他协作者只能查看。
 - `multi`：多人共享一个有序的项目会话。普通聊天消息只进入共享会话，不会调用 Agent；Agent 请求只由发送者自己的本地 runtime 领取，回复会标注用户名、设备、harness、provider、模型、本地会话和上下文保真度。
@@ -46,7 +46,7 @@ npm run verify
 
 ## 本地端到端运行
 
-创建不会被 Git 跟踪的环境文件，并设置一个稳定、随机、至少32字节的 `ACP_AUTH_TOKEN_PEPPER`：
+创建不会被 Git 跟踪的环境文件，并设置一个稳定、随机、至少32字节的 `GATHERTHREAD_AUTH_TOKEN_PEPPER`：
 
 ```bash
 cp .env.example .env
