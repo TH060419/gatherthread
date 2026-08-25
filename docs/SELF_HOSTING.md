@@ -107,7 +107,7 @@ Invitation and device authorization secrets are accepted in request bodies, neve
 
 Each collaborator runs the bridge locally with their own device credential and runtime metadata. The bridge requires an HTTPS GatherThread URL for remote hosts, rejects credentials embedded in URLs, persists cursors locally, and does not forward the GatherThread credential to a harness adapter process.
 
-See [bridge configuration](../packages/bridge/README.md) and [MCP configuration](../packages/mcp/README.md). Keep credentials in local environment or an operating-system secret store, never in MCP JSON committed to the project.
+For Codex, use the built-in connector documented in the [Codex connector guide](CODEX_CONNECT.md). It requests the device credential through a hidden prompt and strips it from the Codex child environment. Generic bridge adapters and MCP configuration are documented in [bridge configuration](../packages/bridge/README.md) and [MCP configuration](../packages/mcp/README.md). Keep credentials in local environment or an operating-system secret store, never in MCP JSON committed to the project.
 
 ## Backup and host migration
 

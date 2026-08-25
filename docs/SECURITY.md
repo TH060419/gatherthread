@@ -35,6 +35,7 @@ The collaboration service never inherits authority to approve local tools. Trans
 - Events become visible only after the database transaction commits. The durable log, not WebSocket delivery, is authoritative.
 - Secrets, raw thinking, and private system or developer instructions are removed before persistence, logs, metrics, traces, and fan-out.
 - Fidelity labels are server-validated. Reconstructed history cannot claim `provider_request` fidelity.
+- The built-in Codex connector treats prior shared events as untrusted data, accepts execution only for the server-verified initiating user's request, retains a bounded local sandbox, and disables automatic privilege escalation.
 
 ## Threat model
 
@@ -52,6 +53,7 @@ The collaboration service never inherits authority to approve local tools. Trans
 | T10 | Resource exhaustion | request/JSON complexity and event limits; per-device/per-IP rate limits; per-user/session/deployment storage quotas; byte-bounded replay; socket backpressure | limit and reconnect tests |
 | T11 | SQLite corruption or inconsistent backup | WAL and foreign keys; bounded transactions; online SQLite backup API; integrity check and restore drill | operational restore drill |
 | T12 | Dependency or CI compromise | lockfiles, dependency review, license gate, secret scan, least-privilege workflow permissions, reviewed updates | CI checks and release review |
+| T13 | Shared-history prompt injection causes unintended local action | separate the authenticated current request from prior untrusted context; claim only the initiating user's request; retain read-only/workspace-write sandbox; disable automatic escalation; allow final-answer-only sharing | Codex prompt/argument tests and real CLI smoke test |
 
 ## Authentication and authorization requirements
 

@@ -174,6 +174,7 @@ const DEFAULT_MAX_USER_EVENT_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_SESSION_EVENT_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_EVENT_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_EVENT_BYTES = 256 * 1024;
+const RUNTIME_OFFLINE_AFTER_MS = 30_000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -363,6 +364,19 @@ function resolveAuthTokenPepper(path: string, configured?: string): string {
     if (!raced) throw new Error("Authentication token pepper file is empty");
     return raced;
   }
+}
+
+function runtimeStatus(
+  value: string | null | undefined,
+  lastSeenAt: string | null | undefined,
+  now: number,
+): RuntimeRecord["status"] {
+  if (value === "revoked") return "revoked";
+  if (value !== "online") return "offline";
+  const lastSeen = typeof lastSeenAt === "string" ? Date.parse(lastSeenAt) : Number.NaN;
+  return Number.isFinite(lastSeen) && now - lastSeen <= RUNTIME_OFFLINE_AFTER_MS
+    ? "online"
+    : "offline";
 }
 
 function mapEvent(row: EventRow): CanonicalEvent {
@@ -1077,6 +1091,7 @@ export class CollaborationDatabase {
                users.display_name ASC
     `).all(sessionId) as Array<Record<string, string | null>>;
 
+    const now = this.clock().getTime();
     return rows.map((row) => ({
       user_id: String(row.user_id),
       display_name: String(row.display_name),
@@ -1091,7 +1106,7 @@ export class CollaborationDatabase {
         model: String(row.model),
         local_session_id: String(row.local_session_id),
         capture_fidelity: row.capture_fidelity as CaptureFidelity,
-        status: row.status as RuntimeRecord["status"],
+        status: runtimeStatus(row.status, row.last_seen_at, now),
         last_seen_at: String(row.last_seen_at),
       },
     }));

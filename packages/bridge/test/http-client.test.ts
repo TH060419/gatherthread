@@ -8,9 +8,11 @@ import {
 test("HTTP client matches the collaboration server v1 wire contract", async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
   const responses: unknown[] = [
+    { data: { id: "u1", username: "Alice", device_id: "device-1" } },
     { data: { sessions: [{ id: "s1", title: "Demo", mode: "multi", state: "active", role: "owner", current_sequence: 2, updated_at: "2026-08-25T00:00:00.000Z" }] } },
     { data: { events: [wireEvent("e1", 1)], cursor: 1, has_more: false } },
     { data: { event: wireEvent("e2", 2) } },
+    { data: { runtime: wireRuntime() } },
     { data: { runtime: wireRuntime() } },
     { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed" } },
     { data: { event: wireEvent("response-1", 3, wireProvenance()) } },
@@ -25,6 +27,11 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     fetch,
   });
 
+  assert.deepEqual(await client.getCurrentActor(), {
+    id: "u1",
+    displayName: "Alice",
+    deviceId: "device-1",
+  });
   assert.equal((await client.listSessions())[0]?.latestSequence, 2);
   assert.equal((await client.readEvents("s1", 0)).events[0]?.sessionId, "s1");
   await client.appendEvent("s1", {
@@ -34,6 +41,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   });
   const runtime = await client.registerRuntime(runtimeRegistration());
   assert.equal(runtime.id, "runtime-1");
+  assert.equal((await client.heartbeatRuntime(runtime.id)).id, "runtime-1");
   assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).claimed, true);
   const completed = await client.completeAgentRequest("s1", "request-1", {
     runtimeId: runtime.id,
@@ -43,20 +51,22 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   assert.equal(completed.runtime?.captureFidelity, "harness_transcript");
 
   assert.deepEqual(requests.map((item) => item.url), [
+    "https://collab.example/v1/me",
     "https://collab.example/v1/sessions",
     "https://collab.example/v1/sessions/s1/events?after_sequence=0&limit=200",
     "https://collab.example/v1/sessions/s1/events",
     "https://collab.example/v1/runtimes",
+    "https://collab.example/v1/runtimes/runtime-1/heartbeat",
     "https://collab.example/v1/sessions/s1/agent-requests/request-1/claim",
     "https://collab.example/v1/sessions/s1/agent-requests/request-1/complete",
   ]);
-  assert.deepEqual(JSON.parse(String(requests[2]?.init.body)), {
+  assert.deepEqual(JSON.parse(String(requests[3]?.init.body)), {
     type: "human_chat",
     idempotency_key: "chat-key-0001",
     payload: { text: "hello" },
     visibility: "session",
   });
-  assert.equal(JSON.parse(String(requests[3]?.init.body)).capture_fidelity, "harness_transcript");
+  assert.equal(JSON.parse(String(requests[4]?.init.body)).capture_fidelity, "harness_transcript");
   assert.equal(requests[0]?.init.headers && new Headers(requests[0].init.headers).get("authorization"), "Bearer secret-token");
   assert.equal(requests[0]?.init.redirect, "error");
 });

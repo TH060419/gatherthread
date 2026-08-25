@@ -381,6 +381,36 @@ test("only the initiating user's runtime can claim and complete an agent request
   }
 });
 
+test("runtime presence becomes offline without heartbeats and returns online after one", () => {
+  let instant = new Date("2026-08-25T00:00:00.000Z");
+  const f = fixture({ clock: () => instant });
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "runtime-presence",
+      idempotency_key: "create-runtime-presence",
+      mode: "multi",
+      title: "Runtime presence",
+    });
+    const runtime = f.service.registerRuntime(f.owner, {
+      session_id: session.id,
+      device_id: f.owner.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-test",
+      local_session_id: "presence-local",
+      capture_fidelity: "harness_transcript",
+    });
+    assert.equal(f.service.listMembers(f.owner, session.id)[0]?.runtime?.status, "online");
+
+    instant = new Date("2026-08-25T00:00:31.000Z");
+    assert.equal(f.service.listMembers(f.owner, session.id)[0]?.runtime?.status, "offline");
+    f.service.heartbeatRuntime(f.owner, runtime.id);
+    assert.equal(f.service.listMembers(f.owner, session.id)[0]?.runtime?.status, "online");
+  } finally {
+    f.close();
+  }
+});
+
 test("device credentials use peppered HMAC digests and track use, expiry, revocation, and rotation", () => {
   const f = fixture();
   try {

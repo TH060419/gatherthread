@@ -20,6 +20,7 @@
     "owner-host": "node --env-file-if-exists=.env scripts/self-host.mjs start",
     "owner-host:init": "node --env-file-if-exists=.env scripts/self-host.mjs init",
     "owner-host:tailscale-serve": "node --env-file-if-exists=.env scripts/self-host-tailscale.mjs",
+    "codex:connect": "npm run build:ts && node packages/bridge/dist/src/codex-connect.js",
     "test": "npm run test:unit && npm run test:scripts && npm run test:web && npm run test:integration && npm run test:e2e",
     "test:unit": "npm run build:ts && node --test packages/protocol/dist/test/*.test.js packages/adapters/dist/test/*.test.js packages/bridge/dist/test/*.test.js packages/mcp/dist/test/*.test.js apps/server/dist/test/*.test.js",
     "test:scripts": "node --test scripts/test/*.test.mjs",

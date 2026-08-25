@@ -44,6 +44,8 @@ const state = {
 let createdInvitationSecret = "";
 let newDeviceAccessToken = "";
 let authenticationGeneration = 0;
+let memberRefreshTimer;
+let memberRefreshInFlight = false;
 
 const element = (id) => document.getElementById(id);
 const authView = element("auth-view");
@@ -73,6 +75,7 @@ clearSensitiveInputs();
 window.addEventListener("pagehide", () => {
   authenticationGeneration += 1;
   sync.disconnect();
+  stopMemberRefresh();
   api.clearCredential?.();
   clearCreatedInvitationSecret();
   clearNewDeviceAccessToken();
@@ -316,6 +319,7 @@ async function restoreBrowserSession() {
 
 function resetWorkspaceToAuth() {
   sync.disconnect();
+  stopMemberRefresh();
   api.clearCredential?.();
   state.currentUser = null;
   state.sessions = [];
@@ -358,6 +362,7 @@ async function selectSession(sessionId) {
     api.listMembers(sessionId),
   ]);
   state.session = { ...session, members };
+  startMemberRefresh(sessionId);
   location.hash = new URLSearchParams({ session: sessionId }).toString();
   emptyState.hidden = true;
   sessionView.hidden = false;
@@ -368,6 +373,34 @@ async function selectSession(sessionId) {
   renderComposerPermissions();
   element("session-title").focus({ preventScroll: true });
   await sync.connect(sessionId);
+}
+
+function startMemberRefresh(sessionId) {
+  stopMemberRefresh();
+  memberRefreshTimer = setInterval(() => void refreshMembers(sessionId), 5_000);
+  memberRefreshTimer.unref?.();
+}
+
+function stopMemberRefresh() {
+  if (memberRefreshTimer !== undefined) clearInterval(memberRefreshTimer);
+  memberRefreshTimer = undefined;
+  memberRefreshInFlight = false;
+}
+
+async function refreshMembers(sessionId) {
+  if (memberRefreshInFlight || state.session?.id !== sessionId) return;
+  memberRefreshInFlight = true;
+  try {
+    const members = await api.listMembers(sessionId);
+    if (state.session?.id !== sessionId) return;
+    state.session = { ...state.session, members };
+    renderMembers();
+    renderComposerPermissions();
+  } catch {
+    // Realtime/replay remains authoritative for history. A later presence poll retries.
+  } finally {
+    memberRefreshInFlight = false;
+  }
 }
 
 function renderSessionList() {

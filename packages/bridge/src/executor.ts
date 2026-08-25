@@ -193,7 +193,7 @@ function copyOptionalString(
   target[key] = value;
 }
 
-function withoutGatherThreadCredentials(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+export function withoutGatherThreadCredentials(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const blocked = new Set([
     "GATHERTHREAD_AUTH_TOKEN_PEPPER",
     "GATHERTHREAD_AUTHORIZATION_TOKEN",

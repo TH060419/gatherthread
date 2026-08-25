@@ -9,7 +9,7 @@
 - `solo`: one owner publishes a complete canonical session stream; collaborators follow it read-only.
 - `multi`: people share one ordered project conversation. A human chat message is shared without invoking an agent. An agent request is claimed only by the sender's local runtime, and the response is labelled with username, device, harness, provider, model, local session, and capture fidelity.
 
-The server persists an append-only canonical event log in SQLite WAL, assigns authoritative per-session sequence numbers, enforces role-based access, and provides durable replay plus WebSocket live delivery. The local bridge imports Codex and Claude Code JSONL incrementally, redacts common secrets, maintains separate server/local cursors, and exposes collaboration through MCP tools and resources.
+The server persists an append-only canonical event log in SQLite WAL, assigns authoritative per-session sequence numbers, enforces role-based access, and provides durable replay plus WebSocket live delivery. The local bridge can run a persistent Codex thread with automatic canonical-history hydration, imports Codex and Claude Code JSONL incrementally, redacts common secrets, maintains separate server/local cursors, and exposes collaboration through MCP tools and resources.
 
 ## What “complete context” means
 
@@ -59,13 +59,28 @@ Enter the one-time displayed device credential at `http://127.0.0.1:8787`. The p
 
 For UI-only development, `npm --workspace apps/web run dev` starts the loopback preview and proxies the local API. Explicit mock mode is available only at `http://127.0.0.1:4173/?mock=1` with `demo-token`.
 
+## Connect a local Codex agent
+
+Each collaborator runs their own connector with their own GatherThread device token and local Codex login:
+
+```bash
+npm run codex:connect -- \
+  --url https://your-host.your-tailnet.ts.net \
+  --workspace "/absolute/path/to/the/local/project" \
+  --model gpt-5.6-sol
+```
+
+The token is requested through a hidden prompt. Choose a writable session when asked and keep the terminal open. The Web UI discovers the runtime automatically; **Request my agent** then invokes that user's local Codex, while ordinary chat only updates shared context.
+
+The first request receives complete visible canonical history. Later requests resume the same local Codex thread and receive every new canonical event in order. GatherThread credentials are stripped from the Codex child environment, automatic privilege escalation is disabled, and `danger-full-access` is unsupported. See the [Codex connector guide](docs/CODEX_CONNECT.md) and [ADR-0005](docs/adr/0005-managed-codex-thread-bridge.md).
+
 ## Security and current limits
 
 The first release includes peppered device credentials, HMAC-protected and revocable browser sessions, strict Cookie-write Origin checks, single-use invitations and device authorization, device-bound runtime provenance, immediate session/socket/authorization invalidation on device revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, configurable event-storage quotas, reconnect replay, and SQLite backup/restore scripts. A newly invited user sees the new device credential once and must save it before dismissing the dialog.
 
 The supported zero-cost alpha topology is one participant-owned host bound to loopback and shared privately through Tailscale Serve. See the [owner-hosting guide](docs/SELF_HOSTING.md). Do not expose the current service through router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
 
-Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers.
+Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, token-by-token agent streaming, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers.
 
 See [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [architecture decisions](docs/adr/README.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
 

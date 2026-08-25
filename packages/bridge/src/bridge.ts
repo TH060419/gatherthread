@@ -71,6 +71,13 @@ export class LocalBridge {
     return this.#runtime;
   }
 
+  async heartbeat(): Promise<RegisteredRuntime> {
+    const runtime = this.#requireRuntime();
+    if (!this.#api.heartbeatRuntime) return runtime;
+    this.#runtime = await this.#api.heartbeatRuntime(runtime.id);
+    return this.#runtime;
+  }
+
   async discoverTranscripts(harness: HarnessName, maxFiles?: number): Promise<TranscriptFile[]> {
     return discoverJsonlTranscripts(
       harness,

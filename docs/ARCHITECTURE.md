@@ -43,6 +43,8 @@ Clients authenticate over HTTP, obtain a 30-second one-use session-scoped ticket
 
 Each bridge registers a device and runtime. It maintains a server cursor and a local transcript cursor. For an `agent_request`, only the initiating user's eligible runtime can claim the turn. The bridge hydrates the canonical history, invokes the configured local harness, captures structured output, and appends events with runtime provenance.
 
+The built-in Codex connector binds one shared session and local workspace to one persisted Codex thread. Its first turn receives full visible canonical history; resumed turns receive the canonical delta after the last covered sequence. The current server-verified local request is separated from prior untrusted shared context. Codex runs with an explicit local sandbox and no automatic privilege escalation. See [ADR-0005](adr/0005-managed-codex-thread-bridge.md).
+
 Transcript access is opt-in and path-scoped. Secrets are redacted before upload. Raw thinking and private system/developer instructions are excluded by default unless the owner explicitly changes the session policy.
 
 ## MCP boundary
