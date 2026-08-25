@@ -19,7 +19,7 @@ Do not expose port 8787 through a router, firewall, Tailscale Funnel, or a publi
 
 ## Install and configure
 
-Install the pinned dependencies and create a private environment file:
+Install the pinned dependencies and create a private environment file for production settings:
 
 ```bash
 npm ci
@@ -27,7 +27,7 @@ cp .env.example .env
 chmod 600 .env
 ```
 
-Edit `.env` and set at least:
+Edit `.env` and set at least the deployment settings below. Leave the Pepper blank to let `owner-host:init` generate it securely, or inject an existing stable value from a secret manager:
 
 ```dotenv
 NODE_ENV=production
@@ -37,7 +37,7 @@ GATHERTHREAD_DATABASE_PATH=.local/collaboration.sqlite
 GATHERTHREAD_STATIC_DIRECTORY=apps/web/dist
 GATHERTHREAD_PUBLIC_BASE_URL=https://your-host.your-tailnet.ts.net
 GATHERTHREAD_ALLOWED_ORIGINS=
-GATHERTHREAD_AUTH_TOKEN_PEPPER=replace-with-a-random-secret-of-at-least-32-bytes
+GATHERTHREAD_AUTH_TOKEN_PEPPER=
 GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true
 GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP=false
 GATHERTHREAD_MAX_EVENT_BYTES=262144
@@ -52,7 +52,7 @@ The application refuses production startup if the public origin is not HTTPS, th
 
 ## Create the first owner
 
-Bootstrap operates directly on the local SQLite database. There is no production network bootstrap endpoint.
+Bootstrap operates directly on the local SQLite database. There is no production network bootstrap endpoint. The command creates or fills a private local `.env` only when the Pepper is absent; it never replaces a configured value.
 
 ```bash
 npm run owner-host:init -- \
@@ -107,7 +107,7 @@ Invitation and device authorization secrets are accepted in request bodies, neve
 
 Each collaborator runs the bridge locally with their own device credential and runtime metadata. The bridge requires an HTTPS GatherThread URL for remote hosts, rejects credentials embedded in URLs, persists cursors locally, and does not forward the GatherThread credential to a harness adapter process.
 
-See [bridge configuration](../packages/bridge/README.md) and [MCP configuration](../packages/mcp/README.md). Keep credentials in local environment or an operating-system secret store, never in MCP JSON committed to the project.
+For Codex, use the built-in connector documented in the [Codex connector guide](CODEX_CONNECT.md). It requests the device credential through a hidden prompt and strips it from the Codex child environment. Generic bridge adapters and MCP configuration are documented in [bridge configuration](../packages/bridge/README.md) and [MCP configuration](../packages/mcp/README.md). Keep credentials in local environment or an operating-system secret store, never in MCP JSON committed to the project.
 
 ## Backup and host migration
 

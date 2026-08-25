@@ -46,7 +46,7 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
   const originalFetch = globalThis.fetch;
   const requests = [];
   const responses = [
-    { data: { id: "u1", username: "Alice", device_id: "d1" } },
+    { data: { actor: { id: "u1", username: "Alice", device_id: "d1" }, expires_at: "2026-08-26T00:00:00.000Z" } },
     { data: { sessions: [{ id: "s1", title: "Shared", mode: "multi", state: "active", role: "owner", current_sequence: 2, member_count: 1, updated_at: "2026-08-25T00:00:00.000Z" }] } },
     { data: { members: [{ user_id: "u1", display_name: "Alice", role: "owner", runtime: { id: "r1", status: "online", harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }] } },
     { data: { events: [{ id: "e2", session_id: "s1", sequence: 2, type: "agent_response", actor_user_id: "u1", created_at: "2026-08-25T00:00:01.000Z", payload: { content: "done" }, runtime_provenance: { harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }], cursor: 2, has_more: false } },
@@ -68,9 +68,10 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
     assert.equal(replay.events[0].actor.username, "Alice");
     assert.equal(replay.events[0].provenance.fidelity, "harness_transcript");
     assert.equal(replay.next_after_sequence, 2);
-    assert.equal(requests[0].url, "https://gatherthread.example/v1/me");
+    assert.equal(requests[0].url, "https://gatherthread.example/v1/browser-sessions");
+    assert.equal(requests[0].options.method, "POST");
+    assert.equal(requests[0].options.credentials, "include");
     assert.equal(requests[0].options.headers.Authorization, "Bearer secret-token");
-    api.clearCredential();
     assert.equal(api.token, "");
   } finally {
     globalThis.fetch = originalFetch;
@@ -124,7 +125,7 @@ test("HTTP invitation API uses exact routes, keeps secrets out of list records, 
   }
 });
 
-test("new-user invitation claim is unauthenticated and stores only the returned device credential", async () => {
+test("new-user invitation claim requests a browser session without retaining the returned device credential", async () => {
   const originalFetch = globalThis.fetch;
   let captured;
   globalThis.fetch = async (url, options = {}) => {
@@ -156,14 +157,52 @@ test("new-user invitation claim is unauthenticated and stores only the returned 
     });
     assert.equal(claimed.actor.username, "New User");
     assert.equal(claimed.invitation.status, "claimed");
-    assert.equal(api.token, "new-device-token");
+    assert.equal(claimed.accessToken, "new-device-token");
+    assert.equal(api.token, "");
     assert.equal(captured.url, "https://gatherthread.example/v1/invitations/claim");
     assert.equal(captured.options.headers.Authorization, undefined);
+    assert.equal(captured.options.headers["X-GatherThread-Browser-Session"], "1");
+    assert.equal(captured.options.credentials, "include");
     assert.deepEqual(JSON.parse(captured.options.body), {
       invite_token: "one-use-invitation-secret-that-is-long",
       display_name: "New User",
       device_name: "Work laptop",
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP client restores and revokes an HttpOnly browser session without JavaScript token storage", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const responses = [
+    new Response(JSON.stringify({ data: { id: "u1", username: "Alice", device_id: "d1" } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    new Response(null, { status: 204 }),
+    new Response(JSON.stringify({ error: { code: "unauthorized", message: "Unauthorized" } }), {
+      status: 401,
+      headers: { "content-type": "application/json" },
+    }),
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return responses.shift();
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.restoreSession()).username, "Alice");
+    await api.logout();
+    assert.equal(await api.restoreSession(), null);
+    assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
+      ["GET", "https://gatherthread.example/v1/me"],
+      ["DELETE", "https://gatherthread.example/v1/browser-sessions/current"],
+      ["GET", "https://gatherthread.example/v1/me"],
+    ]);
+    assert.ok(requests.every((request) => request.options.credentials === "include"));
+    assert.ok(requests.every((request) => request.options.headers.Authorization === undefined));
   } finally {
     globalThis.fetch = originalFetch;
   }

@@ -37,8 +37,11 @@ const HEARTBEAT_INTERVAL_MS = 15_000;
 const MAX_SOCKET_BUFFER_BYTES = 1024 * 1024;
 const MAX_JSON_DEPTH = 64;
 const MAX_JSON_NODES = 50_000;
+const DEVELOPMENT_BROWSER_SESSION_COOKIE = "gatherthread_session";
+const SECURE_BROWSER_SESSION_COOKIE = "__Host-gatherthread_session";
 const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/bootstrap",
+  "/v1/browser-sessions",
   "/v1/invitations/claim",
   "/v1/device-authorizations/claim",
 ]);
@@ -67,6 +70,12 @@ interface SocketAuth {
 
 interface RealtimeTicket extends SocketAuth {
   expiresAt: number;
+}
+
+interface HttpAuthentication {
+  actor: Actor;
+  kind: "bearer" | "browser_session";
+  browserSessionId: string | null;
 }
 
 export interface ServerOptions {
@@ -146,7 +155,7 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   response.writeHead(200, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
     "content-length": stat.size,
-    "cache-control": relative === "index.html" ? "no-store" : "public, max-age=3600",
+    "cache-control": relative === "index.html" ? "no-store" : "no-cache",
   });
   if (request.method === "HEAD") response.end();
   else createReadStream(resolved).pipe(response);
@@ -190,6 +199,29 @@ function bearerToken(request: IncomingMessage): string {
   const authorization = request.headers.authorization;
   if (authorization?.startsWith("Bearer ")) return authorization.slice(7).trim();
   throw unauthorized();
+}
+
+function browserSessionCookieName(secureTransport: boolean): string {
+  return secureTransport ? SECURE_BROWSER_SESSION_COOKIE : DEVELOPMENT_BROWSER_SESSION_COOKIE;
+}
+
+function browserSessionCookieValue(request: IncomingMessage, name: string): string | null {
+  const matches = (request.headers.cookie ?? "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(`${name}=`))
+    .map((part) => part.slice(name.length + 1));
+  if (matches.length !== 1) return null;
+  const value = matches[0] ?? "";
+  return /^gtb_[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
+}
+
+function serializeBrowserSessionCookie(name: string, token: string, secureTransport: boolean): string {
+  return `${name}=${token}; Path=/; HttpOnly; SameSite=Strict${secureTransport ? "; Secure" : ""}`;
+}
+
+function serializeClearedBrowserSessionCookie(name: string, secureTransport: boolean): string {
+  return `${name}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT${secureTransport ? "; Secure" : ""}`;
 }
 
 function realtimeTicketFromProtocols(request: IncomingMessage): string {
@@ -289,6 +321,8 @@ export async function startCollaborationServer(
     maxEventBytes: options.maxEventBytes,
   });
   const service = new CollaborationService(database);
+  const secureTransport = options.secureTransport ?? false;
+  const browserCookieName = browserSessionCookieName(secureTransport);
   const sockets = new Map<WebSocket, SocketState>();
   const realtimeTickets = new Map<string, RealtimeTicket>();
   const wsServer = new WebSocketServer({
@@ -309,7 +343,7 @@ export async function startCollaborationServer(
     try {
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       const parts = pathParts(url);
-      setSecurityHeaders(response, options.secureTransport ?? false);
+      setSecurityHeaders(response, secureTransport);
       const remoteAddress = request.socket.remoteAddress ?? "unknown";
       const rateLimit = requestLimiter.consume(remoteAddress);
       response.setHeader("ratelimit-limit", rateLimit.limit);
@@ -331,7 +365,8 @@ export async function startCollaborationServer(
           throw new ApiError(403, "origin_forbidden", "The browser origin is not allowed");
         }
         response.setHeader("access-control-allow-origin", requestOrigin);
-        response.setHeader("access-control-allow-headers", "authorization, content-type");
+        response.setHeader("access-control-allow-credentials", "true");
+        response.setHeader("access-control-allow-headers", "authorization, content-type, x-gatherthread-browser-session");
         response.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
         response.setHeader("vary", "Origin");
       }
@@ -353,6 +388,12 @@ export async function startCollaborationServer(
 
       if (request.method === "POST" && url.pathname === "/v1/invitations/claim") {
         const input = ClaimInvitationInputSchema.parse(await readJson(request));
+        if (request.headers["x-gatherthread-browser-session"] === "1") {
+          const { browser_session: browserSession, ...result } = service.claimInvitationWithBrowserSession(input);
+          response.setHeader("set-cookie", serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport));
+          sendJson(response, 201, { data: result });
+          return;
+        }
         sendJson(response, 201, { data: service.claimInvitation(input) });
         return;
       }
@@ -363,21 +404,53 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/v1/browser-sessions") {
+        const actor = database.authenticate(bearerToken(request));
+        const browserSession = database.createBrowserSession(actor);
+        response.setHeader("set-cookie", serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport));
+        sendJson(response, 201, { data: {
+          actor: { id: actor.user_id, username: actor.display_name, device_id: actor.device_id },
+          expires_at: browserSession.expires_at,
+        } });
+        return;
+      }
+
       if (options.staticDirectory && sendStaticFile(request, response, options.staticDirectory, url.pathname)) return;
 
-      const actor = database.authenticate(bearerToken(request));
+      const authorization = request.headers.authorization;
+      const authentication: HttpAuthentication = authorization === undefined
+        ? (() => {
+          const cookieToken = browserSessionCookieValue(request, browserCookieName);
+          if (!cookieToken) throw unauthorized();
+          const authenticated = database.authenticateBrowserSession(cookieToken);
+          return { actor: authenticated.actor, kind: "browser_session", browserSessionId: authenticated.session_id };
+        })()
+        : { actor: database.authenticate(bearerToken(request)), kind: "bearer", browserSessionId: null };
+      const { actor } = authentication;
+      const isWrite = request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS";
+      if (authentication.kind === "browser_session" && isWrite
+        && (!requestOrigin || !options.allowedOrigins?.includes(requestOrigin))) {
+        throw new ApiError(403, "csrf_origin_required", "Cookie-authenticated writes require an allowed Origin");
+      }
       const actorRateLimit = actorLimiter.consume(actor.device_id);
       if (!actorRateLimit.allowed) {
         response.setHeader("retry-after", actorRateLimit.retryAfterSeconds);
         throw new ApiError(429, "rate_limited", "Too many requests for this device");
       }
-      if (request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS") {
+      if (isWrite) {
         const writeRateLimit = actorWriteLimiter.consume(actor.device_id);
         if (!writeRateLimit.allowed) {
           response.setHeader("retry-after", writeRateLimit.retryAfterSeconds);
           throw new ApiError(429, "rate_limited", "Too many writes for this device");
         }
       }
+      const readAuthenticatedJson = async (): Promise<unknown> => {
+        const value = await readJson(request);
+        if (authentication.kind === "browser_session" && authentication.browserSessionId) {
+          database.assertActiveBrowserSession(authentication.browserSessionId, actor);
+        }
+        return value;
+      };
 
       if (request.method === "GET" && url.pathname === "/v1/me") {
         sendJson(response, 200, { data: {
@@ -388,8 +461,17 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "DELETE" && url.pathname === "/v1/browser-sessions/current") {
+        if (authentication.browserSessionId) {
+          database.revokeBrowserSession(authentication.browserSessionId, actor);
+        }
+        response.setHeader("set-cookie", serializeClearedBrowserSessionCookie(browserCookieName, secureTransport));
+        response.writeHead(204).end();
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/v1/invitations/accept") {
-        const input = AcceptInvitationInputSchema.parse(await readJson(request));
+        const input = AcceptInvitationInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: service.claimInvitationForActor(actor, input.invite_token) });
         return;
       }
@@ -428,13 +510,13 @@ export async function startCollaborationServer(
       }
 
       if (request.method === "POST" && parts[0] === "v1" && parts[1] === "devices" && parts[2] && parts[3] === "rotate" && parts.length === 4) {
-        const input = RotateDeviceTokenInputSchema.parse(await readJson(request));
+        const input = RotateDeviceTokenInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: service.rotateDeviceToken(actor, parts[2], input.expires_at) });
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/v1/sessions") {
-        const input = CreateSessionInputSchema.parse(await readJson(request));
+        const input = CreateSessionInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 201, { data: service.createSession(actor, input) });
         return;
       }
@@ -445,7 +527,7 @@ export async function startCollaborationServer(
       }
 
       if (request.method === "POST" && url.pathname === "/v1/realtime-ticket") {
-        const input = z.object({ session_id: z.string().trim().min(1).max(128) }).parse(await readJson(request));
+        const input = z.object({ session_id: z.string().trim().min(1).max(128) }).parse(await readAuthenticatedJson());
         service.requireMembership(actor, input.session_id);
         const ticket = randomBytes(32).toString("base64url");
         const expiresAt = Date.now() + 30_000;
@@ -465,7 +547,7 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && request.method === "PATCH" && parts.length === 3) {
-        const input = UpdateSessionInputSchema.parse(await readJson(request));
+        const input = UpdateSessionInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: service.updateSession(actor, sessionId, input) });
         return;
       }
@@ -476,7 +558,7 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && parts[3] === "invitations" && parts.length === 4 && request.method === "POST") {
-        const input = CreateInvitationInputSchema.parse(await readJson(request));
+        const input = CreateInvitationInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 201, { data: service.createInvitation(actor, sessionId, input) });
         return;
       }
@@ -497,19 +579,19 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "PUT") {
-        const input = SetMembershipInputSchema.parse(await readJson(request));
+        const input = SetMembershipInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: { event: service.setMembership(actor, sessionId, parts[4], input.role, input.idempotency_key) } });
         return;
       }
 
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        const input = z.object({ idempotency_key: IdempotencyKeySchema }).parse(await readJson(request));
+        const input = z.object({ idempotency_key: IdempotencyKeySchema }).parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: { event: service.removeMembership(actor, sessionId, parts[4], input.idempotency_key) } });
         return;
       }
 
       if (sessionId && parts[3] === "events" && parts.length === 4 && request.method === "POST") {
-        const input = AppendEventInputSchema.parse(await readJson(request));
+        const input = AppendEventInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 201, { data: { event: service.appendEvent(actor, sessionId, input) } });
         return;
       }
@@ -522,7 +604,7 @@ export async function startCollaborationServer(
       }
 
       if (request.method === "POST" && url.pathname === "/v1/runtimes") {
-        const input = RegisterRuntimeInputSchema.parse(await readJson(request));
+        const input = RegisterRuntimeInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 201, { data: { runtime: service.registerRuntime(actor, input) } });
         return;
       }
@@ -533,13 +615,13 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "claim" && parts.length === 6 && request.method === "POST") {
-        const input = ClaimAgentRequestInputSchema.parse(await readJson(request));
+        const input = ClaimAgentRequestInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: service.claimAgentRequest(actor, sessionId, parts[4], input.runtime_id) });
         return;
       }
 
       if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "complete" && parts.length === 6 && request.method === "POST") {
-        const input = CompleteAgentRequestInputSchema.parse(await readJson(request));
+        const input = CompleteAgentRequestInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 201, { data: { event: service.completeAgentRequest(actor, sessionId, parts[4], input.runtime_id, input.idempotency_key, input.payload) } });
         return;
       }

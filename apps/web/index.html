@@ -9,7 +9,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260825-3" />
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to conversation</a>
@@ -17,7 +17,10 @@
     <main id="auth-view" class="auth-shell" aria-labelledby="login-title">
       <section class="auth-story" aria-hidden="true">
         <p class="eyebrow">Human + agent workspace</p>
-        <h1>One room.<br />Many minds.</h1>
+        <h1>
+          <span class="headline-line">One room.</span>
+          <span class="headline-line">Many minds.</span>
+        </h1>
         <p>
           Keep every collaborator in their own harness while the shared history
           stays ordered, attributable, and live.
@@ -249,10 +252,11 @@
               <div class="invitation-options">
                 <div>
                   <label for="invitation-role">Role</label>
-                  <select id="invitation-role" name="role">
+                  <select id="invitation-role" name="role" aria-describedby="invitation-role-help">
                     <option value="participant">Participant</option>
                     <option value="viewer">Viewer</option>
                   </select>
+                  <p id="invitation-role-help" class="field-help">Multi sessions can invite participants or read-only viewers.</p>
                 </div>
                 <div>
                   <label for="invitation-ttl">Expires in</label>
@@ -319,7 +323,25 @@
       </form>
     </dialog>
 
+    <dialog id="device-credential-dialog" class="create-dialog device-credential-dialog" aria-labelledby="device-credential-title">
+      <div>
+        <p class="eyebrow">One-time credential</p>
+        <h2 id="device-credential-title">Save your access token</h2>
+        <p>
+          Your secure browser session is active. Save this device token in a password manager so you can sign in again after the browser session ends. It will not be shown again.
+        </p>
+        <div class="secret-copy-row">
+          <code id="new-device-access-token"></code>
+          <button id="copy-device-access-token-button" class="button button-secondary" type="button">Copy</button>
+        </div>
+        <p id="copy-device-access-token-status" class="field-help" role="status" aria-live="polite"></p>
+        <button id="acknowledge-device-access-token-button" class="button button-primary button-wide" type="button">
+          I saved it
+        </button>
+      </div>
+    </dialog>
+
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js"></script>
+    <script type="module" src="./src/main.js?v=20260825-4"></script>
   </body>
 </html>

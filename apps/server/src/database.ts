@@ -94,6 +94,10 @@ export interface ClaimInvitationResult {
   event: CanonicalEvent;
 }
 
+export interface ClaimInvitationWithBrowserSessionResult extends ClaimInvitationResult {
+  browser_session: BrowserSessionIssue;
+}
+
 export interface AcceptInvitationResult {
   actor: Actor;
   invitation: InvitationRecord;
@@ -110,6 +114,17 @@ export interface ClaimDeviceAuthorizationResult {
   device: DeviceRecord;
   token: string;
   authorization: DeviceAuthorizationRecord;
+}
+
+export interface BrowserSessionIssue {
+  session_id: string;
+  token: string;
+  expires_at: string;
+}
+
+export interface BrowserSessionAuthentication {
+  actor: Actor;
+  session_id: string;
 }
 
 interface EventRow {
@@ -135,6 +150,16 @@ interface MembershipRow { role: MembershipRole }
 interface ClaimRow { runtime_id: string; status: "claimed" | "completed" }
 interface InvitationRow extends InvitationRecord { token_digest: string }
 interface DeviceAuthorizationRow extends DeviceAuthorizationRecord { token_digest: string }
+interface BrowserSessionRow {
+  id: string;
+  user_id: string;
+  device_id: string;
+  token_digest: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
+}
 
 const INVITATION_TTL_MS: Readonly<Record<InvitationTtl, number>> = {
   "1h": 60 * 60 * 1_000,
@@ -144,10 +169,12 @@ const INVITATION_TTL_MS: Readonly<Record<InvitationTtl, number>> = {
 
 const PROCESS_CREDENTIAL_PEPPER = randomBytes(32).toString("base64url");
 const DEVICE_AUTHORIZATION_TTL_MS = 10 * 60 * 1_000;
+const BROWSER_SESSION_TTL_MS = 24 * 60 * 60 * 1_000;
 const DEFAULT_MAX_USER_EVENT_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_SESSION_EVENT_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_EVENT_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_EVENT_BYTES = 256 * 1024;
+const RUNTIME_OFFLINE_AFTER_MS = 30_000;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -273,6 +300,18 @@ CREATE TABLE IF NOT EXISTS device_authorizations (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS device_authorizations_user_idx
   ON device_authorizations(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS browser_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  token_digest TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  last_used_at TEXT,
+  revoked_at TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS browser_sessions_device_idx
+  ON browser_sessions(device_id, created_at DESC);
 `;
 
 function stableJson(value: JsonValue): string {
@@ -300,6 +339,10 @@ function issueDeviceAuthorizationToken(): string {
   return `gtd_${randomBytes(32).toString("base64url")}`;
 }
 
+function issueBrowserSessionToken(): string {
+  return `gtb_${randomBytes(32).toString("base64url")}`;
+}
+
 function resolveAuthTokenPepper(path: string, configured?: string): string {
   const explicit = configured ?? process.env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
   if (explicit) return explicit;
@@ -321,6 +364,19 @@ function resolveAuthTokenPepper(path: string, configured?: string): string {
     if (!raced) throw new Error("Authentication token pepper file is empty");
     return raced;
   }
+}
+
+function runtimeStatus(
+  value: string | null | undefined,
+  lastSeenAt: string | null | undefined,
+  now: number,
+): RuntimeRecord["status"] {
+  if (value === "revoked") return "revoked";
+  if (value !== "online") return "offline";
+  const lastSeen = typeof lastSeenAt === "string" ? Date.parse(lastSeenAt) : Number.NaN;
+  return Number.isFinite(lastSeen) && now - lastSeen <= RUNTIME_OFFLINE_AFTER_MS
+    ? "online"
+    : "offline";
 }
 
 function mapEvent(row: EventRow): CanonicalEvent {
@@ -445,6 +501,10 @@ export class CollaborationDatabase {
         UPDATE device_authorizations SET revoked_at = ?
         WHERE authorizer_device_id = ? AND claimed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL
       `).run(timestamp, deviceId);
+      this.sqlite.prepare(`
+        UPDATE browser_sessions SET revoked_at = ?
+        WHERE device_id = ? AND revoked_at IS NULL
+      `).run(timestamp, deviceId);
     });
   }
 
@@ -469,6 +529,63 @@ export class CollaborationDatabase {
     if (!row) throw unauthorized("Bearer token is invalid, expired, or revoked");
     this.sqlite.prepare("UPDATE devices SET last_used_at = ? WHERE id = ?").run(timestamp, row.device_id);
     return { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id };
+  }
+
+  createBrowserSession(actor: Actor): BrowserSessionIssue {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      return this.insertBrowserSession(actor, this.clock());
+    });
+  }
+
+  authenticateBrowserSession(token: string): BrowserSessionAuthentication {
+    const timestamp = this.now();
+    const row = this.sqlite.prepare(`
+      SELECT browser_sessions.*, users.display_name
+      FROM browser_sessions
+      JOIN devices ON devices.id = browser_sessions.device_id
+      JOIN users ON users.id = browser_sessions.user_id
+      WHERE browser_sessions.token_digest = ?
+        AND browser_sessions.revoked_at IS NULL
+        AND browser_sessions.expires_at > ?
+        AND devices.user_id = browser_sessions.user_id
+        AND devices.revoked_at IS NULL
+        AND (devices.expires_at IS NULL OR devices.expires_at > ?)
+    `).get(this.tokenDigest(token), timestamp, timestamp) as unknown as (BrowserSessionRow & { display_name: string }) | undefined;
+    if (!row) throw unauthorized("Browser session is invalid, expired, or revoked");
+    this.sqlite.prepare("UPDATE browser_sessions SET last_used_at = ? WHERE id = ?").run(timestamp, row.id);
+    this.sqlite.prepare("UPDATE devices SET last_used_at = ? WHERE id = ?").run(timestamp, row.device_id);
+    return {
+      actor: { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id },
+      session_id: row.id,
+    };
+  }
+
+  assertActiveBrowserSession(sessionId: string, actor: Actor): void {
+    const timestamp = this.now();
+    const row = this.sqlite.prepare(`
+      SELECT browser_sessions.id
+      FROM browser_sessions
+      JOIN devices ON devices.id = browser_sessions.device_id
+      WHERE browser_sessions.id = ?
+        AND browser_sessions.user_id = ?
+        AND browser_sessions.device_id = ?
+        AND browser_sessions.revoked_at IS NULL
+        AND browser_sessions.expires_at > ?
+        AND devices.user_id = browser_sessions.user_id
+        AND devices.revoked_at IS NULL
+        AND (devices.expires_at IS NULL OR devices.expires_at > ?)
+    `).get(sessionId, actor.user_id, actor.device_id, timestamp, timestamp);
+    if (!row) throw unauthorized("Browser session is invalid, expired, or revoked");
+  }
+
+  revokeBrowserSession(sessionId: string, actor: Actor): void {
+    const timestamp = this.now();
+    const result = this.sqlite.prepare(`
+      UPDATE browser_sessions SET revoked_at = ?
+      WHERE id = ? AND user_id = ? AND device_id = ? AND revoked_at IS NULL
+    `).run(timestamp, sessionId, actor.user_id, actor.device_id);
+    if (Number(result.changes) === 0) throw unauthorized("Browser session is invalid, expired, or revoked");
   }
 
   getDevice(actor: Actor, deviceId: string): DeviceRecord {
@@ -500,6 +617,10 @@ export class CollaborationDatabase {
         WHERE id = ? AND user_id = ? AND revoked_at IS NULL
       `).run(this.tokenDigest(token), timestamp, expiresAt, timestamp, deviceId, actor.user_id);
       if (Number(result.changes) === 0) throw notFound("Device");
+      this.sqlite.prepare(`
+        UPDATE browser_sessions SET revoked_at = ?
+        WHERE device_id = ? AND revoked_at IS NULL
+      `).run(timestamp, deviceId);
       return { device: this.getDeviceForUser(actor.user_id, deviceId), token };
     });
   }
@@ -666,9 +787,25 @@ export class CollaborationDatabase {
     device_id?: string | undefined;
     device_name: string;
     device_expires_at?: string | null | undefined;
-  }): ClaimInvitationResult {
+  }): ClaimInvitationResult;
+  claimInvitation(input: {
+    invite_token: string;
+    user_id?: string | undefined;
+    display_name: string;
+    device_id?: string | undefined;
+    device_name: string;
+    device_expires_at?: string | null | undefined;
+  }, options: { browserSession: true }): ClaimInvitationWithBrowserSessionResult;
+  claimInvitation(input: {
+    invite_token: string;
+    user_id?: string | undefined;
+    display_name: string;
+    device_id?: string | undefined;
+    device_name: string;
+    device_expires_at?: string | null | undefined;
+  }, options: { browserSession?: boolean } = {}): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult {
     const timestamp = this.now();
-    const result = this.transaction((): ClaimInvitationResult | { failure: "invalid" | "expired" } => {
+    const result = this.transaction((): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult | { failure: "invalid" | "expired" } => {
       const row = this.sqlite.prepare("SELECT * FROM invitations WHERE token_digest = ?")
         .get(this.tokenDigest(input.invite_token)) as unknown as InvitationRow | undefined;
       if (!row || row.revoked_at !== null || row.claimed_at !== null || row.expired_at !== null) {
@@ -742,13 +879,16 @@ export class CollaborationDatabase {
         },
       }, null);
       const actor = { user_id: userId, display_name: input.display_name, device_id: deviceId };
-      return {
+      const claimResult: ClaimInvitationResult = {
         actor,
         token: deviceToken,
         device: this.getDeviceForUser(userId, deviceId),
         invitation: this.requireInvitation(row.id),
         event,
       };
+      return options.browserSession
+        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp)) }
+        : claimResult;
     });
     if ("failure" in result) {
       throw unauthorized(result.failure === "expired" ? "Invitation is expired" : "Invitation is invalid or unavailable");
@@ -951,6 +1091,7 @@ export class CollaborationDatabase {
                users.display_name ASC
     `).all(sessionId) as Array<Record<string, string | null>>;
 
+    const now = this.clock().getTime();
     return rows.map((row) => ({
       user_id: String(row.user_id),
       display_name: String(row.display_name),
@@ -965,7 +1106,7 @@ export class CollaborationDatabase {
         model: String(row.model),
         local_session_id: String(row.local_session_id),
         capture_fidelity: row.capture_fidelity as CaptureFidelity,
-        status: row.status as RuntimeRecord["status"],
+        status: runtimeStatus(row.status, row.last_seen_at, now),
         last_seen_at: String(row.last_seen_at),
       },
     }));
@@ -1336,6 +1477,22 @@ export class CollaborationDatabase {
       input.role,
       input.created_at,
     );
+  }
+
+  private insertBrowserSession(actor: Actor, createdAtDate: Date): BrowserSessionIssue {
+    const createdAt = createdAtDate.toISOString();
+    const expiresAt = new Date(createdAtDate.getTime() + BROWSER_SESSION_TTL_MS).toISOString();
+    const sessionId = randomUUID();
+    const token = issueBrowserSessionToken();
+    this.sqlite.prepare(`
+      UPDATE browser_sessions SET revoked_at = ?
+      WHERE device_id = ? AND revoked_at IS NULL
+    `).run(createdAt, actor.device_id);
+    this.sqlite.prepare(`
+      INSERT INTO browser_sessions(id, user_id, device_id, token_digest, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(sessionId, actor.user_id, actor.device_id, this.tokenDigest(token), createdAt, expiresAt);
+    return { session_id: sessionId, token, expires_at: expiresAt };
   }
 
   private expireInvitation(invitation: InvitationRecord, timestamp: string): void {

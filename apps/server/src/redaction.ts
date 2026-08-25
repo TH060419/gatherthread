@@ -21,7 +21,7 @@ const STRING_PATTERNS: readonly [RegExp, string][] = [
   [/\bAKIA[0-9A-Z]{16}\b/g, "[REDACTED]"],
   [/\b(?:ghp|github_pat|glpat|sk|xox[baprs])[-_][A-Za-z0-9_-]{16,}\b/g, "[REDACTED]"],
   [/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [REDACTED]"],
-  [/\b(?:gt[aid]|acp(?:i|d)?)_[A-Za-z0-9_-]{20,}\b/gi, "[REDACTED]"],
+  [/\b(?:gt[abid]|acp(?:i|d)?)_[A-Za-z0-9_-]{20,}\b/gi, "[REDACTED]"],
   [/\b(?:sk|key)-[A-Za-z0-9_-]{12,}\b/g, "[REDACTED]"],
   [/(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|refresh[_-]?token|secret|token)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]"],
   [/(\b[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|AUTH_TOKEN_PEPPER)\s*[=:]\s*)[^\s,;]+/g, "$1[REDACTED]"],

@@ -64,7 +64,7 @@ Every event is expected to contain a stable `id`, monotonic per-session `sequenc
 
 - Owners create participant or viewer invitations that expire after 1 hour, 24 hours (the default), or 7 days.
 - The invitation secret is returned only by the create request. The UI keeps it in memory long enough to copy it, never adds it to a URL or browser storage, and cannot recover it from the invitation list.
-- A new user can claim an invitation with a display name and device name; the returned device credential is adopted in memory and opens the invited session directly.
+- A new user can claim an invitation with a display name and device name. Invitation claim and browser-session issuance commit atomically; the UI opens the invited session and shows the device credential once in a blocking copy dialog for password-manager storage.
 - An already signed-in user can accept an invitation without rotating or replacing their existing credential.
 - Pending invitations can be revoked. Claimed, revoked, and expired records remain visible to the owner without exposing their secret.
 
@@ -74,7 +74,7 @@ Every event is expected to contain a stable `id`, monotonic per-session `sequenc
 
 ## First-release limits
 
-- The client keeps the entered bearer token only in JavaScript memory. Reloading or closing the tab clears it and requires sign-in again. A future browser-auth design should replace the bearer entry flow with an owner-host-issued `HttpOnly; Secure; SameSite=Strict` cookie and CSRF protection.
+- The entered device bearer is used only to create a 24-hour server-side browser session and is then cleared from JavaScript. The opaque session token is held in a non-persistent `HttpOnly; SameSite=Strict; Path=/` Cookie, with `Secure` and `__Host-` under HTTPS. Reload restores the workspace; logout, device revocation, and token rotation revoke the session. Cookie-authenticated writes require an exact allowed Origin. Neither bearer nor browser token is placed in Web Storage or a URL.
 - There is no membership editing, attachment upload, reply UI, offline outbox, search, or runtime selection yet.
 - The mock emits illustrative agent responses; real responses use the local bridge claim/complete workflow.
 - Drafts survive a temporary socket loss in memory, but not a full reload.

@@ -4,6 +4,7 @@ import type {
   CanonicalEvent,
   CollaborationApi,
   CompleteAgentRequestInput,
+  CurrentActor,
   ReadEventsResult,
   RegisteredRuntime,
   RuntimeProvenance,
@@ -49,6 +50,15 @@ export class HttpCollaborationClient implements CollaborationApi {
     return sessions.map(fromWireSession);
   }
 
+  async getCurrentActor(): Promise<CurrentActor> {
+    const body = requiredObject(await this.#request("/me"));
+    return {
+      id: requiredString(body.id, "actor.id"),
+      displayName: requiredString(body.username, "actor.username"),
+      deviceId: requiredString(body.device_id, "actor.device_id"),
+    };
+  }
+
   async readEvents(
     sessionId: string,
     afterSequence: number,
@@ -79,6 +89,14 @@ export class HttpCollaborationClient implements CollaborationApi {
     const body = requiredObject(await this.#request("/runtimes", {
       method: "POST",
       body: JSON.stringify(toSnakeCase(runtime as unknown as Record<string, unknown>)),
+    }));
+    return fromWireRuntime(body.runtime ?? body);
+  }
+
+  async heartbeatRuntime(runtimeId: string): Promise<RegisteredRuntime> {
+    const body = requiredObject(await this.#request(`/runtimes/${encodeURIComponent(runtimeId)}/heartbeat`, {
+      method: "POST",
+      body: "{}",
     }));
     return fromWireRuntime(body.runtime ?? body);
   }

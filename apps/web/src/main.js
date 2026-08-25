@@ -5,10 +5,12 @@ import {
   eventLabel,
   formatTimestamp,
   initials,
+  isTimelineEventVisible,
   invitationStatusLabel,
+  invitationRolePolicy,
   normalizeInvitation,
   runtimeLabel,
-} from "./domain.js";
+} from "./domain.js?v=20260825-3";
 import { SessionSync } from "./realtime.js";
 
 const query = new URLSearchParams(location.search);
@@ -23,7 +25,7 @@ elementAfterReady(
   "token-help",
   mockEnabled
     ? "Mock mode is enabled for this tab. Use demo-token."
-    : `Connects to ${configuredApiUrl || "this owner host"}. The token is kept only in memory and is cleared on reload.`,
+    : `Connects to ${configuredApiUrl || "this owner host"}. The token is exchanged for a secure browser session and is never stored by the page.`,
 );
 
 function elementAfterReady(id, text) {
@@ -40,6 +42,10 @@ const state = {
 };
 
 let createdInvitationSecret = "";
+let newDeviceAccessToken = "";
+let authenticationGeneration = 0;
+let memberRefreshTimer;
+let memberRefreshInFlight = false;
 
 const element = (id) => document.getElementById(id);
 const authView = element("auth-view");
@@ -63,25 +69,25 @@ const memberPanel = element("member-panel");
 const acceptInvitationForm = element("accept-invitation-form");
 const createInvitationForm = element("create-invitation-form");
 const invitationList = element("invitation-list");
+const deviceCredentialDialog = element("device-credential-dialog");
 
 clearSensitiveInputs();
 window.addEventListener("pagehide", () => {
+  authenticationGeneration += 1;
+  sync.disconnect();
+  stopMemberRefresh();
   api.clearCredential?.();
   clearCreatedInvitationSecret();
+  clearNewDeviceAccessToken();
   clearSensitiveInputs();
 });
 window.addEventListener("pageshow", (event) => {
   if (!event.persisted) return;
-  sync.disconnect();
-  state.currentUser = null;
-  state.sessions = [];
-  state.session = null;
-  state.invitations = [];
-  workspace.hidden = true;
-  authView.hidden = false;
-  clearSensitiveInputs();
-  element("token").focus();
+  resetWorkspaceToAuth();
+  void restoreBrowserSession();
 });
+
+void restoreBrowserSession();
 
 sync.subscribe((snapshot) => {
   const previousCount = state.sync.events.length;
@@ -97,13 +103,16 @@ sync.subscribe((snapshot) => {
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const generation = ++authenticationGeneration;
   loginError.textContent = "";
   const token = new FormData(loginForm).get("token")?.toString() ?? "";
   const submit = loginForm.querySelector("button[type='submit']");
   submit.disabled = true;
   submit.textContent = "Checking…";
   try {
-    state.currentUser = await api.authenticate(token);
+    const actor = await api.authenticate(token);
+    if (generation !== authenticationGeneration) return;
+    state.currentUser = actor;
     loginForm.reset();
     await enterWorkspace();
   } catch (error) {
@@ -117,6 +126,7 @@ loginForm.addEventListener("submit", async (event) => {
 
 claimInvitationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const generation = ++authenticationGeneration;
   const data = new FormData(claimInvitationForm);
   const errorNode = element("claim-invite-error");
   const submit = claimInvitationForm.querySelector("button[type='submit']");
@@ -129,7 +139,9 @@ claimInvitationForm.addEventListener("submit", async (event) => {
       displayName: data.get("display-name")?.toString().trim() ?? "",
       deviceName: data.get("device-name")?.toString().trim() ?? "",
     });
+    if (generation !== authenticationGeneration) return;
     state.currentUser = result.actor;
+    showNewDeviceAccessToken(result.accessToken);
     claimInvitationForm.reset();
     element("claim-device-name").value = "This browser";
     await enterWorkspace(result.invitation.sessionId);
@@ -142,18 +154,19 @@ claimInvitationForm.addEventListener("submit", async (event) => {
   }
 });
 
-element("logout-button").addEventListener("click", () => {
-  sync.disconnect();
-  api.clearCredential?.();
-  state.currentUser = null;
-  state.sessions = [];
-  state.session = null;
-  state.invitations = [];
-  clearCreatedInvitationSecret();
-  workspace.hidden = true;
-  authView.hidden = false;
-  loginForm.reset();
-  element("token").focus();
+element("logout-button").addEventListener("click", async () => {
+  authenticationGeneration += 1;
+  const button = element("logout-button");
+  button.disabled = true;
+  try {
+    await api.logout?.();
+  } catch {
+    loginError.textContent = "The server could not confirm logout. If it is offline, close this browser tab to end the local session.";
+  } finally {
+    resetWorkspaceToAuth();
+    button.disabled = false;
+    element("token").focus();
+  }
 });
 
 acceptInvitationForm.addEventListener("submit", async (event) => {
@@ -184,6 +197,8 @@ createInvitationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!state.session) return;
   const data = new FormData(createInvitationForm);
+  const rolePolicy = invitationRolePolicy(state.session.mode);
+  const requestedRole = data.get("role")?.toString() ?? "";
   const errorNode = element("create-invitation-error");
   const submit = createInvitationForm.querySelector("button[type='submit']");
   errorNode.textContent = "";
@@ -192,7 +207,7 @@ createInvitationForm.addEventListener("submit", async (event) => {
   clearCreatedInvitationSecret();
   try {
     const result = await api.createInvitation(state.session.id, {
-      role: data.get("role")?.toString() ?? "participant",
+      role: rolePolicy.allowedRoles.includes(requestedRole) ? requestedRole : rolePolicy.defaultRole,
       ttl: data.get("ttl")?.toString() ?? "24h",
     });
     createdInvitationSecret = result.inviteToken;
@@ -222,6 +237,22 @@ element("copy-invite-secret-button").addEventListener("click", async () => {
     status.textContent = "Clipboard access is unavailable. Select and copy the secret manually.";
   }
 });
+
+element("copy-device-access-token-button").addEventListener("click", async () => {
+  const status = element("copy-device-access-token-status");
+  if (!newDeviceAccessToken) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(newDeviceAccessToken);
+    status.textContent = "Copied to clipboard.";
+  } catch {
+    status.textContent = "Clipboard access is unavailable. Select and copy the token manually.";
+  }
+});
+element("acknowledge-device-access-token-button").addEventListener("click", () => {
+  clearNewDeviceAccessToken();
+});
+deviceCredentialDialog.addEventListener("cancel", (event) => event.preventDefault());
 
 element("new-session-button").addEventListener("click", openCreateDialog);
 element("empty-create-button").addEventListener("click", openCreateDialog);
@@ -271,6 +302,37 @@ function closeMembersPanel() {
   element("mobile-members-button").focus();
 }
 
+async function restoreBrowserSession() {
+  if (mockEnabled) return;
+  const generation = ++authenticationGeneration;
+  try {
+    const actor = await api.restoreSession();
+    if (generation !== authenticationGeneration || !actor) return;
+    state.currentUser = actor;
+    await enterWorkspace();
+  } catch (error) {
+    if (generation !== authenticationGeneration) return;
+    resetWorkspaceToAuth();
+    loginError.textContent = error.message ?? "Unable to restore this browser session.";
+  }
+}
+
+function resetWorkspaceToAuth() {
+  sync.disconnect();
+  stopMemberRefresh();
+  api.clearCredential?.();
+  state.currentUser = null;
+  state.sessions = [];
+  state.session = null;
+  state.invitations = [];
+  clearCreatedInvitationSecret();
+  clearNewDeviceAccessToken();
+  clearSensitiveInputs();
+  workspace.hidden = true;
+  authView.hidden = false;
+  loginForm.reset();
+}
+
 async function enterWorkspace(preferredSessionId) {
   authView.hidden = true;
   workspace.hidden = false;
@@ -300,6 +362,7 @@ async function selectSession(sessionId) {
     api.listMembers(sessionId),
   ]);
   state.session = { ...session, members };
+  startMemberRefresh(sessionId);
   location.hash = new URLSearchParams({ session: sessionId }).toString();
   emptyState.hidden = true;
   sessionView.hidden = false;
@@ -310,6 +373,34 @@ async function selectSession(sessionId) {
   renderComposerPermissions();
   element("session-title").focus({ preventScroll: true });
   await sync.connect(sessionId);
+}
+
+function startMemberRefresh(sessionId) {
+  stopMemberRefresh();
+  memberRefreshTimer = setInterval(() => void refreshMembers(sessionId), 5_000);
+  memberRefreshTimer.unref?.();
+}
+
+function stopMemberRefresh() {
+  if (memberRefreshTimer !== undefined) clearInterval(memberRefreshTimer);
+  memberRefreshTimer = undefined;
+  memberRefreshInFlight = false;
+}
+
+async function refreshMembers(sessionId) {
+  if (memberRefreshInFlight || state.session?.id !== sessionId) return;
+  memberRefreshInFlight = true;
+  try {
+    const members = await api.listMembers(sessionId);
+    if (state.session?.id !== sessionId) return;
+    state.session = { ...state.session, members };
+    renderMembers();
+    renderComposerPermissions();
+  } catch {
+    // Realtime/replay remains authoritative for history. A later presence poll retries.
+  } finally {
+    memberRefreshInFlight = false;
+  }
 }
 
 function renderSessionList() {
@@ -387,11 +478,25 @@ function renderMembers() {
 async function renderInvitationControls() {
   const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
   const ownerControls = element("owner-invitations");
+  renderInvitationRoleControl();
   ownerControls.hidden = membership?.role !== "owner";
   state.invitations = [];
   invitationList.replaceChildren();
   element("invitation-list-status").textContent = "";
   if (membership?.role === "owner") await loadInvitations();
+}
+
+function renderInvitationRoleControl() {
+  const roleSelect = element("invitation-role");
+  const policy = invitationRolePolicy(state.session?.mode);
+  for (const option of roleSelect.options) {
+    const allowed = policy.allowedRoles.includes(option.value);
+    option.disabled = !allowed;
+    option.hidden = !allowed;
+  }
+  roleSelect.value = policy.defaultRole;
+  roleSelect.disabled = policy.locked;
+  element("invitation-role-help").textContent = policy.help;
 }
 
 async function loadInvitations() {
@@ -471,6 +576,20 @@ function clearCreatedInvitationSecret() {
   element("created-invitation").hidden = true;
 }
 
+function showNewDeviceAccessToken(token) {
+  newDeviceAccessToken = token;
+  element("new-device-access-token").textContent = token;
+  element("copy-device-access-token-status").textContent = "";
+  if (!deviceCredentialDialog.open) deviceCredentialDialog.showModal();
+}
+
+function clearNewDeviceAccessToken() {
+  newDeviceAccessToken = "";
+  element("new-device-access-token").textContent = "";
+  element("copy-device-access-token-status").textContent = "";
+  if (deviceCredentialDialog.open) deviceCredentialDialog.close();
+}
+
 function clearSensitiveInputs() {
   for (const id of ["token", "claim-invite-secret", "accept-invite-secret"]) {
     element(id).value = "";
@@ -509,7 +628,7 @@ function renderSyncState() {
 
 function renderTimeline() {
   timeline.replaceChildren();
-  const events = state.sync.events;
+  const events = state.sync.events.filter(isTimelineEventVisible);
   timelineEmpty.hidden = events.length > 0;
 
   for (const event of events) {

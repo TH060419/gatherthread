@@ -79,6 +79,12 @@ export interface RegisteredRuntime extends RuntimeRegistration {
   registeredAt?: string;
 }
 
+export interface CurrentActor {
+  id: string;
+  displayName: string;
+  deviceId: string;
+}
+
 export interface AgentRequestClaim {
   claimed: boolean;
   status: "claimed" | "completed";
@@ -97,6 +103,7 @@ export interface CollaborationApi {
   readEvents(sessionId: string, afterSequence: number, limit?: number): Promise<ReadEventsResult>;
   appendEvent(sessionId: string, event: AppendEventInput): Promise<CanonicalEvent>;
   registerRuntime(runtime: RuntimeRegistration): Promise<RegisteredRuntime>;
+  heartbeatRuntime?(runtimeId: string): Promise<RegisteredRuntime>;
   claimAgentRequest(sessionId: string, requestId: string, runtimeId: string): Promise<AgentRequestClaim>;
   completeAgentRequest(sessionId: string, requestId: string, input: CompleteAgentRequestInput): Promise<CanonicalEvent>;
 }

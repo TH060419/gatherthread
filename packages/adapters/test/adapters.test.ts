@@ -61,7 +61,7 @@ test("redaction covers secret-bearing strings and nested structured values", () 
     content: "Authorization: Bearer abcdefghijklmnop",
     arguments: {
       api_key: "top-secret",
-      nested: "password=hunter2 GATHERTHREAD_TOKEN=gta_01234567890123456789012345678901 legacy=acp_01234567890123456789012345678901",
+      nested: "password=hunter2 GATHERTHREAD_TOKEN=gta_01234567890123456789012345678901 browser=gtb_01234567890123456789012345678901 legacy=acp_01234567890123456789012345678901",
       systemPrompt: "private instructions",
       privateKey: "private material",
       GATHERTHREAD_AUTH_TOKEN_PEPPER: "private pepper",
@@ -71,7 +71,7 @@ test("redaction covers secret-bearing strings and nested structured values", () 
   assert.equal(redacted.content, "Authorization: [REDACTED]");
   assert.deepEqual(redacted.arguments, {
     api_key: "[REDACTED]",
-    nested: "password=[REDACTED] GATHERTHREAD_TOKEN=[REDACTED] legacy=[REDACTED]",
+    nested: "password=[REDACTED] GATHERTHREAD_TOKEN=[REDACTED] browser=[REDACTED] legacy=[REDACTED]",
     systemPrompt: "[REDACTED]",
     privateKey: "[REDACTED]",
     GATHERTHREAD_AUTH_TOKEN_PEPPER: "[REDACTED]",

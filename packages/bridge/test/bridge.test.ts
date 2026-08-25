@@ -18,6 +18,7 @@ import {
 class FakeApi implements CollaborationApi {
   readonly appended: AppendEventInput[] = [];
   readonly history: CanonicalEvent[] = [];
+  heartbeatCount = 0;
   completeInput?: CompleteAgentRequestInput;
   runtime: RegisteredRuntime = {
     id: "runtime-1",
@@ -55,6 +56,10 @@ class FakeApi implements CollaborationApi {
       payload: input.payload,
       runtimeId: input.runtimeId,
     });
+  }
+  async heartbeatRuntime() {
+    this.heartbeatCount += 1;
+    return { ...this.runtime, status: "online" as const, lastSeenAt: "2026-08-25T00:00:00.000Z" };
   }
 }
 
@@ -241,6 +246,37 @@ test("bridge daemon exits cleanly when its abort signal is raised", async () => 
   });
   await daemon.run();
   assert.equal(api.completeInput?.payload && (api.completeInput.payload as any).text, "done");
+});
+
+test("bridge daemon refreshes runtime presence independently of request polling", async () => {
+  const api = new FakeApi();
+  const bridge = new LocalBridge({
+    api,
+    cursorStore: new MemoryCursorStore(),
+    runtime: runtimeRegistration(),
+    transcriptRoots: {},
+  });
+  const shutdown = new AbortController();
+  const originalHeartbeat = api.heartbeatRuntime.bind(api);
+  api.heartbeatRuntime = async () => {
+    const runtime = await originalHeartbeat();
+    shutdown.abort();
+    return runtime;
+  };
+  const daemon = new BridgeDaemon({
+    bridge,
+    signal: shutdown.signal,
+    pollIntervalMs: 60_000,
+    heartbeatIntervalMs: 1,
+    executor: {
+      async execute() {
+        throw new Error("no request should execute");
+      },
+    },
+  });
+
+  await daemon.run();
+  assert.equal(api.heartbeatCount, 1);
 });
 
 function canonical(
