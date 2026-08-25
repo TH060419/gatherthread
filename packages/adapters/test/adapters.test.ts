@@ -101,11 +101,12 @@ test("authorized roots reject traversal and symlink escapes", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "adapter-root-"));
   const outside = await mkdtemp(path.join(tmpdir(), "adapter-outside-"));
   const target = path.join(outside, "secret.jsonl");
-  const link = path.join(root, "escape.jsonl");
+  const link = path.join(root, "escape");
+  const linkedTarget = path.join(link, "secret.jsonl");
   await writeFile(target, "{}\n");
-  await symlink(target, link);
   await assert.rejects(resolveAuthorizedPath(target, [root]), /outside authorized roots/);
-  await assert.rejects(resolveAuthorizedPath(link, [root]), /outside authorized roots/);
+  await symlink(outside, link, process.platform === "win32" ? "junction" : "dir");
+  await assert.rejects(resolveAuthorizedPath(linkedTarget, [root]), /outside authorized roots/);
   await assert.rejects(resolveAuthorizedPath(target, []), /explicitly authorized/);
 });
 
@@ -116,7 +117,7 @@ test("discovery is recursive but remains scoped to explicitly authorized roots",
   await writeFile(path.join(root, "nested", "session.jsonl"), "{}\n");
   await writeFile(path.join(root, "nested", "ignore.txt"), "no");
   await writeFile(path.join(outside, "outside.jsonl"), "{}\n");
-  await symlink(outside, path.join(root, "escape"));
+  await symlink(outside, path.join(root, "escape"), process.platform === "win32" ? "junction" : "dir");
 
   const files = await discoverJsonlTranscripts("codex", [root]);
   assert.equal(files.length, 1);

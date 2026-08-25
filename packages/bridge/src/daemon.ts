@@ -70,7 +70,6 @@ function abortableDelay(milliseconds: number, signal?: AbortSignal): Promise<voi
   if (signal?.aborted) return Promise.resolve();
   return new Promise((resolve) => {
     const timer = setTimeout(finish, milliseconds);
-    timer.unref();
     signal?.addEventListener("abort", finish, { once: true });
     function finish() {
       clearTimeout(timer);

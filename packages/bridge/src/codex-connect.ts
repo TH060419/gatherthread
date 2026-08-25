@@ -4,6 +4,7 @@ import { unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
+import { pathToFileURL } from "node:url";
 import { redactText } from "@gatherthread/adapters";
 import { LocalBridge } from "./bridge.js";
 import { CodexCliExecutor, type CodexSandboxMode } from "./codex-executor.js";
@@ -288,7 +289,8 @@ function oneLine(value: string): string {
   return value.replace(/[\r\n]+/g, " ").trim();
 }
 
-if (import.meta.url === new URL(process.argv[1] ?? "", "file:").href) {
+const entryPoint = process.argv[1];
+if (entryPoint && import.meta.url === pathToFileURL(path.resolve(entryPoint)).href) {
   runCodexConnectCli().catch((error) => {
     process.stderr.write(`gatherthread-codex: ${safeError(error, process.env.GATHERTHREAD_TOKEN ?? "")}\n`);
     process.exitCode = 1;
