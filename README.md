@@ -1,5 +1,7 @@
 # Agent Cooperation Project
 
+[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 Agent Cooperation Project, working UI name **Relayroom**, is a harness-neutral collaboration layer for people who each work with their own local AI agent.
 
 - `solo`: one owner publishes a complete canonical session stream; collaborators follow it read-only.
@@ -74,3 +76,7 @@ The first release includes hashed bearer tokens, device revocation, server-deriv
 Not yet implemented: invitation proofs and UI, bearer token expiry/rotation, rate limiting, multi-process WebSocket fan-out, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and a packaged daemon installer for local harness hooks.
 
 See [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
+
+## License
+
+Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Yuhan He and contributors.
