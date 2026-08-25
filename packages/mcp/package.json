@@ -1,0 +1,22 @@
+{
+  "name": "@agent-cooperation/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    }
+  },
+  "dependencies": {
+    "@agent-cooperation/adapters": "*",
+    "@agent-cooperation/bridge": "*"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "test": "npm run build && node --test dist/test/*.test.js"
+  }
+}
