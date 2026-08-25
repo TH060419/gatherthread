@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import {
   assertPersistentCredentialPepper,
@@ -23,8 +23,8 @@ test("development configuration uses a loopback-only, same-origin baseline", () 
   assert.equal(config.environment, "development");
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 8787);
-  assert.equal(config.databasePath, "/srv/gatherthread/.local/collaboration.sqlite");
-  assert.equal(config.staticDirectory, "/srv/gatherthread/apps/web/dist");
+  assert.equal(config.databasePath, resolve("/srv/gatherthread", ".local/collaboration.sqlite"));
+  assert.equal(config.staticDirectory, resolve("/srv/gatherthread", "apps/web/dist"));
   assert.equal(config.publicBaseUrl, "http://127.0.0.1:8787");
   assert.deepEqual(config.allowedOrigins, ["http://127.0.0.1:8787"]);
   assert.equal(config.allowHttpBootstrap, false);
@@ -143,14 +143,20 @@ test("database directory preparation creates private storage and rejects loose p
   try {
     const development = loadServerConfig({ GATHERTHREAD_DATABASE_PATH: "private/db.sqlite" }, directory);
     prepareDatabaseDirectory(development);
-    assert.equal(statSync(join(directory, "private")).mode & 0o777, 0o700);
+    if (process.platform !== "win32") {
+      assert.equal(statSync(join(directory, "private")).mode & 0o777, 0o700);
+    }
 
     chmodSync(join(directory, "private"), 0o755);
     const production = loadServerConfig({
       ...productionEnvironment,
       GATHERTHREAD_DATABASE_PATH: "private/db.sqlite",
     }, directory);
-    assert.throws(() => prepareDatabaseDirectory(production), /mode 0700/);
+    if (process.platform === "win32") {
+      assert.doesNotThrow(() => prepareDatabaseDirectory(production));
+    } else {
+      assert.throws(() => prepareDatabaseDirectory(production), /mode 0700/);
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

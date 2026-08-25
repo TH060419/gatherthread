@@ -11,3 +11,4 @@ coverage/
 .local/
 .serena/
 .codegraph/
+.idea/

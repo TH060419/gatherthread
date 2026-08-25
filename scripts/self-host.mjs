@@ -9,8 +9,6 @@ if (!new Set(["start", "init", "bootstrap"]).has(mode)) {
   process.exit(2);
 }
 
-const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-
 if (mode !== "start") {
   const localEnvironment = await ensureLocalOwnerHostEnvironment();
   if (localEnvironment.generated) {
@@ -27,7 +25,12 @@ function run(command, args) {
 }
 
 const buildTarget = mode === "start" ? "build" : "build:ts";
-const built = await run(npmCommand, ["run", buildTarget]);
+const npmCli = process.env.npm_execpath?.trim();
+const built = npmCli
+  ? await run(process.execPath, [npmCli, "run", buildTarget])
+  : process.platform === "win32"
+    ? await run(process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", `npm.cmd run ${buildTarget}`])
+    : await run("npm", ["run", buildTarget]);
 if (built.signal) {
   process.kill(process.pid, built.signal);
 } else if (built.code !== 0) {

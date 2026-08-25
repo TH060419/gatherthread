@@ -661,7 +661,7 @@ function renderTimeline() {
     identity.className = "event-identity";
     identity.append(avatar, meta);
     header.append(identity, sequence, time);
-    body.textContent = event.payload?.content ?? "No visible content";
+    body.textContent = event.payload?.content ?? event.payload?.text ?? "No visible content";
     article.append(header, body);
 
     if (event.provenance) {

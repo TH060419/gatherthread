@@ -17,5 +17,7 @@ test("file cursor store persists atomically in a private file", async () => {
     server: { "session-1": 42 },
     local: { transcript: { path: "/authorized/transcript.jsonl", offset: 100 } },
   });
-  assert.equal((await stat(cursorPath)).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(cursorPath)).mode & 0o777, 0o600);
+  }
 });

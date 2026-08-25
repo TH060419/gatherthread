@@ -22,7 +22,9 @@ test("owner-host init creates a private ignored environment with a generated pep
     assert.equal(result.generated, true);
     assert.match(env.GATHERTHREAD_AUTH_TOKEN_PEPPER, /^[a-f0-9]{64}$/);
     assert.match(await readFile(join(directory, ".env"), "utf8"), /^GATHERTHREAD_AUTH_TOKEN_PEPPER=[a-f0-9]{64}$/m);
-    assert.equal((await stat(join(directory, ".env"))).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal((await stat(join(directory, ".env"))).mode & 0o777, 0o600);
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -37,7 +39,9 @@ test("owner-host init fills an empty pepper without replacing other local settin
     const contents = await readFile(join(directory, ".env"), "utf8");
     assert.match(contents, /GATHERTHREAD_SERVER_PORT=9999/);
     assert.match(contents, /^GATHERTHREAD_AUTH_TOKEN_PEPPER=[a-f0-9]{64}$/m);
-    assert.equal((await stat(join(directory, ".env"))).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal((await stat(join(directory, ".env"))).mode & 0o777, 0o600);
+    }
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -188,7 +188,7 @@ export function prepareDatabaseDirectory(config: ServerConfig): void {
   if (config.environment !== "production") return;
   const info = statSync(directory);
   if (!info.isDirectory()) throw new ConfigurationError("The database parent must be a directory");
-  if ((info.mode & 0o077) !== 0) {
+  if (process.platform !== "win32" && (info.mode & 0o077) !== 0) {
     throw new ConfigurationError("The production database directory must not grant group or other permissions (use mode 0700)");
   }
 }

@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { parseCodexConnectArgs } from "../src/codex-connect.js";
+
+const execFileAsync = promisify(execFile);
 
 test("Codex connector accepts a private HTTPS origin and applies safe defaults", () => {
   const parsed = parseCodexConnectArgs([
@@ -30,4 +35,11 @@ test("Codex connector rejects public plaintext URLs and unsafe sandbox modes", (
     "--url", "https://example.com",
     "--model", "--dangerously-treated-as-an-option",
   ]), /requires a value/);
+});
+
+test("Codex connector direct entry point runs on native filesystem paths", async () => {
+  const entryPoint = fileURLToPath(new URL("../src/codex-connect.js", import.meta.url));
+  const { stdout, stderr } = await execFileAsync(process.execPath, [entryPoint, "--help"]);
+  assert.match(stdout, /GatherThread Codex connector/);
+  assert.equal(stderr, "");
 });

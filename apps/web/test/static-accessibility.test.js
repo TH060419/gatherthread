@@ -54,3 +54,8 @@ test("runtime presence refreshes while a session is open and stops with the page
   assert.match(main, /window\.addEventListener\("pagehide",[\s\S]*?stopMemberRefresh\(\)/);
   assert.match(main, /function resetWorkspaceToAuth\(\)[\s\S]*?stopMemberRefresh\(\)/);
 });
+
+test("timeline renders both user content and harness response text", async () => {
+  const main = await readFile(mainPath, "utf8");
+  assert.match(main, /event\.payload\?\.content \?\? event\.payload\?\.text \?\? "No visible content"/);
+});
