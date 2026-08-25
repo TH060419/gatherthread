@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f4f1e8" />
+    <meta
+      name="description"
+      content="Relayroom, a lightweight multi-harness collaboration client."
+    />
+    <title>Relayroom</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to conversation</a>
+
+    <main id="auth-view" class="auth-shell" aria-labelledby="login-title">
+      <section class="auth-story" aria-hidden="true">
+        <p class="eyebrow">Human + agent workspace</p>
+        <h1>One room.<br />Many minds.</h1>
+        <p>
+          Keep every collaborator in their own harness while the shared history
+          stays ordered, attributable, and live.
+        </p>
+        <div class="signal-card">
+          <span class="signal-dot"></span>
+          <span>Canonical history is the source of truth</span>
+        </div>
+      </section>
+
+      <section class="login-panel">
+        <div class="brand-mark" aria-label="Relayroom">R</div>
+        <p class="eyebrow">Relayroom</p>
+        <h2 id="login-title">Enter your workspace</h2>
+        <p class="muted">Your identity and permissions come from the server.</p>
+        <form id="login-form" novalidate>
+          <label for="token">Access token</label>
+          <input
+            id="token"
+            name="token"
+            type="password"
+            autocomplete="current-password"
+            required
+            aria-describedby="token-help login-error"
+          />
+          <p id="token-help" class="field-help">For the preview, use <code>demo-token</code>.</p>
+          <p id="login-error" class="form-error" role="alert"></p>
+          <button class="button button-primary button-wide" type="submit">
+            Continue <span aria-hidden="true">→</span>
+          </button>
+        </form>
+      </section>
+    </main>
+
+    <div id="workspace" class="workspace" hidden>
+      <header class="topbar">
+        <a class="wordmark" href="#" aria-label="Relayroom home">
+          <span class="brand-mark brand-mark-small" aria-hidden="true">R</span>
+          <span>Relayroom</span>
+        </a>
+        <div class="account-cluster">
+          <div class="connection-chip" id="global-connection" role="status">
+            <span class="status-dot"></span>
+            <span id="global-connection-label">Connecting</span>
+          </div>
+          <span class="avatar" id="current-user-avatar" aria-hidden="true"></span>
+          <span id="current-username" class="current-username"></span>
+          <button id="logout-button" class="text-button" type="button">Log out</button>
+        </div>
+      </header>
+
+      <div class="workspace-grid">
+        <nav class="session-rail" aria-label="Sessions">
+          <div class="rail-heading">
+            <div>
+              <p class="eyebrow">Workspace</p>
+              <h2>Sessions</h2>
+            </div>
+            <button
+              id="new-session-button"
+              class="icon-button"
+              type="button"
+              aria-label="Create session"
+            >
+              <span aria-hidden="true">+</span>
+            </button>
+          </div>
+          <ul id="session-list" class="session-list"></ul>
+          <div class="rail-note">
+            <span aria-hidden="true">↳</span>
+            <p>Human chat is shared without triggering a local agent.</p>
+          </div>
+        </nav>
+
+        <main id="main-content" class="conversation" tabindex="-1">
+          <section id="empty-state" class="empty-state" hidden>
+            <p class="eyebrow">No sessions yet</p>
+            <h1>Start a shared thread.</h1>
+            <p>Create a solo room for observers or a multi room for active collaboration.</p>
+            <button id="empty-create-button" class="button button-primary" type="button">
+              Create your first session
+            </button>
+          </section>
+
+          <div id="session-view" class="session-view" hidden>
+            <header class="session-header">
+              <div>
+                <div class="title-line">
+                  <h1 id="session-title" tabindex="-1"></h1>
+                  <span id="session-mode" class="mode-badge"></span>
+                </div>
+                <p id="session-subtitle" class="session-subtitle"></p>
+              </div>
+              <button
+                id="mobile-members-button"
+                class="button button-secondary mobile-only"
+                type="button"
+                aria-controls="member-panel"
+                aria-expanded="false"
+              >
+                Members
+              </button>
+            </header>
+
+            <div
+              id="sync-banner"
+              class="sync-banner"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <span class="status-dot"></span>
+              <div>
+                <strong id="sync-title">Connecting</strong>
+                <span id="sync-detail">Opening the live channel…</span>
+              </div>
+              <button id="retry-sync-button" class="text-button" type="button" hidden>Retry</button>
+            </div>
+
+            <section
+              id="timeline-region"
+              class="timeline-region"
+              aria-label="Canonical event timeline"
+              aria-busy="true"
+            >
+              <ol id="event-timeline" class="event-timeline"></ol>
+              <div id="timeline-empty" class="timeline-empty">
+                <span aria-hidden="true">✦</span>
+                <p>No events yet. Start the conversation below.</p>
+              </div>
+            </section>
+
+            <form id="composer" class="composer">
+              <label for="message-input">Message</label>
+              <textarea
+                id="message-input"
+                name="message"
+                rows="3"
+                maxlength="12000"
+                placeholder="Write to the room…"
+                aria-describedby="composer-permission send-chat-help send-agent-help"
+              ></textarea>
+              <p id="composer-permission" class="permission-note"></p>
+              <div class="composer-actions">
+                <div class="intent-help" id="send-chat-help">
+                  <button id="send-chat-button" class="button button-secondary" type="button">
+                    <span aria-hidden="true">↗</span> Send chat
+                  </button>
+                  <span>Share only · no agent run</span>
+                </div>
+                <div class="intent-help intent-agent" id="send-agent-help">
+                  <button id="send-agent-button" class="button button-primary" type="button">
+                    <span aria-hidden="true">✦</span> Request my agent
+                  </button>
+                  <span id="agent-target-label">No runtime available</span>
+                </div>
+              </div>
+              <p id="send-error" class="form-error" role="alert"></p>
+            </form>
+          </div>
+        </main>
+
+        <aside id="member-panel" class="member-panel" aria-labelledby="members-title">
+          <div class="member-heading">
+            <div>
+              <p class="eyebrow">Presence</p>
+              <h2 id="members-title">Members</h2>
+            </div>
+            <button id="close-members-button" class="icon-button mobile-only" type="button" aria-label="Close members">
+              ×
+            </button>
+          </div>
+          <ul id="member-list" class="member-list"></ul>
+          <section class="integrity-card" aria-labelledby="integrity-title">
+            <span class="integrity-icon" aria-hidden="true">✓</span>
+            <div>
+              <h3 id="integrity-title">History integrity</h3>
+              <p id="sequence-label">Waiting for replay</p>
+            </div>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <dialog id="create-session-dialog" class="create-dialog">
+      <form id="create-session-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">New workspace</p>
+            <h2>Create a session</h2>
+          </div>
+          <button id="cancel-create-button" class="icon-button" type="button" aria-label="Close">×</button>
+        </div>
+        <label for="session-name">Session name</label>
+        <input id="session-name" name="name" required maxlength="80" />
+        <fieldset>
+          <legend>Collaboration mode</legend>
+          <label class="mode-option">
+            <input type="radio" name="mode" value="multi" checked />
+            <span><strong>Multi</strong><small>Members can chat and request their own agents.</small></span>
+          </label>
+          <label class="mode-option">
+            <input type="radio" name="mode" value="solo" />
+            <span><strong>Solo</strong><small>Only the owner writes; invited viewers follow live.</small></span>
+          </label>
+        </fieldset>
+        <p id="create-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="dialog-cancel-button" class="button button-secondary" type="button">Cancel</button>
+          <button class="button button-primary" type="submit">Create session</button>
+        </div>
+      </form>
+    </dialog>
+
+    <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
