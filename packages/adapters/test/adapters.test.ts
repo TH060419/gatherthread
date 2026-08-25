@@ -59,12 +59,23 @@ test("redaction covers secret-bearing strings and nested structured values", () 
     harness: "codex",
     captureFidelity: "harness_transcript",
     content: "Authorization: Bearer abcdefghijklmnop",
-    arguments: { api_key: "top-secret", nested: "password=hunter2" },
+    arguments: {
+      api_key: "top-secret",
+      nested: "password=hunter2 RELAYROOM_TOKEN=acp_01234567890123456789012345678901",
+      systemPrompt: "private instructions",
+      privateKey: "private material",
+      ACP_AUTH_TOKEN_PEPPER: "private pepper",
+      tokenCount: 12,
+    },
   });
   assert.equal(redacted.content, "Authorization: [REDACTED]");
   assert.deepEqual(redacted.arguments, {
     api_key: "[REDACTED]",
-    nested: "password=[REDACTED]",
+    nested: "password=[REDACTED] RELAYROOM_TOKEN=[REDACTED]",
+    systemPrompt: "[REDACTED]",
+    privateKey: "[REDACTED]",
+    ACP_AUTH_TOKEN_PEPPER: "[REDACTED]",
+    tokenCount: 12,
   });
 });
 

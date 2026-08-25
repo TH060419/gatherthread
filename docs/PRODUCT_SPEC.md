@@ -52,6 +52,16 @@ The server retains canonical events. Each local harness may build a private proj
 
 Solo sessions reject participant writes except from the owner. Multi sessions serialize agent turns per local runtime while allowing concurrent human chat.
 
+## Identity, invitations, and devices
+
+Public registration is disabled. The deployment operator creates the first owner locally. A session owner may create a single-use invitation for `participant` or `viewer`; solo sessions allow viewer invitations only. Expiry choices are one hour, 24 hours, and seven days, with 24 hours as the default.
+
+A new collaborator claims an invitation to create their own server identity and first device credential atomically. An existing authenticated user can accept an invitation without receiving a new credential. An inviter never handles another user's device credential. Each additional device uses its own ten-minute, single-use authorization and receives an independently revocable token.
+
+## First-release deployment
+
+One participating user runs the only active authoritative server for a deployment. The service and SQLite bind to the host loopback interface and are shared with named collaborators through private Tailscale Serve HTTPS. Other users run only their local Web client, MCP process, bridge, and harness. Public Funnel, router port forwarding, multi-primary replication, and automatic failover are outside the first release.
+
 ## Realtime guarantees
 
 - Server assigns total order per session.
@@ -68,4 +78,6 @@ Solo sessions reject participant writes except from the owner. Multi sessions se
 4. A solo viewer can follow the owner but cannot append any event.
 5. Codex and Claude Code transcript import/tail preserve visible user, assistant, tool-call, and tool-result events.
 6. Reconnect replay, idempotent append, role enforcement, redaction, and concurrent writes have automated tests.
-
+7. A new user can claim a one-use role-bound invitation without exposing their device credential to the inviter.
+8. A second device requires a separate expiring authorization and can be revoked without revoking the user's other devices.
+9. One loopback owner host serves Web, API, and WebSocket on a private HTTPS origin without a public application port.

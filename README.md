@@ -40,42 +40,37 @@ npm install
 npm run verify
 ```
 
-`verify` runs strict TypeScript checks, server/protocol/adapter/bridge/MCP tests, Web tests and build, a real server-to-bridge agent turn, collaboration contract tests, reference/license checks, and a secret scan.
+`verify` runs strict TypeScript checks, server/protocol/adapter/bridge/MCP tests, Web tests and build, a real server-to-bridge agent turn, collaboration contract tests, reference/license checks, a secret scan, and an npm vulnerability audit.
 
 ## Local end-to-end run
 
-Build and start the API, allowing the separate local Web preview origin:
+Create the ignored environment file and set a stable random `ACP_AUTH_TOKEN_PEPPER` of at least 32 bytes:
 
 ```bash
-npm run build
-ACP_ALLOWED_ORIGINS=http://127.0.0.1:4173 npm start
+cp .env.example .env
+chmod 600 .env
 ```
 
-In another terminal, start the Web client:
+Create the first owner directly on the host, then start the same-origin Web/API/WebSocket service:
 
 ```bash
-npm --workspace apps/web run dev
+npm run owner-host:init -- --display-name "Alice" --device-name "Alice laptop"
+npm run owner-host
 ```
 
-Bootstrap the first user once:
+Enter the one-time displayed device credential at `http://127.0.0.1:8787`. The Web client keeps it only in memory. It obtains a 30-second, one-use, session-scoped ticket for WebSocket authentication and never places the long-lived bearer token in a URL.
 
-```bash
-curl -sS http://127.0.0.1:8787/v1/bootstrap \
-  -H 'content-type: application/json' \
-  -d '{"user_id":"alice","display_name":"Alice","device_id":"alice-laptop","device_name":"Alice laptop"}'
-```
-
-Copy the returned token into `http://127.0.0.1:4173/?api=http://127.0.0.1:8787`. The browser obtains a 30-second, one-use, session-scoped ticket for WebSocket authentication; it does not place the long-lived bearer token in the socket URL.
-
-The mock product preview remains available at `http://127.0.0.1:4173` with `demo-token`.
+For UI-only development, `npm --workspace apps/web run dev` starts the loopback preview and proxies the local API. Explicit mock mode is available only at `http://127.0.0.1:4173/?mock=1` with `demo-token`.
 
 ## Security and current limits
 
-The first release includes hashed bearer tokens, device revocation, server-derived actors, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, Origin allowlists, reconnect replay, and SQLite backup/restore scripts. For non-local deployment, place the server behind an HTTPS reverse proxy.
+The first release includes peppered device credentials, single-use invitations and device authorization, device-bound runtime provenance, immediate socket/authorization invalidation on device revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, configurable event-storage quotas, reconnect replay, and SQLite backup/restore scripts.
 
-Not yet implemented: invitation proofs and UI, bearer token expiry/rotation, rate limiting, multi-process WebSocket fan-out, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and a packaged daemon installer for local harness hooks.
+The supported zero-cost alpha topology is one participant-owned host bound to loopback and shared privately through Tailscale Serve. See the [owner-hosting guide](docs/SELF_HOSTING.md). Do not expose the current service through router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
 
-See [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [architecture decisions](docs/adr/README.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
+Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, browser HttpOnly-cookie sessions, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers.
+
+See [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [architecture decisions](docs/adr/README.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
 
 ## License
 

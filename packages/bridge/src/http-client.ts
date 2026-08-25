@@ -15,17 +15,31 @@ export interface HttpCollaborationClientOptions {
   baseUrl: string;
   bearerToken: string;
   fetch?: typeof globalThis.fetch;
+  signal?: AbortSignal;
+  requestTimeoutMs?: number;
 }
 
 export class HttpCollaborationClient implements CollaborationApi {
   readonly #baseUrl: string;
   readonly #bearerToken: string;
   readonly #fetch: typeof globalThis.fetch;
+  readonly #signal: AbortSignal | undefined;
+  readonly #requestTimeoutMs: number;
 
   constructor(options: HttpCollaborationClientOptions) {
-    this.#baseUrl = options.baseUrl.replace(/\/$/, "");
+    const parsedBaseUrl = validateBaseUrl(options.baseUrl);
+    if (!options.bearerToken || /[\r\n]/.test(options.bearerToken)) {
+      throw new Error("bearerToken must be a non-empty HTTP bearer token");
+    }
+    if (options.requestTimeoutMs !== undefined
+      && (!Number.isSafeInteger(options.requestTimeoutMs) || options.requestTimeoutMs < 1)) {
+      throw new Error("requestTimeoutMs must be a positive integer");
+    }
+    this.#baseUrl = parsedBaseUrl;
     this.#bearerToken = options.bearerToken;
     this.#fetch = options.fetch ?? globalThis.fetch;
+    this.#signal = options.signal;
+    this.#requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
   }
 
   async listSessions(): Promise<SessionSummary[]> {
@@ -104,8 +118,15 @@ export class HttpCollaborationClient implements CollaborationApi {
   }
 
   async #request(path: string, init: RequestInit = {}): Promise<unknown> {
+    const signal = combineSignals(
+      init.signal ?? undefined,
+      this.#signal,
+      AbortSignal.timeout(this.#requestTimeoutMs),
+    );
     const response = await this.#fetch(`${this.#baseUrl}${path}`, {
       ...init,
+      redirect: "error",
+      signal,
       headers: {
         accept: "application/json",
         authorization: `Bearer ${this.#bearerToken}`,
@@ -120,10 +141,35 @@ export class HttpCollaborationClient implements CollaborationApi {
         : isObject(body) && isObject(body.error) && typeof body.error.message === "string"
           ? body.error.message
           : response.statusText;
-      throw new Error(`Collaboration API ${response.status}: ${detail}`);
+      throw new Error(`Collaboration API ${response.status}: ${redactCredential(detail, this.#bearerToken)}`);
     }
     return isObject(body) && "data" in body ? body.data : body;
   }
+}
+
+function validateBaseUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("baseUrl must be an absolute HTTP(S) URL");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("baseUrl must use HTTP or HTTPS");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("baseUrl cannot contain credentials, a query, or a fragment");
+  }
+  return url.toString().replace(/\/$/, "");
+}
+
+function combineSignals(...signals: Array<AbortSignal | undefined>): AbortSignal {
+  const present = signals.filter((signal): signal is AbortSignal => signal !== undefined);
+  return present.length === 1 ? present[0] as AbortSignal : AbortSignal.any(present);
+}
+
+function redactCredential(value: string, credential: string): string {
+  return value.replaceAll(credential, "[REDACTED]").replace(/[\r\n]+/g, " ");
 }
 
 function toWireEvent(event: AppendEventInput): Record<string, unknown> {

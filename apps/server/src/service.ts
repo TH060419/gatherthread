@@ -33,6 +33,7 @@ export class CollaborationService {
   }
 
   createSession(actor: Actor, input: Parameters<CollaborationDatabase["createSession"]>[1]) {
+    this.database.assertActiveDevice(actor);
     const result = this.database.createSession(actor, input);
     this.publish(result.event);
     return result;
@@ -44,12 +45,86 @@ export class CollaborationService {
   }
 
   listSessions(actor: Actor) {
+    this.database.assertActiveDevice(actor);
     return this.database.listSessions(actor.user_id);
   }
 
   listMembers(actor: Actor, sessionId: string) {
     this.requireMembership(actor, sessionId);
     return this.database.listSessionMembers(sessionId);
+  }
+
+  createInvitation(
+    actor: Actor,
+    sessionId: string,
+    input: Parameters<CollaborationDatabase["createInvitation"]>[2],
+  ) {
+    this.requireOwner(actor, sessionId);
+    const session = this.database.requireSession(sessionId);
+    if (session.mode === "solo" && input.role !== "viewer") {
+      throw forbidden("Solo sessions can invite read-only viewers only");
+    }
+    return this.database.createInvitation(actor, sessionId, input);
+  }
+
+  claimInvitation(input: Parameters<CollaborationDatabase["claimInvitation"]>[0]) {
+    const result = this.database.claimInvitation(input);
+    this.publish(result.event);
+    return result;
+  }
+
+  claimInvitationForActor(actor: Actor, inviteToken: string) {
+    const result = this.database.claimInvitationForActor(actor, inviteToken);
+    this.publish(result.event);
+    return result;
+  }
+
+  revokeInvitation(actor: Actor, sessionId: string, invitationId: string) {
+    this.requireOwner(actor, sessionId);
+    return this.database.revokeInvitation(actor, sessionId, invitationId);
+  }
+
+  listInvitations(actor: Actor, sessionId: string) {
+    this.requireOwner(actor, sessionId);
+    return this.database.listInvitations(actor, sessionId);
+  }
+
+  listInvitationAudit(actor: Actor, sessionId: string) {
+    this.requireOwner(actor, sessionId);
+    return this.database.listInvitationAudit(actor, sessionId);
+  }
+
+  createDeviceAuthorization(actor: Actor) {
+    return this.database.createDeviceAuthorization(actor);
+  }
+
+  claimDeviceAuthorization(input: Parameters<CollaborationDatabase["claimDeviceAuthorization"]>[0]) {
+    return this.database.claimDeviceAuthorization(input);
+  }
+
+  revokeDeviceAuthorization(actor: Actor, authorizationId: string) {
+    this.database.assertActiveDevice(actor);
+    return this.database.revokeDeviceAuthorization(actor, authorizationId);
+  }
+
+  listDeviceAuthorizations(actor: Actor) {
+    this.database.assertActiveDevice(actor);
+    return this.database.listDeviceAuthorizations(actor);
+  }
+
+  listDevices(actor: Actor) {
+    this.database.assertActiveDevice(actor);
+    return this.database.listDevices(actor);
+  }
+
+  rotateDeviceToken(actor: Actor, deviceId: string, expiresAt?: string | null) {
+    this.database.assertActiveDevice(actor);
+    return this.database.rotateDeviceToken(actor, deviceId, expiresAt);
+  }
+
+  revokeDevice(actor: Actor, deviceId: string): void {
+    this.database.assertActiveDevice(actor);
+    this.database.revokeDevice(actor, deviceId);
   }
 
   updateSession(actor: Actor, sessionId: string, input: Parameters<CollaborationDatabase["updateSession"]>[2]) {
@@ -96,9 +171,9 @@ export class CollaborationService {
     return event;
   }
 
-  replay(actor: Actor, sessionId: string, afterSequence: number, limit: number): ReplayResponse {
+  replay(actor: Actor, sessionId: string, afterSequence: number, limit: number, maxBytes?: number): ReplayResponse {
     const role = this.requireMembership(actor, sessionId);
-    return this.database.replay(sessionId, afterSequence, limit, role === "owner");
+    return this.database.replay(sessionId, afterSequence, limit, role === "owner", maxBytes);
   }
 
   registerRuntime(actor: Actor, input: Parameters<CollaborationDatabase["registerRuntime"]>[1]): RuntimeRecord {
@@ -137,6 +212,7 @@ export class CollaborationService {
   }
 
   requireMembership(actor: Actor, sessionId: string): MembershipRole {
+    this.database.assertActiveDevice(actor);
     this.database.requireSession(sessionId);
     const role = this.database.membershipRole(sessionId, actor.user_id);
     if (!role) throw notFound("Session");
@@ -158,7 +234,8 @@ export class CollaborationService {
 
   private requireOwnedRuntime(actor: Actor, sessionId: string, runtimeId: string): RuntimeRecord {
     const runtime = this.database.getRuntime(runtimeId);
-    if (runtime.user_id !== actor.user_id || runtime.session_id !== sessionId || runtime.status === "revoked") {
+    if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
+      || runtime.session_id !== sessionId || runtime.status === "revoked") {
       throw forbidden("Runtime does not belong to the actor and session");
     }
     return runtime;

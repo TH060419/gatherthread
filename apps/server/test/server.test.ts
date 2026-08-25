@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -9,6 +9,8 @@ import { startCollaborationServer } from "../src/server.js";
 interface IdentityResponse {
   data: { actor: { user_id: string; device_id: string }; token: string };
 }
+
+const TEST_PEPPER = "server-test-pepper-that-is-long-and-random-enough";
 
 async function api<T>(origin: string, path: string, options: {
   method?: string;
@@ -53,9 +55,32 @@ function waitForSocketMessage(socket: WebSocket, predicate: (message: Record<str
   });
 }
 
+async function realtimeSocket(origin: string, token: string, sessionId: string, originHeader?: string): Promise<WebSocket> {
+  const ticket = await api<{ data: { ticket: string; websocket_url: string } }>(origin, "/v1/realtime-ticket", {
+    method: "POST",
+    token,
+    body: { session_id: sessionId },
+  });
+  const socket = new WebSocket(
+    `${origin.replace("http", "ws")}${ticket.body.data.websocket_url}`,
+    ["relayroom-v1", `relayroom-ticket.${ticket.body.data.ticket}`],
+    originHeader ? { origin: originHeader } : undefined,
+  );
+  await new Promise<void>((resolve, reject) => {
+    socket.once("open", resolve);
+    socket.once("error", reject);
+  });
+  return socket;
+}
+
 test("HTTP replay and WebSocket reconnect provide ordered multi-client updates", async () => {
   const directory = mkdtempSync(join(tmpdir(), "acp-http-"));
-  const running = await startCollaborationServer({ databasePath: join(directory, "server.sqlite"), heartbeatIntervalMs: 100 }, 0);
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    heartbeatIntervalMs: 100,
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
   let socket: WebSocket | undefined;
   try {
     const bootstrap = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
@@ -64,31 +89,30 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
     });
     assert.equal(bootstrap.status, 201);
     const ownerToken = bootstrap.body.data.token;
-    const member = await api<IdentityResponse>(running.origin, "/v1/users", {
-      method: "POST",
-      token: ownerToken,
-      body: { user_id: "member", display_name: "Member", device_id: "member-device", device_name: "Laptop" },
-    });
-    const memberToken = member.body.data.token;
     const created = await api<{ data: { session: { id: string } } }>(running.origin, "/v1/sessions", {
       method: "POST",
       token: ownerToken,
       body: { session_id: "shared", idempotency_key: "create-shared-0001", mode: "multi", title: "Shared" },
     });
     assert.equal(created.status, 201);
-    await api(running.origin, "/v1/sessions/shared/members/member", {
-      method: "PUT",
+    const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/sessions/shared/invitations", {
+      method: "POST",
       token: ownerToken,
-      body: { role: "participant", idempotency_key: "add-member-0001" },
+      body: { role: "participant", ttl: "1h" },
     });
+    const member = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+      method: "POST",
+      body: {
+        invite_token: invitation.body.data.invite_token,
+        user_id: "member",
+        display_name: "Member",
+        device_id: "member-device",
+        device_name: "Laptop",
+      },
+    });
+    const memberToken = member.body.data.token;
 
-    socket = new WebSocket(running.origin.replace("http", "ws") + "/v1/ws", {
-      headers: { authorization: `Bearer ${memberToken}` },
-    });
-    await new Promise<void>((resolve, reject) => {
-      socket?.once("open", () => resolve());
-      socket?.once("error", reject);
-    });
+    socket = await realtimeSocket(running.origin, memberToken, "shared");
     const subscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
     socket.send(JSON.stringify({ type: "subscribe", session_id: "shared", after_sequence: 0 }));
     assert.equal((await subscribed).cursor, 2);
@@ -125,13 +149,7 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
       socket?.once("close", () => resolve());
       socket?.close();
     });
-    socket = new WebSocket(running.origin.replace("http", "ws") + "/v1/ws", {
-      headers: { authorization: `Bearer ${memberToken}` },
-    });
-    await new Promise<void>((resolve, reject) => {
-      socket?.once("open", () => resolve());
-      socket?.once("error", reject);
-    });
+    socket = await realtimeSocket(running.origin, memberToken, "shared");
     const reconnectReplay = waitForSocketMessage(socket, (message) => message.type === "replay");
     const reconnectSubscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
     socket.send(JSON.stringify({ type: "subscribe", session_id: "shared", after_sequence: 3 }));
@@ -177,26 +195,41 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
 
 test("token auth and solo viewer ACL are enforced over HTTP", async () => {
   const directory = mkdtempSync(join(tmpdir(), "acp-acl-"));
-  const running = await startCollaborationServer({ databasePath: join(directory, "server.sqlite") }, 0);
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
   try {
     const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
-    });
-    const viewer = await api<IdentityResponse>(running.origin, "/v1/users", {
-      method: "POST",
-      token: owner.body.data.token,
-      body: { user_id: "viewer", display_name: "Viewer", device_id: "viewer-device", device_name: "Phone" },
     });
     await api(running.origin, "/v1/sessions", {
       method: "POST",
       token: owner.body.data.token,
       body: { session_id: "solo", idempotency_key: "create-solo-http-1", mode: "solo", title: "Solo" },
     });
-    await api(running.origin, "/v1/sessions/solo/members/viewer", {
-      method: "PUT",
+    const invalidParticipantInvitation = await api<{ error: { code: string } }>(running.origin, "/v1/sessions/solo/invitations", {
+      method: "POST",
       token: owner.body.data.token,
-      body: { role: "viewer", idempotency_key: "add-viewer-http-1" },
+      body: { role: "participant", ttl: "1h" },
+    });
+    assert.equal(invalidParticipantInvitation.status, 403);
+    const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/sessions/solo/invitations", {
+      method: "POST",
+      token: owner.body.data.token,
+      body: { role: "viewer", ttl: "24h" },
+    });
+    const viewer = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+      method: "POST",
+      body: {
+        invite_token: invitation.body.data.invite_token,
+        user_id: "viewer",
+        display_name: "Viewer",
+        device_id: "viewer-device",
+        device_name: "Phone",
+      },
     });
     await api(running.origin, "/v1/sessions", {
       method: "POST",
@@ -238,6 +271,9 @@ test("token auth and solo viewer ACL are enforced over HTTP", async () => {
     });
     assert.equal(readable.status, 200);
     assert.equal(readable.body.data.events.length, 2);
+    assert.equal((await api(running.origin, "/v1/sessions/solo/events?limit=0", {
+      token: viewer.body.data.token,
+    })).status, 400);
     assert.equal((await api(running.origin, "/v1/sessions/solo/events")).status, 401);
   } finally {
     await running.close();
@@ -251,6 +287,8 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
     allowedOrigins: [browserOrigin],
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
   }, 0);
   let socket: WebSocket | undefined;
   try {
@@ -307,7 +345,11 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
       { method: "POST", token, body: { session_id: "browser-room" } },
     );
     const ticket = ticketResponse.body.data.ticket;
-    socket = new WebSocket(`${running.origin.replace("http", "ws")}${ticketResponse.body.data.websocket_url}?ticket=${encodeURIComponent(ticket)}`);
+    socket = new WebSocket(
+      `${running.origin.replace("http", "ws")}${ticketResponse.body.data.websocket_url}`,
+      ["relayroom-v1", `relayroom-ticket.${ticket}`],
+      { origin: browserOrigin },
+    );
     await new Promise<void>((resolve, reject) => {
       socket?.once("open", resolve);
       socket?.once("error", reject);
@@ -318,7 +360,11 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
     socket.close();
     socket = undefined;
 
-    const reused = new WebSocket(`${running.origin.replace("http", "ws")}/v1/ws?ticket=${encodeURIComponent(ticket)}`);
+    const reused = new WebSocket(
+      `${running.origin.replace("http", "ws")}/v1/ws`,
+      ["relayroom-v1", `relayroom-ticket.${ticket}`],
+      { origin: browserOrigin },
+    );
     reused.on("error", () => {});
     const status = await new Promise<number>((resolve) => {
       reused.once("unexpected-response", (_request, response) => {
@@ -329,6 +375,184 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
       reused.once("open", () => resolve(101));
     });
     assert.equal(status, 401);
+  } finally {
+    socket?.terminate();
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("network bootstrap, URL credentials, direct bearer sockets, and unapproved origins fail closed", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "acp-boundary-"));
+  const allowedOrigin = "https://relayroom.example.ts.net";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    allowedOrigins: [allowedOrigin],
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: false,
+    secureTransport: true,
+  }, 0);
+  try {
+    const owner = running.database.bootstrapIdentity({
+      user_id: "owner",
+      display_name: "Owner",
+      device_id: "owner-device",
+      device_name: "Laptop",
+    });
+    const bootstrap = await api<{ error: { code: string } }>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { display_name: "Attacker", device_name: "Browser" },
+    });
+    assert.equal(bootstrap.status, 401);
+    assert.equal(bootstrap.body.error.code, "unauthorized");
+
+    const queryCredential = await api<{ error: { code: string } }>(
+      running.origin,
+      `/v1/me?access_token=${encodeURIComponent(owner.token)}`,
+    );
+    assert.equal(queryCredential.status, 401);
+    assert.equal(queryCredential.body.error.code, "unauthorized");
+
+    const removedIdentityMint = await api<{ error: { code: string } }>(running.origin, "/v1/users", {
+      method: "POST",
+      token: owner.token,
+      body: { display_name: "Forged", device_name: "Forged" },
+    });
+    assert.equal(removedIdentityMint.status, 404);
+
+    const health = await fetch(`${running.origin}/health`);
+    assert.equal(health.headers.get("x-content-type-options"), "nosniff");
+    assert.match(health.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+    assert.match(health.headers.get("strict-transport-security") ?? "", /max-age=/);
+
+    const directBearer = new WebSocket(`${running.origin.replace("http", "ws")}/v1/ws`, {
+      headers: { authorization: `Bearer ${owner.token}` },
+    });
+    directBearer.on("error", () => {});
+    const directStatus = await new Promise<number>((resolve) => {
+      directBearer.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      directBearer.once("open", () => resolve(101));
+    });
+    assert.equal(directStatus, 401);
+
+    await api(running.origin, "/v1/sessions", {
+      method: "POST",
+      token: owner.token,
+      body: { session_id: "room", idempotency_key: "create-boundary-room", mode: "multi", title: "Room" },
+    });
+    const ticket = await api<{ data: { ticket: string; websocket_url: string } }>(running.origin, "/v1/realtime-ticket", {
+      method: "POST",
+      token: owner.token,
+      body: { session_id: "room" },
+    });
+    const wrongOrigin = new WebSocket(
+      `${running.origin.replace("http", "ws")}${ticket.body.data.websocket_url}`,
+      ["relayroom-v1", `relayroom-ticket.${ticket.body.data.ticket}`],
+      { origin: "https://attacker.invalid" },
+    );
+    wrongOrigin.on("error", () => {});
+    const wrongOriginStatus = await new Promise<number>((resolve) => {
+      wrongOrigin.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      wrongOrigin.once("open", () => resolve(101));
+    });
+    assert.equal(wrongOriginStatus, 401);
+
+    const missingOrigin = new WebSocket(
+      `${running.origin.replace("http", "ws")}${ticket.body.data.websocket_url}`,
+      ["relayroom-v1", `relayroom-ticket.${ticket.body.data.ticket}`],
+    );
+    missingOrigin.on("error", () => {});
+    const missingOriginStatus = await new Promise<number>((resolve) => {
+      missingOrigin.once("unexpected-response", (_request, response) => {
+        response.resume();
+        resolve(response.statusCode ?? 0);
+      });
+      missingOrigin.once("open", () => resolve(101));
+    });
+    assert.equal(missingOriginStatus, 401);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("owner host serves only the configured static tree without authentication", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "acp-static-"));
+  const staticDirectory = join(directory, "public");
+  mkdirSync(join(staticDirectory, "assets"), { recursive: true });
+  writeFileSync(join(staticDirectory, "index.html"), "<!doctype html><title>Relayroom</title>");
+  writeFileSync(join(staticDirectory, "assets", "app.js"), "export const ready = true;\n");
+  writeFileSync(join(directory, "private.txt"), "must not leak");
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    staticDirectory,
+  }, 0);
+  try {
+    const index = await fetch(`${running.origin}/`);
+    assert.equal(index.status, 200);
+    assert.equal(index.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.match(await index.text(), /Relayroom/);
+
+    const asset = await fetch(`${running.origin}/assets/app.js`);
+    assert.equal(asset.status, 200);
+    assert.equal(asset.headers.get("content-type"), "text/javascript; charset=utf-8");
+
+    const traversal = await fetch(`${running.origin}/..%2Fprivate.txt`);
+    assert.notEqual(traversal.status, 200);
+    assert.doesNotMatch(await traversal.text(), /must not leak/);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("revoking a device closes its realtime socket and invalidates delegated authorizations", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "acp-revoke-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  let socket: WebSocket | undefined;
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    await api(running.origin, "/v1/sessions", {
+      method: "POST",
+      token: owner.body.data.token,
+      body: { session_id: "revocation-room", idempotency_key: "create-revocation-room", mode: "multi", title: "Revocation" },
+    });
+    const delegated = await api<{ data: { authorization_token: string } }>(running.origin, "/v1/device-authorizations", {
+      method: "POST",
+      token: owner.body.data.token,
+    });
+    socket = await realtimeSocket(running.origin, owner.body.data.token, "revocation-room");
+    const subscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
+    socket.send(JSON.stringify({ type: "subscribe", session_id: "revocation-room", after_sequence: 0 }));
+    await subscribed;
+    const closed = new Promise<number>((resolve) => socket?.once("close", resolve));
+    const revoked = await api(running.origin, "/v1/devices/owner-device", {
+      method: "DELETE",
+      token: owner.body.data.token,
+    });
+    assert.equal(revoked.status, 204);
+    assert.equal(await closed, 1008);
+    socket = undefined;
+    const recovered = await api<{ error: { code: string } }>(running.origin, "/v1/device-authorizations/claim", {
+      method: "POST",
+      body: { authorization_token: delegated.body.data.authorization_token, device_name: "Unexpected recovery" },
+    });
+    assert.equal(recovered.status, 401);
+    assert.equal(recovered.body.error.code, "unauthorized");
   } finally {
     socket?.terminate();
     await running.close();

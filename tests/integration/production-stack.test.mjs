@@ -29,14 +29,11 @@ test("production server and local bridge complete a provenance-labelled agent tu
   const directory = mkdtempSync(join(tmpdir(), "acp-production-stack-"));
   const running = await startCollaborationServer({ databasePath: join(directory, "stack.sqlite") }, 0);
   try {
-    const identity = await request(running.origin, "/v1/bootstrap", {
-      method: "POST",
-      body: {
-        user_id: "alice",
-        display_name: "Alice",
-        device_id: "alice-laptop",
-        device_name: "Alice laptop",
-      },
+    const identity = running.database.bootstrapIdentity({
+      user_id: "alice",
+      display_name: "Alice",
+      device_id: "alice-laptop",
+      device_name: "Alice laptop",
     });
     const token = identity.token;
     await request(running.origin, "/v1/sessions", {

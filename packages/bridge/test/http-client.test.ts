@@ -58,6 +58,20 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   });
   assert.equal(JSON.parse(String(requests[3]?.init.body)).capture_fidelity, "harness_transcript");
   assert.equal(requests[0]?.init.headers && new Headers(requests[0].init.headers).get("authorization"), "Bearer secret-token");
+  assert.equal(requests[0]?.init.redirect, "error");
+});
+
+test("HTTP client redacts its bearer credential from server errors", async () => {
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async () => Response.json({ error: "rejected secret-token" }, { status: 401 }),
+  });
+  await assert.rejects(client.listSessions(), (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.message, "Collaboration API 401: rejected [REDACTED]");
+    return true;
+  });
 });
 
 function runtimeRegistration(): RuntimeRegistration {

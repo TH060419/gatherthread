@@ -1,5 +1,41 @@
 export const SESSION_MODES = Object.freeze(["solo", "multi"]);
 export const MEMBER_ROLES = Object.freeze(["owner", "participant", "viewer"]);
+export const INVITATION_ROLES = Object.freeze(["participant", "viewer"]);
+export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
+
+export function invitationStatus(invitation, now = Date.now()) {
+  if (invitation.revokedAt ?? invitation.revoked_at) return "revoked";
+  if (invitation.claimedAt ?? invitation.claimed_at) return "claimed";
+  if (invitation.expiredAt ?? invitation.expired_at) return "expired";
+  const expiresAt = invitation.expiresAt ?? invitation.expires_at;
+  if (expiresAt && new Date(expiresAt).getTime() <= now) return "expired";
+  return "pending";
+}
+
+export function normalizeInvitation(invitation) {
+  const normalized = {
+    id: invitation.id,
+    sessionId: invitation.session_id ?? invitation.sessionId,
+    inviterUserId: invitation.inviter_user_id ?? invitation.inviterUserId,
+    role: invitation.role,
+    createdAt: invitation.created_at ?? invitation.createdAt,
+    expiresAt: invitation.expires_at ?? invitation.expiresAt,
+    revokedAt: invitation.revoked_at ?? invitation.revokedAt ?? null,
+    expiredAt: invitation.expired_at ?? invitation.expiredAt ?? null,
+    claimedAt: invitation.claimed_at ?? invitation.claimedAt ?? null,
+    claimedByUserId: invitation.claimed_by_user_id ?? invitation.claimedByUserId ?? null,
+  };
+  return { ...normalized, status: invitationStatus(normalized) };
+}
+
+export function invitationStatusLabel(status) {
+  return {
+    pending: "Pending",
+    claimed: "Accepted",
+    revoked: "Revoked",
+    expired: "Expired",
+  }[status] ?? "Unknown";
+}
 
 export function canAppend({ session, currentUser, connectionPhase, kind }) {
   if (!session || !currentUser) return { allowed: false, reason: "Choose a session first." };

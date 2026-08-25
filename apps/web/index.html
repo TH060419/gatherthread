@@ -43,11 +43,38 @@
             required
             aria-describedby="token-help login-error"
           />
-          <p id="token-help" class="field-help">For the preview, use <code>demo-token</code>.</p>
+          <p id="token-help" class="field-help">Enter the access token issued by this owner host.</p>
           <p id="login-error" class="form-error" role="alert"></p>
           <button class="button button-primary button-wide" type="submit">
             Continue <span aria-hidden="true">→</span>
           </button>
+        </form>
+        <div class="auth-divider" aria-hidden="true"><span>or join with an invitation</span></div>
+        <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
+          <label for="claim-invite-secret">Invitation secret</label>
+          <input
+            id="claim-invite-secret"
+            name="invite-secret"
+            type="password"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+            aria-describedby="claim-invite-help claim-invite-error"
+          />
+          <p id="claim-invite-help" class="field-help">Paste the secret you received. It stays only in this tab's memory.</p>
+          <div class="claim-identity-grid">
+            <div>
+              <label for="claim-display-name">Display name</label>
+              <input id="claim-display-name" name="display-name" autocomplete="name" required maxlength="120" />
+            </div>
+            <div>
+              <label for="claim-device-name">Device name</label>
+              <input id="claim-device-name" name="device-name" autocomplete="off" required maxlength="120" value="This browser" />
+            </div>
+          </div>
+          <p id="claim-invite-error" class="form-error" role="alert"></p>
+          <button class="button button-secondary button-wide" type="submit">Join workspace</button>
         </form>
       </section>
     </main>
@@ -191,6 +218,66 @@
             </button>
           </div>
           <ul id="member-list" class="member-list"></ul>
+          <section class="invitation-card" aria-labelledby="join-session-title">
+            <h3 id="join-session-title">Join another session</h3>
+            <form id="accept-invitation-form" autocomplete="off">
+              <label for="accept-invite-secret">Invitation secret</label>
+              <input
+                id="accept-invite-secret"
+                name="invite-secret"
+                type="password"
+                autocomplete="off"
+                autocapitalize="none"
+                spellcheck="false"
+                required
+                aria-describedby="accept-invite-help accept-invite-error"
+              />
+              <p id="accept-invite-help" class="field-help">Use this when you are already signed in.</p>
+              <p id="accept-invite-error" class="form-error" role="alert"></p>
+              <button class="button button-secondary button-wide" type="submit">Accept invitation</button>
+            </form>
+          </section>
+          <section id="owner-invitations" class="invitation-card" aria-labelledby="owner-invitations-title" hidden>
+            <div class="invitation-heading">
+              <div>
+                <p class="eyebrow">Owner controls</p>
+                <h3 id="owner-invitations-title">Invitations</h3>
+              </div>
+              <button id="refresh-invitations-button" class="text-button" type="button">Refresh</button>
+            </div>
+            <form id="create-invitation-form">
+              <div class="invitation-options">
+                <div>
+                  <label for="invitation-role">Role</label>
+                  <select id="invitation-role" name="role">
+                    <option value="participant">Participant</option>
+                    <option value="viewer">Viewer</option>
+                  </select>
+                </div>
+                <div>
+                  <label for="invitation-ttl">Expires in</label>
+                  <select id="invitation-ttl" name="ttl">
+                    <option value="1h">1 hour</option>
+                    <option value="24h" selected>24 hours</option>
+                    <option value="7d">7 days</option>
+                  </select>
+                </div>
+              </div>
+              <p id="create-invitation-error" class="form-error" role="alert"></p>
+              <button class="button button-primary button-wide" type="submit">Create invitation</button>
+            </form>
+            <div id="created-invitation" class="created-invitation" role="status" aria-live="polite" hidden>
+              <strong>Copy this secret now</strong>
+              <p>It is shown once and cannot be retrieved later.</p>
+              <div class="secret-copy-row">
+                <code id="created-invite-secret"></code>
+                <button id="copy-invite-secret-button" class="button button-secondary" type="button">Copy</button>
+              </div>
+              <p id="copy-invite-status" class="field-help" aria-live="polite"></p>
+            </div>
+            <p id="invitation-list-status" class="field-help" role="status" aria-live="polite"></p>
+            <ul id="invitation-list" class="invitation-list" aria-label="Session invitations"></ul>
+          </section>
           <section class="integrity-card" aria-labelledby="integrity-title">
             <span class="integrity-icon" aria-hidden="true">✓</span>
             <div>

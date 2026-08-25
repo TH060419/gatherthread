@@ -35,3 +35,10 @@ export function notFound(resource: string): ApiError {
 export function unauthorized(message = "A valid bearer token is required"): ApiError {
   return new ApiError(401, "unauthorized", message);
 }
+
+export function storageQuotaExceeded(scope: "event" | "user" | "session" | "deployment", limitBytes: number): ApiError {
+  return new ApiError(507, "storage_quota_exceeded", `${scope} event storage quota exceeded`, {
+    scope,
+    limit_bytes: limitBytes,
+  });
+}

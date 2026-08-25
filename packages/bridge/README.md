@@ -16,4 +16,46 @@ Transcript roots have no implicit defaults and are configured separately for `co
 
 Context snapshots require an explicit fidelity. Reconstructed canonical history is labelled `canonical_history`; parsed local logs are labelled `harness_transcript`. The snapshot fidelity must match the server-registered runtime fidelity, so the server-derived provenance cannot contradict the payload. `provider_request` is disabled by default and requires both service authorization and a caller assertion that an authorized hook or proxy observed the exact request. The bridge cannot independently verify a dishonest caller assertion.
 
-Agent completion follows the server's single-response contract: tool events are appended idempotently, then the claimed request is completed as one canonical `agent_response`. A failed claim expires or is resolved according to server policy; this package does not currently expose claim abandonment.
+Agent completion follows the server's single-response contract: tool events are appended idempotently, then the claimed request is completed as one canonical `agent_response`. The alpha does not yet implement claim abandonment or lease expiry. If a bridge crashes after claiming, that request remains stuck and the session owner must submit a replacement request.
+
+## Local worker executable
+
+Build the workspace and run `relayroom-bridge` (or `npm --workspace packages/bridge start`). The executable accepts no command-line configuration. Relayroom credentials are read only from `RELAYROOM_TOKEN`, are removed from the adapter child process environment, and are never printed or passed as process arguments.
+
+Required environment:
+
+- `RELAYROOM_API_URL`: complete Relayroom API root, such as `https://relay.example/v1`; plain HTTP is accepted only for a loopback host
+- `RELAYROOM_TOKEN`: bearer token
+- `RELAYROOM_SESSION_ID`, `RELAYROOM_DEVICE_ID`, `RELAYROOM_LOCAL_SESSION_ID`: session-scoped runtime identity
+- `RELAYROOM_HARNESS`: `codex` or `claude-code`
+- `RELAYROOM_PROVIDER`, `RELAYROOM_MODEL`: runtime provenance
+- `RELAYROOM_ADAPTER_COMMAND`: an explicit executable path or command name implementing the adapter contract below
+
+Optional environment:
+
+- `RELAYROOM_ADAPTER_ARGS_JSON`: JSON string array of adapter arguments; the Relayroom token is rejected if embedded here
+- `RELAYROOM_CURSOR_PATH`: durable cursor file; defaults to `~/.relayroom/bridge-cursor.json`
+- `RELAYROOM_CAPABILITIES_JSON`: JSON string array registered with the runtime
+- `RELAYROOM_POLL_INTERVAL_MS`, `RELAYROOM_POLL_LIMIT`
+- `RELAYROOM_REQUEST_TIMEOUT_MS`, `RELAYROOM_ADAPTER_TIMEOUT_MS`, `RELAYROOM_ADAPTER_MAX_OUTPUT_BYTES`
+
+The worker registers exactly one runtime for one Relayroom session, reads canonical events after the persisted server cursor, claims each `agent_request`, supplies canonical history through that request to the configured adapter, validates and redacts the adapter result, then completes the claim. The cursor advances only after the corresponding event has been handled. `SIGINT` and `SIGTERM` abort in-flight HTTP and adapter work and close the polling loop.
+
+The adapter is a real executable boundary, not a built-in Codex or Claude Code invocation. For each claim it receives one `HarnessExecutionInput` JSON object followed by a newline on stdin. It must write one `HarnessExecutionResult` JSON object to stdout and exit successfully. stdout must contain only that object. A minimal result is:
+
+```json
+{
+  "localSessionId": "local-harness-session",
+  "events": [
+    {
+      "kind": "assistant",
+      "localEventId": "stable-local-event-id",
+      "harness": "codex",
+      "captureFidelity": "harness_transcript",
+      "content": "answer"
+    }
+  ]
+}
+```
+
+The executable does not invent a harness command. Deployments must explicitly configure an adapter that knows how to call their authorized local harness and translate its observed transcript into this contract.

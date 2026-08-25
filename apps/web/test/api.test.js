@@ -70,7 +70,141 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
     assert.equal(replay.next_after_sequence, 2);
     assert.equal(requests[0].url, "https://relay.example/v1/me");
     assert.equal(requests[0].options.headers.Authorization, "Bearer secret-token");
+    api.clearCredential();
+    assert.equal(api.token, "");
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP invitation API uses exact routes, keeps secrets out of list records, and adopts claimed credentials in memory", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const record = {
+    id: "i1",
+    session_id: "s1",
+    inviter_user_id: "owner",
+    role: "participant",
+    created_at: "2026-08-25T00:00:00.000Z",
+    expires_at: "2026-08-26T00:00:00.000Z",
+    revoked_at: null,
+    expired_at: null,
+    claimed_at: null,
+    claimed_by_user_id: null,
+    claimed_by_device_id: null,
+  };
+  const responses = [
+    { data: { invitation: record, invite_token: "invite-secret-value-that-is-long-enough" } },
+    { data: { invitations: [record] } },
+    { data: { invitation: { ...record, revoked_at: "2026-08-25T01:00:00.000Z" } } },
+    { data: { actor: { user_id: "existing", display_name: "Existing", device_id: "d1" }, invitation: { ...record, claimed_at: "2026-08-25T01:00:00.000Z" }, event: {} } },
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return new Response(JSON.stringify(responses.shift()), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://relay.example", token: "member-token" });
+    const created = await api.createInvitation("s1", { role: "participant", ttl: "7d" });
+    assert.equal(created.inviteToken, "invite-secret-value-that-is-long-enough");
+    assert.equal((await api.listInvitations("s1"))[0].status, "pending");
+    assert.equal((await api.revokeInvitation("s1", "i1")).status, "revoked");
+    assert.equal((await api.acceptInvitation("existing-secret")).invitation.sessionId, "s1");
+
+    assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
+      ["POST", "https://relay.example/v1/sessions/s1/invitations"],
+      ["GET", "https://relay.example/v1/sessions/s1/invitations"],
+      ["DELETE", "https://relay.example/v1/sessions/s1/invitations/i1"],
+      ["POST", "https://relay.example/v1/invitations/accept"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[0].options.body), { role: "participant", ttl: "7d" });
+    assert.deepEqual(JSON.parse(requests[3].options.body), { invite_token: "existing-secret" });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("new-user invitation claim is unauthenticated and stores only the returned device credential", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return new Response(JSON.stringify({ data: {
+      actor: { user_id: "new-user", display_name: "New User", device_id: "new-device" },
+      token: "new-device-token",
+      invitation: {
+        id: "i1",
+        session_id: "s1",
+        inviter_user_id: "owner",
+        role: "viewer",
+        created_at: "2026-08-25T00:00:00.000Z",
+        expires_at: "2026-08-26T00:00:00.000Z",
+        revoked_at: null,
+        expired_at: null,
+        claimed_at: "2026-08-25T01:00:00.000Z",
+        claimed_by_user_id: "new-user",
+        claimed_by_device_id: "new-device",
+      },
+    } }), { status: 201, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://relay.example" });
+    const claimed = await api.claimInvitation({
+      inviteToken: "one-use-invitation-secret-that-is-long",
+      displayName: "New User",
+      deviceName: "Work laptop",
+    });
+    assert.equal(claimed.actor.username, "New User");
+    assert.equal(claimed.invitation.status, "claimed");
+    assert.equal(api.token, "new-device-token");
+    assert.equal(captured.url, "https://relay.example/v1/invitations/claim");
+    assert.equal(captured.options.headers.Authorization, undefined);
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      invite_token: "one-use-invitation-secret-that-is-long",
+      display_name: "New User",
+      device_name: "Work laptop",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("realtime ticket is carried by WebSocket subprotocol and never placed in the URL", async () => {
+  const originalFetch = globalThis.fetch;
+  const OriginalWebSocket = globalThis.WebSocket;
+  const sockets = [];
+  globalThis.fetch = async () => new Response(JSON.stringify({ data: {
+    ticket: "one-use-ticket-secret",
+    websocket_url: "/v1/ws",
+    expires_at: "2026-08-25T00:00:30.000Z",
+  } }), { status: 201, headers: { "content-type": "application/json" } });
+  globalThis.WebSocket = class FakeWebSocket {
+    constructor(url, protocols) {
+      this.url = String(url);
+      this.protocols = protocols;
+      this.listeners = new Map();
+      sockets.push(this);
+    }
+
+    addEventListener(type, listener) {
+      this.listeners.set(type, listener);
+    }
+
+    close() {}
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://relay.example", token: "member-token" });
+    await api.openRealtime({
+      sessionId: "s1",
+      afterSequence: 0,
+      onEvent() {},
+      onState() {},
+    });
+    assert.equal(sockets[0].url, "wss://relay.example/v1/ws");
+    assert.equal(new URL(sockets[0].url).search, "");
+    assert.deepEqual(sockets[0].protocols, ["relayroom-v1", "relayroom-ticket.one-use-ticket-secret"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    globalThis.WebSocket = OriginalWebSocket;
   }
 });

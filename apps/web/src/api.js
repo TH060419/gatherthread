@@ -1,4 +1,4 @@
-import { createIdempotencyKey } from "./domain.js";
+import { createIdempotencyKey, normalizeInvitation } from "./domain.js";
 
 export class ApiError extends Error {
   constructor(message, { status = 0, code = "unknown" } = {}) {
@@ -22,7 +22,7 @@ export class HttpCollaborationApi {
       ...options,
       headers: {
         Accept: "application/json",
-        Authorization: `Bearer ${this.token}`,
+        ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...options.headers,
       },
@@ -41,9 +41,18 @@ export class HttpCollaborationApi {
 
   async authenticate(token = this.token) {
     this.token = token;
-    const actor = await this.request("/v1/me");
-    this.actors.set(actor.id, actor.username);
-    return actor;
+    try {
+      const actor = await this.request("/v1/me");
+      this.actors.set(actor.id, actor.username);
+      return actor;
+    } catch (error) {
+      this.token = "";
+      throw error;
+    }
+  }
+
+  clearCredential() {
+    this.token = "";
   }
 
   async listSessions() {
@@ -101,6 +110,59 @@ export class HttpCollaborationApi {
     });
   }
 
+  async createInvitation(sessionId, { role, ttl = "24h" }) {
+    const result = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/invitations`, {
+      method: "POST",
+      body: JSON.stringify({ role, ttl }),
+    });
+    return {
+      invitation: normalizeInvitation(result.invitation),
+      inviteToken: result.invite_token,
+    };
+  }
+
+  async listInvitations(sessionId) {
+    const { invitations } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/invitations`);
+    return invitations.map(normalizeInvitation);
+  }
+
+  async revokeInvitation(sessionId, invitationId) {
+    const { invitation } = await this.request(
+      `/v1/sessions/${encodeURIComponent(sessionId)}/invitations/${encodeURIComponent(invitationId)}`,
+      { method: "DELETE" },
+    );
+    return normalizeInvitation(invitation);
+  }
+
+  async claimInvitation({ inviteToken, displayName, deviceName, userId, deviceId }) {
+    const result = await this.request("/v1/invitations/claim", {
+      method: "POST",
+      body: JSON.stringify({
+        invite_token: inviteToken,
+        display_name: displayName,
+        device_name: deviceName,
+        ...(userId ? { user_id: userId } : {}),
+        ...(deviceId ? { device_id: deviceId } : {}),
+      }),
+    });
+    this.token = result.token;
+    const actor = {
+      id: result.actor.user_id,
+      username: result.actor.display_name,
+      device_id: result.actor.device_id,
+    };
+    this.actors.set(actor.id, actor.username);
+    return { actor, invitation: normalizeInvitation(result.invitation) };
+  }
+
+  async acceptInvitation(inviteToken) {
+    const result = await this.request("/v1/invitations/accept", {
+      method: "POST",
+      body: JSON.stringify({ invite_token: inviteToken }),
+    });
+    return { ...result, invitation: normalizeInvitation(result.invitation) };
+  }
+
   async replayEvents(sessionId, { afterSequence, limit = 100 }) {
     const query = new URLSearchParams({
       after_sequence: String(afterSequence),
@@ -145,8 +207,7 @@ export class HttpCollaborationApi {
     });
     const socketUrl = new URL(websocketUrl, this.baseUrl || globalThis.location?.origin);
     socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
-    socketUrl.searchParams.set("ticket", ticket);
-    const socket = new WebSocket(socketUrl);
+    const socket = new WebSocket(socketUrl, ["relayroom-v1", `relayroom-ticket.${ticket}`]);
     socket.addEventListener("open", () => {
       socket.send(JSON.stringify({ type: "subscribe", session_id: sessionId, after_sequence: afterSequence }));
     });
@@ -217,6 +278,8 @@ export class MockCollaborationApi {
     this.currentUser = users.avery;
     this.listeners = new Map();
     this.idempotentEvents = new Map();
+    this.invitations = new Map();
+    this.credential = "";
     this.sessions = [
       {
         id: "session-orbit",
@@ -308,6 +371,10 @@ export class MockCollaborationApi {
     return structuredClone(this.currentUser);
   }
 
+  clearCredential() {
+    this.credential = "";
+  }
+
   async listSessions() {
     await this.#wait();
     return this.sessions.map((session) => this.#summary(session));
@@ -352,6 +419,84 @@ export class MockCollaborationApi {
   async listMembers(sessionId) {
     await this.#wait();
     return structuredClone(this.#findSession(sessionId).members);
+  }
+
+  async createInvitation(sessionId, { role, ttl = "24h" }) {
+    await this.#wait();
+    const session = this.#findSession(sessionId);
+    const membership = session.members.find((member) => member.userId === this.currentUser.id);
+    if (membership?.role !== "owner") throw new ApiError("Only the owner can create invitations.", { status: 403, code: "forbidden" });
+    const ttlMs = { "1h": 3_600_000, "24h": 86_400_000, "7d": 604_800_000 }[ttl];
+    if (!new Set(["participant", "viewer"]).has(role) || !ttlMs) {
+      throw new ApiError("Choose a valid role and expiry.", { status: 422, code: "invalid_invitation" });
+    }
+    const id = `invite-${createIdempotencyKey("mock").split(":").at(-1)}`;
+    const inviteToken = `mock-invite-${createIdempotencyKey("secret")}`;
+    const invitation = normalizeInvitation({
+      id,
+      session_id: sessionId,
+      inviter_user_id: this.currentUser.id,
+      role,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + ttlMs).toISOString(),
+      revoked_at: null,
+      expired_at: null,
+      claimed_at: null,
+      claimed_by_user_id: null,
+    });
+    this.invitations.set(id, { ...invitation, inviteToken });
+    return { invitation: structuredClone(invitation), inviteToken };
+  }
+
+  async listInvitations(sessionId) {
+    await this.#wait();
+    this.#findSession(sessionId);
+    return [...this.invitations.values()]
+      .filter((invitation) => invitation.sessionId === sessionId)
+      .map(({ inviteToken: _inviteToken, ...invitation }) => structuredClone(normalizeInvitation(invitation)));
+  }
+
+  async revokeInvitation(sessionId, invitationId) {
+    await this.#wait();
+    this.#findSession(sessionId);
+    const invitation = this.invitations.get(invitationId);
+    if (!invitation || invitation.sessionId !== sessionId) throw new ApiError("Invitation not found.", { status: 404, code: "not_found" });
+    if (invitation.status !== "pending") throw new ApiError("Only pending invitations can be revoked.", { status: 409, code: "conflict" });
+    invitation.revokedAt = new Date().toISOString();
+    return structuredClone(normalizeInvitation(invitation));
+  }
+
+  async claimInvitation({ inviteToken, displayName, deviceName }) {
+    await this.#wait();
+    const invitation = [...this.invitations.values()].find((item) => item.inviteToken === inviteToken);
+    if (!invitation || normalizeInvitation(invitation).status !== "pending") {
+      throw new ApiError("Invitation is invalid or unavailable.", { status: 401, code: "unauthorized" });
+    }
+    if (!displayName?.trim() || !deviceName?.trim()) throw new ApiError("Name and device name are required.", { status: 422, code: "invalid_claim" });
+    const actor = { id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`, username: displayName.trim() };
+    this.currentUser = actor;
+    this.credential = `mock-device-${createIdempotencyKey("token")}`;
+    const session = this.#findSession(invitation.sessionId);
+    session.members.push({ ...actor, userId: actor.id, role: invitation.role, runtime: null });
+    invitation.claimedAt = new Date().toISOString();
+    invitation.claimedByUserId = actor.id;
+    return { actor: structuredClone(actor), invitation: structuredClone(normalizeInvitation(invitation)) };
+  }
+
+  async acceptInvitation(inviteToken) {
+    await this.#wait();
+    const invitation = [...this.invitations.values()].find((item) => item.inviteToken === inviteToken);
+    if (!invitation || normalizeInvitation(invitation).status !== "pending") {
+      throw new ApiError("Invitation is invalid or unavailable.", { status: 401, code: "unauthorized" });
+    }
+    const session = this.#findSession(invitation.sessionId);
+    if (session.members.some((member) => member.userId === this.currentUser.id)) {
+      throw new ApiError("You are already a member of this session.", { status: 409, code: "conflict" });
+    }
+    session.members.push({ ...this.currentUser, userId: this.currentUser.id, role: invitation.role, runtime: null });
+    invitation.claimedAt = new Date().toISOString();
+    invitation.claimedByUserId = this.currentUser.id;
+    return { actor: structuredClone(this.currentUser), invitation: structuredClone(normalizeInvitation(invitation)) };
   }
 
   async replayEvents(sessionId, { afterSequence, limit = 100 }) {

@@ -92,6 +92,45 @@ export class LocalBridge {
     return page.events;
   }
 
+  async processPendingAgentRequests(
+    executor: HarnessExecutor,
+    limit = 200,
+  ): Promise<{ examined: number; claimed: number; completed: number }> {
+    const runtime = this.#requireRuntime();
+    const state = await this.#cursorStore.load();
+    const afterSequence = state.server[runtime.sessionId] ?? 0;
+    const page = await this.#api.readEvents(runtime.sessionId, afterSequence, limit);
+    let cursor = afterSequence;
+    let claimed = 0;
+    let completed = 0;
+    for (const event of page.events) {
+      if (event.sequence <= cursor) continue;
+      if (event.sessionId !== runtime.sessionId) {
+        throw new Error("Collaboration API returned an event for a different session");
+      }
+      if (event.type === "agent_request") {
+        const result = await this.processAgentRequest(event, executor);
+        if (result.claimed) {
+          claimed += 1;
+          completed += result.completed.length;
+        }
+      }
+      cursor = event.sequence;
+      await this.#cursorStore.save({
+        ...state,
+        server: { ...state.server, [runtime.sessionId]: cursor },
+      });
+    }
+    const nextCursor = Math.max(cursor, page.nextSequence);
+    if (nextCursor !== cursor) {
+      await this.#cursorStore.save({
+        ...state,
+        server: { ...state.server, [runtime.sessionId]: nextCursor },
+      });
+    }
+    return { examined: page.events.length, claimed, completed };
+  }
+
   async importTranscript(
     sessionId: string,
     harness: HarnessName,

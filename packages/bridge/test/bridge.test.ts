@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
+  BridgeDaemon,
   LocalBridge,
   MemoryCursorStore,
   type AppendEventInput,
@@ -166,6 +167,80 @@ test("agent request claim hydrates canonical history and completes with redacted
   });
   assert.equal(result.claimed, true);
   assert.equal((api.completeInput?.payload as any).text, "[REDACTED]");
+});
+
+test("pending request polling persists the server cursor only after execution completes", async () => {
+  const api = new FakeApi();
+  const cursorStore = new MemoryCursorStore();
+  const request = canonical("session-1", 2, {
+    type: "agent_request",
+    idempotencyKey: "request",
+    payload: { text: "answer" },
+  });
+  api.history.push(
+    canonical("session-1", 1, { type: "human_chat", idempotencyKey: "chat", payload: {} }),
+    request,
+  );
+  const bridge = new LocalBridge({
+    api,
+    cursorStore,
+    runtime: runtimeRegistration(),
+    transcriptRoots: {},
+  });
+  await bridge.connect();
+  await assert.rejects(bridge.processPendingAgentRequests({
+    async execute() { throw new Error("adapter failed"); },
+  }), /adapter failed/);
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
+
+  const result = await bridge.processPendingAgentRequests({
+    async execute() {
+      return { events: [{
+        kind: "assistant",
+        localEventId: "answer-2",
+        harness: "codex",
+        captureFidelity: "harness_transcript",
+        content: "done",
+      }] };
+    },
+  });
+  assert.equal(result.claimed, 1);
+  assert.equal((await cursorStore.load()).server["session-1"], 2);
+});
+
+test("bridge daemon exits cleanly when its abort signal is raised", async () => {
+  const api = new FakeApi();
+  api.history.push(canonical("session-1", 1, {
+    type: "agent_request",
+    idempotencyKey: "request",
+    payload: { text: "answer" },
+  }));
+  const bridge = new LocalBridge({
+    api,
+    cursorStore: new MemoryCursorStore(),
+    runtime: runtimeRegistration(),
+    transcriptRoots: {},
+  });
+  const shutdown = new AbortController();
+  const daemon = new BridgeDaemon({
+    bridge,
+    signal: shutdown.signal,
+    pollIntervalMs: 60_000,
+    executor: {
+      async execute() {
+        shutdown.abort();
+        return { events: [{
+          kind: "assistant",
+          localEventId: "answer-3",
+          harness: "codex",
+          captureFidelity: "harness_transcript",
+          content: "done",
+        }] };
+      },
+    },
+  });
+  await daemon.run();
+  assert.equal(api.completeInput?.payload && (api.completeInput.payload as any).text, "done");
 });
 
 function canonical(

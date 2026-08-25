@@ -5,12 +5,17 @@ Significant architectural choices and their rationale are recorded in the [ADR i
 ## Components
 
 ```text
-Browser / CLI ── HTTPS + WebSocket ── Collaboration server ── SQLite WAL
-                                           │
-                                           │ MCP over Streamable HTTP
-                                           │
-Local bridge ── transcript adapter ── local Codex / Claude Code session
+Collaborator browser / CLI ── private HTTPS + WSS over Tailscale Serve ─┐
+                                                                       │
+Host loopback ── Collaboration server ── SQLite WAL                    │
+                       │                                               │
+                       ├── same-origin Web client                      │
+                       └── MCP collaboration surface                   │
+                                                                       │
+Collaborator local bridge ── transcript adapter ── local harness ──────┘
 ```
+
+One deployment has one active authoritative host as defined by [ADR-0003](adr/0003-single-owner-hosted-deployment.md). Different collaborators keep their harnesses and credentials local; they do not share or replicate the SQLite file.
 
 ## Repository layout
 
@@ -32,7 +37,7 @@ SQLite runs in WAL mode with foreign keys enabled. A write transaction allocates
 
 ## Realtime protocol
 
-Clients authenticate, subscribe with `session_id` and `after_sequence`, receive replay pages, then transition to live events. Heartbeats detect dead connections. Gaps trigger an HTTP replay rather than trusting best-effort socket delivery.
+Clients authenticate over HTTP, obtain a 30-second one-use session-scoped ticket, and carry it in `Sec-WebSocket-Protocol`. They subscribe with `session_id` and `after_sequence`, receive count-and-byte-bounded replay pages sequentially under socket backpressure, then transition to live events. Heartbeats revalidate the device and detect dead connections. Gaps trigger an authenticated replay rather than trusting best-effort socket delivery.
 
 ## Local bridge
 
@@ -47,9 +52,14 @@ MCP exposes collaboration capabilities but is not assumed to see a host's full c
 ## Security baseline
 
 - Private-by-default sessions and revocable invitations.
+- Local-only first-owner bootstrap; no public registration.
+- One-use session invitations with fixed 1h, 24h, or 7d expiry.
+- One-use ten-minute authorization for each additional device.
 - Server-derived actor identity; clients cannot forge usernames.
-- Hashed bearer credentials and per-device revocation.
+- Peppered HMAC device credentials with use tracking, rotation, and per-device revocation.
 - Strict schema validation and payload size limits.
+- Bounded JSON depth/nodes, byte-paged replay, slow-client cutoff, per-device rate limits, and per-user/session/deployment event quotas.
 - Secret redaction before persistence plus configurable content policy.
 - No remote transfer of local tool approval authority.
 - Audit events for membership, visibility, and retention changes.
+- Loopback-only owner host behind tailnet-only HTTPS; no default public ingress.

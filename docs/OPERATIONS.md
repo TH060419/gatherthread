@@ -2,23 +2,27 @@
 
 ## Release state
 
-This is an operational scaffold for the first release. The application owners must map the proposed environment names in `.env.example` to the server implementation and add service-specific health, migration, and shutdown commands. Do not expose a deployment until those integration points and the production security gates are implemented.
+This guide covers the executable single-process alpha. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. The supported remote path is a loopback owner host behind private Tailscale Serve, not public ingress.
 
 ## Private-by-default startup
 
 The safe local baseline is one process bound to loopback with an on-disk SQLite database under a directory readable only by the service account. Sessions are private, public discovery is disabled, payload logging is disabled, and transcript upload excludes raw thinking and private instructions.
 
-Copy `.env.example` to an ignored local file and set fresh secrets. Never commit the populated file.
+Copy `.env.example` to the ignored `.env`, restrict it to the host account, and set a fresh stable pepper. Never commit the populated file. See `SELF_HOSTING.md` for the exact bootstrap and startup commands.
 
 Production preflight must fail if any of these are absent or unsafe:
 
-- `NODE_ENV=production` with a loopback application bind behind an HTTPS reverse proxy.
-- A cryptographically random `AUTH_TOKEN_PEPPER` supplied through the deployment secret manager.
-- Secure cookies and explicit HTTP and WebSocket origin allowlists.
+- `NODE_ENV=production` with `ACP_SERVER_HOST` restricted to loopback behind Tailscale Serve HTTPS.
+- A cryptographically random `ACP_AUTH_TOKEN_PEPPER` of at least 32 bytes.
+- An exact HTTPS `ACP_PUBLIC_BASE_URL`, explicit origin allowlist, and `ACP_TLS_TERMINATED_BY_PROXY=true`.
 - Private session default and public sessions disabled.
 - Existing writable database and backup directories owned by the service account.
 - Request, event, replay-page, attachment, and WebSocket queue limits.
 - A tested backup plus a restore drill completed for the release schema.
+
+The browser alpha keeps its bearer credential only in JavaScript memory and clears it on reload. A future public deployment requires an HttpOnly secure-cookie session design and a separate security review; memory-only bearer entry is not authorization to expose the service publicly.
+
+The default event limits are 256 KiB per event, 256 MiB per attributed user, 512 MiB per session, and 2 GiB for the deployment. They are logical event charges, not a guarantee of the SQLite/WAL file size. A quota breach returns `storage_quota_exceeded` without allocating a sequence or deleting history. Keep independent free-disk monitoring and raise a limit only with a verified backup and capacity plan.
 
 ## Health and deployment gates
 

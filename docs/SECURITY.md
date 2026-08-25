@@ -4,7 +4,7 @@
 
 This document defines the first-release security boundary for the collaboration server, browser client, MCP surface, local bridge, transcript adapters, and operational tooling.
 
-The repository currently contains contracts and a reference E2E model, not a production server. Controls below are requirements unless a test or implementation review explicitly marks them verified. Passing `npm run verify` does not certify a deployment.
+The repository contains an executable single-process alpha server and owner-host tooling. Automated checks cover core contracts, but passing `npm run verify` does not certify a host, tailnet policy, operating system, backup location, or Internet-facing deployment. Public ingress is unsupported for the first release.
 
 ## Assets and trust boundaries
 
@@ -17,14 +17,18 @@ The main trust boundaries are:
 3. Collaboration server to SQLite and attachment storage.
 4. Bridge to local harness transcripts, provider context, filesystem, and tool approvals.
 5. CI and dependency sources to the build and release artifacts.
+6. Tailscale identity and grants to the loopback-only owner host exposed through Serve.
 
 The collaboration service never inherits authority to approve local tools. Transcript access is opt-in and path-scoped. A remote request cannot broaden filesystem access or bypass the harness approval boundary.
 
 ## Security invariants
 
 - Sessions are private by default. Public discovery and anonymous access are disabled.
-- The server derives actor and runtime identity from authenticated credentials. Payload identity fields are ignored or rejected.
-- Authorization is checked on every read, replay, subscribe, append, claim, completion, invitation, retention, and attachment operation.
+- Public registration and production HTTP bootstrap are disabled. The first owner is created directly on the host.
+- Invitation and device-authorization secrets are single-use, expire, are stored only as peppered digests, and never appear in URLs or logs.
+- The server derives actor and runtime identity from authenticated credentials. A runtime is bound to the exact authenticated device, not merely another device belonging to the same user.
+- Device revocation also revokes its runtimes and unused delegated authorizations, removes unused realtime tickets, and closes or revalidates active sockets.
+- Authorization is checked on every implemented read, replay, subscribe, append, claim, completion, invitation, and device operation.
 - A solo viewer cannot append any event. Rejection happens before sequence allocation or fan-out.
 - Agent requests can be claimed only by an eligible runtime owned by the initiating user. Claim and completion transitions are atomic.
 - Events become visible only after the database transaction commits. The durable log, not WebSocket delivery, is authoritative.
@@ -39,26 +43,26 @@ The collaboration service never inherits authority to approve local tools. Trans
 | T2 | Cross-session IDOR | membership check for every session-scoped resource, including replay cursors and attachments | two-user negative API tests |
 | T3 | Solo viewer write or privilege escalation | role and mode check in the append transaction; owner-only membership changes | solo viewer E2E |
 | T4 | Idempotency poisoning | scope uniqueness to session; require the same actor, operation, and canonical payload hash on retry; return conflict for mismatches | retry and mismatch tests |
-| T5 | Runtime claim theft or duplicate work | compare request actor to runtime owner; atomic claim lease; one active turn per runtime; expiry and completion token | runtime claim E2E and race test |
+| T5 | Runtime claim theft or duplicate work | bind request, user, device, session, and runtime; atomic claim; one active turn per runtime | runtime claim and device-binding tests; abandoned-claim recovery remains open |
 | T6 | Reorder, gap, or phantom event | allocate sequence in a write transaction; publish after commit; detect gaps and replay over authenticated HTTP | concurrent append and reconnect E2E |
 | T7 | Credential or private-context exfiltration | structural allowlist, key-based and pattern redaction, excluded roles, size limits, and no payload logging | redaction E2E and secret scan |
 | T8 | Transcript path escape | explicit owner opt-in; canonicalize path; deny symlink escape; allow regular files under approved roots only | adapter filesystem tests |
-| T9 | Browser session theft, CSRF, or socket hijack | HttpOnly Secure SameSite cookies, CSRF protection for state changes, strict Origin checks, CSP, and no token in URL | browser security tests |
-| T10 | Resource exhaustion | event and attachment limits; per-user and per-IP rate limits; replay page cap; socket backpressure; claim lease limit | load and limit tests |
+| T9 | Browser session theft, CSRF, or socket hijack | memory-only bearer for private alpha; one-use subprotocol socket ticket; strict production Origin checks; CSP; no token in URL; public ingress blocked until cookie/CSRF design | browser security tests |
+| T10 | Resource exhaustion | request/JSON complexity and event limits; per-device/per-IP rate limits; per-user/session/deployment storage quotas; byte-bounded replay; socket backpressure | limit and reconnect tests |
 | T11 | SQLite corruption or inconsistent backup | WAL and foreign keys; bounded transactions; online SQLite backup API; integrity check and restore drill | operational restore drill |
 | T12 | Dependency or CI compromise | lockfiles, dependency review, license gate, secret scan, least-privilege workflow permissions, reviewed updates | CI checks and release review |
 
 ## Authentication and authorization requirements
 
-High-entropy bearer tokens should be generated by a cryptographic random source and stored as a keyed digest with a separately managed pepper. Passwords, if introduced, require a password hashing algorithm such as Argon2id and must not reuse the bearer-token path. Comparisons must be constant-time. Device credentials need issuance time, last-used time, and revocation state.
+High-entropy bearer tokens are generated by a cryptographic random source and stored as HMAC-SHA256 digests with a separately managed pepper. Passwords, if introduced, require a password hashing algorithm such as Argon2id and must not reuse the bearer-token path. Device credentials track issuance, last use, expiry, token version, rotation, and revocation.
 
-Browser sessions should use `HttpOnly; Secure; SameSite=Strict` cookies in production. State-changing cookie-authenticated endpoints require CSRF protection. WebSocket upgrades must authenticate and validate `Origin` against an explicit allowlist. Tokens must never appear in URLs.
+The private owner-host alpha keeps a manually entered bearer only in browser memory, obtains a 30-second one-use session-scoped WebSocket ticket, and carries that ticket in a WebSocket subprotocol rather than a URL. When an Origin allowlist is configured, WebSocket upgrades without an allowed `Origin` fail closed. A future Internet-facing deployment must replace this flow with `HttpOnly; Secure; SameSite=Strict` cookies plus CSRF protection and undergo a separate review. Tokens must never appear in URLs.
 
-Invitation tokens are single-purpose, expire quickly, and are stored as digests. Acceptance must be transactional and audit the inviter, recipient, role, session, and time without logging the token.
+Invitation tokens are single-purpose, one-use, and stored as peppered digests. Owners choose one hour, 24 hours, or seven days, with 24 hours as the default. Acceptance is transactional and audits the inviter, recipient, role, session, and time without logging the token. Additional devices use a separate ten-minute one-use authorization.
 
 ## Persistence and redaction requirements
 
-Validate all events against a strict schema and reject unknown fields where practical. Enforce byte limits before parsing large payloads. Database queries use parameters, SQLite foreign keys are enabled, and sequence allocation plus event insertion share one transaction.
+Validate all events against a strict schema and reject unknown fields where practical. Enforce request byte, JSON depth/node, single-event, replay-page, and cumulative storage limits. Per-user, per-session, and deployment event usage is charged in the same SQLite transaction as sequence allocation and insertion. Database queries use parameters and SQLite foreign keys are enabled.
 
 Redaction must happen at the earliest trusted boundary, before persistence and fan-out. It should combine an event-type allowlist with recursive sensitive-key handling and credential patterns. Regex-only redaction is insufficient. Redaction failures must fail closed for transcript and provider-context uploads. Store a redaction policy version and fidelity label, not the removed value.
 
@@ -66,9 +70,9 @@ Logs may contain request ID, hashed user or session identifier, event type, sequ
 
 ## Default private deployment
 
-The application must bind to `127.0.0.1` by default, set session visibility to private, disable anonymous and public sessions, and refuse production startup without TLS termination, a non-placeholder credential pepper, secure cookies, explicit HTTP and WebSocket origins, and a writable database directory with restrictive permissions.
+The application binds to loopback, serves Web/API/WebSocket on one origin, sets session visibility to private, and disables anonymous/public sessions and network bootstrap. Production startup fails without declared HTTPS termination, an exact public origin, a non-placeholder credential pepper, explicit HTTP/WebSocket origins, a static build, and a writable database directory with restrictive permissions.
 
-Internet exposure requires an authenticated reverse proxy, HTTPS, WebSocket support, request size limits, rate limiting, and an allowlisted origin. Direct exposure of the application port is not the default deployment model. See `OPERATIONS.md` for the preflight and backup gates.
+The supported alpha path is Tailscale Serve inside a private tailnet. The application port remains on loopback, Funnel is disabled, and tailnet grants allow only named collaborators to TCP 443. HTTP and WebSocket paths still require Relayroom authentication and ACL checks. Direct Internet exposure is unsupported. See `SELF_HOSTING.md` and `OPERATIONS.md` for the preflight and backup gates.
 
 ## Supply chain, attribution, and licenses
 
@@ -78,6 +82,7 @@ Run these checks on every pull request:
 npm run audit:references
 npm run audit:licenses
 npm run audit:secrets
+npm run audit:vulnerabilities
 ```
 
 `docs/REFERENCES.md` is research attribution, not permission to copy. Before adapting code, record project, exact upstream URL and path, immutable commit, applicable SPDX license, copyright notice, modifications, and the destination source header. Preserve required notices in the distribution. A reviewer must verify license compatibility before merge.

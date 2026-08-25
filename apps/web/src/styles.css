@@ -37,6 +37,7 @@ body {
 
 button,
 input,
+select,
 textarea {
   font: inherit;
 }
@@ -47,6 +48,7 @@ button {
 
 button:focus-visible,
 input:focus-visible,
+select:focus-visible,
 textarea:focus-visible,
 [tabindex]:focus-visible {
   outline: 3px solid rgba(22, 102, 95, 0.35);
@@ -189,6 +191,7 @@ textarea:focus-visible,
   justify-content: center;
   padding: clamp(40px, 7vw, 100px);
   background: var(--paper-raised);
+  overflow-y: auto;
 }
 
 .brand-mark {
@@ -212,8 +215,37 @@ textarea:focus-visible,
   letter-spacing: -0.04em;
 }
 
-.login-panel form {
+.login-panel > form:first-of-type {
   margin-top: 34px;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 28px 0 22px;
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--line);
+}
+
+.claim-identity-grid,
+.invitation-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.invitation-claim-form .field-help {
+  margin-bottom: 16px;
 }
 
 label,
@@ -225,6 +257,7 @@ legend {
 }
 
 input,
+select,
 textarea {
   width: 100%;
   border: 1px solid var(--line-strong);
@@ -236,6 +269,16 @@ textarea {
 input {
   min-height: 48px;
   padding: 10px 13px;
+}
+
+select {
+  width: 100%;
+  min-height: 44px;
+  padding: 9px 34px 9px 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: white;
+  color: var(--ink);
 }
 
 textarea {
@@ -818,6 +861,137 @@ code {
   font-size: 0.63rem;
 }
 
+.invitation-card {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.invitation-card h3,
+.created-invitation p,
+.invitation-row p {
+  margin: 0;
+}
+
+.invitation-card h3 {
+  font-family: Georgia, serif;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.invitation-card form {
+  margin-top: 14px;
+}
+
+.invitation-card input {
+  min-height: 42px;
+}
+
+.invitation-card .field-help {
+  margin-bottom: 12px;
+}
+
+.invitation-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.created-invitation {
+  margin-top: 16px;
+  padding: 12px;
+  border: 1px solid #d7b064;
+  border-radius: 10px;
+  background: var(--amber-wash);
+}
+
+.created-invitation > strong {
+  font-size: 0.78rem;
+}
+
+.created-invitation > p {
+  margin-top: 4px;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+}
+
+.secret-copy-row {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.secret-copy-row code {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  padding: 10px;
+  font-size: 0.68rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.secret-copy-row .button {
+  flex: none;
+}
+
+.invitation-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.invitation-row {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+
+.invitation-row:first-child {
+  border-top: 0;
+}
+
+.invitation-row-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.invitation-row-heading strong {
+  font-size: 0.76rem;
+  text-transform: capitalize;
+}
+
+.invitation-status {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--teal-wash);
+  color: var(--teal-dark);
+  font-size: 0.62rem;
+  font-weight: 800;
+}
+
+.invitation-status-claimed,
+.invitation-status-revoked,
+.invitation-status-expired {
+  background: #e5e2d9;
+  color: var(--ink-soft);
+}
+
+.invitation-row p {
+  margin-top: 5px;
+  color: var(--ink-soft);
+  font-size: 0.66rem;
+}
+
+.invitation-row .text-button {
+  margin-top: 5px;
+  padding-left: 0;
+  color: var(--danger);
+}
+
 .integrity-card {
   display: flex;
   gap: 11px;
@@ -964,6 +1138,10 @@ code {
 
   .login-panel {
     padding: 42px 28px 60px;
+  }
+
+  .claim-identity-grid {
+    grid-template-columns: 1fr;
   }
 
   .workspace {

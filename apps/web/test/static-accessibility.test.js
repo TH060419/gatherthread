@@ -4,6 +4,8 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const htmlPath = fileURLToPath(new URL("../index.html", import.meta.url));
+const mainPath = fileURLToPath(new URL("../src/main.js", import.meta.url));
+const apiPath = fileURLToPath(new URL("../src/api.js", import.meta.url));
 
 test("the shell exposes landmarks, labelled forms, status regions, and separate send controls", async () => {
   const html = await readFile(htmlPath, "utf8");
@@ -16,7 +18,25 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     'for="token"',
     'id="send-chat-button"',
     'id="send-agent-button"',
+    'id="claim-invitation-form"',
+    'for="claim-invite-secret"',
+    'id="accept-invitation-form"',
+    'for="accept-invite-secret"',
+    'id="create-invitation-form"',
+    'for="invitation-role"',
+    'for="invitation-ttl"',
+    'id="created-invitation" class="created-invitation" role="status" aria-live="polite" hidden',
+    'id="invitation-list" class="invitation-list" aria-label="Session invitations"',
   ]) {
     assert.match(html, new RegExp(requirement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
+});
+
+test("the real API is the default and bearer credentials are never persisted", async () => {
+  const [main, api] = await Promise.all([readFile(mainPath, "utf8"), readFile(apiPath, "utf8")]);
+  assert.match(main, /query\.get\("mock"\) === "1"/);
+  assert.match(main, /new HttpCollaborationApi\(\{ baseUrl: configuredApiUrl \}\)/);
+  assert.doesNotMatch(`${main}\n${api}`, /(?:local|session)Storage/);
+  assert.doesNotMatch(main, /searchParams\.(?:set|append)\([^\n]*(?:invite|token)/i);
+  assert.doesNotMatch(`${main}\n${api}`, /console\.(?:log|info|debug|warn|error)/);
 });
