@@ -2054,6 +2054,72 @@ for await (const line of lines) {
   );
 });
 
+test("headless App Server execution declines MCP elicitations without interrupting the turn", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-app-server-elicitation-"));
+  const capturePath = path.join(directory, "capture.jsonl");
+  const fakeCodex = path.join(directory, "elicitation-request.mjs");
+  await writeFile(fakeCodex, `
+import { appendFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  const message = JSON.parse(line);
+  await appendFile(process.env.CAPTURE, JSON.stringify(message) + "\\n");
+  if (message.method === "initialized") continue;
+  if (message.method === "initialize") {
+    respond(message.id, { userAgent: "fake" });
+  } else if (message.method === "turn/start") {
+    respond(message.id, { turn: { id: "turn-1" } });
+    process.stdout.write(JSON.stringify({
+      id: 99,
+      method: "mcpServer/elicitation/request",
+      params: {
+        threadId: message.params.threadId,
+        turnId: "turn-1",
+        serverName: "test-mcp",
+        mode: "form",
+        _meta: null,
+        message: "Provide a secret",
+        requestedSchema: { type: "object", properties: {} },
+      },
+    }) + "\\n");
+  } else if (message.id === 99) {
+    process.stdout.write(JSON.stringify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", text: "continued safely" }],
+        },
+      },
+    }) + "\\n");
+  }
+}
+function respond(id, result) { process.stdout.write(JSON.stringify({ id, result }) + "\\n"); }
+`);
+  const client = new CodexAppServerClient({
+    command: process.execPath,
+    commandArgs: [fakeCodex],
+    cwd: directory,
+    env: { ...process.env, CAPTURE: capturePath },
+    turnTimeoutMs: 500,
+  });
+  t.after(() => client.dispose());
+  const completed = await client.runTurn({
+    threadId: "thread-1",
+    prompt: "continue without interactive input",
+    clientUserMessageId: "elicitation-turn",
+  });
+  assert.deepEqual(completed.items, [{ type: "agentMessage", text: "continued safely" }]);
+  const captures = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(captures.find((message) => message.id === 99), {
+    id: 99,
+    result: { action: "decline", content: null, _meta: null },
+  });
+});
+
 test("project harness replaces an externally claimed exec projection before the next Web request", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-app-server-"));
   const stateRoot = path.join(directory, "state");

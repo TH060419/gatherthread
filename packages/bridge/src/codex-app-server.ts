@@ -708,7 +708,15 @@ export class CodexAppServerClient {
       return;
     }
     if (typeof message.method !== "string") return;
-    if (typeof message.id === "number") {
+    if (typeof message.id === "number" || typeof message.id === "string") {
+      if (message.method === "mcpServer/elicitation/request") {
+        this.#respondToServerRequest(message.id, {
+          action: "decline",
+          content: null,
+          _meta: null,
+        });
+        return;
+      }
       this.#fail(new Error(`Codex App Server requested unsupported interaction: ${safeText(message.method)}`));
       return;
     }
@@ -723,6 +731,17 @@ export class CodexAppServerClient {
       }
     }
     for (const listener of this.#notifications) listener(message as unknown as JsonRpcNotification);
+  }
+
+  #respondToServerRequest(id: number | string, result: unknown): void {
+    const child = this.#child;
+    if (!child?.stdin.writable) {
+      this.#fail(new Error("Codex App Server interaction response could not be written"));
+      return;
+    }
+    child.stdin.write(`${JSON.stringify({ id, result })}\n`, (error) => {
+      if (error) this.#fail(new Error("Codex App Server interaction response could not be written"));
+    });
   }
 
   #fail(error: Error): void {

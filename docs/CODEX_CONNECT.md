@@ -72,6 +72,7 @@ Keep the terminal open. The Web member panel refreshes runtime presence every fi
 - Sibling sessions use separate Codex threads and never hydrate one another's history.
 - Agent turns are serialized across sessions sharing the same workspace to avoid conflicting concurrent edits.
 - App Server access is local stdio and short-lived. Background execution and snapshots use operation-scoped children. The implementation task is distinctly named `GatherThread background · <project> · <session>`; do not use it for direct work if Codex Desktop lists it. If Desktop externally claims a completed background projection, GatherThread creates a new one, replays authoritative canonical history, and continues the next Web request. Prepared or started operations remain fail-closed rather than risking duplicate execution. After Desktop task creation, direct Desktop synchronization uses only the trusted local Hook relay and never opens that task through a competing App Server writer.
+- Web Agent execution is headless. If an MCP server requests an interactive form or URL elicitation, GatherThread returns the protocol-level `decline` response without opening the URL, supplying form content, or interrupting the whole Codex turn. Command, file-change, permission, and unknown server-initiated interactions remain fail-closed.
 - A legacy `codex exec` mapping migrates on its next request to a new desktop-visible thread rebuilt from canonical history; the old native transcript is not deleted.
 
 ## Codex desktop boundary

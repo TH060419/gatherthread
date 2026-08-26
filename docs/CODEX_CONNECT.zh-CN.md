@@ -72,6 +72,7 @@ npm run codex:connect -- \
 - 每个会话始终使用独立 Codex thread，不会把兄弟会话历史混入当前会话。
 - 同一个本地目录上的多个会话请求按顺序执行，避免两个 Codex turn 同时修改同一批文件。
 - App Server 只通过本机 stdio 短时运行。后台执行与快照使用单次操作子进程。实现任务会明确命名为 `GatherThread background · 项目名 · 会话名`；如果 Codex Desktop 将其列出，请不要把它用于直接工作。若 Desktop 在一次操作完成后从外部接管了后台投影，GatherThread 会新建投影、重放权威规范历史并继续下一次网页请求；若仍有 prepared 或 started 操作，则保持 fail-closed，避免重复执行。Desktop 任务创建后，直接桌面同步只使用可信本地 Hook relay，绝不再通过另一个 App Server 打开它。
+- 网页 Agent 执行没有交互式界面。若 MCP server 请求填写表单或打开 URL，GatherThread 会返回协议级 `decline`，既不打开链接、也不代填内容，同时不会因此中断整个 Codex turn。命令执行、文件修改、权限审批以及其他未知的服务端主动交互仍然失败关闭。
 - 旧版 `codex exec` 映射会在下一次请求时新建桌面可见 thread，并用规范历史重建；旧的 Codex 原生 transcript 不会被删除。
 
 ## Codex 桌面端边界
