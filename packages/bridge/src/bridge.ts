@@ -3,6 +3,7 @@ import {
   ClaudeCodeProjectAdapter,
   CodexRolloutAdapter,
   discoverJsonlTranscripts,
+  redactText,
   redactValue,
   redactTranscriptEvent,
   resolveAuthorizedPath,
@@ -19,11 +20,27 @@ import type {
   CanonicalEvent,
   CollaborationApi,
   ContextSnapshot,
+  HarnessExecutionResult,
   HarnessExecutor,
   RegisteredRuntime,
   RuntimeProvenance,
   RuntimeRegistration,
 } from "./types.js";
+import { CollaborationHttpError } from "./http-client.js";
+
+export class HarnessExecutionTerminatedError extends Error {
+  readonly failureCode: string;
+  readonly publicMessage: string;
+
+  constructor(failureCode: string, message: string) {
+    const safeCode = /^[a-z0-9_]{1,64}$/.test(failureCode) ? failureCode : "harness_execution_failed";
+    const safeMessage = redactText(message).replace(/[\r\n]+/g, " ").slice(0, 400) || "The local harness ended without a response";
+    super(safeMessage);
+    this.name = "HarnessExecutionTerminatedError";
+    this.failureCode = safeCode;
+    this.publicMessage = safeMessage;
+  }
+}
 
 export interface LocalBridgeOptions {
   api: CollaborationApi;
@@ -116,11 +133,27 @@ export class LocalBridge {
         throw new Error("Collaboration API returned an event for a different session");
       }
       if (event.type === "agent_request") {
-        const result = await this.processAgentRequest(event, executor);
-        if (result.claimed) {
-          claimed += 1;
-          completed += result.completed.length;
+        const shouldExecute = event.actorId === runtime.userId
+          && (executor.shouldExecute === undefined || await executor.shouldExecute(event, runtime));
+        if (shouldExecute) {
+          try {
+            const result = await this.processAgentRequest(event, executor);
+            if (result.claimed) {
+              claimed += 1;
+              completed += result.completed.length;
+            }
+          } catch (error) {
+            if (!isTerminalAgentRequestClaimConflict(error)) throw error;
+            if (!executor.projectCanonicalEvents) {
+              throw new Error("Agent request was claimed by another runtime but this executor cannot project the canonical request safely");
+            }
+            await executor.projectCanonicalEvents([event], runtime);
+          }
+        } else if (executor.projectCanonicalEvents) {
+          await executor.projectCanonicalEvents([event], runtime);
         }
+      } else if (executor.projectCanonicalEvents) {
+        await executor.projectCanonicalEvents([event], runtime);
       }
       cursor = event.sequence;
       await this.#cursorStore.save({
@@ -136,6 +169,63 @@ export class LocalBridge {
       });
     }
     return { examined: page.events.length, claimed, completed };
+  }
+
+  async materializeAuthoritativeHistory(
+    executor: HarnessExecutor,
+    throughSequence: number,
+    limit = 200,
+  ): Promise<number> {
+    const runtime = this.#requireRuntime();
+    if (!executor.projectCanonicalEvents) return 0;
+    if (!Number.isSafeInteger(throughSequence) || throughSequence < 0) {
+      throw new Error("Authoritative materialization cursor must be a non-negative safe integer");
+    }
+    let state = await this.#cursorStore.load();
+    let cursor = state.server[runtime.sessionId] ?? 0;
+    if (executor.prepareCanonicalProjection) {
+      const nativeCursor = await executor.prepareCanonicalProjection(runtime);
+      if (!Number.isSafeInteger(nativeCursor) || nativeCursor < 0) {
+        throw new Error("Harness native projection cursor must be a non-negative safe integer");
+      }
+      if (nativeCursor < cursor) {
+        cursor = nativeCursor;
+        state = {
+          ...state,
+          server: { ...state.server, [runtime.sessionId]: cursor },
+        };
+        await this.#cursorStore.save(state);
+      }
+    }
+    while (cursor < throughSequence) {
+      const page = await this.#api.readEvents(runtime.sessionId, cursor, limit);
+      const events = page.events.filter((event) => event.sequence > cursor && event.sequence <= throughSequence);
+      for (const event of events) {
+        if (event.sessionId !== runtime.sessionId) {
+          throw new Error("Collaboration API returned an event for a different session");
+        }
+        await executor.projectCanonicalEvents([event], runtime);
+        cursor = event.sequence;
+        state = {
+          ...state,
+          server: { ...state.server, [runtime.sessionId]: cursor },
+        };
+        await this.#cursorStore.save(state);
+      }
+      const coveredThrough = Math.min(throughSequence, page.nextSequence);
+      if (coveredThrough > cursor && (!page.hasMore || events.length === 0)) {
+        cursor = coveredThrough;
+        state = {
+          ...state,
+          server: { ...state.server, [runtime.sessionId]: cursor },
+        };
+        await this.#cursorStore.save(state);
+      }
+      if (events.length === 0 && coveredThrough <= cursor) {
+        throw new Error("Collaboration API did not advance authoritative history materialization");
+      }
+    }
+    return cursor;
   }
 
   async importTranscript(
@@ -228,7 +318,24 @@ export class LocalBridge {
     if (!claim.claimed) return { claimed: false, completed: [] };
 
     const canonicalHistory = await this.#readCanonicalHistory(request.sessionId, request.sequence);
-    const execution = await executor.execute({ request, canonicalHistory, runtime });
+    let execution: HarnessExecutionResult;
+    try {
+      execution = await executor.execute({ request, canonicalHistory, runtime });
+    } catch (error) {
+      if (!(error instanceof HarnessExecutionTerminatedError)) throw error;
+      const failure = await this.#api.completeAgentRequest(request.sessionId, request.id, {
+        runtimeId: runtime.id,
+        idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:complete`,
+        payload: {
+          text: `Agent execution failed: ${error.publicMessage}`,
+          status: "failed",
+          error: { code: error.failureCode, message: error.publicMessage },
+          capture_fidelity: "harness_transcript",
+          source_harness: runtime.harness,
+        },
+      });
+      return { claimed: true, completed: [failure] };
+    }
     const events = execution.events.map((event) => {
       if (event.captureFidelity !== "harness_transcript") {
         throw new Error("Harness execution output must be labelled harness_transcript");
@@ -293,6 +400,13 @@ export class LocalBridge {
       );
     }
   }
+}
+
+function isTerminalAgentRequestClaimConflict(error: unknown): boolean {
+  return error instanceof CollaborationHttpError
+    && error.status === 409
+    && (error.code === "agent_request_already_claimed"
+      || error.code === "agent_request_already_completed");
 }
 
 function toAppendEvent(

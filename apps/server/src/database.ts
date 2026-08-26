@@ -5,6 +5,8 @@ import type {
   AppendEventInput,
   CanonicalEvent,
   CaptureFidelity,
+  CommitLocalTurnInput,
+  CommitLocalTurnResult,
   DeviceAuthorizationRecord,
   EventType,
   EventVisibility,
@@ -14,12 +16,19 @@ import type {
   InvitationTtl,
   JsonValue,
   MembershipRole,
+  ProjectInvitationAuditRecord,
+  ProjectInvitationRecord,
+  ProjectListItem,
   ReplayResponse,
   RuntimeProvenance,
   SessionListItem,
   SessionMode,
+  SnapshotFailure,
+  SnapshotRequestRecord,
+  SnapshotRequestStatus,
 } from "@gatherthread/protocol";
-import { conflict, idempotencyConflict, notFound, runtimeBusy, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
+import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 
 export interface Actor {
   user_id: string;
@@ -29,6 +38,7 @@ export interface Actor {
 
 export interface SessionRecord {
   id: string;
+  project_id: string;
   owner_user_id: string;
   mode: SessionMode;
   title: string;
@@ -38,11 +48,27 @@ export interface SessionRecord {
   updated_at: string;
 }
 
+export interface ProjectRecord {
+  id: string;
+  owner_user_id: string;
+  title: string;
+  state: "active" | "archived";
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProjectMemberRecord {
+  user_id: string;
+  display_name: string;
+  role: MembershipRole;
+}
+
 export interface RuntimeRecord {
   id: string;
   session_id: string;
   user_id: string;
   device_id: string;
+  purpose: "execution" | "snapshot_connector";
   harness: string;
   provider: string;
   model: string;
@@ -79,6 +105,16 @@ export interface DatabaseOptions {
   maxSessionEventBytes?: number | undefined;
   maxTotalEventBytes?: number | undefined;
   maxEventBytes?: number | undefined;
+  maxSnapshotResultBytes?: number | undefined;
+  maxUserSnapshotBytes?: number | undefined;
+  maxSessionSnapshotBytes?: number | undefined;
+  maxTotalSnapshotBytes?: number | undefined;
+  maxUserActiveSnapshotRequests?: number | undefined;
+  maxSessionActiveSnapshotRequests?: number | undefined;
+  maxTotalActiveSnapshotRequests?: number | undefined;
+  maxUserSessions?: number | undefined;
+  maxProjectSessions?: number | undefined;
+  maxTotalSessions?: number | undefined;
 }
 
 export interface CreateInvitationResult {
@@ -90,8 +126,8 @@ export interface ClaimInvitationResult {
   actor: Actor;
   token: string;
   device: DeviceRecord;
-  invitation: InvitationRecord;
-  event: CanonicalEvent;
+  invitation: InvitationRecord | ProjectInvitationRecord;
+  event: CanonicalEvent | null;
 }
 
 export interface ClaimInvitationWithBrowserSessionResult extends ClaimInvitationResult {
@@ -100,8 +136,8 @@ export interface ClaimInvitationWithBrowserSessionResult extends ClaimInvitation
 
 export interface AcceptInvitationResult {
   actor: Actor;
-  invitation: InvitationRecord;
-  event: CanonicalEvent;
+  invitation: InvitationRecord | ProjectInvitationRecord;
+  event: CanonicalEvent | null;
 }
 
 export interface CreateDeviceAuthorizationResult {
@@ -134,6 +170,7 @@ interface EventRow {
   idempotency_key: string;
   type: EventType;
   actor_user_id: string;
+  actor_display_name: string;
   created_at: string;
   visibility: EventVisibility;
   reply_to_event_id: string | null;
@@ -142,6 +179,7 @@ interface EventRow {
 }
 
 interface SessionRow extends SessionRecord {}
+interface ProjectRow extends ProjectRecord { creation_idempotency_key: string }
 interface RuntimeRow extends RuntimeRecord {}
 interface CountRow { count: number }
 interface BytesRow { bytes: number }
@@ -149,6 +187,7 @@ interface SequenceRow { next_sequence: number }
 interface MembershipRow { role: MembershipRole }
 interface ClaimRow { runtime_id: string; status: "claimed" | "completed" }
 interface InvitationRow extends InvitationRecord { token_digest: string }
+interface ProjectInvitationRow extends ProjectInvitationRecord { token_digest: string }
 interface DeviceAuthorizationRow extends DeviceAuthorizationRecord { token_digest: string }
 interface BrowserSessionRow {
   id: string;
@@ -159,6 +198,28 @@ interface BrowserSessionRow {
   expires_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+}
+interface LocalTurnCommitRow {
+  input_digest: string;
+  head_before_commit: number;
+  request_event_id: string;
+  response_event_id: string;
+  tool_event_ids_json: string;
+}
+interface SnapshotRequestRow {
+  id: string;
+  session_id: string;
+  requested_by_user_id: string;
+  through_sequence: number;
+  status: SnapshotRequestStatus;
+  claimed_by_runtime_id: string | null;
+  created_at: string;
+  claimed_at: string | null;
+  completed_at: string | null;
+  failed_at: string | null;
+  result_json: string | null;
+  failure_json: string | null;
+  storage_bytes: number;
 }
 
 const INVITATION_TTL_MS: Readonly<Record<InvitationTtl, number>> = {
@@ -174,8 +235,17 @@ const DEFAULT_MAX_USER_EVENT_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_SESSION_EVENT_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_EVENT_BYTES = 2 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_EVENT_BYTES = 256 * 1024;
+const DEFAULT_MAX_USER_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+const DEFAULT_MAX_SESSION_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+const DEFAULT_MAX_TOTAL_SNAPSHOT_BYTES = 64 * 1024 * 1024;
+const DEFAULT_MAX_SNAPSHOT_LIST_BYTES = 128 * 1024;
+// Covers every bounded pending/claimed field, including a maximum-length runtime ID,
+// plus conservative SQLite row/index overhead. It remains charged for terminal audit rows.
+const SNAPSHOT_REQUEST_METADATA_BYTES = 1_024;
+const DEFAULT_MAX_USER_ACTIVE_SNAPSHOT_REQUESTS = 64;
+const DEFAULT_MAX_SESSION_ACTIVE_SNAPSHOT_REQUESTS = 256;
+const DEFAULT_MAX_TOTAL_ACTIVE_SNAPSHOT_REQUESTS = 4_096;
 const RUNTIME_OFFLINE_AFTER_MS = 30_000;
-
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -195,8 +265,27 @@ CREATE TABLE IF NOT EXISTS devices (
   rotated_at TEXT,
   token_version INTEGER NOT NULL DEFAULT 1 CHECK (token_version > 0)
 ) STRICT;
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  owner_user_id TEXT NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL,
+  state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'archived')),
+  creation_idempotency_key TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (owner_user_id, creation_idempotency_key)
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_memberships (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL CHECK (role IN ('owner', 'participant', 'viewer')),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, user_id)
+) STRICT;
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   owner_user_id TEXT NOT NULL REFERENCES users(id),
   mode TEXT NOT NULL CHECK (mode IN ('solo', 'multi')),
   title TEXT NOT NULL,
@@ -218,6 +307,7 @@ CREATE TABLE IF NOT EXISTS runtimes (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  purpose TEXT NOT NULL DEFAULT 'execution' CHECK (purpose IN ('execution', 'snapshot_connector')),
   harness TEXT NOT NULL,
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
@@ -235,6 +325,7 @@ CREATE TABLE IF NOT EXISTS events (
   idempotency_key TEXT NOT NULL,
   type TEXT NOT NULL CHECK (type IN ('human_chat','agent_request','agent_response','tool_call','tool_result','attachment','context_snapshot','membership_change','session_state_change')),
   actor_user_id TEXT NOT NULL REFERENCES users(id),
+  actor_display_name TEXT NOT NULL,
   created_at TEXT NOT NULL,
   visibility TEXT NOT NULL CHECK (visibility IN ('session', 'owner_only')),
   reply_to_event_id TEXT REFERENCES events(id),
@@ -257,6 +348,42 @@ CREATE TABLE IF NOT EXISTS agent_request_claims (
   claimed_at TEXT NOT NULL,
   completed_at TEXT,
   status TEXT NOT NULL CHECK (status IN ('claimed', 'completed'))
+) STRICT;
+CREATE TABLE IF NOT EXISTS local_turn_commits (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  runtime_id TEXT NOT NULL REFERENCES runtimes(id) ON DELETE CASCADE,
+  local_turn_id TEXT NOT NULL,
+  input_digest TEXT NOT NULL,
+  head_before_commit INTEGER NOT NULL CHECK (head_before_commit >= 0),
+  request_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  response_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+  tool_event_ids_json TEXT NOT NULL CHECK (json_valid(tool_event_ids_json)),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (session_id, runtime_id, local_turn_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS snapshot_requests (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
+  claimed_by_runtime_id TEXT REFERENCES runtimes(id),
+  created_at TEXT NOT NULL,
+  claimed_at TEXT,
+  completed_at TEXT,
+  failed_at TEXT,
+  result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+  failure_json TEXT CHECK (failure_json IS NULL OR json_valid(failure_json)),
+  storage_bytes INTEGER NOT NULL DEFAULT ${SNAPSHOT_REQUEST_METADATA_BYTES} CHECK (storage_bytes >= 0),
+  metadata_charged INTEGER NOT NULL DEFAULT 1 CHECK (metadata_charged IN (0, 1))
+) STRICT;
+CREATE INDEX IF NOT EXISTS snapshot_requests_user_status_idx
+  ON snapshot_requests(requested_by_user_id, status, created_at, id);
+CREATE TABLE IF NOT EXISTS snapshot_storage_usage (
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  bytes INTEGER NOT NULL CHECK (bytes >= 0),
+  PRIMARY KEY (session_id, user_id)
 ) STRICT;
 CREATE TABLE IF NOT EXISTS invitations (
   id TEXT PRIMARY KEY,
@@ -286,6 +413,35 @@ CREATE TABLE IF NOT EXISTS invitation_audit (
   created_at TEXT NOT NULL
 ) STRICT;
 CREATE INDEX IF NOT EXISTS invitation_audit_session_idx ON invitation_audit(session_id, created_at, id);
+CREATE TABLE IF NOT EXISTS project_invitations (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  inviter_user_id TEXT NOT NULL REFERENCES users(id),
+  role TEXT NOT NULL CHECK (role IN ('participant', 'viewer')),
+  token_digest TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  expired_at TEXT,
+  claimed_at TEXT,
+  claimed_by_user_id TEXT REFERENCES users(id),
+  claimed_by_device_id TEXT REFERENCES devices(id),
+  CHECK (claimed_at IS NULL OR (claimed_by_user_id IS NOT NULL AND claimed_by_device_id IS NOT NULL))
+) STRICT;
+CREATE INDEX IF NOT EXISTS project_invitations_project_idx ON project_invitations(project_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS project_invitation_audit (
+  id TEXT PRIMARY KEY,
+  invitation_id TEXT NOT NULL REFERENCES project_invitations(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  action TEXT NOT NULL CHECK (action IN ('created', 'claimed', 'revoked', 'expired')),
+  inviter_user_id TEXT NOT NULL REFERENCES users(id),
+  subject_user_id TEXT REFERENCES users(id),
+  subject_device_id TEXT REFERENCES devices(id),
+  role TEXT NOT NULL CHECK (role IN ('participant', 'viewer')),
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS project_invitation_audit_project_idx
+  ON project_invitation_audit(project_id, created_at, id);
 CREATE TABLE IF NOT EXISTS device_authorizations (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -325,6 +481,14 @@ function stableJson(value: JsonValue): string {
     return item;
   };
   return JSON.stringify(normalize(value));
+}
+
+function payloadWithClientOccurredAt(payload: JsonValue, occurredAt: string): JsonValue {
+  const clientMetadata = { occurred_at: occurredAt } satisfies JsonValue;
+  if (payload !== null && typeof payload === "object" && !Array.isArray(payload)) {
+    return { ...payload, _gatherthread_client: clientMetadata };
+  }
+  return { value: payload, _gatherthread_client: clientMetadata };
 }
 
 function issueDeviceToken(): string {
@@ -380,6 +544,9 @@ function runtimeStatus(
 }
 
 function mapEvent(row: EventRow): CanonicalEvent {
+  const storedProvenance = row.runtime_provenance_json === null
+    ? null
+    : JSON.parse(row.runtime_provenance_json) as RuntimeProvenance;
   return {
     id: row.id,
     session_id: row.session_id,
@@ -387,13 +554,14 @@ function mapEvent(row: EventRow): CanonicalEvent {
     idempotency_key: row.idempotency_key,
     type: row.type,
     actor_user_id: row.actor_user_id,
+    actor_display_name: row.actor_display_name,
     created_at: row.created_at,
     visibility: row.visibility,
     reply_to_event_id: row.reply_to_event_id,
     payload: JSON.parse(row.payload_json) as JsonValue,
-    runtime_provenance: row.runtime_provenance_json === null
+    runtime_provenance: storedProvenance === null
       ? null
-      : JSON.parse(row.runtime_provenance_json) as RuntimeProvenance,
+      : { ...storedProvenance, local_session_id: "private" },
   };
 }
 
@@ -405,6 +573,16 @@ export class CollaborationDatabase {
   private readonly maxSessionEventBytes: number;
   private readonly maxTotalEventBytes: number;
   private readonly maxEventBytes: number;
+  private readonly maxSnapshotResultBytes: number;
+  private readonly maxUserSnapshotBytes: number;
+  private readonly maxSessionSnapshotBytes: number;
+  private readonly maxTotalSnapshotBytes: number;
+  private readonly maxUserActiveSnapshotRequests: number;
+  private readonly maxSessionActiveSnapshotRequests: number;
+  private readonly maxTotalActiveSnapshotRequests: number;
+  private readonly maxUserSessions: number;
+  private readonly maxProjectSessions: number;
+  private readonly maxTotalSessions: number;
 
   constructor(path: string, options: DatabaseOptions = {}) {
     this.authTokenPepper = resolveAuthTokenPepper(path, options.authTokenPepper);
@@ -413,11 +591,31 @@ export class CollaborationDatabase {
     this.maxSessionEventBytes = options.maxSessionEventBytes ?? DEFAULT_MAX_SESSION_EVENT_BYTES;
     this.maxTotalEventBytes = options.maxTotalEventBytes ?? DEFAULT_MAX_TOTAL_EVENT_BYTES;
     this.maxEventBytes = options.maxEventBytes ?? DEFAULT_MAX_EVENT_BYTES;
+    this.maxSnapshotResultBytes = options.maxSnapshotResultBytes ?? MAX_SNAPSHOT_RESULT_BYTES;
+    this.maxUserSnapshotBytes = options.maxUserSnapshotBytes ?? DEFAULT_MAX_USER_SNAPSHOT_BYTES;
+    this.maxSessionSnapshotBytes = options.maxSessionSnapshotBytes ?? DEFAULT_MAX_SESSION_SNAPSHOT_BYTES;
+    this.maxTotalSnapshotBytes = options.maxTotalSnapshotBytes ?? DEFAULT_MAX_TOTAL_SNAPSHOT_BYTES;
+    this.maxUserActiveSnapshotRequests = options.maxUserActiveSnapshotRequests ?? DEFAULT_MAX_USER_ACTIVE_SNAPSHOT_REQUESTS;
+    this.maxSessionActiveSnapshotRequests = options.maxSessionActiveSnapshotRequests ?? DEFAULT_MAX_SESSION_ACTIVE_SNAPSHOT_REQUESTS;
+    this.maxTotalActiveSnapshotRequests = options.maxTotalActiveSnapshotRequests ?? DEFAULT_MAX_TOTAL_ACTIVE_SNAPSHOT_REQUESTS;
+    this.maxUserSessions = options.maxUserSessions ?? 512;
+    this.maxProjectSessions = options.maxProjectSessions ?? 2_048;
+    this.maxTotalSessions = options.maxTotalSessions ?? 8_192;
     for (const [name, value] of [
       ["maxUserEventBytes", this.maxUserEventBytes],
       ["maxSessionEventBytes", this.maxSessionEventBytes],
       ["maxTotalEventBytes", this.maxTotalEventBytes],
       ["maxEventBytes", this.maxEventBytes],
+      ["maxSnapshotResultBytes", this.maxSnapshotResultBytes],
+      ["maxUserSnapshotBytes", this.maxUserSnapshotBytes],
+      ["maxSessionSnapshotBytes", this.maxSessionSnapshotBytes],
+      ["maxTotalSnapshotBytes", this.maxTotalSnapshotBytes],
+      ["maxUserActiveSnapshotRequests", this.maxUserActiveSnapshotRequests],
+      ["maxSessionActiveSnapshotRequests", this.maxSessionActiveSnapshotRequests],
+      ["maxTotalActiveSnapshotRequests", this.maxTotalActiveSnapshotRequests],
+      ["maxUserSessions", this.maxUserSessions],
+      ["maxProjectSessions", this.maxProjectSessions],
+      ["maxTotalSessions", this.maxTotalSessions],
     ] as const) {
       if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive safe integer`);
     }
@@ -425,12 +623,34 @@ export class CollaborationDatabase {
       || this.maxUserEventBytes > this.maxTotalEventBytes || this.maxSessionEventBytes > this.maxTotalEventBytes) {
       throw new RangeError("Event storage limits are inconsistent");
     }
+    if (this.maxSnapshotResultBytes > MAX_SNAPSHOT_RESULT_BYTES
+      || this.maxSnapshotResultBytes > Math.min(
+        this.maxUserSnapshotBytes, this.maxSessionSnapshotBytes, this.maxTotalSnapshotBytes,
+      )
+      || this.maxUserSnapshotBytes > this.maxTotalSnapshotBytes
+      || this.maxSessionSnapshotBytes > this.maxTotalSnapshotBytes) {
+      throw new RangeError("Snapshot storage limits are inconsistent");
+    }
+    if (SNAPSHOT_REQUEST_METADATA_BYTES > Math.min(
+      this.maxUserSnapshotBytes, this.maxSessionSnapshotBytes, this.maxTotalSnapshotBytes,
+    ) || this.maxUserActiveSnapshotRequests > this.maxTotalActiveSnapshotRequests
+      || this.maxSessionActiveSnapshotRequests > this.maxTotalActiveSnapshotRequests) {
+      throw new RangeError("Snapshot request metadata limits are inconsistent");
+    }
+    if (this.maxUserSessions > this.maxTotalSessions || this.maxProjectSessions > this.maxTotalSessions) {
+      throw new RangeError("Session count limits are inconsistent");
+    }
     this.sqlite = new DatabaseSync(path);
     this.sqlite.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_size_limit = 67108864;");
     const journalMode = (this.sqlite.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
     this.migrateDeviceCredentialColumns();
+    this.migrateProjectModel();
+    this.migrateRuntimePurposeColumn();
+    this.migrateEventActorDisplayNameColumn();
+    this.migrateCanonicalProvenancePrivacy();
+    this.migrateSnapshotStorageLedger();
     this.initializeEventStorageUsage();
   }
 
@@ -736,6 +956,149 @@ export class CollaborationDatabase {
     return rows.map((row) => this.publicDeviceAuthorization(row));
   }
 
+  createProject(actor: Actor, input: {
+    project_id?: string | undefined;
+    idempotency_key: string;
+    title: string;
+  }): ProjectRecord & { role: "owner"; session_count: number } {
+    const projectId = input.project_id ?? `project-${createHash("sha256")
+      .update(`${actor.user_id}\0${input.idempotency_key}`)
+      .digest("hex")
+      .slice(0, 32)}`;
+    const timestamp = this.now();
+    return this.transaction(() => {
+      const existing = this.sqlite.prepare(`
+        SELECT * FROM projects WHERE owner_user_id = ? AND creation_idempotency_key = ?
+      `).get(actor.user_id, input.idempotency_key) as unknown as ProjectRow | undefined;
+      if (existing) {
+        if (existing.id !== projectId || existing.title !== input.title) {
+          throw idempotencyConflict("Project creation retry does not match the original request");
+        }
+        return this.projectCreationResult(existing);
+      }
+      if (this.sqlite.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId)) {
+        throw idempotencyConflict("Project ID already exists with another operation");
+      }
+      this.sqlite.prepare(`
+        INSERT INTO projects(id, owner_user_id, title, state, creation_idempotency_key, created_at, updated_at)
+        VALUES (?, ?, ?, 'active', ?, ?, ?)
+      `).run(projectId, actor.user_id, input.title, input.idempotency_key, timestamp, timestamp);
+      this.sqlite.prepare(`
+        INSERT INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+        VALUES (?, ?, 'owner', ?, ?)
+      `).run(projectId, actor.user_id, timestamp, timestamp);
+      return this.projectCreationResult(this.requireProject(projectId));
+    });
+  }
+
+  requireProject(projectId: string): ProjectRecord {
+    const row = this.sqlite.prepare("SELECT * FROM projects WHERE id = ?")
+      .get(projectId) as unknown as ProjectRow | undefined;
+    if (!row) throw notFound("Project");
+    return this.publicProject(row);
+  }
+
+  listProjects(userId: string): ProjectListItem[] {
+    return this.sqlite.prepare(`
+      SELECT projects.id, projects.title, projects.state, projects.created_at, projects.updated_at,
+             project_memberships.role,
+             (SELECT COUNT(*) FROM sessions WHERE sessions.project_id = projects.id) AS session_count
+      FROM project_memberships
+      JOIN projects ON projects.id = project_memberships.project_id
+      WHERE project_memberships.user_id = ?
+      ORDER BY projects.updated_at DESC, projects.id ASC
+    `).all(userId) as unknown as ProjectListItem[];
+  }
+
+  projectMembershipRole(projectId: string, userId: string): MembershipRole | null {
+    const row = this.sqlite.prepare(`
+      SELECT role FROM project_memberships WHERE project_id = ? AND user_id = ?
+    `).get(projectId, userId) as unknown as MembershipRow | undefined;
+    return row?.role ?? null;
+  }
+
+  listProjectMembers(projectId: string): ProjectMemberRecord[] {
+    return this.sqlite.prepare(`
+      SELECT project_memberships.user_id, users.display_name, project_memberships.role
+      FROM project_memberships
+      JOIN users ON users.id = project_memberships.user_id
+      WHERE project_memberships.project_id = ?
+      ORDER BY CASE project_memberships.role WHEN 'owner' THEN 0 WHEN 'participant' THEN 1 ELSE 2 END,
+               users.display_name ASC
+    `).all(projectId) as unknown as ProjectMemberRecord[];
+  }
+
+  setProjectMembership(
+    actor: Actor,
+    projectId: string,
+    userId: string,
+    role: "participant" | "viewer",
+  ): ProjectMemberRecord {
+    this.requireProjectOwnedBy(projectId, actor.user_id);
+    if (userId === actor.user_id) throw conflict("The project owner's role cannot be changed");
+    if (!this.sqlite.prepare("SELECT 1 FROM users WHERE id = ?").get(userId)) throw notFound("User");
+    const timestamp = this.now();
+    return this.transaction(() => {
+      const existing = this.projectMembershipRole(projectId, userId);
+      if (existing === null) throw notFound("Project membership");
+      if (existing === "owner") throw conflict("The project owner's role cannot be changed");
+      this.sqlite.prepare(`
+        UPDATE project_memberships SET role = ?, updated_at = ?
+        WHERE project_id = ? AND user_id = ? AND role != 'owner'
+      `).run(role, timestamp, projectId, userId);
+      this.sqlite.prepare(`
+        UPDATE memberships SET role = ?, updated_at = ?
+        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
+          AND role != 'owner'
+      `).run(role, timestamp, userId, projectId);
+      if (role === "viewer") {
+        this.sqlite.prepare(`
+          UPDATE runtimes SET status = 'revoked'
+          WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
+            AND purpose = 'execution'
+        `).run(userId, projectId);
+      }
+      this.touchProject(projectId, timestamp);
+      return this.requireProjectMember(projectId, userId);
+    });
+  }
+
+  removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
+    this.requireProjectOwnedBy(projectId, actor.user_id);
+    if (userId === actor.user_id) throw conflict("The project owner cannot be removed");
+    this.transaction(() => {
+      const result = this.sqlite.prepare(`
+        DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
+      `).run(projectId, userId);
+      if (Number(result.changes) === 0) throw notFound("Project membership");
+      this.sqlite.prepare(`
+        DELETE FROM memberships
+        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
+          AND role != 'owner'
+      `).run(userId, projectId);
+      this.sqlite.prepare(`
+        UPDATE runtimes SET status = 'revoked'
+        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
+      `).run(userId, projectId);
+      this.touchProject(projectId);
+    });
+  }
+
+  listProjectSessions(projectId: string, userId: string): SessionListItem[] {
+    const role = this.projectMembershipRole(projectId, userId);
+    if (!role) throw notFound("Project");
+    return this.sqlite.prepare(`
+      SELECT sessions.id, sessions.project_id, sessions.owner_user_id,
+             sessions.title, sessions.mode, sessions.state,
+             ? AS role, sessions.next_sequence AS current_sequence, sessions.updated_at,
+             (SELECT COUNT(*) FROM project_memberships
+              WHERE project_memberships.project_id = sessions.project_id) AS member_count
+      FROM sessions
+      WHERE sessions.project_id = ?
+      ORDER BY sessions.updated_at DESC, sessions.id ASC
+    `).all(role, projectId) as unknown as SessionListItem[];
+  }
+
   createInvitation(actor: Actor, sessionId: string, input: {
     role: InvitationRole;
     ttl?: InvitationTtl | undefined;
@@ -804,6 +1167,9 @@ export class CollaborationDatabase {
     device_name: string;
     device_expires_at?: string | null | undefined;
   }, options: { browserSession?: boolean } = {}): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult {
+    const projectInvitation = this.sqlite.prepare("SELECT id FROM project_invitations WHERE token_digest = ?")
+      .get(this.tokenDigest(input.invite_token));
+    if (projectInvitation) return this.claimProjectInvitation(input, options);
     const timestamp = this.now();
     const result = this.transaction((): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult | { failure: "invalid" | "expired" } => {
       const row = this.sqlite.prepare("SELECT * FROM invitations WHERE token_digest = ?")
@@ -846,6 +1212,11 @@ export class CollaborationDatabase {
         timestamp,
         input.device_expires_at ?? null,
       );
+      const projectId = this.requireSession(row.session_id).project_id;
+      this.sqlite.prepare(`
+        INSERT INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(projectId, userId, row.role, timestamp, timestamp);
       this.sqlite.prepare(`
         INSERT INTO memberships(session_id, user_id, role, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?)
@@ -897,6 +1268,9 @@ export class CollaborationDatabase {
   }
 
   claimInvitationForActor(actor: Actor, inviteToken: string): AcceptInvitationResult {
+    const projectInvitation = this.sqlite.prepare("SELECT id FROM project_invitations WHERE token_digest = ?")
+      .get(this.tokenDigest(inviteToken));
+    if (projectInvitation) return this.claimProjectInvitationForActor(actor, inviteToken);
     const timestamp = this.now();
     const result = this.transaction((): AcceptInvitationResult | { failure: "invalid" | "expired" } => {
       const device = this.sqlite.prepare(`
@@ -916,9 +1290,14 @@ export class CollaborationDatabase {
       }
       const session = this.requireSession(row.session_id);
       if (session.state !== "active") return { failure: "invalid" };
-      if (this.membershipRole(row.session_id, actor.user_id) !== null) {
-        throw conflict("User is already a member of this session");
+      const projectId = this.requireSession(row.session_id).project_id;
+      if (this.projectMembershipRole(projectId, actor.user_id) !== null) {
+        throw conflict("User is already a member of this project");
       }
+      this.sqlite.prepare(`
+        INSERT INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(projectId, actor.user_id, row.role, timestamp, timestamp);
       this.sqlite.prepare(`
         INSERT INTO memberships(session_id, user_id, role, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?)
@@ -1002,7 +1381,229 @@ export class CollaborationDatabase {
     `).all(sessionId) as unknown as InvitationAuditRecord[];
   }
 
+  createProjectInvitation(actor: Actor, projectId: string, input: {
+    role: InvitationRole;
+    ttl?: InvitationTtl | undefined;
+  }): { invitation: ProjectInvitationRecord; invite_token: string } {
+    const project = this.requireProjectOwnedBy(projectId, actor.user_id);
+    if (project.state !== "active") throw conflict("Archived projects do not accept invitations");
+    const ttl = input.ttl ?? "24h";
+    const ttlMs = INVITATION_TTL_MS[ttl];
+    if (ttlMs === undefined) throw conflict("Invitation TTL must be 1h, 24h, or 7d");
+    const invitationId = randomUUID();
+    const inviteToken = issueInvitationToken();
+    const createdAtDate = this.clock();
+    const createdAt = createdAtDate.toISOString();
+    const expiresAt = new Date(createdAtDate.getTime() + ttlMs).toISOString();
+    return this.transaction(() => {
+      this.sqlite.prepare(`
+        INSERT INTO project_invitations(
+          id, project_id, inviter_user_id, role, token_digest, created_at, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        invitationId,
+        projectId,
+        actor.user_id,
+        input.role,
+        this.tokenDigest(inviteToken),
+        createdAt,
+        expiresAt,
+      );
+      this.appendProjectInvitationAudit({
+        invitation_id: invitationId,
+        project_id: projectId,
+        action: "created",
+        inviter_user_id: actor.user_id,
+        subject_user_id: null,
+        subject_device_id: null,
+        role: input.role,
+        created_at: createdAt,
+      });
+      return {
+        invitation: this.requireProjectInvitation(invitationId),
+        invite_token: inviteToken,
+      };
+    });
+  }
+
+  revokeProjectInvitation(actor: Actor, projectId: string, invitationId: string): ProjectInvitationRecord {
+    this.requireProjectOwnedBy(projectId, actor.user_id);
+    const timestamp = this.now();
+    this.expirePendingProjectInvitations(projectId, timestamp);
+    return this.transaction(() => {
+      const invitation = this.requireProjectInvitation(invitationId, projectId);
+      if (invitation.claimed_at !== null) throw conflict("Claimed invitations cannot be revoked");
+      if (invitation.expired_at !== null) throw conflict("Expired invitations cannot be revoked");
+      if (invitation.revoked_at !== null) return invitation;
+      this.sqlite.prepare("UPDATE project_invitations SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
+        .run(timestamp, invitationId);
+      this.appendProjectInvitationAudit({
+        invitation_id: invitation.id,
+        project_id: invitation.project_id,
+        action: "revoked",
+        inviter_user_id: invitation.inviter_user_id,
+        subject_user_id: null,
+        subject_device_id: null,
+        role: invitation.role,
+        created_at: timestamp,
+      });
+      return this.requireProjectInvitation(invitationId, projectId);
+    });
+  }
+
+  listProjectInvitations(actor: Actor, projectId: string): ProjectInvitationRecord[] {
+    this.requireProjectOwnedBy(projectId, actor.user_id);
+    this.expirePendingProjectInvitations(projectId, this.now());
+    const rows = this.sqlite.prepare(`
+      SELECT * FROM project_invitations WHERE project_id = ? ORDER BY created_at DESC, id
+    `).all(projectId) as unknown as ProjectInvitationRow[];
+    return rows.map((row) => this.publicProjectInvitation(row));
+  }
+
+  listProjectInvitationAudit(actor: Actor, projectId: string): ProjectInvitationAuditRecord[] {
+    this.requireProjectOwnedBy(projectId, actor.user_id);
+    this.expirePendingProjectInvitations(projectId, this.now());
+    return this.sqlite.prepare(`
+      SELECT id, invitation_id, project_id, action, inviter_user_id,
+             subject_user_id, subject_device_id, role, created_at
+      FROM project_invitation_audit WHERE project_id = ? ORDER BY rowid
+    `).all(projectId) as unknown as ProjectInvitationAuditRecord[];
+  }
+
+  private claimProjectInvitation(
+    input: {
+      invite_token: string;
+      user_id?: string | undefined;
+      display_name: string;
+      device_id?: string | undefined;
+      device_name: string;
+      device_expires_at?: string | null | undefined;
+    },
+    options: { browserSession?: boolean },
+  ): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult {
+    const timestamp = this.now();
+    const result = this.transaction((): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult | { failure: "invalid" | "expired" } => {
+      const row = this.sqlite.prepare("SELECT * FROM project_invitations WHERE token_digest = ?")
+        .get(this.tokenDigest(input.invite_token)) as unknown as ProjectInvitationRow | undefined;
+      if (!row || row.revoked_at !== null || row.claimed_at !== null || row.expired_at !== null) {
+        return { failure: "invalid" };
+      }
+      if (row.expires_at <= timestamp) {
+        this.expireProjectInvitation(this.publicProjectInvitation(row), timestamp);
+        return { failure: "expired" };
+      }
+      const project = this.requireProject(row.project_id);
+      if (project.state !== "active") return { failure: "invalid" };
+      const userId = input.user_id ?? randomUUID();
+      const deviceId = input.device_id ?? randomUUID();
+      const deviceToken = issueDeviceToken();
+      this.sqlite.prepare("INSERT INTO users(id, display_name, created_at) VALUES (?, ?, ?)")
+        .run(userId, input.display_name, timestamp);
+      this.sqlite.prepare(`
+        INSERT INTO devices(id, user_id, name, token_hash, created_at, token_created_at, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        deviceId,
+        userId,
+        input.device_name,
+        this.tokenDigest(deviceToken),
+        timestamp,
+        timestamp,
+        input.device_expires_at ?? null,
+      );
+      this.sqlite.prepare(`
+        INSERT INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(row.project_id, userId, row.role, timestamp, timestamp);
+      const claimed = this.sqlite.prepare(`
+        UPDATE project_invitations
+        SET claimed_at = ?, claimed_by_user_id = ?, claimed_by_device_id = ?
+        WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL AND expired_at IS NULL AND expires_at > ?
+      `).run(timestamp, userId, deviceId, row.id, timestamp);
+      if (Number(claimed.changes) !== 1) throw conflict("Invitation was claimed concurrently");
+      this.appendProjectInvitationAudit({
+        invitation_id: row.id,
+        project_id: row.project_id,
+        action: "claimed",
+        inviter_user_id: row.inviter_user_id,
+        subject_user_id: userId,
+        subject_device_id: deviceId,
+        role: row.role,
+        created_at: timestamp,
+      });
+      this.touchProject(row.project_id, timestamp);
+      const actor = { user_id: userId, display_name: input.display_name, device_id: deviceId };
+      const claimResult: ClaimInvitationResult = {
+        actor,
+        token: deviceToken,
+        device: this.getDeviceForUser(userId, deviceId),
+        invitation: this.requireProjectInvitation(row.id),
+        event: null,
+      };
+      return options.browserSession
+        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp)) }
+        : claimResult;
+    });
+    if ("failure" in result) {
+      throw unauthorized(result.failure === "expired" ? "Invitation is expired" : "Invitation is invalid or unavailable");
+    }
+    return result;
+  }
+
+  private claimProjectInvitationForActor(actor: Actor, inviteToken: string): AcceptInvitationResult {
+    const timestamp = this.now();
+    const result = this.transaction((): AcceptInvitationResult | { failure: "invalid" | "expired" } => {
+      const device = this.sqlite.prepare(`
+        SELECT id FROM devices
+        WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > ?)
+      `).get(actor.device_id, actor.user_id, timestamp);
+      if (!device) return { failure: "invalid" };
+      const row = this.sqlite.prepare("SELECT * FROM project_invitations WHERE token_digest = ?")
+        .get(this.tokenDigest(inviteToken)) as unknown as ProjectInvitationRow | undefined;
+      if (!row || row.revoked_at !== null || row.claimed_at !== null || row.expired_at !== null) {
+        return { failure: "invalid" };
+      }
+      if (row.expires_at <= timestamp) {
+        this.expireProjectInvitation(this.publicProjectInvitation(row), timestamp);
+        return { failure: "expired" };
+      }
+      const project = this.requireProject(row.project_id);
+      if (project.state !== "active") return { failure: "invalid" };
+      if (this.projectMembershipRole(row.project_id, actor.user_id) !== null) {
+        throw conflict("User is already a member of this project");
+      }
+      this.sqlite.prepare(`
+        INSERT INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(row.project_id, actor.user_id, row.role, timestamp, timestamp);
+      const claimed = this.sqlite.prepare(`
+        UPDATE project_invitations
+        SET claimed_at = ?, claimed_by_user_id = ?, claimed_by_device_id = ?
+        WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL AND expired_at IS NULL AND expires_at > ?
+      `).run(timestamp, actor.user_id, actor.device_id, row.id, timestamp);
+      if (Number(claimed.changes) !== 1) throw conflict("Invitation was claimed concurrently");
+      this.appendProjectInvitationAudit({
+        invitation_id: row.id,
+        project_id: row.project_id,
+        action: "claimed",
+        inviter_user_id: row.inviter_user_id,
+        subject_user_id: actor.user_id,
+        subject_device_id: actor.device_id,
+        role: row.role,
+        created_at: timestamp,
+      });
+      this.touchProject(row.project_id, timestamp);
+      return { actor, invitation: this.requireProjectInvitation(row.id), event: null };
+    });
+    if ("failure" in result) {
+      throw unauthorized(result.failure === "expired" ? "Invitation is expired" : "Invitation is invalid or unavailable");
+    }
+    return result;
+  }
+
   createSession(actor: Actor, input: {
+    project_id?: string | undefined;
     session_id?: string | undefined;
     idempotency_key: string;
     mode: SessionMode;
@@ -1012,39 +1613,104 @@ export class CollaborationDatabase {
       .update(`${actor.user_id}\0${input.idempotency_key}`)
       .digest("hex")
       .slice(0, 32)}`;
+    const projectId = input.project_id ?? `project-${createHash("sha256")
+      .update(`legacy-session\0${sessionId}`)
+      .digest("hex")
+      .slice(0, 32)}`;
     const timestamp = this.now();
-    return this.transaction(() => {
-      const creationPayload = { action: "created", mode: input.mode, title: input.title } satisfies JsonValue;
-      const existingSession = this.sqlite.prepare("SELECT id FROM sessions WHERE id = ?").get(sessionId);
-      if (existingSession) {
-        const existingEvent = this.findByIdempotencyKey(sessionId, input.idempotency_key);
-        if (!existingEvent) throw idempotencyConflict("Session ID already exists with another operation");
-        return {
-          session: this.requireSession(sessionId),
-          event: this.requireIdempotencyMatch(
-            existingEvent,
-            actor.user_id,
-            "session_state_change",
-            creationPayload,
-          ),
-        };
+    return this.transaction(() => this.createSessionInsideTransaction(actor, {
+      project_id: projectId,
+      session_id: sessionId,
+      idempotency_key: input.idempotency_key,
+      mode: input.mode,
+      title: input.title,
+    }, timestamp, () => {
+      if (input.project_id === undefined) {
+        const project = this.sqlite.prepare("SELECT id FROM projects WHERE id = ?")
+          .get(projectId);
+        if (!project) {
+          this.sqlite.prepare(`
+            INSERT INTO projects(id, owner_user_id, title, state, creation_idempotency_key, created_at, updated_at)
+            VALUES (?, ?, ?, 'active', ?, ?, ?)
+          `).run(projectId, actor.user_id, input.title, `legacy-${input.idempotency_key}`, timestamp, timestamp);
+          this.sqlite.prepare(`
+            INSERT INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+            VALUES (?, ?, 'owner', ?, ?)
+          `).run(projectId, actor.user_id, timestamp, timestamp);
+        }
+      } else {
+        const project = this.requireProject(projectId);
+        if (project.state !== "active") throw conflict("Archived projects do not accept new sessions");
       }
-      this.sqlite.prepare(`
-        INSERT INTO sessions(id, owner_user_id, mode, title, state, next_sequence, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'active', 0, ?, ?)
-      `).run(sessionId, actor.user_id, input.mode, input.title, timestamp, timestamp);
-      this.sqlite.prepare(`
-        INSERT INTO memberships(session_id, user_id, role, created_at, updated_at)
-        VALUES (?, ?, 'owner', ?, ?)
-      `).run(sessionId, actor.user_id, timestamp, timestamp);
-      const event = this.appendInsideTransaction(actor.user_id, sessionId, {
-        idempotency_key: input.idempotency_key,
-        type: "session_state_change",
-        visibility: "session",
-        payload: creationPayload,
-      }, null);
-      return { session: this.requireSession(sessionId), event };
-    });
+    }));
+  }
+
+  private createSessionInsideTransaction(
+    actor: Actor,
+    input: {
+      project_id: string;
+      session_id: string;
+      event_id?: string | undefined;
+      idempotency_key: string;
+      mode: SessionMode;
+      title: string;
+    },
+    timestamp: string,
+    prepareProject: () => void = () => {},
+  ): { session: SessionRecord; event: CanonicalEvent } {
+    const creationPayload = { action: "created", mode: input.mode, title: input.title } satisfies JsonValue;
+    prepareProject();
+    const project = this.requireProject(input.project_id);
+    if (project.state !== "active") throw conflict("Archived projects do not accept new sessions");
+    const projectRole = this.projectMembershipRole(input.project_id, actor.user_id);
+    if (projectRole === null) throw notFound("Project");
+    if (projectRole === "viewer") throw forbidden("Viewers cannot create shared sessions");
+    if (projectRole === "participant" && input.mode !== "solo") {
+      throw forbidden("Participants may create only their own solo sessions");
+    }
+    const existingSession = this.sqlite.prepare("SELECT id FROM sessions WHERE id = ?").get(input.session_id);
+    if (existingSession) {
+      const session = this.requireSession(input.session_id);
+      const existingEvent = this.findByIdempotencyKey(input.session_id, input.idempotency_key);
+      if (session.project_id !== input.project_id || !existingEvent) {
+        throw idempotencyConflict("Session ID already exists with another operation");
+      }
+      return {
+        session,
+        event: this.requireIdempotencyMatch(
+          existingEvent,
+          actor.user_id,
+          "session_state_change",
+          creationPayload,
+        ),
+      };
+    }
+    this.enforceSessionQuota(input.project_id, actor.user_id);
+    this.sqlite.prepare(`
+      INSERT INTO sessions(
+        id, project_id, owner_user_id, mode, title, state, next_sequence, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'active', 0, ?, ?)
+    `).run(
+      input.session_id,
+      input.project_id,
+      actor.user_id,
+      input.mode,
+      input.title,
+      timestamp,
+      timestamp,
+    );
+    this.sqlite.prepare(`
+      INSERT INTO memberships(session_id, user_id, role, created_at, updated_at)
+      VALUES (?, ?, 'owner', ?, ?)
+    `).run(input.session_id, actor.user_id, timestamp, timestamp);
+    const event = this.appendInsideTransaction(actor.user_id, input.session_id, {
+      event_id: input.event_id,
+      idempotency_key: input.idempotency_key,
+      type: "session_state_change",
+      visibility: "session",
+      payload: creationPayload,
+    }, null);
+    return { session: this.requireSession(input.session_id), event };
   }
 
   requireSession(sessionId: string): SessionRecord {
@@ -1055,39 +1721,43 @@ export class CollaborationDatabase {
 
   listSessions(userId: string): SessionListItem[] {
     return this.sqlite.prepare(`
-      SELECT sessions.id, sessions.title, sessions.mode, sessions.state,
-             memberships.role, sessions.next_sequence AS current_sequence,
+      SELECT sessions.id, sessions.project_id, sessions.owner_user_id,
+             sessions.title, sessions.mode, sessions.state,
+             project_memberships.role, sessions.next_sequence AS current_sequence,
              sessions.updated_at,
-             (SELECT COUNT(*) FROM memberships AS session_members
-              WHERE session_members.session_id = sessions.id) AS member_count
-      FROM memberships
-      JOIN sessions ON sessions.id = memberships.session_id
-      WHERE memberships.user_id = ?
+             (SELECT COUNT(*) FROM project_memberships AS project_members
+              WHERE project_members.project_id = sessions.project_id) AS member_count
+      FROM project_memberships
+      JOIN sessions ON sessions.project_id = project_memberships.project_id
+      WHERE project_memberships.user_id = ?
       ORDER BY sessions.updated_at DESC, sessions.id ASC
     `).all(userId) as unknown as SessionListItem[];
   }
 
   listSessionMembers(sessionId: string): SessionMemberRecord[] {
     const rows = this.sqlite.prepare(`
-      SELECT memberships.user_id, users.display_name, memberships.role,
+      SELECT project_memberships.user_id, users.display_name, project_memberships.role,
              runtimes.id AS runtime_id, runtimes.session_id AS runtime_session_id,
              runtimes.user_id AS runtime_user_id, runtimes.device_id,
+             runtimes.purpose,
              runtimes.harness, runtimes.provider, runtimes.model,
              runtimes.local_session_id, runtimes.capture_fidelity,
              runtimes.status, runtimes.last_seen_at
-      FROM memberships
-      JOIN users ON users.id = memberships.user_id
+      FROM sessions
+      JOIN project_memberships ON project_memberships.project_id = sessions.project_id
+      JOIN users ON users.id = project_memberships.user_id
       LEFT JOIN runtimes ON runtimes.id = (
         SELECT candidate.id FROM runtimes AS candidate
-        WHERE candidate.session_id = memberships.session_id
-          AND candidate.user_id = memberships.user_id
+        WHERE candidate.session_id = sessions.id
+          AND candidate.user_id = project_memberships.user_id
           AND candidate.status != 'revoked'
-        ORDER BY CASE WHEN candidate.status = 'online' THEN 0 ELSE 1 END,
+        ORDER BY CASE WHEN candidate.purpose = 'execution' THEN 0 ELSE 1 END,
+                 CASE WHEN candidate.status = 'online' THEN 0 ELSE 1 END,
                  candidate.last_seen_at DESC
         LIMIT 1
       )
-      WHERE memberships.session_id = ?
-      ORDER BY CASE memberships.role WHEN 'owner' THEN 0 WHEN 'participant' THEN 1 ELSE 2 END,
+      WHERE sessions.id = ?
+      ORDER BY CASE project_memberships.role WHEN 'owner' THEN 0 WHEN 'participant' THEN 1 ELSE 2 END,
                users.display_name ASC
     `).all(sessionId) as Array<Record<string, string | null>>;
 
@@ -1101,6 +1771,7 @@ export class CollaborationDatabase {
         session_id: String(row.runtime_session_id),
         user_id: String(row.runtime_user_id),
         device_id: String(row.device_id),
+        purpose: row.purpose as RuntimeRecord["purpose"],
         harness: String(row.harness),
         provider: String(row.provider),
         model: String(row.model),
@@ -1113,7 +1784,12 @@ export class CollaborationDatabase {
   }
 
   membershipRole(sessionId: string, userId: string): MembershipRole | null {
-    const row = this.sqlite.prepare("SELECT role FROM memberships WHERE session_id = ? AND user_id = ?")
+    const row = this.sqlite.prepare(`
+      SELECT project_memberships.role
+      FROM sessions
+      JOIN project_memberships ON project_memberships.project_id = sessions.project_id
+      WHERE sessions.id = ? AND project_memberships.user_id = ?
+    `)
       .get(sessionId, userId) as unknown as MembershipRow | undefined;
     return row?.role ?? null;
   }
@@ -1124,11 +1800,26 @@ export class CollaborationDatabase {
       const payload = { action: "set", user_id: userId, role } satisfies JsonValue;
       if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "membership_change", payload);
       const timestamp = this.now();
+      const session = this.requireSession(sessionId);
+      const project = this.requireProject(session.project_id);
+      if (userId === project.owner_user_id) throw conflict("The project owner's role cannot be changed");
+      this.sqlite.prepare(`
+        INSERT INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(project_id, user_id) DO UPDATE SET role = excluded.role, updated_at = excluded.updated_at
+      `).run(session.project_id, userId, role, timestamp, timestamp);
       this.sqlite.prepare(`
         INSERT INTO memberships(session_id, user_id, role, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT(session_id, user_id) DO UPDATE SET role = excluded.role, updated_at = excluded.updated_at
       `).run(sessionId, userId, role, timestamp, timestamp);
+      if (role === "viewer") {
+        this.sqlite.prepare(`
+          UPDATE runtimes SET status = 'revoked'
+          WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
+            AND purpose = 'execution'
+        `).run(userId, session.project_id);
+      }
       return this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "membership_change",
@@ -1143,9 +1834,20 @@ export class CollaborationDatabase {
       const existing = this.findByIdempotencyKey(sessionId, idempotencyKey);
       const payload = { action: "removed", user_id: userId } satisfies JsonValue;
       if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "membership_change", payload);
-      const result = this.sqlite.prepare("DELETE FROM memberships WHERE session_id = ? AND user_id = ? AND role != 'owner'")
-        .run(sessionId, userId);
+      const session = this.requireSession(sessionId);
+      const result = this.sqlite.prepare(`
+        DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
+      `).run(session.project_id, userId);
       if (Number(result.changes) === 0) throw notFound("Membership");
+      this.sqlite.prepare(`
+        DELETE FROM memberships WHERE user_id = ?
+          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
+          AND role != 'owner'
+      `).run(userId, session.project_id);
+      this.sqlite.prepare(`
+        UPDATE runtimes SET status = 'revoked' WHERE user_id = ?
+          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
+      `).run(userId, session.project_id);
       return this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "membership_change",
@@ -1162,10 +1864,22 @@ export class CollaborationDatabase {
     idempotency_key: string;
   }): { session: SessionRecord; event: CanonicalEvent } {
     return this.transaction(() => {
+      const manageableSession = this.requireSessionManageableInsideTransaction(actor, sessionId);
+      if (manageableSession.mode === "solo"
+        && this.membershipRole(sessionId, actor.user_id) !== "owner"
+        && input.mode !== undefined && input.mode !== "solo") {
+        throw forbidden("Only the project owner can convert a solo session to multi");
+      }
+      const payload: Record<string, JsonValue> = {
+        action: input.title !== undefined && input.mode === undefined && input.state === undefined ? "renamed" : "updated",
+      };
+      if (input.mode !== undefined) payload.mode = input.mode;
+      if (input.state !== undefined) payload.state = input.state;
+      if (input.title !== undefined) payload.title = input.title;
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
       if (existing) return {
         session: this.requireSession(sessionId),
-        event: this.requireIdempotencyMatch(existing, actor.user_id, "session_state_change"),
+        event: this.requireIdempotencyMatch(existing, actor.user_id, "session_state_change", payload),
       };
       const session = this.requireSession(sessionId);
       const next = {
@@ -1173,13 +1887,23 @@ export class CollaborationDatabase {
         state: input.state ?? session.state,
         title: input.title ?? session.title,
       };
-      this.sqlite.prepare("UPDATE sessions SET mode = ?, state = ?, title = ?, updated_at = ? WHERE id = ?")
-        .run(next.mode, next.state, next.title, this.now(), sessionId);
+      const timestamp = this.now();
+      this.sqlite.prepare(`
+        UPDATE sessions SET mode = ?, state = ?, title = ?,
+          updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END
+        WHERE id = ?
+      `).run(next.mode, next.state, next.title, timestamp, timestamp, sessionId);
+      if (next.mode === "solo") {
+        this.sqlite.prepare(`
+          UPDATE runtimes SET status = 'revoked'
+          WHERE session_id = ? AND user_id != ?
+        `).run(sessionId, session.owner_user_id);
+      }
       const event = this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: input.idempotency_key,
         type: "session_state_change",
         visibility: "session",
-        payload: { action: "updated", ...next },
+        payload,
       }, null);
       return { session: this.requireSession(sessionId), event };
     });
@@ -1260,6 +1984,7 @@ export class CollaborationDatabase {
     runtime_id?: string | undefined;
     session_id: string;
     device_id: string;
+    purpose?: "execution" | "snapshot_connector" | undefined;
     harness: string;
     provider: string;
     model: string;
@@ -1271,21 +1996,22 @@ export class CollaborationDatabase {
     const runtimeId = input.runtime_id ?? randomUUID();
     const timestamp = this.now();
     this.sqlite.prepare(`
-      INSERT INTO runtimes(id, session_id, user_id, device_id, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+      INSERT INTO runtimes(id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
       ON CONFLICT(device_id, harness, local_session_id) DO UPDATE SET
         session_id = excluded.session_id,
+        purpose = excluded.purpose,
         provider = excluded.provider,
         model = excluded.model,
         capture_fidelity = excluded.capture_fidelity,
         status = 'online',
         last_seen_at = excluded.last_seen_at
-    `).run(runtimeId, input.session_id, actor.user_id, input.device_id, input.harness, input.provider, input.model, input.local_session_id, input.capture_fidelity, timestamp, timestamp);
+    `).run(runtimeId, input.session_id, actor.user_id, input.device_id, input.purpose ?? "execution", input.harness, input.provider, input.model, input.local_session_id, input.capture_fidelity, timestamp, timestamp);
     return this.getRuntimeByIdentity(input.device_id, input.harness, input.local_session_id);
   }
 
   getRuntime(runtimeId: string): RuntimeRecord {
-    const row = this.sqlite.prepare("SELECT id, session_id, user_id, device_id, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at FROM runtimes WHERE id = ?")
+    const row = this.sqlite.prepare("SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at FROM runtimes WHERE id = ?")
       .get(runtimeId) as unknown as RuntimeRow | undefined;
     if (!row) throw notFound("Runtime");
     return row;
@@ -1304,15 +2030,18 @@ export class CollaborationDatabase {
     return this.transaction(() => {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be claimed");
+      if (this.sqlite.prepare("SELECT 1 FROM local_turn_commits WHERE request_event_id = ?").get(requestEventId)) {
+        throw agentRequestAlreadyCompleted();
+      }
       const runtime = this.getRuntime(runtimeId);
       if (runtime.session_id !== sessionId || runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
-        || event.actor_user_id !== actor.user_id || runtime.status === "revoked") {
+        || event.actor_user_id !== actor.user_id || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("The request is eligible only for the initiating user's active runtime");
       }
       const existing = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
       if (existing) {
-        if (existing.runtime_id !== runtimeId) throw conflict("Agent request is already claimed by another runtime");
+        if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
         return { request_event_id: requestEventId, runtime_id: runtimeId, status: existing.status };
       }
       const active = this.sqlite.prepare(`
@@ -1332,7 +2061,7 @@ export class CollaborationDatabase {
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
-        || runtime.session_id !== sessionId || runtime.status === "revoked") {
+        || runtime.session_id !== sessionId || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("A matching active runtime on the authenticated device is required");
       }
       const existingEvent = this.findByIdempotencyKey(sessionId, idempotencyKey);
@@ -1365,6 +2094,176 @@ export class CollaborationDatabase {
     });
   }
 
+  commitLocalTurn(actor: Actor, sessionId: string, input: CommitLocalTurnInput): CommitLocalTurnResult {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      const runtime = this.requireRuntimeForActor(actor, sessionId, input.runtime_id, "execution");
+      if (session.state !== "active") throw conflict("Archived sessions do not accept completed local turns");
+      if (input.based_on_sequence > session.next_sequence) {
+        throw conflict("based_on_sequence cannot be ahead of the canonical session head");
+      }
+      const digestPayload: JsonValue = {
+        local_turn_id: input.local_turn_id,
+        runtime_id: input.runtime_id,
+        based_on_sequence: input.based_on_sequence,
+        occurred_at: input.occurred_at,
+        ...(input.observed_model === undefined ? {} : { observed_model: input.observed_model }),
+        ...(input.observed_reasoning_effort === undefined ? {} : { observed_reasoning_effort: input.observed_reasoning_effort }),
+        request_payload: input.request_payload,
+        response_payload: input.response_payload,
+        tool_events: (input.tool_events ?? []).map((event) => ({
+          type: event.type,
+          payload: event.payload,
+          ...(event.occurred_at === undefined ? {} : { occurred_at: event.occurred_at }),
+        })),
+      };
+      const inputDigest = createHash("sha256").update(stableJson(digestPayload)).digest("hex");
+      const existing = this.sqlite.prepare(`
+        SELECT input_digest, head_before_commit, request_event_id, response_event_id, tool_event_ids_json
+        FROM local_turn_commits WHERE session_id = ? AND runtime_id = ? AND local_turn_id = ?
+      `).get(sessionId, input.runtime_id, input.local_turn_id) as unknown as LocalTurnCommitRow | undefined;
+      if (existing) {
+        if (existing.input_digest !== inputDigest) throw idempotencyConflict("Local turn retry body does not match the committed turn");
+        return this.localTurnResult(input.local_turn_id, input.runtime_id, input.based_on_sequence, existing);
+      }
+      const headBeforeCommit = session.next_sequence;
+      const keyBase = `local-turn-${createHash("sha256")
+        .update(`${sessionId}\0${input.runtime_id}\0${input.local_turn_id}`)
+        .digest("hex")}`;
+      const provenance = {
+        ...this.runtimeProvenance(runtime),
+        ...(input.observed_model === undefined ? {} : { model: input.observed_model }),
+        ...(input.observed_reasoning_effort === undefined ? {} : { reasoning_effort: input.observed_reasoning_effort }),
+      };
+      const requestEvent = this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: `${keyBase}-request`, type: "agent_request", visibility: "session",
+        payload: payloadWithClientOccurredAt(input.request_payload, input.occurred_at), runtime_id: input.runtime_id,
+      }, provenance);
+      const toolEvents = (input.tool_events ?? []).map((event, index) => this.appendInsideTransaction(
+        actor.user_id, sessionId, {
+          idempotency_key: `${keyBase}-tool-${index}`, type: event.type, visibility: "session",
+          reply_to_event_id: requestEvent.id,
+          payload: payloadWithClientOccurredAt(event.payload, event.occurred_at ?? input.occurred_at),
+          runtime_id: input.runtime_id,
+        }, provenance,
+      ));
+      const responseEvent = this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: `${keyBase}-response`, type: "agent_response", visibility: "session",
+        reply_to_event_id: requestEvent.id,
+        payload: payloadWithClientOccurredAt(input.response_payload, input.occurred_at),
+        runtime_id: input.runtime_id,
+      }, provenance);
+      this.sqlite.prepare(`
+        INSERT INTO local_turn_commits(
+          session_id, runtime_id, local_turn_id, input_digest, head_before_commit,
+          request_event_id, response_event_id, tool_event_ids_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(sessionId, input.runtime_id, input.local_turn_id, inputDigest, headBeforeCommit,
+        requestEvent.id, responseEvent.id, JSON.stringify(toolEvents.map((event) => event.id)), this.now());
+      return {
+        local_turn_id: input.local_turn_id,
+        runtime_id: input.runtime_id,
+        head_before_commit: headBeforeCommit,
+        reconciliation_required: headBeforeCommit > input.based_on_sequence,
+        request_event: requestEvent,
+        response_event: responseEvent,
+        tool_events: toolEvents,
+      };
+    });
+  }
+
+  createSnapshotRequest(actor: Actor, sessionId: string): SnapshotRequestRecord {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
+      this.enforceActiveSnapshotRequestQuota(sessionId, actor.user_id);
+      this.enforceSnapshotStorageQuota(sessionId, actor.user_id, SNAPSHOT_REQUEST_METADATA_BYTES);
+      const id = randomUUID();
+      this.sqlite.prepare(`
+        INSERT INTO snapshot_requests(
+          id, session_id, requested_by_user_id, through_sequence, status, created_at,
+          storage_bytes, metadata_charged
+        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, 1)
+      `).run(id, sessionId, actor.user_id, session.next_sequence, this.now(), SNAPSHOT_REQUEST_METADATA_BYTES);
+      this.sqlite.prepare(`
+        INSERT INTO snapshot_storage_usage(session_id, user_id, bytes) VALUES (?, ?, ?)
+        ON CONFLICT(session_id, user_id) DO UPDATE SET bytes = bytes + excluded.bytes
+      `).run(sessionId, actor.user_id, SNAPSHOT_REQUEST_METADATA_BYTES);
+      return this.requireSnapshotRequest(id);
+    });
+  }
+
+  getSnapshotRequest(actor: Actor, requestId: string): SnapshotRequestRecord {
+    this.assertActiveDevice(actor);
+    const request = this.requireSnapshotRequest(requestId);
+    if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
+    if (request.status !== "completed" && this.membershipRole(request.session_id, actor.user_id) === null) {
+      throw notFound("Snapshot request");
+    }
+    return request;
+  }
+
+  listSnapshotRequests(
+    actor: Actor,
+    status: SnapshotRequestStatus | undefined,
+    sessionId: string | undefined,
+    limit: number,
+    maxBytes = DEFAULT_MAX_SNAPSHOT_LIST_BYTES,
+  ): SnapshotRequestRecord[] {
+    this.assertActiveDevice(actor);
+    const rows = this.sqlite.prepare(`
+      SELECT snapshot_requests.* FROM snapshot_requests
+      WHERE requested_by_user_id = ? AND (? IS NULL OR status = ?)
+        AND (? IS NULL OR session_id = ?)
+        AND (status = 'completed' OR EXISTS (
+          SELECT 1 FROM project_memberships JOIN sessions
+            ON sessions.project_id = project_memberships.project_id
+          WHERE sessions.id = snapshot_requests.session_id
+            AND project_memberships.user_id = snapshot_requests.requested_by_user_id
+        ))
+      ORDER BY created_at DESC, snapshot_requests.rowid DESC LIMIT ?
+    `).all(
+      actor.user_id, status ?? null, status ?? null, sessionId ?? null, sessionId ?? null, limit,
+    ) as unknown as SnapshotRequestRow[];
+    const results: SnapshotRequestRecord[] = [];
+    let encodedBytes = 2;
+    for (const row of rows) {
+      const record = this.mapSnapshotRequest(row);
+      const recordBytes = Buffer.byteLength(JSON.stringify(record)) + (results.length === 0 ? 0 : 1);
+      if (results.length > 0 && encodedBytes + recordBytes > maxBytes) break;
+      results.push(record);
+      encodedBytes += recordBytes;
+    }
+    return results;
+  }
+
+  claimSnapshotRequest(actor: Actor, requestId: string, runtimeId: string): SnapshotRequestRecord {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const request = this.requireSnapshotRequest(requestId);
+      if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
+      this.requireReadableSessionInsideTransaction(actor, request.session_id);
+      this.requireRuntimeForActor(actor, request.session_id, runtimeId, "snapshot_connector");
+      if (request.status === "claimed" && request.claimed_by_runtime_id === runtimeId) return request;
+      if (request.status !== "pending") throw conflict("Snapshot request is not pending");
+      const changed = this.sqlite.prepare(`
+        UPDATE snapshot_requests SET status = 'claimed', claimed_by_runtime_id = ?, claimed_at = ?
+        WHERE id = ? AND status = 'pending'
+      `).run(runtimeId, this.now(), requestId);
+      if (Number(changed.changes) !== 1) throw conflict("Snapshot request was claimed concurrently");
+      return this.requireSnapshotRequest(requestId);
+    });
+  }
+
+  completeSnapshotRequest(actor: Actor, requestId: string, runtimeId: string, result: JsonValue): SnapshotRequestRecord {
+    return this.finishSnapshotRequest(actor, requestId, runtimeId, { result });
+  }
+
+  failSnapshotRequest(actor: Actor, requestId: string, runtimeId: string, failure: SnapshotFailure): SnapshotRequestRecord {
+    return this.finishSnapshotRequest(actor, requestId, runtimeId, { failure });
+  }
+
   runtimeProvenance(runtime: RuntimeRecord): RuntimeProvenance {
     return {
       user_id: runtime.user_id,
@@ -1373,21 +2272,155 @@ export class CollaborationDatabase {
       harness: runtime.harness,
       provider: runtime.provider,
       model: runtime.model,
-      local_session_id: runtime.local_session_id,
+      local_session_id: "private",
       capture_fidelity: runtime.capture_fidelity,
     };
   }
 
   private getRuntimeByIdentity(deviceId: string, harness: string, localSessionId: string): RuntimeRecord {
     const row = this.sqlite.prepare(`
-      SELECT id, session_id, user_id, device_id, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at
+      SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at
       FROM runtimes WHERE device_id = ? AND harness = ? AND local_session_id = ?
     `).get(deviceId, harness, localSessionId) as unknown as RuntimeRow;
     return row;
   }
 
+  private requireRuntimeForActor(actor: Actor, sessionId: string, runtimeId: string, purpose: RuntimeRecord["purpose"]): RuntimeRecord {
+    const runtime = this.getRuntime(runtimeId);
+    if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
+      || runtime.session_id !== sessionId || runtime.status === "revoked" || runtime.purpose !== purpose) {
+      throw forbidden(`A matching ${purpose} runtime on the authenticated device is required`);
+    }
+    return runtime;
+  }
+
+  private requireReadableSessionInsideTransaction(actor: Actor, sessionId: string): SessionRecord {
+    const session = this.requireSession(sessionId);
+    if (this.membershipRole(sessionId, actor.user_id) === null) throw notFound("Session");
+    return session;
+  }
+
+  private requireWritableSessionInsideTransaction(actor: Actor, sessionId: string): SessionRecord {
+    const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
+    const role = this.membershipRole(sessionId, actor.user_id);
+    if (role === "viewer") throw forbidden("Viewers cannot append events");
+    if (session.mode === "solo" && session.owner_user_id !== actor.user_id) {
+      throw forbidden("Only the solo creator can write to this session");
+    }
+    return session;
+  }
+
+  private requireSessionManageableInsideTransaction(actor: Actor, sessionId: string): SessionRecord {
+    const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
+    const role = this.membershipRole(sessionId, actor.user_id);
+    if (session.mode === "solo") {
+      if (role === "viewer" || session.owner_user_id !== actor.user_id) {
+        throw forbidden("Only the solo creator can manage this session");
+      }
+      return session;
+    }
+    if (role !== "owner") throw forbidden("Only the project owner can manage a multi session");
+    return session;
+  }
+
+  private localTurnResult(localTurnId: string, runtimeId: string, basedOnSequence: number, row: LocalTurnCommitRow): CommitLocalTurnResult {
+    const toolEventIds = JSON.parse(row.tool_event_ids_json) as string[];
+    return {
+      local_turn_id: localTurnId,
+      runtime_id: runtimeId,
+      head_before_commit: row.head_before_commit,
+      reconciliation_required: row.head_before_commit > basedOnSequence,
+      request_event: this.getEventById(row.request_event_id),
+      response_event: this.getEventById(row.response_event_id),
+      tool_events: toolEventIds.map((id) => this.getEventById(id)),
+    };
+  }
+
+  private getEventById(eventId: string): CanonicalEvent {
+    const row = this.sqlite.prepare("SELECT * FROM events WHERE id = ?").get(eventId) as unknown as EventRow | undefined;
+    if (!row) throw notFound("Event");
+    return mapEvent(row);
+  }
+
+  private mapSnapshotRequest(row: SnapshotRequestRow): SnapshotRequestRecord {
+    return {
+      id: row.id, session_id: row.session_id, requested_by_user_id: row.requested_by_user_id,
+      through_sequence: row.through_sequence, status: row.status,
+      claimed_by_runtime_id: row.claimed_by_runtime_id, created_at: row.created_at,
+      claimed_at: row.claimed_at, completed_at: row.completed_at, failed_at: row.failed_at,
+      result: row.result_json === null ? null : JSON.parse(row.result_json) as JsonValue,
+      failure: row.failure_json === null ? null : JSON.parse(row.failure_json) as SnapshotFailure,
+    };
+  }
+
+  private requireSnapshotRequest(requestId: string): SnapshotRequestRecord {
+    const row = this.sqlite.prepare("SELECT * FROM snapshot_requests WHERE id = ?")
+      .get(requestId) as unknown as SnapshotRequestRow | undefined;
+    if (!row) throw notFound("Snapshot request");
+    return this.mapSnapshotRequest(row);
+  }
+
+  private finishSnapshotRequest(
+    actor: Actor,
+    requestId: string,
+    runtimeId: string,
+    outcome: { result: JsonValue } | { failure: SnapshotFailure },
+  ): SnapshotRequestRecord {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const request = this.requireSnapshotRequest(requestId);
+      if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
+      this.requireRuntimeForActor(actor, request.session_id, runtimeId, "snapshot_connector");
+      const targetStatus = "result" in outcome ? "completed" : "failed";
+      if (request.status === targetStatus && request.claimed_by_runtime_id === runtimeId) {
+        const matches = "result" in outcome
+          ? stableJson(request.result as JsonValue) === stableJson(outcome.result)
+          : stableJson(request.failure as unknown as JsonValue) === stableJson(outcome.failure as unknown as JsonValue);
+        if (!matches) throw idempotencyConflict("Snapshot request outcome does not match the stored outcome");
+        return request;
+      }
+      if (request.status !== "claimed" || request.claimed_by_runtime_id !== runtimeId) {
+        throw conflict("Snapshot request must be claimed by this runtime");
+      }
+      const timestamp = this.now();
+      const storedJson = JSON.stringify("result" in outcome ? outcome.result : outcome.failure);
+      const storageBytes = Buffer.byteLength(storedJson);
+      if (storageBytes > this.maxSnapshotResultBytes) {
+        throw snapshotStorageQuotaExceeded("result", this.maxSnapshotResultBytes);
+      }
+      this.enforceSnapshotStorageQuota(request.session_id, actor.user_id, storageBytes);
+      if ("result" in outcome) {
+        this.sqlite.prepare(`UPDATE snapshot_requests SET status = 'completed', completed_at = ?, result_json = ?, storage_bytes = storage_bytes + ?
+          WHERE id = ? AND status = 'claimed' AND claimed_by_runtime_id = ?`)
+          .run(timestamp, storedJson, storageBytes, requestId, runtimeId);
+      } else {
+        this.sqlite.prepare(`UPDATE snapshot_requests SET status = 'failed', failed_at = ?, failure_json = ?, storage_bytes = storage_bytes + ?
+          WHERE id = ? AND status = 'claimed' AND claimed_by_runtime_id = ?`)
+          .run(timestamp, storedJson, storageBytes, requestId, runtimeId);
+      }
+      this.sqlite.prepare(`
+        INSERT INTO snapshot_storage_usage(session_id, user_id, bytes) VALUES (?, ?, ?)
+        ON CONFLICT(session_id, user_id) DO UPDATE SET bytes = bytes + excluded.bytes
+      `).run(request.session_id, actor.user_id, storageBytes);
+      return this.requireSnapshotRequest(requestId);
+    });
+  }
+
   private now(): string {
     return this.clock().toISOString();
+  }
+
+  private touchProject(projectId: string, timestamp = this.now()): void {
+    this.sqlite.prepare(`
+      UPDATE projects SET updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END
+      WHERE id = ?
+    `).run(timestamp, timestamp, projectId);
+  }
+
+  private actorDisplayName(actorUserId: string): string {
+    const row = this.sqlite.prepare("SELECT display_name FROM users WHERE id = ?")
+      .get(actorUserId) as { display_name: string } | undefined;
+    return row?.display_name.trim() || actorUserId;
   }
 
   private tokenDigest(token: string): string {
@@ -1405,16 +2438,72 @@ export class CollaborationDatabase {
   }
 
   private requireSessionOwnedBy(sessionId: string, userId: string): SessionRecord {
-    const row = this.sqlite.prepare("SELECT * FROM sessions WHERE id = ? AND owner_user_id = ?")
+    const row = this.sqlite.prepare(`
+      SELECT sessions.* FROM sessions
+      JOIN projects ON projects.id = sessions.project_id
+      WHERE sessions.id = ? AND projects.owner_user_id = ?
+    `)
       .get(sessionId, userId) as unknown as SessionRow | undefined;
     if (!row) throw notFound("Session");
     return row;
+  }
+
+  private requireProjectOwnedBy(projectId: string, userId: string): ProjectRecord {
+    const row = this.sqlite.prepare("SELECT * FROM projects WHERE id = ? AND owner_user_id = ?")
+      .get(projectId, userId) as unknown as ProjectRow | undefined;
+    if (!row) throw notFound("Project");
+    return this.publicProject(row);
+  }
+
+  private requireProjectMember(projectId: string, userId: string): ProjectMemberRecord {
+    const row = this.sqlite.prepare(`
+      SELECT project_memberships.user_id, users.display_name, project_memberships.role
+      FROM project_memberships JOIN users ON users.id = project_memberships.user_id
+      WHERE project_memberships.project_id = ? AND project_memberships.user_id = ?
+    `).get(projectId, userId) as unknown as ProjectMemberRecord | undefined;
+    if (!row) throw notFound("Project membership");
+    return row;
+  }
+
+  private publicProject(row: ProjectRow | ProjectRecord): ProjectRecord {
+    return {
+      id: row.id,
+      owner_user_id: row.owner_user_id,
+      title: row.title,
+      state: row.state,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+    };
+  }
+
+  private projectCreationResult(
+    project: ProjectRow | ProjectRecord,
+  ): ProjectRecord & { role: "owner"; session_count: number } {
+    const row = this.sqlite.prepare("SELECT COUNT(*) AS count FROM sessions WHERE project_id = ?")
+      .get(project.id) as unknown as CountRow;
+    return { ...this.publicProject(project), role: "owner", session_count: row.count };
   }
 
   private publicInvitation(row: InvitationRow): InvitationRecord {
     return {
       id: row.id,
       session_id: row.session_id,
+      inviter_user_id: row.inviter_user_id,
+      role: row.role,
+      created_at: row.created_at,
+      expires_at: row.expires_at,
+      revoked_at: row.revoked_at,
+      expired_at: row.expired_at,
+      claimed_at: row.claimed_at,
+      claimed_by_user_id: row.claimed_by_user_id,
+      claimed_by_device_id: row.claimed_by_device_id,
+    };
+  }
+
+  private publicProjectInvitation(row: ProjectInvitationRow): ProjectInvitationRecord {
+    return {
+      id: row.id,
+      project_id: row.project_id,
       inviter_user_id: row.inviter_user_id,
       role: row.role,
       created_at: row.created_at,
@@ -1460,6 +2549,16 @@ export class CollaborationDatabase {
     return this.publicInvitation(row);
   }
 
+  private requireProjectInvitation(invitationId: string, projectId?: string): ProjectInvitationRecord {
+    const row = (projectId === undefined
+      ? this.sqlite.prepare("SELECT * FROM project_invitations WHERE id = ?").get(invitationId)
+      : this.sqlite.prepare("SELECT * FROM project_invitations WHERE id = ? AND project_id = ?")
+        .get(invitationId, projectId)
+    ) as unknown as ProjectInvitationRow | undefined;
+    if (!row) throw notFound("Invitation");
+    return this.publicProjectInvitation(row);
+  }
+
   private appendInvitationAudit(input: Omit<InvitationAuditRecord, "id">): void {
     this.sqlite.prepare(`
       INSERT INTO invitation_audit(
@@ -1470,6 +2569,25 @@ export class CollaborationDatabase {
       randomUUID(),
       input.invitation_id,
       input.session_id,
+      input.action,
+      input.inviter_user_id,
+      input.subject_user_id,
+      input.subject_device_id,
+      input.role,
+      input.created_at,
+    );
+  }
+
+  private appendProjectInvitationAudit(input: Omit<ProjectInvitationAuditRecord, "id">): void {
+    this.sqlite.prepare(`
+      INSERT INTO project_invitation_audit(
+        id, invitation_id, project_id, action, inviter_user_id,
+        subject_user_id, subject_device_id, role, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      randomUUID(),
+      input.invitation_id,
+      input.project_id,
       input.action,
       input.inviter_user_id,
       input.subject_user_id,
@@ -1524,6 +2642,35 @@ export class CollaborationDatabase {
     });
   }
 
+  private expireProjectInvitation(invitation: ProjectInvitationRecord, timestamp: string): void {
+    const result = this.sqlite.prepare(`
+      UPDATE project_invitations SET expired_at = ?
+      WHERE id = ? AND expired_at IS NULL AND revoked_at IS NULL AND claimed_at IS NULL AND expires_at <= ?
+    `).run(timestamp, invitation.id, timestamp);
+    if (Number(result.changes) === 0) return;
+    this.appendProjectInvitationAudit({
+      invitation_id: invitation.id,
+      project_id: invitation.project_id,
+      action: "expired",
+      inviter_user_id: invitation.inviter_user_id,
+      subject_user_id: null,
+      subject_device_id: null,
+      role: invitation.role,
+      created_at: timestamp,
+    });
+  }
+
+  private expirePendingProjectInvitations(projectId: string, timestamp: string): void {
+    this.transaction(() => {
+      const rows = this.sqlite.prepare(`
+        SELECT * FROM project_invitations
+        WHERE project_id = ? AND expired_at IS NULL AND revoked_at IS NULL
+          AND claimed_at IS NULL AND expires_at <= ?
+      `).all(projectId, timestamp) as unknown as ProjectInvitationRow[];
+      for (const row of rows) this.expireProjectInvitation(this.publicProjectInvitation(row), timestamp);
+    });
+  }
+
   private migrateDeviceCredentialColumns(): void {
     const columns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(devices)").all() as Array<{ name: string }>).map((row) => row.name),
@@ -1545,6 +2692,150 @@ export class CollaborationDatabase {
     if (addedTokenCreatedAt) {
       this.sqlite.exec("UPDATE devices SET token_created_at = created_at WHERE token_created_at IS NULL");
     }
+  }
+
+  private migrateProjectModel(): void {
+    const sessionColumns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!sessionColumns.has("project_id")) {
+      this.sqlite.exec("ALTER TABLE sessions ADD COLUMN project_id TEXT REFERENCES projects(id) ON DELETE CASCADE");
+    }
+    const legacySessions = this.sqlite.prepare(`
+      SELECT id, owner_user_id, title, created_at, updated_at
+      FROM sessions WHERE project_id IS NULL
+      ORDER BY id
+    `).all() as Array<{
+      id: string;
+      owner_user_id: string;
+      title: string;
+      created_at: string;
+      updated_at: string;
+    }>;
+    if (legacySessions.length > 0) {
+      this.transaction(() => {
+        for (const session of legacySessions) {
+          const projectId = `project-${createHash("sha256")
+            .update(`legacy-session\0${session.id}`)
+            .digest("hex")
+            .slice(0, 32)}`;
+          this.sqlite.prepare(`
+            INSERT OR IGNORE INTO projects(
+              id, owner_user_id, title, state, creation_idempotency_key, created_at, updated_at
+            ) VALUES (?, ?, ?, 'active', ?, ?, ?)
+          `).run(
+            projectId,
+            session.owner_user_id,
+            session.title,
+            `migration-${session.id}`,
+            session.created_at,
+            session.updated_at,
+          );
+          this.sqlite.prepare(`
+            INSERT OR IGNORE INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+            SELECT ?, user_id, role, created_at, updated_at FROM memberships WHERE session_id = ?
+          `).run(projectId, session.id);
+          this.sqlite.prepare(`
+            INSERT OR IGNORE INTO project_memberships(project_id, user_id, role, created_at, updated_at)
+            VALUES (?, ?, 'owner', ?, ?)
+          `).run(projectId, session.owner_user_id, session.created_at, session.updated_at);
+          this.sqlite.prepare("UPDATE sessions SET project_id = ? WHERE id = ? AND project_id IS NULL")
+            .run(projectId, session.id);
+        }
+      });
+    }
+    this.sqlite.exec(`
+      CREATE TRIGGER IF NOT EXISTS sessions_project_required_insert
+      BEFORE INSERT ON sessions
+      WHEN NEW.project_id IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_id is required');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS sessions_project_required_update
+      BEFORE UPDATE OF project_id ON sessions
+      WHEN NEW.project_id IS NULL
+      BEGIN
+        SELECT RAISE(ABORT, 'project_id is required');
+      END;
+    `);
+  }
+
+  private migrateRuntimePurposeColumn(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(runtimes)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("purpose")) {
+      this.sqlite.exec("ALTER TABLE runtimes ADD COLUMN purpose TEXT NOT NULL DEFAULT 'execution' CHECK (purpose IN ('execution', 'snapshot_connector'))");
+    }
+  }
+
+  private migrateEventActorDisplayNameColumn(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(events)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("actor_display_name")) {
+      this.sqlite.exec("ALTER TABLE events ADD COLUMN actor_display_name TEXT");
+    }
+    this.sqlite.exec(`
+      UPDATE events
+      SET actor_display_name = COALESCE(
+        NULLIF((SELECT display_name FROM users WHERE users.id = events.actor_user_id), ''),
+        actor_user_id
+      )
+      WHERE actor_display_name IS NULL OR actor_display_name = '';
+
+      CREATE TRIGGER IF NOT EXISTS events_actor_display_name_required_insert
+      BEFORE INSERT ON events
+      WHEN NEW.actor_display_name IS NULL OR NEW.actor_display_name = ''
+      BEGIN
+        SELECT RAISE(ABORT, 'actor_display_name is required');
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS events_actor_display_name_required_update
+      BEFORE UPDATE OF actor_display_name ON events
+      WHEN NEW.actor_display_name IS NULL OR NEW.actor_display_name = ''
+      BEGIN
+        SELECT RAISE(ABORT, 'actor_display_name is required');
+      END;
+    `);
+  }
+
+  private migrateSnapshotStorageLedger(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("storage_bytes")) {
+      this.sqlite.exec("ALTER TABLE snapshot_requests ADD COLUMN storage_bytes INTEGER NOT NULL DEFAULT 0 CHECK (storage_bytes >= 0)");
+    }
+    if (!columns.has("metadata_charged")) {
+      this.sqlite.exec("ALTER TABLE snapshot_requests ADD COLUMN metadata_charged INTEGER NOT NULL DEFAULT 0 CHECK (metadata_charged IN (0, 1))");
+    }
+    this.transaction(() => {
+      this.sqlite.exec(`
+        UPDATE snapshot_requests
+        SET storage_bytes = storage_bytes + ${SNAPSHOT_REQUEST_METADATA_BYTES}, metadata_charged = 1
+        WHERE metadata_charged = 0
+      `);
+      this.sqlite.exec("DELETE FROM snapshot_storage_usage");
+      this.sqlite.exec(`
+        INSERT INTO snapshot_storage_usage(session_id, user_id, bytes)
+        SELECT session_id, requested_by_user_id, SUM(storage_bytes)
+        FROM snapshot_requests
+        WHERE storage_bytes > 0
+        GROUP BY session_id, requested_by_user_id
+      `);
+    });
+  }
+
+  private migrateCanonicalProvenancePrivacy(): void {
+    const changed = this.sqlite.prepare(`
+      UPDATE events
+      SET runtime_provenance_json = json_set(runtime_provenance_json, '$.local_session_id', 'private')
+      WHERE runtime_provenance_json IS NOT NULL
+        AND COALESCE(json_extract(runtime_provenance_json, '$.local_session_id'), '') != 'private'
+    `).run();
+    if (Number(changed.changes) > 0) this.sqlite.exec("DELETE FROM event_storage_usage");
   }
 
   private initializeEventStorageUsage(): void {
@@ -1577,6 +2868,59 @@ export class CollaborationDatabase {
     }
   }
 
+  private enforceSnapshotStorageQuota(sessionId: string, userId: string, storageBytes: number): void {
+    const sessionUsage = this.sqlite.prepare(
+      "SELECT COALESCE(SUM(bytes), 0) AS bytes FROM snapshot_storage_usage WHERE session_id = ?",
+    ).get(sessionId) as unknown as BytesRow;
+    if (sessionUsage.bytes + storageBytes > this.maxSessionSnapshotBytes) {
+      throw snapshotStorageQuotaExceeded("session", this.maxSessionSnapshotBytes);
+    }
+    const userUsage = this.sqlite.prepare(
+      "SELECT COALESCE(SUM(bytes), 0) AS bytes FROM snapshot_storage_usage WHERE user_id = ?",
+    ).get(userId) as unknown as BytesRow;
+    if (userUsage.bytes + storageBytes > this.maxUserSnapshotBytes) {
+      throw snapshotStorageQuotaExceeded("user", this.maxUserSnapshotBytes);
+    }
+    const totalUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM snapshot_storage_usage")
+      .get() as unknown as BytesRow;
+    if (totalUsage.bytes + storageBytes > this.maxTotalSnapshotBytes) {
+      throw snapshotStorageQuotaExceeded("deployment", this.maxTotalSnapshotBytes);
+    }
+  }
+
+  private enforceActiveSnapshotRequestQuota(sessionId: string, userId: string): void {
+    const activePredicate = "status IN ('pending', 'claimed')";
+    const user = this.sqlite.prepare(
+      `SELECT COUNT(*) AS count FROM snapshot_requests WHERE requested_by_user_id = ? AND ${activePredicate}`,
+    ).get(userId) as unknown as CountRow;
+    if (user.count >= this.maxUserActiveSnapshotRequests) {
+      throw conflict("User has too many active snapshot requests");
+    }
+    const session = this.sqlite.prepare(
+      `SELECT COUNT(*) AS count FROM snapshot_requests WHERE session_id = ? AND ${activePredicate}`,
+    ).get(sessionId) as unknown as CountRow;
+    if (session.count >= this.maxSessionActiveSnapshotRequests) {
+      throw conflict("Session has too many active snapshot requests");
+    }
+    const deployment = this.sqlite.prepare(
+      `SELECT COUNT(*) AS count FROM snapshot_requests WHERE ${activePredicate}`,
+    ).get() as unknown as CountRow;
+    if (deployment.count >= this.maxTotalActiveSnapshotRequests) {
+      throw conflict("Deployment has too many active snapshot requests");
+    }
+  }
+
+  private enforceSessionQuota(projectId: string, ownerUserId: string): void {
+    const user = this.sqlite.prepare("SELECT COUNT(*) AS count FROM sessions WHERE owner_user_id = ?")
+      .get(ownerUserId) as unknown as CountRow;
+    if (user.count >= this.maxUserSessions) throw sessionQuotaExceeded("user", this.maxUserSessions);
+    const project = this.sqlite.prepare("SELECT COUNT(*) AS count FROM sessions WHERE project_id = ?")
+      .get(projectId) as unknown as CountRow;
+    if (project.count >= this.maxProjectSessions) throw sessionQuotaExceeded("project", this.maxProjectSessions);
+    const total = this.sqlite.prepare("SELECT COUNT(*) AS count FROM sessions").get() as unknown as CountRow;
+    if (total.count >= this.maxTotalSessions) throw sessionQuotaExceeded("deployment", this.maxTotalSessions);
+  }
+
   private findByIdempotencyKey(sessionId: string, key: string): CanonicalEvent | null {
     const row = this.sqlite.prepare("SELECT * FROM events WHERE session_id = ? AND idempotency_key = ?")
       .get(sessionId, key) as unknown as EventRow | undefined;
@@ -1602,9 +2946,15 @@ export class CollaborationDatabase {
     return event;
   }
 
-  private appendInsideTransaction(actorUserId: string, sessionId: string, input: Omit<AppendEventInput, "visibility"> & { visibility?: EventVisibility }, provenance: RuntimeProvenance | null): CanonicalEvent {
+  private appendInsideTransaction(
+    actorUserId: string,
+    sessionId: string,
+    input: Omit<AppendEventInput, "visibility"> & { visibility?: EventVisibility },
+    provenance: RuntimeProvenance | null,
+  ): CanonicalEvent {
     const session = this.requireSession(sessionId);
     const sequence = session.next_sequence + 1;
+    const actorDisplayName = this.actorDisplayName(actorUserId);
     const event: CanonicalEvent = {
       id: input.event_id ?? randomUUID(),
       session_id: sessionId,
@@ -1612,6 +2962,7 @@ export class CollaborationDatabase {
       idempotency_key: input.idempotency_key,
       type: input.type,
       actor_user_id: actorUserId,
+      actor_display_name: actorDisplayName,
       created_at: this.now(),
       visibility: input.visibility ?? "session",
       reply_to_event_id: input.reply_to_event_id ?? null,
@@ -1624,8 +2975,8 @@ export class CollaborationDatabase {
     if (eventBytes > this.maxEventBytes) throw storageQuotaExceeded("event", this.maxEventBytes);
     this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes);
     this.sqlite.prepare(`
-      INSERT INTO events(id, session_id, sequence, idempotency_key, type, actor_user_id, created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO events(id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name, created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       event.id,
       event.session_id,
@@ -1633,6 +2984,7 @@ export class CollaborationDatabase {
       event.idempotency_key,
       event.type,
       event.actor_user_id,
+      actorDisplayName,
       event.created_at,
       event.visibility,
       event.reply_to_event_id,
@@ -1643,8 +2995,15 @@ export class CollaborationDatabase {
       INSERT INTO event_storage_usage(session_id, actor_user_id, bytes) VALUES (?, ?, ?)
       ON CONFLICT(session_id, actor_user_id) DO UPDATE SET bytes = bytes + excluded.bytes
     `).run(sessionId, actorUserId, eventBytes);
-    this.sqlite.prepare("UPDATE sessions SET next_sequence = ?, updated_at = ? WHERE id = ?")
-      .run(sequence, event.created_at, sessionId);
+    this.sqlite.prepare(`
+      UPDATE sessions SET next_sequence = ?,
+        updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END
+      WHERE id = ?
+    `).run(sequence, event.created_at, event.created_at, sessionId);
+    this.sqlite.prepare(`
+      UPDATE projects SET updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END
+      WHERE id = ?
+    `).run(event.created_at, event.created_at, session.project_id);
     return event;
   }
 

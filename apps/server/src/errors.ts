@@ -24,6 +24,14 @@ export function runtimeBusy(message = "Runtime already has an active agent reque
   return new ApiError(409, "runtime_busy", message);
 }
 
+export function agentRequestAlreadyClaimed(): ApiError {
+  return new ApiError(409, "agent_request_already_claimed", "Agent request is already claimed by another runtime");
+}
+
+export function agentRequestAlreadyCompleted(): ApiError {
+  return new ApiError(409, "agent_request_already_completed", "Agent request was already completed as a local turn");
+}
+
 export function forbidden(message = "Insufficient session permissions"): ApiError {
   return new ApiError(403, "forbidden", message);
 }
@@ -40,5 +48,24 @@ export function storageQuotaExceeded(scope: "event" | "user" | "session" | "depl
   return new ApiError(507, "storage_quota_exceeded", `${scope} event storage quota exceeded`, {
     scope,
     limit_bytes: limitBytes,
+  });
+}
+
+export function snapshotStorageQuotaExceeded(
+  scope: "result" | "user" | "session" | "deployment",
+  limitBytes: number,
+): ApiError {
+  return new ApiError(507, "storage_quota_exceeded", `${scope} snapshot storage quota exceeded`, {
+    resource: "snapshot",
+    scope,
+    limit_bytes: limitBytes,
+  });
+}
+
+export function sessionQuotaExceeded(scope: "user" | "project" | "deployment", limit: number): ApiError {
+  return new ApiError(507, "session_quota_exceeded", `${scope} session quota exceeded`, {
+    resource: "session",
+    scope,
+    limit,
   });
 }

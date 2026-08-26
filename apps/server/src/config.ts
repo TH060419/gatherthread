@@ -28,6 +28,9 @@ export interface ServerConfig {
   maxSessionEventBytes: number;
   maxTotalEventBytes: number;
   maxEventBytes: number;
+  maxUserSessions: number;
+  maxProjectSessions: number;
+  maxTotalSessions: number;
 }
 
 function parsePort(name: string, raw: string | undefined, fallback: number): number {
@@ -55,6 +58,14 @@ function parseByteLimit(name: string, raw: string | undefined, fallback: number,
     throw new ConfigurationError(`${name} must be a safe integer of at least ${minimum} bytes`);
   }
   return bytes;
+}
+
+function parseCountLimit(name: string, raw: string | undefined, fallback: number): number {
+  const value = raw ?? String(fallback);
+  if (!/^\d+$/.test(value)) throw new ConfigurationError(`${name} must be a positive integer`);
+  const count = Number(value);
+  if (!Number.isSafeInteger(count) || count < 1) throw new ConfigurationError(`${name} must be a positive safe integer`);
+  return count;
 }
 
 function parseLoopbackHost(raw: string | undefined): string {
@@ -134,6 +145,9 @@ export function loadServerConfig(
   const maxSessionEventBytes = parseByteLimit("GATHERTHREAD_MAX_SESSION_EVENT_BYTES", env.GATHERTHREAD_MAX_SESSION_EVENT_BYTES, 512 * 1024 * 1024);
   const maxTotalEventBytes = parseByteLimit("GATHERTHREAD_MAX_TOTAL_EVENT_BYTES", env.GATHERTHREAD_MAX_TOTAL_EVENT_BYTES, 2 * 1024 * 1024 * 1024);
   const maxEventBytes = parseByteLimit("GATHERTHREAD_MAX_EVENT_BYTES", env.GATHERTHREAD_MAX_EVENT_BYTES, 256 * 1024, 1024);
+  const maxUserSessions = parseCountLimit("GATHERTHREAD_MAX_USER_SESSIONS", env.GATHERTHREAD_MAX_USER_SESSIONS, 512);
+  const maxProjectSessions = parseCountLimit("GATHERTHREAD_MAX_PROJECT_SESSIONS", env.GATHERTHREAD_MAX_PROJECT_SESSIONS, 2_048);
+  const maxTotalSessions = parseCountLimit("GATHERTHREAD_MAX_TOTAL_SESSIONS", env.GATHERTHREAD_MAX_TOTAL_SESSIONS, 8_192);
   const rawAuthTokenPepper = env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
   if (rawAuthTokenPepper !== undefined && rawAuthTokenPepper !== rawAuthTokenPepper.trim()) {
     throw new ConfigurationError("GATHERTHREAD_AUTH_TOKEN_PEPPER must not have leading or trailing whitespace");
@@ -146,6 +160,9 @@ export function loadServerConfig(
   if (maxSessionEventBytes > maxTotalEventBytes || maxUserEventBytes > maxTotalEventBytes
     || maxEventBytes > Math.min(maxUserEventBytes, maxSessionEventBytes, maxTotalEventBytes)) {
     throw new ConfigurationError("Event, per-user, and per-session limits must fit within GATHERTHREAD_MAX_TOTAL_EVENT_BYTES");
+  }
+  if (maxUserSessions > maxTotalSessions || maxProjectSessions > maxTotalSessions) {
+    throw new ConfigurationError("Per-user and per-project session limits must fit within GATHERTHREAD_MAX_TOTAL_SESSIONS");
   }
   if (isProduction) {
     if (!secureTransport) {
@@ -177,6 +194,9 @@ export function loadServerConfig(
     maxSessionEventBytes,
     maxTotalEventBytes,
     maxEventBytes,
+    maxUserSessions,
+    maxProjectSessions,
+    maxTotalSessions,
   };
 }
 

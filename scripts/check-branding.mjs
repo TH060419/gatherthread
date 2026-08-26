@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { readFile, readdir, stat } from "node:fs/promises";
-import { extname, relative, resolve } from "node:path";
+import { extname, relative, resolve, sep } from "node:path";
 
 const root = process.cwd();
 const excludedDirectories = new Set([
   ".git", ".local", "coverage", "dist", "node_modules", "playwright-report", "test-results",
 ]);
-const excludedFiles = new Set(["scripts/check-branding.mjs"]);
+const excludedFiles = new Set([
+  ".codex/hooks.json",
+  "scripts/check-branding.mjs",
+]);
 const textExtensions = new Set([
   "", ".cjs", ".css", ".env", ".example", ".html", ".js", ".json", ".jsx", ".md", ".mjs",
   ".sh", ".ts", ".tsx", ".txt", ".yaml", ".yml",
@@ -34,7 +37,7 @@ async function walk(directory) {
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (excludedDirectories.has(entry.name)) continue;
     const absolute = resolve(directory, entry.name);
-    const name = relative(root, absolute);
+    const name = relative(root, absolute).split(sep).join("/");
     if (entry.isDirectory()) {
       await walk(absolute);
       continue;

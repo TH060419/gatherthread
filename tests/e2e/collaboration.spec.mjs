@@ -181,4 +181,83 @@ describe('collaboration contract', () => {
     const secondClaim = await driver.claimRequest({ runtime: ownerRuntime, requestId: secondRequest.id })
     assert.equal(secondClaim.request.id, secondRequest.id)
   })
+
+  test('an offline completed local turn is committed once and reports canonical divergence', async () => {
+    const owner = await driver.createUser('owner')
+    const collaborator = await driver.createUser('collaborator')
+    const session = await driver.createSession({ owner, mode: 'multi' })
+    await driver.addMember({ session, actor: owner, user: collaborator, role: 'participant' })
+    const ownerClient = await driver.connectClient({ session, user: owner })
+    const collaboratorClient = await driver.connectClient({ session, user: collaborator })
+    const ownerRuntime = await driver.registerRuntime({
+      user: owner,
+      deviceId: 'owner-device',
+      harness: 'codex',
+      provider: 'openai',
+      model: 'test-model',
+      localSessionId: 'owner-local-thread',
+    })
+
+    await collaboratorClient.append({
+      type: 'human_chat',
+      payload: { text: 'cloud changed while owner was offline' },
+      idempotencyKey: 'remote-during-offline',
+    })
+    const input = {
+      session,
+      runtime: ownerRuntime,
+      localTurnId: 'codex-turn-offline-1',
+      basedOnSequence: 0,
+      request: { content: 'local offline request' },
+      response: { content: 'local offline answer' },
+    }
+    const committed = await driver.commitLocalTurn(input)
+    const retry = await driver.commitLocalTurn(input)
+
+    assert.equal(committed.headBeforeCommit, 1)
+    assert.equal(committed.reconciliationRequired, true)
+    assert.deepEqual(retry, committed)
+    assert.equal(committed.responseEvent.replyTo, committed.requestEvent.id)
+    assert.deepEqual(
+      (await driver.listEvents({ session })).map((event) => event.sequence),
+      [1, 2, 3],
+    )
+    await rejectsWithCode(
+      driver.claimRequest({ runtime: ownerRuntime, requestId: committed.requestEvent.id }),
+      'already_completed',
+    )
+    await rejectsWithCode(
+      driver.commitLocalTurn({ ...input, response: { content: 'different retry' } }),
+      'idempotency_conflict',
+    )
+    await ownerClient.disconnect()
+  })
+
+  test('a completed local turn advances without rebuild when the cloud head did not change', async () => {
+    const owner = await driver.createUser('owner')
+    const session = await driver.createSession({ owner, mode: 'multi' })
+    const runtime = await driver.registerRuntime({
+      user: owner,
+      deviceId: 'owner-device',
+      harness: 'codex',
+      provider: 'openai',
+      model: 'test-model',
+      localSessionId: 'owner-local-thread',
+    })
+    const committed = await driver.commitLocalTurn({
+      session,
+      runtime,
+      localTurnId: 'codex-turn-online-1',
+      basedOnSequence: 0,
+      request: { content: 'local request' },
+      response: { content: 'local answer' },
+    })
+
+    assert.equal(committed.headBeforeCommit, 0)
+    assert.equal(committed.reconciliationRequired, false)
+    assert.deepEqual(
+      [committed.requestEvent.sequence, committed.responseEvent.sequence],
+      [1, 2],
+    )
+  })
 })

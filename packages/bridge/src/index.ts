@@ -5,4 +5,8 @@ export * from "./bridge.js";
 export * from "./config.js";
 export * from "./executor.js";
 export * from "./codex-executor.js";
+export * from "./codex-app-server.js";
+export * from "./codex-hooks.js";
+export * from "./project-harness.js";
+export * from "./project-workspace.js";
 export * from "./daemon.js";

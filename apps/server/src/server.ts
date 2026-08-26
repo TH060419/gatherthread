@@ -9,15 +9,22 @@ import {
   ClaimAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
   ClaimInvitationInputSchema,
+  ClaimSnapshotRequestInputSchema,
+  CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
+  CompleteSnapshotRequestInputSchema,
   CreateInvitationInputSchema,
   CreateIdentityInputSchema,
+  CreateProjectInputSchema,
   CreateSessionInputSchema,
+  FailSnapshotRequestInputSchema,
   IdempotencyKeySchema,
+  ListSnapshotRequestsQuerySchema,
   RegisterRuntimeInputSchema,
   RotateDeviceTokenInputSchema,
   SetMembershipInputSchema,
   SubscribeMessageSchema,
+  UpdateSessionInputSchema,
   type ApiErrorBody,
   type CanonicalEvent,
   type JsonValue,
@@ -45,15 +52,6 @@ const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/invitations/claim",
   "/v1/device-authorizations/claim",
 ]);
-
-const UpdateSessionInputSchema = z.object({
-  mode: z.enum(["solo", "multi"]).optional(),
-  state: z.enum(["active", "archived"]).optional(),
-  title: z.string().trim().min(1).max(200).optional(),
-  idempotency_key: IdempotencyKeySchema,
-}).refine((value) => value.mode !== undefined || value.state !== undefined || value.title !== undefined, {
-  message: "At least one session field must be updated",
-});
 
 interface SocketState {
   actor: Actor;
@@ -97,6 +95,16 @@ export interface ServerOptions {
   maxSessionEventBytes?: number;
   maxTotalEventBytes?: number;
   maxEventBytes?: number;
+  maxSnapshotResultBytes?: number;
+  maxUserSnapshotBytes?: number;
+  maxSessionSnapshotBytes?: number;
+  maxTotalSnapshotBytes?: number;
+  maxUserActiveSnapshotRequests?: number;
+  maxSessionActiveSnapshotRequests?: number;
+  maxTotalActiveSnapshotRequests?: number;
+  maxUserSessions?: number;
+  maxProjectSessions?: number;
+  maxTotalSessions?: number;
 }
 
 export interface RunningCollaborationServer {
@@ -308,6 +316,17 @@ function normalizeError(error: unknown): ApiError {
   return new ApiError(500, "internal_error", "Internal server error");
 }
 
+function parseTitleMutationInput<T>(parse: () => T): T {
+  try {
+    return parse();
+  } catch (error) {
+    if (error instanceof ZodError) {
+      throw new ApiError(422, "validation_error", "Request validation failed", error.issues as unknown as JsonValue);
+    }
+    throw error;
+  }
+}
+
 export async function startCollaborationServer(
   options: ServerOptions,
   port = 0,
@@ -319,6 +338,16 @@ export async function startCollaborationServer(
     maxSessionEventBytes: options.maxSessionEventBytes,
     maxTotalEventBytes: options.maxTotalEventBytes,
     maxEventBytes: options.maxEventBytes,
+    maxSnapshotResultBytes: options.maxSnapshotResultBytes,
+    maxUserSnapshotBytes: options.maxUserSnapshotBytes,
+    maxSessionSnapshotBytes: options.maxSessionSnapshotBytes,
+    maxTotalSnapshotBytes: options.maxTotalSnapshotBytes,
+    maxUserActiveSnapshotRequests: options.maxUserActiveSnapshotRequests,
+    maxSessionActiveSnapshotRequests: options.maxSessionActiveSnapshotRequests,
+    maxTotalActiveSnapshotRequests: options.maxTotalActiveSnapshotRequests,
+    maxUserSessions: options.maxUserSessions,
+    maxProjectSessions: options.maxProjectSessions,
+    maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
   const secureTransport = options.secureTransport ?? false;
@@ -338,6 +367,15 @@ export async function startCollaborationServer(
   const actorLimiter = new FixedWindowRateLimiter(options.actorRateLimit ?? { windowMs: 60_000, limit: 600 });
   const actorWriteLimiter = new FixedWindowRateLimiter(options.actorWriteRateLimit ?? { windowMs: 60_000, limit: 120 });
   const maxConnections = options.maxConnections ?? 128;
+
+  const closeSocketsWithoutMembership = (): void => {
+    for (const [socket, state] of sockets) {
+      if (state.sessionId !== null && database.membershipRole(state.sessionId, state.actor.user_id) === null) {
+        socket.close(1008, "membership_revoked");
+        sockets.delete(socket);
+      }
+    }
+  };
 
   const httpServer = createServer(async (request, response) => {
     try {
@@ -516,13 +554,88 @@ export async function startCollaborationServer(
       }
 
       if (request.method === "POST" && url.pathname === "/v1/sessions") {
-        const input = CreateSessionInputSchema.parse(await readAuthenticatedJson());
+        const body = await readAuthenticatedJson();
+        const input = parseTitleMutationInput(() => CreateSessionInputSchema.parse(body));
         sendJson(response, 201, { data: service.createSession(actor, input) });
         return;
       }
 
       if (request.method === "GET" && url.pathname === "/v1/sessions") {
         sendJson(response, 200, { data: { sessions: service.listSessions(actor) } });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/projects") {
+        const body = await readAuthenticatedJson();
+        const input = parseTitleMutationInput(() => CreateProjectInputSchema.parse(body));
+        sendJson(response, 201, { data: { project: service.createProject(actor, input) } });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/projects") {
+        sendJson(response, 200, { data: { projects: service.listProjects(actor) } });
+        return;
+      }
+
+      const projectId = parts[0] === "v1" && parts[1] === "projects" ? parts[2] : undefined;
+      if (projectId && request.method === "GET" && parts.length === 3) {
+        sendJson(response, 200, { data: service.getProject(actor, projectId) });
+        return;
+      }
+
+      if (projectId && parts[3] === "sessions" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: { sessions: service.listProjectSessions(actor, projectId) } });
+        return;
+      }
+
+      if (projectId && parts[3] === "sessions" && parts.length === 4 && request.method === "POST") {
+        const body = await readAuthenticatedJson();
+        const input = parseTitleMutationInput(() => CreateSessionInputSchema.parse(body));
+        sendJson(response, 201, { data: service.createSession(actor, { ...input, project_id: projectId }) });
+        return;
+      }
+
+      if (projectId && parts[3] === "members" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: { members: service.listProjectMembers(actor, projectId) } });
+        return;
+      }
+
+      if (projectId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "PUT") {
+        const input = SetMembershipInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: {
+          member: service.setProjectMembership(actor, projectId, parts[4], input.role),
+        } });
+        return;
+      }
+
+      if (projectId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
+        await readAuthenticatedJson();
+        service.removeProjectMembership(actor, projectId, parts[4]);
+        closeSocketsWithoutMembership();
+        response.writeHead(204).end();
+        return;
+      }
+
+      if (projectId && parts[3] === "invitations" && parts.length === 4 && request.method === "POST") {
+        const input = CreateInvitationInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: service.createProjectInvitation(actor, projectId, input) });
+        return;
+      }
+
+      if (projectId && parts[3] === "invitations" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: { invitations: service.listProjectInvitations(actor, projectId) } });
+        return;
+      }
+
+      if (projectId && parts[3] === "invitations" && parts[4] && parts.length === 5 && request.method === "DELETE") {
+        sendJson(response, 200, { data: {
+          invitation: service.revokeProjectInvitation(actor, projectId, parts[4]),
+        } });
+        return;
+      }
+
+      if (projectId && parts[3] === "invitation-audit" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: { audit: service.listProjectInvitationAudit(actor, projectId) } });
         return;
       }
 
@@ -547,7 +660,8 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && request.method === "PATCH" && parts.length === 3) {
-        const input = UpdateSessionInputSchema.parse(await readAuthenticatedJson());
+        const body = await readAuthenticatedJson();
+        const input = parseTitleMutationInput(() => UpdateSessionInputSchema.parse(body));
         sendJson(response, 200, { data: service.updateSession(actor, sessionId, input) });
         return;
       }
@@ -586,7 +700,9 @@ export async function startCollaborationServer(
 
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
         const input = z.object({ idempotency_key: IdempotencyKeySchema }).parse(await readAuthenticatedJson());
-        sendJson(response, 200, { data: { event: service.removeMembership(actor, sessionId, parts[4], input.idempotency_key) } });
+        const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key);
+        closeSocketsWithoutMembership();
+        sendJson(response, 200, { data: { event } });
         return;
       }
 
@@ -603,6 +719,18 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (sessionId && parts[3] === "local-turns" && parts.length === 4 && request.method === "POST") {
+        const input = CommitLocalTurnInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: service.commitLocalTurn(actor, sessionId, input) });
+        return;
+      }
+
+      if (sessionId && parts[3] === "snapshot-requests" && parts.length === 4 && request.method === "POST") {
+        z.object({}).parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: { snapshot_request: service.createSnapshotRequest(actor, sessionId) } });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/v1/runtimes") {
         const input = RegisterRuntimeInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 201, { data: { runtime: service.registerRuntime(actor, input) } });
@@ -611,6 +739,41 @@ export async function startCollaborationServer(
 
       if (request.method === "POST" && parts[0] === "v1" && parts[1] === "runtimes" && parts[2] && parts[3] === "heartbeat" && parts.length === 4) {
         sendJson(response, 200, { data: { runtime: service.heartbeatRuntime(actor, parts[2]) } });
+        return;
+      }
+
+      if (request.method === "GET" && parts[0] === "v1" && parts[1] === "snapshot-requests" && parts.length === 2) {
+        const query = ListSnapshotRequestsQuerySchema.parse({
+          status: url.searchParams.get("status") ?? undefined,
+          session_id: url.searchParams.get("session_id") ?? undefined,
+          limit: numericQuery(url, "limit", 50, 100, 1),
+        });
+        sendJson(response, 200, { data: {
+          snapshot_requests: service.listSnapshotRequests(actor, query.status, query.session_id, query.limit),
+        } });
+        return;
+      }
+
+      if (request.method === "GET" && parts[0] === "v1" && parts[1] === "snapshot-requests" && parts[2] && parts.length === 3) {
+        sendJson(response, 200, { data: { snapshot_request: service.getSnapshotRequest(actor, parts[2]) } });
+        return;
+      }
+
+      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "snapshot-requests" && parts[2] && parts[3] === "claim" && parts.length === 4) {
+        const input = ClaimSnapshotRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: { snapshot_request: service.claimSnapshotRequest(actor, parts[2], input.runtime_id) } });
+        return;
+      }
+
+      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "snapshot-requests" && parts[2] && parts[3] === "complete" && parts.length === 4) {
+        const input = CompleteSnapshotRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: { snapshot_request: service.completeSnapshotRequest(actor, parts[2], input.runtime_id, input.result) } });
+        return;
+      }
+
+      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "snapshot-requests" && parts[2] && parts[3] === "fail" && parts.length === 4) {
+        const input = FailSnapshotRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: { snapshot_request: service.failSnapshotRequest(actor, parts[2], input.runtime_id, input.error) } });
         return;
       }
 
@@ -687,6 +850,7 @@ export async function startCollaborationServer(
           state.cursor = message.after_sequence;
           let page = service.replay(actor, message.session_id, state.cursor, DEFAULT_REPLAY_LIMIT, MAX_REPLAY_BYTES);
           while (true) {
+            service.requireMembership(actor, message.session_id);
             if (!await socketSend(socket, { type: "replay", events: page.events, cursor: page.cursor, has_more: page.has_more })) return;
             state.cursor = page.cursor;
             database.assertActiveDevice(actor);
@@ -694,6 +858,7 @@ export async function startCollaborationServer(
             if (!page.has_more && nextPage.events.length === 0 && nextPage.cursor === state.cursor) break;
             page = nextPage;
           }
+          service.requireMembership(actor, message.session_id);
           const subscribedSend = socketSend(socket, { type: "subscribed", session_id: message.session_id, cursor: state.cursor });
           state.replaying = false;
           ownsReplay = false;
@@ -714,14 +879,16 @@ export async function startCollaborationServer(
       if (state.replaying || state.sessionId !== event.session_id || event.sequence <= state.cursor) continue;
       try {
         database.assertActiveDevice(state.actor);
+        service.requireMembership(state.actor, event.session_id);
         if (service.canReadEvent(state.actor, event)) {
-          void socketSend(socket, { type: "event", event });
+          void socketSend(socket, { type: "event", event: service.presentEvent(state.actor, event) });
         } else {
           void socketSend(socket, { type: "cursor", cursor: event.sequence });
         }
         state.cursor = event.sequence;
       } catch {
-        socket.close(1008, "device_revoked");
+        socket.close(1008, "membership_or_device_revoked");
+        sockets.delete(socket);
       }
     }
   });
@@ -734,8 +901,9 @@ export async function startCollaborationServer(
     for (const [socket, state] of sockets) {
       try {
         database.assertActiveDevice(state.actor);
+        if (state.sessionId !== null) service.requireMembership(state.actor, state.sessionId);
       } catch {
-        socket.close(1008, "device_revoked");
+        socket.close(1008, "membership_or_device_revoked");
         sockets.delete(socket);
         continue;
       }

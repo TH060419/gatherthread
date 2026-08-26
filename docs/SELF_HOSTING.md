@@ -44,11 +44,14 @@ GATHERTHREAD_MAX_EVENT_BYTES=262144
 GATHERTHREAD_MAX_USER_EVENT_BYTES=268435456
 GATHERTHREAD_MAX_SESSION_EVENT_BYTES=536870912
 GATHERTHREAD_MAX_TOTAL_EVENT_BYTES=2147483648
+GATHERTHREAD_MAX_USER_SESSIONS=512
+GATHERTHREAD_MAX_PROJECT_SESSIONS=2048
+GATHERTHREAD_MAX_TOTAL_SESSIONS=8192
 ```
 
 Generate the pepper with a cryptographic password generator, store it in a password manager, and paste it into `.env`. Never commit it. Losing or changing the pepper invalidates every device credential, so back it up separately from the database.
 
-The application refuses production startup if the public origin is not HTTPS, the pepper is missing or looks like a placeholder, HTTP bootstrap is enabled, the bind address is not loopback, event limits are invalid, or the database directory grants group/other access. The shown storage limits allow 256 MiB of attributed events per user, 512 MiB per session, and 2 GiB for the deployment. Increase them only after checking disk capacity and backup time; they prevent new writes rather than deleting history.
+The application refuses production startup if the public origin is not HTTPS, the pepper is missing or looks like a placeholder, HTTP bootstrap is enabled, the bind address is not loopback, event/session limits are invalid, or the database directory grants group/other access. The shown storage limits allow 256 MiB of attributed events per user, 512 MiB per session, and 2 GiB for the deployment, plus 512/2,048/8,192 session rows per creator/project/deployment. Increase them only after checking disk capacity and backup time; they prevent new writes rather than deleting history.
 
 ## Create the first owner
 
@@ -84,18 +87,19 @@ This helper runs `tailscale serve` in background mode and explicitly does not ru
 tailscale serve status
 ```
 
-Collaborators open the exact `GATHERTHREAD_PUBLIC_BASE_URL`. GatherThread still requires its own invitation, device credential, session role, and one-use WebSocket ticket; tailnet membership is only an additional network boundary.
+Collaborators open the exact `GATHERTHREAD_PUBLIC_BASE_URL`. GatherThread still requires its own project invitation, device credential, project role, and one-use WebSocket ticket; tailnet membership is only an additional network boundary.
 
 ## Restrict tailnet access
 
 Do not retain a broad allow-all tailnet policy. Use Tailscale grants to allow only the named collaborators to reach TCP 443 on the GatherThread host. Keep SSH, file sharing, and unrelated host ports outside that grant. Review the [Tailscale grants documentation](https://tailscale.com/docs/features/access-control/grants) and test the policy before removing your administrative recovery path.
 
-GatherThread does not trust Tailscale identity headers as application identity. User, device, runtime, and session authorization always come from GatherThread credentials and ACLs.
+GatherThread does not trust Tailscale identity headers as application identity. User, device, runtime, project, and session authorization always come from GatherThread credentials and ACLs.
 
 ## Invitations and devices
 
-- The owner creates a one-use invitation for `participant` or `viewer`.
+- The project owner creates a one-use project invitation for `participant` or `viewer`.
 - Expiry choices are one hour, 24 hours, or seven days; the default is 24 hours.
+- A participant can edit `multi` sessions and reads `solo`; a viewer is read-only throughout the project. The owner can change another member's role later.
 - A new collaborator claims the invitation and receives their own first device credential.
 - An existing user authenticates before accepting an invitation and receives no new credential.
 - A new device uses a separate ten-minute, one-use device authorization token.
@@ -107,7 +111,7 @@ Invitation and device authorization secrets are accepted in request bodies, neve
 
 Each collaborator runs the bridge locally with their own device credential and runtime metadata. The bridge requires an HTTPS GatherThread URL for remote hosts, rejects credentials embedded in URLs, persists cursors locally, and does not forward the GatherThread credential to a harness adapter process.
 
-For Codex, use the built-in connector documented in the [Codex connector guide](CODEX_CONNECT.md). It requests the device credential through a hidden prompt and strips it from the Codex child environment. Generic bridge adapters and MCP configuration are documented in [bridge configuration](../packages/bridge/README.md) and [MCP configuration](../packages/mcp/README.md). Keep credentials in local environment or an operating-system secret store, never in MCP JSON committed to the project.
+For Codex, use the built-in connector documented in the [Codex connector guide](CODEX_CONNECT.md). One connector binds the GatherThread project to one local project directory and uses a local stdio App Server to manage a separate named Codex thread per eligible session. It requests the device credential through a hidden prompt and strips it from the Codex child environment. Generic project harness adapters, bridge adapters, and MCP configuration are documented in [bridge configuration](../packages/bridge/README.md) and [MCP configuration](../packages/mcp/README.md). Keep credentials in local environment or an operating-system secret store, never in MCP JSON committed to the project.
 
 ## Backup and host migration
 

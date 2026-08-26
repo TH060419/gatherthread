@@ -1,17 +1,29 @@
 # Local bridge
 
-`LocalBridge` registers one session-scoped local runtime, keeps independent server and transcript cursors, imports authorized Codex or Claude Code transcripts, hydrates canonical history, and claims/completes agent requests.
+`LocalBridge` registers one session-scoped local runtime, keeps independent server and transcript cursors, imports authorized Codex or Claude Code transcripts, projects canonical history, and claims/completes eligible agent requests.
 
-For Codex, prefer the built-in connector. It maintains one private local Codex thread per GatherThread session/workspace mapping and automatically hydrates the canonical shared history:
+For Codex, prefer the built-in connector. Copy the operating-system-specific command from the project's **Connect Codex** dialog. It binds one GatherThread project to a safe same-name local workspace and discovers eligible sessions automatically. Each writable session has a Desktop-owned task plus a separate `exec`-source background projection.
 
 ```bash
 npm run codex:connect -- \
   --url https://your-host.your-tailnet.ts.net \
-  --workspace "/absolute/path/to/the/local/project" \
-  --model gpt-5.6-sol
+  --project PROJECT_ID \
+  --create-workspace \
+  --model gpt-5.6-sol \
+  --install-hooks
 ```
 
-The first request receives the complete visible history preceding that request. Later requests resume the same Codex thread and receive only the ordered canonical delta. Ordinary `human_chat` events become context but do not invoke Codex; only an `agent_request` authored by the authenticated local user is eligible for that user's runtime. See the [full connector guide](../../docs/CODEX_CONNECT.md).
+`--create-workspace` creates or exactly reuses `~/GatherThread Projects/<safe project name>` using a private credential-free binding marker, then opens that verified directory in Codex Desktop once. A failed or timed-out Desktop reveal is non-fatal and prints the directory for manual opening. Use `--workspace "/absolute/path"` instead when deliberately binding an existing source checkout. The token is always requested through hidden terminal input and is never copied from the Web page.
+
+Canonical events are appended to the background projection with `thread/inject_items` in sequence order. Human chat renders as `actor_display_name · Human Chat：…`; Agent requests and responses retain explicit type labels, and only responses carry canonical harness/model provenance. Oversized events are split into bounded UTF-8 chunks and compacted locally. The Desktop projection receives the canonical delta through `UserPromptSubmit` rather than a second App Server writer. See the [full connector guide](../../docs/CODEX_CONNECT.md).
+
+Project owners and participants attach every `multi` plus personal Solos they created; another member's Solo stays read-only even for the project owner. Viewers cannot execute agents, but visible sessions remain eligible for snapshot-only workers. With trusted Hooks enabled, an unknown local task's first `UserPromptSubmit` creates one deterministic creator-owned Solo for an owner or participant and adopts that same Desktop task; empty tasks and viewer tasks create nothing. Background execution and snapshot threads carry explicit non-discoverable purposes. The session list is refreshed every five seconds, each live session remains in its own Codex thread, and turns sharing one local workspace execute serially. See [ADR-0015](../../docs/adr/0015-create-personal-solos-from-first-local-prompt.md).
+
+Project discovery and scheduling depend on `ProjectHarnessAdapter`, not Codex process details. A Claude Code or DeepSeek Harness implementation supplies its descriptor, preflight, local-session identity, and per-session `HarnessExecutor` while reusing the same project/session loop. Codex-specific projection, compaction, local-turn outbox, reconciliation rebuild, snapshot, and hook capabilities remain on the Codex adapter.
+
+The Codex implementation uses App Server stdio JSON-RPC, creates desktop-interactive threads named `GatherThread · <project> · <session>`, and fails closed on unexpected approval requests or ambiguous completed turns. Completed turns reported by the trusted project hooks have stable IDs derived from the App Server thread/turn IDs. They are persisted to an idempotent local outbox before `POST /sessions/:id/local-turns`. A non-divergent acknowledgement binds the returned canonical IDs without re-execution or duplicate injection. When the server reports reconciliation, a new thread is rebuilt and compacted completely off to the side; only after its sequence is verified does the state file atomically switch. The old thread is renamed `offline fork` and archived best-effort, never deleted.
+
+Projection state version 3 records `cloudCursor`, `projectionGeneration`, model/context-window source and token estimate, `compactionGeneration`, `coveredThroughSequence`, `lastInjectedSequence`, the metadata sidecar, connector client/turn IDs, local-turn bindings, pending outbox entries, hook drafts, crash-recovery journals, and any in-progress rebuild checkpoint. The state and hook files are atomic/private (`0600`).
 
 `HttpCollaborationClient.baseUrl` is the complete API root, for example `https://host.example/v1`. The client matches the server's snake_case v1 wire format. It expects these routes:
 
@@ -21,6 +33,12 @@ The first request receives the complete visible history preceding that request. 
 - `POST /runtimes/:runtimeId/heartbeat`
 - `POST /sessions/:sessionId/agent-requests/:requestId/claim`
 - `POST /sessions/:sessionId/agent-requests/:requestId/complete`
+- `POST /sessions/:sessionId/local-turns`
+- `GET /snapshot-requests/:requestId`
+- `GET /snapshot-requests?status=...&limit=...`
+- `POST /snapshot-requests/:requestId/claim`
+- `POST /snapshot-requests/:requestId/complete`
+- `POST /snapshot-requests/:requestId/fail`
 
 `GET /sessions` is expected to apply server-side ACL filtering and return summaries with `id`, `title`, `mode`, `state`, `role`, `current_sequence`, and `updated_at`. The bridge treats `current_sequence` as the latest durable cursor.
 
@@ -29,6 +47,18 @@ Transcript roots have no implicit defaults and are configured separately for `co
 Context snapshots require an explicit fidelity. Reconstructed canonical history is labelled `canonical_history`; parsed local logs are labelled `harness_transcript`. The snapshot fidelity must match the server-registered runtime fidelity, so the server-derived provenance cannot contradict the payload. `provider_request` is disabled by default and requires both service authorization and a caller assertion that an authorized hook or proxy observed the exact request. The bridge cannot independently verify a dishonest caller assertion.
 
 Agent completion follows the server's single-response contract: tool events are appended idempotently, then the claimed request is completed as one canonical `agent_response`. The alpha does not yet implement claim abandonment or lease expiry. If a bridge crashes after claiming, that request remains stuck and the session owner must submit a replacement request.
+
+## Codex project hooks
+
+Pass `--install-hooks` to merge the GatherThread `UserPromptSubmit` and `Stop` command hooks into `<workspace>/.codex/hooks.json`. These reviewed and trusted hooks are required for publishing turns typed directly in Codex desktop; without them, Web-triggered execution, canonical projection, and read-only snapshots still work while direct desktop turns remain local. Installation is explicit because Codex requires a project trust review; inspect and approve the exact definition with `/hooks`. The hook command contains only private local socket/spool/registry paths, never the GatherThread token.
+
+With `--install-hooks`, the running connector owns a private Unix socket relay on POSIX or a stable project-mapping named pipe on Windows. `UserPromptSubmit` records an outbox draft and supplies a bounded canonical delta. `Stop` supplies the final response, which is made publishable without opening the Desktop-owned task. Current public Stop payloads omit structured tools, so Desktop-originated tool events are omitted. Offline allowlisted events use a bounded private spool.
+
+After a successful authoritative ACL refresh, any session that became read-only, archived, or inaccessible is removed from the managed execution map and hook registry, and its unpublished draft/outbox state is made permanently local-only. The native transcript is retained. Restoring write access does not retroactively upload work from that interval. Transient refresh failures preserve existing authorized bindings, and normal connector shutdown preserves the allowlist for offline capture; an explicit project `403`/`404` clears all execution bindings and stale spool entries.
+
+Desktop and Web turns may run independently because they use separate native writers. The server's canonical sequence orders the accepted results. See [ADR-0013](../../docs/adr/0013-single-writer-dual-codex-projections.md).
+
+Snapshot jobs use an exact-session runtime with `purpose: "snapshot_connector"`, a fresh independent thread, and canonical history frozen through `through_sequence`. The completion result includes `thread_id`, `thread_name`, sequence/model/projection metadata, and `immutable: true`. Snapshot runtimes never claim agent requests or publish local turns, and completed snapshot threads are never polled again.
 
 ## Generic local worker executable
 

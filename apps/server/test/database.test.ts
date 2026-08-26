@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Worker } from "node:worker_threads";
+import { DatabaseSync } from "node:sqlite";
 import { CollaborationDatabase, type DatabaseOptions } from "../src/database.js";
 import { ApiError } from "../src/errors.js";
 import { CollaborationService } from "../src/service.js";
@@ -327,6 +328,369 @@ test("solo ACL rejects participant writes while preserving viewer replay", () =>
   }
 });
 
+test("participants create creator-owned solo sessions while project owners and viewers remain read only", () => {
+  const f = fixture();
+  try {
+    const project = f.service.createProject(f.owner, {
+      project_id: "personal-solo-project",
+      idempotency_key: "personal-solo-project-create",
+      title: "Personal solos",
+    });
+    const shared = f.service.createSession(f.owner, {
+      project_id: project.id,
+      session_id: "personal-solo-shared",
+      idempotency_key: "personal-solo-shared-create",
+      mode: "multi",
+      title: "Shared",
+    }).session;
+    f.service.setMembership(f.owner, shared.id, f.member.user_id, "participant", "personal-solo-member-add");
+
+    const created = f.service.createSession(f.member, {
+      project_id: project.id,
+      session_id: "member-personal-solo",
+      idempotency_key: "member-personal-solo-create",
+      mode: "solo",
+      title: "Member notes",
+    });
+    assert.equal(created.session.owner_user_id, f.member.user_id);
+    assert.equal(f.service.listProjectSessions(f.owner, project.id)
+      .find((session) => session.id === created.session.id)?.owner_user_id, f.member.user_id);
+    assert.equal(f.service.appendEvent(f.member, created.session.id, {
+      idempotency_key: "member-personal-solo-chat",
+      type: "human_chat",
+      visibility: "session",
+      payload: { text: "mine" },
+    }).sequence, 2);
+    assert.equal(f.service.updateSession(f.member, created.session.id, {
+      title: "Renamed by creator",
+      idempotency_key: "member-personal-solo-rename",
+    }).session.title, "Renamed by creator");
+
+    assert.throws(() => f.service.createSession(f.member, {
+      project_id: project.id,
+      idempotency_key: "member-illegal-multi-create",
+      mode: "multi",
+      title: "Not allowed",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.appendEvent(f.owner, created.session.id, {
+      idempotency_key: "owner-illegal-personal-solo-chat",
+      type: "human_chat",
+      visibility: "session",
+      payload: { text: "not mine" },
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.updateSession(f.owner, created.session.id, {
+      title: "Owner cannot rename",
+      idempotency_key: "owner-illegal-personal-solo-rename",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.registerRuntime(f.owner, {
+      runtime_id: "owner-illegal-personal-solo-runtime",
+      session_id: created.session.id,
+      device_id: f.owner.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-test",
+      local_session_id: "owner-illegal-personal-solo-thread",
+      capture_fidelity: "harness_transcript",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+
+    f.service.setProjectMembership(f.owner, project.id, f.member.user_id, "viewer");
+    assert.throws(() => f.service.appendEvent(f.member, created.session.id, {
+      idempotency_key: "viewer-illegal-personal-solo-chat",
+      type: "human_chat",
+      visibility: "session",
+      payload: { text: "read only now" },
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.createSession(f.member, {
+      project_id: project.id,
+      idempotency_key: "viewer-illegal-solo-create",
+      mode: "solo",
+      title: "Viewer local only",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+  } finally {
+    f.close();
+  }
+});
+
+test("session count quotas bound participant-created solos without breaking exact retries", () => {
+  const userLimited = fixture({ maxUserSessions: 1, maxProjectSessions: 10, maxTotalSessions: 20 });
+  try {
+    const project = userLimited.service.createProject(userLimited.owner, {
+      project_id: "user-session-quota-project",
+      idempotency_key: "user-session-quota-project-create",
+      title: "User quota",
+    });
+    const shared = userLimited.service.createSession(userLimited.owner, {
+      project_id: project.id,
+      idempotency_key: "user-session-quota-shared",
+      mode: "multi",
+      title: "Shared",
+    }).session;
+    userLimited.service.setMembership(
+      userLimited.owner, shared.id, userLimited.member.user_id, "participant", "user-session-quota-member",
+    );
+    const first = userLimited.service.createSession(userLimited.member, {
+      project_id: project.id,
+      idempotency_key: "user-session-quota-personal",
+      mode: "solo",
+      title: "Personal",
+    });
+    assert.equal(userLimited.service.createSession(userLimited.member, {
+      project_id: project.id,
+      idempotency_key: "user-session-quota-personal",
+      mode: "solo",
+      title: "Personal",
+    }).session.id, first.session.id);
+    assert.throws(() => userLimited.service.createSession(userLimited.member, {
+      project_id: project.id,
+      idempotency_key: "user-session-quota-overflow",
+      mode: "solo",
+      title: "Overflow",
+    }), (error: unknown) => error instanceof ApiError
+      && error.code === "session_quota_exceeded"
+      && (error.details as { scope?: string } | undefined)?.scope === "user");
+  } finally {
+    userLimited.close();
+  }
+
+  const aggregateLimited = fixture({ maxUserSessions: 3, maxProjectSessions: 2, maxTotalSessions: 3 });
+  try {
+    const firstProject = aggregateLimited.service.createProject(aggregateLimited.owner, {
+      project_id: "aggregate-session-quota-one",
+      idempotency_key: "aggregate-session-quota-one-create",
+      title: "First",
+    });
+    aggregateLimited.service.createSession(aggregateLimited.owner, {
+      project_id: firstProject.id,
+      idempotency_key: "aggregate-session-quota-one-a",
+      mode: "multi",
+      title: "One A",
+    });
+    aggregateLimited.service.createSession(aggregateLimited.owner, {
+      project_id: firstProject.id,
+      idempotency_key: "aggregate-session-quota-one-b",
+      mode: "solo",
+      title: "One B",
+    });
+    assert.throws(() => aggregateLimited.service.createSession(aggregateLimited.owner, {
+      project_id: firstProject.id,
+      idempotency_key: "aggregate-session-quota-project-overflow",
+      mode: "solo",
+      title: "Project overflow",
+    }), (error: unknown) => error instanceof ApiError
+      && error.code === "session_quota_exceeded"
+      && (error.details as { scope?: string } | undefined)?.scope === "project");
+
+    const secondProject = aggregateLimited.service.createProject(aggregateLimited.owner, {
+      project_id: "aggregate-session-quota-two",
+      idempotency_key: "aggregate-session-quota-two-create",
+      title: "Second",
+    });
+    const secondShared = aggregateLimited.service.createSession(aggregateLimited.owner, {
+      project_id: secondProject.id,
+      idempotency_key: "aggregate-session-quota-two-a",
+      mode: "multi",
+      title: "Two A",
+    }).session;
+    aggregateLimited.service.setMembership(
+      aggregateLimited.owner, secondShared.id, aggregateLimited.member.user_id, "participant",
+      "aggregate-session-quota-member",
+    );
+    assert.throws(() => aggregateLimited.service.createSession(aggregateLimited.member, {
+      project_id: secondProject.id,
+      idempotency_key: "aggregate-session-quota-total-overflow",
+      mode: "solo",
+      title: "Total overflow",
+    }), (error: unknown) => error instanceof ApiError
+      && error.code === "session_quota_exceeded"
+      && (error.details as { scope?: string } | undefined)?.scope === "deployment");
+  } finally {
+    aggregateLimited.close();
+  }
+});
+
+test("project roles govern every current and future session while preserving solo read-only semantics", () => {
+  const f = fixture();
+  try {
+    const project = f.service.createProject(f.owner, {
+      project_id: "project-alpha",
+      idempotency_key: "create-project-alpha",
+      title: "Alpha",
+    });
+    const multi = f.service.createSession(f.owner, {
+      project_id: project.id,
+      session_id: "project-alpha-multi",
+      idempotency_key: "create-project-alpha-multi",
+      mode: "multi",
+      title: "Implementation",
+    }).session;
+    const solo = f.service.createSession(f.owner, {
+      project_id: project.id,
+      session_id: "project-alpha-solo",
+      idempotency_key: "create-project-alpha-solo",
+      mode: "solo",
+      title: "Owner notes",
+    }).session;
+    const invitation = f.service.createProjectInvitation(f.owner, project.id, {
+      role: "participant",
+      ttl: "1h",
+    });
+    const storedInvitation = f.database.sqlite.prepare("SELECT token_digest FROM project_invitations WHERE id = ?")
+      .get(invitation.invitation.id) as { token_digest: string };
+    assert.equal(
+      storedInvitation.token_digest,
+      createHmac("sha256", "unit-test-auth-token-pepper").update(invitation.invite_token).digest("hex"),
+    );
+    assert.equal(JSON.stringify(f.service.listProjectInvitations(f.owner, project.id)).includes(invitation.invite_token), false);
+    const accepted = f.service.claimInvitationForActor(f.member, invitation.invite_token);
+    assert.equal("project_id" in accepted.invitation && accepted.invitation.project_id, project.id);
+    assert.equal(accepted.event, null);
+    assert.deepEqual(
+      f.service.listProjectSessions(f.member, project.id).map((session) => session.id).sort(),
+      [multi.id, solo.id].sort(),
+    );
+    assert.equal(f.service.appendEvent(f.member, multi.id, {
+      idempotency_key: "project-participant-chat",
+      type: "human_chat",
+      visibility: "session",
+      payload: { content: "can edit multi" },
+    }).sequence, 2);
+    assert.throws(
+      () => f.service.appendEvent(f.member, solo.id, {
+        idempotency_key: "project-participant-solo",
+        type: "human_chat",
+        visibility: "session",
+        payload: { content: "cannot edit solo" },
+      }),
+      (error: unknown) => error instanceof ApiError && error.status === 403,
+    );
+
+    const downgraded = f.service.setProjectMembership(f.owner, project.id, f.member.user_id, "viewer");
+    assert.equal(downgraded.role, "viewer");
+    assert.throws(
+      () => f.service.appendEvent(f.member, multi.id, {
+        idempotency_key: "project-viewer-chat",
+        type: "human_chat",
+        visibility: "session",
+        payload: { content: "cannot edit any session" },
+      }),
+      (error: unknown) => error instanceof ApiError && error.status === 403,
+    );
+    assert.throws(
+      () => f.service.setProjectMembership(f.owner, project.id, f.owner.user_id, "viewer"),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("project creation leaves the project empty until the owner creates a session", () => {
+  const f = fixture();
+  try {
+    const project = f.service.createProject(f.owner, {
+      project_id: "empty-project",
+      idempotency_key: "create-empty-project",
+      title: "Empty project",
+    });
+    assert.equal(project.role, "owner");
+    assert.equal(project.session_count, 0);
+    assert.deepEqual(f.service.listProjectSessions(f.owner, project.id), []);
+    assert.equal(f.service.listProjects(f.owner)[0]!.session_count, 0);
+
+    const retried = f.service.createProject(f.owner, {
+      project_id: "empty-project",
+      idempotency_key: "create-empty-project",
+      title: "Empty project",
+    });
+    assert.equal(retried.id, project.id);
+    assert.equal(retried.session_count, 0);
+    assert.deepEqual(f.service.listProjectSessions(f.owner, project.id), []);
+  } finally {
+    f.close();
+  }
+});
+
+test("owner rename is transactional, monotonic, idempotent, and emits metadata only", () => {
+  let timestamp = new Date("2026-08-25T12:00:00.000Z");
+  const f = fixture({ clock: () => timestamp });
+  try {
+    const project = f.service.createProject(f.owner, {
+      project_id: "rename-project", idempotency_key: "rename-project-create", title: "Rename",
+    });
+    const { session } = f.service.createSession(f.owner, {
+      project_id: project.id, session_id: "rename-session", idempotency_key: "rename-session-create",
+      mode: "multi", title: "Before",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "rename-session-member");
+    const beforeProjectUpdatedAt = f.database.requireProject(project.id).updated_at;
+    timestamp = new Date("2026-08-25T11:00:00.000Z");
+    const renamed = f.service.updateSession(f.owner, session.id, {
+      title: "After", idempotency_key: "rename-session-0001",
+    });
+    assert.equal(renamed.session.title, "After");
+    assert.deepEqual(renamed.event.payload, { action: "renamed", title: "After" });
+    assert.equal(JSON.stringify(renamed.event.payload).includes("Before"), false);
+    assert.equal(f.database.requireProject(project.id).updated_at, beforeProjectUpdatedAt);
+    assert.equal(f.service.updateSession(f.owner, session.id, {
+      title: "After", idempotency_key: "rename-session-0001",
+    }).event.id, renamed.event.id);
+    assert.throws(() => f.service.updateSession(f.member, session.id, {
+      title: "Denied", idempotency_key: "rename-session-denied",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+  } finally {
+    f.close();
+  }
+});
+
+test("legacy session-only databases migrate each session into an isolated project", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-project-migration-"));
+  const path = join(directory, "legacy.sqlite");
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE users (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL) STRICT;
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      owner_user_id TEXT NOT NULL REFERENCES users(id),
+      mode TEXT NOT NULL,
+      title TEXT NOT NULL,
+      state TEXT NOT NULL,
+      next_sequence INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE memberships (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (session_id, user_id)
+    ) STRICT;
+    INSERT INTO users VALUES ('owner', 'Owner', '2026-08-25T00:00:00.000Z');
+    INSERT INTO users VALUES ('member', 'Member', '2026-08-25T00:00:00.000Z');
+    INSERT INTO sessions VALUES ('legacy-a', 'owner', 'multi', 'A', 'active', 0, '2026-08-25T00:00:00.000Z', '2026-08-25T00:00:00.000Z');
+    INSERT INTO sessions VALUES ('legacy-b', 'owner', 'solo', 'B', 'active', 0, '2026-08-25T00:00:00.000Z', '2026-08-25T00:00:00.000Z');
+    INSERT INTO memberships VALUES ('legacy-a', 'owner', 'owner', '2026-08-25T00:00:00.000Z', '2026-08-25T00:00:00.000Z');
+    INSERT INTO memberships VALUES ('legacy-a', 'member', 'participant', '2026-08-25T00:00:00.000Z', '2026-08-25T00:00:00.000Z');
+    INSERT INTO memberships VALUES ('legacy-b', 'owner', 'owner', '2026-08-25T00:00:00.000Z', '2026-08-25T00:00:00.000Z');
+  `);
+  legacy.close();
+
+  const database = new CollaborationDatabase(path, { authTokenPepper: "migration-test-pepper" });
+  try {
+    const first = database.requireSession("legacy-a");
+    const second = database.requireSession("legacy-b");
+    assert.notEqual(first.project_id, second.project_id);
+    assert.equal(database.projectMembershipRole(first.project_id, "member"), "participant");
+    assert.equal(database.projectMembershipRole(second.project_id, "member"), null);
+    assert.equal(database.listProjects("owner").length, 2);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("only the initiating user's runtime can claim and complete an agent request", () => {
   const f = fixture();
   try {
@@ -355,6 +719,22 @@ test("only the initiating user's runtime can claim and complete an agent request
     });
     const claim = f.service.claimAgentRequest(f.member, session.id, request.id, runtime.id);
     assert.equal(claim.status, "claimed");
+    const secondDevice = f.database.createDevice(f.member.user_id, "Member second device", "member-device-claim-race");
+    const secondActor = { ...f.member, device_id: secondDevice.device_id };
+    const competingRuntime = f.service.registerRuntime(secondActor, {
+      runtime_id: "runtime-member-claim-race",
+      session_id: session.id,
+      device_id: secondDevice.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-5",
+      local_session_id: "local-session-claim-race",
+      capture_fidelity: "harness_transcript",
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(secondActor, session.id, request.id, competingRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.code === "agent_request_already_claimed",
+    );
     const secondRequest = f.service.appendEvent(f.member, session.id, {
       idempotency_key: "agent-request-0002",
       type: "agent_request",
@@ -376,6 +756,11 @@ test("only the initiating user's runtime can claim and complete an agent request
     assert.equal(response.reply_to_event_id, request.id);
     assert.equal(response.runtime_provenance?.user_id, f.member.user_id);
     assert.equal(response.runtime_provenance?.capture_fidelity, "harness_transcript");
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, secondRequest.id, runtime.id).status,
+      "claimed",
+      "terminal completion must release the runtime for the next request",
+    );
   } finally {
     f.close();
   }
@@ -871,5 +1256,337 @@ test("concurrent invitation claims commit exactly one identity, membership, and 
   } finally {
     for (const worker of workers) await worker.terminate();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("local-turn commits and private snapshot connector jobs preserve sync invariants", () => {
+  const f = fixture();
+  try {
+    const session = f.service.createSession(f.owner, {
+      session_id: "sync-contract-room", idempotency_key: "sync-contract-room-create",
+      mode: "multi", title: "Sync contract",
+    }).session;
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "sync-contract-member");
+    const execution = f.service.registerRuntime(f.member, {
+      runtime_id: "sync-execution", session_id: session.id, device_id: f.member.device_id,
+      purpose: "execution", harness: "codex", provider: "openai", model: "gpt-5",
+      local_session_id: "sync-execution-local", capture_fidelity: "harness_transcript",
+    });
+    const connector = f.service.registerRuntime(f.member, {
+      runtime_id: "sync-snapshot", session_id: session.id, device_id: f.member.device_id,
+      purpose: "snapshot_connector", harness: "connector", provider: "local", model: "snapshot",
+      local_session_id: "sync-snapshot-local", capture_fidelity: "canonical_history",
+    });
+    assert.equal(
+      f.service.listMembers(f.member, session.id).find((member) => member.user_id === f.member.user_id)?.runtime?.id,
+      execution.id,
+    );
+    const head = f.database.requireSession(session.id).next_sequence;
+    const input = {
+      local_turn_id: "local-turn-1", runtime_id: execution.id, based_on_sequence: head - 1,
+      occurred_at: "2026-08-25T12:00:00.000Z",
+      observed_model: "gpt-5.6-terra", observed_reasoning_effort: "high",
+      request_payload: { prompt: "work", token: "secret" }, response_payload: { answer: "done" },
+      tool_events: [{ type: "tool_result" as const, payload: { authorization: "hidden" } }],
+    };
+    const committed = f.service.commitLocalTurn(f.member, session.id, input);
+    assert.equal(committed.reconciliation_required, true);
+    assert.equal(committed.request_event.actor_display_name, "Member");
+    assert.equal(committed.response_event.actor_display_name, "Member");
+    assert.deepEqual(f.service.commitLocalTurn(f.member, session.id, input), committed);
+    assert.deepEqual(committed.request_event.payload, {
+      prompt: "work",
+      token: "[REDACTED]",
+      _gatherthread_client: { occurred_at: input.occurred_at },
+    });
+    assert.notEqual(committed.request_event.created_at, input.occurred_at);
+    assert.equal(committed.request_event.runtime_provenance?.local_session_id, "private");
+    assert.equal(committed.request_event.runtime_provenance?.model, "gpt-5.6-terra");
+    assert.equal(committed.response_event.runtime_provenance?.reasoning_effort, "high");
+    assert.equal((f.database.sqlite.prepare(`
+      SELECT json_extract(runtime_provenance_json, '$.local_session_id') AS local_session_id
+      FROM events WHERE id = ?
+    `).get(committed.request_event.id) as { local_session_id: string }).local_session_id, "private");
+    assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM agent_request_claims").get() as { count: number }).count, 0);
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, committed.request_event.id, execution.id),
+      (error: unknown) => error instanceof ApiError
+        && error.status === 409
+        && error.code === "agent_request_already_completed",
+    );
+    f.database.sqlite.prepare("UPDATE users SET display_name = 'Renamed member' WHERE id = ?").run(f.member.user_id);
+    assert.equal(
+      f.service.replay(f.member, session.id, committed.request_event.sequence - 1, 10).events[0]?.actor_display_name,
+      "Member",
+    );
+    const snapshot = f.service.createSnapshotRequest(f.member, session.id);
+    const canonicalHead = f.database.requireSession(session.id).next_sequence;
+    assert.equal(snapshot.through_sequence, canonicalHead);
+    assert.equal(f.service.claimSnapshotRequest(f.member, snapshot.id, connector.id).status, "claimed");
+    assert.deepEqual(f.service.completeSnapshotRequest(f.member, snapshot.id, connector.id, {
+      summary: "ready", api_key: "secret",
+    }).result, { summary: "ready", api_key: "[REDACTED]" });
+    assert.equal(f.database.requireSession(session.id).next_sequence, canonicalHead);
+    f.service.setProjectMembership(f.owner, session.project_id, f.member.user_id, "viewer");
+    assert.equal(f.service.heartbeatRuntime(f.member, connector.id).purpose, "snapshot_connector");
+    const viewerPresence = f.service.listMembers(f.member, session.id)
+      .find((member) => member.user_id === f.member.user_id)?.runtime;
+    assert.equal(viewerPresence?.id, connector.id);
+    assert.equal(viewerPresence?.purpose, "snapshot_connector");
+    assert.equal(viewerPresence?.status, "online");
+    assert.throws(
+      () => f.service.commitLocalTurn(f.member, session.id, { ...input, local_turn_id: "viewer-turn" }),
+      (error: unknown) => error instanceof ApiError && error.status === 403,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("event actor display names are required for new databases and backfilled for legacy logs", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-event-attribution-"));
+  const path = join(directory, "events.sqlite");
+  let database = new CollaborationDatabase(path, { authTokenPepper: "event-attribution-pepper" });
+  try {
+    const owner = database.bootstrapIdentity({
+      user_id: "owner", display_name: "Frozen Owner", device_id: "owner-device", device_name: "Laptop",
+    }).actor;
+    const service = new CollaborationService(database);
+    const session = service.createSession(owner, {
+      session_id: "attribution-room", idempotency_key: "attribution-room-create",
+      mode: "multi", title: "Attribution",
+    }).session;
+    const column = (database.sqlite.prepare("PRAGMA table_info(events)").all() as Array<{ name: string; notnull: number }>)
+      .find((item) => item.name === "actor_display_name");
+    assert.equal(column?.notnull, 1);
+    database.close();
+
+    const legacy = new DatabaseSync(path);
+    legacy.exec(`
+      DROP TRIGGER IF EXISTS events_actor_display_name_required_insert;
+      DROP TRIGGER IF EXISTS events_actor_display_name_required_update;
+      ALTER TABLE events DROP COLUMN actor_display_name;
+    `);
+    legacy.close();
+
+    database = new CollaborationDatabase(path, { authTokenPepper: "event-attribution-pepper" });
+    const replayed = database.replay(session.id, 0, 10, true).events[0];
+    assert.equal(replayed?.actor_display_name, "Frozen Owner");
+    assert.throws(
+      () => database.sqlite.prepare(`
+        INSERT INTO events(
+          id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name,
+          created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json
+        ) VALUES ('bad-event', ?, 999, 'bad-event-key', 'human_chat', 'owner', NULL,
+          '2026-08-25T00:00:00.000Z', 'session', NULL, '{}', NULL)
+      `).run(session.id),
+    );
+  } finally {
+    try { database.close(); } catch {}
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("snapshot result and aggregate quotas roll back atomically with a consistent ledger", () => {
+  const f = fixture({
+    maxSnapshotResultBytes: 2_048,
+    maxUserSnapshotBytes: 4_500,
+    maxSessionSnapshotBytes: 5_000,
+    maxTotalSnapshotBytes: 5_000,
+  });
+  try {
+    const session = f.service.createSession(f.owner, {
+      session_id: "snapshot-quota-room", idempotency_key: "snapshot-quota-room-create",
+      mode: "multi", title: "Snapshot quota",
+    }).session;
+    const connector = f.service.registerRuntime(f.owner, {
+      runtime_id: "snapshot-quota-connector", session_id: session.id, device_id: f.owner.device_id,
+      purpose: "snapshot_connector", harness: "connector", provider: "local", model: "snapshot",
+      local_session_id: "snapshot-quota-local", capture_fidelity: "canonical_history",
+    });
+    const complete = (id: string, content: string) => {
+      const request = f.service.createSnapshotRequest(f.owner, session.id);
+      f.service.claimSnapshotRequest(f.owner, request.id, connector.id);
+      return { request, result: () => f.service.completeSnapshotRequest(f.owner, request.id, connector.id, { content }) };
+    };
+    const first = complete("first", "a".repeat(1_400));
+    const firstResult = first.result();
+    const usageAfterFirst = (f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM snapshot_storage_usage")
+      .get() as { bytes: number }).bytes;
+    assert.equal(usageAfterFirst, (f.database.sqlite.prepare("SELECT storage_bytes FROM snapshot_requests WHERE id = ?")
+      .get(first.request.id) as { storage_bytes: number }).storage_bytes);
+    assert.throws(
+      () => f.service.completeSnapshotRequest(f.owner, first.request.id, connector.id, { content: "changed" }),
+      (error: unknown) => error instanceof ApiError && error.code === "idempotency_conflict",
+    );
+    assert.deepEqual(f.service.completeSnapshotRequest(f.owner, first.request.id, connector.id, { content: "a".repeat(1_400) }), firstResult);
+    assert.equal((f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM snapshot_storage_usage")
+      .get() as { bytes: number }).bytes, usageAfterFirst);
+
+    const second = complete("second", "b".repeat(1_400));
+    assert.throws(second.result, (error: unknown) => error instanceof ApiError && error.code === "storage_quota_exceeded");
+    const rejected = f.database.sqlite.prepare("SELECT status, result_json, storage_bytes FROM snapshot_requests WHERE id = ?")
+      .get(second.request.id) as { status: string; result_json: string | null; storage_bytes: number };
+    assert.equal(rejected.status, "claimed");
+    assert.equal(rejected.result_json, null);
+    assert.equal(rejected.storage_bytes, 1_024);
+    assert.equal((f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM snapshot_storage_usage")
+      .get() as { bytes: number }).bytes, usageAfterFirst + 1_024);
+
+    const oversized = complete("oversized", "x".repeat(100_000));
+    assert.throws(oversized.result, (error: unknown) => error instanceof ApiError && error.code === "storage_quota_exceeded");
+    assert.equal(
+      (f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM snapshot_storage_usage").get() as { bytes: number }).bytes,
+      (f.database.sqlite.prepare("SELECT SUM(storage_bytes) AS bytes FROM snapshot_requests").get() as { bytes: number }).bytes,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("snapshot lists are newest-first, session-filtered, and response-byte bounded", () => {
+  const f = fixture();
+  try {
+    const firstSession = f.service.createSession(f.owner, {
+      session_id: "snapshot-list-a", idempotency_key: "snapshot-list-a-create", mode: "multi", title: "A",
+    }).session;
+    const secondSession = f.service.createSession(f.owner, {
+      project_id: firstSession.project_id,
+      session_id: "snapshot-list-b", idempotency_key: "snapshot-list-b-create", mode: "multi", title: "B",
+    }).session;
+    for (let index = 0; index < 45; index += 1) f.service.createSnapshotRequest(f.owner, firstSession.id);
+    const target = f.service.createSnapshotRequest(f.owner, secondSession.id);
+    const filtered = f.service.listSnapshotRequests(f.owner, "pending", secondSession.id, 40);
+    assert.deepEqual(filtered.map((request) => request.id), [target.id]);
+    const newest = f.service.listSnapshotRequests(f.owner, "pending", undefined, 40);
+    assert.equal(newest[0]?.id, target.id);
+
+    const connector = f.service.registerRuntime(f.owner, {
+      runtime_id: "snapshot-list-connector", session_id: firstSession.id, device_id: f.owner.device_id,
+      purpose: "snapshot_connector", harness: "connector", provider: "local", model: "snapshot",
+      local_session_id: "snapshot-list-local", capture_fidelity: "canonical_history",
+    });
+    for (let index = 0; index < 20; index += 1) {
+      const request = f.service.createSnapshotRequest(f.owner, firstSession.id);
+      f.service.claimSnapshotRequest(f.owner, request.id, connector.id);
+      f.service.completeSnapshotRequest(f.owner, request.id, connector.id, { content: "x".repeat(7_000), index });
+    }
+    const completed = f.service.listSnapshotRequests(f.owner, "completed", firstSession.id, 100);
+    assert.ok(completed.length < 20);
+    assert.ok(Buffer.byteLength(JSON.stringify(completed)) <= 128 * 1024);
+  } finally {
+    f.close();
+  }
+});
+
+test("snapshot metadata and unresolved jobs are hard bounded without deleting terminal audit", () => {
+  const f = fixture({
+    maxUserActiveSnapshotRequests: 2,
+    maxSessionActiveSnapshotRequests: 3,
+    maxTotalActiveSnapshotRequests: 4,
+  });
+  try {
+    const first = f.service.createSession(f.owner, {
+      session_id: "snapshot-active-a", idempotency_key: "snapshot-active-a-create", mode: "multi", title: "A",
+    }).session;
+    const second = f.service.createSession(f.owner, {
+      project_id: first.project_id,
+      session_id: "snapshot-active-b", idempotency_key: "snapshot-active-b-create", mode: "multi", title: "B",
+    }).session;
+    f.service.setMembership(f.owner, first.id, f.member.user_id, "participant", "snapshot-active-member");
+    const outsider = f.database.createIdentity({
+      user_id: "outsider", display_name: "Outsider", device_id: "outsider-device", device_name: "Laptop",
+    }).actor;
+    f.service.setMembership(f.owner, first.id, outsider.user_id, "participant", "snapshot-active-outsider");
+
+    const ownerOne = f.service.createSnapshotRequest(f.owner, first.id);
+    f.service.createSnapshotRequest(f.owner, first.id);
+    assert.throws(
+      () => f.service.createSnapshotRequest(f.owner, second.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409 && /User/.test(error.message),
+    );
+    f.service.createSnapshotRequest(f.member, first.id);
+    assert.throws(
+      () => f.service.createSnapshotRequest(f.member, first.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409 && /Session/.test(error.message),
+    );
+    f.service.createSnapshotRequest(f.member, second.id);
+    assert.throws(
+      () => f.service.createSnapshotRequest(outsider, second.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409 && /Deployment/.test(error.message),
+    );
+
+    assert.equal((f.database.sqlite.prepare("SELECT COUNT(*) AS count FROM snapshot_requests")
+      .get() as { count: number }).count, 4);
+    assert.equal((f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM snapshot_storage_usage")
+      .get() as { bytes: number }).bytes, 4 * 1_024);
+
+    const connector = f.service.registerRuntime(f.owner, {
+      runtime_id: "snapshot-active-connector", session_id: first.id, device_id: f.owner.device_id,
+      purpose: "snapshot_connector", harness: "connector", provider: "local", model: "snapshot",
+      local_session_id: "snapshot-active-local", capture_fidelity: "canonical_history",
+    });
+    f.service.claimSnapshotRequest(f.owner, ownerOne.id, connector.id);
+    f.service.completeSnapshotRequest(f.owner, ownerOne.id, connector.id, { summary: "kept for audit" });
+    assert.equal(f.service.getSnapshotRequest(f.owner, ownerOne.id).status, "completed");
+    assert.doesNotThrow(() => f.service.createSnapshotRequest(outsider, second.id));
+    assert.equal((f.database.sqlite.prepare("SELECT COUNT(*) AS count FROM snapshot_requests WHERE status IN ('pending','claimed')")
+      .get() as { count: number }).count, 4);
+    assert.equal((f.database.sqlite.prepare("SELECT COUNT(*) AS count FROM snapshot_requests WHERE id = ?")
+      .get(ownerOne.id) as { count: number }).count, 1);
+  } finally {
+    f.close();
+  }
+});
+
+test("client occurrence times cannot control canonical clocks and response provenance is minimized", () => {
+  let now = new Date("2026-08-25T12:00:00.000Z");
+  const f = fixture({ clock: () => now });
+  try {
+    const session = f.service.createSession(f.owner, {
+      session_id: "canonical-clock", idempotency_key: "canonical-clock-create", mode: "multi", title: "Clock",
+    }).session;
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "canonical-clock-member");
+    const ownerRuntime = f.service.registerRuntime(f.owner, {
+      runtime_id: "owner-private-runtime", session_id: session.id, device_id: f.owner.device_id,
+      purpose: "execution", harness: "codex", provider: "openai", model: "gpt-test",
+      local_session_id: "/private/owner/thread", capture_fidelity: "harness_transcript",
+    });
+    const memberRuntime = f.service.registerRuntime(f.member, {
+      runtime_id: "member-private-runtime", session_id: session.id, device_id: f.member.device_id,
+      purpose: "execution", harness: "codex", provider: "openai", model: "gpt-test",
+      local_session_id: "/private/member/thread", capture_fidelity: "harness_transcript",
+    });
+
+    const memberView = f.service.listMembers(f.member, session.id);
+    assert.equal(memberView.find((member) => member.user_id === f.owner.user_id)?.runtime?.id, "private");
+    assert.equal(memberView.find((member) => member.user_id === f.owner.user_id)?.runtime?.device_id, "private");
+    assert.equal(memberView.find((member) => member.user_id === f.member.user_id)?.runtime?.id, memberRuntime.id);
+    assert.equal(f.service.listMembers(f.owner, session.id)
+      .find((member) => member.user_id === f.member.user_id)?.runtime?.id, memberRuntime.id);
+
+    now = new Date("2026-08-25T11:00:00.000Z");
+    const committed = f.service.commitLocalTurn(f.owner, session.id, {
+      local_turn_id: "future-client-time", runtime_id: ownerRuntime.id, based_on_sequence: 1,
+      occurred_at: "9999-12-31T23:59:59.999Z",
+      request_payload: { text: "question" }, response_payload: { text: "answer" },
+    });
+    assert.equal(committed.request_event.created_at, now.toISOString());
+    assert.deepEqual(committed.request_event.payload, {
+      text: "question", _gatherthread_client: { occurred_at: "9999-12-31T23:59:59.999Z" },
+    });
+    assert.equal(committed.request_event.runtime_provenance?.local_session_id, "private");
+    assert.equal(f.database.requireProject(session.project_id).updated_at, "2026-08-25T12:00:00.000Z");
+
+    const ownerReplay = f.service.replay(f.owner, session.id, committed.request_event.sequence - 1, 10).events[0];
+    assert.equal(ownerReplay?.runtime_provenance?.runtime_id, ownerRuntime.id);
+    assert.equal(ownerReplay?.runtime_provenance?.device_id, f.owner.device_id);
+    assert.equal(ownerReplay?.runtime_provenance?.local_session_id, "private");
+    const memberReplay = f.service.replay(f.member, session.id, committed.request_event.sequence - 1, 10).events[0];
+    assert.equal(memberReplay?.runtime_provenance?.runtime_id, "private");
+    assert.equal(memberReplay?.runtime_provenance?.device_id, "private");
+    assert.equal(memberReplay?.runtime_provenance?.local_session_id, "private");
+  } finally {
+    f.close();
   }
 });

@@ -2,6 +2,150 @@ export const SESSION_MODES = Object.freeze(["solo", "multi"]);
 export const MEMBER_ROLES = Object.freeze(["owner", "participant", "viewer"]);
 export const INVITATION_ROLES = Object.freeze(["participant", "viewer"]);
 export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
+export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
+export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
+
+export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gpt-5.6-sol" }) {
+  if (typeof baseUrl !== "string" || baseUrl.length === 0 || /[\u0000-\u001f\u007f]/.test(baseUrl)) {
+    throw new Error("A valid GatherThread server URL is required.");
+  }
+  let parsed;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error("A valid GatherThread server URL is required.");
+  }
+  const isLoopbackHttp = parsed.protocol === "http:"
+    && new Set(["127.0.0.1", "localhost", "[::1]"]).has(parsed.hostname);
+  if ((parsed.protocol !== "https:" && !isLoopbackHttp)
+    || parsed.username || parsed.password || parsed.search || parsed.hash) {
+    throw new Error("The GatherThread server URL is not safe for a connector command.");
+  }
+  if (typeof projectId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(projectId)) {
+    throw new Error("The GatherThread project ID is not safe for a connector command.");
+  }
+  if (typeof model !== "string" || model.length === 0 || model.length > 120 || /[\u0000-\u001f\u007f]/.test(model)) {
+    throw new Error("The Codex model is not safe for a connector command.");
+  }
+  const normalizedBaseUrl = parsed.toString().replace(/\/$/, "");
+  const posixQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
+  const powerShellQuote = (value) => `'${value.replaceAll("'", "''")}'`;
+  const values = [normalizedBaseUrl, projectId, model];
+  return Object.freeze({
+    posix: [
+      "npm run codex:connect --",
+      "--url", posixQuote(values[0]),
+      "--project", posixQuote(values[1]),
+      "--create-workspace",
+      "--model", posixQuote(values[2]),
+      "--install-hooks",
+    ].join(" "),
+    powershell: [
+      "npm.cmd run codex:connect --",
+      "--url", powerShellQuote(values[0]),
+      "--project", powerShellQuote(values[1]),
+      "--create-workspace",
+      "--model", powerShellQuote(values[2]),
+      "--install-hooks",
+    ].join(" "),
+  });
+}
+
+export function createSelectionGuard() {
+  let generation = 0;
+  return {
+    begin(key) {
+      return Object.freeze({ key, generation: ++generation });
+    },
+    isCurrent(selection) {
+      return selection?.generation === generation;
+    },
+    invalidate() {
+      generation += 1;
+    },
+  };
+}
+
+export function sessionDeliveryMode({ role, mode, ownerUserId, currentUserId }) {
+  if (role === "viewer") return "snapshot";
+  if (mode === "solo") {
+    return ownerUserId === undefined ? role === "owner" ? "live" : "snapshot"
+      : ownerUserId === currentUserId ? "live" : "snapshot";
+  }
+  return role === "owner" || role === "participant" ? "live" : "snapshot";
+}
+
+export function isExecutionRuntime(runtime) {
+  return runtime?.status === "online" && (runtime.purpose == null || runtime.purpose === "execution");
+}
+
+export function hasOnlineSnapshotConnector(members = []) {
+  return members.some((member) => member.runtime?.status === "online" && member.runtime?.purpose === "snapshot_connector");
+}
+
+export function normalizeSnapshotRequest(payload) {
+  const request = payload?.snapshot_request ?? payload?.request ?? payload ?? {};
+  const wireStatus = request.status ?? payload?.job?.status;
+  const status = wireStatus === "pending" ? "queued" : SNAPSHOT_STATUSES.includes(wireStatus) ? wireStatus : "failed";
+  const result = request.result ?? payload?.job?.result ?? null;
+  const failure = request.failure ?? request.error ?? payload?.job?.failure ?? payload?.job?.error ?? null;
+  const localTaskName = [
+    request.localTaskName,
+    request.local_task_name,
+    payload?.job?.localTaskName,
+    payload?.job?.local_task_name,
+    result?.threadName,
+    result?.thread_name,
+    result?.task_name,
+    result?.task?.name,
+    result?.threadId,
+    result?.thread_id,
+  ].find((value) => typeof value === "string" && value.length > 0) ?? "";
+  return {
+    id: request.id,
+    sessionId: request.session_id ?? request.sessionId ?? null,
+    throughSequence: Number(request.through_sequence ?? request.throughSequence ?? 0),
+    status,
+    createdAt: request.created_at ?? request.createdAt ?? new Date().toISOString(),
+    localTaskName,
+    failureMessage: typeof failure === "string" ? failure : failure?.message ?? "",
+  };
+}
+
+export function snapshotStatusView(request) {
+  const views = {
+    queued: { label: "Queued", detail: "Waiting for a local Codex connector.", retryable: false, terminal: false },
+    claimed: { label: "Claimed", detail: "A local Codex connector claimed this frozen copy.", retryable: false, terminal: false },
+    importing: { label: "Importing", detail: "Importing the frozen history into a local Codex task.", retryable: false, terminal: false },
+    compacting: { label: "Compacting", detail: "Preparing the local task for use.", retryable: false, terminal: false },
+    completed: { label: "Completed", detail: request.localTaskName || "Local Codex task created.", retryable: false, terminal: true },
+    failed: { label: "Failed", detail: request.failureMessage || "The local Codex import failed.", retryable: true, terminal: true },
+  };
+  return views[request.status] ?? views.failed;
+}
+
+export function normalizeConnectorState(value, syncSnapshot = {}) {
+  const fallback = {
+    live: "synced",
+    offline: "offline",
+    recovering: "reconciling",
+    connecting: "rebuilding",
+    replaying: "rebuilding",
+    blocked: "rebuilding",
+    idle: "offline",
+  }[syncSnapshot.phase] ?? "offline";
+  const rawStatus = value?.status ?? value?.state ?? fallback;
+  const status = CONNECTOR_STATUSES.includes(rawStatus) ? rawStatus : fallback;
+  const pendingCount = Number(value?.pending_count ?? value?.pendingCount ?? value?.bufferedCount ?? syncSnapshot.bufferedCount ?? 0);
+  const label = {
+    synced: "Synced",
+    offline: pendingCount > 0 ? `Offline · ${pendingCount} pending` : "Offline",
+    reconciling: "Reconciling",
+    rebuilding: "Rebuilding",
+    local_fork: "Local fork",
+  }[status];
+  return { status, pendingCount, label };
+}
 
 export function invitationStatus(invitation, now = Date.now()) {
   if (invitation.revokedAt ?? invitation.revoked_at) return "revoked";
@@ -15,6 +159,7 @@ export function invitationStatus(invitation, now = Date.now()) {
 export function normalizeInvitation(invitation) {
   const normalized = {
     id: invitation.id,
+    projectId: invitation.project_id ?? invitation.projectId ?? null,
     sessionId: invitation.session_id ?? invitation.sessionId,
     inviterUserId: invitation.inviter_user_id ?? invitation.inviterUserId,
     role: invitation.role,
@@ -47,29 +192,23 @@ export function canAppend({ session, currentUser, connectionPhase, kind }) {
   if (!membership || membership.role === "viewer") {
     return { allowed: false, reason: "Your viewer role is read only." };
   }
-  if (session.mode === "solo" && membership.role !== "owner") {
-    return { allowed: false, reason: "Only the owner can write in a solo session." };
+  if (session.mode === "solo" && (session.ownerUserId === undefined
+    ? membership.role !== "owner"
+    : session.ownerUserId !== currentUser.id)) {
+    return { allowed: false, reason: "Only the solo creator can write in this session." };
   }
-  if (kind === "agent_request" && membership.runtime?.status !== "online") {
+  if (kind === "agent_request" && !isExecutionRuntime(membership.runtime)) {
     return { allowed: false, reason: "Connect your local runtime to request an agent." };
   }
   return { allowed: true, reason: "" };
 }
 
-export function invitationRolePolicy(sessionMode) {
-  if (sessionMode === "solo") {
-    return {
-      allowedRoles: ["viewer"],
-      defaultRole: "viewer",
-      locked: true,
-      help: "Solo sessions allow read-only viewer invitations only.",
-    };
-  }
+export function invitationRolePolicy() {
   return {
     allowedRoles: ["participant", "viewer"],
     defaultRole: "participant",
     locked: false,
-    help: "Multi sessions can invite participants or read-only viewers.",
+    help: "Participants edit multi sessions and read solo sessions. Viewers are read only everywhere.",
   };
 }
 
@@ -101,10 +240,46 @@ export function eventLabel(type) {
   }[type] ?? type.replaceAll("_", " ");
 }
 
+export function eventContent(event) {
+  const content = event?.payload?.content;
+  if (typeof content === "string") return content;
+  const importedText = event?.payload?.text;
+  return typeof importedText === "string" ? importedText : "";
+}
+
+export function pendingAgentRequests(events) {
+  const answeredRequestIds = new Set(
+    (events ?? [])
+      .filter((event) => event?.type === "agent_response")
+      .map((event) => event.replyTo ?? event.reply_to_event_id ?? event?.payload?.reply_to_event_id)
+      .filter((eventId) => typeof eventId === "string" && eventId.length > 0),
+  );
+  return (events ?? []).filter((event) =>
+    event?.type === "agent_request"
+    && typeof event.id === "string"
+    && !answeredRequestIds.has(event.id),
+  );
+}
+
 export function isTimelineEventVisible(event) {
   const isControlEvent = event?.type === "membership_change" || event?.type === "session_state_change";
   const content = event?.payload?.content;
   return !isControlEvent || (typeof content === "string" && content.trim().length > 0);
+}
+
+export function sessionMetadataFromEvent(event) {
+  const title = event?.payload?.title;
+  if (
+    event?.type !== "session_state_change"
+    || !new Set(["renamed", "updated"]).has(event?.payload?.action)
+    || typeof title !== "string"
+    || title.trim().length === 0
+    || title.length > 200
+  ) return null;
+  return {
+    sessionId: event.sessionId ?? event.session_id,
+    name: title,
+  };
 }
 
 export function formatTimestamp(value) {

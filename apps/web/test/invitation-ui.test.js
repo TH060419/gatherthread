@@ -17,10 +17,10 @@ test("invitation UI offers the required roles and TTLs with 24 hours selected by
   assert.match(html, /<option value="7d">7 days<\/option>/);
 });
 
-test("invitation role control locks solo sessions to viewer and restores both multi roles", async () => {
+test("project invitation role control always offers participant and viewer", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /function renderInvitationRoleControl\(\)/);
-  assert.match(main, /invitationRolePolicy\(state\.session\?\.mode\)/);
+  assert.match(main, /invitationRolePolicy\(\)/);
   assert.match(main, /option\.disabled = !allowed/);
   assert.match(main, /option\.hidden = !allowed/);
   assert.match(main, /roleSelect\.disabled = policy\.locked/);
@@ -36,12 +36,12 @@ test("owner secret is rendered only from create response and cleared on session 
   assert.doesNotMatch(main, /state\.invitations[^\n]*inviteToken/);
 });
 
-test("new and existing user forms route to distinct claim and accept methods", async () => {
+test("new and existing user forms route to project-level claim and accept methods", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /claimInvitationForm\.addEventListener[\s\S]*?api\.claimInvitation/);
   assert.match(main, /acceptInvitationForm\.addEventListener[\s\S]*?api\.acceptInvitation/);
-  assert.match(main, /await enterWorkspace\(result\.invitation\.sessionId\)/);
-  assert.match(main, /await selectSession\(result\.invitation\.sessionId\)/);
+  assert.match(main, /await enterWorkspace\(result\.invitation\.projectId\)/);
+  assert.match(main, /await selectProject\(result\.invitation\.projectId\)/);
 });
 
 test("new users receive a one-time copyable device token without browser storage or URL exposure", async () => {

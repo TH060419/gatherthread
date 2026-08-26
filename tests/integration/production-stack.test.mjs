@@ -202,3 +202,118 @@ process.stdout.write(JSON.stringify({
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("production sync commits a local turn once while snapshot jobs stay outside canonical history", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-local-sync-stack-"));
+  const running = await startCollaborationServer({ databasePath: join(directory, "stack.sqlite") }, 0);
+  try {
+    const identity = running.database.bootstrapIdentity({
+      user_id: "alice",
+      display_name: "Alice",
+      device_id: "alice-laptop",
+      device_name: "Alice laptop",
+    });
+    await request(running.origin, "/v1/sessions", {
+      method: "POST",
+      token: identity.token,
+      body: {
+        session_id: "local-sync-session",
+        idempotency_key: "create-local-sync-session",
+        mode: "multi",
+        title: "Local sync",
+      },
+    });
+    const api = new HttpCollaborationClient({
+      baseUrl: `${running.origin}/v1`,
+      bearerToken: identity.token,
+    });
+    const runtime = await api.registerRuntime({
+      runtimeId: "alice-execution-runtime",
+      sessionId: "local-sync-session",
+      deviceId: "alice-laptop",
+      purpose: "execution",
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-test",
+      localSessionId: "alice-local-thread",
+      captureFidelity: "harness_transcript",
+    });
+    await api.appendEvent("local-sync-session", {
+      type: "human_chat",
+      idempotencyKey: "base-cloud-context",
+      payload: { content: "base cloud context" },
+    });
+    await api.appendEvent("local-sync-session", {
+      type: "human_chat",
+      idempotencyKey: "concurrent-cloud-context",
+      payload: { content: "cloud advanced while the local turn ran" },
+    });
+
+    const localTurn = {
+      localTurnId: "codex-local-turn-1",
+      runtimeId: runtime.id,
+      basedOnSequence: 2,
+      occurredAt: "2026-08-25T18:00:00.000Z",
+      requestPayload: { text: "local prompt" },
+      responsePayload: { text: "GATHERTHREAD_TOKEN=gta_secret-that-must-be-redacted" },
+      toolEvents: [{
+        type: "tool_call",
+        payload: { command: "npm test" },
+        occurred_at: "2026-08-25T18:00:01.000Z",
+      }],
+    };
+    const committed = await api.commitLocalTurn("local-sync-session", localTurn);
+    const retry = await api.commitLocalTurn("local-sync-session", localTurn);
+    assert.equal(committed.reconciliationRequired, true);
+    assert.equal(committed.headBeforeCommit, 3);
+    assert.deepEqual(
+      [committed.requestEvent.sequence, committed.toolEvents[0]?.sequence, committed.responseEvent.sequence],
+      [4, 5, 6],
+    );
+    assert.equal(committed.requestEvent.actorDisplayName, "Alice");
+    assert.match(JSON.stringify(committed.responseEvent.payload), /\[REDACTED\]/);
+    assert.deepEqual(retry, committed);
+    await assert.rejects(
+      api.claimAgentRequest("local-sync-session", committed.requestEvent.id, runtime.id),
+      /Collaboration API 409/,
+    );
+
+    const snapshotRuntime = await api.registerRuntime({
+      runtimeId: "alice-snapshot-runtime",
+      sessionId: "local-sync-session",
+      deviceId: "alice-laptop",
+      purpose: "snapshot_connector",
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-test",
+      localSessionId: "alice-snapshot-thread",
+      captureFidelity: "canonical_history",
+    });
+    const createdSnapshot = await request(running.origin, "/v1/sessions/local-sync-session/snapshot-requests", {
+      method: "POST",
+      token: identity.token,
+      body: {},
+    });
+    assert.equal(createdSnapshot.snapshot_request.through_sequence, 6);
+    await api.appendEvent("local-sync-session", {
+      type: "human_chat",
+      idempotencyKey: "after-snapshot-freeze",
+      payload: { content: "not part of the frozen snapshot" },
+    });
+    const claimed = await api.claimSnapshotRequest(createdSnapshot.snapshot_request.id, snapshotRuntime.id);
+    assert.equal(claimed.status, "claimed");
+    const completedSnapshot = await api.completeSnapshotRequest(
+      createdSnapshot.snapshot_request.id,
+      snapshotRuntime.id,
+      { thread_id: "frozen-codex-thread", immutable: true },
+    );
+    assert.equal(completedSnapshot.status, "completed");
+
+    const history = await api.readEvents("local-sync-session", 0, 100);
+    assert.deepEqual(history.events.map((event) => event.sequence), [1, 2, 3, 4, 5, 6, 7]);
+    assert.equal(history.events.some((event) => event.type === "context_snapshot"), false);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

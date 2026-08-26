@@ -16,6 +16,7 @@ test("redaction covers environment credentials, camelCase prompts, and issued de
     GATHERTHREAD_TOKEN: "gta_01234567890123456789012345678901",
     GATHERTHREAD_AUTH_TOKEN_PEPPER: "private-pepper",
     privateKey: "private-key-value",
+    local_session_id: "/private/local/thread.jsonl",
     bearer: "opaque-bearer-secret",
     nested: {
       authToken: "private-token",
@@ -33,6 +34,7 @@ test("redaction covers environment credentials, camelCase prompts, and issued de
     GATHERTHREAD_TOKEN: "[REDACTED]",
     GATHERTHREAD_AUTH_TOKEN_PEPPER: "[REDACTED]",
     privateKey: "[REDACTED]",
+    local_session_id: "[REDACTED]",
     bearer: "[REDACTED]",
     nested: {
       authToken: "[REDACTED]",
