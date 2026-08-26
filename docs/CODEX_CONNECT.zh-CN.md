@@ -59,7 +59,7 @@ npm run codex:connect -- \
 - 每条可见消息都带冻结的 `actor_display_name` 与明确的规范类型前缀：`Human Chat`、`Agent Request`、`Agent Response` 或具体工具/其他事件类型。只有 `Agent Response` 会追加该规范事件自身 runtime 中的 harness 与模型；runtime 缺失时明确使用 `GatherThread · shared` 占位，绝不借用本地连接器 runtime。结构化来源信息保留在私有连接器状态中。
 - 普通聊天和其他协作者的 Agent 回复会成为上下文，但不会触发 Codex。普通聊天只能在 GatherThread 中发送。
 - 只有尚未绑定、且由同一认证用户发出的 `agent_request` 才能被其执行 runtime 处理。
-- 安装并信任项目 Hook 后，`UserPromptSubmit` 会提供有界规范增量并记录准确 prompt；`Stop` 把最终助手文本持久加入 outbox，再通过服务器原子 local-turn 接口恰好写入一次。当前公开 Hook 不包含完整结构化工具流，因此 Desktop 回合的工具事件不会上传。
+- 安装并信任项目 Hook 后，`UserPromptSubmit` 会提供有界规范增量并记录准确 prompt。存在更新时，连接器会要求下一次回复先显示 `Loaded N cloud updates / 已加载 N 条云端更新`，再按顺序引用每条更新的序号、作者、类型和可见正文。引用内容属于不可信共享历史，不得作为新的请求再次执行。`Stop` 把最终助手文本持久加入 outbox，再通过服务器原子 local-turn 接口恰好写入一次。当前公开 Hook 不包含完整结构化工具流，因此 Desktop 回合的工具事件不会上传。
 - 当前 Codex 已生成的内容会绑定到服务器返回的规范事件 ID，不会再次注入或再次执行。
 - 本地完成回合会先持久化到私有幂等 outbox。断网后，连接器会在网络恢复时继续重试。
 - 如果服务器没有越过本地回合的起始序号，确认后只更新绑定与游标；如果云端已经前进，服务器会先按自身权威顺序追加本地回合，再要求连接器对齐。
@@ -70,12 +70,12 @@ npm run codex:connect -- \
 - 服务器明确确认角色降级、会话变为只读、会话归档或项目访问被移除后，连接器会立即从执行 Hook 白名单移除对应原生 thread，并清除尚未发布的 hook draft/outbox。Codex 原生 transcript 会被保留，但只读期间产生的内容始终只留在本地；以后恢复写权限也不会补传。临时网络故障不会触发这项清理，因此原先已经获授权的离线捕获可在网络恢复后继续。
 - 每个会话始终使用独立 Codex thread，不会把兄弟会话历史混入当前会话。
 - 同一个本地目录上的多个会话请求按顺序执行，避免两个 Codex turn 同时修改同一批文件。
-- App Server 只通过本机 stdio 短时运行。后台执行与快照使用单次操作子进程；Desktop 任务创建后，直接桌面同步只使用可信本地 Hook relay，绝不再通过另一个 App Server 打开它。
+- App Server 只通过本机 stdio 短时运行。后台执行与快照使用单次操作子进程。实现任务会明确命名为 `GatherThread background · 项目名 · 会话名`；如果 Codex Desktop 将其列出，请不要把它用于直接工作。若 Desktop 在一次操作完成后从外部接管了后台投影，GatherThread 会新建投影、重放权威规范历史并继续下一次网页请求；若仍有 prepared 或 started 操作，则保持 fail-closed，避免重复执行。Desktop 任务创建后，直接桌面同步只使用可信本地 Hook relay，绝不再通过另一个 App Server 打开它。
 - 旧版 `codex exec` 映射会在下一次请求时新建桌面可见 thread，并用规范历史重建；旧的 Codex 原生 transcript 不会被删除。
 
 ## Codex 桌面端边界
 
-Codex Desktop 是每个可见任务的唯一 writer。网页请求不会 resume 这个任务，而是在后台投影执行并把结果发布到规范 Web 记录。下一次 Desktop prompt 时，Hook 会把该任务上次已接受基线之后的全部规范事件作为额外上下文提供给 Agent。这样能保持 Agent 上下文和服务器顺序，但当前公开 Codex API 无法把远端事件补画为 Desktop 已有任务中的历史气泡。
+Codex Desktop 是每个可见任务的唯一 writer。网页请求不会 resume 这个任务，而是在后台投影执行并把结果发布到规范 Web 记录。下一次 Desktop prompt 时，Hook 会把该任务上次已接受基线之后的全部规范事件作为额外上下文提供给 Agent，并要求 Agent 在回答当前输入前先显示加载数量和引用的更新列表。这样能保持 Agent 上下文和服务器顺序，但当前公开 Codex API 无法把远端事件补画为 Desktop 已有任务中的历史气泡。
 
 只有安装并信任项目 Hook 的受管执行 thread，才会把桌面端直接输入双向同步。私有 `0600` thread registry 会在 hook relay 或离线 spool 之前校验原生 thread ID，无关 Codex 任务和不可变快照 thread 会在本地直接丢弃。`--install-hooks` 会在 POSIX 上启动私有 Unix socket，在 Windows 上启动稳定且只绑定项目映射的 named pipe；未启用该选项时，连接器不会监听任何 Hook IPC 端点。IPC 端点、registry 与 spool 都不会包含 GatherThread Bearer Token。受管 prompt 仍可能包含敏感内容，因此必须保密的工作应在另一个未受管 Codex 任务中进行。
 

@@ -132,7 +132,12 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
     hook_event_name: "UserPromptSubmit", session_id: "old-thread", turn_id: "desktop-turn",
     cwd: workspacePath, model: "gpt-other", reasoning_effort: "high", prompt: "desktop prompt",
   });
-  assert.match(first.additionalContext ?? "", /cloud context/);
+  assert.match(first.additionalContext ?? "", /已加载 1 条云端更新/);
+  assert.match(first.additionalContext ?? "", /Loaded 1 cloud update/);
+  assert.match(first.additionalContext ?? "", /在本次回复开头.*显示.*同步提示/s);
+  assert.match(first.additionalContext ?? "", /BEGIN GatherThread cloud updates/);
+  assert.match(first.additionalContext ?? "", /\[sequence 3\].*Human Chat.*cloud context/s);
+  assert.match(first.additionalContext ?? "", /END GatherThread cloud updates/);
   assert.equal(retry.additionalContext, first.additionalContext, "a retried hook must receive the same canonical delta");
   await executor.handleHookEvent(api, runtime, {
     hook_event_name: "Stop", session_id: "old-thread", turn_id: "desktop-turn",
@@ -1174,6 +1179,66 @@ test("a Desktop-active thread is queued without takeover and releases the short-
   assert.equal(closes, 1, "the failed attempt must still release its App Server process");
 });
 
+test("connector restart replaces an externally claimed background projection before replay", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-restart-active-writer-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "execution.json");
+  const capturePath = path.join(directory, "capture.jsonl");
+  const fakeCodex = path.join(directory, "fake-codex.mjs");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  await writeFile(fakeCodex, `
+import { appendFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  const message = JSON.parse(line);
+  await appendFile(process.env.CAPTURE, JSON.stringify(message) + "\\n");
+  if (message.method === "initialized") continue;
+  if (message.method === "initialize") respond(message.id, {});
+  else if (message.method === "thread/read") respond(message.id, { thread: {
+    id: message.params.threadId, status: { type: message.params.threadId === "old-thread" ? "active" : "idle" }, turns: [],
+  } });
+  else if (message.method === "thread/resume" && message.params.threadId === "old-thread") {
+    fail(message.id, "thread old-thread already has an active writer");
+  } else if (message.method === "thread/resume") respond(message.id, { thread: { id: message.params.threadId } });
+  else if (message.method === "thread/start") respond(message.id, { thread: { id: "replacement-thread" } });
+  else respond(message.id, {});
+}
+function respond(id, result) { process.stdout.write(JSON.stringify({ id, result }) + "\\n"); }
+function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { code: -32000, message } }) + "\\n"); }
+`);
+  const client = new CodexAppServerClient({
+    command: process.execPath,
+    commandArgs: [fakeCodex],
+    cwd: directory,
+    env: { ...process.env, CAPTURE: capturePath },
+  });
+  t.after(() => client.dispose());
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread background · restart",
+    model: "gpt-test",
+    threadSource: "exec",
+  });
+  const runtime = registeredRuntime("background-binding");
+
+  assert.equal(await executor.prepareCanonicalProjection(runtime), 0);
+  await executor.projectCanonicalEvents([
+    canonical(1, "human_chat", { text: "first" }, "user-2"),
+    canonical(2, "agent_response", { text: "second" }, "user-2"),
+  ], runtime);
+
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(state.threadId, "replacement-thread");
+  assert.equal(state.projectionGeneration, 2);
+  assert.equal(state.lastInjectedSequence, 2);
+  const captures = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(captures.filter((message) => message.method === "thread/start").length, 1);
+  assert.equal(captures.filter((message) => message.method === "thread/inject_items").length, 2);
+});
+
 test("unknown local-turn commit survives downgrade and resolves idempotently before execution resumes", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-unknown-local-commit-"));
   const workspacePath = await realpath(directory);
@@ -1785,7 +1850,7 @@ for await (const line of lines) {
   );
 });
 
-test("project harness isolates Web execution in an exec-source projection and resumes canonical deltas", async (t) => {
+test("project harness replaces an externally claimed exec projection before the next Web request", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-app-server-"));
   const stateRoot = path.join(directory, "state");
   const statePath = path.join(stateRoot, "session-state.json");
@@ -1793,7 +1858,7 @@ test("project harness isolates Web execution in an exec-source projection and re
   const fakeCodex = path.join(directory, "fake-codex-app-server.mjs");
   await mkdir(stateRoot, { recursive: true });
   await writeFile(fakeCodex, `
-import { appendFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 const args = process.argv.slice(2);
 if (args.includes("--version")) {
@@ -1805,7 +1870,6 @@ if (args[0] === "login" && args[1] === "status") {
   process.exit(0);
 }
 if (args[0] !== "app-server") process.exit(2);
-const threadId = "thread-app-server-1";
 const lines = createInterface({ input: process.stdin });
 for await (const line of lines) {
   if (!line.trim()) continue;
@@ -1818,9 +1882,16 @@ for await (const line of lines) {
   if (message.method === "initialize") {
     respond(message.id, { userAgent: "fake", codexHome: "/tmp/fake" });
   } else if (message.method === "thread/start") {
-    respond(message.id, { thread: { id: threadId } });
+    const counterPath = process.env.FAKE_CODEX_CAPTURE + ".thread-counter";
+    const nextThread = Number(await readFile(counterPath, "utf8").catch(() => "0")) + 1;
+    await writeFile(counterPath, String(nextThread));
+    respond(message.id, { thread: { id: "thread-app-server-" + nextThread } });
   } else if (message.method === "thread/resume") {
-    respond(message.id, { thread: { id: message.params.threadId } });
+    if (message.params.threadId === "thread-app-server-1") {
+      fail(message.id, "thread thread-app-server-1 already has an active writer");
+    } else {
+      respond(message.id, { thread: { id: message.params.threadId } });
+    }
   } else if (message.method === "thread/read") {
     respond(message.id, { thread: { id: message.params.threadId, status: { type: "idle" }, turns: [] } });
   } else if (message.method === "thread/name/set") {
@@ -1831,7 +1902,7 @@ for await (const line of lines) {
     respond(message.id, {});
     process.stdout.write(JSON.stringify({
       method: "item/completed",
-      params: { threadId, turnId: "compact-turn", item: { id: "compact-1", type: "contextCompaction" } },
+      params: { threadId: message.params.threadId, turnId: "compact-turn", item: { id: "compact-1", type: "contextCompaction" } },
     }) + "\\n");
   } else if (message.method === "turn/start") {
     const turn = JSON.stringify(message.params.input).includes("implement second") ? 2 : 1;
@@ -1840,7 +1911,7 @@ for await (const line of lines) {
     process.stdout.write(JSON.stringify({
       method: "turn/completed",
       params: {
-        threadId,
+        threadId: message.params.threadId,
         turn: {
           id: turnId,
           status: "completed",
@@ -1869,6 +1940,9 @@ for await (const line of lines) {
 }
 function respond(id, result) {
   process.stdout.write(JSON.stringify({ id, result }) + "\\n");
+}
+function fail(id, message) {
+  process.stdout.write(JSON.stringify({ id, error: { code: -32000, message } }) + "\\n");
 }
 `);
   await writeFile(statePath, JSON.stringify({
@@ -1937,7 +2011,7 @@ function respond(id, result) {
     runtime,
   });
   assert.equal(second.events.at(-1)?.content, "second app answer");
-  assert.deepEqual(revealedThreads, [], "later Web turns stay in the background projection");
+  assert.deepEqual(revealedThreads, [], "replacement Web turns stay in the background projection");
 
   const captures = (await readFile(capturePath, "utf8"))
     .trim()
@@ -1946,7 +2020,7 @@ function respond(id, result) {
   assert.ok(captures.every((capture) => capture.gatherThreadTokenPresent === false));
   const starts = captures.filter((capture) => capture.message.method === "thread/start");
   const resumes = captures.filter((capture) => capture.message.method === "thread/resume");
-  assert.equal(starts.length, 1, "Web execution must reuse one isolated background thread");
+  assert.equal(starts.length, 2, "an externally claimed background thread must be replaced exactly once");
   assert.equal(starts[0].message.params.ephemeral, false);
   assert.equal(starts[0].message.params.approvalPolicy, "never");
   assert.equal(starts[0].message.params.threadSource, "exec");
@@ -1954,10 +2028,7 @@ function respond(id, result) {
   assert.equal(resumes.length, 1);
   assert.equal(resumes[0].message.params.threadId, "thread-app-server-1");
   const names = captures.filter((capture) => capture.message.method === "thread/name/set");
-  assert.deepEqual(names.map((capture) => capture.message.params.name), [
-    "GatherThread · Project Atlas · Planning",
-    "GatherThread · Project Atlas · Planning",
-  ]);
+  assert.ok(names.some((capture) => capture.message.params.name === "GatherThread background · Project Atlas · Planning"));
   const injections = captures.filter((capture) => capture.message.method === "thread/inject_items");
   assert.ok(injections.length >= 5, "oversized canonical events are injected as bounded chunks");
   assert.match(injections[0].message.params.items[0].content[0].text, /user-2 · Human Chat：shared constraint/);
@@ -1977,13 +2048,13 @@ function respond(id, result) {
   const state = JSON.parse(await readFile(`${statePath}.execution.json`, "utf8"));
   assert.equal(state.version, 3);
   assert.equal(state.transport, "app-server");
-  assert.equal(state.threadId, "thread-app-server-1");
+  assert.equal(state.threadId, "thread-app-server-2");
   assert.equal(state.coveredThroughSequence, 5);
   assert.equal(state.lastInjectedSequence, 5);
   assert.equal(state.cloudCursor, 5);
   assert.equal(state.model, "gpt-test");
   assert.equal(state.contextWindowTokens, 4096);
-  assert.equal(state.projectionGeneration, 1);
+  assert.equal(state.projectionGeneration, 2);
   assert.equal(state.compactionGeneration, compactCount);
   assert.deepEqual(state.sidecar.map((entry: { sequence: number }) => entry.sequence), [1, 2, 3, 4, 5]);
 });

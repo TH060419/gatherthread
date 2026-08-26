@@ -76,9 +76,9 @@ npm run codex:connect -- \
   --install-hooks
 ```
 
-命令不含任何 Token；连接器会在终端中隐藏输入自己的设备 Token，在 `~/GatherThread Projects/` 下安全创建或复用与云端项目同名的本地工作区，并在 Codex Desktop 中打开它。每个可编辑会话会得到一个名为 `GatherThread · 项目名 · 会话名` 的 Desktop 任务，以及一个实现私有的 `exec` 后台投影。Desktop 是可见任务的唯一 writer；网页 **Request my agent** 在后台投影执行，再通过规范历史汇合。连接器会自动发现后续新会话，请保持终端运行。若要绑定已有源码目录，请改用 `--workspace "/本地项目绝对路径"`。
+命令不含任何 Token；连接器会在终端中隐藏输入自己的设备 Token，在 `~/GatherThread Projects/` 下安全创建或复用与云端项目同名的本地工作区，并在 Codex Desktop 中打开它。每个可编辑会话会得到一个名为 `GatherThread · 项目名 · 会话名` 的 Desktop 任务，以及一个名为 `GatherThread background · 项目名 · 会话名` 的实现私有 `exec` 后台投影。Desktop 是可见任务的唯一 writer；网页 **Request my agent** 在后台投影执行，再通过规范历史汇合。如果当前 Desktop 版本列出了带 `background` 的任务，请不要把它用于直接工作；即使 Desktop 意外接管了它，下一次网页请求也会根据权威规范历史替换该后台投影，而不是无限重试被锁定的 writer。连接器会自动发现后续新会话，请保持终端运行。若要绑定已有源码目录，请改用 `--workspace "/本地项目绝对路径"`。
 
-规范事件会按顺序导入后台投影，并使用冻结且按类型区分的前缀：`用户名 · Human Chat：`、`用户名 · Agent Request：` 和 `用户名 · Agent Response · harness · model：`。安装并信任项目 Hook 后，`UserPromptSubmit` 会把有界的规范增量作为上下文交给 Desktop Agent，`Stop` 则把这次 prompt 与最终回复恰好上传一次。当前公开 Hook 不提供完整结构化工具流，因此桌面端工具事件会被省略，而不是通过争抢 writer 去补读。远端事件始终显示在 GatherThread Web，并在下一次本地 prompt 时进入 Desktop 上下文；当前公开 Codex API 无法把它们补画成 Desktop 已有任务中的历史气泡。后台长历史会独立 compact，会话对齐不会回滚源码文件。
+规范事件会按顺序导入后台投影，并使用冻结且按类型区分的前缀：`用户名 · Human Chat：`、`用户名 · Agent Request：` 和 `用户名 · Agent Response · harness · model：`。安装并信任项目 Hook 后，`UserPromptSubmit` 会把有界的规范增量作为上下文交给 Desktop Agent，并要求下一次回复先显示 `Loaded N cloud updates / 已加载 N 条云端更新`，再按顺序列出每条更新的作者、类型和正文。引用的更新会被明确标成不可信共享历史，不会作为新的请求再次执行。`Stop` 则把这次 prompt 与最终回复恰好上传一次。当前公开 Hook 不提供完整结构化工具流，因此桌面端工具事件会被省略，而不是通过争抢 writer 去补读。当前公开 Codex API 无法把远端事件补画成 Desktop 已有任务中的历史气泡。后台长历史会独立 compact，会话对齐不会回滚源码文件。
 
 只读会话不显示输入框，而显示 **Download to Codex**。每次点击都会冻结一个新的 `through_sequence`，创建互相独立的本地快照任务，之后绝不向云端回传。Owner 同步全部会话；Participant 同步 `multi`、下载 `solo`；Viewer 下载全部会话。若要回传 Desktop prompt，必须先在 Codex Desktop 设置中启用 Hooks，再检查生成工作区中的 `.codex/hooks.json`。GatherThread 凭据不会进入 Codex 子进程环境，自动权限提升始终禁用，并且不支持 `danger-full-access`。当前流程参见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)和[ADR-0013](docs/adr/0013-single-writer-dual-codex-projections.md)。
 
