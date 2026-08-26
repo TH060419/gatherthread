@@ -552,7 +552,12 @@ async function selectSession(sessionId) {
   downloadCodexButton.disabled = false;
   element("session-title").focus({ preventScroll: true });
   const membership = members.find((member) => member.userId === state.currentUser?.id);
-  if (sessionDeliveryMode({ role: membership?.role ?? session.role, mode: session.mode }) === "snapshot") {
+  if (sessionDeliveryMode({
+    role: membership?.role ?? session.role,
+    mode: session.mode,
+    ownerUserId: session.ownerUserId,
+    currentUserId: state.currentUser?.id,
+  }) === "snapshot") {
     void restoreSnapshotRequests(sessionId, generation);
   }
   await sync.connect(sessionId);
@@ -572,9 +577,9 @@ function renderProjectSelect() {
 }
 
 function renderProjectPermissions() {
-  const isOwner = state.project?.role === "owner";
-  element("new-session-button").hidden = !isOwner;
-  element("empty-create-button").hidden = !isOwner;
+  const mayCreate = state.project?.role === "owner" || state.project?.role === "participant";
+  element("new-session-button").hidden = !mayCreate;
+  element("empty-create-button").hidden = !mayCreate;
 }
 
 function startMemberRefresh(sessionId) {
@@ -656,7 +661,10 @@ function renderSessionHeader() {
   element("session-mode").textContent = session.mode;
   element("session-mode").className = `mode-badge mode-${session.mode}`;
   const membership = session.members.find((member) => member.userId === state.currentUser.id);
-  element("rename-session-button").hidden = membership?.role !== "owner";
+  const mayRename = session.mode === "solo"
+    ? membership?.role !== "viewer" && session.ownerUserId === state.currentUser?.id
+    : membership?.role === "owner";
+  element("rename-session-button").hidden = !mayRename;
   element("session-subtitle").textContent = `${session.description} · You are ${membership?.role ?? "viewer"}`;
 }
 
@@ -902,7 +910,12 @@ function renderSyncState() {
   }[phase];
   banner.dataset.state = phase;
   const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
-  const isLive = sessionDeliveryMode({ role: membership?.role ?? state.session?.role, mode: state.session?.mode }) === "live";
+  const isLive = sessionDeliveryMode({
+    role: membership?.role ?? state.session?.role,
+    mode: state.session?.mode,
+    ownerUserId: state.session?.ownerUserId,
+    currentUserId: state.currentUser?.id,
+  }) === "live";
   element("sync-title").textContent = isLive ? title : phase === "live" ? "Read-only history" : title;
   element("sync-detail").textContent = bufferedCount
     ? `${detail} ${bufferedCount} later event${bufferedCount === 1 ? " is" : "s are"} buffered.`
@@ -1017,6 +1030,8 @@ function renderSessionDeliveryControls() {
   const isLive = sessionDeliveryMode({
     role: membership?.role ?? state.session?.role,
     mode: state.session?.mode,
+    ownerUserId: state.session?.ownerUserId,
+    currentUserId: state.currentUser?.id,
   }) === "live";
   downloadCodexButton.hidden = isLive;
   element("snapshot-download-panel").hidden = isLive;
@@ -1198,8 +1213,13 @@ async function sendMessage(kind) {
 }
 
 function openCreateDialog() {
-  if (state.project?.role !== "owner") return;
+  if (state.project?.role !== "owner" && state.project?.role !== "participant") return;
   element("create-error").textContent = "";
+  const multi = createForm.querySelector("input[name='mode'][value='multi']");
+  const solo = createForm.querySelector("input[name='mode'][value='solo']");
+  const participant = state.project.role === "participant";
+  multi.disabled = participant;
+  if (participant) solo.checked = true;
   createDialog.showModal();
   requestAnimationFrame(() => element("session-name").focus());
 }
@@ -1212,7 +1232,11 @@ function openCreateProjectDialog() {
 
 function openRenameSessionDialog() {
   const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
-  if (!state.session || membership?.role !== "owner") return;
+  if (!state.session) return;
+  const mayRename = state.session.mode === "solo"
+    ? membership?.role !== "viewer" && state.session.ownerUserId === state.currentUser?.id
+    : membership?.role === "owner";
+  if (!mayRename) return;
   renameSessionReturnFocus = document.activeElement;
   element("rename-session-error").textContent = "";
   element("rename-session-name").value = state.session.name;

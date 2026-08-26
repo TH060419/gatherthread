@@ -102,6 +102,9 @@ export interface ServerOptions {
   maxUserActiveSnapshotRequests?: number;
   maxSessionActiveSnapshotRequests?: number;
   maxTotalActiveSnapshotRequests?: number;
+  maxUserSessions?: number;
+  maxProjectSessions?: number;
+  maxTotalSessions?: number;
 }
 
 export interface RunningCollaborationServer {
@@ -342,6 +345,9 @@ export async function startCollaborationServer(
     maxUserActiveSnapshotRequests: options.maxUserActiveSnapshotRequests,
     maxSessionActiveSnapshotRequests: options.maxSessionActiveSnapshotRequests,
     maxTotalActiveSnapshotRequests: options.maxTotalActiveSnapshotRequests,
+    maxUserSessions: options.maxUserSessions,
+    maxProjectSessions: options.maxProjectSessions,
+    maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
   const secureTransport = options.secureTransport ?? false;

@@ -6,8 +6,8 @@ Project roles determine the connector mode:
 
 | Project role | `multi` session | `solo` session |
 |---|---|---|
-| `owner` | live bidirectional synchronization | live bidirectional synchronization |
-| `participant` | live bidirectional synchronization | read-only **Download to Codex** snapshot |
+| `owner` | live bidirectional synchronization | live only for Solos created by this user; other Solos are read-only snapshots |
+| `participant` | live bidirectional synchronization | live only for Solos created by this user; other Solos are read-only snapshots |
 | `viewer` | read-only **Download to Codex** snapshot | read-only **Download to Codex** snapshot |
 
 The connector may therefore run for a viewer, but it registers only isolated `snapshot_connector` runtimes and never an execution runtime.
@@ -60,13 +60,14 @@ Keep the terminal open. The Web member panel refreshes runtime presence every fi
 - Human chat and other collaborators' agent responses become context but do not trigger Codex. Human chat can be authored only in GatherThread.
 - Only an unbound `agent_request` authored by the same authenticated user is eligible for that user's execution runtime.
 - With reviewed project hooks installed and trusted, `UserPromptSubmit` supplies a canonical relay capsule under the Hook's 2,500-token additional-context ceiling and records the exact prompt. The Agent is asked to display only `Loaded N cloud updates / 已加载 N 条云端更新` plus at most three short previews; exact ordered bodies are marked as untrusted model-only context. Oversized UTF-8 content is checkpointed and resumed over later completed Desktop turns. The separate delivery cursor advances only after `Stop`; cancellation repeats the same capsule, and an omitted chunk is never silently acknowledged. `Stop` durably queues the final assistant text for one atomic local-turn commit. Current public Hook payloads omit the completed structured tool stream, so Desktop-originated tool events are not uploaded.
+- In an unbound Desktop task, that first `UserPromptSubmit` is also the discovery trigger. An owner or participant creates one deterministic creator-owned Solo, adopts the current native task without opening a competing writer, and uploads the same completed turn through the normal outbox. Opening an empty task creates nothing. A viewer's unbound task remains local-only. Background execution and snapshot tasks carry explicit non-discoverable purposes, so they cannot recursively create Solos.
 - Output already produced by the same Codex thread is bound to the returned canonical event IDs rather than injected or executed again.
 - Local completed turns are persisted to a private idempotent outbox before upload. A disconnected connector retries that outbox after network recovery.
 - If the server has not advanced beyond the local turn's base sequence, acknowledgement only advances the binding and cursor. If it has advanced, the server appends the local turn after its authoritative head and asks the connector to reconcile.
 - Background reconciliation builds a new execution projection off to the side from the complete canonical sequence, compacts as needed, verifies coverage, and only then switches that private binding. The Desktop-owned task is never renamed, archived, or replaced by the connector.
 - Conversation reconciliation changes Codex thread state only. It never resets, checks out, or overwrites local project source files.
 - Codex compaction remains local. The connector uses App Server token-usage and model-context-window updates when available, with a conservative configured estimate as fallback. GatherThread keeps the full canonical event log and does not share native compaction state.
-- New sessions are discovered by the same project connector. Owners attach execution runtimes to all sessions; participants attach them only to `multi`; viewers remain snapshot-only.
+- New cloud sessions are discovered by the same project connector. Owners and participants attach execution runtimes to `multi` plus personal Solos they created; another member's Solo remains snapshot-only. Viewers remain snapshot-only everywhere.
 - An authoritative role downgrade, conversion to read-only, archive, or project removal immediately removes the affected native thread from the execution hook allowlist and clears unpublished hook drafts/outbox state. The native Codex transcript is preserved, but work performed during the read-only interval remains local-only and is not uploaded if write access is later restored. A transient network failure does not trigger this cleanup, so already-authorized offline capture can resume after connectivity returns.
 - Sibling sessions use separate Codex threads and never hydrate one another's history.
 - Agent turns are serialized across sessions sharing the same workspace to avoid conflicting concurrent edits.
@@ -155,4 +156,4 @@ Shared history is untrusted collaboration data. The connector separates the serv
 
 The server charges a conservative 1 KiB metadata allowance for every snapshot job, bounds one stored result to 8 KiB of UTF-8 JSON, and enforces cumulative job quotas of 4 MiB per user, 8 MiB per session, and 64 MiB per deployment by default. It also caps unfinished jobs at 64 per user, 256 per session, and 4096 per deployment. Snapshot results contain projection metadata rather than the imported canonical transcript.
 
-[ADR-0013](adr/0013-single-writer-dual-codex-projections.md) records the current Codex synchronization boundary. See the [official OpenAI Codex App Server documentation](https://developers.openai.com/codex/app-server) for the upstream protocol.
+[ADR-0013](adr/0013-single-writer-dual-codex-projections.md) records the dual-projection boundary, [ADR-0014](adr/0014-acknowledged-bounded-desktop-relay-capsules.md) records acknowledged relay delivery, and [ADR-0015](adr/0015-create-personal-solos-from-first-local-prompt.md) records first-prompt personal Solo creation. See the [official OpenAI Codex App Server documentation](https://developers.openai.com/codex/app-server) for the upstream protocol.

@@ -6,7 +6,7 @@ Enable multiple people to collaborate on an agent-assisted project while each pe
 
 ## Project collaboration boundary
 
-A project groups related sessions and is the stable membership, invitation, and local-agent binding boundary. Creating a project atomically creates only its owner membership; the owner then creates the first `solo` or `multi` session explicitly. Existing sessions named `General` are preserved, but new and historical projects are never backfilled with one. A project invitation grants access to the project's current and future sessions. The project owner creates and renames sessions and can change every other member between `participant` and `viewer`.
+A project groups related sessions and is the stable membership, invitation, and local-agent binding boundary. Creating a project atomically creates only its owner membership; an owner or participant then creates an eligible first session explicitly. Existing sessions named `General` are preserved, but new and historical projects are never backfilled with one. A project invitation grants access to the project's current and future sessions. The project owner creates and renames `multi` sessions and can change every other member between `participant` and `viewer`. Owners and participants create and rename only their own personal `solo` sessions.
 
 One collaborator maps the project to one local working directory and harness configuration. Sessions inside that project keep independent canonical histories, cursors, native agent conversations, and local compaction.
 
@@ -14,7 +14,7 @@ One collaborator maps the project to one local working directory and harness con
 
 ### Solo
 
-The project owner is the only member allowed to write or submit agent requests. Project participants and viewers can read the complete shared event history and approved context snapshots in real time.
+The Solo creator is the only member allowed to write or submit agent requests while that creator still has a non-viewer project role. Every other member, including the project owner for a participant-created Solo, can read the complete shared event history and approved context snapshots but cannot mutate it.
 
 ### Multi
 
@@ -54,11 +54,11 @@ The server retains canonical events. Each local harness may build a private proj
 
 | Project role | `multi` | `solo` | Project administration |
 |---|---|---|---|
-| `owner` | read, chat, request/live-sync Agent | read, chat, request/live-sync Agent | sessions, invitations, roles, retention |
-| `participant` | read, chat, request/live-sync Agent | read and download immutable local snapshots | none |
+| `owner` | read, chat, request/live-sync Agent | write own Solo; read/download other Solos | multi sessions, invitations, roles, retention |
+| `participant` | read, chat, request/live-sync Agent | write own Solo; read/download other Solos | create personal Solo only |
 | `viewer` | read and download immutable local snapshots | read and download immutable local snapshots | none |
 
-Solo sessions reject participant writes. Viewer sessions reject every conversation write and execution-runtime registration. Multi sessions serialize agent turns per local runtime while allowing concurrent human chat. Session-specific membership overrides are outside the first release.
+Solo sessions reject every writer except their immutable creator, and a viewer downgrade also disables that creator. Viewer sessions reject every conversation write and execution-runtime registration. Multi sessions serialize agent turns per local runtime while allowing concurrent human chat. Apart from creator ownership on Solo, session-specific membership overrides are outside the first release.
 
 ## Local project synchronization
 
@@ -97,7 +97,7 @@ One participating user runs the only active authoritative server for a deploymen
 1. Two authenticated users can join one project from separate clients and see ordered live updates in its multi sessions.
 2. `human_chat` never triggers an agent but is included in the next hydration payload.
 3. `agent_request` is claimed by the initiating user's registered bridge and produces a provenance-labelled response.
-4. A project participant or viewer can follow a solo session but cannot append any event.
+4. A Solo creator with a non-viewer role can append; every other project member follows it read-only.
 5. Codex and Claude Code transcript import/tail preserve visible user, assistant, tool-call, and tool-result events.
 6. Reconnect replay, idempotent append, role enforcement, redaction, and concurrent writes have automated tests.
 7. A new user can claim a one-use project-role invitation without exposing their device credential to the inviter, and the owner can later change that role.
@@ -107,8 +107,9 @@ One participating user runs the only active authoritative server for a deploymen
 11. An unanswered agent request has an accessible answering indicator; it changes to queued when the local runtime is offline and disappears after the linked canonical response.
 12. With the reviewed project hooks installed and trusted, a completed prompt in a managed Codex desktop thread is uploaded atomically and exactly once as one canonical Agent turn, including allowed redacted tool events; without trusted hooks it remains local.
 13. Offline local work is durable; after reconnect, a divergent turn is ordered by the server and a verified replacement thread becomes active while the former thread remains an `offline fork`.
-14. Participants can download `solo` sessions and viewers can download every visible session as independent immutable Codex snapshots; snapshot runtimes cannot execute or publish.
+14. Owners and participants can download another member's `solo`, while viewers can download every visible session as independent immutable Codex snapshots; snapshot runtimes cannot execute or publish.
 15. Long projection and snapshot imports compact locally against an observed model context window or a conservative fallback without deleting canonical events.
 16. Hook installation is explicit and reviewable; only privately allowlisted managed execution threads can reach the hook relay or offline spool.
-17. A new project starts with no sessions, presents an owner-only first-session action, and its Web page produces credential-free project connection commands for macOS/Linux and Windows.
-18. The project owner can rename a session from GatherThread Web; subscribed Web clients and background harness projections converge without rebuilding history. A connector must not force-rename a Codex Desktop-owned task while the public protocol provides no safe single-writer rename channel.
+17. A new project starts with no sessions, lets an owner create `solo` or `multi` and a participant create only a personal `solo`, and produces credential-free project connection commands for macOS/Linux and Windows.
+18. A project owner can rename `multi`; a Solo creator can rename that Solo. Subscribed Web clients and background harness projections converge without rebuilding history. A connector must not force-rename a Codex Desktop-owned task while the public protocol provides no safe single-writer rename channel.
+19. With trusted Hooks enabled, the first prompt in an unbound local Codex task creates one idempotent creator-owned Solo for an owner or participant and binds the same task. Empty tasks create nothing; viewer tasks remain local-only; connector-owned background and snapshot tasks cannot trigger discovery.

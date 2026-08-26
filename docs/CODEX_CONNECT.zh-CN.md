@@ -6,8 +6,8 @@
 
 | 项目角色 | `multi` 会话 | `solo` 会话 |
 |---|---|---|
-| `owner` | 实时双向同步 | 实时双向同步 |
-| `participant` | 实时双向同步 | 只读 **Download to Codex** 快照 |
+| `owner` | 实时双向同步 | 仅本人创建的 Solo 实时双向同步；其他 Solo 为只读快照 |
+| `participant` | 实时双向同步 | 仅本人创建的 Solo 实时双向同步；其他 Solo 为只读快照 |
 | `viewer` | 只读 **Download to Codex** 快照 | 只读 **Download to Codex** 快照 |
 
 因此 Viewer 也可以运行连接器，但只能注册隔离的 `snapshot_connector` runtime，绝不会注册执行 runtime。
@@ -60,13 +60,14 @@ npm run codex:connect -- \
 - 普通聊天和其他协作者的 Agent 回复会成为上下文，但不会触发 Codex。普通聊天只能在 GatherThread 中发送。
 - 只有尚未绑定、且由同一认证用户发出的 `agent_request` 才能被其执行 runtime 处理。
 - 安装并信任项目 Hook 后，`UserPromptSubmit` 会在 Hook 的 2,500-token 附加上下文上限内提供规范 relay capsule，并记录准确 prompt。Agent 只需显示 `Loaded N cloud updates / 已加载 N 条云端更新` 和最多三条短预览；精确顺序正文作为不可信的仅模型上下文。超长 UTF-8 内容会持久记录检查点，并在后续完成的 Desktop 回合继续。独立投递游标只在 `Stop` 后推进；取消会原样重投，任何省略分段都不会被静默确认。`Stop` 把最终助手文本持久加入 outbox，再通过服务器原子 local-turn 接口恰好写入一次。当前公开 Hook 不包含完整结构化工具流，因此 Desktop 回合的工具事件不会上传。
+- 对尚未绑定的 Desktop 任务，第一次 `UserPromptSubmit` 同时是发现触发点。Owner 或 Participant 会幂等创建一个由本人所有的 Solo，在不打开竞争 writer 的前提下采用当前原生任务，并通过正常 outbox 上传同一个已完成回合。打开空任务不会创建任何内容；Viewer 的未绑定任务始终仅保留在本地。后台执行与快照任务具有明确的不可发现用途，因此不能递归创建 Solo。
 - 当前 Codex 已生成的内容会绑定到服务器返回的规范事件 ID，不会再次注入或再次执行。
 - 本地完成回合会先持久化到私有幂等 outbox。断网后，连接器会在网络恢复时继续重试。
 - 如果服务器没有越过本地回合的起始序号，确认后只更新绑定与游标；如果云端已经前进，服务器会先按自身权威顺序追加本地回合，再要求连接器对齐。
 - 后台对齐会在旁路新建执行投影，导入完整规范序列，按需 compact，验证覆盖序号后才切换私有绑定。连接器不会重命名、归档或替换 Desktop 独占任务。
 - 会话对齐只改变 Codex thread 状态，不会 reset、checkout 或覆盖本地项目源码文件。
 - Codex compact 始终是本地状态。连接器优先使用 App Server 报告的 token usage 与模型上下文窗口，无法取得时使用保守配置估计。GatherThread 保留完整规范事件日志，不共享原生 compact 状态。
-- 新会话会被同一个项目连接器自动发现。Owner 为所有会话连接执行 runtime；Participant 只连接 `multi`；Viewer 始终只有快照模式。
+- 云端新会话会被同一个项目连接器自动发现。Owner 与 Participant 为 `multi` 和本人创建的个人 Solo 连接执行 runtime；其他成员的 Solo 保持快照模式。Viewer 在所有会话中始终只有快照模式。
 - 服务器明确确认角色降级、会话变为只读、会话归档或项目访问被移除后，连接器会立即从执行 Hook 白名单移除对应原生 thread，并清除尚未发布的 hook draft/outbox。Codex 原生 transcript 会被保留，但只读期间产生的内容始终只留在本地；以后恢复写权限也不会补传。临时网络故障不会触发这项清理，因此原先已经获授权的离线捕获可在网络恢复后继续。
 - 每个会话始终使用独立 Codex thread，不会把兄弟会话历史混入当前会话。
 - 同一个本地目录上的多个会话请求按顺序执行，避免两个 Codex turn 同时修改同一批文件。
@@ -155,4 +156,4 @@ npm run codex:connect -- \
 
 服务器会为每条快照任务保守计入 1 KiB 元数据，把单条快照结果限制为 8 KiB UTF-8 JSON，并默认执行累计任务配额：每位用户 4 MiB、每个会话 8 MiB、整个部署 64 MiB。未终结任务还分别限制为每位用户 64 条、每个会话 256 条、整个部署 4096 条。快照结果只存投影元数据，不包含导入的规范 transcript 正文。
 
-[ADR-0013](adr/0013-single-writer-dual-codex-projections.md)记录当前 Codex 同步边界。Codex App Server 的协议能力参见 [OpenAI 官方文档](https://developers.openai.com/codex/app-server)。
+[ADR-0013](adr/0013-single-writer-dual-codex-projections.md)记录双投影边界，[ADR-0014](adr/0014-acknowledged-bounded-desktop-relay-capsules.md)记录有确认的 relay 投递，[ADR-0015](adr/0015-create-personal-solos-from-first-local-prompt.md)记录首条 prompt 创建个人 Solo 的规则。Codex App Server 的协议能力参见 [OpenAI 官方文档](https://developers.openai.com/codex/app-server)。

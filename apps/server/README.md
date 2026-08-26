@@ -33,14 +33,14 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 | `GET` | `/v1/me` | Return the authenticated user and device identity |
 | `POST/GET` | `/v1/projects` | Create an empty project or list projects visible to the actor |
 | `GET` | `/v1/projects/:project_id` | Read one visible project and the actor's role |
-| `POST/GET` | `/v1/projects/:project_id/sessions` | Owner-create or list project sessions |
+| `POST/GET` | `/v1/projects/:project_id/sessions` | Owner creates solo/multi; participant creates personal solo; members list sessions |
 | `GET` | `/v1/projects/:project_id/members` | List project members |
 | `PUT/DELETE` | `/v1/projects/:project_id/members/:user_id` | Owner-change or remove another member |
 | `POST/GET/DELETE` | `/v1/projects/:project_id/invitations[/invite_id]` | Owner-manage project invitations |
 | `POST` | `/v1/invitations/claim` | Atomically claim a project invitation as a new identity/device |
 | `POST` | `/v1/invitations/accept` | Accept a project invitation as an authenticated identity |
 | `GET` | `/v1/sessions` | Compatibility list of all visible sessions |
-| `GET/PATCH` | `/v1/sessions/:session_id` | Read or owner-update mode, state, and title |
+| `GET/PATCH` | `/v1/sessions/:session_id` | Read; project owner manages multi; Solo creator manages own Solo |
 | `GET` | `/v1/sessions/:session_id/members` | Visible members and their most relevant active runtime |
 | `POST` | `/v1/sessions/:session_id/events` | Append a validated, redacted canonical event |
 | `GET` | `/v1/sessions/:session_id/events?after_sequence=N&limit=100` | Durable replay page and cursor |
@@ -76,9 +76,9 @@ The server derives actor identity from the credential and always assigns event I
 }
 ```
 
-Project membership is the ACL boundary. A participant can write `multi` sessions and reads `solo`; a viewer reads all project sessions. The project owner creates sessions and can change or remove every other member. The same role governs current and future sessions in that project.
+Project membership is the broad ACL boundary. A participant can write `multi`; a viewer reads all project sessions. Owners and participants may create personal `solo`, and the persisted `owner_user_id` identifies its immutable creator: only that creator can write or rename the Solo while retaining a non-viewer project role. Even the project owner reads another member's Solo. The project owner alone creates `multi` and can change or remove every other member.
 
-Project creation inserts only the project and its owner membership, so a new project's `session_count` is `0`. The owner explicitly creates its first session; existing sessions named `General` are preserved and no migration backfills one. Project creation, session creation, and owner-only `PATCH /v1/sessions/:session_id` share a trimmed 1–200 character, control-character-free `title` policy; invalid title mutations return `422 validation_error`. A title-only change emits a metadata-only `session_state_change` event with `{ "action": "renamed", "title": "..." }`, allowing subscribed clients to refresh their title and session list without exposing the previous name or conversation content.
+Project creation inserts only the project and its owner membership, so a new project's `session_count` is `0`. An owner or participant explicitly creates an eligible first session; existing sessions named `General` are preserved and no migration backfills one. Project creation, session creation, and authorized `PATCH /v1/sessions/:session_id` share a trimmed 1–200 character, control-character-free `title` policy; invalid title mutations return `422 validation_error`. A title-only change emits a metadata-only `session_state_change` event with `{ "action": "renamed", "title": "..." }`, allowing subscribed clients to refresh their title and session list without exposing the previous name or conversation content.
 
 ## WebSocket contract
 
@@ -94,4 +94,4 @@ Set `GATHERTHREAD_ALLOWED_ORIGINS` to a comma-separated exact Origin allowlist w
 
 ## Security and first-release scope
 
-Projects are private and owner-managed. Solo writes are owner-only; multi writes allow owners and participants; viewers are read-only. Project invitations are single-use, peppered, and expire after one hour, 24 hours, or seven days. Payloads redact common credentials and default-private thinking/system/developer fields before persistence. A non-owner member reading another user's activity receives public attribution rather than local device, runtime, or native-session identifiers. Snapshot jobs are charged at least 1 KiB each, completion data is bounded to 8 KiB, cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment, and unfinished jobs default to 64/256/4096 respectively. The first release still lacks multi-process fan-out, automatic retention jobs, attachment blob storage, and public-Internet deployment support. Use the documented loopback plus private Tailscale Serve topology.
+Projects are private and owner-managed. Solo writes are creator-only; multi writes allow owners and participants; viewers are read-only. New sessions default to hard limits of 512 per creator, 2,048 per project, and 8,192 per deployment; exact idempotent retries still return the original session at the limit. Project invitations are single-use, peppered, and expire after one hour, 24 hours, or seven days. Payloads redact common credentials and default-private thinking/system/developer fields before persistence. A non-owner member reading another user's activity receives public attribution rather than local device, runtime, or native-session identifiers. Snapshot jobs are charged at least 1 KiB each, completion data is bounded to 8 KiB, cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment, and unfinished jobs default to 64/256/4096 respectively. The first release still lacks multi-process fan-out, automatic retention jobs, attachment blob storage, and public-Internet deployment support. Use the documented loopback plus private Tailscale Serve topology.

@@ -243,7 +243,7 @@ https://gatherthread-host.example-tailnet.ts.net/health
 2. 输入 owner 设备 Token 登录。页面会把它交换为 `HttpOnly` 浏览器会话，不会保存到 Web Storage。
 3. 点击 **Create project**，创建这次协作使用的项目。
 4. 在项目中点击 **Create session**，选择 `multi` 并创建测试会话。
-5. 在项目的 **Invitations** 中选择 `Participant`。Participant 可以编辑该项目的 multi 会话，但对 solo 会话只读。
+5. 在项目的 **Invitations** 中选择 `Participant`。Participant 可以编辑该项目的 multi，会实时编辑本人创建的 solo，但对其他成员创建的 solo 只读。
 6. 同步测试建议有效期选择 `1 hour`。
 7. 点击 **Create invitation**。
 8. 复制一次性 invitation secret。这个邀请授予整个项目权限，也会覆盖之后新建的会话。
@@ -309,7 +309,7 @@ https://gatherthread-host.example-tailnet.ts.net/health
 - [ ] 主机创建一个 `solo` 会话。
 - [ ] 同一项目的 Participant 自动能看到该会话，但不能发送 Chat 或 Agent 请求。
 - [ ] Owner 把协作者调整为 Viewer 后，该用户在 multi 和 solo 中都只读。
-- [ ] Owner 再调整为 Participant 后，该用户恢复 multi 写权限，solo 仍只读。
+- [ ] Owner 再调整为 Participant 后，该用户恢复 multi 与本人 solo 的写权限，其他成员的 solo 仍只读。
 
 ### F. Agent 路径
 

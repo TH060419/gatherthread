@@ -106,6 +106,9 @@ async function start(config: ServerConfig): Promise<void> {
     maxSessionEventBytes: config.maxSessionEventBytes,
     maxTotalEventBytes: config.maxTotalEventBytes,
     maxEventBytes: config.maxEventBytes,
+    maxUserSessions: config.maxUserSessions,
+    maxProjectSessions: config.maxProjectSessions,
+    maxTotalSessions: config.maxTotalSessions,
   }, config.port, config.host);
   process.stdout.write(`GatherThread owner host listening at ${running.origin}\n`);
 

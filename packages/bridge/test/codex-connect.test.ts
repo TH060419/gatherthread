@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -9,10 +10,14 @@ import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import {
   ConnectorRetryReporter,
+  createPersonalSoloForLocalPrompt,
   parseCodexConnectArgs,
   formatConnectedCodexSessionOutput,
   formatCodexDesktopRevealWarning,
   initializeProjectSession,
+  isSessionWritableBy,
+  localSoloCreationKey,
+  localSoloTitle,
   reconcileProjectSessionPermissions,
   refreshProjectSessionPermissions,
   refreshManagedSessionName,
@@ -49,6 +54,83 @@ test("connector retry reporting coalesces stable failures and reports recovery o
   assert.match(output[0] ?? "", /writer busy \[REDACTED\]/);
   assert.match(output[1] ?? "", /retrying/);
   assert.match(output[2] ?? "", /recovered/);
+});
+
+test("personal solo eligibility follows its creator instead of the project owner role", () => {
+  const personalSolo: SessionSummary = {
+    id: "solo-1",
+    ownerUserId: "participant-1",
+    mode: "solo",
+    role: "participant",
+  };
+  assert.equal(isSessionWritableBy(personalSolo, "participant-1"), true);
+  assert.equal(isSessionWritableBy({ ...personalSolo, role: "owner" }, "project-owner"), false);
+  assert.equal(isSessionWritableBy({ ...personalSolo, role: "viewer" }, "participant-1"), false);
+  assert.equal(isSessionWritableBy({ ...personalSolo, mode: "multi" }, "participant-1"), true);
+  assert.equal(localSoloTitle("\n  First\tlocal\nquestion  "), "First local question");
+  assert.equal(Array.from(localSoloTitle("问".repeat(180))).length, 120);
+  assert.equal(
+    localSoloCreationKey("device-1", "project-1", "thread-1"),
+    localSoloCreationKey("device-1", "project-1", "thread-1"),
+  );
+  assert.notEqual(
+    localSoloCreationKey("device-1", "project-1", "thread-1"),
+    localSoloCreationKey("device-1", "project-1", "thread-2"),
+  );
+});
+
+test("first local prompt creates one deterministic personal solo while viewers stay local-only", async () => {
+  const actorUserId = "participant-1";
+  let role: "participant" | "viewer" = "participant";
+  const creates: Array<{ projectId: string; title: string; mode: string; idempotencyKey: string }> = [];
+  const api = {
+    listProjects: async () => [{ id: "project-1", name: "Project", role, state: "active", sessionCount: 0 }],
+    createSession: async (projectId: string, input: { title: string; mode: "solo" | "multi"; idempotencyKey: string }) => {
+      creates.push({ projectId, ...input });
+      return {
+        id: `session-${createHash("sha256").update(`${actorUserId}\0${input.idempotencyKey}`).digest("hex").slice(0, 32)}`,
+        projectId,
+        ownerUserId: actorUserId,
+        name: input.title,
+        mode: input.mode,
+        state: "active" as const,
+        latestSequence: 1,
+      };
+    },
+  } as unknown as HttpCollaborationClient;
+  const first = await createPersonalSoloForLocalPrompt({
+    api,
+    actorUserId,
+    actorDeviceId: "device-1",
+    projectId: "project-1",
+    localConversationId: "desktop-thread-1",
+    prompt: "  Investigate the replay race  ",
+  });
+  const retried = await createPersonalSoloForLocalPrompt({
+    api,
+    actorUserId,
+    actorDeviceId: "device-1",
+    projectId: "project-1",
+    localConversationId: "desktop-thread-1",
+    prompt: "  Investigate the replay race  ",
+  });
+  assert.equal(first?.id, retried?.id);
+  assert.equal(first?.ownerUserId, actorUserId);
+  assert.equal(first?.role, "participant");
+  assert.equal(creates[0]?.mode, "solo");
+  assert.equal(creates[0]?.title, "Investigate the replay race");
+  assert.equal(creates[0]?.idempotencyKey, creates[1]?.idempotencyKey);
+
+  role = "viewer";
+  assert.equal(await createPersonalSoloForLocalPrompt({
+    api,
+    actorUserId,
+    actorDeviceId: "device-1",
+    projectId: "project-1",
+    localConversationId: "viewer-local-thread",
+    prompt: "This must remain local",
+  }), null);
+  assert.equal(creates.length, 2);
 });
 
 test("Codex connector accepts a private HTTPS origin and applies safe defaults", () => {
@@ -153,6 +235,7 @@ test("connector with hooks disabled starts and closes no IPC relay", async () =>
   let closes = 0;
   await runProjectConnector({
     api: {} as HttpCollaborationClient,
+    actorUserId: "user-1",
     actorDeviceId: "device-1",
     project: { id: "project-1", name: "Project", role: "owner", state: "active", sessionCount: 0 },
     stateRoot: "/private/state",
@@ -162,6 +245,7 @@ test("connector with hooks disabled starts and closes no IPC relay", async () =>
     hookSocketPath: "/must/not/listen.sock",
     hookSpoolPath: "/must/not/drain.jsonl",
     hookRegistryPath: "/must/not/read.json",
+    hookWorkspacePath: "/private/workspace",
     hooksEnabled: false,
     hookRelay: {
       start: async () => { starts += 1; },

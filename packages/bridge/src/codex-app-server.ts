@@ -245,7 +245,7 @@ export interface CodexAppServerExecutorOptions {
   threadName: string;
   model: string;
   hookRegistryPath?: string;
-  hookThreadPurpose?: "execution" | "snapshot_connector";
+  hookThreadPurpose?: "execution" | "snapshot_connector" | "background_execution";
   localPublishingInitiallyActive?: boolean;
   sandbox?: CodexSandboxMode;
   maxPromptBytes?: number;
@@ -751,7 +751,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   #threadName: string;
   readonly #model: string;
   readonly #hookRegistryPath: string | undefined;
-  readonly #hookThreadPurpose: "execution" | "snapshot_connector";
+  readonly #hookThreadPurpose: "execution" | "snapshot_connector" | "background_execution";
   readonly #sandbox: CodexSandboxMode;
   readonly #maxPromptBytes: number;
   readonly #maxInjectionItemBytes: number;
@@ -948,6 +948,27 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       if (!state) return undefined;
       const thread = await this.#client.readThread(state.threadId);
       return thread.name;
+    });
+  }
+
+  adoptDesktopThread(sessionId: string, threadId: string): Promise<void> {
+    if (!this.#desktopHookOnly || !this.#gatherThreadSessionId || this.#gatherThreadSessionId !== sessionId) {
+      return Promise.reject(new Error("Only a matching Desktop hook projection can adopt a local Codex task"));
+    }
+    if (!/^[A-Za-z0-9._:-]{1,128}$/.test(threadId)) {
+      return Promise.reject(new Error("Codex Desktop task id is invalid"));
+    }
+    return this.#withStateWriter(async () => {
+      const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+      const existing = await this.#loadStateFromDisk(workspacePath);
+      if (existing) {
+        if (existing.gatherThreadSessionId !== sessionId || existing.threadId !== threadId) {
+          throw new Error("GatherThread session already has a different local Codex task binding");
+        }
+        return;
+      }
+      const state = this.#newState(sessionId, workspacePath, threadId);
+      await this.#saveState(state, false);
     });
   }
 
@@ -1864,7 +1885,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     const temporaryPath = `${this.#statePath}.tmp-${process.pid}-${randomUUID()}`;
     await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
     await rename(temporaryPath, this.#statePath);
-    if (registerHook && this.#hookRegistryPath) {
+    const registerPurpose = registerHook || this.#hookThreadPurpose !== "execution";
+    if (registerPurpose && this.#hookRegistryPath) {
       await updateCodexHookRegistry({
         registryPath: this.#hookRegistryPath,
         workspacePath: state.workspacePath,
@@ -1943,6 +1965,10 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
       model: this.#options.model,
       localPublishingInitiallyActive: false,
       threadSource: "exec",
+      ...(this.#options.localTurnsEnabled === true && this.#options.hookRegistryPath !== undefined ? {
+        hookRegistryPath: this.#options.hookRegistryPath,
+        hookThreadPurpose: "background_execution" as const,
+      } : {}),
       ...(this.#options.sandbox === undefined ? {} : { sandbox: this.#options.sandbox }),
       ...(this.#options.shareToolEvents === undefined ? {} : { shareToolEvents: this.#options.shareToolEvents }),
       ...(this.#options.maxPromptBytes === undefined ? {} : { maxPromptBytes: this.#options.maxPromptBytes }),
@@ -1969,6 +1995,10 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
     return {
       localSessionId: `gatherthread-codex:${this.#options.mappingId}:${input.sessionKey}`,
       executor,
+      ...(desktop === undefined ? {} : {
+        adoptLocalConversation: (localConversationId: string) =>
+          desktop.adoptDesktopThread(input.session.id, localConversationId),
+      }),
       rename: async (session: SessionSummary) => {
         const name = ["GatherThread", this.#options.projectName, session.name ?? session.id].join(" · ");
         const executionName = ["GatherThread background", this.#options.projectName, session.name ?? session.id].join(" · ");

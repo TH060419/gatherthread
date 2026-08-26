@@ -209,7 +209,7 @@ export class CollaborationService {
   }
 
   updateSession(actor: Actor, sessionId: string, input: Parameters<CollaborationDatabase["updateSession"]>[2]) {
-    this.requireOwner(actor, sessionId);
+    this.requireManage(actor, sessionId);
     const result = this.database.updateSession(actor, sessionId, input);
     this.publish(result.event);
     return result;
@@ -363,8 +363,16 @@ export class CollaborationService {
     const role = this.database.membershipRole(sessionId, actor.user_id);
     if (!role) throw notFound("Session");
     if (role === "viewer") throw forbidden("Viewers cannot append events");
-    if (session.mode === "solo" && role !== "owner") throw forbidden("Only the owner can write to a solo session");
+    if (session.mode === "solo" && session.owner_user_id !== actor.user_id) {
+      throw forbidden("Only the solo creator can write to this session");
+    }
     return { role, session };
+  }
+
+  private requireManage(actor: Actor, sessionId: string): void {
+    const { role, session } = this.requireWrite(actor, sessionId);
+    if (session.mode === "solo") return;
+    if (role !== "owner") throw forbidden("Only the project owner can manage a multi session");
   }
 
   private requireOwner(actor: Actor, sessionId: string): void {

@@ -150,11 +150,11 @@ test("session rename updates local metadata and applies realtime control events"
   assert.match(api, /method: "PATCH"/);
 });
 
-test("an empty project exposes the owner-only first-session action", async () => {
+test("an empty project lets owners and participants create an eligible first session", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /element\("empty-state-title"\)\.textContent = "Start a shared thread\."/);
   assert.match(main, /element\("empty-create-button"\)\.textContent = "Create your first session"/);
-  assert.match(main, /element\("empty-create-button"\)\.hidden = !isOwner/);
+  assert.match(main, /element\("empty-create-button"\)\.hidden = !mayCreate/);
 });
 
 test("the multiline login headline keeps safe vertical spacing", async () => {

@@ -27,7 +27,7 @@ The static build is written to `apps/web/dist`.
 - `authenticate(token)` -> server-derived current user
 - `listProjects()`, `getProject(...)`, and `createProject(...)`
 - `listProjectSessions(...)`, `listProjectMembers(...)`, and `createSession(projectId, ...)`
-- `getSession(sessionId)`, owner-only `renameSession(sessionId, ...)`, and `listMembers(sessionId)`
+- `getSession(sessionId)`, permission-checked `renameSession(sessionId, ...)`, and `listMembers(sessionId)`
 - project-scoped `createInvitation(...)`, `listInvitations(...)`, `revokeInvitation(...)`, and `setProjectMemberRole(...)`
 - distinct `claimInvitation(...)` and `acceptInvitation(...)` methods for new and existing users
 - `replayEvents(sessionId, { afterSequence, limit })`
@@ -75,12 +75,12 @@ Replay pages accept either camelCase mock fields or the proposed wire fields:
 
 Every event is expected to contain a stable `id`, monotonic per-session `sequence`, `idempotencyKey`, server-derived `actor`, timestamp, visibility, optional reply target, payload, and optional runtime provenance. The UI orders exclusively by sequence.
 
-New projects start with no sessions and show an owner-only **Create your first session** action. Project and session names are trimmed, limited to 1–200 characters, and reject C0/C1 control characters while retaining ordinary Unicode. Session owners can rename beside the session title. A successful rename updates the open title and project sidebar immediately; metadata-only `session_state_change` events apply the same update in other clients subscribed to that session.
+New projects start with no sessions. Owners may create `solo` or `multi`; participants may create only a personal `solo`; viewers see no creation action. Project and session names are trimmed, limited to 1–200 characters, and reject C0/C1 control characters while retaining ordinary Unicode. Project owners can rename `multi`, while each Solo creator can rename that Solo. A successful rename updates the open title and project sidebar immediately; metadata-only `session_state_change` events apply the same update in other clients subscribed to that session.
 
 ### Invitations and credentials
 
 - Owners create project-level participant or viewer invitations that expire after 1 hour, 24 hours (the default), or 7 days.
-- Participants can write and run their own agent in `multi`, but all `solo` sessions are read-only to them. Viewers are read-only across the project. Owners can change every other member's project role later.
+- Participants can write and run their own agent in `multi`, create/write their own personal Solo, and read every other Solo. Project owners also read participant-created Solos rather than overriding them. Viewers are read-only across the project. Owners can change every other member's project role later.
 - The invitation secret is returned only by the create request. The UI keeps it in memory long enough to copy it, never adds it to a URL or browser storage, and cannot recover it from the invitation list.
 - A new user can claim an invitation with a display name and device name. Invitation claim and browser-session issuance commit atomically; the UI opens the invited project and shows the device credential once in a blocking copy dialog for password-manager storage.
 - An already signed-in user can accept an invitation without rotating or replacing their existing credential.
@@ -88,7 +88,7 @@ New projects start with no sessions and show an owner-only **Create your first s
 
 ### Codex downloads and connector state
 
-- Owners and participants in multi sessions retain the live collaboration controls. Participants observing a solo session and all viewers instead receive a one-way “Download to Codex / 下载到 Codex” action.
+- Owners and participants in multi sessions, plus a personal Solo's creator, retain live collaboration controls. Any member observing another person's Solo and all viewers instead receive a one-way “Download to Codex / 下载到 Codex” action.
 - Each click creates an independent frozen snapshot through the server-returned `through_sequence`. A queued request means the server is waiting for a local snapshot connector; it does not mean a local task already exists.
 - The UI polls only the individual in-memory request IDs and renders queued, claimed, importing, compacting, completed, and failed states. Failed requests retry by creating a new snapshot. Completed records show the local task or thread name returned in `result`.
 - Live sessions normalize connector state into Synced, Offline with an optional pending count, Reconciling, Rebuilding, or Local fork. A runtime with `purpose: snapshot_connector` never enables the agent execution control.

@@ -44,11 +44,14 @@ GATHERTHREAD_MAX_EVENT_BYTES=262144
 GATHERTHREAD_MAX_USER_EVENT_BYTES=268435456
 GATHERTHREAD_MAX_SESSION_EVENT_BYTES=536870912
 GATHERTHREAD_MAX_TOTAL_EVENT_BYTES=2147483648
+GATHERTHREAD_MAX_USER_SESSIONS=512
+GATHERTHREAD_MAX_PROJECT_SESSIONS=2048
+GATHERTHREAD_MAX_TOTAL_SESSIONS=8192
 ```
 
 Generate the pepper with a cryptographic password generator, store it in a password manager, and paste it into `.env`. Never commit it. Losing or changing the pepper invalidates every device credential, so back it up separately from the database.
 
-The application refuses production startup if the public origin is not HTTPS, the pepper is missing or looks like a placeholder, HTTP bootstrap is enabled, the bind address is not loopback, event limits are invalid, or the database directory grants group/other access. The shown storage limits allow 256 MiB of attributed events per user, 512 MiB per session, and 2 GiB for the deployment. Increase them only after checking disk capacity and backup time; they prevent new writes rather than deleting history.
+The application refuses production startup if the public origin is not HTTPS, the pepper is missing or looks like a placeholder, HTTP bootstrap is enabled, the bind address is not loopback, event/session limits are invalid, or the database directory grants group/other access. The shown storage limits allow 256 MiB of attributed events per user, 512 MiB per session, and 2 GiB for the deployment, plus 512/2,048/8,192 session rows per creator/project/deployment. Increase them only after checking disk capacity and backup time; they prevent new writes rather than deleting history.
 
 ## Create the first owner
 

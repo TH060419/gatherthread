@@ -18,6 +18,34 @@ import {
   updateCodexHookRegistry,
 } from "../src/index.js";
 
+test("Hook discovery admits only unknown project tasks and excludes connector-owned threads", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-discovery-"));
+  const registryPath = path.join(directory, "registry.json");
+  const event = {
+    hook_event_name: "UserPromptSubmit" as const,
+    session_id: "desktop-new-task",
+    turn_id: "turn-1",
+    cwd: "/workspace",
+    model: "gpt-test",
+    prompt: "First local prompt",
+  };
+  await updateCodexHookRegistry({
+    registryPath,
+    workspacePath: "/workspace",
+    discoverUnregistered: true,
+    add: {
+      "background-task": "background_execution",
+      "snapshot-task": "snapshot_connector",
+    },
+  });
+  assert.equal(await isAllowedCodexHookEvent(registryPath, event), true);
+  assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, session_id: "background-task" }), false);
+  assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, session_id: "snapshot-task" }), false);
+  assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, cwd: "/other" }), false);
+  await updateCodexHookRegistry({ registryPath, workspacePath: "/workspace", discoverUnregistered: false });
+  assert.equal(await isAllowedCodexHookEvent(registryPath, event), false);
+});
+
 test("Codex hook relay returns bounded additional context without credentials in config", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-hook-"));
   const socketPath = process.platform === "win32"

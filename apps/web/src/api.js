@@ -99,6 +99,7 @@ export class HttpCollaborationApi {
       return {
         id: session.id,
         projectId: session.project_id,
+        ownerUserId: session.owner_user_id,
         name: session.title,
         mode: session.mode,
         description: session.state === "archived" ? "Archived shared session" : "Active shared session",
@@ -388,6 +389,7 @@ export class HttpCollaborationApi {
     return {
       id: session.id,
       projectId: session.project_id,
+      ownerUserId: session.owner_user_id,
       name: session.title,
       mode: session.mode,
       description: session.state === "archived" ? "Archived shared session" : "Active shared session",
@@ -455,6 +457,7 @@ export class MockCollaborationApi {
       {
         id: "session-orbit",
         projectId: "project-orbit",
+        ownerUserId: users.avery.id,
         name: "Project Orbit",
         mode: "multi",
         description: "Launch brief and implementation handoff",
@@ -488,6 +491,7 @@ export class MockCollaborationApi {
       {
         id: "session-notes",
         projectId: "project-orbit",
+        ownerUserId: users.avery.id,
         name: "Research notes",
         mode: "solo",
         description: "Owner-led thread with read-only observers",
@@ -617,19 +621,24 @@ export class MockCollaborationApi {
     await this.#wait();
     const title = normalizeMockTitle(name, "Session");
     if (!new Set(["solo", "multi"]).has(mode)) throw new ApiError("Choose solo or multi.", { status: 422, code: "invalid_mode" });
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project || project.role === "viewer" || (project.role === "participant" && mode !== "solo")) {
+      throw new ApiError("Your project role cannot create this session.", { status: 403, code: "forbidden" });
+    }
     const id = `session-${createIdempotencyKey("new").split(":").at(-1)}`;
     const session = {
       id,
       projectId,
+      ownerUserId: this.currentUser.id,
       name: title,
       mode,
-      description: mode === "solo" ? "Owner-led thread with read-only observers" : "Shared human and agent collaboration",
+      description: mode === "solo" ? "Creator-led thread with read-only observers" : "Shared human and agent collaboration",
       updatedAt: new Date().toISOString(),
       members: [
         {
           ...this.currentUser,
           userId: this.currentUser.id,
-          role: "owner",
+          role: project.role,
           runtime: {
             status: "online",
             harness: "Codex",
@@ -640,7 +649,6 @@ export class MockCollaborationApi {
       ],
     };
     this.sessions.unshift(session);
-    const project = this.projects.find((item) => item.id === projectId);
     if (project) project.sessionCount += 1;
     this.events.set(id, []);
     return this.#summary(session);
@@ -656,8 +664,11 @@ export class MockCollaborationApi {
     await this.#wait();
     const session = this.#findSession(sessionId);
     const member = session.members.find((item) => item.userId === this.currentUser.id);
-    if (member?.role !== "owner") {
-      throw new ApiError("Only the project owner can rename sessions.", { status: 403, code: "forbidden" });
+    const mayRename = session.mode === "solo"
+      ? member?.role !== "viewer" && session.ownerUserId === this.currentUser.id
+      : member?.role === "owner";
+    if (!mayRename) {
+      throw new ApiError("You cannot rename this session.", { status: 403, code: "forbidden" });
     }
     const title = normalizeMockTitle(name, "Session");
     const key = `${sessionId}:${idempotencyKey}`;
@@ -889,7 +900,7 @@ export class MockCollaborationApi {
     await this.#wait();
     const session = this.#findSession(sessionId);
     const member = session.members.find((item) => item.userId === this.currentUser.id);
-    if (!member || member.role === "viewer" || (session.mode === "solo" && member.role !== "owner")) {
+    if (!member || member.role === "viewer" || (session.mode === "solo" && session.ownerUserId !== this.currentUser.id)) {
       throw new ApiError("This session is read only for your role.", { status: 403, code: "forbidden" });
     }
     if (type === "agent_request" && !isExecutionRuntime(member.runtime)) {
@@ -953,6 +964,7 @@ export class MockCollaborationApi {
     return {
       id: session.id,
       projectId: session.projectId,
+      ownerUserId: session.ownerUserId,
       name: session.name,
       mode: session.mode,
       description: session.description,

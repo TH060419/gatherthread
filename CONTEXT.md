@@ -33,16 +33,24 @@ A person admitted to a project. Their effective permissions within a session dep
 _Avoid_: Session-only identity
 
 **Project Owner**:
-The project member who manages the project, its sessions, invitations, and the roles of every other member.
+The project member who manages the project, invitations, member roles, and multi sessions. Project ownership does not grant write access to another member's Personal Solo Session.
 _Avoid_: Deployment operator, session owner
 
 **Project Participant**:
-A project member who may contribute to multi sessions and may read, but never modify, solo sessions.
+A project member who may contribute to multi sessions, create and write their own Personal Solo Sessions, and read every other member's solo sessions without modifying them.
 _Avoid_: Editor, session participant
 
 **Project Viewer**:
-A project member whose access to every session in the project is read-only.
+A project member whose access to every cloud session in the project is read-only. A local agent conversation created by a Project Viewer remains local and never creates a cloud session.
 _Avoid_: Guest, observer
+
+**Personal Solo Session**:
+A solo session owned by the Project Owner or Project Participant who created it. Only that Solo Creator may modify or publish local-agent turns to it while they retain a non-viewer project role; every other project member, including the Project Owner, is read-only.
+_Avoid_: Owner-only project, private session, multi session
+
+**Solo Creator**:
+The Project Member recorded as the owner of one Personal Solo Session. This authority is session-scoped and does not imply Project ownership.
+_Avoid_: Project Owner, deployment operator
 
 **Project Invitation**:
 A single-use invitation to join a project as either a Project Participant or Project Viewer, including access to the project's current and future sessions.

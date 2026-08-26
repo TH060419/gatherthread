@@ -24,6 +24,8 @@ The browser uses a server-side session after login. A device bearer is present i
 
 The default event limits are 256 KiB per event, 256 MiB per attributed user, 512 MiB per session, and 2 GiB for the deployment. They are logical event charges, not a guarantee of the SQLite/WAL file size. A quota breach returns `storage_quota_exceeded` without allocating a sequence or deleting history. Keep independent free-disk monitoring and raise a limit only with a verified backup and capacity plan.
 
+Session metadata is separately capped at 512 creator-owned sessions per user, 2,048 sessions per project, and 8,192 sessions per deployment. A new session beyond a limit returns `session_quota_exceeded`; an exact idempotent retry of an already-created session still returns its original result. These row-count guards limit first-prompt auto-discovery abuse but do not replace host disk monitoring.
+
 ## Health and deployment gates
 
 The server should expose separate liveness and readiness checks. Liveness proves only that the process loop runs. Readiness must execute a bounded database query, confirm migrations are current, confirm the database is writable, and report unavailable while shutting down. Neither endpoint should expose paths, versions, credentials, member counts, or event content.

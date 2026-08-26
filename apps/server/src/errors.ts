@@ -61,3 +61,11 @@ export function snapshotStorageQuotaExceeded(
     limit_bytes: limitBytes,
   });
 }
+
+export function sessionQuotaExceeded(scope: "user" | "project" | "deployment", limit: number): ApiError {
+  return new ApiError(507, "session_quota_exceeded", `${scope} session quota exceeded`, {
+    resource: "session",
+    scope,
+    limit,
+  });
+}

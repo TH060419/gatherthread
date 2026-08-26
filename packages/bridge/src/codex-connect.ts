@@ -16,6 +16,7 @@ import {
   installCodexHookConfig,
   isAllowedCodexHookEvent,
   renderCodexHookConfig,
+  updateCodexHookRegistry,
   type CodexHookEvent,
 } from "./codex-hooks.js";
 import { validateCodexWorkspace, type CodexSandboxMode } from "./codex-executor.js";
@@ -214,6 +215,7 @@ export async function runCodexConnectCli(
       process.stdout.write("Keep this terminal open; press Control-C to stop.\n");
       await runProjectConnector({
         api,
+        actorUserId: actor.id,
         actorDeviceId: actor.deviceId,
         project: selected,
         stateRoot,
@@ -223,6 +225,7 @@ export async function runCodexConnectCli(
         hookSocketPath,
         hookSpoolPath,
         hookRegistryPath,
+        hookWorkspacePath: preflight.workspacePath,
         hooksEnabled: parsed.installHooks,
       });
     } finally {
@@ -546,6 +549,7 @@ export async function synchronizeManagedSessionTitle(input: {
     "name" | "rename" | "readNativeName" | "localRename" | "suppressLocalRenameForCloudName">;
   session: SessionSummary;
   projectName: string;
+  actorUserId?: string;
   actorDeviceId: string;
   api: CollaborationApi;
 }): Promise<"unchanged" | "uploaded" | "awaiting_cloud" | "restored_cloud"> {
@@ -555,7 +559,12 @@ export async function synchronizeManagedSessionTitle(input: {
     return "unchanged";
   }
   if (input.current.localRename?.baseCloudName !== cloudName) delete input.current.localRename;
-  if (input.session.role !== "owner") {
+  const mayRename = input.session.mode === "solo"
+    ? input.session.role !== "viewer" && (input.session.ownerUserId === undefined
+      ? input.session.role === "owner"
+      : input.session.ownerUserId === input.actorUserId)
+    : input.session.role === "owner";
+  if (!mayRename) {
     delete input.current.localRename;
     const nativeName = await input.current.readNativeName?.();
     if (nativeName !== undefined && nativeName !== null && nativeName !== managedThreadName(input.projectName, cloudName)) {
@@ -627,6 +636,7 @@ export async function initializeProjectSession(options: {
   stateRoot: string;
   harness: ProjectHarnessAdapter;
   session: SessionSummary;
+  adoptLocalConversationId?: string;
 }): Promise<ManagedSession> {
   if (!Number.isSafeInteger(options.session.latestSequence) || Number(options.session.latestSequence) < 0) {
     throw new Error("Project session refresh omitted a valid authoritative latestSequence cursor");
@@ -638,6 +648,12 @@ export async function initializeProjectSession(options: {
     sessionKey,
     statePath: path.join(options.stateRoot, `${sessionKey}-session.json`),
   });
+  if (options.adoptLocalConversationId !== undefined) {
+    if (!binding.adoptLocalConversation) {
+      throw new Error("Selected harness cannot adopt a locally created conversation");
+    }
+    await binding.adoptLocalConversation(options.adoptLocalConversationId);
+  }
   await binding.rename?.(options.session);
   await binding.deactivateLocalPublishing?.("initializing");
   const descriptor = options.harness.descriptor;
@@ -687,6 +703,7 @@ export async function initializeProjectSession(options: {
 
 export async function reconcileProjectSessionPermissions<T extends ManagedPublishingBinding>(input: {
   sessions: readonly SessionSummary[];
+  actorUserId?: string;
   managed: Map<string, T>;
   harness: ProjectHarnessAdapter;
 }): Promise<{
@@ -695,9 +712,7 @@ export async function reconcileProjectSessionPermissions<T extends ManagedPublis
   errors: Error[];
 }> {
   const visibleSessions = input.sessions.filter((session) => session.state !== "archived");
-  const eligibleSessions = visibleSessions.filter((session) =>
-    session.role === "owner" || (session.role === "participant" && session.mode === "multi"),
-  );
+  const eligibleSessions = visibleSessions.filter((session) => isSessionWritableBy(session, input.actorUserId));
   const eligibleIds = new Set(eligibleSessions.map((session) => session.id));
   const sessionsById = new Map(input.sessions.map((session) => [session.id, session]));
   const errors: Error[] = [];
@@ -721,8 +736,17 @@ export async function reconcileProjectSessionPermissions<T extends ManagedPublis
   return { visibleSessions, eligibleSessions, errors };
 }
 
+export function isSessionWritableBy(session: SessionSummary, actorUserId?: string): boolean {
+  if (session.role === "viewer") return false;
+  if (session.mode === "solo") {
+    return session.ownerUserId === undefined ? session.role === "owner" : session.ownerUserId === actorUserId;
+  }
+  return session.role === "owner" || session.role === "participant";
+}
+
 export async function refreshProjectSessionPermissions<T extends ManagedPublishingBinding>(input: {
   loadSessions: () => Promise<SessionSummary[]>;
+  actorUserId?: string;
   managed: Map<string, T>;
   harness: ProjectHarnessAdapter;
 }): Promise<
@@ -740,13 +764,69 @@ export async function refreshProjectSessionPermissions<T extends ManagedPublishi
   }
   return { status: "updated", ...await reconcileProjectSessionPermissions({
     sessions,
+    ...(input.actorUserId === undefined ? {} : { actorUserId: input.actorUserId }),
     managed: input.managed,
     harness: input.harness,
   }) };
 }
 
+class LocalTaskDiscoveryDisabledError extends Error {}
+
+export function localSoloCreationKey(actorDeviceId: string, projectId: string, localConversationId: string): string {
+  return `codex-solo-${createHash("sha256")
+    .update([actorDeviceId, projectId, localConversationId].join("\0"))
+    .digest("hex")}`;
+}
+
+export function localSoloTitle(prompt: string): string {
+  const normalized = prompt
+    .replace(/[\u0000-\u001f\u007f-\u009f]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+  if (!normalized) return "Local Codex solo";
+  return Array.from(normalized).slice(0, 120).join("");
+}
+
+function localSoloExpectedSessionId(actorUserId: string, idempotencyKey: string): string {
+  return `session-${createHash("sha256")
+    .update(`${actorUserId}\0${idempotencyKey}`)
+    .digest("hex").slice(0, 32)}`;
+}
+
+export async function createPersonalSoloForLocalPrompt(input: {
+  api: HttpCollaborationClient;
+  actorUserId: string;
+  actorDeviceId: string;
+  projectId: string;
+  localConversationId: string;
+  prompt: string;
+}): Promise<SessionSummary | null> {
+  const project = (await input.api.listProjects()).find((candidate) => candidate.id === input.projectId);
+  if (!project) throw new Error("GatherThread project access was revoked during local task discovery");
+  if (project.role === "viewer") return null;
+  const idempotencyKey = localSoloCreationKey(input.actorDeviceId, project.id, input.localConversationId);
+  const expectedSessionId = localSoloExpectedSessionId(input.actorUserId, idempotencyKey);
+  const created = await input.api.createSession(project.id, {
+    title: localSoloTitle(input.prompt),
+    mode: "solo",
+    idempotencyKey,
+  });
+  if (created.id !== expectedSessionId || created.ownerUserId !== input.actorUserId || created.mode !== "solo") {
+    throw new Error("Server returned an unexpected personal solo session binding");
+  }
+  return {
+    ...created,
+    projectId: project.id,
+    ownerUserId: input.actorUserId,
+    role: project.role,
+    state: created.state ?? "active",
+    latestSequence: created.latestSequence ?? 1,
+  };
+}
+
 export async function runProjectConnector(options: {
   api: HttpCollaborationClient;
+  actorUserId: string;
   actorDeviceId: string;
   project: ProjectSummary;
   stateRoot: string;
@@ -756,11 +836,63 @@ export async function runProjectConnector(options: {
   hookSocketPath: string;
   hookSpoolPath: string;
   hookRegistryPath: string;
+  hookWorkspacePath: string;
   hooksEnabled: boolean;
   hookRelay?: Pick<CodexHookRelayServer, "start" | "close">;
 }): Promise<void> {
   const managed = new Map<string, ManagedSession>();
+  const discoveries = new Map<string, Promise<ManagedSession>>();
+  const discoverySessionIds = new Set<string>();
   const retryReporter = new ConnectorRetryReporter({ token: options.token });
+  const setDiscoveryPermission = async (enabled: boolean) => {
+    if (!options.hooksEnabled) return;
+    await updateCodexHookRegistry({
+      registryPath: options.hookRegistryPath,
+      workspacePath: path.resolve(options.hookWorkspacePath),
+      discoverUnregistered: enabled,
+    });
+  };
+  const discoverLocalSolo = (event: Extract<CodexHookEvent, { hook_event_name: "UserPromptSubmit" }>) => {
+    const existing = discoveries.get(event.session_id);
+    if (existing) return existing;
+    const operation = (async () => {
+      const idempotencyKey = localSoloCreationKey(options.actorDeviceId, options.project.id, event.session_id);
+      const expectedSessionId = localSoloExpectedSessionId(options.actorUserId, idempotencyKey);
+      discoverySessionIds.add(expectedSessionId);
+      try {
+        const session = await createPersonalSoloForLocalPrompt({
+          api: options.api,
+          actorUserId: options.actorUserId,
+          actorDeviceId: options.actorDeviceId,
+          projectId: options.project.id,
+          localConversationId: event.session_id,
+          prompt: event.prompt,
+        });
+        if (session === null) {
+          await setDiscoveryPermission(false);
+          throw new LocalTaskDiscoveryDisabledError();
+        }
+        const current = managed.get(session.id) ?? await initializeProjectSession({
+          api: options.api,
+          actorDeviceId: options.actorDeviceId,
+          stateRoot: options.stateRoot,
+          harness: options.harness,
+          session,
+          adoptLocalConversationId: event.session_id,
+        });
+        managed.set(session.id, current);
+        process.stdout.write(`${formatConnectedCodexSessionOutput(options.project.name, session).trimEnd()} (personal solo created from local task)\n`);
+        return current;
+      } finally {
+        discoverySessionIds.delete(expectedSessionId);
+      }
+    })();
+    discoveries.set(event.session_id, operation);
+    void operation.finally(() => {
+      if (discoveries.get(event.session_id) === operation) discoveries.delete(event.session_id);
+    }).catch(() => undefined);
+    return operation;
+  };
   const dispatchHook = async (event: CodexHookEvent, replay: boolean): Promise<{ additionalContext?: string }> => {
     for (const current of managed.values()) {
       if (!current.relayLocalHarnessEvent || !current.bridge.runtime) continue;
@@ -772,6 +904,25 @@ export async function runProjectConnector(options: {
       });
       if (result.handled) return result.additionalContext === undefined ? {} : { additionalContext: result.additionalContext };
     }
+    if (event.hook_event_name === "UserPromptSubmit") {
+      try {
+        const current = await discoverLocalSolo(event);
+        if (!current.relayLocalHarnessEvent || !current.bridge.runtime) {
+          throw new Error("Discovered personal solo is not ready for local publishing");
+        }
+        const result = await current.relayLocalHarnessEvent({
+          api: options.api,
+          runtime: current.bridge.runtime,
+          event,
+          replay,
+        });
+        if (!result.handled) throw new Error("Discovered local Codex task did not match its personal solo binding");
+        return result.additionalContext === undefined ? {} : { additionalContext: result.additionalContext };
+      } catch (error) {
+        if (error instanceof LocalTaskDiscoveryDisabledError) return {};
+        throw error;
+      }
+    }
     throw new Error("Codex hook event does not match an active GatherThread session binding");
   };
   const relay = options.hooksEnabled
@@ -780,6 +931,15 @@ export async function runProjectConnector(options: {
       onEvent: (event) => dispatchHook(event, false),
     })
     : undefined;
+  if (options.hooksEnabled) {
+    const currentProject = (await options.api.listProjects()).find((candidate) => candidate.id === options.project.id);
+    if (!currentProject) throw new Error("GatherThread project access was revoked before Hook discovery activation");
+    await updateCodexHookRegistry({
+      registryPath: options.hookRegistryPath,
+      workspacePath: path.resolve(options.hookWorkspacePath),
+      discoverUnregistered: currentProject.role !== "viewer",
+    });
+  }
   await relay?.start();
   let nextRefreshAt = 0;
   let eligibleSessions: SessionSummary[] = [];
@@ -792,6 +952,7 @@ export async function runProjectConnector(options: {
     if (now >= nextRefreshAt) {
       const refresh = await refreshProjectSessionPermissions({
         loadSessions: () => options.api.listProjectSessions(options.project.id),
+        actorUserId: options.actorUserId,
         managed,
         harness: options.harness,
       });
@@ -799,6 +960,15 @@ export async function runProjectConnector(options: {
         visibleSessions = refresh.visibleSessions;
         eligibleSessions = refresh.eligibleSessions;
         authoritativeAclLoaded = true;
+        if (options.hooksEnabled) {
+          try {
+            const currentProject = (await options.api.listProjects()).find((candidate) => candidate.id === options.project.id);
+            await setDiscoveryPermission(currentProject !== undefined && currentProject.role !== "viewer");
+          } catch (error) {
+            await setDiscoveryPermission(false).catch(() => undefined);
+            refresh.errors.push(error instanceof Error ? error : new Error("Project discovery permission refresh failed"));
+          }
+        }
         if (refresh.errors.length > 0) {
           retryReporter.retrying("project refresh", new Error("Local execution permissions could not be reconciled safely", { cause: refresh.errors[0] }));
         } else {
@@ -825,6 +995,7 @@ export async function runProjectConnector(options: {
 
     for (const session of eligibleSessions) {
       if (options.signal.aborted) break;
+      if (discoverySessionIds.has(session.id)) continue;
       try {
         let current = managed.get(session.id);
         if (current) {
@@ -833,6 +1004,7 @@ export async function runProjectConnector(options: {
             current,
             session,
             projectName: options.project.name,
+            actorUserId: options.actorUserId,
             actorDeviceId: options.actorDeviceId,
             api: options.api,
           });

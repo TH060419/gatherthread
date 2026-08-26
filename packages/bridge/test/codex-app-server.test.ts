@@ -67,6 +67,33 @@ test("local Codex tool items become canonical local-turn tool pairs", () => {
   assert.equal((discovered[0]?.toolEvents[1]?.payload as { is_error?: boolean }).is_error, false);
 });
 
+test("a first local prompt can adopt its Desktop task without opening a competing writer", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-adopt-local-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  const client = new CodexAppServerClient({ command: process.execPath, commandArgs: ["--version"], cwd: directory });
+  t.after(() => client.dispose());
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread · Personal solo",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    localPublishingInitiallyActive: false,
+    gatherThreadSessionId: "session-personal-1",
+  });
+  await executor.adoptDesktopThread("session-personal-1", "desktop-thread-1");
+  await executor.adoptDesktopThread("session-personal-1", "desktop-thread-1");
+  const state = JSON.parse(await readFile(statePath, "utf8")) as Record<string, unknown>;
+  assert.equal(state.gatherThreadSessionId, "session-personal-1");
+  assert.equal(state.threadId, "desktop-thread-1");
+  await assert.rejects(
+    executor.adoptDesktopThread("session-personal-1", "desktop-thread-other"),
+    /different local Codex task binding/,
+  );
+});
+
 test("trusted desktop hooks publish without opening the Desktop-owned thread writer", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-owner-"));
   const workspacePath = await realpath(directory);
@@ -385,6 +412,7 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
   assert.equal(captures.some((message) => message.method === "thread/read" && message.params.threadId === "old-thread"), false);
   const registry = JSON.parse(await readFile(registryPath, "utf8"));
   assert.equal(registry.threads["old-thread"], "execution");
+  assert.equal(registry.threads["background-thread"], "background_execution");
   assert.ok(binding.relayLocalHarnessEvent, "trusted Desktop hooks must be routed to the Desktop projection");
 });
 

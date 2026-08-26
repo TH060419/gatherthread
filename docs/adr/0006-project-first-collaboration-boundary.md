@@ -4,6 +4,7 @@
 **Status**: accepted
 **Deciders**: Yuhan He
 **Supersedes**: ADR-0002 session-scoped invitation decision; ADR-0005 single-session connector mapping
+**Partially superseded by**: [ADR-0015](0015-create-personal-solos-from-first-local-prompt.md) for creator-owned Solos and participant Solo creation
 
 ## Context
 

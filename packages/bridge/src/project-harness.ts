@@ -23,6 +23,7 @@ export interface ProjectHarnessPreflight {
 export interface ProjectHarnessSessionBinding {
   executor: HarnessExecutor;
   localSessionId: string;
+  adoptLocalConversation?: (localConversationId: string) => Promise<void>;
   synchronize?: (input: { api: CollaborationApi; runtime: RegisteredRuntime }) => Promise<void>;
   rename?: (session: SessionSummary) => Promise<void>;
   readNativeName?: () => Promise<string | null | undefined>;

@@ -82,6 +82,21 @@ export class HttpCollaborationClient implements CollaborationApi {
     return sessions.map(fromWireSession);
   }
 
+  async createSession(
+    projectId: string,
+    input: { title: string; mode: "solo" | "multi"; idempotencyKey: string },
+  ): Promise<SessionSummary> {
+    const body = requiredObject(await this.#request(`/projects/${encodeURIComponent(projectId)}/sessions`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: input.title,
+        mode: input.mode,
+        idempotency_key: input.idempotencyKey,
+      }),
+    }));
+    return fromWireSession(body.session ?? body);
+  }
+
   async updateSession(
     sessionId: string,
     input: { title: string; idempotencyKey: string },
@@ -388,11 +403,12 @@ function fromWireSession(value: unknown): SessionSummary {
   const latestSequence = typeof input.current_sequence === "number"
     ? input.current_sequence
     : typeof input.next_sequence === "number"
-      ? Math.max(0, input.next_sequence - 1)
+      ? input.next_sequence
       : undefined;
   return {
     id: requiredString(input.id, "session.id"),
     ...(typeof input.project_id === "string" ? { projectId: input.project_id } : {}),
+    ...(typeof input.owner_user_id === "string" ? { ownerUserId: input.owner_user_id } : {}),
     mode: requiredString(input.mode, "session.mode") as SessionSummary["mode"],
     ...(input.state === "active" || input.state === "archived" ? { state: input.state } : {}),
     ...(name === undefined ? {} : { name }),

@@ -66,8 +66,13 @@ export function createSelectionGuard() {
   };
 }
 
-export function sessionDeliveryMode({ role, mode }) {
-  return role === "owner" || (role === "participant" && mode === "multi") ? "live" : "snapshot";
+export function sessionDeliveryMode({ role, mode, ownerUserId, currentUserId }) {
+  if (role === "viewer") return "snapshot";
+  if (mode === "solo") {
+    return ownerUserId === undefined ? role === "owner" ? "live" : "snapshot"
+      : ownerUserId === currentUserId ? "live" : "snapshot";
+  }
+  return role === "owner" || role === "participant" ? "live" : "snapshot";
 }
 
 export function isExecutionRuntime(runtime) {
@@ -187,8 +192,10 @@ export function canAppend({ session, currentUser, connectionPhase, kind }) {
   if (!membership || membership.role === "viewer") {
     return { allowed: false, reason: "Your viewer role is read only." };
   }
-  if (session.mode === "solo" && membership.role !== "owner") {
-    return { allowed: false, reason: "Only the owner can write in a solo session." };
+  if (session.mode === "solo" && (session.ownerUserId === undefined
+    ? membership.role !== "owner"
+    : session.ownerUserId !== currentUser.id)) {
+    return { allowed: false, reason: "Only the solo creator can write in this session." };
   }
   if (kind === "agent_request" && !isExecutionRuntime(membership.runtime)) {
     return { allowed: false, reason: "Connect your local runtime to request an agent." };

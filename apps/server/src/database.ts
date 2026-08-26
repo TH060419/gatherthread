@@ -28,7 +28,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
-import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 
 export interface Actor {
   user_id: string;
@@ -112,6 +112,9 @@ export interface DatabaseOptions {
   maxUserActiveSnapshotRequests?: number | undefined;
   maxSessionActiveSnapshotRequests?: number | undefined;
   maxTotalActiveSnapshotRequests?: number | undefined;
+  maxUserSessions?: number | undefined;
+  maxProjectSessions?: number | undefined;
+  maxTotalSessions?: number | undefined;
 }
 
 export interface CreateInvitationResult {
@@ -577,6 +580,9 @@ export class CollaborationDatabase {
   private readonly maxUserActiveSnapshotRequests: number;
   private readonly maxSessionActiveSnapshotRequests: number;
   private readonly maxTotalActiveSnapshotRequests: number;
+  private readonly maxUserSessions: number;
+  private readonly maxProjectSessions: number;
+  private readonly maxTotalSessions: number;
 
   constructor(path: string, options: DatabaseOptions = {}) {
     this.authTokenPepper = resolveAuthTokenPepper(path, options.authTokenPepper);
@@ -592,6 +598,9 @@ export class CollaborationDatabase {
     this.maxUserActiveSnapshotRequests = options.maxUserActiveSnapshotRequests ?? DEFAULT_MAX_USER_ACTIVE_SNAPSHOT_REQUESTS;
     this.maxSessionActiveSnapshotRequests = options.maxSessionActiveSnapshotRequests ?? DEFAULT_MAX_SESSION_ACTIVE_SNAPSHOT_REQUESTS;
     this.maxTotalActiveSnapshotRequests = options.maxTotalActiveSnapshotRequests ?? DEFAULT_MAX_TOTAL_ACTIVE_SNAPSHOT_REQUESTS;
+    this.maxUserSessions = options.maxUserSessions ?? 512;
+    this.maxProjectSessions = options.maxProjectSessions ?? 2_048;
+    this.maxTotalSessions = options.maxTotalSessions ?? 8_192;
     for (const [name, value] of [
       ["maxUserEventBytes", this.maxUserEventBytes],
       ["maxSessionEventBytes", this.maxSessionEventBytes],
@@ -604,6 +613,9 @@ export class CollaborationDatabase {
       ["maxUserActiveSnapshotRequests", this.maxUserActiveSnapshotRequests],
       ["maxSessionActiveSnapshotRequests", this.maxSessionActiveSnapshotRequests],
       ["maxTotalActiveSnapshotRequests", this.maxTotalActiveSnapshotRequests],
+      ["maxUserSessions", this.maxUserSessions],
+      ["maxProjectSessions", this.maxProjectSessions],
+      ["maxTotalSessions", this.maxTotalSessions],
     ] as const) {
       if (!Number.isSafeInteger(value) || value <= 0) throw new RangeError(`${name} must be a positive safe integer`);
     }
@@ -624,6 +636,9 @@ export class CollaborationDatabase {
     ) || this.maxUserActiveSnapshotRequests > this.maxTotalActiveSnapshotRequests
       || this.maxSessionActiveSnapshotRequests > this.maxTotalActiveSnapshotRequests) {
       throw new RangeError("Snapshot request metadata limits are inconsistent");
+    }
+    if (this.maxUserSessions > this.maxTotalSessions || this.maxProjectSessions > this.maxTotalSessions) {
+      throw new RangeError("Session count limits are inconsistent");
     }
     this.sqlite = new DatabaseSync(path);
     this.sqlite.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_size_limit = 67108864;");
@@ -1073,7 +1088,8 @@ export class CollaborationDatabase {
     const role = this.projectMembershipRole(projectId, userId);
     if (!role) throw notFound("Project");
     return this.sqlite.prepare(`
-      SELECT sessions.id, sessions.project_id, sessions.title, sessions.mode, sessions.state,
+      SELECT sessions.id, sessions.project_id, sessions.owner_user_id,
+             sessions.title, sessions.mode, sessions.state,
              ? AS role, sessions.next_sequence AS current_sequence, sessions.updated_at,
              (SELECT COUNT(*) FROM project_memberships
               WHERE project_memberships.project_id = sessions.project_id) AS member_count
@@ -1623,7 +1639,7 @@ export class CollaborationDatabase {
           `).run(projectId, actor.user_id, timestamp, timestamp);
         }
       } else {
-        const project = this.requireProjectOwnedBy(projectId, actor.user_id);
+        const project = this.requireProject(projectId);
         if (project.state !== "active") throw conflict("Archived projects do not accept new sessions");
       }
     }));
@@ -1643,6 +1659,15 @@ export class CollaborationDatabase {
     prepareProject: () => void = () => {},
   ): { session: SessionRecord; event: CanonicalEvent } {
     const creationPayload = { action: "created", mode: input.mode, title: input.title } satisfies JsonValue;
+    prepareProject();
+    const project = this.requireProject(input.project_id);
+    if (project.state !== "active") throw conflict("Archived projects do not accept new sessions");
+    const projectRole = this.projectMembershipRole(input.project_id, actor.user_id);
+    if (projectRole === null) throw notFound("Project");
+    if (projectRole === "viewer") throw forbidden("Viewers cannot create shared sessions");
+    if (projectRole === "participant" && input.mode !== "solo") {
+      throw forbidden("Participants may create only their own solo sessions");
+    }
     const existingSession = this.sqlite.prepare("SELECT id FROM sessions WHERE id = ?").get(input.session_id);
     if (existingSession) {
       const session = this.requireSession(input.session_id);
@@ -1660,9 +1685,7 @@ export class CollaborationDatabase {
         ),
       };
     }
-
-    prepareProject();
-    this.requireProjectOwnedBy(input.project_id, actor.user_id);
+    this.enforceSessionQuota(input.project_id, actor.user_id);
     this.sqlite.prepare(`
       INSERT INTO sessions(
         id, project_id, owner_user_id, mode, title, state, next_sequence, created_at, updated_at
@@ -1698,7 +1721,8 @@ export class CollaborationDatabase {
 
   listSessions(userId: string): SessionListItem[] {
     return this.sqlite.prepare(`
-      SELECT sessions.id, sessions.project_id, sessions.title, sessions.mode, sessions.state,
+      SELECT sessions.id, sessions.project_id, sessions.owner_user_id,
+             sessions.title, sessions.mode, sessions.state,
              project_memberships.role, sessions.next_sequence AS current_sequence,
              sessions.updated_at,
              (SELECT COUNT(*) FROM project_memberships AS project_members
@@ -1840,6 +1864,12 @@ export class CollaborationDatabase {
     idempotency_key: string;
   }): { session: SessionRecord; event: CanonicalEvent } {
     return this.transaction(() => {
+      const manageableSession = this.requireSessionManageableInsideTransaction(actor, sessionId);
+      if (manageableSession.mode === "solo"
+        && this.membershipRole(sessionId, actor.user_id) !== "owner"
+        && input.mode !== undefined && input.mode !== "solo") {
+        throw forbidden("Only the project owner can convert a solo session to multi");
+      }
       const payload: Record<string, JsonValue> = {
         action: input.title !== undefined && input.mode === undefined && input.state === undefined ? "renamed" : "updated",
       };
@@ -2274,7 +2304,22 @@ export class CollaborationDatabase {
     const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
     const role = this.membershipRole(sessionId, actor.user_id);
     if (role === "viewer") throw forbidden("Viewers cannot append events");
-    if (session.mode === "solo" && role !== "owner") throw forbidden("Only the owner can write to a solo session");
+    if (session.mode === "solo" && session.owner_user_id !== actor.user_id) {
+      throw forbidden("Only the solo creator can write to this session");
+    }
+    return session;
+  }
+
+  private requireSessionManageableInsideTransaction(actor: Actor, sessionId: string): SessionRecord {
+    const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
+    const role = this.membershipRole(sessionId, actor.user_id);
+    if (session.mode === "solo") {
+      if (role === "viewer" || session.owner_user_id !== actor.user_id) {
+        throw forbidden("Only the solo creator can manage this session");
+      }
+      return session;
+    }
+    if (role !== "owner") throw forbidden("Only the project owner can manage a multi session");
     return session;
   }
 
@@ -2863,6 +2908,17 @@ export class CollaborationDatabase {
     if (deployment.count >= this.maxTotalActiveSnapshotRequests) {
       throw conflict("Deployment has too many active snapshot requests");
     }
+  }
+
+  private enforceSessionQuota(projectId: string, ownerUserId: string): void {
+    const user = this.sqlite.prepare("SELECT COUNT(*) AS count FROM sessions WHERE owner_user_id = ?")
+      .get(ownerUserId) as unknown as CountRow;
+    if (user.count >= this.maxUserSessions) throw sessionQuotaExceeded("user", this.maxUserSessions);
+    const project = this.sqlite.prepare("SELECT COUNT(*) AS count FROM sessions WHERE project_id = ?")
+      .get(projectId) as unknown as CountRow;
+    if (project.count >= this.maxProjectSessions) throw sessionQuotaExceeded("project", this.maxProjectSessions);
+    const total = this.sqlite.prepare("SELECT COUNT(*) AS count FROM sessions").get() as unknown as CountRow;
+    if (total.count >= this.maxTotalSessions) throw sessionQuotaExceeded("deployment", this.maxTotalSessions);
   }
 
   private findByIdempotencyKey(sessionId: string, key: string): CanonicalEvent | null {

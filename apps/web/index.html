@@ -322,7 +322,7 @@
                     <option value="participant">Participant</option>
                     <option value="viewer">Viewer</option>
                   </select>
-                  <p id="invitation-role-help" class="field-help">Participants edit multi sessions and read solo sessions. Viewers are read only everywhere.</p>
+                  <p id="invitation-role-help" class="field-help">Participants edit multi sessions, create their own solo sessions, and read everyone else's solo sessions. Viewers are read only everywhere.</p>
                 </div>
                 <div>
                   <label for="invitation-ttl">Expires in</label>
@@ -378,7 +378,7 @@
           </label>
           <label class="mode-option">
             <input type="radio" name="mode" value="solo" />
-            <span><strong>Solo</strong><small>Only the owner writes; invited viewers follow live.</small></span>
+            <span><strong>Solo</strong><small>Only its creator writes; every other project member follows read-only.</small></span>
           </label>
         </fieldset>
         <p id="create-error" class="form-error" role="alert"></p>
@@ -448,6 +448,8 @@
           <h3 id="connect-codex-activation-title">Single-writer synchronization</h3>
           <p>Codex Desktop exclusively owns the visible task. Web Agent requests run in an isolated background projection, and trusted hooks merge Desktop turns and the latest shared context through GatherThread.</p>
           <p lang="zh-Hans">Codex Desktop 独占可见任务；网页 Agent 请求在隔离的后台投影执行，可信 Hook 通过 GatherThread 汇合桌面回合与最新共享上下文。</p>
+          <p>An owner or participant can start a new Desktop task normally. Its first submitted prompt creates and binds a personal Solo in this project; an empty task creates nothing. Viewer tasks always remain local.</p>
+          <p lang="zh-Hans">Owner 或 Participant 可以正常新建 Desktop 任务；第一次提交 prompt 时才会在本项目创建并绑定一个本人 Solo，空任务不会创建云端内容。Viewer 的任务始终只留在本地。</p>
         </section>
         <p id="connect-codex-security" class="codex-connect-notice">
           Your device token is requested by a hidden CLI prompt. It is not included in either command. After hooks are installed for the first time, open Codex Desktop Settings and enable Hooks, then review the generated <code>.codex/hooks.json</code> before use.

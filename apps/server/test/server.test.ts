@@ -204,6 +204,75 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
   }
 });
 
+test("HTTP project participants create personal solos that remain read only to the project owner", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-personal-solo-http-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    await api(running.origin, "/v1/projects", {
+      method: "POST", token: owner.body.data.token,
+      body: { project_id: "personal-http", idempotency_key: "personal-http-project-create", title: "Personal" },
+    });
+    const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/projects/personal-http/invitations", {
+      method: "POST", token: owner.body.data.token, body: { role: "participant", ttl: "1h" },
+    });
+    const participant = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+      method: "POST",
+      body: {
+        invite_token: invitation.body.data.invite_token,
+        user_id: "participant",
+        display_name: "Participant",
+        device_id: "participant-device",
+        device_name: "Desktop",
+      },
+    });
+    const created = await api<{ data: { session: { id: string; owner_user_id: string; mode: string } } }>(
+      running.origin,
+      "/v1/projects/personal-http/sessions",
+      {
+        method: "POST", token: participant.body.data.token,
+        body: { idempotency_key: "participant-local-thread-1", mode: "solo", title: "First local prompt" },
+      },
+    );
+    assert.equal(created.status, 201);
+    assert.equal(created.body.data.session.owner_user_id, "participant");
+    const listed = await api<{ data: { sessions: Array<{ id: string; owner_user_id: string; role: string }> } }>(
+      running.origin, "/v1/projects/personal-http/sessions", { token: owner.body.data.token },
+    );
+    assert.equal(listed.body.data.sessions[0]?.id, created.body.data.session.id);
+    assert.equal(listed.body.data.sessions[0]?.owner_user_id, "participant");
+    assert.equal(listed.body.data.sessions[0]?.role, "owner");
+    assert.equal((await api(running.origin, `/v1/sessions/${created.body.data.session.id}/events`, {
+      method: "POST", token: owner.body.data.token,
+      body: {
+        idempotency_key: "owner-cannot-write-personal-solo",
+        type: "human_chat", visibility: "session", payload: { text: "forbidden" },
+      },
+    })).status, 403);
+    assert.equal((await api(running.origin, "/v1/projects/personal-http/sessions", {
+      method: "POST", token: participant.body.data.token,
+      body: { idempotency_key: "participant-cannot-create-multi", mode: "multi", title: "Forbidden" },
+    })).status, 403);
+    assert.equal((await api(running.origin, `/v1/sessions/${created.body.data.session.id}/events`, {
+      method: "POST", token: participant.body.data.token,
+      body: {
+        idempotency_key: "participant-writes-personal-solo",
+        type: "human_chat", visibility: "session", payload: { text: "allowed" },
+      },
+    })).status, 201);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("owner session rename validates input and reaches another client as metadata-only control", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-rename-"));
   const running = await startCollaborationServer({

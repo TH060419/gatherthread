@@ -258,7 +258,8 @@ export async function runCodexHookForwarder(input: {
 interface CodexHookRegistry {
   version: 1;
   workspacePath: string;
-  threads: Record<string, "execution" | "snapshot_connector">;
+  threads: Record<string, "execution" | "snapshot_connector" | "background_execution">;
+  discoverUnregistered?: boolean;
 }
 
 const REGISTRY_WRITERS = new Map<string, Promise<void>>();
@@ -266,9 +267,10 @@ const REGISTRY_WRITERS = new Map<string, Promise<void>>();
 export async function updateCodexHookRegistry(input: {
   registryPath: string;
   workspacePath: string;
-  add?: Record<string, "execution" | "snapshot_connector">;
+  add?: Record<string, "execution" | "snapshot_connector" | "background_execution">;
   remove?: readonly string[];
-  removePurpose?: "execution" | "snapshot_connector";
+  removePurpose?: "execution" | "snapshot_connector" | "background_execution";
+  discoverUnregistered?: boolean;
 }): Promise<void> {
   const key = path.resolve(input.registryPath);
   const previous = REGISTRY_WRITERS.get(key) ?? Promise.resolve();
@@ -284,9 +286,10 @@ export async function updateCodexHookRegistry(input: {
 async function updateCodexHookRegistryFile(input: {
   registryPath: string;
   workspacePath: string;
-  add?: Record<string, "execution" | "snapshot_connector">;
+  add?: Record<string, "execution" | "snapshot_connector" | "background_execution">;
   remove?: readonly string[];
-  removePurpose?: "execution" | "snapshot_connector";
+  removePurpose?: "execution" | "snapshot_connector" | "background_execution";
+  discoverUnregistered?: boolean;
 }): Promise<void> {
   let registry: CodexHookRegistry = { version: 1, workspacePath: path.resolve(input.workspacePath), threads: {} };
   try {
@@ -305,6 +308,9 @@ async function updateCodexHookRegistryFile(input: {
     }
   }
   Object.assign(registry.threads, input.add ?? {});
+  if (input.discoverUnregistered !== undefined) {
+    registry.discoverUnregistered = input.discoverUnregistered;
+  }
   await preparePrivateDirectory(
     path.dirname(input.registryPath),
     "Codex hook registry directory must be private (mode 0700 or stricter)",
@@ -704,9 +710,9 @@ function requiredBoundedLabel(value: unknown, field: string, maxLength: number):
 export async function isAllowedCodexHookEvent(registryPath: string, event: CodexHookEvent): Promise<boolean> {
   try {
     const registry = JSON.parse(await readFile(registryPath, "utf8")) as unknown;
-    return isHookRegistry(registry)
-      && registry.threads[event.session_id] === "execution"
-      && path.resolve(event.cwd) === registry.workspacePath;
+    if (!isHookRegistry(registry) || path.resolve(event.cwd) !== registry.workspacePath) return false;
+    const purpose = registry.threads[event.session_id];
+    return purpose === "execution" || (purpose === undefined && registry.discoverUnregistered === true);
   } catch {
     return false;
   }
@@ -716,5 +722,8 @@ function isHookRegistry(value: unknown): value is CodexHookRegistry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
   if (input.version !== 1 || typeof input.workspacePath !== "string" || !input.threads || typeof input.threads !== "object" || Array.isArray(input.threads)) return false;
-  return Object.values(input.threads as Record<string, unknown>).every((purpose) => purpose === "execution" || purpose === "snapshot_connector");
+  if (input.discoverUnregistered !== undefined && typeof input.discoverUnregistered !== "boolean") return false;
+  return Object.values(input.threads as Record<string, unknown>).every((purpose) =>
+    purpose === "execution" || purpose === "snapshot_connector" || purpose === "background_execution",
+  );
 }

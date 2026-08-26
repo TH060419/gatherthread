@@ -33,6 +33,9 @@ test("development configuration uses a loopback-only, same-origin baseline", () 
   assert.equal(config.maxUserEventBytes, 268_435_456);
   assert.equal(config.maxSessionEventBytes, 536_870_912);
   assert.equal(config.maxTotalEventBytes, 2_147_483_648);
+  assert.equal(config.maxUserSessions, 512);
+  assert.equal(config.maxProjectSessions, 2_048);
+  assert.equal(config.maxTotalSessions, 8_192);
   assert.throws(() => assertPersistentCredentialPepper(config), /credentials remain valid/);
 });
 
@@ -72,9 +75,23 @@ test("unsafe bind hosts, malformed booleans, ports, and origins are rejected", (
     { GATHERTHREAD_MAX_USER_EVENT_BYTES: "1048576.5" },
     { GATHERTHREAD_MAX_SESSION_EVENT_BYTES: "9007199254740992" },
     { GATHERTHREAD_MAX_TOTAL_EVENT_BYTES: "999999", GATHERTHREAD_MAX_USER_EVENT_BYTES: "1048576", GATHERTHREAD_MAX_SESSION_EVENT_BYTES: "1048576" },
+    { GATHERTHREAD_MAX_USER_SESSIONS: "0" },
+    { GATHERTHREAD_MAX_PROJECT_SESSIONS: "1.5" },
+    { GATHERTHREAD_MAX_TOTAL_SESSIONS: "2", GATHERTHREAD_MAX_USER_SESSIONS: "3" },
   ]) {
     assert.throws(() => loadServerConfig(environment, "/srv/gatherthread"), ConfigurationError);
   }
+});
+
+test("session count limits accept deliberate consistent overrides", () => {
+  const config = loadServerConfig({
+    GATHERTHREAD_MAX_USER_SESSIONS: "10",
+    GATHERTHREAD_MAX_PROJECT_SESSIONS: "20",
+    GATHERTHREAD_MAX_TOTAL_SESSIONS: "30",
+  }, "/srv/gatherthread");
+  assert.equal(config.maxUserSessions, 10);
+  assert.equal(config.maxProjectSessions, 20);
+  assert.equal(config.maxTotalSessions, 30);
 });
 
 test("event storage limits accept deliberate overrides and reject inconsistent ceilings", () => {

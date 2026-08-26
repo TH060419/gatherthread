@@ -3,6 +3,7 @@
 **Date**: 2026-08-26  
 **Status**: accepted  
 **Deciders**: Yuhan He  
+**Partially superseded by**: [ADR-0015](0015-create-personal-solos-from-first-local-prompt.md) for first-prompt discovery of previously unregistered user tasks
 **Builds on**: [ADR-0013](0013-single-writer-dual-codex-projections.md)
 
 ## Context

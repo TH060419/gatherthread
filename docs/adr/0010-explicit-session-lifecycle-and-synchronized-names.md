@@ -5,6 +5,7 @@
 **Deciders**: Yuhan He
 **Builds on**: [ADR-0006](0006-project-first-collaboration-boundary.md), [ADR-0008](0008-local-agent-conversations-as-rebuildable-projections.md), and [ADR-0009](0009-copyable-project-codex-connection-command.md)
 **Partially supersedes**: ADR-0009's default `General` session decision
+**Partially superseded by**: [ADR-0015](0015-create-personal-solos-from-first-local-prompt.md) for participant-created personal Solos and creator-authorized renames
 
 ## Context
 

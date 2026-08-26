@@ -328,6 +328,186 @@ test("solo ACL rejects participant writes while preserving viewer replay", () =>
   }
 });
 
+test("participants create creator-owned solo sessions while project owners and viewers remain read only", () => {
+  const f = fixture();
+  try {
+    const project = f.service.createProject(f.owner, {
+      project_id: "personal-solo-project",
+      idempotency_key: "personal-solo-project-create",
+      title: "Personal solos",
+    });
+    const shared = f.service.createSession(f.owner, {
+      project_id: project.id,
+      session_id: "personal-solo-shared",
+      idempotency_key: "personal-solo-shared-create",
+      mode: "multi",
+      title: "Shared",
+    }).session;
+    f.service.setMembership(f.owner, shared.id, f.member.user_id, "participant", "personal-solo-member-add");
+
+    const created = f.service.createSession(f.member, {
+      project_id: project.id,
+      session_id: "member-personal-solo",
+      idempotency_key: "member-personal-solo-create",
+      mode: "solo",
+      title: "Member notes",
+    });
+    assert.equal(created.session.owner_user_id, f.member.user_id);
+    assert.equal(f.service.listProjectSessions(f.owner, project.id)
+      .find((session) => session.id === created.session.id)?.owner_user_id, f.member.user_id);
+    assert.equal(f.service.appendEvent(f.member, created.session.id, {
+      idempotency_key: "member-personal-solo-chat",
+      type: "human_chat",
+      visibility: "session",
+      payload: { text: "mine" },
+    }).sequence, 2);
+    assert.equal(f.service.updateSession(f.member, created.session.id, {
+      title: "Renamed by creator",
+      idempotency_key: "member-personal-solo-rename",
+    }).session.title, "Renamed by creator");
+
+    assert.throws(() => f.service.createSession(f.member, {
+      project_id: project.id,
+      idempotency_key: "member-illegal-multi-create",
+      mode: "multi",
+      title: "Not allowed",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.appendEvent(f.owner, created.session.id, {
+      idempotency_key: "owner-illegal-personal-solo-chat",
+      type: "human_chat",
+      visibility: "session",
+      payload: { text: "not mine" },
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.updateSession(f.owner, created.session.id, {
+      title: "Owner cannot rename",
+      idempotency_key: "owner-illegal-personal-solo-rename",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.registerRuntime(f.owner, {
+      runtime_id: "owner-illegal-personal-solo-runtime",
+      session_id: created.session.id,
+      device_id: f.owner.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-test",
+      local_session_id: "owner-illegal-personal-solo-thread",
+      capture_fidelity: "harness_transcript",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+
+    f.service.setProjectMembership(f.owner, project.id, f.member.user_id, "viewer");
+    assert.throws(() => f.service.appendEvent(f.member, created.session.id, {
+      idempotency_key: "viewer-illegal-personal-solo-chat",
+      type: "human_chat",
+      visibility: "session",
+      payload: { text: "read only now" },
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.createSession(f.member, {
+      project_id: project.id,
+      idempotency_key: "viewer-illegal-solo-create",
+      mode: "solo",
+      title: "Viewer local only",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+  } finally {
+    f.close();
+  }
+});
+
+test("session count quotas bound participant-created solos without breaking exact retries", () => {
+  const userLimited = fixture({ maxUserSessions: 1, maxProjectSessions: 10, maxTotalSessions: 20 });
+  try {
+    const project = userLimited.service.createProject(userLimited.owner, {
+      project_id: "user-session-quota-project",
+      idempotency_key: "user-session-quota-project-create",
+      title: "User quota",
+    });
+    const shared = userLimited.service.createSession(userLimited.owner, {
+      project_id: project.id,
+      idempotency_key: "user-session-quota-shared",
+      mode: "multi",
+      title: "Shared",
+    }).session;
+    userLimited.service.setMembership(
+      userLimited.owner, shared.id, userLimited.member.user_id, "participant", "user-session-quota-member",
+    );
+    const first = userLimited.service.createSession(userLimited.member, {
+      project_id: project.id,
+      idempotency_key: "user-session-quota-personal",
+      mode: "solo",
+      title: "Personal",
+    });
+    assert.equal(userLimited.service.createSession(userLimited.member, {
+      project_id: project.id,
+      idempotency_key: "user-session-quota-personal",
+      mode: "solo",
+      title: "Personal",
+    }).session.id, first.session.id);
+    assert.throws(() => userLimited.service.createSession(userLimited.member, {
+      project_id: project.id,
+      idempotency_key: "user-session-quota-overflow",
+      mode: "solo",
+      title: "Overflow",
+    }), (error: unknown) => error instanceof ApiError
+      && error.code === "session_quota_exceeded"
+      && (error.details as { scope?: string } | undefined)?.scope === "user");
+  } finally {
+    userLimited.close();
+  }
+
+  const aggregateLimited = fixture({ maxUserSessions: 3, maxProjectSessions: 2, maxTotalSessions: 3 });
+  try {
+    const firstProject = aggregateLimited.service.createProject(aggregateLimited.owner, {
+      project_id: "aggregate-session-quota-one",
+      idempotency_key: "aggregate-session-quota-one-create",
+      title: "First",
+    });
+    aggregateLimited.service.createSession(aggregateLimited.owner, {
+      project_id: firstProject.id,
+      idempotency_key: "aggregate-session-quota-one-a",
+      mode: "multi",
+      title: "One A",
+    });
+    aggregateLimited.service.createSession(aggregateLimited.owner, {
+      project_id: firstProject.id,
+      idempotency_key: "aggregate-session-quota-one-b",
+      mode: "solo",
+      title: "One B",
+    });
+    assert.throws(() => aggregateLimited.service.createSession(aggregateLimited.owner, {
+      project_id: firstProject.id,
+      idempotency_key: "aggregate-session-quota-project-overflow",
+      mode: "solo",
+      title: "Project overflow",
+    }), (error: unknown) => error instanceof ApiError
+      && error.code === "session_quota_exceeded"
+      && (error.details as { scope?: string } | undefined)?.scope === "project");
+
+    const secondProject = aggregateLimited.service.createProject(aggregateLimited.owner, {
+      project_id: "aggregate-session-quota-two",
+      idempotency_key: "aggregate-session-quota-two-create",
+      title: "Second",
+    });
+    const secondShared = aggregateLimited.service.createSession(aggregateLimited.owner, {
+      project_id: secondProject.id,
+      idempotency_key: "aggregate-session-quota-two-a",
+      mode: "multi",
+      title: "Two A",
+    }).session;
+    aggregateLimited.service.setMembership(
+      aggregateLimited.owner, secondShared.id, aggregateLimited.member.user_id, "participant",
+      "aggregate-session-quota-member",
+    );
+    assert.throws(() => aggregateLimited.service.createSession(aggregateLimited.member, {
+      project_id: secondProject.id,
+      idempotency_key: "aggregate-session-quota-total-overflow",
+      mode: "solo",
+      title: "Total overflow",
+    }), (error: unknown) => error instanceof ApiError
+      && error.code === "session_quota_exceeded"
+      && (error.details as { scope?: string } | undefined)?.scope === "deployment");
+  } finally {
+    aggregateLimited.close();
+  }
+});
+
 test("project roles govern every current and future session while preserving solo read-only semantics", () => {
   const f = fixture();
   try {

@@ -176,6 +176,47 @@ test("HTTP client redacts its bearer credential from server errors", async () =>
   });
 });
 
+test("HTTP client creates creator-owned project solos with a stable idempotency key", async () => {
+  const requests: Array<{ url: string; init: RequestInit }> = [];
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async (input, init = {}) => {
+      requests.push({ url: String(input), init });
+      return Response.json({
+        data: {
+          session: {
+            id: "session-personal",
+            project_id: "project-1",
+            owner_user_id: "participant-1",
+            title: "First local prompt",
+            mode: "solo",
+            state: "active",
+            role: "participant",
+            current_sequence: 1,
+          },
+        },
+      });
+    },
+  });
+
+  const session = await client.createSession("project-1", {
+    title: "First local prompt",
+    mode: "solo",
+    idempotencyKey: "codex-solo-stable-key",
+  });
+
+  assert.equal(session.ownerUserId, "participant-1");
+  assert.equal(session.role, "participant");
+  assert.equal(requests[0]?.url, "https://collab.example/v1/projects/project-1/sessions");
+  assert.equal(requests[0]?.init.method, "POST");
+  assert.deepEqual(JSON.parse(String(requests[0]?.init.body)), {
+    title: "First local prompt",
+    mode: "solo",
+    idempotency_key: "codex-solo-stable-key",
+  });
+});
+
 function runtimeRegistration(): RuntimeRegistration {
   return {
     sessionId: "s1",

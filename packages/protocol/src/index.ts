@@ -425,6 +425,7 @@ export type ReplayResponse = z.infer<typeof ReplayResponseSchema>;
 export const SessionListItemSchema = z.object({
   id: IdSchema,
   project_id: IdSchema,
+  owner_user_id: IdSchema,
   title: z.string(),
   mode: SessionModeSchema,
   state: z.enum(["active", "archived"]),

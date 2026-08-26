@@ -80,6 +80,7 @@ export interface SnapshotRequestSummary {
 export interface SessionSummary {
   id: string;
   projectId?: string;
+  ownerUserId?: string;
   name?: string;
   mode: "solo" | "multi";
   state?: "active" | "archived";
@@ -154,6 +155,11 @@ export interface CollaborationApi {
   listSessions(): Promise<SessionSummary[]>;
   listProjects?(): Promise<ProjectSummary[]>;
   listProjectSessions?(projectId: string): Promise<SessionSummary[]>;
+  createSession?(projectId: string, input: {
+    title: string;
+    mode: "solo" | "multi";
+    idempotencyKey: string;
+  }): Promise<SessionSummary>;
   updateSession?(sessionId: string, input: { title: string; idempotencyKey: string }): Promise<SessionSummary>;
   readEvents(sessionId: string, afterSequence: number, limit?: number): Promise<ReadEventsResult>;
   appendEvent(sessionId: string, event: AppendEventInput): Promise<CanonicalEvent>;

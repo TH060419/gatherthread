@@ -119,6 +119,12 @@ test("only execution runtimes can back agent requests", () => {
 
 test("session delivery mode keeps owners and multi participants live", () => {
   assert.equal(sessionDeliveryMode({ role: "owner", mode: "solo" }), "live");
+  assert.equal(sessionDeliveryMode({
+    role: "participant", mode: "solo", ownerUserId: "participant-1", currentUserId: "participant-1",
+  }), "live");
+  assert.equal(sessionDeliveryMode({
+    role: "owner", mode: "solo", ownerUserId: "participant-1", currentUserId: "project-owner",
+  }), "snapshot");
   assert.equal(sessionDeliveryMode({ role: "participant", mode: "multi" }), "live");
   assert.equal(sessionDeliveryMode({ role: "participant", mode: "solo" }), "snapshot");
   assert.equal(sessionDeliveryMode({ role: "viewer", mode: "multi" }), "snapshot");
@@ -265,7 +271,7 @@ test("invitation records normalize wire keys and derive fail-closed status", () 
     inviter_user_id: "u1",
     role: "participant",
     created_at: "2026-08-25T10:00:00.000Z",
-    expires_at: "2026-08-26T10:00:00.000Z",
+    expires_at: "2099-08-26T10:00:00.000Z",
     revoked_at: null,
     expired_at: null,
     claimed_at: null,
