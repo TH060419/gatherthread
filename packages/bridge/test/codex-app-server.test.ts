@@ -134,10 +134,11 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
   });
   assert.match(first.additionalContext ?? "", /已加载 1 条云端更新/);
   assert.match(first.additionalContext ?? "", /Loaded 1 cloud update/);
-  assert.match(first.additionalContext ?? "", /在本次回复开头.*显示.*同步提示/s);
-  assert.match(first.additionalContext ?? "", /BEGIN GatherThread cloud updates/);
+  assert.match(first.additionalContext ?? "", /只显示下方简短的可见同步摘要/);
+  assert.match(first.additionalContext ?? "", /BEGIN VISIBLE SYNC SUMMARY/);
   assert.match(first.additionalContext ?? "", /\[sequence 3\].*Human Chat.*cloud context/s);
-  assert.match(first.additionalContext ?? "", /END GatherThread cloud updates/);
+  assert.match(first.additionalContext ?? "", /BEGIN GatherThread exact cloud context/);
+  assert.match(first.additionalContext ?? "", /END GatherThread exact cloud context/);
   assert.equal(retry.additionalContext, first.additionalContext, "a retried hook must receive the same canonical delta");
   await executor.handleHookEvent(api, runtime, {
     hook_event_name: "Stop", session_id: "old-thread", turn_id: "desktop-turn",
@@ -153,6 +154,181 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
   assert.equal(committedReasoningEffort, "high", "reasoning effort is frozen when the Hook exposes it");
   assert.equal(state.cloudCursor, 6);
   assert.equal(state.pendingLocalTurns.length, 0);
+});
+
+test("oversized Desktop cloud deltas advance only after acknowledged UTF-8 chunks", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-capsule-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  const fakeCodex = path.join(directory, "fake-codex.mjs");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  await writeFile(fakeCodex, `
+import { createInterface } from "node:readline";
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+}
+`);
+  const client = new CodexAppServerClient({
+    command: process.execPath,
+    commandArgs: [fakeCodex],
+    cwd: directory,
+  });
+  t.after(() => client.dispose());
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread · Desktop capsule",
+    model: "gpt-test",
+    desktopHookOnly: true,
+  });
+  const runtime = registeredRuntime("desktop-capsule");
+  const oversized = canonical(3, "human_chat", { text: `BEGIN-${"云".repeat(4_000)}-END` }, "user-2");
+  const tail = canonical(4, "human_chat", { text: `tail update ${"t".repeat(4_000)}` }, "user-3");
+  const committedBases: number[] = [];
+  let commitSequence = 10;
+  const api = {
+    readEvents: async (_sessionId: string, afterSequence: number) => ({
+      events: [oversized, tail].filter((event) => event.sequence > afterSequence),
+      nextSequence: 4,
+      hasMore: false,
+    }),
+    commitLocalTurn: async (_sessionId: string, input: { basedOnSequence: number; toolEvents: unknown[] }) => {
+      committedBases.push(input.basedOnSequence);
+      const requestSequence = commitSequence;
+      const responseSequence = commitSequence + 1;
+      commitSequence += 2;
+      return {
+        localTurnId: `local-${requestSequence}`,
+        runtimeId: runtime.id,
+        headBeforeCommit: 4,
+        reconciliationRequired: true,
+        requestEvent: canonical(requestSequence, "agent_request", { text: "desktop prompt" }),
+        responseEvent: canonical(responseSequence, "agent_response", { text: "desktop answer" }),
+        toolEvents: input.toolEvents,
+      };
+    },
+  } as unknown as CollaborationApi;
+
+  const submit = async (turnId: string) => executor.handleHookEvent(api, runtime, {
+    hook_event_name: "UserPromptSubmit",
+    session_id: "old-thread",
+    turn_id: turnId,
+    cwd: workspacePath,
+    model: "gpt-test",
+    prompt: `prompt ${turnId}`,
+  });
+  const stopAndCommit = async (turnId: string) => {
+    await executor.handleHookEvent(api, runtime, {
+      hook_event_name: "Stop",
+      session_id: "old-thread",
+      turn_id: turnId,
+      cwd: workspacePath,
+      model: "gpt-test",
+      stop_hook_active: false,
+      last_assistant_message: `answer ${turnId}`,
+    });
+    await executor.synchronizeLocalTurns(api, runtime);
+  };
+
+  const first = await submit("desktop-turn-1");
+  assert.match(first.additionalContext ?? "", /sequence 3, part 1\//);
+  assert.match(first.additionalContext ?? "", /do not repeat the exact context block/i);
+  assert.ok(Buffer.byteLength(first.additionalContext ?? "") <= 7 * 1024);
+  const visibleSummary = /--- BEGIN VISIBLE SYNC SUMMARY ---\n(?<summary>[\s\S]*?)\n--- END VISIBLE SYNC SUMMARY ---/u
+    .exec(first.additionalContext ?? "")?.groups?.summary ?? "";
+  assert.ok(Buffer.byteLength(visibleSummary) <= 1_024, "the user-visible relay summary must stay concise");
+  assert.doesNotMatch(visibleSummary, /-END/, "the visible response must preview rather than repeat an oversized body");
+  await executor.handleHookEvent(api, runtime, {
+    hook_event_name: "Stop",
+    session_id: "old-thread",
+    turn_id: "desktop-turn-1",
+    cwd: workspacePath,
+    model: "gpt-test",
+    stop_hook_active: false,
+    last_assistant_message: "",
+  });
+  const cancelledRetry = await submit("desktop-turn-1-retry");
+  assert.match(cancelledRetry.additionalContext ?? "", /sequence 3, part 1\//,
+    "a cancelled Desktop turn must not acknowledge its relay chunk");
+  await stopAndCommit("desktop-turn-1-retry");
+  const afterFirst = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(afterFirst.desktopDeliveryCursor, 2, "a partial event must not advance the delivered sequence");
+  assert.equal(afterFirst.desktopRelayCheckpoint?.nextChunk, 1);
+  assert.equal(committedBases[0], 2, "the local answer must not claim unseen cloud history as its context base");
+
+  const second = await submit("desktop-turn-2");
+  assert.match(second.additionalContext ?? "", /sequence 3, part 2\//);
+  assert.doesNotMatch(second.additionalContext ?? "", /sequence 3, part 1\//);
+  await stopAndCommit("desktop-turn-2");
+  const afterSecond = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(afterSecond.desktopDeliveryCursor, 2);
+  assert.equal(afterSecond.desktopRelayCheckpoint?.nextChunk, 2);
+
+  const seenContexts = [first.additionalContext ?? "", second.additionalContext ?? ""];
+  for (let turn = 3; turn <= 20; turn += 1) {
+    const state = JSON.parse(await readFile(statePath, "utf8"));
+    if (state.desktopDeliveryCursor >= 4) break;
+    const relay = await submit(`desktop-turn-${turn}`);
+    seenContexts.push(relay.additionalContext ?? "");
+    await stopAndCommit(`desktop-turn-${turn}`);
+  }
+  const finalState = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(finalState.desktopDeliveryCursor, 4, "every oversized event chunk and its tail must eventually be acknowledged");
+  assert.equal(finalState.desktopRelayCheckpoint, undefined);
+  assert.equal(seenContexts.filter((context) => /sequence 3, part 1\//.test(context)).length, 1,
+    "an acknowledged chunk must never be repeated");
+  assert.match(seenContexts.join("\n"), /tail update/);
+});
+
+test("pre-capsule Desktop state replays canonical history from zero instead of trusting its cloud cursor", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-capsule-migration-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  const fakeCodex = path.join(directory, "fake-codex.mjs");
+  const legacy = projectionState(workspacePath) as Record<string, unknown>;
+  delete legacy.desktopDeliveryCursor;
+  legacy.cloudCursor = 99;
+  await writeFile(statePath, JSON.stringify(legacy));
+  await writeFile(fakeCodex, `
+import { createInterface } from "node:readline";
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+}
+`);
+  const client = new CodexAppServerClient({ command: process.execPath, commandArgs: [fakeCodex], cwd: directory });
+  t.after(() => client.dispose());
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread · Desktop capsule migration",
+    model: "gpt-test",
+    desktopHookOnly: true,
+  });
+  let observedAfter = -1;
+  const api = {
+    readEvents: async (_sessionId: string, afterSequence: number) => {
+      observedAfter = afterSequence;
+      return { events: [canonical(1, "human_chat", { text: "recovered history" })], nextSequence: 1, hasMore: false };
+    },
+  } as unknown as CollaborationApi;
+  const relay = await executor.handleHookEvent(api, registeredRuntime("desktop-migration"), {
+    hook_event_name: "UserPromptSubmit",
+    session_id: "old-thread",
+    turn_id: "desktop-turn-migration",
+    cwd: workspacePath,
+    model: "gpt-test",
+    prompt: "continue",
+  });
+  assert.equal(observedAfter, 0);
+  assert.match(relay.additionalContext ?? "", /recovered history/);
 });
 
 test("project harness keeps Desktop hooks and Web execution on separate native writers", async (t) => {
@@ -2137,6 +2313,7 @@ function projectionState(workspacePath: string) {
     contextWindowTokens: 128000,
     estimatedContextTokens: 100,
     cloudCursor: 2,
+    desktopDeliveryCursor: 2,
     projectionGeneration: 1,
     compactionGeneration: 0,
     coveredThroughSequence: 2,

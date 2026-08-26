@@ -17,3 +17,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0011](0011-manual-codex-desktop-project-assignment.md) | Require manual Codex Desktop project assignment for managed tasks | superseded by 0012 | 2026-08-25 |
 | [0012](0012-activate-codex-desktop-tasks-with-registered-links.md) | Activate synchronized Codex Desktop tasks with registered links | partially superseded by 0013 | 2026-08-25 |
 | [0013](0013-single-writer-dual-codex-projections.md) | Use single-writer dual projections for Codex Desktop | accepted | 2026-08-26 |
+| [0014](0014-acknowledged-bounded-desktop-relay-capsules.md) | Use acknowledged bounded capsules for Desktop cloud relay | accepted | 2026-08-26 |

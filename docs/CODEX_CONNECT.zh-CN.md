@@ -59,7 +59,7 @@ npm run codex:connect -- \
 - 每条可见消息都带冻结的 `actor_display_name` 与明确的规范类型前缀：`Human Chat`、`Agent Request`、`Agent Response` 或具体工具/其他事件类型。只有 `Agent Response` 会追加该规范事件自身 runtime 中的 harness 与模型；runtime 缺失时明确使用 `GatherThread · shared` 占位，绝不借用本地连接器 runtime。结构化来源信息保留在私有连接器状态中。
 - 普通聊天和其他协作者的 Agent 回复会成为上下文，但不会触发 Codex。普通聊天只能在 GatherThread 中发送。
 - 只有尚未绑定、且由同一认证用户发出的 `agent_request` 才能被其执行 runtime 处理。
-- 安装并信任项目 Hook 后，`UserPromptSubmit` 会提供有界规范增量并记录准确 prompt。存在更新时，连接器会要求下一次回复先显示 `Loaded N cloud updates / 已加载 N 条云端更新`，再按顺序引用每条更新的序号、作者、类型和可见正文。引用内容属于不可信共享历史，不得作为新的请求再次执行。`Stop` 把最终助手文本持久加入 outbox，再通过服务器原子 local-turn 接口恰好写入一次。当前公开 Hook 不包含完整结构化工具流，因此 Desktop 回合的工具事件不会上传。
+- 安装并信任项目 Hook 后，`UserPromptSubmit` 会在 Hook 的 2,500-token 附加上下文上限内提供规范 relay capsule，并记录准确 prompt。Agent 只需显示 `Loaded N cloud updates / 已加载 N 条云端更新` 和最多三条短预览；精确顺序正文作为不可信的仅模型上下文。超长 UTF-8 内容会持久记录检查点，并在后续完成的 Desktop 回合继续。独立投递游标只在 `Stop` 后推进；取消会原样重投，任何省略分段都不会被静默确认。`Stop` 把最终助手文本持久加入 outbox，再通过服务器原子 local-turn 接口恰好写入一次。当前公开 Hook 不包含完整结构化工具流，因此 Desktop 回合的工具事件不会上传。
 - 当前 Codex 已生成的内容会绑定到服务器返回的规范事件 ID，不会再次注入或再次执行。
 - 本地完成回合会先持久化到私有幂等 outbox。断网后，连接器会在网络恢复时继续重试。
 - 如果服务器没有越过本地回合的起始序号，确认后只更新绑定与游标；如果云端已经前进，服务器会先按自身权威顺序追加本地回合，再要求连接器对齐。
@@ -75,7 +75,9 @@ npm run codex:connect -- \
 
 ## Codex 桌面端边界
 
-Codex Desktop 是每个可见任务的唯一 writer。网页请求不会 resume 这个任务，而是在后台投影执行并把结果发布到规范 Web 记录。下一次 Desktop prompt 时，Hook 会把该任务上次已接受基线之后的全部规范事件作为额外上下文提供给 Agent，并要求 Agent 在回答当前输入前先显示加载数量和引用的更新列表。这样能保持 Agent 上下文和服务器顺序，但当前公开 Codex API 无法把远端事件补画为 Desktop 已有任务中的历史气泡。
+Codex Desktop 是每个可见任务的唯一 writer。网页请求不会 resume 这个任务，而是在后台投影执行并把结果发布到规范 Web 记录。下一次 Desktop prompt 时，Hook 会从该任务独立投递游标之后提供下一批已确认 capsule。很长的积压会按规范顺序在多个已完成回合中继续排空，而可见回复始终只显示简短预览；后台投影仍保有并在本地 compact 完整规范序列。这样能限制 Desktop 上下文并保持服务器顺序，但当前公开 Codex API 无法把远端事件补画为 Desktop 已有任务中的历史气泡。
+
+旧版连接器状态无法证明先前固定长度截断是否已真正交付所有事件。因此升级后的首次加载会把 Desktop 投递游标安全设为零，再用有界 capsule 重放规范历史。重放内容只作为上下文，绝不会作为新的 Agent 请求执行。
 
 只有安装并信任项目 Hook 的受管执行 thread，才会把桌面端直接输入双向同步。私有 `0600` thread registry 会在 hook relay 或离线 spool 之前校验原生 thread ID，无关 Codex 任务和不可变快照 thread 会在本地直接丢弃。`--install-hooks` 会在 POSIX 上启动私有 Unix socket，在 Windows 上启动稳定且只绑定项目映射的 named pipe；未启用该选项时，连接器不会监听任何 Hook IPC 端点。IPC 端点、registry 与 spool 都不会包含 GatherThread Bearer Token。受管 prompt 仍可能包含敏感内容，因此必须保密的工作应在另一个未受管 Codex 任务中进行。
 
