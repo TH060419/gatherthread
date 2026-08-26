@@ -129,6 +129,8 @@ interface LocalTurnOutbox {
   turnId: string;
   basedOnSequence: number;
   occurredAt: string;
+  observedModel?: string;
+  observedReasoningEffort?: string;
   requestPayload: unknown;
   responsePayload: unknown;
   toolEvents: unknown[];
@@ -140,6 +142,8 @@ interface HookLocalTurnDraft {
   turnId: string;
   basedOnSequence: number;
   occurredAt: string;
+  observedModel?: string;
+  observedReasoningEffort?: string;
   requestPayload: unknown;
   additionalContext?: string;
   contextThroughSequence?: number;
@@ -951,7 +955,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   ): Promise<(CodexHookRelayResult & { handled: boolean })> {
     return this.#withStateWriter(async () => {
       if (runtime.purpose === "snapshot_connector") return { handled: false };
-      if (event.model !== runtime.model) throw new Error("Codex hook model does not match the registered execution runtime");
+      validateObservedCodexModel(event.model);
       const workspacePath = await validateCodexWorkspace(this.#workspacePath);
       if (path.resolve(event.cwd) !== workspacePath) return { handled: false };
       const state = await this.#loadState(runtime.sessionId, workspacePath);
@@ -977,6 +981,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
             turnId: event.turn_id,
             basedOnSequence,
             occurredAt: new Date().toISOString(),
+            observedModel: event.model,
+            ...(event.reasoning_effort === undefined ? {} : { observedReasoningEffort: event.reasoning_effort }),
             requestPayload: { text: event.prompt },
             ...(additionalContext === undefined ? {} : { additionalContext }),
             contextThroughSequence: basedOnSequence,
@@ -1005,6 +1011,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         return { handled: true };
       }
       draft.finalResponse = event.last_assistant_message;
+      draft.observedModel = event.model;
+      if (event.reasoning_effort === undefined) delete draft.observedReasoningEffort;
+      else draft.observedReasoningEffort = event.reasoning_effort;
       draft.stopObservedAt = new Date().toISOString();
       if (this.#desktopHookOnly) {
         this.#promoteHookDraftWithoutThread(state, draft);
@@ -1279,6 +1288,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         runtimeId: runtime.id,
         basedOnSequence: pending.basedOnSequence,
         occurredAt: pending.occurredAt,
+        ...(pending.observedModel === undefined ? {} : { observedModel: pending.observedModel }),
+        ...(pending.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: pending.observedReasoningEffort }),
         requestPayload: upload.requestPayload,
         responsePayload: upload.responsePayload,
         toolEvents: upload.toolEvents,
@@ -1599,6 +1610,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         turnId: draft.turnId,
         basedOnSequence: draft.basedOnSequence,
         occurredAt: draft.stopObservedAt ?? draft.occurredAt,
+        ...(draft.observedModel === undefined ? {} : { observedModel: draft.observedModel }),
+        ...(draft.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: draft.observedReasoningEffort }),
         requestPayload: { text: requestText ?? objectOptionalString(draft.requestPayload, "text") ?? "" },
         responsePayload: { text: responseText },
         toolEvents: canonicalLocalToolEvents(turn, draft.stopObservedAt ?? draft.occurredAt),
@@ -1616,6 +1629,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         turnId: draft.turnId,
         basedOnSequence: draft.basedOnSequence,
         occurredAt: draft.stopObservedAt ?? draft.occurredAt,
+        ...(draft.observedModel === undefined ? {} : { observedModel: draft.observedModel }),
+        ...(draft.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: draft.observedReasoningEffort }),
         requestPayload: { text: objectOptionalString(draft.requestPayload, "text") ?? "" },
         responsePayload: { text: draft.finalResponse },
         // The public Stop hook carries the final assistant text but not the
@@ -1968,6 +1983,12 @@ function clearUncommittedLocalPublishingState(state: CodexAppServerState): void 
   state.localTurnBindings = Object.fromEntries(
     Object.entries(state.localTurnBindings).filter(([, binding]) => binding.status !== "pending"),
   );
+}
+
+function validateObservedCodexModel(model: string): void {
+  if (!model.trim() || model.length > 160 || model.startsWith("-") || /[\u0000-\u001f\u007f-\u009f]/u.test(model)) {
+    throw new Error("Codex hook model must be a valid bounded model identifier");
+  }
 }
 
 function executionProjectionStatePath(desktopStatePath: string): string {

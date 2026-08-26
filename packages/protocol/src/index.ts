@@ -64,6 +64,7 @@ export const RuntimeProvenanceSchema = z.object({
   harness: z.string().trim().min(1).max(80),
   provider: z.string().trim().min(1).max(80),
   model: z.string().trim().min(1).max(160),
+  reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
   local_session_id: z.string().trim().min(1).max(512),
   capture_fidelity: CaptureFidelitySchema,
 });
@@ -340,6 +341,8 @@ export const CommitLocalTurnInputSchema = z.object({
   runtime_id: IdSchema,
   based_on_sequence: z.number().int().nonnegative(),
   occurred_at: z.string().datetime(),
+  observed_model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
+  observed_reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
   request_payload: JsonValueSchema,
   response_payload: JsonValueSchema,
   tool_events: z.array(LocalTurnToolEventSchema).max(32).optional(),

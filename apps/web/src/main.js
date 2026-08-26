@@ -967,6 +967,7 @@ function renderTimeline() {
         event.provenance.harness,
         event.provenance.provider,
         event.provenance.model,
+        event.provenance.reasoningEffort,
         event.provenance.fidelity?.replaceAll("_", " "),
       ].filter(Boolean)) {
         const tag = document.createElement("span");

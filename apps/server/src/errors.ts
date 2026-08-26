@@ -28,6 +28,10 @@ export function agentRequestAlreadyClaimed(): ApiError {
   return new ApiError(409, "agent_request_already_claimed", "Agent request is already claimed by another runtime");
 }
 
+export function agentRequestAlreadyCompleted(): ApiError {
+  return new ApiError(409, "agent_request_already_completed", "Agent request was already completed as a local turn");
+}
+
 export function forbidden(message = "Insufficient session permissions"): ApiError {
   return new ApiError(403, "forbidden", message);
 }

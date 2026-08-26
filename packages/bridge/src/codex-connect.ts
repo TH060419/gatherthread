@@ -154,7 +154,7 @@ export async function runCodexConnectCli(
         registryPath: hookRegistryPath,
       }),
     });
-    process.stdout.write(`Installed GatherThread project hooks: ${configPath}\nReview and trust this exact definition with Codex /hooks before use.\n`);
+    process.stdout.write(`Installed GatherThread project hooks: ${configPath}\nOpen Codex Desktop Settings and enable Hooks, then review this exact generated file before use.\n`);
   }
 
   const shutdown = new AbortController();

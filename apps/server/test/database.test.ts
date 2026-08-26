@@ -1105,6 +1105,7 @@ test("local-turn commits and private snapshot connector jobs preserve sync invar
     const input = {
       local_turn_id: "local-turn-1", runtime_id: execution.id, based_on_sequence: head - 1,
       occurred_at: "2026-08-25T12:00:00.000Z",
+      observed_model: "gpt-5.6-terra", observed_reasoning_effort: "high",
       request_payload: { prompt: "work", token: "secret" }, response_payload: { answer: "done" },
       tool_events: [{ type: "tool_result" as const, payload: { authorization: "hidden" } }],
     };
@@ -1120,6 +1121,8 @@ test("local-turn commits and private snapshot connector jobs preserve sync invar
     });
     assert.notEqual(committed.request_event.created_at, input.occurred_at);
     assert.equal(committed.request_event.runtime_provenance?.local_session_id, "private");
+    assert.equal(committed.request_event.runtime_provenance?.model, "gpt-5.6-terra");
+    assert.equal(committed.response_event.runtime_provenance?.reasoning_effort, "high");
     assert.equal((f.database.sqlite.prepare(`
       SELECT json_extract(runtime_provenance_json, '$.local_session_id') AS local_session_id
       FROM events WHERE id = ?
@@ -1127,7 +1130,9 @@ test("local-turn commits and private snapshot connector jobs preserve sync invar
     assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM agent_request_claims").get() as { count: number }).count, 0);
     assert.throws(
       () => f.service.claimAgentRequest(f.member, session.id, committed.request_event.id, execution.id),
-      (error: unknown) => error instanceof ApiError && error.status === 409,
+      (error: unknown) => error instanceof ApiError
+        && error.status === 409
+        && error.code === "agent_request_already_completed",
     );
     f.database.sqlite.prepare("UPDATE users SET display_name = 'Renamed member' WHERE id = ?").run(f.member.user_id);
     assert.equal(

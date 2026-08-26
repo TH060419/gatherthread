@@ -176,9 +176,12 @@ test("local turn, snapshot request, and runtime purpose contracts are bounded", 
   assert.equal(RegisterRuntimeInputSchema.parse({ ...runtime, purpose: "snapshot_connector" }).purpose, "snapshot_connector");
   const turn = {
     local_turn_id: "turn-1", runtime_id: "runtime-1", based_on_sequence: 0,
-    occurred_at: "2026-08-25T12:00:00.000Z", request_payload: {}, response_payload: {},
+    occurred_at: "2026-08-25T12:00:00.000Z", observed_model: "gpt-5.6-terra", observed_reasoning_effort: "high",
+    request_payload: {}, response_payload: {},
   };
   assert.equal(CommitLocalTurnInputSchema.safeParse(turn).success, true);
+  assert.equal(CommitLocalTurnInputSchema.safeParse({ ...turn, observed_model: "x".repeat(161) }).success, false);
+  assert.equal(CommitLocalTurnInputSchema.safeParse({ ...turn, observed_reasoning_effort: "x".repeat(81) }).success, false);
   assert.equal(CommitLocalTurnInputSchema.safeParse({
     ...turn,
     tool_events: Array.from({ length: 33 }, () => ({ type: "tool_result", payload: {} })),

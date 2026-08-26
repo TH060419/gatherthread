@@ -47,7 +47,9 @@ npm run codex:connect -- \
   --install-hooks
 ```
 
-`--install-hooks` is required only when prompts typed directly in Codex desktop must be published to GatherThread. It merges GatherThread's `UserPromptSubmit` and `Stop` hooks into `<workspace>/.codex/hooks.json`; it does not replace other hook arrays. Inspect the exact file and approve the project hook with Codex `/hooks` before trusting it. Installation is never implicit. Without the hooks, Web-triggered Agent requests, canonical cloud projection, and read-only snapshots still work, but direct desktop turns remain local.
+`--install-hooks` is required only when prompts typed directly in Codex Desktop must be published to GatherThread. It merges GatherThread's `UserPromptSubmit` and `Stop` hooks into `<workspace>/.codex/hooks.json`; it does not replace other hook arrays. Open Codex Desktop Settings, enable Hooks, and inspect the exact generated file before trusting it. Installation is never implicit. Without enabled Hooks, Web-triggered Agent requests, canonical cloud projection, and read-only snapshots still work, but direct Desktop turns remain local.
+
+`--model` selects the isolated background model used for Web-triggered Agent requests; it does not lock the model selected inside a Desktop task. Trusted Hooks freeze the actual Desktop-reported model on each uploaded local turn, so changing models between turns is supported. Codex 0.148 does not include reasoning effort in the observed Hook payload; GatherThread records that optional per-turn field when a Hook provides it and otherwise leaves it unset rather than guessing.
 
 Keep the terminal open. The Web member panel refreshes runtime presence every five seconds. When it shows `codex · openai · <model>` as online, enter a message and select **Request my agent**.
 
@@ -141,7 +143,7 @@ Normal connector shutdown deliberately preserves the current execution allowlist
 - Import approaches the context limit: keep the connector running so it can compact and continue. If App Server does not report the model window, review the conservative fallback before raising it. The server history is not deleted.
 - A managed task is not visible in Desktop: keep the connector running with `--install-hooks`, reopen the generated workspace, and verify the task name shown in the connector output. Web Agent turns intentionally stay in the background projection and will not create Desktop history bubbles.
 - A read-only snapshot task is missing: click **Download to Codex** and keep the snapshot connector running until the frozen job completes.
-- A completed desktop turn is still local: confirm the connector was started with `--install-hooks` and the exact project configuration is trusted with `/hooks`, then keep the connector running or restart it to drain the outbox. Turns completed before trusted hooks were active are deliberately not inferred or uploaded later.
+- A completed Desktop turn is still local: confirm the connector was started with `--install-hooks`, Hooks are enabled in Codex Desktop Settings, and the generated `.codex/hooks.json` was reviewed; then keep the connector running or restart it to drain the outbox. Turns completed before trusted Hooks were active are deliberately not inferred or uploaded later.
 - `already has an active writer`: update to the dual-projection connector. Current builds never open a Desktop-owned task from the background App Server; one stable retry is logged immediately and then at most once per minute.
 - A process crash after claiming a request can leave that alpha request stuck. Submit a replacement request; automated claim lease recovery is not implemented yet.
 

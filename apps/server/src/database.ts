@@ -28,7 +28,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
-import { agentRequestAlreadyClaimed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 
 export interface Actor {
   user_id: string;
@@ -2001,7 +2001,7 @@ export class CollaborationDatabase {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be claimed");
       if (this.sqlite.prepare("SELECT 1 FROM local_turn_commits WHERE request_event_id = ?").get(requestEventId)) {
-        throw conflict("Completed local turn requests cannot be claimed");
+        throw agentRequestAlreadyCompleted();
       }
       const runtime = this.getRuntime(runtimeId);
       if (runtime.session_id !== sessionId || runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
@@ -2078,6 +2078,8 @@ export class CollaborationDatabase {
         runtime_id: input.runtime_id,
         based_on_sequence: input.based_on_sequence,
         occurred_at: input.occurred_at,
+        ...(input.observed_model === undefined ? {} : { observed_model: input.observed_model }),
+        ...(input.observed_reasoning_effort === undefined ? {} : { observed_reasoning_effort: input.observed_reasoning_effort }),
         request_payload: input.request_payload,
         response_payload: input.response_payload,
         tool_events: (input.tool_events ?? []).map((event) => ({
@@ -2099,7 +2101,11 @@ export class CollaborationDatabase {
       const keyBase = `local-turn-${createHash("sha256")
         .update(`${sessionId}\0${input.runtime_id}\0${input.local_turn_id}`)
         .digest("hex")}`;
-      const provenance = this.runtimeProvenance(runtime);
+      const provenance = {
+        ...this.runtimeProvenance(runtime),
+        ...(input.observed_model === undefined ? {} : { model: input.observed_model }),
+        ...(input.observed_reasoning_effort === undefined ? {} : { reasoning_effort: input.observed_reasoning_effort }),
+      };
       const requestEvent = this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: `${keyBase}-request`, type: "agent_request", visibility: "session",
         payload: payloadWithClientOccurredAt(input.request_payload, input.occurred_at), runtime_id: input.runtime_id,

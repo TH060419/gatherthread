@@ -107,10 +107,14 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
   const runtime = registeredRuntime("desktop-binding");
   const cloudDelta = canonical(3, "human_chat", { text: "cloud context" }, "user-2");
   let committedBase = -1;
+  let committedModel: string | undefined;
+  let committedReasoningEffort: string | undefined;
   const api = {
     readEvents: async () => ({ events: [cloudDelta], nextSequence: 4, hasMore: false }),
-    commitLocalTurn: async (_sessionId: string, input: { basedOnSequence: number; toolEvents: unknown[] }) => {
+    commitLocalTurn: async (_sessionId: string, input: { basedOnSequence: number; observedModel?: string; observedReasoningEffort?: string; toolEvents: unknown[] }) => {
       committedBase = input.basedOnSequence;
+      committedModel = input.observedModel;
+      committedReasoningEffort = input.observedReasoningEffort;
       return {
         localTurnId: "local", runtimeId: runtime.id, headBeforeCommit: 4, reconciliationRequired: false,
         requestEvent: canonical(5, "agent_request", { text: "desktop prompt" }),
@@ -122,17 +126,17 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
 
   const first = await executor.handleHookEvent(api, runtime, {
     hook_event_name: "UserPromptSubmit", session_id: "old-thread", turn_id: "desktop-turn",
-    cwd: workspacePath, model: "gpt-test", prompt: "desktop prompt",
+    cwd: workspacePath, model: "gpt-other", reasoning_effort: "high", prompt: "desktop prompt",
   });
   const retry = await executor.handleHookEvent(api, runtime, {
     hook_event_name: "UserPromptSubmit", session_id: "old-thread", turn_id: "desktop-turn",
-    cwd: workspacePath, model: "gpt-test", prompt: "desktop prompt",
+    cwd: workspacePath, model: "gpt-other", reasoning_effort: "high", prompt: "desktop prompt",
   });
   assert.match(first.additionalContext ?? "", /cloud context/);
   assert.equal(retry.additionalContext, first.additionalContext, "a retried hook must receive the same canonical delta");
   await executor.handleHookEvent(api, runtime, {
     hook_event_name: "Stop", session_id: "old-thread", turn_id: "desktop-turn",
-    cwd: workspacePath, model: "gpt-test", stop_hook_active: false, last_assistant_message: "desktop answer",
+    cwd: workspacePath, model: "gpt-other", reasoning_effort: "high", stop_hook_active: false, last_assistant_message: "desktop answer",
   });
   await executor.synchronizeLocalTurns(api, runtime);
 
@@ -140,6 +144,8 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
   assert.doesNotMatch(captures, /thread\/read|thread\/resume|thread\/inject_items|turn\/start/);
   const state = JSON.parse(await readFile(statePath, "utf8"));
   assert.equal(committedBase, 4, "ACL-hidden canonical tails still advance the Desktop context base");
+  assert.equal(committedModel, "gpt-other", "Desktop-selected model is frozen per local turn");
+  assert.equal(committedReasoningEffort, "high", "reasoning effort is frozen when the Hook exposes it");
   assert.equal(state.cloudCursor, 6);
   assert.equal(state.pendingLocalTurns.length, 0);
 });
@@ -750,14 +756,6 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
       hasMore: false,
     }),
   } as unknown as CollaborationApi;
-  await assert.rejects(executor.handleHookEvent(api, runtime, {
-    hook_event_name: "UserPromptSubmit",
-    session_id: "old-thread",
-    turn_id: "wrong-model-turn",
-    cwd: workspacePath,
-    model: "gpt-other",
-    prompt: "must not be captured",
-  }), /model does not match/);
   const prompt = await executor.handleHookEvent(api, runtime, {
     hook_event_name: "UserPromptSubmit",
     session_id: "old-thread",
@@ -800,7 +798,7 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
     stop_hook_active: false,
     last_assistant_message: "tests passed",
   });
-  const committed: Array<{ basedOnSequence: number; toolEvents?: readonly unknown[] }> = [];
+  const committed: Array<{ basedOnSequence: number; observedModel?: string; observedReasoningEffort?: string; toolEvents?: readonly unknown[] }> = [];
   const localApi = {
     commitLocalTurn: async (_sessionId: string, input: { basedOnSequence: number; toolEvents?: readonly unknown[] }) => {
       committed.push(input);
@@ -818,6 +816,7 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   await executor.synchronizeLocalTurns(localApi, runtime);
   assert.equal(committed.length, 1);
   assert.equal(committed[0]?.basedOnSequence, 3);
+  assert.equal(committed[0]?.observedModel, "gpt-test");
   assert.deepEqual((committed[0]?.toolEvents as Array<{ type: string }>).map((event) => event.type), ["tool_call", "tool_result"]);
   const captures = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   assert.equal(captures.filter((message) => message.method === "thread/inject_items").length, 1);

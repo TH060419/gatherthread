@@ -77,6 +77,8 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     runtimeId: runtime.id,
     basedOnSequence: 3,
     occurredAt: "2026-08-25T00:00:03.000Z",
+    observedModel: "gpt-5.6-terra",
+    observedReasoningEffort: "high",
     requestPayload: { text: "local request" },
     responsePayload: { text: "local response" },
     toolEvents: [{
@@ -140,6 +142,8 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     runtime_id: "runtime-1",
     based_on_sequence: 3,
     occurred_at: "2026-08-25T00:00:03.000Z",
+    observed_model: "gpt-5.6-terra",
+    observed_reasoning_effort: "high",
     request_payload: { text: "local request" },
     response_payload: { text: "local response" },
     tool_events: [{

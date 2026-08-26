@@ -22,6 +22,7 @@ export interface RuntimeProvenance {
   harness: HarnessName;
   provider: string;
   model: string;
+  reasoningEffort?: string;
   localSessionId: string;
   captureFidelity: CaptureFidelity;
 }
@@ -43,6 +44,8 @@ export interface CommitLocalTurnInput {
   runtimeId: string;
   basedOnSequence: number;
   occurredAt: string;
+  observedModel?: string;
+  observedReasoningEffort?: string;
   requestPayload: unknown;
   responsePayload: unknown;
   toolEvents?: readonly unknown[];

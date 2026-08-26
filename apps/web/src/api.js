@@ -417,6 +417,7 @@ export class HttpCollaborationApi {
         harness: provenance.harness,
         provider: provenance.provider,
         model: provenance.model,
+        reasoningEffort: provenance.reasoning_effort,
         fidelity: provenance.capture_fidelity,
       } : null,
     };

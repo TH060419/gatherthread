@@ -190,6 +190,8 @@ export class HttpCollaborationClient implements CollaborationApi {
         runtime_id: input.runtimeId,
         based_on_sequence: input.basedOnSequence,
         occurred_at: input.occurredAt,
+        ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
+        ...(input.observedReasoningEffort === undefined ? {} : { observed_reasoning_effort: input.observedReasoningEffort }),
         request_payload: truncateJsonValue(input.requestPayload, 32 * 1024),
         response_payload: truncateJsonValue(input.responsePayload, 112 * 1024),
         ...(input.toolEvents === undefined ? {} : { tool_events: toolEvents }),
@@ -437,6 +439,7 @@ function fromWireProvenance(value: unknown): RuntimeProvenance {
     harness: requiredString(input.harness, "runtime_provenance.harness") as RuntimeProvenance["harness"],
     provider: requiredString(input.provider, "runtime_provenance.provider"),
     model: requiredString(input.model, "runtime_provenance.model"),
+    ...(typeof input.reasoning_effort === "string" ? { reasoningEffort: input.reasoning_effort } : {}),
     localSessionId: requiredString(input.local_session_id, "runtime_provenance.local_session_id"),
     captureFidelity: requiredString(input.capture_fidelity, "runtime_provenance.capture_fidelity") as RuntimeProvenance["captureFidelity"],
   };

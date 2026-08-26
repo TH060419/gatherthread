@@ -143,7 +143,7 @@ export class LocalBridge {
               completed += result.completed.length;
             }
           } catch (error) {
-            if (!isAgentRequestClaimCompetition(error)) throw error;
+            if (!isTerminalAgentRequestClaimConflict(error)) throw error;
             if (!executor.projectCanonicalEvents) {
               throw new Error("Agent request was claimed by another runtime but this executor cannot project the canonical request safely");
             }
@@ -402,10 +402,11 @@ export class LocalBridge {
   }
 }
 
-function isAgentRequestClaimCompetition(error: unknown): boolean {
+function isTerminalAgentRequestClaimConflict(error: unknown): boolean {
   return error instanceof CollaborationHttpError
     && error.status === 409
-    && error.code === "agent_request_already_claimed";
+    && (error.code === "agent_request_already_claimed"
+      || error.code === "agent_request_already_completed");
 }
 
 function toAppendEvent(

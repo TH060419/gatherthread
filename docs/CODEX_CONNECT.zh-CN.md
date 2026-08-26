@@ -47,7 +47,9 @@ npm run codex:connect -- \
   --install-hooks
 ```
 
-只有在需要把 Codex 桌面端直接输入的 prompt 回传到 GatherThread 时，才必须使用 `--install-hooks`。它会把 GatherThread 的 `UserPromptSubmit` 与 `Stop` hook 合并进 `<workspace>/.codex/hooks.json`，不会覆盖已有 hook 数组。必须先检查具体文件，再使用 Codex `/hooks` 明确信任该项目 hook；安装永远不会暗中完成。没有安装 Hook 时，网页发起的 Agent 请求、规范云端历史投影和只读快照仍可工作，但桌面端直接完成的回合只保留在本地。
+只有在需要把 Codex Desktop 直接输入的 prompt 回传到 GatherThread 时，才必须使用 `--install-hooks`。它会把 GatherThread 的 `UserPromptSubmit` 与 `Stop` Hook 合并进 `<workspace>/.codex/hooks.json`，不会覆盖已有 Hook 数组。必须先在 Codex Desktop 设置中启用 Hooks，再检查准确的生成文件；安装永远不会暗中完成。没有启用 Hooks 时，网页发起的 Agent 请求、规范云端历史投影和只读快照仍可工作，但 Desktop 直接完成的回合只保留在本地。
+
+`--model` 选择网页触发 Agent 请求时使用的隔离后台模型，不会锁定 Desktop 任务内部选择的模型。可信 Hook 会把 Desktop 实际报告的模型逐回合冻结到上传记录，因此允许在不同回合之间切换模型。Codex 0.148 的实际 Hook payload 不包含思考强度；若 Hook 提供该可选字段，GatherThread 会逐回合记录，否则保持未设置而不会猜测。
 
 保持该终端运行。网页每5秒刷新一次 runtime 状态。成员区域显示 `codex · openai · <模型>` 且为 Online 后，在输入框填写指令并点击 **Request my agent**。
 
@@ -141,7 +143,7 @@ npm run codex:connect -- \
 - 导入接近上下文上限：保持连接器运行，让它 compact 后继续。如果 App Server 未报告模型窗口，先审查保守回退值再决定是否提高；服务器历史不会被删除。
 - 受管任务没有出现在 Desktop：使用 `--install-hooks` 保持连接器运行，重新打开生成的工作区，并核对终端显示的准确任务名。网页 Agent 回合有意保留在后台投影，不会生成 Desktop 历史气泡。
 - 只读快照任务没有出现：点击 **Download to Codex**，并保持快照连接器运行直到冻结任务完成。
-- 桌面回合完成后仍未上传：确认连接器使用了 `--install-hooks`，并通过 `/hooks` 信任了准确的项目配置，然后保持连接器运行或重启以清空 outbox。在可信 Hook 生效前已经完成的回合不会被事后猜测或上传。
+- Desktop 回合完成后仍未上传：确认连接器使用了 `--install-hooks`、已在 Codex Desktop 设置中启用 Hooks，并检查了生成的 `.codex/hooks.json`，然后保持连接器运行或重启以清空 outbox。在可信 Hook 生效前已经完成的回合不会被事后猜测或上传。
 - `already has an active writer`：请更新到双投影连接器。当前版本不会再用后台 App Server 打开 Desktop 独占任务；同一稳定错误只会立即显示一次，之后最多每分钟一次。
 - Alpha 版本中，如果进程在领取请求后崩溃，请求可能卡住；可重新发送一条替代请求，自动 claim lease 恢复尚未实现。
 

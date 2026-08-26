@@ -75,7 +75,10 @@ test("project Codex connector explains scope, credential prompting, hook trust, 
   assert.match(html, /Web Agent requests run in an isolated background projection/i);
   assert.doesNotMatch(html, /Move to project|manual Desktop step/i);
   assert.match(html, /device token is requested by a hidden CLI prompt/i);
-  assert.match(html, /review and trust them in Codex <code>\/hooks<\/code>/i);
+  assert.match(html, /open Codex Desktop Settings and enable Hooks/i);
+  assert.match(html, /review the generated <code>\.codex\/hooks\.json<\/code>/i);
+  assert.match(html, /Codex Desktop 设置中启用 Hooks/);
+  assert.doesNotMatch(html, /Codex <code>\/hooks<\/code>/i);
   assert.match(main, /projectCodexConnectionCommands\(\{[\s\S]*?baseUrl: location\.origin[\s\S]*?projectId: state\.project\.id/);
   assert.doesNotMatch(main, /connect-codex-move-project-name|renderCodexDesktopMoveGuide/);
   assert.match(main, /connectCodexDialog\.addEventListener\("close"[\s\S]*?returnFocus\.focus\(\)/);

@@ -12,6 +12,7 @@ export interface CodexUserPromptHookEvent {
   turn_id: string;
   cwd: string;
   model: string;
+  reasoning_effort?: string;
   prompt: string;
 }
 
@@ -21,6 +22,7 @@ export interface CodexStopHookEvent {
   turn_id: string;
   cwd: string;
   model: string;
+  reasoning_effort?: string;
   stop_hook_active: boolean;
   last_assistant_message: string | null;
 }
@@ -173,6 +175,9 @@ export function validateCodexHookEvent(value: unknown): CodexHookEvent {
     turn_id: requiredString(input.turn_id, "turn_id"),
     cwd: requiredString(input.cwd, "cwd"),
     model: requiredString(input.model, "model"),
+    ...(input.reasoning_effort === undefined ? {} : {
+      reasoning_effort: requiredBoundedLabel(input.reasoning_effort, "reasoning_effort", 80),
+    }),
   };
   if (input.hook_event_name === "UserPromptSubmit") {
     return { hook_event_name: "UserPromptSubmit", ...common, prompt: requiredString(input.prompt, "prompt") };
@@ -687,6 +692,13 @@ function requiredObject(value: unknown): Record<string, unknown> {
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value || value.length > 1024 * 1024) throw new Error(`Codex hook ${field} is invalid`);
   return value;
+}
+
+function requiredBoundedLabel(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== "string" || !value.trim() || value.length > maxLength || /[\u0000-\u001f\u007f-\u009f]/u.test(value)) {
+    throw new Error(`Codex hook ${field} is invalid`);
+  }
+  return value.trim();
 }
 
 export async function isAllowedCodexHookEvent(registryPath: string, event: CodexHookEvent): Promise<boolean> {

@@ -450,7 +450,8 @@
           <p lang="zh-Hans">Codex Desktop 独占可见任务；网页 Agent 请求在隔离的后台投影执行，可信 Hook 通过 GatherThread 汇合桌面回合与最新共享上下文。</p>
         </section>
         <p id="connect-codex-security" class="codex-connect-notice">
-          Your device token is requested by a hidden CLI prompt. It is not included in either command. After hooks are installed for the first time, explicitly review and trust them in Codex <code>/hooks</code> before use.
+          Your device token is requested by a hidden CLI prompt. It is not included in either command. After hooks are installed for the first time, open Codex Desktop Settings and enable Hooks, then review the generated <code>.codex/hooks.json</code> before use.
+          <br><span lang="zh-Hans">设备 Token 只会在终端隐藏输入，不会进入命令。首次安装后，请在 Codex Desktop 设置中启用 Hooks，并检查生成的 <code>.codex/hooks.json</code>。</span>
         </p>
 
         <section class="command-card" aria-labelledby="connect-codex-posix-title">

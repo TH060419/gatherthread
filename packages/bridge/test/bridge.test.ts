@@ -307,6 +307,30 @@ test("losing a cross-device claim race projects and advances only for the typed 
   assert.equal((await otherCursor.load()).server["session-1"] ?? 0, 0);
 });
 
+test("an atomically completed local turn is projected without retrying its agent request", async () => {
+  const request = canonical("session-1", 1, {
+    type: "agent_request",
+    idempotencyKey: "completed-local-request",
+    payload: { text: "already answered on Desktop" },
+  });
+  const api = new FakeApi();
+  api.history.push(request);
+  api.claimAgentRequest = async () => {
+    throw new CollaborationHttpError(409, "already completed", "agent_request_already_completed");
+  };
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const projected: number[] = [];
+  const result = await bridge.processPendingAgentRequests({
+    async execute() { throw new Error("a completed local turn must never execute again"); },
+    async projectCanonicalEvents(events) { projected.push(...events.map((event) => event.sequence)); },
+  });
+  assert.deepEqual(projected, [1]);
+  assert.equal(result.claimed, 0);
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
+});
+
 test("request polling projects remote requests and advances without claiming them", async () => {
   const api = new FakeApi();
   let claims = 0;

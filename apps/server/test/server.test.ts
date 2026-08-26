@@ -1005,9 +1005,10 @@ test("HTTP exposes idempotent local turns and snapshot request control-plane", a
     assert.equal(executionPresence.body.data.members[0]?.runtime?.purpose, "execution");
     const turn = {
       local_turn_id: "http-turn-1", runtime_id: "execution-http", based_on_sequence: 0,
-      occurred_at: "2026-08-25T12:00:00.000Z", request_payload: { text: "q" }, response_payload: { text: "a" },
+      occurred_at: "2026-08-25T12:00:00.000Z", observed_model: "gpt-5.6-terra",
+      observed_reasoning_effort: "high", request_payload: { text: "q" }, response_payload: { text: "a" },
     };
-    const first = await api<{ data: { request_event: { id: string; actor_display_name: string }; response_event: { sequence: number; actor_display_name: string } } }>(
+    const first = await api<{ data: { request_event: { id: string; actor_display_name: string; runtime_provenance: { model: string; reasoning_effort?: string } }; response_event: { sequence: number; actor_display_name: string } } }>(
       running.origin, "/v1/sessions/sync-http/local-turns", { method: "POST", token, body: turn },
     );
     const retry = await api<typeof first.body>(running.origin, "/v1/sessions/sync-http/local-turns", {
@@ -1015,8 +1016,17 @@ test("HTTP exposes idempotent local turns and snapshot request control-plane", a
     });
     assert.equal(first.status, 201);
     assert.equal(first.body.data.request_event.actor_display_name, "Owner");
+    assert.equal(first.body.data.request_event.runtime_provenance.model, "gpt-5.6-terra");
+    assert.equal(first.body.data.request_event.runtime_provenance.reasoning_effort, "high");
     assert.equal(first.body.data.response_event.actor_display_name, "Owner");
     assert.deepEqual(retry.body, first.body);
+    const completedClaim = await api<{ error: { code: string } }>(
+      running.origin, `/v1/sessions/sync-http/agent-requests/${first.body.data.request_event.id}/claim`, {
+        method: "POST", token, body: { runtime_id: "execution-http" },
+      },
+    );
+    assert.equal(completedClaim.status, 409);
+    assert.equal(completedClaim.body.error.code, "agent_request_already_completed");
     const created = await api<{ data: { snapshot_request: { id: string; through_sequence: number } } }>(
       running.origin, "/v1/sessions/sync-http/snapshot-requests", { method: "POST", token, body: {} },
     );
