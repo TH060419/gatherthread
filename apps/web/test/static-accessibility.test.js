@@ -168,8 +168,3 @@ test("timeline renders both user content and harness response text", async () =>
   assert.match(main, /eventContent,/);
   assert.match(main, /const content = eventContent\(event\);/);
 });
-
-test("timeline renders both user content and harness response text", async () => {
-  const main = await readFile(mainPath, "utf8");
-  assert.match(main, /event\.payload\?\.content \?\? event\.payload\?\.text \?\? "No visible content"/);
-});

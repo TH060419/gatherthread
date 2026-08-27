@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -24,7 +24,9 @@ import {
   synchronizeManagedSessionTitle,
   revealCodexDesktopProject,
   revealCodexDesktopThread,
+  resolveCodexCommand,
   resolveCodexHookRelayPath,
+  resolveWorkspaceCodexHookPaths,
   runProjectConnector,
 } from "../src/codex-connect.js";
 import type { HttpCollaborationClient } from "../src/http-client.js";
@@ -33,6 +35,57 @@ import type { ProjectHarnessAdapter, SessionSummary } from "../src/index.js";
 import { codexSessionKey, type CanonicalEvent, type CollaborationApi } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
+
+test("Windows Codex discovery skips shell shims and selects a native executable", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-path-"));
+  const shim = path.join(directory, "codex");
+  const executable = path.join(directory, "codex.exe");
+  await Promise.all([
+    writeFile(shim, "#!/bin/sh\nexit 0\n"),
+    writeFile(executable, "native executable placeholder"),
+  ]);
+  await Promise.all([chmod(shim, 0o755), chmod(executable, 0o755)]);
+
+  assert.equal(
+    await resolveCodexCommand("codex", { PATH: directory }, "win32"),
+    executable,
+  );
+});
+
+test("Windows Codex discovery finds the newest Desktop binary outside PATH", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-install-"));
+  const pathOnlyShim = path.join(directory, "npm-bin");
+  const binRoot = path.join(directory, "OpenAI", "Codex", "bin");
+  const oldExecutable = path.join(binRoot, "old-version", "codex.exe");
+  const newestExecutable = path.join(binRoot, "new-version", "codex.exe");
+  await mkdir(pathOnlyShim, { recursive: true });
+  await mkdir(path.dirname(oldExecutable), { recursive: true });
+  await mkdir(path.dirname(newestExecutable), { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pathOnlyShim, "codex.cmd"), "@echo off\r\n"),
+    writeFile(oldExecutable, "old native executable"),
+    writeFile(newestExecutable, "new native executable"),
+  ]);
+  const oldTime = new Date("2026-01-01T00:00:00.000Z");
+  const newestTime = new Date("2026-08-27T00:00:00.000Z");
+  await Promise.all([
+    utimes(oldExecutable, oldTime, oldTime),
+    utimes(newestExecutable, newestTime, newestTime),
+  ]);
+
+  assert.equal(
+    await resolveCodexCommand("codex", { PATH: pathOnlyShim, LOCALAPPDATA: directory }, "win32"),
+    newestExecutable,
+  );
+});
+
+test("Codex hook transport stays stable across GatherThread project mappings", () => {
+  const first = resolveWorkspaceCodexHookPaths("D:\\codes\\Web\\gatherthread", "C:\\Users\\tester", "win32");
+  const sameWorkspaceDifferentCase = resolveWorkspaceCodexHookPaths("d:\\CODES\\web\\GATHERTHREAD", "C:\\Users\\tester", "win32");
+  assert.deepEqual(first, sameWorkspaceDifferentCase);
+  assert.match(first.hookSocketPath, /^\\\\\.\\pipe\\gatherthread-[a-f0-9]{24}-hook-relay$/);
+  assert.match(first.hookRegistryPath, /[\\/]\.gatherthread[\\/]codex[\\/]hooks[\\/][a-f0-9]{24}[\\/]hook-registry\.json$/);
+});
 
 test("connector retry reporting coalesces stable failures and reports recovery once", () => {
   let now = 0;

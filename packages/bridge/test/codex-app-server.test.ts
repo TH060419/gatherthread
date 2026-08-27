@@ -67,6 +67,68 @@ test("local Codex tool items become canonical local-turn tool pairs", () => {
   assert.equal((discovered[0]?.toolEvents[1]?.payload as { is_error?: boolean }).is_error, false);
 });
 
+test("Desktop polling publishes completed local turns when Codex hooks do not fire", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-polling-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  await writeFile(statePath, JSON.stringify({
+    ...projectionState(workspacePath),
+    cloudCursor: 0,
+    desktopDeliveryCursor: 0,
+    coveredThroughSequence: 0,
+    lastInjectedSequence: 0,
+  }));
+  const reads: string[] = [];
+  const client = {
+    readThread: async (threadId: string) => {
+      reads.push(threadId);
+      return {
+        id: threadId,
+        name: "GatherThread · Desktop polling",
+        status: "idle",
+        turns: [completedTurn("desktop-turn", "desktop-client", "local prompt", "local answer")],
+      };
+    },
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread · Desktop polling",
+    model: "gpt-test",
+    desktopHookOnly: true,
+  });
+  const runtime = registeredRuntime("desktop-polling");
+  const commits: Array<{ localTurnId: string; basedOnSequence: number; requestPayload: unknown; responsePayload: unknown }> = [];
+  const api = {
+    commitLocalTurn: async (_sessionId: string, input: typeof commits[number]) => {
+      commits.push(input);
+      return {
+        localTurnId: input.localTurnId,
+        runtimeId: runtime.id,
+        headBeforeCommit: 0,
+        reconciliationRequired: false,
+        requestEvent: canonical(1, "agent_request", input.requestPayload),
+        responseEvent: canonical(2, "agent_response", input.responsePayload),
+        toolEvents: [],
+      };
+    },
+  } as unknown as CollaborationApi;
+
+  await executor.synchronizeLocalTurns(api, runtime);
+  await executor.synchronizeLocalTurns(api, runtime);
+
+  assert.equal(reads.length, 2);
+  assert.equal(commits.length, 1, "a polled Desktop turn must be uploaded exactly once");
+  assert.equal(commits[0]?.basedOnSequence, 0, "polling must not claim cloud context that no hook delivered");
+  assert.deepEqual(commits[0]?.requestPayload, { text: "local prompt" });
+  assert.deepEqual(commits[0]?.responsePayload, { text: "local answer" });
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(state.localTurnBindings[commits[0]?.localTurnId ?? ""]?.status, "acked");
+  assert.equal(state.pendingLocalTurns.length, 0);
+});
+
 test("a first local prompt can adopt its Desktop task without opening a competing writer", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-adopt-local-"));
   const workspacePath = await realpath(directory);
@@ -1357,6 +1419,42 @@ test("archived or missing managed Codex threads require explicit repair and are 
   }
 });
 
+test("connector restart replaces a missing ephemeral exec projection", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-missing-ephemeral-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "execution.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  const starts: Array<{ threadSource?: string }> = [];
+  const unsubscribed: string[] = [];
+  const client = {
+    readThread: async () => { throw new Error("ephemeral thread not found after restart"); },
+    startThread: async (input: { threadSource?: string }) => {
+      starts.push(input);
+      return "replacement-ephemeral-thread";
+    },
+    unsubscribeThread: async (threadId: string) => { unsubscribed.push(threadId); },
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread background · restarted",
+    model: "gpt-test",
+    threadSource: "exec",
+  });
+
+  await executor.renameThread("GatherThread background · restarted and renamed");
+  assert.equal(await executor.prepareCanonicalProjection(registeredRuntime("old-thread")), 0);
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0]?.threadSource, "exec");
+  assert.deepEqual(unsubscribed, [], "ephemeral projections must remain loaded for the App Server lifetime");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(state.threadId, "replacement-ephemeral-thread");
+  assert.equal(state.threadName, "GatherThread background · restarted and renamed");
+  assert.equal(state.lastInjectedSequence, 0, "canonical history must replay into the replacement");
+});
+
 test("a Desktop-active thread is queued without takeover and releases the short-lived client", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-active-"));
   const workspacePath = await realpath(directory);
@@ -2120,7 +2218,7 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   });
 });
 
-test("project harness replaces an externally claimed exec projection before the next Web request", async (t) => {
+test("project harness retains its process-owned ephemeral exec projection across Web requests", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-app-server-"));
   const stateRoot = path.join(directory, "state");
   const statePath = path.join(stateRoot, "session-state.json");
@@ -2290,15 +2388,18 @@ function fail(id, message) {
   assert.ok(captures.every((capture) => capture.gatherThreadTokenPresent === false));
   const starts = captures.filter((capture) => capture.message.method === "thread/start");
   const resumes = captures.filter((capture) => capture.message.method === "thread/resume");
-  assert.equal(starts.length, 2, "an externally claimed background thread must be replaced exactly once");
-  assert.equal(starts[0].message.params.ephemeral, false);
+  assert.equal(starts.length, 1, "a process-owned ephemeral projection must be created exactly once");
+  assert.equal(starts[0].message.params.ephemeral, true, "background execution must not create a user-visible Desktop task");
   assert.equal(starts[0].message.params.approvalPolicy, "never");
   assert.equal(starts[0].message.params.threadSource, "exec");
   assert.equal(starts[0].message.params.serviceName, "gatherthread");
-  assert.equal(resumes.length, 1);
-  assert.equal(resumes[0].message.params.threadId, "thread-app-server-1");
+  assert.equal(resumes.length, 0, "a loaded ephemeral projection must not be resumed through the persistent-thread API");
   const names = captures.filter((capture) => capture.message.method === "thread/name/set");
-  assert.ok(names.some((capture) => capture.message.params.name === "GatherThread background · Project Atlas · Planning"));
+  assert.equal(names.length, 0, "ephemeral background threads must never receive unsupported metadata updates");
+  assert.equal(captures.filter((capture) => capture.message.method === "thread/archive").length, 0,
+    "ephemeral background threads must never receive unsupported archival updates");
+  assert.equal(captures.filter((capture) => capture.message.method === "thread/unsubscribe").length, 0,
+    "ephemeral background threads must remain loaded between connector operations");
   const injections = captures.filter((capture) => capture.message.method === "thread/inject_items");
   assert.ok(injections.length >= 5, "oversized canonical events are injected as bounded chunks");
   assert.match(injections[0].message.params.items[0].content[0].text, /user-2 · Human Chat：shared constraint/);
@@ -2318,13 +2419,13 @@ function fail(id, message) {
   const state = JSON.parse(await readFile(`${statePath}.execution.json`, "utf8"));
   assert.equal(state.version, 3);
   assert.equal(state.transport, "app-server");
-  assert.equal(state.threadId, "thread-app-server-2");
+  assert.equal(state.threadId, "thread-app-server-1");
   assert.equal(state.coveredThroughSequence, 5);
   assert.equal(state.lastInjectedSequence, 5);
   assert.equal(state.cloudCursor, 5);
   assert.equal(state.model, "gpt-test");
   assert.equal(state.contextWindowTokens, 4096);
-  assert.equal(state.projectionGeneration, 2);
+  assert.equal(state.projectionGeneration, 1);
   assert.equal(state.compactionGeneration, compactCount);
   assert.deepEqual(state.sidecar.map((entry: { sequence: number }) => entry.sequence), [1, 2, 3, 4, 5]);
 });
