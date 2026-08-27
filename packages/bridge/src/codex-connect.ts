@@ -1137,6 +1137,7 @@ export async function resolveCodexCommand(
   platform: NodeJS.Platform = process.platform,
 ): Promise<string> {
   if (command !== "codex" || command.includes(path.sep)) return command;
+  const executableAccessMode = platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK;
   const executableNames = platform === "win32"
     ? [`${command}.exe`, `${command}.com`]
     : [command];
@@ -1144,7 +1145,7 @@ export async function resolveCodexCommand(
     for (const executableName of executableNames) {
       const candidate = path.join(directory, executableName);
       try {
-        await access(candidate, fsConstants.X_OK);
+        await access(candidate, executableAccessMode);
         return candidate;
       } catch {
         // Continue to the next directly executable candidate.
@@ -1161,7 +1162,7 @@ export async function resolveCodexCommand(
           .map(async (entry) => {
             const candidate = path.join(desktopBinRoot, entry.name, "codex.exe");
             try {
-              await access(candidate, fsConstants.X_OK);
+              await access(candidate, executableAccessMode);
               const metadata = await stat(candidate);
               return metadata.isFile() ? { candidate, modifiedAt: metadata.mtimeMs } : undefined;
             } catch {
