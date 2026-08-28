@@ -1412,35 +1412,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       );
     }
     if (!api.commitLocalTurn) return;
-    if (this.#desktopHookOnly) {
-      // Hooks remain the preferred path because they can inject cloud context
-      // before a turn. If no Hook state exists, use a read-only App Server scan
-      // as a durable fallback for Desktop versions that did not run the hook.
-      if (state.pendingLocalTurns.length === 0 && Object.keys(state.hookDrafts).length === 0) {
-        const thread = await this.#client.readThread(state.threadId);
-        if (thread.status === "active") return;
-        if (thread.status !== "idle" && thread.status !== "notLoaded") {
-          throw new Error(`Codex Desktop thread status ${safeText(thread.status)} is not safe for local-turn reconciliation`);
-        }
-        let discoveredStateChanged = false;
-        for (const turn of discoverCompletedLocalTurns(thread.turns, state)) {
-          state.localTurnBindings[turn.localTurnId] = {
-            localTurnId: turn.localTurnId,
-            threadId: state.threadId,
-            turnId: turn.turnId,
-            basedOnSequence: state.desktopDeliveryCursor,
-            status: "pending",
-          };
-          state.pendingLocalTurns.push({
-            ...turn,
-            threadId: state.threadId,
-            basedOnSequence: state.desktopDeliveryCursor,
-          });
-          discoveredStateChanged = true;
-        }
-        if (discoveredStateChanged) await this.#saveState(state);
-      }
-    } else {
+    if (!this.#desktopHookOnly) {
       const thread = await this.#client.readThread(state.threadId);
       if (thread.status === "active") return;
       if (thread.status !== "idle" && thread.status !== "notLoaded") {

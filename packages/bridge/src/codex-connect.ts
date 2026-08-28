@@ -139,11 +139,12 @@ export async function runCodexConnectCli(
   const { hookSocketPath, hookSpoolPath, hookRegistryPath } = resolveWorkspaceCodexHookPaths(workspacePath);
   if (!parsed.installHooks) {
     await mkdir(stateRoot, { recursive: true, mode: 0o700 });
-    await writeFile(hookRegistryPath, `${JSON.stringify({
-      version: 1,
+    await updateCodexHookRegistry({
+      registryPath: hookRegistryPath,
       workspacePath: path.resolve(workspacePath),
-      threads: {},
-    }, null, 2)}\n`, { mode: 0o600 });
+      clearThreads: true,
+      discoverUnregistered: false,
+    });
     process.stdout.write("Desktop local-turn sync is disabled. Re-run with --install-hooks and approve the definition with /hooks to enable it.\n");
   }
   if (parsed.installHooks) {

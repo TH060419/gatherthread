@@ -46,6 +46,33 @@ test("Hook discovery admits only unknown project tasks and excludes connector-ow
   assert.equal(await isAllowedCodexHookEvent(registryPath, event), false);
 });
 
+test("disabling Hooks atomically creates a private registry and clears stale thread authorization", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-disabled-hooks-"));
+  const registryPath = path.join(directory, "nested", "private", "registry.json");
+  await updateCodexHookRegistry({
+    registryPath,
+    workspacePath: "/workspace",
+    discoverUnregistered: true,
+    add: {
+      "desktop-task": "execution",
+      "background-task": "background_execution",
+    },
+  });
+  await updateCodexHookRegistry({
+    registryPath,
+    workspacePath: "/workspace",
+    clearThreads: true,
+    discoverUnregistered: false,
+  });
+  const registry = JSON.parse(await readFile(registryPath, "utf8"));
+  assert.deepEqual(registry.threads, {});
+  assert.equal(registry.discoverUnregistered, false);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(path.dirname(registryPath))).mode & 0o777, 0o700);
+    assert.equal((await stat(registryPath)).mode & 0o777, 0o600);
+  }
+});
+
 test("Codex hook forwarder waits for a newly activated MULTI registry binding", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-hook-"));
   const socketPath = process.platform === "win32"

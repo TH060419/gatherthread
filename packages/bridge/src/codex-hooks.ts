@@ -286,6 +286,7 @@ const REGISTRY_WRITERS = new Map<string, Promise<void>>();
 export async function updateCodexHookRegistry(input: {
   registryPath: string;
   workspacePath: string;
+  clearThreads?: boolean;
   add?: Record<string, "execution" | "snapshot_connector" | "background_execution">;
   remove?: readonly string[];
   removePurpose?: "execution" | "snapshot_connector" | "background_execution";
@@ -305,6 +306,7 @@ export async function updateCodexHookRegistry(input: {
 async function updateCodexHookRegistryFile(input: {
   registryPath: string;
   workspacePath: string;
+  clearThreads?: boolean;
   add?: Record<string, "execution" | "snapshot_connector" | "background_execution">;
   remove?: readonly string[];
   removePurpose?: "execution" | "snapshot_connector" | "background_execution";
@@ -320,6 +322,7 @@ async function updateCodexHookRegistryFile(input: {
   } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
   }
+  if (input.clearThreads) registry.threads = {};
   for (const threadId of input.remove ?? []) delete registry.threads[threadId];
   if (input.removePurpose) {
     for (const [threadId, purpose] of Object.entries(registry.threads)) {

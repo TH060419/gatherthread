@@ -67,68 +67,6 @@ test("local Codex tool items become canonical local-turn tool pairs", () => {
   assert.equal((discovered[0]?.toolEvents[1]?.payload as { is_error?: boolean }).is_error, false);
 });
 
-test("Desktop polling publishes completed local turns when Codex hooks do not fire", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-polling-"));
-  const workspacePath = await realpath(directory);
-  const statePath = path.join(directory, "desktop-state.json");
-  await writeFile(statePath, JSON.stringify({
-    ...projectionState(workspacePath),
-    cloudCursor: 0,
-    desktopDeliveryCursor: 0,
-    coveredThroughSequence: 0,
-    lastInjectedSequence: 0,
-  }));
-  const reads: string[] = [];
-  const client = {
-    readThread: async (threadId: string) => {
-      reads.push(threadId);
-      return {
-        id: threadId,
-        name: "GatherThread · Desktop polling",
-        status: "idle",
-        turns: [completedTurn("desktop-turn", "desktop-client", "local prompt", "local answer")],
-      };
-    },
-    close: async () => undefined,
-  } as unknown as CodexAppServerClient;
-  const executor = new CodexAppServerExecutor({
-    client,
-    workspacePath,
-    statePath,
-    threadName: "GatherThread · Desktop polling",
-    model: "gpt-test",
-    desktopHookOnly: true,
-  });
-  const runtime = registeredRuntime("desktop-polling");
-  const commits: Array<{ localTurnId: string; basedOnSequence: number; requestPayload: unknown; responsePayload: unknown }> = [];
-  const api = {
-    commitLocalTurn: async (_sessionId: string, input: typeof commits[number]) => {
-      commits.push(input);
-      return {
-        localTurnId: input.localTurnId,
-        runtimeId: runtime.id,
-        headBeforeCommit: 0,
-        reconciliationRequired: false,
-        requestEvent: canonical(1, "agent_request", input.requestPayload),
-        responseEvent: canonical(2, "agent_response", input.responsePayload),
-        toolEvents: [],
-      };
-    },
-  } as unknown as CollaborationApi;
-
-  await executor.synchronizeLocalTurns(api, runtime);
-  await executor.synchronizeLocalTurns(api, runtime);
-
-  assert.equal(reads.length, 2);
-  assert.equal(commits.length, 1, "a polled Desktop turn must be uploaded exactly once");
-  assert.equal(commits[0]?.basedOnSequence, 0, "polling must not claim cloud context that no hook delivered");
-  assert.deepEqual(commits[0]?.requestPayload, { text: "local prompt" });
-  assert.deepEqual(commits[0]?.responsePayload, { text: "local answer" });
-  const state = JSON.parse(await readFile(statePath, "utf8"));
-  assert.equal(state.localTurnBindings[commits[0]?.localTurnId ?? ""]?.status, "acked");
-  assert.equal(state.pendingLocalTurns.length, 0);
-});
-
 test("a first local prompt can adopt its Desktop task without opening a competing writer", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-adopt-local-"));
   const workspacePath = await realpath(directory);
@@ -233,6 +171,7 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
     hook_event_name: "Stop", session_id: "old-thread", turn_id: "desktop-turn",
     cwd: workspacePath, model: "gpt-other", reasoning_effort: "high", stop_hook_active: false, last_assistant_message: "desktop answer",
   });
+  await executor.synchronizeLocalTurns(api, runtime);
   await executor.synchronizeLocalTurns(api, runtime);
 
   const captures = await readFile(capturePath, "utf8").catch(() => "");
@@ -2144,10 +2083,11 @@ for await (const line of lines) {
     cwd: directory,
   });
   t.after(() => client.close());
-  await client.start();
-  await new Promise((resolve) => setTimeout(resolve, 20));
   await assert.rejects(
-    client.request("thread/start", {}),
+    async () => {
+      await client.start();
+      await client.request("thread/start", {});
+    },
     /unsupported interaction/,
   );
 });
