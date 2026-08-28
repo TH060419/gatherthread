@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, realpath, utimes, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -24,7 +25,9 @@ import {
   synchronizeManagedSessionTitle,
   revealCodexDesktopProject,
   revealCodexDesktopThread,
+  resolveCodexCommand,
   resolveCodexHookRelayPath,
+  resolveWorkspaceCodexHookPaths,
   runProjectConnector,
 } from "../src/codex-connect.js";
 import type { HttpCollaborationClient } from "../src/http-client.js";
@@ -33,6 +36,57 @@ import type { ProjectHarnessAdapter, SessionSummary } from "../src/index.js";
 import { codexSessionKey, type CanonicalEvent, type CollaborationApi } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
+
+test("Windows Codex discovery skips shell shims and selects a native executable", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-path-"));
+  const shim = path.join(directory, "codex");
+  const executable = path.join(directory, "codex.exe");
+  await Promise.all([
+    writeFile(shim, "#!/bin/sh\nexit 0\n"),
+    writeFile(executable, "native executable placeholder"),
+  ]);
+  await Promise.all([chmod(shim, 0o755), chmod(executable, 0o755)]);
+
+  assert.equal(
+    await resolveCodexCommand("codex", { PATH: directory }, "win32"),
+    executable,
+  );
+});
+
+test("Windows Codex discovery finds the newest Desktop binary outside PATH", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-install-"));
+  const pathOnlyShim = path.join(directory, "npm-bin");
+  const binRoot = path.join(directory, "OpenAI", "Codex", "bin");
+  const oldExecutable = path.join(binRoot, "old-version", "codex.exe");
+  const newestExecutable = path.join(binRoot, "new-version", "codex.exe");
+  await mkdir(pathOnlyShim, { recursive: true });
+  await mkdir(path.dirname(oldExecutable), { recursive: true });
+  await mkdir(path.dirname(newestExecutable), { recursive: true });
+  await Promise.all([
+    writeFile(path.join(pathOnlyShim, "codex.cmd"), "@echo off\r\n"),
+    writeFile(oldExecutable, "old native executable"),
+    writeFile(newestExecutable, "new native executable"),
+  ]);
+  const oldTime = new Date("2026-01-01T00:00:00.000Z");
+  const newestTime = new Date("2026-08-27T00:00:00.000Z");
+  await Promise.all([
+    utimes(oldExecutable, oldTime, oldTime),
+    utimes(newestExecutable, newestTime, newestTime),
+  ]);
+
+  assert.equal(
+    await resolveCodexCommand("codex", { PATH: pathOnlyShim, LOCALAPPDATA: directory }, "win32"),
+    newestExecutable,
+  );
+});
+
+test("Codex hook transport stays stable across GatherThread project mappings", () => {
+  const first = resolveWorkspaceCodexHookPaths("D:\\codes\\Web\\gatherthread", "C:\\Users\\tester", "win32");
+  const sameWorkspaceDifferentCase = resolveWorkspaceCodexHookPaths("d:\\CODES\\web\\GATHERTHREAD", "C:\\Users\\tester", "win32");
+  assert.deepEqual(first, sameWorkspaceDifferentCase);
+  assert.match(first.hookSocketPath, /^\\\\\.\\pipe\\gatherthread-[a-f0-9]{24}-hook-relay$/);
+  assert.match(first.hookRegistryPath, /[\\/]\.gatherthread[\\/]codex[\\/]hooks[\\/][a-f0-9]{24}[\\/]hook-registry\.json$/);
+});
 
 test("connector retry reporting coalesces stable failures and reports recovery once", () => {
   let now = 0;
@@ -187,6 +241,92 @@ test("Codex connector direct entry point runs on native filesystem paths", async
   const { stdout, stderr } = await execFileAsync(process.execPath, [entryPoint, "--help"]);
   assert.match(stdout, /GatherThread Codex connector/);
   assert.equal(stderr, "");
+});
+
+test("Codex connector default CLI initializes a disabled Hook registry under a fresh home", async () => {
+  const homeDirectory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-home-"));
+  const workspacePath = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-workspace-"));
+  const server = createServer((request, response) => {
+    response.setHeader("content-type", "application/json");
+    if (request.url === "/v1/me") {
+      response.end(JSON.stringify({ data: { id: "user-1", username: "Owner", device_id: "device-1" } }));
+      return;
+    }
+    if (request.url === "/v1/projects") {
+      response.end(JSON.stringify({ data: { projects: [{
+        id: "project-1", title: "Project", role: "owner", state: "active", session_count: 0,
+      }] } }));
+      return;
+    }
+    if (request.url === "/v1/projects/project-1/sessions") {
+      response.end(JSON.stringify({ data: { sessions: [] } }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end(JSON.stringify({ error: { code: "not_found", message: "not found" } }));
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  assert.ok(address && typeof address !== "string");
+  const entryPoint = fileURLToPath(new URL("../src/codex-connect.js", import.meta.url));
+  const child = spawn(process.execPath, [
+    entryPoint,
+    "--url", `http://127.0.0.1:${address.port}`,
+    "--project", "project-1",
+    "--workspace", workspacePath,
+    "--codex-command", process.execPath,
+  ], {
+    env: {
+      ...process.env,
+      HOME: homeDirectory,
+      USERPROFILE: homeDirectory,
+      GATHERTHREAD_TOKEN: "gta_test-device-token",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+  child.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`Codex connector did not initialize: ${stderr}`)), 10_000);
+      const inspect = () => {
+        if (!stdout.includes("Desktop local-turn sync is disabled")) return;
+        clearTimeout(timeout);
+        resolve();
+      };
+      child.stdout.on("data", inspect);
+      child.once("error", (error) => {
+        clearTimeout(timeout);
+        reject(error);
+      });
+      child.once("close", (code) => {
+        if (stdout.includes("Desktop local-turn sync is disabled")) return;
+        clearTimeout(timeout);
+        reject(new Error(`Codex connector exited ${code}: ${stderr}`));
+      });
+      inspect();
+    });
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
+    await new Promise<void>((resolve) => {
+      if (child.exitCode !== null || child.signalCode !== null) resolve();
+      else child.once("close", () => resolve());
+    });
+    await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  }
+  const registryPath = resolveWorkspaceCodexHookPaths(workspacePath, homeDirectory).hookRegistryPath;
+  const registry = JSON.parse(await readFile(registryPath, "utf8"));
+  assert.equal(registry.workspacePath, path.resolve(workspacePath));
+  assert.deepEqual(registry.threads, {});
+  assert.equal(registry.discoverUnregistered, false);
 });
 
 test("Codex connector polling keeps the process alive until the next cycle", async () => {

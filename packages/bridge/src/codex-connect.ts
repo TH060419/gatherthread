@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, mkdir, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -133,16 +133,18 @@ export async function runCodexConnectCli(
   const stateRoot = path.join(homedir(), ".gatherthread", "codex", mappingId);
   if (parsed.resetCodexSession) await rm(stateRoot, { recursive: true, force: true });
   const codexCommand = await resolveCodexCommand(parsed.codexCommand, env);
-  const hookSocketPath = resolveCodexHookRelayPath(mappingId, stateRoot);
-  const hookSpoolPath = path.join(stateRoot, "hook-outbox.jsonl");
-  const hookRegistryPath = path.join(stateRoot, "hook-registry.json");
+  // Hook definitions are trusted by content hash. Keep every path embedded in
+  // hooks.json stable for a workspace so switching GatherThread projects or
+  // credentials does not silently invalidate the user's Codex approval.
+  const { hookSocketPath, hookSpoolPath, hookRegistryPath } = resolveWorkspaceCodexHookPaths(workspacePath);
   if (!parsed.installHooks) {
     await mkdir(stateRoot, { recursive: true, mode: 0o700 });
-    await writeFile(hookRegistryPath, `${JSON.stringify({
-      version: 1,
+    await updateCodexHookRegistry({
+      registryPath: hookRegistryPath,
       workspacePath: path.resolve(workspacePath),
-      threads: {},
-    }, null, 2)}\n`, { mode: 0o600 });
+      clearThreads: true,
+      discoverUnregistered: false,
+    });
     process.stdout.write("Desktop local-turn sync is disabled. Re-run with --install-hooks and approve the definition with /hooks to enable it.\n");
   }
   if (parsed.installHooks) {
@@ -928,7 +930,10 @@ export async function runProjectConnector(options: {
   const relay = options.hooksEnabled
     ? options.hookRelay ?? new CodexHookRelayServer({
       socketPath: options.hookSocketPath,
-      onEvent: (event) => dispatchHook(event, false),
+      onEvent: async (event) => {
+        if (!await isAllowedCodexHookEvent(options.hookRegistryPath, event)) return {};
+        return dispatchHook(event, false);
+      },
     })
     : undefined;
   if (options.hooksEnabled) {
@@ -1133,13 +1138,45 @@ export async function resolveCodexCommand(
   platform: NodeJS.Platform = process.platform,
 ): Promise<string> {
   if (command !== "codex" || command.includes(path.sep)) return command;
+  const executableAccessMode = platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK;
+  const executableNames = platform === "win32"
+    ? [`${command}.exe`, `${command}.com`]
+    : [command];
   for (const directory of (env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
-    const candidate = path.join(directory, command);
-    try {
-      await access(candidate, fsConstants.X_OK);
-      return candidate;
-    } catch {
-      // Continue to the bundled macOS CLI fallback.
+    for (const executableName of executableNames) {
+      const candidate = path.join(directory, executableName);
+      try {
+        await access(candidate, executableAccessMode);
+        return candidate;
+      } catch {
+        // Continue to the next directly executable candidate.
+      }
+    }
+  }
+  if (platform === "win32") {
+    const localAppData = env.LOCALAPPDATA?.trim();
+    if (localAppData) {
+      const desktopBinRoot = path.join(localAppData, "OpenAI", "Codex", "bin");
+      try {
+        const candidates = await Promise.all((await readdir(desktopBinRoot, { withFileTypes: true }))
+          .filter((entry) => entry.isDirectory())
+          .map(async (entry) => {
+            const candidate = path.join(desktopBinRoot, entry.name, "codex.exe");
+            try {
+              await access(candidate, executableAccessMode);
+              const metadata = await stat(candidate);
+              return metadata.isFile() ? { candidate, modifiedAt: metadata.mtimeMs } : undefined;
+            } catch {
+              return undefined;
+            }
+          }));
+        const newest = candidates
+          .filter((candidate): candidate is { candidate: string; modifiedAt: number } => candidate !== undefined)
+          .sort((left, right) => right.modifiedAt - left.modifiedAt || right.candidate.localeCompare(left.candidate))[0];
+        if (newest) return newest.candidate;
+      } catch {
+        // Fall through to the regular spawn error when Desktop is not installed.
+      }
     }
   }
   if (platform === "darwin") {
@@ -1152,6 +1189,24 @@ export async function resolveCodexCommand(
     }
   }
   return command;
+}
+
+export function resolveWorkspaceCodexHookPaths(
+  workspacePath: string,
+  homeDirectory = homedir(),
+  platform: NodeJS.Platform = process.platform,
+): { hookSocketPath: string; hookSpoolPath: string; hookRegistryPath: string } {
+  const resolvedWorkspace = path.resolve(workspacePath);
+  const hookId = createHash("sha256")
+    .update(platform === "win32" ? resolvedWorkspace.toLowerCase() : resolvedWorkspace)
+    .digest("hex")
+    .slice(0, 24);
+  const hookStateRoot = path.join(homeDirectory, ".gatherthread", "codex", "hooks", hookId);
+  return {
+    hookSocketPath: resolveCodexHookRelayPath(hookId, hookStateRoot, platform),
+    hookSpoolPath: path.join(hookStateRoot, "hook-outbox.jsonl"),
+    hookRegistryPath: path.join(hookStateRoot, "hook-registry.json"),
+  };
 }
 
 export function waitForConnectorPoll(milliseconds: number, signal: AbortSignal): Promise<void> {

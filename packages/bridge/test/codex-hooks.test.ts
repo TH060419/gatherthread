@@ -46,14 +46,40 @@ test("Hook discovery admits only unknown project tasks and excludes connector-ow
   assert.equal(await isAllowedCodexHookEvent(registryPath, event), false);
 });
 
-test("Codex hook relay returns bounded additional context without credentials in config", async (t) => {
+test("disabling Hooks atomically creates a private registry and clears stale thread authorization", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-disabled-hooks-"));
+  const registryPath = path.join(directory, "nested", "private", "registry.json");
+  await updateCodexHookRegistry({
+    registryPath,
+    workspacePath: "/workspace",
+    discoverUnregistered: true,
+    add: {
+      "desktop-task": "execution",
+      "background-task": "background_execution",
+    },
+  });
+  await updateCodexHookRegistry({
+    registryPath,
+    workspacePath: "/workspace",
+    clearThreads: true,
+    discoverUnregistered: false,
+  });
+  const registry = JSON.parse(await readFile(registryPath, "utf8"));
+  assert.deepEqual(registry.threads, {});
+  assert.equal(registry.discoverUnregistered, false);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(path.dirname(registryPath))).mode & 0o777, 0o700);
+    assert.equal((await stat(registryPath)).mode & 0o777, 0o600);
+  }
+});
+
+test("Codex hook forwarder waits for a newly activated MULTI registry binding", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-hook-"));
   const socketPath = process.platform === "win32"
     ? `\\\\.\\pipe\\gatherthread-test-${process.pid}-${Date.now()}`
     : path.join(directory, "relay.sock");
   const spoolPath = path.join(directory, "offline.jsonl");
   const registryPath = path.join(directory, "registry.json");
-  await updateCodexHookRegistry({ registryPath, workspacePath: "/workspace", add: { "thread-1": "execution" } });
   const events: unknown[] = [];
   const relay = new CodexHookRelayServer({
     socketPath,
@@ -83,8 +109,18 @@ test("Codex hook relay returns bounded additional context without credentials in
   const output = new PassThrough();
   let rendered = "";
   output.on("data", (chunk) => { rendered += chunk.toString("utf8"); });
+  const registryActivation = new Promise<void>((resolve, reject) => {
+    setTimeout(() => {
+      void updateCodexHookRegistry({
+        registryPath,
+        workspacePath: "/workspace",
+        add: { "thread-1": "execution" },
+      }).then(resolve, reject);
+    }, 50);
+  });
   input.end(JSON.stringify(promptEvent()));
   await runCodexHookForwarder({ socketPath, spoolPath, registryPath, stdin: input, stdout: output });
+  await registryActivation;
   assert.equal(events.length, 1);
   assert.deepEqual(JSON.parse(rendered), {
     hookSpecificOutput: {
@@ -126,7 +162,47 @@ test("Codex hook installation preserves existing project hooks", async () => {
   assert.equal(installed.hooks.UserPromptSubmit.length, 1);
 });
 
-test("Windows hook configuration passes the named-pipe endpoint to the same forwarder", () => {
+test("Codex hook installation replaces a stale GatherThread relay definition", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-hook-replace-"));
+  const configPath = path.join(directory, ".codex", "hooks.json");
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(path.dirname(configPath), { recursive: true }));
+  const stale = renderCodexHookConfig({
+    hookScriptPath: "/safe/codex-hook.js",
+    socketPath: "/private/old-relay.sock",
+    spoolPath: "/private/old-spool.jsonl",
+    registryPath: "/private/old-registry.json",
+  });
+  const current = renderCodexHookConfig({
+    hookScriptPath: "/safe/codex-hook.js",
+    socketPath: "/private/stable-relay.sock",
+    spoolPath: "/private/stable-spool.jsonl",
+    registryPath: "/private/stable-registry.json",
+  });
+  await writeFile(configPath, JSON.stringify(stale));
+  await installCodexHookConfig({ workspacePath: directory, config: current });
+  const installed = await readFile(configPath, "utf8");
+  assert.doesNotMatch(installed, /old-relay|old-spool|old-registry/);
+  assert.match(installed, /stable-relay/);
+});
+
+test("Codex hook installation does not rewrite an unchanged trusted definition", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-hook-idempotent-"));
+  const configPath = path.join(directory, ".codex", "hooks.json");
+  await mkdir(path.dirname(configPath), { recursive: true });
+  const config = renderCodexHookConfig({
+    hookScriptPath: "/safe/codex-hook.js",
+    socketPath: "/private/stable-relay.sock",
+    spoolPath: "/private/stable-spool.jsonl",
+    registryPath: "/private/stable-registry.json",
+  });
+  await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  const fixedTime = new Date("2026-01-01T00:00:00.000Z");
+  await utimes(configPath, fixedTime, fixedTime);
+  await installCodexHookConfig({ workspacePath: directory, config });
+  assert.equal((await stat(configPath)).mtimeMs, fixedTime.getTime());
+});
+
+test("Windows hook configuration uses a PowerShell-safe override for the same forwarder", () => {
   const endpoint = "\\\\.\\pipe\\gatherthread-0123456789abcdef01234567-hook-relay";
   const config = renderCodexHookConfig({
     hookScriptPath: "C:\\GatherThread Project\\codex-hook.js",
@@ -135,10 +211,13 @@ test("Windows hook configuration passes the named-pipe endpoint to the same forw
     registryPath: "C:\\GatherThread State\\hook-registry.json",
     nodePath: "C:\\Program Files\\nodejs\\node.exe",
     platform: "win32",
-  }) as { hooks: { Stop: Array<{ hooks: Array<{ command: string }> }> } };
-  const command = config.hooks.Stop[0]?.hooks[0]?.command ?? "";
+  }) as { hooks: { Stop: Array<{ hooks: Array<{ command: string; commandWindows?: string }> }> } };
+  const handler = config.hooks.Stop[0]?.hooks[0];
+  const command = handler?.command ?? "";
+  const commandWindows = handler?.commandWindows ?? "";
   assert.match(command, /"C:\\Program Files\\nodejs\\node\.exe"/);
   assert.ok(command.includes(`"--socket" "${endpoint}"`));
+  assert.equal(commandWindows, `& ${command}`);
   assert.doesNotMatch(command, /gta_|Bearer|GATHERTHREAD_TOKEN/);
   assert.throws(() => renderCodexHookConfig({
     hookScriptPath: "C:\\unsafe%PATH%\\codex-hook.js",
@@ -147,6 +226,39 @@ test("Windows hook configuration passes the named-pipe endpoint to the same forw
     registryPath: "C:\\state\\registry.json",
     platform: "win32",
   }), /Windows shell metacharacters/);
+});
+
+test("Windows command override launches through PowerShell", {
+  skip: process.platform === "win32" ? false : "PowerShell command execution is Windows-only",
+}, async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread hook powershell-"));
+  const scriptPath = path.join(directory, "hook fixture.js");
+  await writeFile(scriptPath, "process.stdin.resume(); process.stdin.on('end', () => process.stdout.write('{}\\n'));\n");
+  const config = renderCodexHookConfig({
+    hookScriptPath: scriptPath,
+    socketPath: "\\\\.\\pipe\\gatherthread-test-hook-relay",
+    spoolPath: path.join(directory, "hook outbox.jsonl"),
+    registryPath: path.join(directory, "hook registry.json"),
+    nodePath: process.execPath,
+    platform: "win32",
+  }) as { hooks: { UserPromptSubmit: Array<{ hooks: Array<{ commandWindows: string }> }> } };
+  const commandWindows = config.hooks.UserPromptSubmit[0]?.hooks[0]?.commandWindows;
+  assert.ok(commandWindows);
+  const child = spawn("powershell.exe", ["-NoProfile", "-Command", commandWindows], {
+    cwd: directory,
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk.toString("utf8"); });
+  child.stderr.on("data", (chunk) => { stderr += chunk.toString("utf8"); });
+  child.stdin.end("{}");
+  const exitCode = await new Promise<number | null>((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  assert.equal(exitCode, 0, stderr);
+  assert.equal(stdout, "{}\n");
 });
 
 test("Codex hook relay recovers stale sockets and refuses active or non-socket paths", {

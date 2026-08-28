@@ -211,6 +211,13 @@ class CodexThreadActiveError extends Error {
   }
 }
 
+class CodexThreadMissingError extends Error {
+  constructor(cause: unknown, detail?: string) {
+    super(`Managed Codex thread is missing or unreadable${detail ? ` (${detail})` : ""}; repair the binding or explicitly reset it to create a new mapping`, { cause });
+    this.name = "CodexThreadMissingError";
+  }
+}
+
 interface ProjectionJournalEntry {
   eventId: string;
   sequence: number;
@@ -361,7 +368,10 @@ export class CodexAppServerClient {
       model: input.model,
       sandbox: input.sandbox,
       approvalPolicy: "never",
-      ephemeral: false,
+      // Exec-source threads are connector-owned implementation details. Keep
+      // them out of the Desktop task list while this App Server process owns
+      // them; canonical history can rebuild them after a connector restart.
+      ephemeral: input.threadSource === "exec",
       serviceName: "gatherthread",
       // Codex Desktop currently classifies its interactive project tasks as
       // `vscode`. Using the same documented ThreadSource value keeps this
@@ -784,6 +794,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   readonly #gatherThreadSessionId: string | undefined;
   #localPublishingActive: boolean;
   #revealedThreadId: string | undefined;
+  #loadedExecThreadId: string | undefined;
 
   constructor(options: CodexAppServerExecutorOptions) {
     if (!options.statePath.trim()) throw new Error("Codex session state path must be non-empty");
@@ -861,38 +872,38 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       let state = await this.#loadState(runtime.sessionId, workspacePath);
       if (state?.desktopProjectMigration) state = await this.#retireUnsupportedDesktopProjectMigration(state);
       if (!state) {
-        const threadId = await this.#client.startThread({
-          cwd: workspacePath,
-          model: this.#model,
-          sandbox: this.#sandbox,
-          threadSource: this.#threadSource,
-        });
+        const threadId = await this.#startManagedThread(workspacePath);
         state = this.#newState(runtime.sessionId, workspacePath, threadId);
-        await this.#client.setThreadName(threadId, this.#threadName);
+        await this.#setManagedThreadName(threadId, this.#threadName);
         await this.#saveState(state, false);
-        await this.#client.unsubscribeThread(threadId);
+        await this.#unsubscribeManagedThread(threadId);
         return { cursor: 0, threadId, hasNativeTurns: false };
       }
       let replacedExternallyClaimedProjection = false;
-      try {
-        await this.#assertThreadNotActive(state.threadId);
-        await this.#client.resumeThread({
-          threadId: state.threadId,
-          cwd: workspacePath,
-          model: this.#model,
-          sandbox: this.#sandbox,
-        });
-      } catch (error) {
-        if (!isActiveWriterError(error)) throw error;
+      if (this.#threadSource === "exec" && this.#loadedExecThreadId !== state.threadId) {
         state = await this.#replaceExternallyClaimedExecutionProjection(state);
         replacedExternallyClaimedProjection = true;
+      } else if (this.#threadSource !== "exec") {
+        try {
+          await this.#assertThreadNotActive(state.threadId);
+          await this.#client.resumeThread({
+            threadId: state.threadId,
+            cwd: workspacePath,
+            model: this.#model,
+            sandbox: this.#sandbox,
+          });
+        } catch (error) {
+          if (!isActiveWriterError(error)) throw error;
+          state = await this.#replaceExternallyClaimedExecutionProjection(state);
+          replacedExternallyClaimedProjection = true;
+        }
       }
-      await this.#client.setThreadName(state.threadId, this.#threadName);
+      await this.#setManagedThreadName(state.threadId, this.#threadName);
       if (state.threadName !== this.#threadName) {
         state.threadName = this.#threadName;
         await this.#saveState(state, false);
       }
-      await this.#client.unsubscribeThread(state.threadId);
+      await this.#unsubscribeManagedThread(state.threadId);
       const hasNativeTurns = state.connectorTurnIds.length > 0
         || Object.keys(state.localTurnBindings).length > 0;
       return {
@@ -908,6 +919,35 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   async #revealThreadIfNeeded(threadId: string): Promise<void> {
     if (!this.#revealThread || this.#revealedThreadId === threadId) return;
     if (await this.#revealThread(threadId)) this.#revealedThreadId = threadId;
+  }
+
+  async #setManagedThreadName(threadId: string, name: string): Promise<void> {
+    if (this.#threadSource === "exec") return;
+    await this.#client.setThreadName(threadId, name);
+  }
+
+  async #archiveManagedThread(threadId: string): Promise<void> {
+    if (this.#threadSource === "exec") return;
+    await this.#client.archiveThread(threadId);
+  }
+
+  async #unsubscribeManagedThread(threadId: string): Promise<void> {
+    // Codex 0.150 unloads an ephemeral thread when its last subscription is
+    // removed. Keep connector-owned exec projections loaded until their App
+    // Server process closes; persistent Desktop threads still release writers.
+    if (this.#threadSource === "exec") return;
+    await this.#client.unsubscribeThread(threadId);
+  }
+
+  async #startManagedThread(workspacePath: string): Promise<string> {
+    const threadId = await this.#client.startThread({
+      cwd: workspacePath,
+      model: this.#model,
+      sandbox: this.#sandbox,
+      threadSource: this.#threadSource,
+    });
+    if (this.#threadSource === "exec") this.#loadedExecThreadId = threadId;
+    return threadId;
   }
 
   async #retireUnsupportedDesktopProjectMigration(state: CodexAppServerState): Promise<CodexAppServerState> {
@@ -952,8 +992,16 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         await this.#saveState(state, false);
         return;
       }
+      if (this.#threadSource === "exec") {
+        // Initialization renames the binding before prepareCanonicalProjection
+        // adopts a fresh process-owned ephemeral thread. Persist only the
+        // desired label here; ephemeral threads reject metadata and includeTurns.
+        state.threadName = nextName;
+        await this.#saveState(state, false);
+        return;
+      }
       await this.#assertThreadNotActive(state.threadId);
-      await this.#client.setThreadName(state.threadId, nextName);
+      await this.#setManagedThreadName(state.threadId, nextName);
       state.threadName = nextName;
       await this.#saveState(state, false);
     });
@@ -998,19 +1046,14 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       const workspacePath = await validateCodexWorkspace(this.#workspacePath);
       let state = await this.#loadStateFromDisk(workspacePath);
       if (!state) {
-        const threadId = await this.#client.startThread({
-          cwd: workspacePath,
-          model: this.#model,
-          sandbox: this.#sandbox,
-          threadSource: "vscode",
-        });
+        const threadId = await this.#startManagedThread(workspacePath);
         if (!this.#gatherThreadSessionId) {
           throw new Error("Desktop hook projection requires its GatherThread session id before creating a task");
         }
         state = this.#newState(this.#gatherThreadSessionId, workspacePath, threadId);
-        await this.#client.setThreadName(threadId, this.#threadName);
+        await this.#setManagedThreadName(threadId, this.#threadName);
         await this.#saveState(state, false);
-        await this.#client.unsubscribeThread(threadId);
+        await this.#unsubscribeManagedThread(threadId);
       } else if (!this.#desktopHookOnly) {
         await this.#assertThreadNotActive(state.threadId);
       }
@@ -1144,22 +1187,28 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       if (Object.keys(state.hookDrafts).length > 0) {
         throw new Error("Codex desktop turn is active; canonical projection is queued until its Stop hook completes");
       }
-      await this.#assertThreadNotActive(state.threadId);
-      await this.#client.resumeThread({ threadId: state.threadId, cwd: workspacePath, model: this.#model, sandbox: this.#sandbox });
+      if (this.#threadSource === "exec" && this.#loadedExecThreadId !== state.threadId) {
+        state = await this.#replaceExternallyClaimedExecutionProjection(state);
+      } else if (this.#threadSource !== "exec") try {
+        await this.#assertThreadNotActive(state.threadId);
+        await this.#client.resumeThread({ threadId: state.threadId, cwd: workspacePath, model: this.#model, sandbox: this.#sandbox });
+      } catch (error) {
+        throw error;
+      }
     } else {
-      const threadId = await this.#client.startThread({ cwd: workspacePath, model: this.#model, sandbox: this.#sandbox, threadSource: this.#threadSource });
+      const threadId = await this.#startManagedThread(workspacePath);
       state = this.#newState(runtime.sessionId, workspacePath, threadId);
       await this.#saveState(state);
     }
     try {
-      await this.#client.setThreadName(state.threadId, this.#threadName);
+      await this.#setManagedThreadName(state.threadId, this.#threadName);
       for (const event of [...events].sort((left, right) => left.sequence - right.sequence)) {
         if (event.sessionId !== runtime.sessionId) throw new Error("Canonical projection received an event for a different session");
         if (event.sequence <= state.lastInjectedSequence) continue;
         state = await this.#projectEvent(state, event, runtime.id);
       }
     } finally {
-      await this.#client.unsubscribeThread(state.threadId);
+      await this.#unsubscribeManagedThread(state.threadId);
     }
   }
 
@@ -1174,7 +1223,10 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       if (Object.keys(state.hookDrafts).length > 0) {
         throw new Error("Codex desktop turn is active; Web agent execution is queued until its Stop hook completes");
       }
-      try {
+      if (this.#threadSource === "exec" && this.#loadedExecThreadId !== state.threadId) {
+        state = await this.#replaceExternallyClaimedExecutionProjection(state);
+        rebuildingExternallyClaimedProjection = true;
+      } else if (this.#threadSource !== "exec") try {
         await this.#assertThreadNotActive(state.threadId);
         await this.#client.resumeThread({
           threadId: state.threadId,
@@ -1188,12 +1240,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         rebuildingExternallyClaimedProjection = true;
       }
     } else {
-      const threadId = await this.#client.startThread({
-        cwd: workspacePath,
-        model: this.#model,
-        sandbox: this.#sandbox,
-        threadSource: this.#threadSource,
-      });
+      const threadId = await this.#startManagedThread(workspacePath);
       state = this.#newState(input.request.sessionId, workspacePath, threadId);
       await this.#saveState(state);
     }
@@ -1235,7 +1282,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       }
     }
     try {
-      await this.#client.setThreadName(state.threadId, this.#threadName);
+      await this.#setManagedThreadName(state.threadId, this.#threadName);
       const afterSequence = state.lastInjectedSequence;
       const history = input.canonicalHistory
         .filter((event) => event.sequence > afterSequence && event.sequence < input.request.sequence)
@@ -1319,7 +1366,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       await this.#saveState(state);
       return { events: executionEvents, localSessionId: state.threadId };
     } finally {
-      await this.#client.unsubscribeThread(state.threadId);
+      await this.#unsubscribeManagedThread(state.threadId);
     }
   }
 
@@ -1456,7 +1503,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     const workspacePath = await validateCodexWorkspace(this.#workspacePath);
     let state = await this.#loadState(sessionId, workspacePath);
     if (!state) {
-      const threadId = await this.#client.startThread({ cwd: workspacePath, model: this.#model, sandbox: this.#sandbox, threadSource: this.#threadSource });
+      const threadId = await this.#startManagedThread(workspacePath);
       state = this.#newState(sessionId, workspacePath, threadId);
       await this.#saveState(state);
     } else {
@@ -1465,7 +1512,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     }
     if (!state) throw new Error("Codex snapshot state initialization failed");
     try {
-      await this.#client.setThreadName(state.threadId, this.#threadName);
+      await this.#setManagedThreadName(state.threadId, this.#threadName);
       const afterSequence = state.lastInjectedSequence;
       for (const event of events.filter((item) => item.sequence > afterSequence && item.sequence <= throughSequence).sort((a, b) => a.sequence - b.sequence)) {
         state = await this.#projectEvent(state, event, runtimeId, false, true, false);
@@ -1476,7 +1523,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       await this.#saveState(state);
       return { threadId: state.threadId, projectionGeneration: state.projectionGeneration, compactionGeneration: state.compactionGeneration };
     } finally {
-      await this.#client.unsubscribeThread(state.threadId);
+      await this.#unsubscribeManagedThread(state.threadId);
     }
   }
 
@@ -1502,10 +1549,11 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       return await operation();
     } finally {
       try {
-        // `thread/unsubscribe` does not unload the App Server writer. End the
-        // process before declaring the bridge operation idle so Codex Desktop
-        // can load, edit, or archive the same task between sync operations.
-        await this.#client.close();
+        // Persistent Desktop threads use short-lived App Server writers so the
+        // app can load them between sync operations. Ephemeral exec threads
+        // belong to their App Server process and disappear when it closes, so
+        // keep that isolated process alive until the harness is disposed.
+        if (this.#threadSource !== "exec") await this.#client.close();
       } finally {
         await releaseFileLock?.();
         ACTIVE_STATE_WRITERS.delete(this.#statePath);
@@ -1626,13 +1674,14 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   }
 
   async #assertThreadNotActive(threadId: string): Promise<void> {
+    if (this.#threadSource === "exec" && this.#loadedExecThreadId === threadId) return;
     let thread: CodexThreadReadResult;
     try {
       thread = await this.#client.readThread(threadId);
     } catch (error) {
-      throw new Error(
-        "Managed Codex thread is missing or unreadable; repair the binding or explicitly reset it to create a new mapping",
-        { cause: error },
+      throw new CodexThreadMissingError(
+        error,
+        `source=${this.#threadSource}, thread=${threadId}, owned=${this.#loadedExecThreadId === threadId}`,
       );
     }
     if (thread.status === "active") {
@@ -1660,12 +1709,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     }
 
     const oldThreadId = state.threadId;
-    const threadId = await this.#client.startThread({
-      cwd: state.workspacePath,
-      model: this.#model,
-      sandbox: this.#sandbox,
-      threadSource: this.#threadSource,
-    });
+    const threadId = await this.#startManagedThread(state.workspacePath);
     const replacement = this.#newState(state.gatherThreadSessionId, state.workspacePath, threadId);
     replacement.projectionGeneration = state.projectionGeneration + 1;
     replacement.executionJournal = Object.fromEntries(
@@ -1674,8 +1718,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       ),
     );
     await this.#saveState(replacement);
-    await this.#client.setThreadName(threadId, this.#threadName);
-    await this.#client.unsubscribeThread(oldThreadId);
+    await this.#setManagedThreadName(threadId, this.#threadName);
+    await this.#unsubscribeManagedThread(oldThreadId);
     return replacement;
   }
 
@@ -1696,18 +1740,18 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       const abandonedThreadId = state.rebuild.threadId;
       delete state.rebuild;
       await this.#saveState(state);
-      try { await this.#client.setThreadName(abandonedThreadId, `${this.#threadName} · abandoned rebuild`); } catch { /* best effort */ }
-      try { await this.#client.archiveThread(abandonedThreadId); } catch { /* never delete */ }
-      await this.#client.unsubscribeThread(abandonedThreadId);
+      try { await this.#setManagedThreadName(abandonedThreadId, `${this.#threadName} · abandoned rebuild`); } catch { /* best effort */ }
+      try { await this.#archiveManagedThread(abandonedThreadId); } catch { /* never delete */ }
+      await this.#unsubscribeManagedThread(abandonedThreadId);
     }
     if (!state.rebuild) {
-      const threadId = await this.#client.startThread({ cwd: state.workspacePath, model: this.#model, sandbox: this.#sandbox, threadSource: this.#threadSource });
+      const threadId = await this.#startManagedThread(state.workspacePath);
       state.rebuild = { threadId, generation: state.projectionGeneration + 1, targetThroughSequence: throughSequence, lastInjectedSequence: 0, estimatedContextTokens: 0, compactionGeneration: 0 };
       await this.#saveState(state);
     }
     const oldThreadId = state.threadId;
     const rebuild = state.rebuild;
-    await this.#client.setThreadName(rebuild.threadId, `${this.#threadName} · rebuilding`);
+    await this.#setManagedThreadName(rebuild.threadId, `${this.#threadName} · rebuilding`);
     let temporary: CodexAppServerState = { ...state, threadId: rebuild.threadId, lastInjectedSequence: rebuild.lastInjectedSequence, estimatedContextTokens: rebuild.estimatedContextTokens, compactionGeneration: rebuild.compactionGeneration, sidecar: [] };
     for (const event of history.events.filter((item) => item.sequence > temporary.lastInjectedSequence)) {
       temporary = await this.#projectEvent(temporary, event, runtimeId, false, false, false);
@@ -1716,7 +1760,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       rebuild.compactionGeneration = temporary.compactionGeneration;
       await this.#saveState({ ...state, rebuild });
     }
-    await this.#client.setThreadName(rebuild.threadId, this.#threadName);
+    await this.#setManagedThreadName(rebuild.threadId, this.#threadName);
     state = {
       ...state,
       threadId: rebuild.threadId,
@@ -1739,13 +1783,13 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       });
     }
     try {
-      await this.#client.setThreadName(oldThreadId, `${this.#threadName} · offline fork`);
-      await this.#client.archiveThread(oldThreadId);
+      await this.#setManagedThreadName(oldThreadId, `${this.#threadName} · offline fork`);
+      await this.#archiveManagedThread(oldThreadId);
     } catch {
       // Never delete an offline fork. The new active binding is already durable.
     }
-    await this.#client.unsubscribeThread(oldThreadId);
-    await this.#client.unsubscribeThread(state.threadId);
+    await this.#unsubscribeManagedThread(oldThreadId);
+    await this.#unsubscribeManagedThread(state.threadId);
     return state;
   }
 
@@ -2056,6 +2100,11 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
       new Set(input.retainSessionIds ?? []),
       new Set(input.preserveSessionIds ?? []),
     );
+    await updateCodexHookRegistry({
+      registryPath: this.#options.hookRegistryPath,
+      workspacePath: path.resolve(this.#options.workspacePath),
+      removePurpose: "background_execution",
+    });
     await updateCodexHookRegistry({
       registryPath: this.#options.hookRegistryPath,
       workspacePath: path.resolve(this.#options.workspacePath),
