@@ -21,8 +21,6 @@ import {
   localSoloTitle,
   reconcileProjectSessionPermissions,
   refreshProjectSessionPermissions,
-  refreshManagedSessionName,
-  synchronizeManagedSessionTitle,
   revealCodexDesktopProject,
   revealCodexDesktopThread,
   resolveCodexCommand,
@@ -489,7 +487,7 @@ test("connected session output gives the exact managed Desktop task without manu
     ...session("owner", "multi"),
     name: "Shared analysis",
   });
-  assert.match(output, /^Connected session: Shared analysis \[multi\] as "GatherThread · Research Project · Shared analysis"$/m);
+  assert.match(output, /^Connected session: Shared analysis \[multi\] as "Shared analysis · GatherThread"$/m);
   assert.doesNotMatch(output, /Move to project|manual grouping/i);
   assert.doesNotMatch(output, /gta_|GATHERTHREAD_TOKEN|\/Users\/|\\Users\\/);
 });
@@ -575,8 +573,8 @@ test("new binding materializes through the authoritative cursor before one-time 
   });
   assert.equal(successfulActivations, 1);
   assert.deepEqual(order, [
-    "create", "rename", "deactivate:initializing", "register", "project:1", "project:2",
-    "create", "rename", "deactivate:initializing", "register", "project:2", "activate",
+    "create", "deactivate:initializing", "register", "project:1", "project:2",
+    "create", "deactivate:initializing", "register", "project:2", "activate",
   ]);
 });
 
@@ -610,7 +608,7 @@ test("initialization prepares an empty native conversation and rewinds a stale b
   });
 
   assert.deepEqual(order, [
-    "create", "rename", "deactivate:initializing", "register", "prepare:0",
+    "create", "deactivate:initializing", "register", "prepare:0",
     "project:1", "project:2", "activate",
   ]);
   assert.equal(JSON.parse(await readFile(path.join(stateRoot, `${sessionKey}-cursor.json`), "utf8")).server["session-1"], 2);
@@ -658,126 +656,40 @@ test("activation failure rolls publishing back and retries without reprojecting 
   assert.deepEqual(order.filter((item) => item === "activate"), ["activate", "activate"]);
 });
 
-test("authoritative session rename updates one existing native binding exactly once", async () => {
-  const names: string[] = [];
-  const managed = {
-    name: "Old name",
-    rename: async (cloud: SessionSummary) => { names.push(cloud.name ?? cloud.id); },
+test("session initialization never renames an adopted local conversation", async () => {
+  const stateRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-independent-local-title-"));
+  let renameCalls = 0;
+  const harness: ProjectHarnessAdapter = {
+    descriptor: {
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-test",
+      captureFidelity: "harness_transcript",
+      capabilities: [],
+    },
+    preflight: async () => ({ version: "test", authentication: "test", workspacePath: "/workspace" }),
+    createSessionBinding: () => ({
+      localSessionId: "local-session-independent-title",
+      executor: {
+        execute: async () => { throw new Error("not used"); },
+        projectCanonicalEvents: async () => undefined,
+      },
+      adoptLocalConversation: async () => undefined,
+      rename: async () => { renameCalls += 1; },
+      activateLocalPublishing: async () => undefined,
+      deactivateLocalPublishing: async () => undefined,
+    }),
+    close: async () => undefined,
   };
-  const renamed = { ...session("owner", "multi"), name: "New name" };
-  assert.equal(await refreshManagedSessionName(managed, renamed), true);
-  assert.equal(await refreshManagedSessionName(managed, renamed), false);
-  assert.deepEqual(names, ["New name"]);
-  assert.equal(managed.name, "New name");
-});
-
-test("native title upload is owner-only, idempotent, and loses to an authoritative cloud rename", async () => {
-  const updates: Array<{ sessionId: string; title: string; idempotencyKey: string }> = [];
-  const nativeNames = [
-    "GatherThread · Project · Local title",
-    "GatherThread · Project · Local title",
-    "stale local title",
-    "participant local title",
-  ];
-  const restored: string[] = [];
-  const current = {
-    name: "Cloud title",
-    rename: async (cloud: SessionSummary) => { restored.push(cloud.name ?? cloud.id); },
-    readNativeName: async () => nativeNames.shift() ?? null,
-  };
-  const api = {
-    updateSession: async (sessionId: string, input: { title: string; idempotencyKey: string }) => {
-      updates.push({ sessionId, ...input });
-      return { ...session("owner", "multi"), name: input.title };
-    },
-  } as unknown as CollaborationApi;
-  const owner = { ...session("owner", "multi"), name: "Cloud title" };
-
-  assert.equal(await synchronizeManagedSessionTitle({
-    current, session: owner, projectName: "Project", actorDeviceId: "device-1", api,
-  }), "uploaded");
-  assert.equal(await synchronizeManagedSessionTitle({
-    current, session: owner, projectName: "Project", actorDeviceId: "device-1", api,
-  }), "awaiting_cloud");
-  assert.equal(updates.length, 1);
-  assert.equal(updates[0]?.title, "Local title");
-  assert.match(updates[0]?.idempotencyKey ?? "", /^codex-title-[a-f0-9]{64}$/);
-
-  const cloudRenamed = { ...owner, name: "Concurrent cloud title" };
-  assert.equal(await refreshManagedSessionName(current, cloudRenamed), true);
-  assert.equal(await synchronizeManagedSessionTitle({
-    current, session: cloudRenamed, projectName: "Project", actorDeviceId: "device-1", api,
-  }), "unchanged");
-  assert.equal(updates.length, 1, "cloud rename wins without uploading the stale local title");
-
-  const participant = { ...session("participant", "multi"), name: "Concurrent cloud title" };
-  assert.equal(await synchronizeManagedSessionTitle({
-    current, session: participant, projectName: "Project", actorDeviceId: "device-1", api,
-  }), "restored_cloud");
-  assert.equal(updates.length, 1, "participants must never attempt a title mutation");
-  assert.deepEqual(restored, ["Concurrent cloud title", "Concurrent cloud title"]);
-});
-
-test("uncertain native title upload retries the identical idempotency key", async () => {
-  const keys: string[] = [];
-  let attempts = 0;
-  const current = {
-    name: "Cloud",
-    readNativeName: async () => "Local",
-  };
-  const api = {
-    updateSession: async (_sessionId: string, input: { title: string; idempotencyKey: string }) => {
-      keys.push(input.idempotencyKey);
-      attempts += 1;
-      if (attempts === 1) throw new TypeError("response lost");
-      return { ...session("owner", "multi"), name: input.title };
-    },
-  } as unknown as CollaborationApi;
-  const cloud = { ...session("owner", "multi"), name: "Cloud" };
-  await assert.rejects(synchronizeManagedSessionTitle({
-    current, session: cloud, projectName: "Project", actorDeviceId: "device-1", api,
-  }), /response lost/);
-  assert.equal(await synchronizeManagedSessionTitle({
-    current, session: cloud, projectName: "Project", actorDeviceId: "device-1", api,
-  }), "uploaded");
-  assert.equal(attempts, 2);
-  assert.equal(keys[0], keys[1]);
-});
-
-test("native title normalization trims the managed suffix and rejects control characters", async () => {
-  const updates: string[] = [];
-  const restored: string[] = [];
-  const api = {
-    updateSession: async (_sessionId: string, input: { title: string }) => {
-      updates.push(input.title);
-      return { ...session("owner", "multi"), name: input.title };
-    },
-  } as unknown as CollaborationApi;
-  const cloud = { ...session("owner", "multi"), name: "Cloud" };
-  assert.equal(await synchronizeManagedSessionTitle({
-    current: {
-      name: "Cloud",
-      readNativeName: async () => "GatherThread · Project ·   Trimmed title   ",
-    },
-    session: cloud,
-    projectName: "Project",
+  await initializeProjectSession({
+    api: projectApi([], []),
     actorDeviceId: "device-1",
-    api,
-  }), "uploaded");
-  assert.deepEqual(updates, ["Trimmed title"]);
-  assert.equal(await synchronizeManagedSessionTitle({
-    current: {
-      name: "Cloud",
-      readNativeName: async () => "unsafe\nname",
-      rename: async (session) => { restored.push(session.name ?? session.id); },
-    },
-    session: cloud,
-    projectName: "Project",
-    actorDeviceId: "device-1",
-    api,
-  }), "restored_cloud");
-  assert.deepEqual(updates, ["Trimmed title"]);
-  assert.deepEqual(restored, ["Cloud"]);
+    stateRoot,
+    harness,
+    session: { ...session("owner", "solo"), latestSequence: 0 },
+    adoptLocalConversationId: "native-user-title",
+  });
+  assert.equal(renameCalls, 0, "cloud metadata must never overwrite a user-owned local task title");
 });
 
 test("authoritative ACL downgrade removes owner and participant-solo execution bindings", async () => {
@@ -803,6 +715,27 @@ test("authoritative ACL downgrade removes owner and participant-solo execution b
     assert.deepEqual(result.eligibleSessions, []);
     assert.deepEqual(result.errors, []);
   }
+});
+
+test("cloud renames preserve the existing binding by stable session id", async () => {
+  const binding = { deactivateLocalPublishing: async () => undefined };
+  const managed = new Map([["session-1", binding]]);
+  const renamed = { ...session("owner", "multi"), name: "A completely different cloud title" };
+  const retained: string[][] = [];
+  const result = await reconcileProjectSessionPermissions({
+    sessions: [renamed],
+    managed,
+    harness: {
+      deactivateExecutionBindings: async (input?: { retainSessionIds?: readonly string[] }) => {
+        retained.push([...(input?.retainSessionIds ?? [])]);
+      },
+    } as unknown as ProjectHarnessAdapter,
+  });
+  assert.equal(managed.size, 1);
+  assert.equal(managed.get("session-1"), binding, "a title change must not replace or duplicate the binding");
+  assert.equal(result.eligibleSessions[0]?.id, "session-1");
+  assert.equal(result.eligibleSessions[0]?.name, "A completely different cloud title");
+  assert.deepEqual(retained, [["session-1"]]);
 });
 
 test("ACL refresh preserves initializing session state without adding it to the execution allowlist", async () => {
@@ -953,7 +886,6 @@ function projectHarness(input: {
           projectCanonicalEvents: async (events) => input.project(events),
           ...(input.prepare === undefined ? {} : { prepareCanonicalProjection: async () => input.prepare?.() ?? 0 }),
         },
-        rename: async () => { input.order.push("rename"); },
         activateLocalPublishing: async () => input.activate(),
         deactivateLocalPublishing: async (reason) => {
           input.order.push(`deactivate:${reason}`);

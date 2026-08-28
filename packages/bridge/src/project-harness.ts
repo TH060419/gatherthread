@@ -25,8 +25,6 @@ export interface ProjectHarnessSessionBinding {
   localSessionId: string;
   adoptLocalConversation?: (localConversationId: string) => Promise<void>;
   synchronize?: (input: { api: CollaborationApi; runtime: RegisteredRuntime }) => Promise<void>;
-  rename?: (session: SessionSummary) => Promise<void>;
-  readNativeName?: () => Promise<string | null | undefined>;
   activateLocalPublishing?: () => Promise<void>;
   deactivateLocalPublishing?: (reason: ProjectHarnessDeactivationReason) => Promise<void>;
   relayLocalHarnessEvent?: (input: {

@@ -100,7 +100,10 @@ test("trusted desktop hooks publish without opening the Desktop-owned thread wri
   const statePath = path.join(directory, "desktop-state.json");
   const capturePath = path.join(directory, "capture.jsonl");
   const fakeCodex = path.join(directory, "fake-codex.mjs");
-  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  await writeFile(statePath, JSON.stringify({
+    ...projectionState(workspacePath),
+    threadName: "A user-renamed local task",
+  }));
   await writeFile(fakeCodex, `
 import { appendFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
@@ -155,6 +158,7 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
     hook_event_name: "UserPromptSubmit", session_id: "old-thread", turn_id: "desktop-turn",
     cwd: workspacePath, model: "gpt-other", reasoning_effort: "high", prompt: "desktop prompt",
   });
+  assert.equal(first.handled, true, "the stable native thread id must match even when the local title differs");
   const retry = await executor.handleHookEvent(api, runtime, {
     hook_event_name: "UserPromptSubmit", session_id: "old-thread", turn_id: "desktop-turn",
     cwd: workspacePath, model: "gpt-other", reasoning_effort: "high", prompt: "desktop prompt",

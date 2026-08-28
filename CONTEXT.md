@@ -25,7 +25,7 @@ The authoritative ordered event history of one session. It does not implicitly i
 _Avoid_: Project history, native harness transcript
 
 **Local Agent Conversation**:
-The harness-native conversation maintained for one session under a Local Project Binding. Different sessions in the same project use separate local agent conversations.
+The harness-native conversation maintained for one session under a Local Project Binding. Different sessions in the same project use separate local agent conversations. Its local title is independent from the cloud Session title after first materialization and must never be used as binding identity.
 _Avoid_: Project-wide agent conversation
 
 **Project Member**:

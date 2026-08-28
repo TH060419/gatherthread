@@ -13,9 +13,10 @@ Architecture Decision Records document significant technical choices, their rati
 | [0007](0007-project-harness-adapter-and-codex-app-server.md) | Use a project harness adapter and Codex App Server | partially superseded by 0008 | 2026-08-25 |
 | [0008](0008-local-agent-conversations-as-rebuildable-projections.md) | Treat local agent conversations as rebuildable projections of canonical history | partially superseded by 0013 | 2026-08-25 |
 | [0009](0009-copyable-project-codex-connection-command.md) | Use a copyable project command for the first Codex connection | partially superseded by 0010 and 0012 | 2026-08-25 |
-| [0010](0010-explicit-session-lifecycle-and-synchronized-names.md) | Start projects empty and synchronize session names | partially superseded by 0015 | 2026-08-25 |
+| [0010](0010-explicit-session-lifecycle-and-synchronized-names.md) | Start projects empty and synchronize session names | partially superseded by 0015 and 0016 | 2026-08-25 |
 | [0011](0011-manual-codex-desktop-project-assignment.md) | Require manual Codex Desktop project assignment for managed tasks | superseded by 0012 | 2026-08-25 |
 | [0012](0012-activate-codex-desktop-tasks-with-registered-links.md) | Activate synchronized Codex Desktop tasks with registered links | partially superseded by 0013 | 2026-08-25 |
 | [0013](0013-single-writer-dual-codex-projections.md) | Use single-writer dual projections for Codex Desktop | accepted | 2026-08-26 |
 | [0014](0014-acknowledged-bounded-desktop-relay-capsules.md) | Use acknowledged bounded capsules for Desktop cloud relay | partially superseded by 0015 | 2026-08-26 |
 | [0015](0015-create-personal-solos-from-first-local-prompt.md) | Create creator-owned Solo sessions from the first local prompt | accepted | 2026-08-26 |
+| [0016](0016-independent-cloud-and-local-session-titles.md) | Keep cloud and local session titles independent | accepted | 2026-08-28 |
