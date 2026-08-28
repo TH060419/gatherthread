@@ -2370,6 +2370,78 @@ function fail(id, message) {
   assert.deepEqual(state.sidecar.map((entry: { sequence: number }) => entry.sequence), [1, 2, 3, 4, 5]);
 });
 
+test("project harness shares one background App Server across session projections", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-project-process-"));
+  const stateRoot = path.join(directory, "state");
+  const capturePath = path.join(directory, "capture.jsonl");
+  const fakeCodex = path.join(directory, "fake-codex-app-server.mjs");
+  await mkdir(stateRoot, { recursive: true });
+  await writeFile(fakeCodex, `
+import { appendFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
+if (process.argv[2] !== "app-server") process.exit(2);
+let nextThread = 0;
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  if (!line.trim()) continue;
+  const message = JSON.parse(line);
+  await appendFile(process.env.FAKE_CODEX_CAPTURE, JSON.stringify({ pid: process.pid, method: message.method }) + "\\n");
+  if (message.method === "initialized") continue;
+  if (message.method === "initialize") {
+    respond(message.id, { userAgent: "fake", codexHome: "/tmp/fake" });
+  } else if (message.method === "thread/start") {
+    nextThread += 1;
+    respond(message.id, { thread: { id: "thread-" + process.pid + "-" + nextThread } });
+  } else {
+    respond(message.id, {});
+  }
+}
+function respond(id, result) {
+  process.stdout.write(JSON.stringify({ id, result }) + "\\n");
+}
+`);
+
+  const harness = new CodexProjectHarness({
+    workspacePath: directory,
+    stateRoot,
+    mappingId: "mapping-shared-process",
+    projectName: "Shared process",
+    model: "gpt-test",
+    command: process.execPath,
+    commandArgs: [fakeCodex],
+    env: { ...process.env, FAKE_CODEX_CAPTURE: capturePath },
+  });
+  t.after(() => harness.close());
+  const first = harness.createSessionBinding({
+    session: { id: "session-1", projectId: "project-1", name: "One", mode: "multi" },
+    sessionKey: "one",
+    statePath: path.join(stateRoot, "one-session.json"),
+  });
+  const second = harness.createSessionBinding({
+    session: { id: "session-2", projectId: "project-1", name: "Two", mode: "multi" },
+    sessionKey: "two",
+    statePath: path.join(stateRoot, "two-session.json"),
+  });
+
+  await first.executor.prepareCanonicalProjection?.({
+    ...registeredRuntime(first.localSessionId),
+    sessionId: "session-1",
+  });
+  await second.executor.prepareCanonicalProjection?.({
+    ...registeredRuntime(second.localSessionId),
+    sessionId: "session-2",
+  });
+
+  const starts = (await readFile(capturePath, "utf8"))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as { pid: number; method: string })
+    .filter((entry) => entry.method === "thread/start");
+  assert.equal(starts.length, 2, "each session still owns an independent native thread");
+  assert.equal(new Set(starts.map((entry) => entry.pid)).size, 1,
+    "all background session threads must share one project-scoped App Server process");
+});
+
 function registeredRuntime(localSessionId: string): RegisteredRuntime {
   return {
     id: "runtime-1",

@@ -1963,6 +1963,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
   readonly descriptor: ProjectHarnessDescriptor;
   readonly #options: CodexProjectHarnessOptions;
   readonly #clients = new Set<CodexAppServerClient>();
+  #backgroundClient: CodexAppServerClient | undefined;
 
   constructor(options: CodexProjectHarnessOptions) {
     validateCodexModel(options.model);
@@ -2021,7 +2022,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
     const threadName = ["GatherThread", this.#options.projectName, input.session.name ?? input.session.id].join(" · ");
     const executionThreadName = ["GatherThread background", this.#options.projectName, input.session.name ?? input.session.id].join(" · ");
     const executor = new CodexAppServerExecutor({
-      client: this.#createClient(),
+      client: this.#projectBackgroundClient(),
       workspacePath: this.#options.workspacePath,
       statePath: executionProjectionStatePath(input.statePath),
       threadName: executionThreadName,
@@ -2204,7 +2205,13 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
   async close(): Promise<void> {
     const clients = [...this.#clients];
     this.#clients.clear();
+    this.#backgroundClient = undefined;
     await Promise.all(clients.map((client) => client.dispose()));
+  }
+
+  #projectBackgroundClient(): CodexAppServerClient {
+    if (!this.#backgroundClient) this.#backgroundClient = this.#createClient();
+    return this.#backgroundClient;
   }
 
   #createClient(): CodexAppServerClient {
