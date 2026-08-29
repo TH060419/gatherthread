@@ -372,6 +372,12 @@ export class CodexAppServerClient {
       // them out of the Desktop task list while this App Server process owns
       // them; canonical history can rebuild them after a connector restart.
       ephemeral: input.threadSource === "exec",
+      // GatherThread relies on full-history reads, resume, raw item injection,
+      // compaction, and JSONL-backed Desktop recovery. Codex Desktop may opt
+      // its App Server into paginated history by default, where those APIs are
+      // intentionally incomplete. Pin every managed projection to the legacy
+      // rollout store until paginated history supports the same lifecycle.
+      historyMode: "legacy",
       serviceName: "gatherthread",
       // Codex Desktop currently classifies its interactive project tasks as
       // `vscode`. Using the same documented ThreadSource value keeps this
@@ -545,6 +551,10 @@ export class CodexAppServerClient {
     await this.request("thread/archive", { threadId });
   }
 
+  async deleteThread(threadId: string): Promise<void> {
+    await this.request("thread/delete", { threadId });
+  }
+
   async unsubscribeThread(threadId: string): Promise<void> {
     try {
       await this.request("thread/unsubscribe", { threadId });
@@ -669,7 +679,9 @@ export class CodexAppServerClient {
     });
     await this.request("initialize", {
       clientInfo: { name: "gatherthread", title: "GatherThread", version: "0.1.0" },
-      capabilities: {},
+      // historyMode is an experimental client selector even when explicitly
+      // requesting the stable legacy rollout implementation.
+      capabilities: { experimentalApi: true },
     });
     if (this.#failure) throw this.#failure;
     child.stdin.write(`${JSON.stringify({ method: "initialized", params: {} })}\n`);
@@ -950,6 +962,33 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     return threadId;
   }
 
+  async #startVerifiedDesktopThread(workspacePath: string): Promise<string> {
+    const threadId = await this.#startManagedThread(workspacePath);
+    try {
+      await this.#setManagedThreadName(threadId, this.#threadName);
+      await this.#unsubscribeManagedThread(threadId);
+
+      // A successful thread/start response does not prove that another rich
+      // client can resume the rollout. Codex 0.150 on Windows can index an
+      // empty Desktop thread before its JSONL exists; terminating the creating
+      // App Server then leaves a broken deep link. Restart the operation-scoped
+      // server and use the read-only API as a cross-process persistence barrier
+      // before committing GatherThread state or Hook authorization.
+      await this.#client.close();
+      await this.#client.readThread(threadId);
+      return threadId;
+    } catch (error) {
+      // The candidate has not been committed and cannot have received a user
+      // turn. Best-effort deletion prevents a failed attempt from remaining as
+      // a broken Desktop task or index row.
+      await this.#client.deleteThread(threadId).catch(() => undefined);
+      throw new CodexThreadMissingError(
+        error,
+        `new Desktop thread ${threadId} was not persisted across App Server restart`,
+      );
+    }
+  }
+
   async #retireUnsupportedDesktopProjectMigration(state: CodexAppServerState): Promise<CodexAppServerState> {
     const migration = state.desktopProjectMigration;
     if (!migration) return state;
@@ -1046,14 +1085,12 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       const workspacePath = await validateCodexWorkspace(this.#workspacePath);
       let state = await this.#loadStateFromDisk(workspacePath);
       if (!state) {
-        const threadId = await this.#startManagedThread(workspacePath);
         if (!this.#gatherThreadSessionId) {
           throw new Error("Desktop hook projection requires its GatherThread session id before creating a task");
         }
+        const threadId = await this.#startVerifiedDesktopThread(workspacePath);
         state = this.#newState(this.#gatherThreadSessionId, workspacePath, threadId);
-        await this.#setManagedThreadName(threadId, this.#threadName);
         await this.#saveState(state, false);
-        await this.#unsubscribeManagedThread(threadId);
       } else if (!this.#desktopHookOnly) {
         await this.#assertThreadNotActive(state.threadId);
       }
