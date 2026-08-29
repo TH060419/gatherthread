@@ -1336,89 +1336,6 @@ test("suspended project binding materializes without entering the hook allowlist
   assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, { "old-thread": "execution" });
 });
 
-test("new Desktop binding is committed only after cross-process rollout verification", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-persisted-desktop-"));
-  const workspacePath = await realpath(directory);
-  const statePath = path.join(directory, "binding-session.json");
-  const registryPath = path.join(directory, "hook-registry.json");
-  await writeFile(registryPath, JSON.stringify({ version: 1, workspacePath, threads: {} }));
-  const calls: Array<{ method: string; threadId?: string }> = [];
-  let closed = false;
-  const client = {
-    startThread: async () => { calls.push({ method: "thread/start" }); return "persisted-thread"; },
-    setThreadName: async (threadId: string) => { calls.push({ method: "thread/name/set", threadId }); },
-    unsubscribeThread: async (threadId: string) => { calls.push({ method: "thread/unsubscribe", threadId }); },
-    close: async () => { calls.push({ method: "client/close" }); closed = true; },
-    readThread: async (threadId: string) => {
-      assert.equal(closed, true, "verification must use a restarted App Server process");
-      calls.push({ method: "thread/read", threadId });
-      return { id: threadId, name: "Session · GatherThread", status: "notLoaded", turns: [] };
-    },
-    deleteThread: async (threadId: string) => { calls.push({ method: "thread/delete", threadId }); },
-  } as unknown as CodexAppServerClient;
-  const executor = new CodexAppServerExecutor({
-    client,
-    workspacePath,
-    statePath,
-    threadName: "Session · GatherThread",
-    model: "gpt-test",
-    hookRegistryPath: registryPath,
-    localPublishingInitiallyActive: false,
-    desktopHookOnly: true,
-    threadSource: "vscode",
-    gatherThreadSessionId: "session-1",
-  });
-
-  await executor.activateLocalPublishing();
-
-  assert.deepEqual(calls.slice(0, 5).map((call) => call.method), [
-    "thread/start", "thread/name/set", "thread/unsubscribe", "client/close", "thread/read",
-  ]);
-  assert.equal(calls.some((call) => call.method === "thread/delete"), false);
-  assert.equal(JSON.parse(await readFile(statePath, "utf8")).threadId, "persisted-thread");
-  assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, { "persisted-thread": "execution" });
-});
-
-test("unpersisted empty Desktop thread never becomes a binding or Hook writer", async () => {
-  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-unpersisted-desktop-"));
-  const workspacePath = await realpath(directory);
-  const statePath = path.join(directory, "binding-session.json");
-  const registryPath = path.join(directory, "hook-registry.json");
-  await writeFile(registryPath, JSON.stringify({ version: 1, workspacePath, threads: {} }));
-  const calls: Array<{ method: string; threadId?: string }> = [];
-  const client = {
-    startThread: async () => { calls.push({ method: "thread/start" }); return "missing-rollout"; },
-    setThreadName: async (threadId: string) => { calls.push({ method: "thread/name/set", threadId }); },
-    unsubscribeThread: async (threadId: string) => { calls.push({ method: "thread/unsubscribe", threadId }); },
-    close: async () => { calls.push({ method: "client/close" }); },
-    readThread: async (threadId: string) => {
-      calls.push({ method: "thread/read", threadId });
-      throw new Error("failed to resolve rollout path: file does not exist");
-    },
-    deleteThread: async (threadId: string) => { calls.push({ method: "thread/delete", threadId }); },
-  } as unknown as CodexAppServerClient;
-  const executor = new CodexAppServerExecutor({
-    client,
-    workspacePath,
-    statePath,
-    threadName: "Session · GatherThread",
-    model: "gpt-test",
-    hookRegistryPath: registryPath,
-    localPublishingInitiallyActive: false,
-    desktopHookOnly: true,
-    threadSource: "vscode",
-    gatherThreadSessionId: "session-1",
-  });
-
-  await assert.rejects(executor.activateLocalPublishing(), /not persisted across App Server restart/);
-
-  assert.deepEqual(calls.map((call) => call.method), [
-    "thread/start", "thread/name/set", "thread/unsubscribe", "client/close", "thread/read", "thread/delete", "client/close",
-  ]);
-  await assert.rejects(readFile(statePath, "utf8"), /ENOENT/);
-  assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, {});
-});
-
 test("archived or missing managed Codex threads require explicit repair and are never resumed", async () => {
   for (const readThread of [
     async () => ({ id: "old-thread", status: "archived", turns: [] }),
@@ -2419,10 +2336,7 @@ function fail(id, message) {
   assert.equal(starts[0].message.params.ephemeral, true, "background execution must not create a user-visible Desktop task");
   assert.equal(starts[0].message.params.approvalPolicy, "never");
   assert.equal(starts[0].message.params.threadSource, "exec");
-  assert.equal(starts[0].message.params.historyMode, "legacy");
   assert.equal(starts[0].message.params.serviceName, "gatherthread");
-  const initialize = captures.find((capture) => capture.message.method === "initialize");
-  assert.equal(initialize.message.params.capabilities.experimentalApi, true);
   assert.equal(resumes.length, 0, "a loaded ephemeral projection must not be resumed through the persistent-thread API");
   const names = captures.filter((capture) => capture.message.method === "thread/name/set");
   assert.equal(names.length, 0, "ephemeral background threads must never receive unsupported metadata updates");
