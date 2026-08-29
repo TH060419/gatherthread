@@ -110,6 +110,8 @@ export interface AppendEventInput {
   visibility?: string;
   runtimeId?: string;
   runtime?: RuntimeProvenance;
+  observedModel?: string;
+  observedReasoningEffort?: string;
 }
 
 export interface RuntimeRegistration {
@@ -149,6 +151,8 @@ export interface CompleteAgentRequestInput {
   runtimeId: string;
   idempotencyKey: string;
   payload: unknown;
+  observedModel?: string;
+  observedReasoningEffort?: string;
 }
 
 export interface CollaborationApi {
@@ -189,6 +193,8 @@ export interface HarnessExecutionInput {
 export interface HarnessExecutionResult {
   events: TranscriptEvent[];
   localSessionId?: string;
+  observedModel?: string;
+  observedReasoningEffort?: string;
 }
 
 export interface HarnessExecutor {

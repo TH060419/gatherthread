@@ -5,7 +5,7 @@ export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
 export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
 
-export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gpt-5.6-sol" }) {
+export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gpt-5.6-sol", contextWindowTokens = 128_000 }) {
   if (typeof baseUrl !== "string" || baseUrl.length === 0 || /[\u0000-\u001f\u007f]/.test(baseUrl)) {
     throw new Error("A valid GatherThread server URL is required.");
   }
@@ -27,6 +27,9 @@ export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gp
   if (typeof model !== "string" || model.length === 0 || model.length > 120 || /[\u0000-\u001f\u007f]/.test(model)) {
     throw new Error("The Codex model is not safe for a connector command.");
   }
+  if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 4_096 || contextWindowTokens > 2_000_000) {
+    throw new Error("The Codex context window is not safe for a connector command.");
+  }
   const normalizedBaseUrl = parsed.toString().replace(/\/$/, "");
   const posixQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
   const powerShellQuote = (value) => `'${value.replaceAll("'", "''")}'`;
@@ -38,6 +41,7 @@ export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gp
       "--project", posixQuote(values[1]),
       "--create-workspace",
       "--model", posixQuote(values[2]),
+      "--context-window-tokens", String(contextWindowTokens),
       "--install-hooks",
     ].join(" "),
     powershell: [
@@ -46,6 +50,7 @@ export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gp
       "--project", powerShellQuote(values[1]),
       "--create-workspace",
       "--model", powerShellQuote(values[2]),
+      "--context-window-tokens", String(contextWindowTokens),
       "--install-hooks",
     ].join(" "),
   });

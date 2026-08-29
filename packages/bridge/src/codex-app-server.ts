@@ -180,6 +180,8 @@ interface ExecutionJournalEntry {
   turnId?: string;
   events?: TranscriptEvent[];
   failure?: { code: string; message: string };
+  observedModel?: string;
+  observedReasoningEffort?: string;
 }
 
 class CodexTurnTerminatedError extends Error {
@@ -372,6 +374,12 @@ export class CodexAppServerClient {
       // them out of the Desktop task list while this App Server process owns
       // them; canonical history can rebuild them after a connector restart.
       ephemeral: input.threadSource === "exec",
+      // GatherThread relies on full-history reads, resume, raw item injection,
+      // compaction, and JSONL-backed Desktop recovery. Codex Desktop may opt
+      // its App Server into paginated history by default, where those APIs are
+      // intentionally incomplete. Pin every managed projection to the legacy
+      // rollout store until paginated history supports the same lifecycle.
+      historyMode: "legacy",
       serviceName: "gatherthread",
       // Codex Desktop currently classifies its interactive project tasks as
       // `vscode`. Using the same documented ThreadSource value keeps this
@@ -409,6 +417,8 @@ export class CodexAppServerClient {
     threadId: string;
     prompt: string;
     clientUserMessageId: string;
+    model?: string;
+    effort?: string;
     onStarted?: (turnId: string) => Promise<void> | void;
   }): Promise<{ turnId: string; items: unknown[]; modelContextWindow?: number; totalTokens?: number }> {
     await this.start();
@@ -451,6 +461,8 @@ export class CodexAppServerClient {
         threadId: input.threadId,
         clientUserMessageId: input.clientUserMessageId,
         input: [{ type: "text", text: input.prompt }],
+        ...(input.model === undefined ? {} : { model: input.model }),
+        ...(input.effort === undefined ? {} : { effort: input.effort }),
       });
       const expectedTurnId = objectString(objectValue(started, "turn"), "id");
       if (!expectedTurnId) throw new Error("Codex App Server turn/start omitted the turn id");
@@ -543,6 +555,10 @@ export class CodexAppServerClient {
 
   async archiveThread(threadId: string): Promise<void> {
     await this.request("thread/archive", { threadId });
+  }
+
+  async deleteThread(threadId: string): Promise<void> {
+    await this.request("thread/delete", { threadId });
   }
 
   async unsubscribeThread(threadId: string): Promise<void> {
@@ -669,7 +685,9 @@ export class CodexAppServerClient {
     });
     await this.request("initialize", {
       clientInfo: { name: "gatherthread", title: "GatherThread", version: "0.1.0" },
-      capabilities: {},
+      // historyMode is an experimental client selector even when explicitly
+      // requesting the stable legacy rollout implementation.
+      capabilities: { experimentalApi: true },
     });
     if (this.#failure) throw this.#failure;
     child.stdin.write(`${JSON.stringify({ method: "initialized", params: {} })}\n`);
@@ -845,6 +863,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   shouldExecute(request: CanonicalEvent, runtime: RegisteredRuntime): Promise<boolean> {
     return this.#withStateWriter(async () => {
       if (request.actorId !== runtime.userId) return false;
+      const requestedHarness = requestedHarnessForRequest(request);
+      if (requestedHarness !== undefined && requestedHarness !== runtime.harness) return false;
       const workspacePath = await validateCodexWorkspace(this.#workspacePath);
       const state = await this.#loadState(runtime.sessionId, workspacePath);
       if (!state) return true;
@@ -950,6 +970,33 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     return threadId;
   }
 
+  async #startVerifiedDesktopThread(workspacePath: string): Promise<string> {
+    const threadId = await this.#startManagedThread(workspacePath);
+    try {
+      await this.#setManagedThreadName(threadId, this.#threadName);
+      await this.#unsubscribeManagedThread(threadId);
+
+      // A successful thread/start response does not prove that another rich
+      // client can resume the rollout. Codex 0.150 on Windows can index an
+      // empty Desktop thread before its JSONL exists; terminating the creating
+      // App Server then leaves a broken deep link. Restart the operation-scoped
+      // server and use the read-only API as a cross-process persistence barrier
+      // before committing GatherThread state or Hook authorization.
+      await this.#client.close();
+      await this.#client.readThread(threadId);
+      return threadId;
+    } catch (error) {
+      // The candidate has not been committed and cannot have received a user
+      // turn. Best-effort deletion prevents a failed attempt from remaining as
+      // a broken Desktop task or index row.
+      await this.#client.deleteThread(threadId).catch(() => undefined);
+      throw new CodexThreadMissingError(
+        error,
+        `new Desktop thread ${threadId} was not persisted across App Server restart`,
+      );
+    }
+  }
+
   async #retireUnsupportedDesktopProjectMigration(state: CodexAppServerState): Promise<CodexAppServerState> {
     const migration = state.desktopProjectMigration;
     if (!migration) return state;
@@ -1046,14 +1093,12 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       const workspacePath = await validateCodexWorkspace(this.#workspacePath);
       let state = await this.#loadStateFromDisk(workspacePath);
       if (!state) {
-        const threadId = await this.#startManagedThread(workspacePath);
         if (!this.#gatherThreadSessionId) {
           throw new Error("Desktop hook projection requires its GatherThread session id before creating a task");
         }
+        const threadId = await this.#startVerifiedDesktopThread(workspacePath);
         state = this.#newState(this.#gatherThreadSessionId, workspacePath, threadId);
-        await this.#setManagedThreadName(threadId, this.#threadName);
         await this.#saveState(state, false);
-        await this.#unsubscribeManagedThread(threadId);
       } else if (!this.#desktopHookOnly) {
         await this.#assertThreadNotActive(state.threadId);
       }
@@ -1251,6 +1296,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         return {
           events: journal.events,
           localSessionId: state.threadId,
+          observedModel: journal.observedModel ?? executionProfileForRequest(input.request, this.#model).model,
+          ...(journal.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: journal.observedReasoningEffort }),
         };
       }
       if (journal.status === "failed" && journal.failure) {
@@ -1269,6 +1316,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         return {
           events: journal.events,
           localSessionId: state.threadId,
+          observedModel: journal.observedModel ?? executionProfileForRequest(input.request, this.#model).model,
+          ...(journal.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: journal.observedReasoningEffort }),
         };
       }
       if (recovered && isTerminalCodexTurnStatus(recovered.status)) {
@@ -1281,6 +1330,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         throw new Error("Codex connector execution is still active or indeterminate; refusing to start a duplicate turn");
       }
     }
+    const executionProfile = executionProfileForRequest(input.request, this.#model);
     try {
       await this.#setManagedThreadName(state.threadId, this.#threadName);
       const afterSequence = state.lastInjectedSequence;
@@ -1303,7 +1353,12 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       if (!state.connectorClientMessageIds.includes(input.request.id)) {
         state.connectorClientMessageIds.push(input.request.id);
       }
-      state.executionJournal[input.request.id] = { requestId: input.request.id, status: "prepared" };
+      state.executionJournal[input.request.id] = {
+        requestId: input.request.id,
+        status: "prepared",
+        observedModel: executionProfile.model,
+        ...(executionProfile.reasoningEffort === undefined ? {} : { observedReasoningEffort: executionProfile.reasoningEffort }),
+      };
       if (requestChunks.length > 1) {
         state.projectionJournal = {
           eventId: input.request.id,
@@ -1329,9 +1384,17 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           threadId: connectorState.threadId,
           prompt: chunkLabel(requestChunks.at(-1) as string, requestChunks.length - 1, requestChunks.length),
           clientUserMessageId: input.request.id,
+          model: executionProfile.model,
+          ...(executionProfile.reasoningEffort === undefined ? {} : { effort: executionProfile.reasoningEffort }),
           onStarted: async (turnId) => {
             if (!connectorState.connectorTurnIds.includes(turnId)) connectorState.connectorTurnIds.push(turnId);
-            connectorState.executionJournal[input.request.id] = { requestId: input.request.id, status: "started", turnId };
+            connectorState.executionJournal[input.request.id] = {
+              requestId: input.request.id,
+              status: "started",
+              turnId,
+              observedModel: executionProfile.model,
+              ...(executionProfile.reasoningEffort === undefined ? {} : { observedReasoningEffort: executionProfile.reasoningEffort }),
+            };
             await this.#saveState(connectorState);
           },
         });
@@ -1362,9 +1425,16 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         status: "completed",
         turnId: turn.turnId,
         events: executionEvents,
+        observedModel: executionProfile.model,
+        ...(executionProfile.reasoningEffort === undefined ? {} : { observedReasoningEffort: executionProfile.reasoningEffort }),
       };
       await this.#saveState(state);
-      return { events: executionEvents, localSessionId: state.threadId };
+      return {
+        events: executionEvents,
+        localSessionId: state.threadId,
+        observedModel: executionProfile.model,
+        ...(executionProfile.reasoningEffort === undefined ? {} : { observedReasoningEffort: executionProfile.reasoningEffort }),
+      };
     } finally {
       await this.#unsubscribeManagedThread(state.threadId);
     }
@@ -1377,6 +1447,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     status: string,
     detail?: string,
   ): Promise<never> {
+    const previous = state.executionJournal[requestId];
     const normalizedStatus = safeText(status).toLowerCase();
     const code = normalizedStatus.includes("cancel") || normalizedStatus.includes("interrupt")
       ? "codex_turn_cancelled"
@@ -1389,6 +1460,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       status: "failed",
       turnId,
       failure: { code, message },
+      ...(previous?.observedModel === undefined ? {} : { observedModel: previous.observedModel }),
+      ...(previous?.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: previous.observedReasoningEffort }),
     };
     await this.#saveState(state);
     throw new HarnessExecutionTerminatedError(code, message);
@@ -2356,6 +2429,8 @@ function isExecutionJournal(value: unknown): value is Record<string, ExecutionJo
   return isObject(value) && Object.entries(value).every(([requestId, item]) =>
     isObject(item)
     && item.requestId === requestId
+    && (item.observedModel === undefined || isSafeExecutionProfileText(item.observedModel, 160))
+    && (item.observedReasoningEffort === undefined || isSafeExecutionProfileText(item.observedReasoningEffort, 80))
     && (
       (item.status === "prepared" && item.turnId === undefined && item.events === undefined)
       || (item.status === "started" && typeof item.turnId === "string" && item.turnId.length > 0 && item.events === undefined)
@@ -2525,6 +2600,44 @@ function renderProjectionEvent(
     session_state_change: "Session State Change",
   };
   return { role: projectionRole(event), text: `${username} · ${eventLabel[event.type]}：${content}` };
+}
+
+function executionProfileForRequest(
+  request: CanonicalEvent,
+  fallbackModel: string,
+): { harness: "codex"; model: string; reasoningEffort?: string } {
+  const payload = isObject(request.payload) ? request.payload : undefined;
+  const raw = payload && isObject(payload.execution_profile) ? payload.execution_profile : undefined;
+  if (raw === undefined) return { harness: "codex", model: fallbackModel };
+  const harness = typeof raw.harness === "string" ? raw.harness.trim().toLowerCase() : "";
+  if (harness !== "codex") throw new Error("Codex connector received an Agent request for a different harness");
+  const model = typeof raw.model === "string" ? raw.model.trim() : "";
+  validateCodexModel(model);
+  const reasoningEffort = typeof raw.reasoning_effort === "string" ? raw.reasoning_effort.trim() : undefined;
+  if (reasoningEffort !== undefined && !new Set(["low", "medium", "high", "xhigh", "max", "ultra"]).has(reasoningEffort)) {
+    throw new Error("Codex Agent request contains an unsupported reasoning effort");
+  }
+  return {
+    harness: "codex",
+    model,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+  };
+}
+
+function requestedHarnessForRequest(request: CanonicalEvent): string | undefined {
+  const payload = isObject(request.payload) ? request.payload : undefined;
+  const raw = payload && isObject(payload.execution_profile) ? payload.execution_profile : undefined;
+  if (raw === undefined) return undefined;
+  const harness = typeof raw.harness === "string" ? raw.harness.trim().toLowerCase() : "";
+  if (!isSafeExecutionProfileText(harness, 80)) throw new Error("Agent request contains an invalid target harness");
+  return harness;
+}
+
+function isSafeExecutionProfileText(value: unknown, maximum: number): value is string {
+  return typeof value === "string"
+    && value.length > 0
+    && value.length <= maximum
+    && !/[\u0000-\u001f\u007f-\u009f]/u.test(value);
 }
 
 function projectionRole(event: CanonicalEvent): "user" | "assistant" {

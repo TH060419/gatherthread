@@ -2056,7 +2056,16 @@ export class CollaborationDatabase {
     });
   }
 
-  completeAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, idempotencyKey: string, payload: JsonValue): CanonicalEvent {
+  completeAgentRequest(
+    actor: Actor,
+    sessionId: string,
+    requestEventId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+    payload: JsonValue,
+    observedModel?: string,
+    observedReasoningEffort?: string,
+  ): CanonicalEvent {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
@@ -2079,7 +2088,11 @@ export class CollaborationDatabase {
       if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed") {
         throw conflict("A matching active claim is required to complete this request");
       }
-      const provenance = this.runtimeProvenance(runtime);
+      const provenance = {
+        ...this.runtimeProvenance(runtime),
+        ...(observedModel === undefined ? {} : { model: observedModel }),
+        ...(observedReasoningEffort === undefined ? {} : { reasoning_effort: observedReasoningEffort }),
+      };
       const response = this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "agent_response",

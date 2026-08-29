@@ -191,6 +191,8 @@ export class HttpCollaborationClient implements CollaborationApi {
         runtime_id: input.runtimeId,
         idempotency_key: input.idempotencyKey,
         payload: truncateJsonValue(input.payload, 160 * 1024),
+        ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
+        ...(input.observedReasoningEffort === undefined ? {} : { observed_reasoning_effort: input.observedReasoningEffort }),
       }),
     }));
     return fromWireEvent(body.event ?? body);
@@ -342,6 +344,8 @@ function toWireEvent(event: AppendEventInput): Record<string, unknown> {
     reply_to_event_id: event.replyTo,
     visibility: event.visibility ?? "session",
     runtime_id: event.runtimeId ?? event.runtime?.runtimeId,
+    observed_model: event.observedModel,
+    observed_reasoning_effort: event.observedReasoningEffort,
   };
 }
 

@@ -34,9 +34,10 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
     assert.match(command, /--url 'https:\/\/gatherthread\.example\/v1'/);
     assert.match(command, /--project 'project-alpha_1'/);
     assert.match(command, /--model 'gpt-5\.6-sol'/);
+    assert.match(command, /--context-window-tokens 128000/);
     assert.match(command, /--create-workspace/);
     assert.match(command, /--install-hooks/);
-    assert.doesNotMatch(command, /token|Bearer|cookie|password/i);
+    assert.doesNotMatch(command, /access[-_ ]?token|Bearer|cookie|password/i);
   }
   assert.throws(() => projectCodexConnectionCommands({
     baseUrl: "https://user:secret@gatherthread.example",
@@ -62,6 +63,11 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
   });
   assert.match(quoted.posix, /--model 'gpt-'"'"'preview'/);
   assert.match(quoted.powershell, /--model 'gpt-''preview'/);
+  assert.throws(() => projectCodexConnectionCommands({
+    baseUrl: "https://gatherthread.example",
+    projectId: "project-alpha",
+    contextWindowTokens: 3,
+  }), /context window is not safe/);
 });
 
 const currentUser = { id: "u1", username: "User One" };

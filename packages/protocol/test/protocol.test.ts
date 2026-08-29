@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  AgentExecutionProfileSchema,
   AppendEventInputSchema,
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
@@ -18,6 +19,21 @@ import {
   SubscribeMessageSchema,
   UpdateSessionInputSchema,
 } from "../src/index.js";
+
+test("Agent execution profiles are bounded single-line data", () => {
+  assert.deepEqual(AgentExecutionProfileSchema.parse({
+    harness: "codex",
+    model: "gpt-5.6-terra",
+    reasoning_effort: "high",
+  }), {
+    harness: "codex",
+    model: "gpt-5.6-terra",
+    reasoning_effort: "high",
+  });
+  assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "bad\nmodel" }).success, false);
+  assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "x".repeat(161) }).success, false);
+  assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "gpt-5.6-sol", reasoning_effort: "bad\u0085value" }).success, false);
+});
 
 test("append input rejects unknown event types and short idempotency keys", () => {
   assert.equal(
