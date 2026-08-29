@@ -991,6 +991,18 @@ export class CollaborationDatabase {
     });
   }
 
+  deleteProject(actor: Actor, projectId: string): { project_id: string; session_ids: string[] } {
+    return this.transaction(() => {
+      this.requireProjectOwnedBy(projectId, actor.user_id);
+      const sessions = this.sqlite.prepare("SELECT id FROM sessions WHERE project_id = ? ORDER BY id")
+        .all(projectId) as Array<{ id: string }>;
+      const result = this.sqlite.prepare("DELETE FROM projects WHERE id = ? AND owner_user_id = ?")
+        .run(projectId, actor.user_id);
+      if (Number(result.changes) !== 1) throw notFound("Project");
+      return { project_id: projectId, session_ids: sessions.map((session) => session.id) };
+    });
+  }
+
   requireProject(projectId: string): ProjectRecord {
     const row = this.sqlite.prepare("SELECT * FROM projects WHERE id = ?")
       .get(projectId) as unknown as ProjectRow | undefined;
@@ -1097,6 +1109,29 @@ export class CollaborationDatabase {
       WHERE sessions.project_id = ?
       ORDER BY sessions.updated_at DESC, sessions.id ASC
     `).all(role, projectId) as unknown as SessionListItem[];
+  }
+
+  deleteSession(actor: Actor, sessionId: string): { project_id: string; session_id: string } {
+    return this.transaction(() => {
+      const row = this.sqlite.prepare(`
+        SELECT sessions.project_id, sessions.owner_user_id AS session_owner_user_id,
+               projects.owner_user_id AS project_owner_user_id
+        FROM sessions
+        JOIN projects ON projects.id = sessions.project_id
+        WHERE sessions.id = ?
+      `).get(sessionId) as {
+        project_id: string;
+        session_owner_user_id: string;
+        project_owner_user_id: string;
+      } | undefined;
+      if (!row || (row.session_owner_user_id !== actor.user_id && row.project_owner_user_id !== actor.user_id)) {
+        throw notFound("Session");
+      }
+      const result = this.sqlite.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+      if (Number(result.changes) !== 1) throw notFound("Session");
+      this.touchProject(row.project_id);
+      return { project_id: row.project_id, session_id: sessionId };
+    });
   }
 
   createInvitation(actor: Actor, sessionId: string, input: {

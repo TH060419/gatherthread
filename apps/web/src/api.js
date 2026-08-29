@@ -141,6 +141,11 @@ export class HttpCollaborationApi {
     };
   }
 
+  async deleteProject(projectId) {
+    await this.request(`/v1/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
+    this.sessionHeads.clear();
+  }
+
   async getProject(projectId) {
     const { project, role } = await this.request(`/v1/projects/${encodeURIComponent(projectId)}`);
     return {
@@ -159,6 +164,7 @@ export class HttpCollaborationApi {
       return {
         id: session.id,
         projectId: session.project_id,
+        ownerUserId: session.owner_user_id,
         name: session.title,
         mode: session.mode,
         description: session.state === "archived" ? "Archived shared session" : "Active shared session",
@@ -207,6 +213,11 @@ export class HttpCollaborationApi {
       }),
     });
     return this.#sessionDetail(session, "owner");
+  }
+
+  async deleteSession(sessionId) {
+    await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+    this.sessionHeads.delete(sessionId);
   }
 
   async listMembers(sessionId) {
@@ -599,6 +610,21 @@ export class MockCollaborationApi {
     return structuredClone(project);
   }
 
+  async deleteProject(projectId) {
+    await this.#wait();
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project || project.role !== "owner") {
+      throw new ApiError("Project not found.", { status: 404, code: "not_found" });
+    }
+    const sessionIds = new Set(this.sessions.filter((session) => session.projectId === projectId).map((session) => session.id));
+    this.projects = this.projects.filter((item) => item.id !== projectId);
+    this.sessions = this.sessions.filter((session) => session.projectId !== projectId);
+    for (const sessionId of sessionIds) this.#discardSessionCloudState(sessionId);
+    for (const [invitationId, invitation] of this.invitations) {
+      if (invitation.projectId === projectId) this.invitations.delete(invitationId);
+    }
+  }
+
   async getProject(projectId) {
     await this.#wait();
     const project = this.projects.find((item) => item.id === projectId);
@@ -708,6 +734,18 @@ export class MockCollaborationApi {
     this.idempotentEvents.set(key, event);
     this.#publish(sessionId, event);
     return this.#summary(session);
+  }
+
+  async deleteSession(sessionId) {
+    await this.#wait();
+    const session = this.#findSession(sessionId);
+    const project = this.projects.find((item) => item.id === session.projectId);
+    if (session.ownerUserId !== this.currentUser.id && project?.role !== "owner") {
+      throw new ApiError("Session not found.", { status: 404, code: "not_found" });
+    }
+    this.sessions = this.sessions.filter((item) => item.id !== sessionId);
+    if (project) project.sessionCount = Math.max(0, project.sessionCount - 1);
+    this.#discardSessionCloudState(sessionId);
   }
 
   async listMembers(sessionId) {
@@ -999,6 +1037,21 @@ export class MockCollaborationApi {
     const session = this.sessions.find((item) => item.id === sessionId);
     if (!session) throw new ApiError("Session not found.", { status: 404, code: "not_found" });
     return session;
+  }
+
+  #discardSessionCloudState(sessionId) {
+    this.events.delete(sessionId);
+    for (const [key, event] of this.idempotentEvents) {
+      if (event.sessionId === sessionId) this.idempotentEvents.delete(key);
+    }
+    for (const [requestId, request] of this.snapshotRequests) {
+      if (request.sessionId === sessionId) this.snapshotRequests.delete(requestId);
+    }
+    for (const listener of this.listeners.get(sessionId) ?? []) {
+      listener.closed = true;
+      listener.onState("offline");
+    }
+    this.listeners.delete(sessionId);
   }
 
   #wait() {

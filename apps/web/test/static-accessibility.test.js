@@ -203,6 +203,34 @@ test("session rename updates local metadata and applies realtime control events"
   assert.match(api, /method: "PATCH"/);
 });
 
+test("cloud deletion is explicit, creator-gated, and preserves local work in the confirmation copy", async () => {
+  const [html, main, api, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(apiPath, "utf8"),
+    readFile(i18nPath, "utf8"),
+  ]);
+  for (const id of [
+    "delete-project-button",
+    "delete-session-button",
+    "delete-cloud-dialog",
+    "delete-cloud-form",
+    "delete-cloud-description",
+    "delete-cloud-local-note",
+    "delete-cloud-error",
+    "confirm-delete-cloud-button",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /Local projects, files, Codex tasks, and Agent conversations stay on every device/);
+  assert.match(main, /session\.ownerUserId === state\.currentUser\?\.id \|\| state\.project\?\.role === "owner"/);
+  assert.match(main, /await api\.deleteSession\(target\.id\)/);
+  assert.match(main, /await api\.deleteProject\(target\.id\)/);
+  assert.match(api, /async deleteSession\(sessionId\)[\s\S]*?method: "DELETE"/);
+  assert.match(api, /async deleteProject\(projectId\)[\s\S]*?method: "DELETE"/);
+  assert.match(i18n, /共享的云端历史将被永久删除/);
+});
+
 test("an empty project lets owners and participants create an eligible first session", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /element\("empty-state-title"\)\.textContent = "Start a shared thread\."/);

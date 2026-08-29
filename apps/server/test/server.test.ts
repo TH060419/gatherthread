@@ -346,6 +346,85 @@ test("owner session rename validates input and reaches another client as metadat
   }
 });
 
+test("cloud delete endpoints enforce creator authority and revoke deleted realtime scopes", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-cloud-delete-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  let socket: WebSocket | undefined;
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "delete-owner", display_name: "Owner", device_id: "delete-owner-device", device_name: "Laptop" },
+    });
+    await api(running.origin, "/v1/projects", {
+      method: "POST", token: owner.body.data.token,
+      body: { project_id: "cloud-delete-project", idempotency_key: "cloud-delete-project-create", title: "Cloud delete" },
+    });
+    await api(running.origin, "/v1/projects/cloud-delete-project/sessions", {
+      method: "POST", token: owner.body.data.token,
+      body: { session_id: "owner-cloud-session", idempotency_key: "owner-cloud-session-create", mode: "multi", title: "Owner" },
+    });
+    const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/projects/cloud-delete-project/invitations", {
+      method: "POST", token: owner.body.data.token, body: { role: "participant", ttl: "1h" },
+    });
+    const participant = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+      method: "POST",
+      body: {
+        invite_token: invitation.body.data.invite_token,
+        user_id: "delete-participant", display_name: "Participant",
+        device_id: "delete-participant-device", device_name: "Desktop",
+      },
+    });
+    const firstSolo = await api<{ data: { session: { id: string } } }>(running.origin, "/v1/projects/cloud-delete-project/sessions", {
+      method: "POST", token: participant.body.data.token,
+      body: { session_id: "participant-cloud-session", idempotency_key: "participant-cloud-session-create", mode: "solo", title: "Mine" },
+    });
+    assert.equal((await api(running.origin, "/v1/sessions/owner-cloud-session", {
+      method: "DELETE", token: participant.body.data.token,
+    })).status, 404);
+    assert.equal((await api(running.origin, "/v1/projects/cloud-delete-project", {
+      method: "DELETE", token: participant.body.data.token,
+    })).status, 404);
+    assert.equal((await api(running.origin, `/v1/sessions/${firstSolo.body.data.session.id}`, {
+      method: "DELETE", token: participant.body.data.token,
+    })).status, 204);
+    assert.equal((await api(running.origin, `/v1/sessions/${firstSolo.body.data.session.id}`, {
+      token: owner.body.data.token,
+    })).status, 404);
+
+    await api(running.origin, "/v1/projects/cloud-delete-project/sessions", {
+      method: "POST", token: participant.body.data.token,
+      body: { session_id: "owner-removes-participant-session", idempotency_key: "owner-removes-participant-session-create", mode: "solo", title: "Owner removes" },
+    });
+    socket = await realtimeSocket(running.origin, participant.body.data.token, "owner-removes-participant-session");
+    const subscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
+    socket.send(JSON.stringify({ type: "subscribe", session_id: "owner-removes-participant-session", after_sequence: 0 }));
+    await subscribed;
+    const closed = new Promise<number>((resolve) => socket?.once("close", resolve));
+    assert.equal((await api(running.origin, "/v1/sessions/owner-removes-participant-session", {
+      method: "DELETE", token: owner.body.data.token,
+    })).status, 204);
+    assert.equal(await closed, 1008);
+
+    assert.equal((await api(running.origin, "/v1/projects/cloud-delete-project", {
+      method: "DELETE", token: owner.body.data.token,
+    })).status, 204);
+    assert.equal((await api(running.origin, "/v1/projects/cloud-delete-project", {
+      token: owner.body.data.token,
+    })).status, 404);
+    assert.equal((await api<{ data: { projects: Array<{ id: string }> } }>(running.origin, "/v1/projects", {
+      token: owner.body.data.token,
+    })).body.data.projects.some((project) => project.id === "cloud-delete-project"), false);
+  } finally {
+    socket?.close();
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("project invitations grant current and future sessions while viewer ACL stays read only", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-acl-"));
   const running = await startCollaborationServer({
@@ -619,6 +698,13 @@ test("browser sessions survive refresh, reject CSRF writes, and revoke on logout
       body: { session_id: "cookie-room", idempotency_key: "create-cookie-room", mode: "multi", title: "Allowed" },
     });
     assert.equal(allowedWrite.status, 201);
+    const csrfDeleteDenied = await api<{ error: { code: string } }>(running.origin, "/v1/sessions/cookie-room", {
+      method: "DELETE",
+      cookie,
+    });
+    assert.equal(csrfDeleteDenied.status, 403);
+    assert.equal(csrfDeleteDenied.body.error.code, "csrf_origin_required");
+    assert.equal((await api(running.origin, "/v1/sessions/cookie-room", { cookie })).status, 200);
 
     const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/sessions/cookie-room/invitations", {
       method: "POST",

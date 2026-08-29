@@ -861,6 +861,16 @@ code {
   display: none;
 }
 
+.project-delete-button {
+  align-self: flex-start;
+  margin: 8px 4px 0;
+  font-size: 0.72rem;
+}
+
+.project-delete-button[hidden] {
+  display: none;
+}
+
 .session-heading {
   margin-top: 24px;
 }
@@ -1910,6 +1920,34 @@ time,
 
 .danger-text-button {
   color: var(--danger);
+}
+
+.button-danger {
+  border-color: color-mix(in srgb, var(--danger) 70%, var(--line));
+  background: var(--danger);
+  color: #fff;
+}
+
+.button-danger:hover:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.delete-cloud-description {
+  margin: 20px 0 0;
+  color: var(--ink);
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+
+.delete-cloud-local-note {
+  margin: 14px 0 0;
+  padding: 13px 14px;
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, var(--line));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--danger) 6%, var(--paper-raised));
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  line-height: 1.5;
 }
 
 :root[data-density="compact"] .session-rail,

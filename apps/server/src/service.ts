@@ -48,6 +48,11 @@ export class CollaborationService {
     return this.database.createProject(actor, input);
   }
 
+  deleteProject(actor: Actor, projectId: string) {
+    this.database.assertActiveDevice(actor);
+    return this.database.deleteProject(actor, projectId);
+  }
+
   getProject(actor: Actor, projectId: string) {
     const role = this.requireProjectMembership(actor, projectId);
     return { project: this.database.requireProject(projectId), role };
@@ -110,6 +115,11 @@ export class CollaborationService {
   getSession(actor: Actor, sessionId: string): { session: SessionRecord; role: MembershipRole } {
     const role = this.requireMembership(actor, sessionId);
     return { session: this.database.requireSession(sessionId), role };
+  }
+
+  deleteSession(actor: Actor, sessionId: string) {
+    this.database.assertActiveDevice(actor);
+    return this.database.deleteSession(actor, sessionId);
   }
 
   listSessions(actor: Actor) {

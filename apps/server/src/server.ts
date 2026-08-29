@@ -368,11 +368,17 @@ export async function startCollaborationServer(
   const actorWriteLimiter = new FixedWindowRateLimiter(options.actorWriteRateLimit ?? { windowMs: 60_000, limit: 120 });
   const maxConnections = options.maxConnections ?? 128;
 
-  const closeSocketsWithoutMembership = (): void => {
+  const closeRealtimeWithoutMembership = (): void => {
     for (const [socket, state] of sockets) {
       if (state.sessionId !== null && database.membershipRole(state.sessionId, state.actor.user_id) === null) {
         socket.close(1008, "membership_revoked");
         sockets.delete(socket);
+      }
+    }
+    for (const [ticketValue, ticket] of realtimeTickets) {
+      if (ticket.allowedSessionId !== null
+        && database.membershipRole(ticket.allowedSessionId, ticket.actor.user_id) === null) {
+        realtimeTickets.delete(ticketValue);
       }
     }
   };
@@ -583,6 +589,13 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (projectId && request.method === "DELETE" && parts.length === 3) {
+        service.deleteProject(actor, projectId);
+        closeRealtimeWithoutMembership();
+        response.writeHead(204).end();
+        return;
+      }
+
       if (projectId && parts[3] === "sessions" && parts.length === 4 && request.method === "GET") {
         sendJson(response, 200, { data: { sessions: service.listProjectSessions(actor, projectId) } });
         return;
@@ -611,7 +624,7 @@ export async function startCollaborationServer(
       if (projectId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
         await readAuthenticatedJson();
         service.removeProjectMembership(actor, projectId, parts[4]);
-        closeSocketsWithoutMembership();
+        closeRealtimeWithoutMembership();
         response.writeHead(204).end();
         return;
       }
@@ -666,6 +679,13 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (sessionId && request.method === "DELETE" && parts.length === 3) {
+        service.deleteSession(actor, sessionId);
+        closeRealtimeWithoutMembership();
+        response.writeHead(204).end();
+        return;
+      }
+
       if (sessionId && parts[3] === "members" && parts.length === 4 && request.method === "GET") {
         sendJson(response, 200, { data: { members: service.listMembers(actor, sessionId) } });
         return;
@@ -701,7 +721,7 @@ export async function startCollaborationServer(
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
         const input = z.object({ idempotency_key: IdempotencyKeySchema }).parse(await readAuthenticatedJson());
         const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key);
-        closeSocketsWithoutMembership();
+        closeRealtimeWithoutMembership();
         sendJson(response, 200, { data: { event } });
         return;
       }

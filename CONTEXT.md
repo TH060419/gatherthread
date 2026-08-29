@@ -28,6 +28,10 @@ _Avoid_: Project history, native harness transcript
 The harness-native conversation maintained for one session under a Local Project Binding. Different sessions in the same project use separate local agent conversations. Its local title is independent from the cloud Session title after first materialization and must never be used as binding identity.
 _Avoid_: Project-wide agent conversation
 
+**Cloud Deletion**:
+Permanent removal of a Project or Session and its server-held history. It stops that cloud synchronization scope but leaves every collaborator's Local Project Binding, local workspace, and Local Agent Conversation untouched.
+_Avoid_: Local deletion, archive, disconnect
+
 **Project Member**:
 A person admitted to a project. Their effective permissions within a session depend on the project role and that session's mode.
 _Avoid_: Session-only identity

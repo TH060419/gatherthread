@@ -1,4 +1,4 @@
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260829-1";
 import {
   canAppend,
   createIdempotencyKey,
@@ -23,7 +23,7 @@ import {
 } from "./domain.js?v=20260829-2";
 import { SessionSync } from "./realtime.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260829-11";
+import { createLocalizer } from "./i18n.js?v=20260829-12";
 import {
   contextBudgetInputBytes,
   digitsOnly,
@@ -116,6 +116,8 @@ const createProjectDialog = element("create-project-dialog");
 const createProjectForm = element("create-project-form");
 const renameSessionDialog = element("rename-session-dialog");
 const renameSessionForm = element("rename-session-form");
+const deleteCloudDialog = element("delete-cloud-dialog");
+const deleteCloudForm = element("delete-cloud-form");
 const connectCodexDialog = element("connect-codex-dialog");
 const connectCodexButton = element("connect-codex-button");
 const memberPanel = element("member-panel");
@@ -131,6 +133,8 @@ const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
 let connectCodexReturnFocus = null;
 let renameSessionReturnFocus = null;
+let deleteCloudReturnFocus = null;
+let pendingCloudDeletion = null;
 let settingsReturnFocus = null;
 let settingsPreview = state.settings;
 
@@ -342,6 +346,17 @@ renameSessionDialog.addEventListener("close", () => {
   renameSessionReturnFocus = null;
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
 });
+element("delete-project-button").addEventListener("click", () => openDeleteCloudDialog("project"));
+element("delete-session-button").addEventListener("click", () => openDeleteCloudDialog("session"));
+element("close-delete-cloud-button").addEventListener("click", () => deleteCloudDialog.close());
+element("cancel-delete-cloud-button").addEventListener("click", () => deleteCloudDialog.close());
+deleteCloudDialog.addEventListener("close", () => {
+  pendingCloudDeletion = null;
+  element("delete-cloud-error").textContent = "";
+  const returnFocus = deleteCloudReturnFocus;
+  deleteCloudReturnFocus = null;
+  requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
+});
 connectCodexButton.addEventListener("click", openConnectCodexDialog);
 element("close-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 element("done-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
@@ -432,6 +447,52 @@ renameSessionForm.addEventListener("submit", async (event) => {
   }
 });
 
+deleteCloudForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const target = pendingCloudDeletion;
+  if (!target) return;
+  const submit = element("confirm-delete-cloud-button");
+  const errorNode = element("delete-cloud-error");
+  errorNode.textContent = "";
+  submit.disabled = true;
+  try {
+    if (target.type === "session") {
+      await api.deleteSession(target.id);
+      if (state.session?.id === target.id) {
+        sync.disconnect();
+        stopMemberRefresh();
+        stopSnapshotPolling();
+        selectedSessionGeneration += 1;
+        state.session = null;
+      }
+      deleteCloudReturnFocus = null;
+      deleteCloudDialog.close();
+      state.projects = await api.listProjects();
+      location.hash = new URLSearchParams({ project: target.projectId }).toString();
+      await selectProject(target.projectId);
+      announce("Session deleted from cloud. Local copies were not changed.");
+    } else {
+      await api.deleteProject(target.id);
+      sync.disconnect();
+      stopMemberRefresh();
+      stopSnapshotPolling();
+      selectedSessionGeneration += 1;
+      projectSelectionGuard.invalidate();
+      state.project = null;
+      state.session = null;
+      deleteCloudReturnFocus = null;
+      deleteCloudDialog.close();
+      history.replaceState(null, "", `${location.pathname}${location.search}`);
+      await enterWorkspace();
+      announce("Project deleted from cloud. Local copies were not changed.");
+    }
+  } catch (error) {
+    errorNode.textContent = error.message ?? "Unable to delete the cloud copy.";
+  } finally {
+    submit.disabled = false;
+  }
+});
+
 sendChatButton.addEventListener("click", () => sendMessage("human_chat"));
 sendAgentButton.addEventListener("click", () => sendMessage("agent_request"));
 element("settings-button").addEventListener("click", openSettingsDialog);
@@ -504,6 +565,7 @@ async function restoreBrowserSession() {
 function resetWorkspaceToAuth() {
   if (connectCodexDialog.open) connectCodexDialog.close();
   if (renameSessionDialog.open) renameSessionDialog.close();
+  if (deleteCloudDialog.open) deleteCloudDialog.close();
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
@@ -642,12 +704,14 @@ function renderProjectSelect() {
   }
   projectSelect.disabled = state.projects.length < 2;
   connectCodexButton.hidden = !state.project;
+  element("delete-project-button").hidden = state.project?.role !== "owner";
 }
 
 function renderProjectPermissions() {
   const mayCreate = state.project?.role === "owner" || state.project?.role === "participant";
   element("new-session-button").hidden = !mayCreate;
   element("empty-create-button").hidden = !mayCreate;
+  element("delete-project-button").hidden = state.project?.role !== "owner";
 }
 
 function startMemberRefresh(sessionId) {
@@ -735,6 +799,8 @@ function renderSessionHeader() {
     ? membership?.role !== "viewer" && session.ownerUserId === state.currentUser?.id
     : membership?.role === "owner";
   element("rename-session-button").hidden = !mayRename;
+  const mayDelete = session.ownerUserId === state.currentUser?.id || state.project?.role === "owner";
+  element("delete-session-button").hidden = !mayDelete;
   element("session-subtitle").textContent = `${session.description} · You are ${membership?.role ?? "viewer"}`;
   element("session-access-note").hidden = session.mode !== "solo";
 }
@@ -1330,6 +1396,28 @@ function openRenameSessionDialog() {
   element("rename-session-name").value = state.session.name;
   renameSessionDialog.showModal();
   requestAnimationFrame(() => element("rename-session-name").select());
+}
+
+function openDeleteCloudDialog(type) {
+  const target = type === "project" ? state.project : state.session;
+  if (!target) return;
+  const permitted = type === "project"
+    ? state.project?.role === "owner"
+    : state.session?.ownerUserId === state.currentUser?.id || state.project?.role === "owner";
+  if (!permitted) return;
+  pendingCloudDeletion = {
+    type,
+    id: target.id,
+    name: target.name,
+    projectId: type === "project" ? target.id : state.project.id,
+  };
+  deleteCloudReturnFocus = document.activeElement;
+  element("delete-cloud-error").textContent = "";
+  element("delete-cloud-description").textContent = type === "project"
+    ? `Delete the cloud project “${target.name}” and all of its cloud sessions?`
+    : `Delete the cloud session “${target.name}”?`;
+  deleteCloudDialog.showModal();
+  requestAnimationFrame(() => element("cancel-delete-cloud-button").focus());
 }
 
 function openConnectCodexDialog() {

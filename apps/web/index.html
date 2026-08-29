@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260829-21" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260829-22" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -176,6 +176,9 @@
           >
             <span>Connect Codex</span>
           </button>
+          <button id="delete-project-button" class="text-button danger-text-button project-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
+            Delete cloud project
+          </button>
           <div class="rail-heading session-heading">
             <div>
               <p class="eyebrow">Conversations</p>
@@ -219,6 +222,9 @@
                     aria-controls="rename-session-dialog"
                     hidden
                   >Rename</button>
+                  <button id="delete-session-button" class="text-button danger-text-button session-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
+                    Delete
+                  </button>
                 </div>
                 <p id="session-subtitle" class="session-subtitle"></p>
                 <p id="session-access-note" class="session-access-note" hidden>Only the creator can edit this Solo session.</p>
@@ -494,6 +500,25 @@
       </form>
     </dialog>
 
+    <dialog id="delete-cloud-dialog" class="create-dialog delete-cloud-dialog" aria-labelledby="delete-cloud-title" aria-describedby="delete-cloud-description delete-cloud-local-note">
+      <form id="delete-cloud-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">Cloud deletion</p>
+            <h2 id="delete-cloud-title">Delete from cloud?</h2>
+          </div>
+          <button id="close-delete-cloud-button" class="icon-button" type="button" aria-label="Close cloud deletion dialog">×</button>
+        </div>
+        <p id="delete-cloud-description" class="delete-cloud-description"></p>
+        <p id="delete-cloud-local-note" class="delete-cloud-local-note">Shared cloud history will be permanently removed. Local projects, files, Codex tasks, and Agent conversations stay on every device.</p>
+        <p id="delete-cloud-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="cancel-delete-cloud-button" class="button button-secondary" type="button">Cancel</button>
+          <button id="confirm-delete-cloud-button" class="button button-danger" type="submit">Delete from cloud</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog
       id="connect-codex-dialog"
       class="create-dialog codex-connect-dialog"
@@ -673,6 +698,6 @@
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260829-22"></script>
+    <script type="module" src="./src/main.js?v=20260829-23"></script>
   </body>
 </html>
