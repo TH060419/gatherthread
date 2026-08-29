@@ -195,6 +195,7 @@ test("Codex connector accepts a private HTTPS origin and applies safe defaults",
   if (parsed === "help") return;
   assert.equal(parsed.apiUrl, "https://host.tailnet.ts.net/v1");
   assert.equal(parsed.model, "gpt-5.6-sol");
+  assert.equal(parsed.contextWindowTokens, 128_000);
   assert.equal(parsed.sandbox, "workspace-write");
   assert.equal(parsed.shareToolEvents, true);
   assert.equal(parsed.projectId, "project-alpha");
@@ -215,6 +216,20 @@ test("Codex connector parses project workspace creation without accepting an amb
     "--workspace", ".",
     "--create-workspace",
   ]), /cannot be combined/);
+});
+
+test("Codex connector accepts a bounded context ceiling", () => {
+  const parsed = parseCodexConnectArgs([
+    "--url", "https://host.tailnet.ts.net",
+    "--context-window-tokens", "257000",
+  ]);
+  assert.notEqual(parsed, "help");
+  if (parsed === "help") return;
+  assert.equal(parsed.contextWindowTokens, 257_000);
+  assert.throws(() => parseCodexConnectArgs([
+    "--url", "https://host.tailnet.ts.net",
+    "--context-window-tokens", "2048",
+  ]), /4096 to 2000000/);
 });
 
 test("Codex connector rejects public plaintext URLs and unsafe sandbox modes", () => {

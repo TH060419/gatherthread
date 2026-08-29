@@ -26,6 +26,36 @@ test("append is idempotent and chat never fabricates an agent response", async (
   assert.equal(after.events.at(-1).type, "human_chat");
 });
 
+test("Agent requests carry the selected model and reasoning profile on the production wire", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: { event: {
+      id: "e1", session_id: "s1", sequence: 1, idempotency_key: "agent-request-0001",
+      type: "agent_request", actor_user_id: "u1", actor_display_name: "Alice",
+      created_at: "2026-08-29T00:00:00.000Z", visibility: "session", reply_to_event_id: null,
+      payload: { content: "Inspect this", execution_profile: { harness: "codex", model: "gpt-5.6-terra", reasoning_effort: "high" } },
+    } } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    await api.appendAgentRequest("s1", {
+      content: "Inspect this",
+      idempotencyKey: "agent-request-0001",
+      executionProfile: { harness: "codex", model: "gpt-5.6-terra", reasoningEffort: "high" },
+    });
+    assert.equal(captured.url, "https://gatherthread.example/v1/sessions/s1/events");
+    assert.deepEqual(JSON.parse(captured.options.body).payload.execution_profile, {
+      harness: "codex",
+      model: "gpt-5.6-terra",
+      reasoning_effort: "high",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("project participants cannot append to solo sessions", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   api.currentUser = { id: "user-maya", username: "Maya Ortiz" };

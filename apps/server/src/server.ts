@@ -785,7 +785,16 @@ export async function startCollaborationServer(
 
       if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "complete" && parts.length === 6 && request.method === "POST") {
         const input = CompleteAgentRequestInputSchema.parse(await readAuthenticatedJson());
-        sendJson(response, 201, { data: { event: service.completeAgentRequest(actor, sessionId, parts[4], input.runtime_id, input.idempotency_key, input.payload) } });
+        sendJson(response, 201, { data: { event: service.completeAgentRequest(
+          actor,
+          sessionId,
+          parts[4],
+          input.runtime_id,
+          input.idempotency_key,
+          input.payload,
+          input.observed_model,
+          input.observed_reasoning_effort,
+        ) } });
         return;
       }
 

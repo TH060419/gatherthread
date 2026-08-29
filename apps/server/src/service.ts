@@ -240,7 +240,11 @@ export class CollaborationService {
     }
     if (input.runtime_id) {
       const runtime = this.requireOwnedRuntime(actor, sessionId, input.runtime_id);
-      provenance = this.database.runtimeProvenance(runtime);
+      provenance = {
+        ...this.database.runtimeProvenance(runtime),
+        ...(input.observed_model === undefined ? {} : { model: input.observed_model }),
+        ...(input.observed_reasoning_effort === undefined ? {} : { reasoning_effort: input.observed_reasoning_effort }),
+      };
     }
     if (session.state !== "active") throw conflict("Archived sessions do not accept new events");
 
@@ -276,7 +280,16 @@ export class CollaborationService {
     return this.database.claimAgentRequest(actor, sessionId, requestEventId, runtimeId);
   }
 
-  completeAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string, idempotencyKey: string, payload: JsonValue): CanonicalEvent {
+  completeAgentRequest(
+    actor: Actor,
+    sessionId: string,
+    requestEventId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+    payload: JsonValue,
+    observedModel?: string,
+    observedReasoningEffort?: string,
+  ): CanonicalEvent {
     const { session } = this.requireWrite(actor, sessionId);
     if (session.state !== "active") throw conflict("Archived sessions do not accept agent responses");
     const event = this.database.completeAgentRequest(
@@ -286,6 +299,8 @@ export class CollaborationService {
       runtimeId,
       idempotencyKey,
       redactJson(payload),
+      observedModel,
+      observedReasoningEffort,
     );
     this.publish(event);
     return event;

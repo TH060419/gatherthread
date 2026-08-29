@@ -347,7 +347,16 @@ export class HttpCollaborationApi {
       body: JSON.stringify({
         type,
         visibility: "session",
-        payload: { content: input.content },
+        payload: {
+          content: input.content,
+          ...(type === "agent_request" && input.executionProfile ? {
+            execution_profile: {
+              harness: input.executionProfile.harness,
+              model: input.executionProfile.model,
+              reasoning_effort: input.executionProfile.reasoningEffort,
+            },
+          } : {}),
+        },
         idempotency_key: input.idempotencyKey,
         reply_to_event_id: input.replyTo ?? null,
       }),
@@ -870,7 +879,8 @@ export class MockCollaborationApi {
           deviceId: "device-demo",
           harness: "Codex",
           provider: "OpenAI",
-          model: "gpt-5",
+          model: input.executionProfile?.model ?? "gpt-5",
+          ...(input.executionProfile?.reasoningEffort ? { reasoningEffort: input.executionProfile.reasoningEffort } : {}),
           localSessionId: "local-demo",
           fidelity: "harness_transcript",
         },
@@ -912,13 +922,14 @@ export class MockCollaborationApi {
       content: input.content,
       actor: this.currentUser,
       idempotencyKey: input.idempotencyKey,
+      executionProfile: input.executionProfile,
     });
     this.idempotentEvents.set(`${sessionId}:${input.idempotencyKey}`, event);
     this.#publish(sessionId, event);
     return structuredClone(event);
   }
 
-  #makeEvent(sessionId, type, { content, actor, idempotencyKey, provenance, replyTo = null }) {
+  #makeEvent(sessionId, type, { content, actor, idempotencyKey, provenance, replyTo = null, executionProfile }) {
     const bucket = this.events.get(sessionId) ?? [];
     const event = {
       id: `evt-${sessionId}-${bucket.length + 1}`,
@@ -930,7 +941,16 @@ export class MockCollaborationApi {
       createdAt: new Date().toISOString(),
       visibility: "session",
       replyTo,
-      payload: { content },
+      payload: {
+        content,
+        ...(type === "agent_request" && executionProfile ? {
+          execution_profile: {
+            harness: executionProfile.harness,
+            model: executionProfile.model,
+            reasoning_effort: executionProfile.reasoningEffort,
+          },
+        } : {}),
+      },
       ...(provenance ? { provenance } : {}),
     };
     bucket.push(event);

@@ -9,21 +9,61 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260825-5" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260829-18" />
   </head>
   <body>
+    <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
+    <svg class="brand-symbols" aria-hidden="true">
+      <defs>
+        <linearGradient id="brand-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#08B9D8"/><stop offset=".50" stop-color="#10C1E1"/><stop offset=".66" stop-color="#8878F4"/><stop offset="1" stop-color="#F35BAE"/></linearGradient>
+        <linearGradient id="brand-blue" x1="20" y1="135" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#168AF4"/><stop offset=".55" stop-color="#4E6CF4"/><stop offset="1" stop-color="#A06BE8"/></linearGradient>
+        <linearGradient id="brand-violet" x1="20" y1="228" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#9A50EE"/><stop offset=".58" stop-color="#AD61EA"/><stop offset="1" stop-color="#C66BDD"/></linearGradient>
+        <linearGradient id="brand-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F456AE"/><stop offset=".58" stop-color="#F15CAE"/><stop offset="1" stop-color="#D56FD5"/></linearGradient>
+        <symbol id="brand-mark-symbol" viewBox="0 0 590 364">
+          <g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#brand-blue)"/>
+            <path d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#brand-violet)"/>
+            <path d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#brand-pink)"/>
+            <path d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#brand-cyan)"/>
+          </g>
+          <circle cx="50" cy="42" r="28" fill="#08B9D8"/><circle cx="50" cy="135" r="28" fill="#168AF4"/><circle cx="50" cy="228" r="28" fill="#9A50EE"/><circle cx="50" cy="322" r="28" fill="#F456AE"/>
+        </symbol>
+      </defs>
+    </svg>
     <a class="skip-link" href="#main-content">Skip to conversation</a>
 
     <main id="auth-view" class="auth-shell" aria-labelledby="login-title">
       <section class="auth-story" aria-hidden="true">
+        <svg class="auth-mark-motion" viewBox="0 0 590 380" aria-hidden="true">
+          <defs>
+            <linearGradient id="auth-mark-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#08B9D8"/><stop offset=".50" stop-color="#10C1E1"/><stop offset=".66" stop-color="#8878F4"/><stop offset="1" stop-color="#F35BAE"/></linearGradient>
+            <linearGradient id="auth-mark-blue" x1="20" y1="135" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#168AF4"/><stop offset=".55" stop-color="#4E6CF4"/><stop offset="1" stop-color="#A06BE8"/></linearGradient>
+            <linearGradient id="auth-mark-violet" x1="20" y1="228" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#9A50EE"/><stop offset=".58" stop-color="#AD61EA"/><stop offset="1" stop-color="#C66BDD"/></linearGradient>
+            <linearGradient id="auth-mark-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F456AE"/><stop offset=".58" stop-color="#F15CAE"/><stop offset="1" stop-color="#D56FD5"/></linearGradient>
+          </defs>
+          <g class="auth-mark-base" fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-blue)"/>
+            <path d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-violet)"/>
+            <path d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-pink)"/>
+            <path d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-cyan)"/>
+          </g>
+          <g class="auth-mark-flow" fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+            <path pathLength="1" d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-blue)"/>
+            <path pathLength="1" d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-violet)"/>
+            <path pathLength="1" d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-pink)"/>
+            <path pathLength="1" d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-cyan)"/>
+          </g>
+          <g class="auth-mark-inputs">
+            <circle cx="50" cy="42" r="28" fill="#08B9D8"/><circle cx="50" cy="135" r="28" fill="#168AF4"/><circle cx="50" cy="228" r="28" fill="#9A50EE"/><circle cx="50" cy="322" r="28" fill="#F456AE"/>
+          </g>
+        </svg>
         <p class="eyebrow">Human + agent workspace</p>
         <h1>
-          <span class="headline-line">One room.</span>
+          <span class="headline-line">One room,</span>
           <span class="headline-line">Many minds.</span>
         </h1>
         <p>
-          Keep every collaborator in their own harness while the shared history
-          stays ordered, attributable, and live.
+          People collaborate in one space, each with a local Agent, sharing context that stays ordered, attributable, and live.
         </p>
         <div class="signal-card">
           <span class="signal-dot"></span>
@@ -32,8 +72,10 @@
       </section>
 
       <section class="login-panel">
-        <div class="brand-mark" aria-label="GatherThread">G</div>
-        <p class="eyebrow">GatherThread</p>
+        <div class="brand-lockup brand-lockup-login" role="img" aria-label="GatherThread">
+          <svg class="brand-lockup-mark" viewBox="0 0 590 364" aria-hidden="true"><use href="#brand-mark-symbol"></use></svg>
+          <span class="brand-lockup-name">GatherThread</span>
+        </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
         <form id="login-form" novalidate>
@@ -85,8 +127,8 @@
     <div id="workspace" class="workspace" hidden>
       <header class="topbar">
         <a class="wordmark" href="#" aria-label="GatherThread home">
-          <span class="brand-mark brand-mark-small" aria-hidden="true">G</span>
-          <span>GatherThread</span>
+          <svg class="brand-lockup-mark" viewBox="0 0 590 364" aria-hidden="true"><use href="#brand-mark-symbol"></use></svg>
+          <span class="brand-lockup-name">GatherThread</span>
         </a>
         <div class="account-cluster">
           <div class="connection-chip" id="global-connection" role="status">
@@ -95,6 +137,9 @@
           </div>
           <span class="avatar" id="current-user-avatar" aria-hidden="true"></span>
           <span id="current-username" class="current-username"></span>
+          <button id="settings-button" class="icon-button topbar-icon-button" type="button" aria-label="Open Settings" aria-haspopup="dialog" aria-controls="settings-dialog">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.1 13.25a7.6 7.6 0 0 0 .05-2.5l2-1.56-2-3.46-2.48 1a7.75 7.75 0 0 0-2.17-1.25L14.15 2h-4.3L9.5 5.48a7.75 7.75 0 0 0-2.17 1.25l-2.48-1-2 3.46 2 1.56a7.6 7.6 0 0 0 .05 2.5l-2.05 1.56 2 3.46 2.5-1a7.8 7.8 0 0 0 2.15 1.24l.35 3.49h4.3l.35-3.49a7.8 7.8 0 0 0 2.15-1.24l2.5 1 2-3.46-2.05-1.56Z"/></svg>
+          </button>
           <button id="logout-button" class="text-button" type="button">Log out</button>
         </div>
       </header>
@@ -125,7 +170,6 @@
             hidden
           >
             <span>Connect Codex</span>
-            <span lang="zh-Hans">连接 Codex</span>
           </button>
           <div class="rail-heading session-heading">
             <div>
@@ -142,11 +186,9 @@
             </button>
           </div>
           <ul id="session-list" class="session-list"></ul>
-          <div class="rail-note">
-            <span aria-hidden="true">↳</span>
-            <p>Human chat is shared without triggering a local agent.</p>
-          </div>
         </nav>
+
+        <div id="left-layout-resizer" class="layout-resizer" role="separator" aria-label="Resize session sidebar" aria-orientation="vertical" aria-valuemin="210" aria-valuemax="420" tabindex="0"></div>
 
         <main id="main-content" class="conversation" tabindex="-1">
           <section id="empty-state" class="empty-state" hidden>
@@ -174,6 +216,7 @@
                   >Rename</button>
                 </div>
                 <p id="session-subtitle" class="session-subtitle"></p>
+                <p id="session-access-note" class="session-access-note" hidden>Only the creator can edit this Solo session.</p>
               </div>
               <div class="session-header-actions">
                 <button
@@ -184,7 +227,6 @@
                   hidden
                 >
                   <span>Download to Codex</span>
-                  <span lang="zh-Hans">下载到 Codex</span>
                 </button>
                 <button
                   id="mobile-members-button"
@@ -246,6 +288,17 @@
               </div>
             </section>
 
+            <div
+              id="composer-layout-resizer"
+              class="composer-layout-resizer"
+              role="separator"
+              aria-label="Resize message composer"
+              aria-orientation="horizontal"
+              aria-valuemin="210"
+              aria-valuemax="560"
+              tabindex="0"
+            ></div>
+
             <form id="composer" class="composer">
               <label for="message-input">Message</label>
               <textarea
@@ -257,6 +310,13 @@
                 aria-describedby="composer-permission send-chat-help send-agent-help"
               ></textarea>
               <p id="composer-permission" class="permission-note"></p>
+              <fieldset id="agent-request-profile" class="agent-request-profile">
+                <legend>Agent request settings</legend>
+                <label for="agent-model-select">Model</label>
+                <select id="agent-model-select" name="agent-model"></select>
+                <label for="agent-effort-select">Reasoning</label>
+                <select id="agent-effort-select" name="agent-effort"></select>
+              </fieldset>
               <div class="composer-actions">
                 <div class="intent-help" id="send-chat-help">
                   <button id="send-chat-button" class="button button-secondary" type="button">
@@ -275,6 +335,8 @@
             </form>
           </div>
         </main>
+
+        <div id="right-layout-resizer" class="layout-resizer" role="separator" aria-label="Resize member sidebar" aria-orientation="vertical" aria-valuemin="260" aria-valuemax="480" tabindex="0"></div>
 
         <aside id="member-panel" class="member-panel" aria-labelledby="members-title">
           <div class="member-heading">
@@ -437,23 +499,21 @@
         <div class="dialog-heading">
           <div>
             <p class="eyebrow">Project connector</p>
-            <h2 id="connect-codex-title">Connect Codex <span lang="zh-Hans">· 连接 Codex</span></h2>
+            <h2 id="connect-codex-title">Connect Codex</h2>
           </div>
           <button id="close-connect-codex-button" class="icon-button" type="button" aria-label="Close Connect Codex dialog">×</button>
         </div>
         <p id="connect-codex-summary">
-          Run one command from the root of your local GatherThread repository. It creates or reuses and opens the same-name local Desktop project <strong id="connect-codex-project-name"></strong>, then connects every editable session with one Desktop task and one isolated background Agent runtime.
+          <span>Run one command from the root of your local GatherThread repository. It creates or reuses and opens the same-name local Desktop project</span>
+          <strong id="connect-codex-project-name"></strong><span>, then connects every editable session with one Desktop task and one isolated background Agent runtime.</span>
         </p>
         <section id="connect-codex-activation" class="codex-desktop-activation-guide" aria-labelledby="connect-codex-activation-title">
           <h3 id="connect-codex-activation-title">Single-writer synchronization</h3>
           <p>Codex Desktop exclusively owns the visible task. Web Agent requests run in an isolated background projection, and trusted hooks merge Desktop turns and the latest shared context through GatherThread.</p>
-          <p lang="zh-Hans">Codex Desktop 独占可见任务；网页 Agent 请求在隔离的后台投影执行，可信 Hook 通过 GatherThread 汇合桌面回合与最新共享上下文。</p>
           <p>An owner or participant can start a new Desktop task normally. Its first submitted prompt creates and binds a personal Solo in this project; an empty task creates nothing. Viewer tasks always remain local.</p>
-          <p lang="zh-Hans">Owner 或 Participant 可以正常新建 Desktop 任务；第一次提交 prompt 时才会在本项目创建并绑定一个本人 Solo，空任务不会创建云端内容。Viewer 的任务始终只留在本地。</p>
         </section>
         <p id="connect-codex-security" class="codex-connect-notice">
           Your device token is requested by a hidden CLI prompt. It is not included in either command. After hooks are installed for the first time, open Codex Desktop Settings and enable Hooks, then review the generated <code>.codex/hooks.json</code> before use.
-          <br><span lang="zh-Hans">设备 Token 只会在终端隐藏输入，不会进入命令。首次安装后，请在 Codex Desktop 设置中启用 Hooks，并检查生成的 <code>.codex/hooks.json</code>。</span>
         </p>
 
         <section class="command-card" aria-labelledby="connect-codex-posix-title">
@@ -481,6 +541,114 @@
       </div>
     </dialog>
 
+    <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+      <form id="settings-form" method="dialog">
+        <header class="settings-header">
+          <div>
+            <p class="eyebrow">GatherThread preferences</p>
+            <h2 id="settings-title">Settings</h2>
+            <p>Personalize this browser without storing credentials.</p>
+          </div>
+          <button id="close-settings-button" class="icon-button" type="button" aria-label="Close Settings">×</button>
+        </header>
+
+        <div class="settings-layout">
+          <nav class="settings-navigation" aria-label="Settings sections">
+            <a href="#settings-general">General</a>
+            <a href="#settings-appearance">Appearance</a>
+            <a href="#settings-layout">Layout</a>
+            <a href="#settings-sync">Sync &amp; context</a>
+            <a href="#settings-agents">Agents</a>
+            <a href="#settings-composer">Composer</a>
+            <a href="#settings-notifications">Notifications</a>
+          </nav>
+
+          <div class="settings-sections">
+            <section id="settings-general" class="settings-section" aria-labelledby="settings-general-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">General</p><h3 id="settings-general-title">Language</h3></div>
+                <p>Interface language for this browser.</p>
+              </div>
+              <label class="settings-row" for="settings-locale">
+                <span><strong>Language</strong><small>English is the default. Product names stay in English.</small></span>
+                <select id="settings-locale" name="locale"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
+              </label>
+            </section>
+
+            <section id="settings-appearance" class="settings-section" aria-labelledby="settings-appearance-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">Appearance</p><h3 id="settings-appearance-title">Look &amp; motion</h3></div>
+                <p>Changes preview immediately and remain local to this browser.</p>
+              </div>
+              <label class="settings-row" for="settings-theme"><span><strong>Theme</strong><small>Follow the system or choose a fixed appearance.</small></span><select id="settings-theme" name="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
+              <div class="settings-row">
+                <span><strong>Text size</strong><small>Use a preset or enter an exact percentage.</small></span>
+                <div class="numeric-setting"><select id="settings-text-scale-preset" aria-label="Text size preset"><option value="90">Small · 90%</option><option value="100">Default · 100%</option><option value="110">Large · 110%</option><option value="125">Extra large · 125%</option><option value="custom">Custom</option></select><label><span class="sr-only">Exact text size</span><input id="settings-text-scale" name="text-scale" type="number" min="90" max="125" step="1" inputmode="numeric" /><span>%</span></label></div>
+              </div>
+              <label class="settings-row" for="settings-density"><span><strong>Density</strong><small>Compact reduces spacing without shrinking targets below accessibility limits.</small></span><select id="settings-density" name="density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
+              <label class="settings-row" for="settings-motion"><span><strong>Motion</strong><small>Reduced motion disables blur and non-essential transitions for comfort and performance.</small></span><select id="settings-motion" name="motion"><option value="system">Follow system</option><option value="reduce">Reduce motion</option><option value="full">Full motion</option></select></label>
+              <label class="settings-row" for="settings-ambient-canvas"><span><strong>Ambient canvas</strong><small>Adds a slow ambient light field behind workspace glass. It stops automatically for reduced motion or background tabs.</small></span><select id="settings-ambient-canvas" name="ambient-canvas"><option value="off">Off</option><option value="subtle">Subtle</option><option value="pronounced">Pronounced</option></select></label>
+              <label class="settings-row settings-toggle" for="settings-high-contrast"><span><strong>Higher contrast</strong><small>Strengthens borders and muted text.</small></span><input id="settings-high-contrast" name="high-contrast" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+            </section>
+
+            <section id="settings-layout" class="settings-section" aria-labelledby="settings-layout-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">Layout</p><h3 id="settings-layout-title">Workspace panels</h3></div>
+                <p>Drag the vertical and horizontal dividers in the workspace, or set exact sizes here.</p>
+              </div>
+              <div class="settings-row"><span><strong>Session sidebar</strong><small>210-420 px.</small></span><div class="numeric-setting"><select id="settings-left-width-preset" aria-label="Session sidebar width preset"><option value="220">Narrow · 220</option><option value="260">Default · 260</option><option value="340">Wide · 340</option><option value="custom">Custom</option></select><label><input id="settings-left-width" name="left-width" type="number" min="210" max="420" step="1" inputmode="numeric" aria-label="Exact session sidebar width" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Member sidebar</strong><small>260-480 px.</small></span><div class="numeric-setting"><select id="settings-right-width-preset" aria-label="Member sidebar width preset"><option value="260">Narrow · 260</option><option value="290">Default · 290</option><option value="380">Wide · 380</option><option value="custom">Custom</option></select><label><input id="settings-right-width" name="right-width" type="number" min="260" max="480" step="1" inputmode="numeric" aria-label="Exact member sidebar width" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Message composer</strong><small>210-560 px. You can also drag the divider above the composer.</small></span><div class="numeric-setting"><select id="settings-composer-height-preset" aria-label="Message composer height preset"><option value="220">Compact · 220</option><option value="280">Default · 280</option><option value="380">Tall · 380</option><option value="custom">Custom</option></select><label><input id="settings-composer-height" name="composer-height" type="number" min="210" max="560" step="1" inputmode="numeric" aria-label="Exact message composer height" /><span>px</span></label></div></div>
+              <button id="reset-layout-button" class="button button-secondary" type="button">Reset panel sizes</button>
+            </section>
+
+            <section id="settings-sync" class="settings-section" aria-labelledby="settings-sync-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">Sync &amp; context</p><h3 id="settings-sync-title">Projection context ceiling</h3></div>
+                <p>Controls the maximum history used by connector projection, rebuilds, snapshots, and Web Agent execution.</p>
+              </div>
+              <label class="settings-row" for="settings-sync-mode"><span><strong>Budget mode</strong><small>Adaptive respects the configured maximum and local connector capability.</small></span><select id="settings-sync-mode" name="sync-mode"><option value="adaptive">Adaptive · recommended</option><option value="fixed">Fixed maximum</option></select></label>
+              <div class="settings-row settings-row-tall">
+                <span><strong>Projection context ceiling</strong><small>Small values load faster but compact long histories more often. Large values can be slower, consume more memory, or exceed a model limit. Match this to the connected model. Desktop Hook updates use a separate bounded capsule.</small></span>
+                <div class="numeric-setting numeric-setting-context"><select id="settings-context-preset" aria-label="Context budget preset"><option value="8192">8 KiB</option><option value="32768">32 KiB</option><option value="131072">128 KiB</option><option value="524288">512 KiB</option><option value="2097152">2 MiB</option><option value="5242880">5 MiB</option><option value="custom">Custom</option></select><label><input id="settings-context-budget" name="context-budget" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" aria-label="Exact context budget" /><select id="settings-context-unit" aria-label="Context budget unit"><option value="KiB">KiB</option><option value="MiB">MiB</option></select></label></div>
+              </div>
+              <div id="settings-context-diagnostic" class="capability-diagnostic" role="status"></div>
+            </section>
+
+            <section id="settings-agents" class="settings-section" aria-labelledby="settings-agents-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">Agents</p><h3 id="settings-agents-title">Default local Agent</h3></div>
+                <p>These defaults seed Connect Codex and new Agent requests for the current project.</p>
+              </div>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Agent harness</strong><small>Claude Code and DeepSeek Harness adapters are reserved for future releases.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option disabled>Claude Code · coming later</option><option disabled>DeepSeek Harness · coming later</option></select></label>
+              <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
+              <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
+              <div class="settings-row settings-row-tall"><span><strong>Custom Codex model</strong><small>Add a safe model ID such as a compatible proxy model. Credentials and CLI arguments are never accepted here.</small></span><div class="custom-model-control"><input id="settings-custom-model" type="text" maxlength="120" autocomplete="off" placeholder="model-id" /><button id="add-custom-model-button" class="button button-secondary" type="button">Add model</button></div></div>
+              <p id="settings-custom-model-error" class="form-error" role="alert"></p>
+            </section>
+
+            <section id="settings-composer" class="settings-section" aria-labelledby="settings-composer-title">
+              <div class="settings-section-heading"><div><p class="eyebrow">Composer</p><h3 id="settings-composer-title">Message behavior</h3></div><p>Controls only this browser.</p></div>
+              <label class="settings-row" for="settings-enter-behavior"><span><strong>Enter key</strong><small>New line is safest because chat and Agent request are distinct actions.</small></span><select id="settings-enter-behavior" name="enter-behavior"><option value="newline">Insert a new line</option><option value="send_chat">Send chat</option><option value="request_agent">Request Agent</option></select></label>
+              <label class="settings-row settings-toggle" for="settings-confirm-agent"><span><strong>Confirm Agent requests</strong><small>Ask before starting a local model run.</small></span><input id="settings-confirm-agent" name="confirm-agent" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+              <label class="settings-row settings-toggle" for="settings-auto-scroll"><span><strong>Follow new events</strong><small>Keep the timeline at the latest event when already near the bottom.</small></span><input id="settings-auto-scroll" name="auto-scroll" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+            </section>
+
+            <section id="settings-notifications" class="settings-section" aria-labelledby="settings-notifications-title">
+              <div class="settings-section-heading"><div><p class="eyebrow">Notifications</p><h3 id="settings-notifications-title">Attention</h3></div><p>Browser permission is requested only when you enable a notification.</p></div>
+              <label class="settings-row settings-toggle" for="settings-notify-agent"><span><strong>Agent completed</strong><small>Notify when a requested Agent finishes while this tab is in the background.</small></span><input id="settings-notify-agent" name="notify-agent" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+              <label class="settings-row settings-toggle" for="settings-notify-connection"><span><strong>Connection lost</strong><small>Show an in-page notification when live sync goes offline.</small></span><input id="settings-notify-connection" name="notify-connection" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+            </section>
+          </div>
+        </div>
+
+        <footer class="settings-footer">
+          <button id="reset-settings-button" class="text-button danger-text-button" type="button">Restore defaults</button>
+          <div><button id="cancel-settings-button" class="button button-secondary" type="button">Cancel</button><button class="button button-primary" type="submit">Save settings</button></div>
+        </footer>
+      </form>
+    </dialog>
+
     <dialog id="device-credential-dialog" class="create-dialog device-credential-dialog" aria-labelledby="device-credential-title">
       <div>
         <p class="eyebrow">One-time credential</p>
@@ -500,6 +668,6 @@
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260825-7"></script>
+    <script type="module" src="./src/main.js?v=20260829-20"></script>
   </body>
 </html>

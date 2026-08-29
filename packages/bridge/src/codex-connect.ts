@@ -35,6 +35,7 @@ interface CodexConnectOptions {
   apiUrl: string;
   workspacePath: string;
   model: string;
+  contextWindowTokens: number;
   projectId?: string;
   createWorkspace: boolean;
   sandbox: CodexSandboxMode;
@@ -84,6 +85,8 @@ Options:
   --url <url>              GatherThread HTTPS origin or /v1 API URL (required)
   --workspace <path>       Local project Codex may access (default: current directory)
   --model <model>          Codex model (default: gpt-5.6-sol)
+  --context-window-tokens <n>
+                           Context ceiling used for safe projection and compaction (default: 128000)
   --project <id>           Project ID; otherwise choose from your writable projects
   --create-workspace       Create/reuse ~/GatherThread Projects/<project name>
   --sandbox <mode>         workspace-write or read-only (default: workspace-write)
@@ -171,6 +174,7 @@ export async function runCodexConnectCli(
       mappingId,
       projectName: selected.name,
       model: parsed.model,
+      contextWindowTokens: parsed.contextWindowTokens,
       command: codexCommand,
       sandbox: parsed.sandbox,
       shareToolEvents: parsed.shareToolEvents,
@@ -407,6 +411,7 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   let url: string | undefined;
   let workspacePath = process.cwd();
   let model = "gpt-5.6-sol";
+  let contextWindowTokens = 128_000;
   let projectId: string | undefined;
   let sandbox: CodexSandboxMode = "workspace-write";
   let codexCommand = "codex";
@@ -443,6 +448,7 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
       workspaceSpecified = true;
     }
     else if (argument === "--model") model = value;
+    else if (argument === "--context-window-tokens") contextWindowTokens = Number(value);
     else if (argument === "--project") projectId = value;
     else if (argument === "--codex-command") codexCommand = value;
     else if (argument === "--sandbox") {
@@ -461,11 +467,15 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   if (!model.trim() || model.length > 200 || model.startsWith("-") || /[\0\r\n]/.test(model)) {
     throw new Error("--model must be a valid non-empty model identifier");
   }
+  if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 4_096 || contextWindowTokens > 2_000_000) {
+    throw new Error("--context-window-tokens must be an integer from 4096 to 2000000");
+  }
   if (!codexCommand.trim()) throw new Error("--codex-command must be non-empty");
   return {
     apiUrl: normalizeApiUrl(url),
     workspacePath: path.resolve(workspacePath),
     model,
+    contextWindowTokens,
     ...(projectId === undefined ? {} : { projectId }),
     createWorkspace,
     sandbox,
