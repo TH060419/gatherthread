@@ -318,7 +318,7 @@ https://gatherthread-host.example-tailnet.ts.net/health
 - [ ] 连接器使用完整的 HTTPS 主机地址和各自的本地项目目录，并选择正确的 GatherThread 项目。
 - [ ] 同一连接器自动发现该项目中新建的 multi 会话；各会话使用独立 Codex thread。
 - [ ] 发送 Agent 请求后、回复到达前，网页显示回答动画；runtime 断线时改为排队提示。
-- [ ] 第一次请求完成后，Codex 桌面端显示 `GatherThread · 项目名 · 会话名`，后续网页请求继续同一 thread。
+- [ ] 第一次请求完成后，Codex Desktop 显示 `会话名 · GatherThread`，后续网页请求继续同一 thread；分别修改云端与本地标题后仍不得产生重复会话。
 - [ ] runtime 显示用户名、设备、harness、provider 和模型。
 - [ ] 普通 Chat 会进入后续上下文，但不会触发本地 Codex。
 - [ ] Agent 请求只由发出者自己的 runtime 领取。

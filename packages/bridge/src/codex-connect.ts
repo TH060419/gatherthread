@@ -511,125 +511,29 @@ interface ManagedSession {
   bridge: LocalBridge;
   executor: HarnessExecutor;
   lastHeartbeatAt: number;
-  name: string;
-  rename?: ProjectHarnessSessionBinding["rename"];
-  readNativeName?: ProjectHarnessSessionBinding["readNativeName"];
-  localRename?: ManagedLocalRename;
-  suppressLocalRenameForCloudName?: string;
   synchronize?: ProjectHarnessSessionBinding["synchronize"];
   activateLocalPublishing?: ProjectHarnessSessionBinding["activateLocalPublishing"];
   deactivateLocalPublishing?: ProjectHarnessSessionBinding["deactivateLocalPublishing"];
   relayLocalHarnessEvent?: ProjectHarnessSessionBinding["relayLocalHarnessEvent"];
 }
 
-interface ManagedLocalRename {
-  baseCloudName: string;
-  title: string;
-  idempotencyKey: string;
-  status: "pending" | "acknowledged";
-}
-
 interface ManagedPublishingBinding {
   deactivateLocalPublishing?: ProjectHarnessSessionBinding["deactivateLocalPublishing"];
 }
 
-export async function refreshManagedSessionName(
-  current: Pick<ManagedSession, "name" | "rename" | "localRename" | "suppressLocalRenameForCloudName">,
-  session: SessionSummary,
-): Promise<boolean> {
+function managedThreadName(sessionName: string): string {
+  return [sessionName, "GatherThread"].join(" · ").slice(0, 240);
+}
+
+export function formatConnectedCodexSessionOutput(_projectName: string, session: SessionSummary): string {
   const sessionName = session.name ?? session.id;
-  if (current.name === sessionName) return false;
-  delete current.localRename;
-  await current.rename?.(session);
-  current.name = sessionName;
-  current.suppressLocalRenameForCloudName = sessionName;
-  return true;
-}
-
-export async function synchronizeManagedSessionTitle(input: {
-  current: Pick<ManagedSession,
-    "name" | "rename" | "readNativeName" | "localRename" | "suppressLocalRenameForCloudName">;
-  session: SessionSummary;
-  projectName: string;
-  actorUserId?: string;
-  actorDeviceId: string;
-  api: CollaborationApi;
-}): Promise<"unchanged" | "uploaded" | "awaiting_cloud" | "restored_cloud"> {
-  const cloudName = input.session.name ?? input.session.id;
-  if (input.current.suppressLocalRenameForCloudName === cloudName) {
-    delete input.current.suppressLocalRenameForCloudName;
-    return "unchanged";
-  }
-  if (input.current.localRename?.baseCloudName !== cloudName) delete input.current.localRename;
-  const mayRename = input.session.mode === "solo"
-    ? input.session.role !== "viewer" && (input.session.ownerUserId === undefined
-      ? input.session.role === "owner"
-      : input.session.ownerUserId === input.actorUserId)
-    : input.session.role === "owner";
-  if (!mayRename) {
-    delete input.current.localRename;
-    const nativeName = await input.current.readNativeName?.();
-    if (nativeName !== undefined && nativeName !== null && nativeName !== managedThreadName(input.projectName, cloudName)) {
-      await input.current.rename?.(input.session);
-      return "restored_cloud";
-    }
-    return "unchanged";
-  }
-  const pending = input.current.localRename;
-  if (pending) {
-    if (pending.status === "acknowledged") return "awaiting_cloud";
-    if (!input.api.updateSession) throw new Error("Collaboration API cannot update session titles");
-    await input.api.updateSession(input.session.id, {
-      title: pending.title,
-      idempotencyKey: pending.idempotencyKey,
-    });
-    pending.status = "acknowledged";
-    return "uploaded";
-  }
-  const nativeName = await input.current.readNativeName?.();
-  if (nativeName === undefined || nativeName === null) return "unchanged";
-  const canonicalNativeName = managedThreadName(input.projectName, cloudName);
-  if (nativeName === canonicalNativeName) return "unchanged";
-  const localTitle = localSessionTitle(nativeName, input.projectName);
-  if (localTitle === undefined || localTitle === cloudName) {
-    await input.current.rename?.(input.session);
-    return "restored_cloud";
-  }
-  const idempotencyKey = `codex-title-${createHash("sha256")
-    .update([input.actorDeviceId, input.session.id, cloudName, localTitle].join("\0"))
-    .digest("hex")}`;
-  input.current.localRename = {
-    baseCloudName: cloudName,
-    title: localTitle,
-    idempotencyKey,
-    status: "pending",
-  };
-  if (!input.api.updateSession) throw new Error("Collaboration API cannot update session titles");
-  await input.api.updateSession(input.session.id, { title: localTitle, idempotencyKey });
-  input.current.localRename.status = "acknowledged";
-  return "uploaded";
-}
-
-function managedThreadName(projectName: string, sessionName: string): string {
-  return ["GatherThread", projectName, sessionName].join(" · ").slice(0, 240);
-}
-
-export function formatConnectedCodexSessionOutput(projectName: string, session: SessionSummary): string {
-  const sessionName = session.name ?? session.id;
-  return `Connected session: ${sessionName} [${session.mode}] as ${terminalQuoted(managedThreadName(projectName, sessionName))}\n`;
+  return `Connected session: ${sessionName} [${session.mode}] as ${terminalQuoted(managedThreadName(sessionName))}\n`;
 }
 
 function terminalQuoted(value: string): string {
   return JSON.stringify(value).replace(/[\u007f-\u009f]/gu, (character) =>
     `\\u${character.codePointAt(0)?.toString(16).padStart(4, "0")}`,
   );
-}
-
-function localSessionTitle(nativeName: string, projectName: string): string | undefined {
-  const prefix = ["GatherThread", projectName, ""].join(" · ");
-  const candidate = (nativeName.startsWith(prefix) ? nativeName.slice(prefix.length) : nativeName).trim();
-  if (candidate.length < 1 || candidate.length > 200 || /[\u0000-\u001f\u007f-\u009f]/u.test(candidate)) return undefined;
-  return candidate;
 }
 
 export async function initializeProjectSession(options: {
@@ -656,7 +560,6 @@ export async function initializeProjectSession(options: {
     }
     await binding.adoptLocalConversation(options.adoptLocalConversationId);
   }
-  await binding.rename?.(options.session);
   await binding.deactivateLocalPublishing?.("initializing");
   const descriptor = options.harness.descriptor;
   const bridge = new LocalBridge({
@@ -693,10 +596,7 @@ export async function initializeProjectSession(options: {
     bridge,
     executor: binding.executor,
     lastHeartbeatAt: Date.now(),
-    name: options.session.name ?? options.session.id,
     ...(binding.synchronize === undefined ? {} : { synchronize: binding.synchronize }),
-    ...(binding.rename === undefined ? {} : { rename: binding.rename }),
-    ...(binding.readNativeName === undefined ? {} : { readNativeName: binding.readNativeName }),
     ...(binding.activateLocalPublishing === undefined ? {} : { activateLocalPublishing: binding.activateLocalPublishing }),
     ...(binding.deactivateLocalPublishing === undefined ? {} : { deactivateLocalPublishing: binding.deactivateLocalPublishing }),
     ...(binding.relayLocalHarnessEvent === undefined ? {} : { relayLocalHarnessEvent: binding.relayLocalHarnessEvent }),
@@ -1003,17 +903,6 @@ export async function runProjectConnector(options: {
       if (discoverySessionIds.has(session.id)) continue;
       try {
         let current = managed.get(session.id);
-        if (current) {
-          await refreshManagedSessionName(current, session);
-          await synchronizeManagedSessionTitle({
-            current,
-            session,
-            projectName: options.project.name,
-            actorUserId: options.actorUserId,
-            actorDeviceId: options.actorDeviceId,
-            api: options.api,
-          });
-        }
         if (!current) {
           current = await initializeProjectSession({
             api: options.api,

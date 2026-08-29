@@ -1,6 +1,6 @@
 # 接入本地 Codex
 
-内置连接器把一个 GatherThread 项目连接到一个本地 Agent 项目目录，并自动发现可见会话。每个实时可写会话包含一个由 Desktop 独占的任务 `GatherThread · 项目名 · 会话名`，以及一个独立的 `exec` 后台投影。Desktop 任务通过可信 Hook 接收本地交互回合；后台投影导入规范历史并执行网页 **Request my agent**。两者通过服务器规范日志汇合，不再由两个进程写同一个原生任务。
+内置连接器把一个 GatherThread 项目连接到一个本地 Agent 项目目录，并自动发现可见会话。新的实时可写会话首次会得到一个由 Desktop 独占、名为 `会话名 · GatherThread` 的任务，以及一个名为 `会话名 · GatherThread background` 的独立 `exec` 后台投影。这些只是初始标签：云端与本地标题可分别修改，而且绝不作为绑定身份。Desktop 任务通过可信 Hooks（钩子）接收本地交互回合；后台投影导入规范历史并执行网页 **Request my agent**。两者通过服务器规范日志汇合，不再由两个进程写同一个原生任务。
 
 项目角色决定连接模式：
 
@@ -71,7 +71,8 @@ npm run codex:connect -- \
 - 服务器明确确认角色降级、会话变为只读、会话归档或项目访问被移除后，连接器会立即从执行 Hook 白名单移除对应原生 thread，并清除尚未发布的 hook draft/outbox。Codex 原生 transcript 会被保留，但只读期间产生的内容始终只留在本地；以后恢复写权限也不会补传。临时网络故障不会触发这项清理，因此原先已经获授权的离线捕获可在网络恢复后继续。
 - 每个会话始终使用独立 Codex thread，不会把兄弟会话历史混入当前会话。
 - 同一个本地目录上的多个会话请求按顺序执行，避免两个 Codex turn 同时修改同一批文件。
-- App Server 只通过本机 stdio 短时运行。后台执行与快照使用单次操作子进程。实现任务会明确命名为 `GatherThread background · 项目名 · 会话名`；如果 Codex Desktop 将其列出，请不要把它用于直接工作。若 Desktop 在一次操作完成后从外部接管了后台投影，GatherThread 会新建投影、重放权威规范历史并继续下一次网页请求；若仍有 prepared 或 started 操作，则保持 fail-closed，避免重复执行。Desktop 任务创建后，直接桌面同步只使用可信本地 Hook relay，绝不再通过另一个 App Server 打开它。
+- App Server 只通过本机 stdio 短时运行。后台执行与快照使用单次操作子进程。实现任务会明确命名为 `会话名 · GatherThread background`；如果 Codex Desktop 将其列出，请不要把它用于直接工作。若 Desktop 在一次操作完成后从外部接管了后台投影，GatherThread 会新建投影、重放权威规范历史并继续下一次网页请求；若仍有 prepared 或 started 操作，则保持 fail-closed，避免重复执行。Desktop 任务创建后，直接桌面同步只使用可信本地 Hook relay，绝不再通过另一个 App Server 打开它。
+- 既有绑定只通过 project ID、GatherThread session ID、已验证 workspace 和持久化的本地 thread ID 解析。连接器会先检查所有既有绑定，只有确实未绑定的首次输入才会进入 Solo 发现流程。因此任意一侧改名都不会新建云端 Solo，也不会产生第二个本地任务。
 - 网页 Agent 执行没有交互式界面。若 MCP server 请求填写表单或打开 URL，GatherThread 会返回协议级 `decline`，既不打开链接、也不代填内容，同时不会因此中断整个 Codex turn。命令执行、文件修改、权限审批以及其他未知的服务端主动交互仍然失败关闭。
 - 旧版 `codex exec` 映射会在下一次请求时新建桌面可见 thread，并用规范历史重建；旧的 Codex 原生 transcript 不会被删除。
 

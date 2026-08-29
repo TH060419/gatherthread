@@ -76,7 +76,7 @@ npm run codex:connect -- \
   --install-hooks
 ```
 
-命令不含任何 Token；连接器会在终端中隐藏输入自己的设备 Token，在 `~/GatherThread Projects/` 下安全创建或复用与云端项目同名的本地工作区，并在 Codex Desktop 中打开它。每个可编辑会话会得到一个名为 `GatherThread · 项目名 · 会话名` 的 Desktop 任务，以及一个名为 `GatherThread background · 项目名 · 会话名` 的实现私有 `exec` 后台投影。Desktop 是可见任务的唯一 writer；网页 **Request my agent** 在后台投影执行，再通过规范历史汇合。如果当前 Desktop 版本列出了带 `background` 的任务，请不要把它用于直接工作；即使 Desktop 意外接管了它，下一次网页请求也会根据权威规范历史替换该后台投影，而不是无限重试被锁定的 writer。连接器会自动发现后续新会话，请保持终端运行。若要绑定已有源码目录，请改用 `--workspace "/本地项目绝对路径"`。
+命令不含任何 Token；连接器会在终端中隐藏输入自己的设备 Token，在 `~/GatherThread Projects/` 下安全创建或复用与云端项目同名的本地工作区，并在 Codex Desktop 中打开它。首次实体化可编辑会话时，会建立一个名为 `会话名 · GatherThread` 的 Desktop 任务，以及一个名为 `会话名 · GatherThread background` 的实现私有 `exec` 后台投影。首次建立后，本地标题与云端标题彼此独立；任意一侧改名都不会改变稳定的 session/thread 绑定，也不会新建第二个会话。Desktop 是可见任务的唯一 writer；网页 **Request my agent** 在后台投影执行，再通过规范历史汇合。如果当前 Desktop 版本列出了带 `background` 的任务，请不要把它用于直接工作；即使 Desktop 意外接管了它，下一次网页请求也会根据权威规范历史替换该后台投影，而不是无限重试被锁定的 writer。连接器会自动发现后续新会话，请保持终端运行。若要绑定已有源码目录，请改用 `--workspace "/本地项目绝对路径"`。
 
 规范事件会按顺序导入后台投影，并使用冻结且按类型区分的前缀：`用户名 · Human Chat：`、`用户名 · Agent Request：` 和 `用户名 · Agent Response · harness · model：`。安装并信任项目 Hook 后，`UserPromptSubmit` 会把经过确认、受上下文预算约束的 capsule 交给 Desktop Agent。可见回复先显示 `Loaded N cloud updates / 已加载 N 条云端更新`，最多展示三条短预览；精确正文只放在供模型推理的上下文块中。超长事件会按 UTF-8 安全分段，在后续完成的 Desktop 回合继续同步。取消回合不会确认任何分段，持久投递游标也绝不会越过被省略的内容。同步内容被明确标成不可信共享历史，不会作为新请求再次执行。`Stop` 则把这次 prompt 与最终回复恰好上传一次。当前公开 Hook 不提供完整结构化工具流，因此桌面端工具事件会被省略，而不是通过争抢 writer 去补读。当前公开 Codex API 无法把远端事件补画成 Desktop 已有任务中的历史气泡。后台长历史会独立 compact，会话对齐不会回滚源码文件。
 

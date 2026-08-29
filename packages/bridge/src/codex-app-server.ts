@@ -1963,6 +1963,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
   readonly descriptor: ProjectHarnessDescriptor;
   readonly #options: CodexProjectHarnessOptions;
   readonly #clients = new Set<CodexAppServerClient>();
+  #backgroundClient: CodexAppServerClient | undefined;
 
   constructor(options: CodexProjectHarnessOptions) {
     validateCodexModel(options.model);
@@ -2018,10 +2019,11 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
     sessionKey: string;
     statePath: string;
   }): ProjectHarnessSessionBinding {
-    const threadName = ["GatherThread", this.#options.projectName, input.session.name ?? input.session.id].join(" · ");
-    const executionThreadName = ["GatherThread background", this.#options.projectName, input.session.name ?? input.session.id].join(" · ");
+    const sessionName = input.session.name ?? input.session.id;
+    const threadName = [sessionName, "GatherThread"].join(" · ");
+    const executionThreadName = [sessionName, "GatherThread background"].join(" · ");
     const executor = new CodexAppServerExecutor({
-      client: this.#createClient(),
+      client: this.#projectBackgroundClient(),
       workspacePath: this.#options.workspacePath,
       statePath: executionProjectionStatePath(input.statePath),
       threadName: executionThreadName,
@@ -2062,12 +2064,6 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
         adoptLocalConversation: (localConversationId: string) =>
           desktop.adoptDesktopThread(input.session.id, localConversationId),
       }),
-      rename: async (session: SessionSummary) => {
-        const name = ["GatherThread", this.#options.projectName, session.name ?? session.id].join(" · ");
-        const executionName = ["GatherThread background", this.#options.projectName, session.name ?? session.id].join(" · ");
-        await executor.renameThread(executionName);
-        await desktop?.renameThread(name);
-      },
       ...(desktop === undefined
         ? {}
         : {
@@ -2158,7 +2154,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
             client,
             workspacePath: this.#options.workspacePath,
             statePath: path.join(this.#options.stateRoot, "snapshots", `${codexSessionKey(job.id)}.json`),
-            threadName: ["GatherThread snapshot", this.#options.projectName, session?.name ?? job.sessionId, `through ${job.throughSequence}`].join(" · "),
+            threadName: [session?.name ?? job.sessionId, "GatherThread snapshot", `through ${job.throughSequence}`].join(" · "),
             model: this.#options.model,
             ...(this.#options.hookRegistryPath === undefined ? {} : {
               hookRegistryPath: this.#options.hookRegistryPath,
@@ -2178,7 +2174,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
           );
           await api.completeSnapshotRequest(job.id, runtime.id, {
             thread_id: projection.threadId,
-            thread_name: ["GatherThread snapshot", this.#options.projectName, session?.name ?? job.sessionId, `through ${job.throughSequence}`].join(" · "),
+            thread_name: [session?.name ?? job.sessionId, "GatherThread snapshot", `through ${job.throughSequence}`].join(" · "),
             through_sequence: job.throughSequence,
             projection_generation: projection.projectionGeneration,
             compaction_generation: projection.compactionGeneration,
@@ -2204,7 +2200,13 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
   async close(): Promise<void> {
     const clients = [...this.#clients];
     this.#clients.clear();
+    this.#backgroundClient = undefined;
     await Promise.all(clients.map((client) => client.dispose()));
+  }
+
+  #projectBackgroundClient(): CodexAppServerClient {
+    if (!this.#backgroundClient) this.#backgroundClient = this.#createClient();
+    return this.#backgroundClient;
   }
 
   #createClient(): CodexAppServerClient {
