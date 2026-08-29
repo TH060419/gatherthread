@@ -20,8 +20,32 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260825-6";
+} from "./domain.js?v=20260829-2";
 import { SessionSync } from "./realtime.js";
+import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
+import { createLocalizer } from "./i18n.js?v=20260829-11";
+import {
+  contextBudgetInputBytes,
+  digitsOnly,
+  numericPresetInputId,
+  numericPresetUpdate,
+  shouldPreviewSettingsInput,
+} from "./settings-controls.js?v=20260829-2";
+import {
+  addCustomCodexModel,
+  CODEX_MODELS,
+  CODEX_REASONING_EFFORTS,
+  CONTEXT_BUDGET_MAX_BYTES,
+  CONTEXT_BUDGET_MIN_BYTES,
+  contextBudgetToTokenCeiling,
+  createSettingsStore,
+  DEFAULT_SETTINGS,
+  effectiveContextBudget,
+  normalizeCodexProfile,
+  normalizeSettings,
+  projectCodexProfile,
+  withProjectCodexProfile,
+} from "./settings.js?v=20260829-4";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -31,6 +55,7 @@ const api = mockEnabled
   : new HttpCollaborationApi({ baseUrl: configuredApiUrl });
 const sync = new SessionSync(api);
 const projectSelectionGuard = createSelectionGuard();
+const settingsStore = createSettingsStore();
 
 elementAfterReady(
   "token-help",
@@ -54,6 +79,7 @@ const state = {
   invitations: [],
   snapshotRequests: [],
   sync: sync.snapshot(),
+  settings: settingsStore.get(),
 };
 
 let createdInvitationSecret = "";
@@ -83,6 +109,7 @@ const sendChatButton = element("send-chat-button");
 const sendAgentButton = element("send-agent-button");
 const sendError = element("send-error");
 const composer = element("composer");
+const composerLayoutResizer = element("composer-layout-resizer");
 const downloadCodexButton = element("download-codex-button");
 const snapshotRequestList = element("snapshot-request-list");
 const createDialog = element("create-session-dialog");
@@ -98,8 +125,18 @@ const acceptInvitationForm = element("accept-invitation-form");
 const createInvitationForm = element("create-invitation-form");
 const invitationList = element("invitation-list");
 const deviceCredentialDialog = element("device-credential-dialog");
+const settingsDialog = element("settings-dialog");
+const settingsForm = element("settings-form");
+const agentModelSelect = element("agent-model-select");
+const agentEffortSelect = element("agent-effort-select");
+const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
+const localizer = createLocalizer(document);
 let connectCodexReturnFocus = null;
 let renameSessionReturnFocus = null;
+let settingsReturnFocus = null;
+let settingsPreview = state.settings;
+
+applyVisualSettings(state.settings);
 
 clearSensitiveInputs();
 window.addEventListener("pagehide", () => {
@@ -133,6 +170,7 @@ sync.subscribe((snapshot) => {
   if (snapshot.phase === "live" && snapshot.events.length > previousCount && previousCount > 0) {
     const latest = snapshot.events.at(-1);
     announce(`${eventLabel(latest.type)} from ${latest.actor.username}`);
+    maybeNotifyAgentCompletion(latest);
   }
 });
 
@@ -155,7 +193,7 @@ loginForm.addEventListener("submit", async (event) => {
     element("token").focus();
   } finally {
     submit.disabled = false;
-    submit.textContent = "Continue →";
+    submit.textContent = `${localizer.t("Continue")} →`;
   }
 });
 
@@ -178,7 +216,7 @@ claimInvitationForm.addEventListener("submit", async (event) => {
     state.currentUser = result.actor;
     showNewDeviceAccessToken(result.accessToken);
     claimInvitationForm.reset();
-    element("claim-device-name").value = "This browser";
+    element("claim-device-name").value = localizer.t("This browser");
     await enterWorkspace(result.invitation.projectId);
   } catch (error) {
     errorNode.textContent = error.message ?? "Unable to claim this invitation.";
@@ -398,6 +436,37 @@ renameSessionForm.addEventListener("submit", async (event) => {
 
 sendChatButton.addEventListener("click", () => sendMessage("human_chat"));
 sendAgentButton.addEventListener("click", () => sendMessage("agent_request"));
+element("settings-button").addEventListener("click", openSettingsDialog);
+element("close-settings-button").addEventListener("click", cancelSettingsDialog);
+element("cancel-settings-button").addEventListener("click", cancelSettingsDialog);
+element("reset-settings-button").addEventListener("click", resetSettingsPreview);
+element("reset-layout-button").addEventListener("click", () => {
+  element("settings-left-width").value = String(DEFAULT_SETTINGS.layout.leftRailPixels);
+  element("settings-right-width").value = String(DEFAULT_SETTINGS.layout.rightPanelPixels);
+  element("settings-composer-height").value = String(DEFAULT_SETTINGS.layout.composerPixels);
+  updateSettingsPreviewFromForm();
+});
+element("add-custom-model-button").addEventListener("click", addCustomModelFromSettings);
+settingsForm.addEventListener("input", handleSettingsControlInput);
+settingsForm.addEventListener("change", handleSettingsControlChange);
+settingsForm.addEventListener("submit", saveSettings);
+settingsDialog.addEventListener("close", () => {
+  const returnFocus = settingsReturnFocus;
+  settingsReturnFocus = null;
+  returnFocus?.focus?.();
+});
+agentModelSelect.addEventListener("change", () => updateComposerAgentProfile("model"));
+agentEffortSelect.addEventListener("change", () => updateComposerAgentProfile("effort"));
+messageInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+  const behavior = state.settings.composer.enterBehavior;
+  if (behavior === "newline") return;
+  event.preventDefault();
+  void sendMessage(behavior === "send_chat" ? "human_chat" : "agent_request");
+});
+installLayoutResizer(element("left-layout-resizer"), "left");
+installLayoutResizer(element("right-layout-resizer"), "right");
+installComposerLayoutResizer(composerLayoutResizer);
 downloadCodexButton.addEventListener("click", () => void createSnapshotDownload());
 snapshotRequestList.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action='retry-snapshot']");
@@ -505,6 +574,7 @@ async function selectProject(projectId) {
   state.sessions = sessions;
   state.projectMembers = projectMembers;
   renderProjectSelect();
+  renderAgentProfileControls();
   renderSessionList();
   renderProjectPermissions();
   await renderInvitationControls(selection);
@@ -645,6 +715,7 @@ function renderSessionList() {
     }
     button.addEventListener("click", () => selectSession(session.id));
     title.textContent = session.name;
+    title.title = session.name;
     description.textContent = `${session.memberCount} member${session.memberCount === 1 ? "" : "s"} · ${session.role}`;
     badge.className = `mode-badge mode-${session.mode}`;
     badge.textContent = session.mode;
@@ -658,6 +729,7 @@ function renderSessionList() {
 function renderSessionHeader() {
   const session = state.session;
   element("session-title").textContent = session.name;
+  element("session-title").title = session.name;
   element("session-mode").textContent = session.mode;
   element("session-mode").className = `mode-badge mode-${session.mode}`;
   const membership = session.members.find((member) => member.userId === state.currentUser.id);
@@ -666,6 +738,7 @@ function renderSessionHeader() {
     : membership?.role === "owner";
   element("rename-session-button").hidden = !mayRename;
   element("session-subtitle").textContent = `${session.description} · You are ${membership?.role ?? "viewer"}`;
+  element("session-access-note").hidden = session.mode !== "solo";
 }
 
 function applySessionMetadataEvents(events) {
@@ -920,6 +993,7 @@ function renderSyncState() {
   element("sync-detail").textContent = bufferedCount
     ? `${detail} ${bufferedCount} later event${bufferedCount === 1 ? " is" : "s are"} buffered.`
     : detail;
+  banner.hidden = phase === "live";
   element("retry-sync-button").hidden = !new Set(["offline", "blocked"]).has(phase);
   timelineRegion.setAttribute("aria-busy", String(new Set(["connecting", "replaying", "recovering"]).has(phase)));
   element("sequence-label").textContent = `Contiguous through sequence #${cursor}`;
@@ -930,6 +1004,7 @@ function renderSyncState() {
 }
 
 function renderTimeline() {
+  const wasNearBottom = timelineRegion.scrollHeight - timelineRegion.scrollTop - timelineRegion.clientHeight < 180;
   timeline.replaceChildren();
   const events = state.sync.events.filter(isTimelineEventVisible);
   const pendingRequestIds = new Set(pendingAgentRequests(state.sync.events).map((event) => event.id));
@@ -997,7 +1072,7 @@ function renderTimeline() {
     timeline.append(item);
   }
 
-  if (events.length && timelineRegion.scrollHeight - timelineRegion.scrollTop - timelineRegion.clientHeight < 180) {
+  if (state.settings.composer.autoScroll && events.length && wasNearBottom) {
     requestAnimationFrame(() => timelineRegion.scrollTo({ top: timelineRegion.scrollHeight, behavior: "smooth" }));
   }
 }
@@ -1037,6 +1112,8 @@ function renderSessionDeliveryControls() {
   element("snapshot-download-panel").hidden = isLive;
   element("connector-status").hidden = !isLive;
   composer.hidden = !isLive;
+  composerLayoutResizer.hidden = !isLive;
+  sessionView.classList.toggle("has-composer", isLive);
   timelineEmpty.querySelector("p").textContent = isLive
     ? "No events yet. Start the conversation below."
     : "No shared events are available yet.";
@@ -1184,6 +1261,7 @@ function renderComposerPermissions() {
   element("agent-target-label").textContent = agent.allowed
     ? runtimeLabel(membership.runtime)
     : agent.reason;
+  renderAgentProfileControls();
 }
 
 async function sendMessage(kind) {
@@ -1194,6 +1272,11 @@ async function sendMessage(kind) {
     return;
   }
   sendError.textContent = "";
+  if (kind === "agent_request" && state.settings.composer.confirmAgentRequest
+    && !window.confirm("Start this Agent request with the selected model and reasoning level?")) {
+    messageInput.focus();
+    return;
+  }
   const button = kind === "human_chat" ? sendChatButton : sendAgentButton;
   const original = button.textContent;
   button.disabled = true;
@@ -1201,7 +1284,14 @@ async function sendMessage(kind) {
   try {
     const input = { content, idempotencyKey: createIdempotencyKey(kind) };
     if (kind === "human_chat") await api.appendHumanChat(state.session.id, input);
-    else await api.appendAgentRequest(state.session.id, input);
+    else await api.appendAgentRequest(state.session.id, {
+      ...input,
+      executionProfile: {
+        harness: "codex",
+        model: agentModelSelect.value,
+        reasoningEffort: agentEffortSelect.value,
+      },
+    });
     messageInput.value = "";
     messageInput.focus();
   } catch (error) {
@@ -1253,6 +1343,8 @@ function openConnectCodexDialog() {
     const commands = projectCodexConnectionCommands({
       baseUrl: location.origin,
       projectId: state.project.id,
+      model: currentProjectProfile().model,
+      contextWindowTokens: contextBudgetToTokenCeiling(state.settings),
     });
     element("connect-codex-project-name").textContent = state.project.name;
     element("connect-codex-posix-command").textContent = commands.posix;
@@ -1306,4 +1398,409 @@ function announce(message) {
 function closeMembersPanelWithoutFocus() {
   memberPanel.classList.remove("member-panel-open");
   element("mobile-members-button").setAttribute("aria-expanded", "false");
+}
+
+function applyVisualSettings(settings) {
+  const normalized = normalizeSettings(settings);
+  const root = document.documentElement;
+  root.dataset.theme = normalized.appearance.theme;
+  root.dataset.density = normalized.appearance.density;
+  root.dataset.motion = normalized.appearance.motion;
+  root.dataset.contrast = normalized.appearance.highContrast ? "high" : "standard";
+  root.dataset.ambient = normalized.appearance.ambientCanvas;
+  root.style.setProperty("--text-scale", String(normalized.appearance.textScalePercent / 100));
+  root.style.setProperty("--left-rail-width", `${normalized.layout.leftRailPixels}px`);
+  root.style.setProperty("--right-panel-width", `${normalized.layout.rightPanelPixels}px`);
+  root.style.setProperty("--composer-height", `min(${normalized.layout.composerPixels}px, 44vh)`);
+  composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
+  root.lang = normalized.general.locale;
+  localizer.apply(normalized.general.locale);
+  const deviceNameInput = element("claim-device-name");
+  if (["This browser", "当前浏览器", "此浏览器"].includes(deviceNameInput.value)) {
+    deviceNameInput.value = localizer.t("This browser");
+  }
+  ambientCanvas.apply(normalized);
+}
+
+function renderModelOptions(select, selectedModel, settings = settingsPreview) {
+  const models = [
+    ...CODEX_MODELS.map((entry) => entry.id),
+    ...settings.agents.customCodexModels.filter((model) => !CODEX_MODELS.some((entry) => entry.id === model)),
+  ];
+  select.replaceChildren();
+  for (const model of models) {
+    const option = document.createElement("option");
+    option.value = model;
+    option.textContent = model;
+    option.selected = model === selectedModel;
+    select.append(option);
+  }
+}
+
+function effortOptionsForModel(model, settings = state.settings) {
+  const known = CODEX_MODELS.find((entry) => entry.id === model);
+  return known?.efforts ?? CODEX_REASONING_EFFORTS;
+}
+
+function updateEffortControl(modelSelect, effortSelect, requestedEffort, settings = state.settings) {
+  const profile = normalizeCodexProfile({ model: modelSelect.value, effort: requestedEffort }, settings.agents.customCodexModels);
+  effortSelect.replaceChildren();
+  for (const effort of effortOptionsForModel(profile.model, settings)) {
+    const option = document.createElement("option");
+    option.value = effort;
+    option.textContent = effort;
+    option.selected = effort === profile.effort;
+    effortSelect.append(option);
+  }
+}
+
+function currentProjectProfile(settings = state.settings) {
+  return state.project ? projectCodexProfile(settings, state.project.id) : normalizeCodexProfile(undefined);
+}
+
+function renderAgentProfileControls() {
+  const profile = currentProjectProfile();
+  renderModelOptions(agentModelSelect, profile.model, state.settings);
+  updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
+  const disabled = !state.project;
+  agentModelSelect.disabled = disabled;
+  agentEffortSelect.disabled = disabled;
+}
+
+function updateComposerAgentProfile(changed) {
+  if (!state.project) return;
+  const previous = currentProjectProfile();
+  const requested = {
+    model: agentModelSelect.value,
+    effort: changed === "model" ? previous.effort : agentEffortSelect.value,
+  };
+  state.settings = settingsStore.set(withProjectCodexProfile(state.settings, state.project.id, requested));
+  renderAgentProfileControls();
+}
+
+function populateSettingsForm(settings) {
+  const normalized = normalizeSettings(settings);
+  element("settings-locale").value = normalized.general.locale;
+  element("settings-theme").value = normalized.appearance.theme;
+  element("settings-text-scale").value = String(normalized.appearance.textScalePercent);
+  element("settings-density").value = normalized.appearance.density;
+  element("settings-motion").value = normalized.appearance.motion;
+  element("settings-ambient-canvas").value = normalized.appearance.ambientCanvas;
+  element("settings-high-contrast").checked = normalized.appearance.highContrast;
+  element("settings-left-width").value = String(normalized.layout.leftRailPixels);
+  element("settings-right-width").value = String(normalized.layout.rightPanelPixels);
+  element("settings-composer-height").value = String(normalized.layout.composerPixels);
+  element("settings-sync-mode").value = normalized.sync.mode;
+  const useMiB = normalized.sync.contextBudgetBytes >= 1024 * 1024 && normalized.sync.contextBudgetBytes % (1024 * 1024) === 0;
+  element("settings-context-unit").value = useMiB ? "MiB" : "KiB";
+  element("settings-context-budget").value = String(normalized.sync.contextBudgetBytes / (useMiB ? 1024 * 1024 : 1024));
+  element("settings-enter-behavior").value = normalized.composer.enterBehavior;
+  element("settings-confirm-agent").checked = normalized.composer.confirmAgentRequest;
+  element("settings-auto-scroll").checked = normalized.composer.autoScroll;
+  element("settings-notify-agent").checked = normalized.notifications.agentCompleted;
+  element("settings-notify-connection").checked = normalized.notifications.connectionLost;
+  const profile = currentProjectProfile(normalized);
+  renderModelOptions(element("settings-default-model"), profile.model, normalized);
+  updateEffortControl(element("settings-default-model"), element("settings-default-effort"), profile.effort, normalized);
+  syncAllNumericPresets();
+  renderContextDiagnostic(normalized);
+}
+
+function readSettingsForm(baseSettings = settingsPreview) {
+  const contextFactor = element("settings-context-unit").value === "MiB" ? 1024 * 1024 : 1024;
+  let next = normalizeSettings({
+    ...baseSettings,
+    general: { locale: element("settings-locale").value },
+    appearance: {
+      theme: element("settings-theme").value,
+      textScalePercent: Number(element("settings-text-scale").value),
+      density: element("settings-density").value,
+      motion: element("settings-motion").value,
+      ambientCanvas: element("settings-ambient-canvas").value,
+      highContrast: element("settings-high-contrast").checked,
+    },
+    layout: {
+      leftRailPixels: Number(element("settings-left-width").value),
+      rightPanelPixels: Number(element("settings-right-width").value),
+      composerPixels: Number(element("settings-composer-height").value),
+    },
+    sync: {
+      mode: element("settings-sync-mode").value,
+      contextBudgetBytes: Math.round(Number(element("settings-context-budget").value) * contextFactor),
+    },
+    composer: {
+      enterBehavior: element("settings-enter-behavior").value,
+      confirmAgentRequest: element("settings-confirm-agent").checked,
+      autoScroll: element("settings-auto-scroll").checked,
+    },
+    notifications: {
+      agentCompleted: element("settings-notify-agent").checked,
+      connectionLost: element("settings-notify-connection").checked,
+    },
+  });
+  if (state.project) {
+    next = withProjectCodexProfile(next, state.project.id, {
+      model: element("settings-default-model").value,
+      effort: element("settings-default-effort").value,
+    });
+  }
+  return next;
+}
+
+function openSettingsDialog() {
+  settingsReturnFocus = document.activeElement;
+  settingsPreview = normalizeSettings(state.settings);
+  populateSettingsForm(settingsPreview);
+  applyVisualSettings(settingsPreview);
+  settingsDialog.showModal();
+  requestAnimationFrame(() => element("close-settings-button").focus());
+}
+
+function cancelSettingsDialog() {
+  applyVisualSettings(state.settings);
+  settingsPreview = state.settings;
+  if (settingsDialog.open) settingsDialog.close();
+}
+
+function resetSettingsPreview() {
+  settingsPreview = normalizeSettings(DEFAULT_SETTINGS);
+  populateSettingsForm(settingsPreview);
+  applyVisualSettings(settingsPreview);
+}
+
+function updateSettingsPreviewFromForm() {
+  if (!settingsDialog.open) return;
+  settingsPreview = readSettingsForm(settingsPreview);
+  applyVisualSettings(settingsPreview);
+  renderContextDiagnostic(settingsPreview);
+  syncAllNumericPresets();
+}
+
+function handleSettingsControlInput(event) {
+  if (!shouldPreviewSettingsInput(event.target.id)) return;
+  if (event.target.id === "settings-context-budget") {
+    const sanitized = digitsOnly(event.target.value);
+    if (event.target.value !== sanitized) event.target.value = sanitized;
+    if (!sanitized) {
+      syncAllNumericPresets();
+      renderContextDiagnostic(settingsPreview);
+      return;
+    }
+  }
+  updateSettingsPreviewFromForm();
+}
+
+function handleSettingsControlChange(event) {
+  if (event.target.id === "settings-default-model") {
+    updateEffortControl(event.target, element("settings-default-effort"), element("settings-default-effort").value, settingsPreview);
+  }
+  const presetInputId = numericPresetInputId(event.target.id);
+  if (presetInputId && event.target.value === "custom") {
+    element(presetInputId).focus();
+    return;
+  }
+  const presetUpdate = numericPresetUpdate(event.target.id, event.target.value);
+  if (presetUpdate) {
+    element(presetUpdate.inputId).value = presetUpdate.inputValue;
+    if (presetUpdate.unit) element("settings-context-unit").value = presetUpdate.unit;
+  }
+  updateSettingsPreviewFromForm();
+}
+
+async function saveSettings(event) {
+  event.preventDefault();
+  const contextBytes = contextBudgetInputBytes(
+    element("settings-context-budget").value,
+    element("settings-context-unit").value,
+  );
+  if (contextBytes == null || contextBytes < CONTEXT_BUDGET_MIN_BYTES || contextBytes > CONTEXT_BUDGET_MAX_BYTES) {
+    renderContextDiagnostic(settingsPreview);
+    element("settings-context-budget").focus();
+    return;
+  }
+  settingsPreview = readSettingsForm(settingsPreview);
+  state.settings = settingsStore.set(settingsPreview);
+  if (state.settings.notifications.agentCompleted) await ensureNotificationPermission();
+  applyVisualSettings(state.settings);
+  renderAgentProfileControls();
+  settingsDialog.close();
+  announce("Settings saved.");
+}
+
+async function ensureNotificationPermission() {
+  if (!("Notification" in window) || Notification.permission !== "default") return;
+  try {
+    await Notification.requestPermission();
+  } catch {
+    // The in-page live status remains available when browser notifications are unavailable.
+  }
+}
+
+function maybeNotifyAgentCompletion(event) {
+  if (!state.settings.notifications.agentCompleted || event?.type !== "agent_response" || !document.hidden) return;
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+  const content = eventContent(event);
+  new Notification("GatherThread · Agent completed", {
+    body: content ? content.slice(0, 180) : `${event.actor.username}'s Agent completed.`,
+    tag: `gatherthread-agent-${event.id}`,
+  });
+}
+
+function addCustomModelFromSettings() {
+  const errorNode = element("settings-custom-model-error");
+  const input = element("settings-custom-model");
+  errorNode.textContent = "";
+  try {
+    settingsPreview = addCustomCodexModel(readSettingsForm(settingsPreview), input.value);
+    const added = input.value.trim();
+    input.value = "";
+    renderModelOptions(element("settings-default-model"), added, settingsPreview);
+    updateEffortControl(element("settings-default-model"), element("settings-default-effort"), "medium", settingsPreview);
+    applyVisualSettings(settingsPreview);
+  } catch (error) {
+    errorNode.textContent = error.message ?? "Unable to add this model.";
+    input.focus();
+  }
+}
+
+function renderContextDiagnostic(settings) {
+  const input = element("settings-context-budget");
+  const rawValue = digitsOnly(input.value);
+  const rawBytes = contextBudgetInputBytes(rawValue, element("settings-context-unit").value);
+  const diagnostic = element("settings-context-diagnostic");
+  if (!rawValue) {
+    input.setAttribute("aria-invalid", "true");
+    diagnostic.dataset.state = "warning";
+    diagnostic.textContent = "Enter a whole number from 8 KiB to 5 MiB.";
+    return;
+  }
+  if (rawBytes == null || rawBytes < CONTEXT_BUDGET_MIN_BYTES || rawBytes > CONTEXT_BUDGET_MAX_BYTES) {
+    input.setAttribute("aria-invalid", "true");
+    diagnostic.dataset.state = "warning";
+    diagnostic.textContent = "The current value is outside the supported range of 8 KiB to 5 MiB.";
+    return;
+  }
+  const result = effectiveContextBudget(settings, {
+    maxContextBytes: settings.sync.contextBudgetBytes,
+    label: "configured connector ceiling",
+  });
+  const approximateTokens = Math.max(4096, Math.floor(result.configuredBytes / 4));
+  input.setAttribute("aria-invalid", "false");
+  diagnostic.dataset.state = "valid";
+  diagnostic.textContent = `Configured projection ceiling: ${formatBytes(result.configuredBytes)} (about ${new Intl.NumberFormat().format(approximateTokens)} tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. Reconnect Codex after changing this value. Desktop Hook updates use a separate 7 KiB capsule and continue across turns.`;
+}
+
+function formatBytes(bytes) {
+  if (bytes >= 1024 * 1024) return `${Number((bytes / (1024 * 1024)).toFixed(2))} MiB`;
+  return `${Number((bytes / 1024).toFixed(1))} KiB`;
+}
+
+function syncPreset(selectId, inputId, values) {
+  const value = Number(element(inputId).value);
+  element(selectId).value = values.includes(value) ? String(value) : "custom";
+}
+
+function syncAllNumericPresets() {
+  syncPreset("settings-text-scale-preset", "settings-text-scale", [90, 100, 110, 125]);
+  syncPreset("settings-left-width-preset", "settings-left-width", [220, 260, 340]);
+  syncPreset("settings-right-width-preset", "settings-right-width", [260, 290, 380]);
+  syncPreset("settings-composer-height-preset", "settings-composer-height", [220, 280, 380]);
+  const factor = element("settings-context-unit").value === "MiB" ? 1024 * 1024 : 1024;
+  const bytes = Number(element("settings-context-budget").value) * factor;
+  const preset = element("settings-context-preset");
+  preset.value = [...preset.options].some((option) => Number(option.value) === bytes) ? String(bytes) : "custom";
+}
+
+function installLayoutResizer(resizer, side) {
+  const minimum = side === "left" ? 210 : 260;
+  const maximum = side === "left" ? 420 : 480;
+  const settingKey = side === "left" ? "leftRailPixels" : "rightPanelPixels";
+  const inputId = side === "left" ? "settings-left-width" : "settings-right-width";
+  const applyWidth = (pixels) => {
+    const width = Math.round(Math.min(maximum, Math.max(minimum, pixels)));
+    state.settings = settingsStore.set({
+      ...state.settings,
+      layout: { ...state.settings.layout, [settingKey]: width },
+    });
+    applyVisualSettings(state.settings);
+    if (settingsDialog.open) {
+      element(inputId).value = String(width);
+      settingsPreview = state.settings;
+      syncAllNumericPresets();
+    }
+    resizer.setAttribute("aria-valuenow", String(width));
+  };
+  resizer.setAttribute("aria-valuenow", String(state.settings.layout[settingKey]));
+  resizer.addEventListener("pointerdown", (event) => {
+    if (window.matchMedia("(max-width: 1040px)").matches) return;
+    resizer.focus();
+    event.preventDefault();
+    resizer.setPointerCapture(event.pointerId);
+    resizer.dataset.dragging = "true";
+    const move = (moveEvent) => applyWidth(side === "left" ? moveEvent.clientX : window.innerWidth - moveEvent.clientX);
+    const finish = () => {
+      delete resizer.dataset.dragging;
+      resizer.removeEventListener("pointermove", move);
+      resizer.removeEventListener("pointerup", finish);
+      resizer.removeEventListener("pointercancel", finish);
+    };
+    resizer.addEventListener("pointermove", move);
+    resizer.addEventListener("pointerup", finish);
+    resizer.addEventListener("pointercancel", finish);
+  });
+  resizer.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowRight" ? 1 : -1;
+    const signedDirection = side === "right" ? -direction : direction;
+    applyWidth(state.settings.layout[settingKey] + signedDirection * (event.shiftKey ? 20 : 4));
+  });
+}
+
+function installComposerLayoutResizer(resizer) {
+  const minimum = 210;
+  const maximum = 560;
+  const applyHeight = (pixels) => {
+    const viewportMaximum = Math.max(minimum, Math.min(maximum, Math.floor(window.innerHeight * 0.44)));
+    const height = Math.round(Math.min(viewportMaximum, Math.max(minimum, pixels)));
+    state.settings = settingsStore.set({
+      ...state.settings,
+      layout: { ...state.settings.layout, composerPixels: height },
+    });
+    applyVisualSettings(state.settings);
+    if (settingsDialog.open) {
+      element("settings-composer-height").value = String(height);
+      settingsPreview = state.settings;
+      syncAllNumericPresets();
+    }
+    resizer.setAttribute("aria-valuemax", String(viewportMaximum));
+    resizer.setAttribute("aria-valuenow", String(height));
+  };
+  resizer.setAttribute("aria-valuenow", String(state.settings.layout.composerPixels));
+  resizer.addEventListener("pointerdown", (event) => {
+    if (window.matchMedia("(max-width: 760px)").matches || resizer.hidden) return;
+    resizer.focus();
+    event.preventDefault();
+    resizer.setPointerCapture(event.pointerId);
+    resizer.dataset.dragging = "true";
+    const move = (moveEvent) => {
+      const bottom = sessionView.getBoundingClientRect().bottom;
+      applyHeight(bottom - moveEvent.clientY);
+    };
+    const finish = () => {
+      delete resizer.dataset.dragging;
+      resizer.removeEventListener("pointermove", move);
+      resizer.removeEventListener("pointerup", finish);
+      resizer.removeEventListener("pointercancel", finish);
+    };
+    resizer.addEventListener("pointermove", move);
+    resizer.addEventListener("pointerup", finish);
+    resizer.addEventListener("pointercancel", finish);
+  });
+  resizer.addEventListener("keydown", (event) => {
+    if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return;
+    event.preventDefault();
+    const direction = event.key === "ArrowUp" ? 1 : -1;
+    applyHeight(state.settings.layout.composerPixels + direction * (event.shiftKey ? 20 : 4));
+  });
 }

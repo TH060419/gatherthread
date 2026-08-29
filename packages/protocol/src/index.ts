@@ -71,6 +71,14 @@ export const RuntimeProvenanceSchema = z.object({
 
 export type RuntimeProvenance = z.infer<typeof RuntimeProvenanceSchema>;
 
+export const AgentExecutionProfileSchema = z.object({
+  harness: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+  model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+  reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
+});
+
+export type AgentExecutionProfile = z.infer<typeof AgentExecutionProfileSchema>;
+
 export const CanonicalEventSchema = z.object({
   id: IdSchema,
   session_id: IdSchema,
@@ -96,6 +104,8 @@ export const AppendEventInputSchema = z.object({
   reply_to_event_id: IdSchema.nullable().optional(),
   payload: JsonValueSchema,
   runtime_id: IdSchema.optional(),
+  observed_model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
+  observed_reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
 });
 
 export type AppendEventInput = z.infer<typeof AppendEventInputSchema>;
@@ -327,6 +337,8 @@ export const CompleteAgentRequestInputSchema = z.object({
   runtime_id: IdSchema,
   idempotency_key: IdempotencyKeySchema,
   payload: JsonValueSchema,
+  observed_model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
+  observed_reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
 });
 
 export const LocalTurnToolEventSchema = z.object({

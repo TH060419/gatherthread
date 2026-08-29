@@ -2382,7 +2382,10 @@ function fail(id, message) {
   });
   assert.equal(binding.synchronize, undefined, "desktop local-turn upload stays disabled without explicitly enabled trusted hooks");
   const runtime = registeredRuntime(binding.localSessionId);
-  const firstRequest = canonical(2, "agent_request", { content: "implement first" });
+  const firstRequest = canonical(2, "agent_request", {
+    content: "implement first",
+    execution_profile: { harness: "codex", model: "gpt-5.6-terra", reasoning_effort: "high" },
+  });
   const first = await binding.executor.execute({
     request: firstRequest,
     canonicalHistory: [canonical(1, "human_chat", { content: "shared constraint" }, "user-2"), firstRequest],
@@ -2391,6 +2394,8 @@ function fail(id, message) {
   assert.equal(first.localSessionId, "thread-app-server-1");
   assert.deepEqual(first.events.map((event) => event.kind), ["tool_call", "tool_result", "assistant"]);
   assert.equal(first.events.at(-1)?.content, "first app answer");
+  assert.equal(first.observedModel, "gpt-5.6-terra");
+  assert.equal(first.observedReasoningEffort, "high");
   assert.deepEqual(revealedThreads, [], "background execution tasks must never be opened in Desktop");
 
   const secondRequest = canonical(5, "agent_request", { content: "implement second" });
@@ -2438,6 +2443,10 @@ function fail(id, message) {
   const compactCount = captures.filter((capture) => capture.message.method === "thread/compact/start").length;
   assert.ok(compactCount >= 2);
   const turns = captures.filter((capture) => capture.message.method === "turn/start");
+  assert.equal(turns[0].message.params.model, "gpt-5.6-terra");
+  assert.equal(turns[0].message.params.effort, "high");
+  assert.equal(turns[1].message.params.model, "gpt-test");
+  assert.equal(turns[1].message.params.effort, undefined);
   const firstPrompt = turns[0].message.params.input[0].text;
   const secondPrompt = turns[1].message.params.input[0].text;
   assert.doesNotMatch(firstPrompt, /shared constraint/);

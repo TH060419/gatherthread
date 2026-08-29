@@ -8,12 +8,18 @@ const mainPath = fileURLToPath(new URL("../src/main.js", import.meta.url));
 const apiPath = fileURLToPath(new URL("../src/api.js", import.meta.url));
 const stylesPath = fileURLToPath(new URL("../src/styles.css", import.meta.url));
 const domainPath = fileURLToPath(new URL("../src/domain.js", import.meta.url));
+const i18nPath = fileURLToPath(new URL("../src/i18n.js", import.meta.url));
 
 test("the shell exposes landmarks, labelled forms, status regions, and separate send controls", async () => {
-  const html = await readFile(htmlPath, "utf8");
+  const [html, main, styles] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+  ]);
   for (const requirement of [
     'class="skip-link"',
-    '<span class="headline-line">One room.</span>',
+    'class="auth-mark-motion"',
+    '<span class="headline-line">One room,</span>',
     '<span class="headline-line">Many minds.</span>',
     '<nav class="session-rail"',
     'id="main-content"',
@@ -39,13 +45,20 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     'for="rename-session-name"',
     'id="rename-session-error" class="form-error" role="alert"',
     'id="download-codex-button"',
-    '<span lang="zh-Hans">下载到 Codex</span>',
     'id="connector-status" class="connector-status" role="status"',
     'id="snapshot-request-error" class="form-error" role="alert"',
     'id="snapshot-request-list" class="snapshot-request-list" aria-label="Codex snapshot downloads"',
     'id="connect-codex-button"',
     '<span>Connect Codex</span>',
-    '<span lang="zh-Hans">连接 Codex</span>',
+    'id="settings-button"',
+    'id="settings-dialog"',
+    'id="settings-locale"',
+    'id="settings-ambient-canvas"',
+    'id="settings-composer-height"',
+    'id="session-access-note"',
+    'id="composer-layout-resizer"',
+    'aria-label="Resize message composer"',
+    'aria-orientation="horizontal"',
     'id="connect-codex-dialog"',
     'aria-labelledby="connect-codex-title"',
     'id="connect-codex-activation"',
@@ -56,16 +69,28 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   ]) {
     assert.match(html, new RegExp(requirement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.equal((html.match(/class="brand-mark(?: brand-mark-small)?"/g) ?? []).length, 2);
-  assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"[^>]*>R</);
-  assert.equal((html.match(/class="brand-mark(?: brand-mark-small)?"[^>]*>G</g) ?? []).length, 2);
+  assert.match(html, /value="pronounced">Pronounced</);
+  assert.doesNotMatch(html, /Subtle · recommended/);
+  assert.match(html, /id="brand-mark-symbol"/);
+  assert.equal((html.match(/class="brand-lockup-mark"/g) ?? []).length, 2);
+  assert.equal((html.match(/class="brand-lockup-name">GatherThread</g) ?? []).length, 2);
+  assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"/);
+  assert.match(main, /title\.title = session\.name/);
+  assert.match(main, /element\("session-title"\)\.title = session\.name/);
+  assert.match(main, /localizer\.t\("Continue"\)/);
+  assert.match(styles, /text-overflow:\s*ellipsis/);
+  assert.match(styles, /select:not\(:disabled\):hover/);
+  assert.match(styles, /html\[lang="zh-CN"\] \.agent-request-profile select/);
+  assert.match(styles, /\.composer-layout-resizer[\s\S]*?cursor:\s*row-resize/);
+  assert.match(main, /installComposerLayoutResizer\(composerLayoutResizer\)/);
 });
 
 test("project Codex connector explains scope, credential prompting, hook trust, and focus restoration", async () => {
-  const [html, main, styles] = await Promise.all([
+  const [html, main, styles, i18n] = await Promise.all([
     readFile(htmlPath, "utf8"),
     readFile(mainPath, "utf8"),
     readFile(stylesPath, "utf8"),
+    readFile(i18nPath, "utf8"),
   ]);
   assert.match(html, /root of your local GatherThread repository/i);
   assert.match(html, /creates or reuses and opens the same-name local Desktop project/i);
@@ -77,7 +102,7 @@ test("project Codex connector explains scope, credential prompting, hook trust, 
   assert.match(html, /device token is requested by a hidden CLI prompt/i);
   assert.match(html, /open Codex Desktop Settings and enable Hooks/i);
   assert.match(html, /review the generated <code>\.codex\/hooks\.json<\/code>/i);
-  assert.match(html, /Codex Desktop 设置中启用 Hooks/);
+  assert.match(i18n, /Hooks（钩子）/);
   assert.doesNotMatch(html, /Codex <code>\/hooks<\/code>/i);
   assert.match(main, /projectCodexConnectionCommands\(\{[\s\S]*?baseUrl: location\.origin[\s\S]*?projectId: state\.project\.id/);
   assert.doesNotMatch(main, /connect-codex-move-project-name|renderCodexDesktopMoveGuide/);
@@ -146,6 +171,7 @@ test("session rename updates local metadata and applies realtime control events"
   assert.match(main, /sessionMetadataFromEvent\(event\)/);
   assert.match(main, /state\.sessions = state\.sessions\.map/);
   assert.match(main, /renderSessionHeader\(\)/);
+  assert.match(main, /element\("session-access-note"\)\.hidden = session\.mode !== "solo"/);
   assert.match(main, /renderSessionList\(\)/);
   assert.match(api, /method: "PATCH"/);
 });
@@ -159,12 +185,27 @@ test("an empty project lets owners and participants create an eligible first ses
 
 test("the multiline login headline keeps safe vertical spacing", async () => {
   const styles = await readFile(stylesPath, "utf8");
+  assert.match(styles, /\.auth-shell \{[\s\S]*?height: 100dvh;[\s\S]*?overflow: hidden;/);
+  assert.match(styles, /@media \(min-width: 901px\) and \(max-height: 740px\)/);
+  assert.match(styles, /@media \(min-width: 901px\) and \(max-height: 600px\)[\s\S]*?overflow-y: auto;/);
   assert.match(styles, /\.auth-story h1 \{[\s\S]*?line-height: 1\.08;/);
   assert.match(styles, /\.headline-line \{[\s\S]*?padding-block: 0\.02em;/);
+  assert.match(styles, /@keyframes auth-mark-thread-flow/);
+  assert.match(styles, /@keyframes auth-ring-primary/);
+  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.auth-mark-flow path/);
 });
 
 test("timeline renders both user content and harness response text", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /eventContent,/);
   assert.match(main, /const content = eventContent\(event\);/);
+});
+
+test("settings switches use a Safari-safe visual track and dark responses use semantic colors", async () => {
+  const [html, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(stylesPath, "utf8")]);
+  assert.equal((html.match(/class="settings-switch-visual"/g) ?? []).length, 5);
+  assert.equal((html.match(/Human chat is shared without triggering a local agent\./g) ?? []).length, 0);
+  assert.match(styles, /\.settings-toggle input\[type="checkbox"\]:checked \+ \.settings-switch-visual::after/);
+  assert.match(styles, /\.event-agent_response \{[\s\S]*?background: var\(--response-surface\);[\s\S]*?color: var\(--ink\);/);
+  assert.match(styles, /html\[lang="zh-CN"\] \{[\s\S]*?--locale-text-boost: 1\.08;/);
 });
