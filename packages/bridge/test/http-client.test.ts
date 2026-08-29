@@ -19,6 +19,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     { data: { runtime: wireRuntime() } },
     { data: { runtime: wireRuntime() } },
     { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed" } },
+    { data: { event: wireEvent("progress-1", 3, wireProvenance()) } },
     { data: { event: wireEvent("response-1", 3, wireProvenance()) } },
     { data: {
       local_turn_id: "codex-local-1",
@@ -66,6 +67,12 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   assert.equal(runtime.purpose, "execution");
   assert.equal((await client.heartbeatRuntime(runtime.id)).id, "runtime-1");
   assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).claimed, true);
+  const progress = await client.appendAgentProgress("s1", "request-1", {
+    runtimeId: runtime.id,
+    idempotencyKey: "progress-key-0001",
+    payload: { content: "Checking files" },
+  });
+  assert.equal(progress.runtime?.captureFidelity, "harness_transcript");
   const completed = await client.completeAgentRequest("s1", "request-1", {
     runtimeId: runtime.id,
     idempotencyKey: "complete-key-0001",
@@ -113,6 +120,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     "https://collab.example/v1/runtimes",
     "https://collab.example/v1/runtimes/runtime-1/heartbeat",
     "https://collab.example/v1/sessions/s1/agent-requests/request-1/claim",
+    "https://collab.example/v1/sessions/s1/agent-requests/request-1/progress",
     "https://collab.example/v1/sessions/s1/agent-requests/request-1/complete",
     "https://collab.example/v1/sessions/s1/local-turns",
     "https://collab.example/v1/sessions/s1/snapshot-requests",
@@ -137,7 +145,12 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   assert.equal(JSON.parse(String(requests[7]?.init.body)).purpose, "execution");
   assert.equal(requests[0]?.init.headers && new Headers(requests[0].init.headers).get("authorization"), "Bearer secret-token");
   assert.equal(requests[0]?.init.redirect, "error");
-  assert.deepEqual(JSON.parse(String(requests[11]?.init.body)), {
+  assert.deepEqual(JSON.parse(String(requests[10]?.init.body)), {
+    runtime_id: "runtime-1",
+    idempotency_key: "progress-key-0001",
+    payload: { content: "Checking files" },
+  });
+  assert.deepEqual(JSON.parse(String(requests[12]?.init.body)), {
     local_turn_id: "codex-local-1",
     runtime_id: "runtime-1",
     based_on_sequence: 3,
@@ -152,7 +165,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
       occurred_at: "2026-08-25T00:00:03.500Z",
     }],
   });
-  assert.deepEqual(JSON.parse(String(requests[16]?.init.body)), {
+  assert.deepEqual(JSON.parse(String(requests[17]?.init.body)), {
     runtime_id: "runtime-1",
     result: {
       thread_id: "snapshot-thread",

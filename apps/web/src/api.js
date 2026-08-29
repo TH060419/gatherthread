@@ -905,9 +905,33 @@ export class MockCollaborationApi {
 
   async appendAgentRequest(sessionId, input) {
     const request = await this.#append(sessionId, "agent_request", input);
+    for (const [delay, content] of [
+      [220, "Inspecting the shared context…"],
+      [430, "Preparing a **Markdown** response."],
+    ]) {
+      setTimeout(() => {
+        const progress = this.#makeEvent(sessionId, "agent_progress", {
+          content,
+          actor: this.currentUser,
+          idempotencyKey: createIdempotencyKey("mock-progress"),
+          replyTo: request.id,
+          provenance: {
+            userId: this.currentUser.id,
+            username: this.currentUser.username,
+            deviceId: "device-demo",
+            harness: "Codex",
+            provider: "OpenAI",
+            model: input.executionProfile?.model ?? "gpt-5",
+            localSessionId: "local-demo",
+            fidelity: "harness_transcript",
+          },
+        });
+        this.#publish(sessionId, progress);
+      }, delay);
+    }
     setTimeout(() => {
       const response = this.#makeEvent(sessionId, "agent_response", {
-        content: "Mock agent acknowledged the request. Connect the server and local bridge for a real harness response.",
+        content: "## Done\n\nMock Agent acknowledged the request. Connect the server and local bridge for a real harness response.\n\n- Progress is folded above\n- Final output supports `Markdown`\n- Inline math: $E = mc^2$\n\n$$\\int_0^1 x^2\\,dx = \\frac{1}{3}$$",
         actor: this.currentUser,
         idempotencyKey: createIdempotencyKey("mock-response"),
         replyTo: request.id,

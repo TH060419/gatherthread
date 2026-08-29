@@ -87,6 +87,8 @@ Validate all events against a strict schema and reject unknown fields where prac
 
 Redaction must happen at the earliest trusted boundary, before persistence and fan-out. It should combine an event-type allowlist with recursive sensitive-key handling and credential patterns. Regex-only redaction is insufficient. Redaction failures must fail closed for transcript and provider-context uploads. Store a redaction policy version and fidelity label, not the removed value.
 
+Agent progress accepts only bridge-generated lifecycle status and public `agentMessage` commentary from the harness. Hidden reasoning items and chain-of-thought are neither persisted nor rendered. Markdown rendering keeps raw HTML and dangerous URL protocols disabled; generated links are protocol-checked, isolated with `noopener noreferrer`, and remote Markdown images are replaced with inert labels to avoid implicit third-party requests. KaTeX is bundled locally with trust disabled and bounded macro expansion and sizing. Its generated positioning requires inline style attributes, but scripts remain restricted to same-origin static assets.
+
 Logs may contain request ID, hashed user or session identifier, event type, sequence, status, latency, byte count, and redaction count. Logs must not contain authorization headers, cookies, invitation tokens, raw request bodies, event payloads, transcript paths, query strings, model prompts, tool arguments, tool results, stack traces returned to clients, or database rows.
 
 ## Local connector and hook boundary

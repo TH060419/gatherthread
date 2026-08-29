@@ -1481,6 +1481,84 @@ test("connector restart replaces a missing ephemeral exec projection", async () 
   assert.equal(state.lastInjectedSequence, 0, "canonical history must replay into the replacement");
 });
 
+test("connector model changes rebuild the private execution projection from canonical history", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-model-change-execution-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "execution.json");
+  await writeFile(statePath, JSON.stringify({
+    ...projectionState(workspacePath),
+    model: "gpt-5.6-sol",
+    contextWindowTokens: 65_536,
+  }));
+  const starts: Array<{ model?: string; threadSource?: string }> = [];
+  const client = {
+    startThread: async (input: { model?: string; threadSource?: string }) => {
+      starts.push(input);
+      return "luna-execution-thread";
+    },
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread background · Luna",
+    model: "gpt-5.6-luna",
+    contextWindowTokens: 131_072,
+    threadSource: "exec",
+  });
+
+  assert.equal(await executor.prepareCanonicalProjection(registeredRuntime("old-thread")), 0);
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0]?.model, "gpt-5.6-luna");
+  assert.equal(starts[0]?.threadSource, "exec");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(state.threadId, "luna-execution-thread");
+  assert.equal(state.model, "gpt-5.6-luna");
+  assert.equal(state.contextWindowTokens, 131_072);
+  assert.equal(state.projectionGeneration, 2);
+  assert.equal(state.lastInjectedSequence, 0, "canonical history must replay under the new model");
+});
+
+test("connector model changes preserve the Desktop-owned task and Hook binding", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-model-change-desktop-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "binding-session.json");
+  const registryPath = path.join(directory, "hook-registry.json");
+  await writeFile(statePath, JSON.stringify({
+    ...projectionState(workspacePath),
+    model: "gpt-5.6-sol",
+    contextWindowTokens: 65_536,
+  }));
+  await writeFile(registryPath, JSON.stringify({ version: 1, workspacePath, threads: {} }));
+  let starts = 0;
+  const client = {
+    startThread: async () => { starts += 1; return "must-not-replace-desktop-thread"; },
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread · Desktop Luna default",
+    model: "gpt-5.6-luna",
+    contextWindowTokens: 131_072,
+    hookRegistryPath: registryPath,
+    desktopHookOnly: true,
+    localPublishingInitiallyActive: false,
+    gatherThreadSessionId: "session-1",
+  });
+
+  await executor.deactivateLocalPublishing("initializing");
+  await executor.activateLocalPublishing();
+  assert.equal(starts, 0, "changing the connector default must not replace a Desktop-owned task");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(state.threadId, "old-thread");
+  assert.equal(state.model, "gpt-5.6-luna");
+  assert.equal(state.contextWindowTokens, 131_072);
+  assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, { "old-thread": "execution" });
+});
+
 test("a Desktop-active thread is queued without takeover and releases the short-lived client", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-active-"));
   const workspacePath = await realpath(directory);
@@ -2210,6 +2288,14 @@ for await (const line of lines) {
     }) + "\\n");
   } else if (message.id === 99) {
     process.stdout.write(JSON.stringify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { id: "commentary-1", type: "agentMessage", phase: "commentary", text: "Checking files" },
+      },
+    }) + "\\n");
+    process.stdout.write(JSON.stringify({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
@@ -2232,12 +2318,20 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
     turnTimeoutMs: 500,
   });
   t.after(() => client.dispose());
+  const completedItems: unknown[] = [];
   const completed = await client.runTurn({
     threadId: "thread-1",
     prompt: "continue without interactive input",
     clientUserMessageId: "elicitation-turn",
+    onItemCompleted: async (item) => { completedItems.push(item); },
   });
   assert.deepEqual(completed.items, [{ type: "agentMessage", text: "continued safely" }]);
+  assert.deepEqual(completedItems, [{
+    id: "commentary-1",
+    type: "agentMessage",
+    phase: "commentary",
+    text: "Checking files",
+  }]);
   const captures = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   assert.deepEqual(captures.find((message) => message.id === 99), {
     id: 99,
@@ -2303,6 +2397,22 @@ for await (const line of lines) {
     const turn = JSON.stringify(message.params.input).includes("implement second") ? 2 : 1;
     const turnId = "turn-" + turn;
     respond(message.id, { turn: { id: turnId } });
+    process.stdout.write(JSON.stringify({
+      method: "item/completed",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        item: { id: "commentary-" + turn, type: "agentMessage", phase: "commentary", text: "Checking turn " + turn },
+      },
+    }) + "\\n");
+    process.stdout.write(JSON.stringify({
+      method: "item/completed",
+      params: {
+        threadId: message.params.threadId,
+        turnId,
+        item: { id: "reasoning-" + turn, type: "reasoning", summary: ["private reasoning"] },
+      },
+    }) + "\\n");
     process.stdout.write(JSON.stringify({
       method: "turn/completed",
       params: {
@@ -2386,16 +2496,19 @@ function fail(id, message) {
     content: "implement first",
     execution_profile: { harness: "codex", model: "gpt-5.6-terra", reasoning_effort: "high" },
   });
+  const progress: Array<{ id: string; content: string }> = [];
   const first = await binding.executor.execute({
     request: firstRequest,
     canonicalHistory: [canonical(1, "human_chat", { content: "shared constraint" }, "user-2"), firstRequest],
     runtime,
+    publishProgress: async (update) => { progress.push(update); },
   });
   assert.equal(first.localSessionId, "thread-app-server-1");
   assert.deepEqual(first.events.map((event) => event.kind), ["tool_call", "tool_result", "assistant"]);
   assert.equal(first.events.at(-1)?.content, "first app answer");
   assert.equal(first.observedModel, "gpt-5.6-terra");
   assert.equal(first.observedReasoningEffort, "high");
+  assert.deepEqual(progress, [{ id: "commentary-1", content: "Checking turn 1" }]);
   assert.deepEqual(revealedThreads, [], "background execution tasks must never be opened in Desktop");
 
   const secondRequest = canonical(5, "agent_request", { content: "implement second" });

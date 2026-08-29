@@ -6,6 +6,7 @@ export const projectStates = ["active", "archived"] as const;
 export const eventTypes = [
   "human_chat",
   "agent_request",
+  "agent_progress",
   "agent_response",
   "tool_call",
   "tool_result",
@@ -340,6 +341,9 @@ export const CompleteAgentRequestInputSchema = z.object({
   observed_model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
   observed_reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
 });
+
+export const AgentProgressInputSchema = CompleteAgentRequestInputSchema;
+export type AgentProgressInput = z.infer<typeof AgentProgressInputSchema>;
 
 export const LocalTurnToolEventSchema = z.object({
   type: z.enum(["tool_call", "tool_result"]),

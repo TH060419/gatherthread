@@ -5,6 +5,7 @@ import {
   canAppend,
   createSelectionGuard,
   eventContent,
+  eventLabel,
   invitationStatus,
   invitationStatusLabel,
   invitationRolePolicy,
@@ -17,6 +18,7 @@ import {
   normalizeSnapshotRequest,
   pendingAgentRequests,
   projectCodexConnectionCommands,
+  provenanceSummary,
   runtimeLabel,
   sessionMetadataFromEvent,
   sessionDeliveryMode,
@@ -252,6 +254,15 @@ test("pending agent requests are derived from canonical request-response links",
   ]), []);
 });
 
+test("progress is labelled but does not complete its agent request", () => {
+  const events = [
+    { id: "request-1", type: "agent_request" },
+    { id: "progress-1", type: "agent_progress", replyTo: "request-1" },
+  ];
+  assert.equal(eventLabel("agent_progress"), "Working");
+  assert.deepEqual(pendingAgentRequests(events).map((event) => event.id), ["request-1"]);
+});
+
 test("replay pages normalize wire keys and sort by sequence", () => {
   const page = normalizeReplayPage({
     events: [{ sequence: 3 }, { sequence: 2 }],
@@ -267,6 +278,25 @@ test("replay pages normalize wire keys and sort by sequence", () => {
 
 test("runtime labels preserve harness, provider, and model", () => {
   assert.equal(runtimeLabel(onlineRuntime), "Codex · OpenAI · gpt-5");
+});
+
+test("timeline provenance is a concise runtime summary", () => {
+  const provenance = {
+    username: "Yuhan He",
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "low",
+    fidelity: "harness_transcript",
+  };
+  assert.equal(
+    provenanceSummary(provenance),
+    "Yuhan He · Codex · gpt-5.6-luna · low",
+  );
+  assert.equal(
+    provenanceSummary(provenance, (effort) => effort === "low" ? "低" : effort),
+    "Yuhan He · Codex · gpt-5.6-luna · 低",
+  );
 });
 
 test("invitation records normalize wire keys and derive fail-closed status", () => {

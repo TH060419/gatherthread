@@ -241,7 +241,7 @@ export class CollaborationService {
 
   appendEvent(actor: Actor, sessionId: string, input: AppendEventInput): CanonicalEvent {
     const { role, session } = this.requireWrite(actor, sessionId);
-    if (!DIRECT_EVENT_TYPES.has(input.type)) throw forbidden("Membership and session-state events require their dedicated owner endpoints");
+    if (!DIRECT_EVENT_TYPES.has(input.type)) throw forbidden("This event type requires its dedicated endpoint");
     if (input.visibility === "owner_only" && role !== "owner") throw forbidden("Only the owner may append owner-only events");
 
     let provenance = null;
@@ -288,6 +288,32 @@ export class CollaborationService {
   claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string) {
     this.requireWrite(actor, sessionId);
     return this.database.claimAgentRequest(actor, sessionId, requestEventId, runtimeId);
+  }
+
+  appendAgentProgress(
+    actor: Actor,
+    sessionId: string,
+    requestEventId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+    payload: JsonValue,
+    observedModel?: string,
+    observedReasoningEffort?: string,
+  ): CanonicalEvent {
+    const { session } = this.requireWrite(actor, sessionId);
+    if (session.state !== "active") throw conflict("Archived sessions do not accept agent progress");
+    const event = this.database.appendAgentProgress(
+      actor,
+      sessionId,
+      requestEventId,
+      runtimeId,
+      idempotencyKey,
+      redactJson(payload),
+      observedModel,
+      observedReasoningEffort,
+    );
+    this.publish(event);
+    return event;
   }
 
   completeAgentRequest(

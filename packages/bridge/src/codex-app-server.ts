@@ -420,6 +420,7 @@ export class CodexAppServerClient {
     model?: string;
     effort?: string;
     onStarted?: (turnId: string) => Promise<void> | void;
+    onItemCompleted?: (item: unknown) => Promise<void> | void;
   }): Promise<{ turnId: string; items: unknown[]; modelContextWindow?: number; totalTokens?: number }> {
     await this.start();
     let resolveCompletion: ((value: unknown) => void) | undefined;
@@ -440,6 +441,8 @@ export class CodexAppServerClient {
     turnTimer.unref();
     let modelContextWindow: number | undefined;
     let totalTokens: number | undefined;
+    let expectedTurnId: string | undefined;
+    let completedItems = Promise.resolve();
     const listener = (notification: JsonRpcNotification) => {
       if (!isObject(notification.params) || notification.params.threadId !== input.threadId) return;
       if (notification.method === "thread/tokenUsage/updated") {
@@ -448,6 +451,13 @@ export class CodexAppServerClient {
         const total = objectValue(usage, "total")?.totalTokens;
         if (typeof context === "number" && Number.isSafeInteger(context) && context > 0) modelContextWindow = context;
         if (typeof total === "number" && Number.isSafeInteger(total) && total >= 0) totalTokens = total;
+        return;
+      }
+      if (notification.method === "item/completed" && input.onItemCompleted) {
+        const notificationTurnId = typeof notification.params.turnId === "string" ? notification.params.turnId : undefined;
+        if (expectedTurnId !== undefined && notificationTurnId !== undefined && notificationTurnId !== expectedTurnId) return;
+        const item = notification.params.item;
+        completedItems = completedItems.then(async () => input.onItemCompleted?.(item)).catch(() => undefined);
         return;
       }
       if (notification.method !== "turn/completed") return;
@@ -464,10 +474,11 @@ export class CodexAppServerClient {
         ...(input.model === undefined ? {} : { model: input.model }),
         ...(input.effort === undefined ? {} : { effort: input.effort }),
       });
-      const expectedTurnId = objectString(objectValue(started, "turn"), "id");
+      expectedTurnId = objectString(objectValue(started, "turn"), "id");
       if (!expectedTurnId) throw new Error("Codex App Server turn/start omitted the turn id");
       await input.onStarted?.(expectedTurnId);
       const completed = await completion;
+      await completedItems;
       const completedTurn = objectValue(completed, "turn");
       if (objectString(completedTurn, "id") !== expectedTurnId) {
         throw new Error("Codex App Server completed an unexpected turn");
@@ -1397,6 +1408,16 @@ export class CodexAppServerExecutor implements HarnessExecutor {
             };
             await this.#saveState(connectorState);
           },
+          ...(input.publishProgress === undefined ? {} : {
+            onItemCompleted: async (item: unknown) => {
+              if (!isObject(item) || item.type !== "agentMessage" || item.phase !== "commentary") return;
+              if (typeof item.text !== "string" || !item.text.trim()) return;
+              await input.publishProgress?.({
+                id: typeof item.id === "string" && item.id ? item.id : `commentary-${randomUUID()}`,
+                content: item.text,
+              });
+            },
+          }),
         });
       } catch (error) {
         if (error instanceof CodexTurnTerminatedError) {
@@ -1978,7 +1999,17 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       throw new Error("Codex App Server session state belongs to a different workspace");
     }
     if (parsed.model !== this.#model) {
+      if (this.#desktopHookOnly) {
+        return this.#migrateDesktopConnectorProfile(parsed);
+      }
+      if (this.#threadSource === "exec") {
+        return this.#replaceExternallyClaimedExecutionProjection(parsed);
+      }
       throw new Error("Codex projection state belongs to a different model; reset or rebuild the session explicitly");
+    }
+    if (parsed.contextUsageSource !== "app_server" && parsed.contextWindowTokens !== this.#contextWindowTokens) {
+      parsed.contextWindowTokens = this.#contextWindowTokens;
+      await this.#saveState(parsed, false);
     }
     return parsed;
   }
@@ -2010,10 +2041,44 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     if (!isCodexAppServerState(parsed)) {
       throw new Error("Codex App Server session state is invalid; move it aside and reconnect explicitly");
     }
-    if (parsed.workspacePath !== workspacePath || parsed.model !== this.#model) {
-      throw new Error("Codex projection state belongs to a different workspace or model");
+    if (parsed.workspacePath !== workspacePath) {
+      throw new Error("Codex projection state belongs to a different workspace");
+    }
+    if (parsed.model !== this.#model) {
+      if (this.#desktopHookOnly) {
+        return this.#migrateDesktopConnectorProfile(parsed);
+      }
+      if (this.#threadSource === "exec") {
+        // Metadata-only operations may run before canonical preparation. Keep
+        // the old private projection intact here; #loadState replaces it under
+        // the new model before any history is read, injected, or executed.
+        return parsed;
+      }
+      throw new Error("Codex projection state belongs to a different model; reset or rebuild the session explicitly");
+    }
+    if (parsed.contextUsageSource !== "app_server" && parsed.contextWindowTokens !== this.#contextWindowTokens) {
+      parsed.contextWindowTokens = this.#contextWindowTokens;
+      await this.#saveState(parsed, false);
     }
     return parsed;
+  }
+
+  async #migrateDesktopConnectorProfile(state: CodexAppServerState): Promise<CodexAppServerState> {
+    const modelChanged = state.model !== this.#model;
+    const contextChanged = state.contextWindowTokens !== this.#contextWindowTokens;
+    if (!modelChanged && (!contextChanged || state.contextUsageSource === "app_server")) return state;
+
+    // The visible task is owned by Codex Desktop and chooses its actual model
+    // per turn. This field is only the connector default, so changing it must
+    // never replace, resume, or mutate the Desktop-owned native task.
+    state.model = this.#model;
+    if (modelChanged || state.contextUsageSource !== "app_server") {
+      state.contextWindowTokens = this.#contextWindowTokens;
+      state.contextUsageSource = "fallback_estimate";
+      if (modelChanged) state.estimatedContextTokens = 0;
+    }
+    await this.#saveState(state, false);
+    return state;
   }
 
   async #saveState(state: CodexAppServerState, registerHook = this.#localPublishingActive): Promise<void> {
@@ -2356,7 +2421,7 @@ async function scrubCodexExecutionStates(
 
 function isAlreadyPresentLocalOutput(event: CanonicalEvent, runtimeId: string): boolean {
   return event.runtime?.runtimeId === runtimeId
-    && ["agent_response", "tool_call", "tool_result"].includes(event.type);
+    && ["agent_progress", "agent_response", "tool_call", "tool_result"].includes(event.type);
 }
 
 function isCodexAppServerState(value: unknown): value is CodexAppServerState {
@@ -2591,7 +2656,12 @@ function renderProjectionEvent(
     const model = event.runtime?.model ?? "shared";
     return { role: "assistant", text: `${username} · Agent Response · ${harness} · ${model}：${content}` };
   }
-  const eventLabel: Record<Exclude<CanonicalEvent["type"], "human_chat" | "agent_request" | "agent_response">, string> = {
+  if (event.type === "agent_progress") {
+    const harness = event.runtime?.harness ?? "GatherThread";
+    const model = event.runtime?.model ?? "shared";
+    return { role: "assistant", text: `${username} · Agent Progress · ${harness} · ${model}：${content}` };
+  }
+  const eventLabel: Record<Exclude<CanonicalEvent["type"], "human_chat" | "agent_request" | "agent_progress" | "agent_response">, string> = {
     tool_call: "Tool Call",
     tool_result: "Tool Result",
     attachment: "Attachment",

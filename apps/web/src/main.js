@@ -13,6 +13,7 @@ import {
   normalizeConnectorState,
   pendingAgentRequests,
   projectCodexConnectionCommands,
+  provenanceSummary,
   invitationStatusLabel,
   invitationRolePolicy,
   normalizeInvitation,
@@ -20,10 +21,11 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260829-2";
+} from "./domain.js?v=20260829-3";
 import { SessionSync } from "./realtime.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260829-12";
+import { createLocalizer } from "./i18n.js?v=20260829-13";
+import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import {
   contextBudgetInputBytes,
   digitsOnly,
@@ -88,6 +90,7 @@ let memberRefreshInFlight = false;
 let snapshotPollTimer;
 let snapshotPollGeneration = 0;
 let selectedSessionGeneration = 0;
+const expandedWorklogs = new Set();
 
 const element = (id) => document.getElementById(id);
 const authView = element("auth-view");
@@ -580,6 +583,7 @@ function resetWorkspaceToAuth() {
   state.session = null;
   state.invitations = [];
   state.snapshotRequests = [];
+  expandedWorklogs.clear();
   clearCreatedInvitationSecret();
   clearNewDeviceAccessToken();
   clearSensitiveInputs();
@@ -655,6 +659,7 @@ async function selectProject(projectId) {
 }
 
 async function selectSession(sessionId) {
+  if (state.session?.id !== sessionId) expandedWorklogs.clear();
   const generation = ++selectedSessionGeneration;
   sendError.textContent = "";
   element("accept-invite-error").textContent = "";
@@ -1071,10 +1076,18 @@ function renderTimeline() {
   const wasNearBottom = timelineRegion.scrollHeight - timelineRegion.scrollTop - timelineRegion.clientHeight < 180;
   timeline.replaceChildren();
   const events = state.sync.events.filter(isTimelineEventVisible);
+  const progressByRequest = new Map();
+  for (const event of events) {
+    if (event.type !== "agent_progress" || !event.replyTo || !eventContent(event).trim()) continue;
+    const progress = progressByRequest.get(event.replyTo) ?? [];
+    progress.push(event);
+    progressByRequest.set(event.replyTo, progress);
+  }
   const pendingRequestIds = new Set(pendingAgentRequests(state.sync.events).map((event) => event.id));
   timelineEmpty.hidden = events.length > 0;
 
   for (const event of events) {
+    if (event.type === "agent_progress") continue;
     const item = document.createElement("li");
     const article = document.createElement("article");
     const header = document.createElement("header");
@@ -1085,7 +1098,6 @@ function renderTimeline() {
     const type = document.createElement("span");
     const sequence = document.createElement("span");
     const time = document.createElement("time");
-    const body = document.createElement("p");
 
     article.className = `event-card event-${event.type}`;
     article.setAttribute("aria-labelledby", `event-${event.id}-actor`);
@@ -1095,7 +1107,7 @@ function renderTimeline() {
     actor.id = `event-${event.id}-actor`;
     actor.textContent = event.actor.username;
     type.className = "event-type";
-    type.textContent = eventLabel(event.type);
+    type.textContent = localizer.t(eventLabel(event.type));
     sequence.className = "event-sequence";
     sequence.textContent = `#${event.sequence}`;
     time.dateTime = event.createdAt;
@@ -1107,29 +1119,34 @@ function renderTimeline() {
     const content = eventContent(event);
     article.append(header);
     if (content) {
-      body.textContent = content;
-      article.append(body);
+      if (event.type === "agent_response") {
+        article.append(renderMarkdown(content));
+      } else {
+        const body = document.createElement("p");
+        body.textContent = content;
+        article.append(body);
+      }
+    }
+
+    if (event.type === "agent_response" && event.replyTo && progressByRequest.has(event.replyTo)) {
+      article.append(renderProgressDisclosure(progressByRequest.get(event.replyTo), false));
     }
 
     if (event.provenance) {
       const provenance = document.createElement("footer");
       provenance.className = "provenance";
-      for (const value of [
-        event.provenance.username,
-        event.provenance.harness,
-        event.provenance.provider,
-        event.provenance.model,
-        event.provenance.reasoningEffort,
-        event.provenance.fidelity?.replaceAll("_", " "),
-      ].filter(Boolean)) {
-        const tag = document.createElement("span");
-        tag.textContent = value;
-        provenance.append(tag);
-      }
-      article.append(provenance);
+      provenance.setAttribute("aria-label", localizer.t("Runtime details"));
+      provenance.textContent = provenanceSummary(
+        event.provenance,
+        (effort) => localizer.t(effort),
+      );
+      if (provenance.textContent) article.append(provenance);
     }
 
     item.append(article);
+    if (event.type === "agent_request" && pendingRequestIds.has(event.id) && progressByRequest.has(event.id)) {
+      item.append(renderProgressDisclosure(progressByRequest.get(event.id), true));
+    }
     if (pendingRequestIds.has(event.id)) {
       item.append(renderAgentPendingStatus(event));
     }
@@ -1139,6 +1156,33 @@ function renderTimeline() {
   if (state.settings.composer.autoScroll && events.length && wasNearBottom) {
     requestAnimationFrame(() => timelineRegion.scrollTo({ top: timelineRegion.scrollHeight, behavior: "smooth" }));
   }
+}
+
+function renderProgressDisclosure(progressEvents, live) {
+  const details = document.createElement("details");
+  const summary = document.createElement("summary");
+  const list = document.createElement("ol");
+  const worklogId = progressEvents[0]?.replyTo;
+  details.className = `agent-worklog${live ? " agent-worklog-live" : ""}`;
+  details.open = live || Boolean(worklogId && expandedWorklogs.has(worklogId));
+  details.setAttribute("aria-live", live ? "polite" : "off");
+  details.addEventListener("toggle", () => {
+    if (live || !worklogId) return;
+    if (details.open) expandedWorklogs.add(worklogId);
+    else expandedWorklogs.delete(worklogId);
+  });
+  summary.textContent = `${localizer.t(live ? "Working" : "Work log")} (${progressEvents.length})`;
+  list.className = "agent-worklog-list";
+  for (const progress of progressEvents) {
+    const item = document.createElement("li");
+    const timestamp = document.createElement("time");
+    timestamp.dateTime = progress.createdAt;
+    timestamp.textContent = formatTimestamp(progress.createdAt);
+    item.append(timestamp, renderMarkdown(localizer.t(eventContent(progress))));
+    list.append(item);
+  }
+  details.append(summary, list);
+  return details;
 }
 
 function renderAgentPendingStatus(request) {

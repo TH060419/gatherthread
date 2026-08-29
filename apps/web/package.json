@@ -12,5 +12,13 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "katex": "^0.16.47",
+    "micromark": "^4.0.2",
+    "micromark-extension-gfm": "^3.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

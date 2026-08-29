@@ -10,6 +10,7 @@ import {
   LocalBridge,
   MemoryCursorStore,
   type AppendEventInput,
+  type AgentProgressInput,
   type CanonicalEvent,
   type CollaborationApi,
   type CompleteAgentRequestInput,
@@ -22,6 +23,7 @@ class FakeApi implements CollaborationApi {
   readonly history: CanonicalEvent[] = [];
   heartbeatCount = 0;
   completeInput?: CompleteAgentRequestInput;
+  progressInputs: AgentProgressInput[] = [];
   runtime: RegisteredRuntime = {
     id: "runtime-1",
     userId: "user-1",
@@ -54,6 +56,15 @@ class FakeApi implements CollaborationApi {
     this.completeInput = input;
     return canonical("session-1", 10, {
       type: "agent_response",
+      idempotencyKey: input.idempotencyKey,
+      payload: input.payload,
+      runtimeId: input.runtimeId,
+    });
+  }
+  async appendAgentProgress(_sessionId: string, _requestId: string, input: AgentProgressInput) {
+    this.progressInputs.push(input);
+    return canonical("session-1", 9, {
+      type: "agent_progress",
       idempotencyKey: input.idempotencyKey,
       payload: input.payload,
       runtimeId: input.runtimeId,
@@ -192,6 +203,7 @@ test("agent request claim hydrates canonical history and completes with redacted
   const result = await bridge.processAgentRequest(request, {
     async execute(input) {
       assert.deepEqual(input.canonicalHistory.map((item) => item.sequence), [1, 2]);
+      await input.publishProgress?.({ id: "commentary-1", content: "Checking token=supersecretvalue" });
       return {
         events: [{
           kind: "assistant",
@@ -204,6 +216,12 @@ test("agent request claim hydrates canonical history and completes with redacted
     },
   });
   assert.equal(result.claimed, true);
+  assert.equal(api.progressInputs.length, 2);
+  assert.equal((api.progressInputs[0]?.payload as any)?.content, "Agent started processing the request.");
+  assert.equal((api.progressInputs[0]?.payload as any)?.phase, "lifecycle");
+  assert.match(api.progressInputs[0]?.idempotencyKey ?? "", /:progress:start$/);
+  assert.match(api.progressInputs[1]?.idempotencyKey ?? "", /:progress:/);
+  assert.doesNotMatch(JSON.stringify(api.progressInputs[1]?.payload), /supersecretvalue/);
   assert.equal((api.completeInput?.payload as any).text, "[REDACTED]");
 });
 

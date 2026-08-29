@@ -906,7 +906,11 @@ test("network bootstrap, URL credentials, direct bearer sockets, and unapproved 
 
     const health = await fetch(`${running.origin}/health`);
     assert.equal(health.headers.get("x-content-type-options"), "nosniff");
-    assert.match(health.headers.get("content-security-policy") ?? "", /default-src 'self'/);
+    const contentSecurityPolicy = health.headers.get("content-security-policy") ?? "";
+    assert.match(contentSecurityPolicy, /default-src 'self'/);
+    assert.match(contentSecurityPolicy, /script-src 'self'/);
+    assert.match(contentSecurityPolicy, /style-src 'self' 'unsafe-inline'/);
+    assert.match(contentSecurityPolicy, /font-src 'self'/);
     assert.match(health.headers.get("strict-transport-security") ?? "", /max-age=/);
 
     const directBearer = new WebSocket(`${running.origin.replace("http", "ws")}/v1/ws`, {
@@ -1158,6 +1162,34 @@ test("HTTP exposes idempotent local turns and snapshot request control-plane", a
     );
     assert.equal(executionPresence.body.data.members[0]?.runtime?.id, "execution-http");
     assert.equal(executionPresence.body.data.members[0]?.runtime?.purpose, "execution");
+    const webRequest = await api<{ data: { event: { id: string } } }>(running.origin, "/v1/sessions/sync-http/events", {
+      method: "POST", token,
+      body: { idempotency_key: "sync-http-agent-request", type: "agent_request", payload: { content: "work" } },
+    });
+    assert.equal((await api(running.origin, `/v1/sessions/sync-http/agent-requests/${webRequest.body.data.event.id}/claim`, {
+      method: "POST", token, body: { runtime_id: "execution-http" },
+    })).status, 200);
+    const progress = await api<{ data: { event: { type: string; reply_to_event_id: string } } }>(
+      running.origin, `/v1/sessions/sync-http/agent-requests/${webRequest.body.data.event.id}/progress`, {
+        method: "POST", token,
+        body: {
+          runtime_id: "execution-http",
+          idempotency_key: "sync-http-agent-progress",
+          payload: { content: "Checking files" },
+        },
+      },
+    );
+    assert.equal(progress.status, 201);
+    assert.equal(progress.body.data.event.type, "agent_progress");
+    assert.equal(progress.body.data.event.reply_to_event_id, webRequest.body.data.event.id);
+    assert.equal((await api(running.origin, `/v1/sessions/sync-http/agent-requests/${webRequest.body.data.event.id}/complete`, {
+      method: "POST", token,
+      body: {
+        runtime_id: "execution-http",
+        idempotency_key: "sync-http-agent-response",
+        payload: { content: "Done" },
+      },
+    })).status, 201);
     const turn = {
       local_turn_id: "http-turn-1", runtime_id: "execution-http", based_on_sequence: 0,
       occurred_at: "2026-08-25T12:00:00.000Z", observed_model: "gpt-5.6-terra",

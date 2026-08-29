@@ -110,6 +110,11 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(styles, /html\[lang="zh-CN"\] \.agent-request-profile select/);
   assert.match(styles, /\.composer-layout-resizer[\s\S]*?cursor:\s*row-resize/);
   assert.match(main, /installComposerLayoutResizer\(composerLayoutResizer\)/);
+  assert.match(main, /renderMarkdown\(content\)/);
+  assert.match(main, /renderProgressDisclosure\(progressByRequest\.get\(event\.replyTo\), false\)/);
+  assert.match(main, /details\.open = live/);
+  assert.match(main, /expandedWorklogs\.has\(worklogId\)/);
+  assert.match(main, /details\.addEventListener\("toggle"/);
 });
 
 test("project Codex connector explains scope, credential prompting, hook trust, and focus restoration", async () => {

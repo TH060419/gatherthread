@@ -824,6 +824,56 @@ test("only the initiating user's runtime can claim and complete an agent request
   }
 });
 
+test("agent progress is ordered, idempotent, claim-bound, and cannot follow completion", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "agent-progress",
+      idempotency_key: "create-agent-progress",
+      mode: "multi",
+      title: "Agent progress",
+    });
+    const request = f.service.appendEvent(f.owner, session.id, {
+      idempotency_key: "agent-progress-request",
+      type: "agent_request",
+      visibility: "session",
+      payload: { content: "work" },
+    });
+    const runtime = f.service.registerRuntime(f.owner, {
+      runtime_id: "agent-progress-runtime",
+      session_id: session.id,
+      device_id: f.owner.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-test",
+      local_session_id: "agent-progress-local",
+      capture_fidelity: "harness_transcript",
+    });
+    f.service.claimAgentRequest(f.owner, session.id, request.id, runtime.id);
+    const progress = f.service.appendAgentProgress(
+      f.owner, session.id, request.id, runtime.id, "agent-progress-event", { content: "Checking files" },
+    );
+    const retry = f.service.appendAgentProgress(
+      f.owner, session.id, request.id, runtime.id, "agent-progress-event", { content: "Checking files" },
+    );
+    assert.equal(progress.id, retry.id);
+    assert.equal(progress.type, "agent_progress");
+    assert.equal(progress.reply_to_event_id, request.id);
+    const response = f.service.completeAgentRequest(
+      f.owner, session.id, request.id, runtime.id, "agent-progress-response", { content: "Done" },
+    );
+    assert.equal(response.sequence, progress.sequence + 1);
+    assert.throws(
+      () => f.service.appendAgentProgress(
+        f.owner, session.id, request.id, runtime.id, "agent-progress-late", { content: "Too late" },
+      ),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("runtime presence becomes offline without heartbeats and returns online after one", () => {
   let instant = new Date("2026-08-25T00:00:00.000Z");
   const f = fixture({ clock: () => instant });

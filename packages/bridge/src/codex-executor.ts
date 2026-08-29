@@ -289,7 +289,7 @@ function extractRequestText(payload: unknown): string {
 
 function isAlreadyPresentLocalOutput(event: CanonicalEvent, runtimeId: string): boolean {
   return event.runtime?.runtimeId === runtimeId
-    && ["agent_response", "tool_call", "tool_result"].includes(event.type);
+    && ["agent_progress", "agent_response", "tool_call", "tool_result"].includes(event.type);
 }
 
 function parseCodexJsonl(

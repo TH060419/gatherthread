@@ -235,6 +235,7 @@ export function eventLabel(type) {
   return {
     human_chat: "Chat",
     agent_request: "Agent request",
+    agent_progress: "Working",
     agent_response: "Agent response",
     tool_call: "Tool call",
     tool_result: "Tool result",
@@ -299,6 +300,13 @@ export function formatTimestamp(value) {
 export function runtimeLabel(runtime) {
   if (!runtime) return "No runtime available";
   return [runtime.harness, runtime.provider, runtime.model].filter(Boolean).join(" · ");
+}
+
+export function provenanceSummary(provenance, formatReasoning = (effort) => effort) {
+  if (!provenance) return "";
+  const harness = /^codex$/iu.test(provenance.harness ?? "") ? "Codex" : provenance.harness;
+  const reasoning = provenance.reasoningEffort ? formatReasoning(provenance.reasoningEffort) : "";
+  return [provenance.username, harness, provenance.model, reasoning].filter(Boolean).join(" · ");
 }
 
 export function normalizeReplayPage(page) {

@@ -103,5 +103,6 @@ New projects start with no sessions. Owners may create `solo` or `multi`; partic
 - Project owners can change participant/viewer roles. There is no member-removal UI, attachment upload, reply UI, offline outbox, search, or runtime selection yet.
 - The mock emits illustrative agent responses; real responses use the local bridge claim/complete workflow.
 - An unanswered `agent_request` shows an accessible pulsing response indicator while its local runtime is online. If the runtime disconnects, the indicator changes to a static queued state and disappears only when a canonical linked response arrives.
+- Linked `agent_progress` lifecycle status and public commentary render live while the request is pending. Once the final response arrives, the work log is closed by default and the safe GFM-rendered final answer remains primary. Bundled KaTeX renders `$...$`, `$$...$$`, `\\(...\\)`, and `\\[...\\]` formulas without trusting formula-supplied commands. Raw HTML, dangerous link protocols, hidden reasoning, and automatic remote Markdown image requests are excluded.
 - Drafts survive a temporary socket loss in memory, but not a full reload.
 - The app is plain ES modules and CSS to remain independently runnable while the monorepo toolchain is still being created.

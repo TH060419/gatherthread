@@ -1,3 +1,5 @@
+@import "katex/dist/katex.min.css";
+
 :root {
   color-scheme: light;
   --paper: #f5f5f7;
@@ -24,7 +26,6 @@
   --surface-highlight: color-mix(in srgb, white 54%, transparent);
   --response-surface: color-mix(in srgb, var(--teal-wash) 62%, var(--paper-raised));
   --response-border: color-mix(in srgb, var(--teal) 38%, var(--line));
-  --provenance-border: color-mix(in srgb, var(--teal) 34%, var(--line));
   --switch-thumb: #ffffff;
   --left-rail-width: 260px;
   --right-panel-width: 290px;
@@ -1292,6 +1293,194 @@ code {
   white-space: pre-wrap;
 }
 
+.event-card > .markdown-body {
+  margin: 13px 0 2px 44px;
+}
+
+.markdown-body {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 0.92rem;
+  line-height: 1.62;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0;
+}
+
+.markdown-body > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body p,
+.markdown-body ul,
+.markdown-body ol,
+.markdown-body blockquote,
+.markdown-body pre,
+.markdown-body table {
+  margin: 0.7em 0;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  margin: 1.1em 0 0.45em;
+  color: var(--ink);
+  font-family: inherit;
+  font-weight: 720;
+  line-height: 1.25;
+}
+
+.markdown-body h1 { font-size: 1.35rem; }
+.markdown-body h2 { font-size: 1.18rem; }
+.markdown-body h3 { font-size: 1.04rem; }
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.45rem;
+}
+
+.markdown-body li + li {
+  margin-top: 0.3em;
+}
+
+.markdown-body blockquote {
+  padding: 0.1rem 0 0.1rem 0.9rem;
+  border-left: 3px solid color-mix(in srgb, var(--teal) 55%, var(--line));
+  color: var(--ink-soft);
+}
+
+.markdown-body code {
+  padding: 0.12em 0.34em;
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--paper) 78%, transparent);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.86em;
+}
+
+.markdown-body pre {
+  max-width: 100%;
+  overflow-x: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--ink) 6%, var(--paper-raised));
+}
+
+.markdown-body pre code {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 0.82rem;
+}
+
+.markdown-body table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  text-align: left;
+}
+
+.markdown-body a {
+  color: var(--teal-dark);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.markdown-body .katex {
+  color: var(--ink);
+  font-size: 1.03em;
+}
+
+.markdown-body .katex-display {
+  max-width: 100%;
+  margin: 1rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.2rem 0.1rem 0.35rem;
+  scrollbar-width: thin;
+}
+
+.markdown-body .katex-display > .katex {
+  min-width: min-content;
+  text-align: center;
+}
+
+.markdown-body .katex-error {
+  color: var(--danger);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.88em;
+  white-space: pre-wrap;
+}
+
+.markdown-image-placeholder {
+  color: var(--ink-soft);
+  font-style: italic;
+}
+
+.agent-worklog {
+  margin: 14px 0 2px 44px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
+  color: var(--ink-soft);
+}
+
+.agent-worklog-live {
+  margin: 9px 0 0 18px;
+  padding: 10px 13px;
+  border: 1px solid var(--response-border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--response-surface) 74%, transparent);
+}
+
+.agent-worklog summary {
+  width: fit-content;
+  padding-top: 10px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.76rem;
+  font-weight: 720;
+  list-style-position: outside;
+}
+
+.agent-worklog-live summary {
+  padding-top: 0;
+  color: var(--teal-dark);
+}
+
+.agent-worklog-list {
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-worklog-list > li {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 0;
+  border-top: 1px solid color-mix(in srgb, var(--line) 58%, transparent);
+}
+
+.agent-worklog-list time {
+  padding-top: 0.12rem;
+  color: var(--ink-soft);
+  font-size: 0.66rem;
+}
+
+.agent-worklog-list .markdown-body {
+  color: var(--ink);
+  font-size: 0.84rem;
+}
+
 .event-agent_request {
   border-left: 4px solid var(--coral);
 }
@@ -2048,18 +2237,13 @@ time,
 }
 
 .provenance {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin: 13px 0 0 44px;
-}
-
-.provenance span {
-  padding: 4px 7px;
-  border: 1px solid #b8d7cf;
-  border-radius: 99px;
-  color: var(--teal-dark);
-  font-size: 0.64rem;
+  margin: 11px 0 0 44px;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  font-weight: 450;
+  line-height: 1.45;
+  letter-spacing: 0.012em;
+  overflow-wrap: anywhere;
 }
 
 .timeline-empty,
@@ -2809,11 +2993,6 @@ time,
 .agent-pending-status {
   border-color: var(--response-border);
   background: var(--response-surface);
-}
-
-.provenance span {
-  border-color: var(--provenance-border);
-  background: color-mix(in srgb, var(--teal-wash) 46%, transparent);
 }
 
 .mode-solo {
