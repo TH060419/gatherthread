@@ -197,6 +197,7 @@ const ZH_CN = Object.freeze({
   "Available levels depend on the selected model.": "可用等级取决于所选模型。",
   "Custom Codex model": "自定义 Codex 模型",
   "Add a safe model ID such as a compatible proxy model. Credentials and CLI arguments are never accepted here.": "添加安全的 model ID，例如兼容代理模型。这里不会接受凭据或 CLI 参数。",
+  "This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.": "这里只登记调用模型名，不配置模型接入。请先自行在 Codex 中配置受支持的模型，再将其名称添加到这里。",
   "Add model": "添加模型",
   "Message behavior": "消息行为",
   "Controls only this browser.": "仅影响当前浏览器。",

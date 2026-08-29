@@ -27,10 +27,8 @@ import { createLocalizer } from "./i18n.js?v=20260829-11";
 import {
   contextBudgetInputBytes,
   digitsOnly,
-  numericPresetInputId,
-  numericPresetUpdate,
-  shouldPreviewSettingsInput,
-} from "./settings-controls.js?v=20260829-2";
+  numericPresetAction,
+} from "./settings-controls.js?v=20260829-3";
 import {
   addCustomCodexModel,
   CODEX_MODELS,
@@ -1576,14 +1574,29 @@ function updateSettingsPreviewFromForm() {
   syncAllNumericPresets();
 }
 
+function handleNumericPresetSelection(target, { focusCustom = false } = {}) {
+  const action = numericPresetAction(target.id, target.value);
+  if (action.kind === "preview") return false;
+  if (action.kind === "focus") {
+    if (focusCustom) element(action.inputId).focus();
+    return true;
+  }
+  if (action.kind === "apply") {
+    element(action.inputId).value = action.inputValue;
+    if (action.unit) element("settings-context-unit").value = action.unit;
+    updateSettingsPreviewFromForm();
+  }
+  return true;
+}
+
 function handleSettingsControlInput(event) {
-  if (!shouldPreviewSettingsInput(event.target.id)) return;
-  if (event.target.id === "settings-context-budget") {
+  if (handleNumericPresetSelection(event.target)) return;
+  if (event.target.classList?.contains("digits-only-input")) {
     const sanitized = digitsOnly(event.target.value);
     if (event.target.value !== sanitized) event.target.value = sanitized;
     if (!sanitized) {
       syncAllNumericPresets();
-      renderContextDiagnostic(settingsPreview);
+      if (event.target.id === "settings-context-budget") renderContextDiagnostic(settingsPreview);
       return;
     }
   }
@@ -1594,16 +1607,7 @@ function handleSettingsControlChange(event) {
   if (event.target.id === "settings-default-model") {
     updateEffortControl(event.target, element("settings-default-effort"), element("settings-default-effort").value, settingsPreview);
   }
-  const presetInputId = numericPresetInputId(event.target.id);
-  if (presetInputId && event.target.value === "custom") {
-    element(presetInputId).focus();
-    return;
-  }
-  const presetUpdate = numericPresetUpdate(event.target.id, event.target.value);
-  if (presetUpdate) {
-    element(presetUpdate.inputId).value = presetUpdate.inputValue;
-    if (presetUpdate.unit) element("settings-context-unit").value = presetUpdate.unit;
-  }
+  if (handleNumericPresetSelection(event.target, { focusCustom: true })) return;
   updateSettingsPreviewFromForm();
 }
 

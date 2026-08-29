@@ -9,6 +9,33 @@ const apiPath = fileURLToPath(new URL("../src/api.js", import.meta.url));
 const stylesPath = fileURLToPath(new URL("../src/styles.css", import.meta.url));
 const domainPath = fileURLToPath(new URL("../src/domain.js", import.meta.url));
 const i18nPath = fileURLToPath(new URL("../src/i18n.js", import.meta.url));
+const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.url));
+
+test("site icons retain GatherThread identity without forcing standalone launch behavior", async () => {
+  const [html, manifestText] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(manifestPath, "utf8"),
+  ]);
+  for (const reference of [
+    'href="./favicon.ico"',
+    'href="./favicon-32x32.png"',
+    'href="./favicon-16x16.png"',
+    'href="./apple-touch-icon.png"',
+    'href="./site.webmanifest"',
+  ]) {
+    assert.match(html, new RegExp(reference.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  const manifest = JSON.parse(manifestText);
+  assert.equal(manifest.name, "GatherThread");
+  assert.equal(manifest.short_name, "GatherThread");
+  assert.equal(manifest.theme_color, "#f4f1e8");
+  assert.equal(manifest.background_color, "#f4f1e8");
+  assert.equal(Object.hasOwn(manifest, "display"), false);
+  assert.deepEqual(manifest.icons.map((icon) => icon.src), [
+    "./android-chrome-192x192.png",
+    "./android-chrome-512x512.png",
+  ]);
+});
 
 test("the shell exposes landmarks, labelled forms, status regions, and separate send controls", async () => {
   const [html, main, styles] = await Promise.all([
@@ -208,4 +235,26 @@ test("settings switches use a Safari-safe visual track and dark responses use se
   assert.match(styles, /\.settings-toggle input\[type="checkbox"\]:checked \+ \.settings-switch-visual::after/);
   assert.match(styles, /\.event-agent_response \{[\s\S]*?background: var\(--response-surface\);[\s\S]*?color: var\(--ink\);/);
   assert.match(styles, /html\[lang="zh-CN"\] \{[\s\S]*?--locale-text-boost: 1\.08;/);
+});
+
+test("custom numeric settings use spinner-free digit inputs", async () => {
+  const [html, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(stylesPath, "utf8")]);
+  assert.doesNotMatch(html, /type="number"/);
+  for (const id of [
+    "settings-text-scale",
+    "settings-left-width",
+    "settings-right-width",
+    "settings-composer-height",
+    "settings-context-budget",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*class="digits-only-input"[^>]*type="text"[^>]*inputmode="numeric"`));
+  }
+  assert.match(styles, /\.numeric-setting-context label \{[\s\S]*?grid-template-columns: minmax\(64px, 1fr\) 100px;/);
+});
+
+test("custom Codex models explain that access must already be configured", async () => {
+  const [html, i18n] = await Promise.all([readFile(htmlPath, "utf8"), readFile(i18nPath, "utf8")]);
+  const explanation = "This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.";
+  assert.match(html, new RegExp(explanation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(i18n, /这里只登记调用模型名，不配置模型接入。请先自行在 Codex 中配置受支持的模型，再将其名称添加到这里。/);
 });

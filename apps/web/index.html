@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260829-18" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260829-21" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -588,7 +588,7 @@
               <label class="settings-row" for="settings-theme"><span><strong>Theme</strong><small>Follow the system or choose a fixed appearance.</small></span><select id="settings-theme" name="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
               <div class="settings-row">
                 <span><strong>Text size</strong><small>Use a preset or enter an exact percentage.</small></span>
-                <div class="numeric-setting"><select id="settings-text-scale-preset" aria-label="Text size preset"><option value="90">Small · 90%</option><option value="100">Default · 100%</option><option value="110">Large · 110%</option><option value="125">Extra large · 125%</option><option value="custom">Custom</option></select><label><span class="sr-only">Exact text size</span><input id="settings-text-scale" name="text-scale" type="number" min="90" max="125" step="1" inputmode="numeric" /><span>%</span></label></div>
+                <div class="numeric-setting"><select id="settings-text-scale-preset" aria-label="Text size preset"><option value="90">Small · 90%</option><option value="100">Default · 100%</option><option value="110">Large · 110%</option><option value="125">Extra large · 125%</option><option value="custom">Custom</option></select><label><span class="sr-only">Exact text size</span><input id="settings-text-scale" name="text-scale" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" /><span>%</span></label></div>
               </div>
               <label class="settings-row" for="settings-density"><span><strong>Density</strong><small>Compact reduces spacing without shrinking targets below accessibility limits.</small></span><select id="settings-density" name="density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
               <label class="settings-row" for="settings-motion"><span><strong>Motion</strong><small>Reduced motion disables blur and non-essential transitions for comfort and performance.</small></span><select id="settings-motion" name="motion"><option value="system">Follow system</option><option value="reduce">Reduce motion</option><option value="full">Full motion</option></select></label>
@@ -601,9 +601,9 @@
                 <div><p class="eyebrow">Layout</p><h3 id="settings-layout-title">Workspace panels</h3></div>
                 <p>Drag the vertical and horizontal dividers in the workspace, or set exact sizes here.</p>
               </div>
-              <div class="settings-row"><span><strong>Session sidebar</strong><small>210-420 px.</small></span><div class="numeric-setting"><select id="settings-left-width-preset" aria-label="Session sidebar width preset"><option value="220">Narrow · 220</option><option value="260">Default · 260</option><option value="340">Wide · 340</option><option value="custom">Custom</option></select><label><input id="settings-left-width" name="left-width" type="number" min="210" max="420" step="1" inputmode="numeric" aria-label="Exact session sidebar width" /><span>px</span></label></div></div>
-              <div class="settings-row"><span><strong>Member sidebar</strong><small>260-480 px.</small></span><div class="numeric-setting"><select id="settings-right-width-preset" aria-label="Member sidebar width preset"><option value="260">Narrow · 260</option><option value="290">Default · 290</option><option value="380">Wide · 380</option><option value="custom">Custom</option></select><label><input id="settings-right-width" name="right-width" type="number" min="260" max="480" step="1" inputmode="numeric" aria-label="Exact member sidebar width" /><span>px</span></label></div></div>
-              <div class="settings-row"><span><strong>Message composer</strong><small>210-560 px. You can also drag the divider above the composer.</small></span><div class="numeric-setting"><select id="settings-composer-height-preset" aria-label="Message composer height preset"><option value="220">Compact · 220</option><option value="280">Default · 280</option><option value="380">Tall · 380</option><option value="custom">Custom</option></select><label><input id="settings-composer-height" name="composer-height" type="number" min="210" max="560" step="1" inputmode="numeric" aria-label="Exact message composer height" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Session sidebar</strong><small>210-420 px.</small></span><div class="numeric-setting"><select id="settings-left-width-preset" aria-label="Session sidebar width preset"><option value="220">Narrow · 220</option><option value="260">Default · 260</option><option value="340">Wide · 340</option><option value="custom">Custom</option></select><label><input id="settings-left-width" name="left-width" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact session sidebar width" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Member sidebar</strong><small>260-480 px.</small></span><div class="numeric-setting"><select id="settings-right-width-preset" aria-label="Member sidebar width preset"><option value="260">Narrow · 260</option><option value="290">Default · 290</option><option value="380">Wide · 380</option><option value="custom">Custom</option></select><label><input id="settings-right-width" name="right-width" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact member sidebar width" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Message composer</strong><small>210-560 px. You can also drag the divider above the composer.</small></span><div class="numeric-setting"><select id="settings-composer-height-preset" aria-label="Message composer height preset"><option value="220">Compact · 220</option><option value="280">Default · 280</option><option value="380">Tall · 380</option><option value="custom">Custom</option></select><label><input id="settings-composer-height" name="composer-height" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact message composer height" /><span>px</span></label></div></div>
               <button id="reset-layout-button" class="button button-secondary" type="button">Reset panel sizes</button>
             </section>
 
@@ -628,7 +628,7 @@
               <label class="settings-row" for="settings-agent-harness"><span><strong>Agent harness</strong><small>Claude Code and DeepSeek Harness adapters are reserved for future releases.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option disabled>Claude Code · coming later</option><option disabled>DeepSeek Harness · coming later</option></select></label>
               <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
               <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
-              <div class="settings-row settings-row-tall"><span><strong>Custom Codex model</strong><small>Add a safe model ID such as a compatible proxy model. Credentials and CLI arguments are never accepted here.</small></span><div class="custom-model-control"><input id="settings-custom-model" type="text" maxlength="120" autocomplete="off" placeholder="model-id" /><button id="add-custom-model-button" class="button button-secondary" type="button">Add model</button></div></div>
+              <div class="settings-row settings-row-tall"><span><strong>Custom Codex model</strong><small>Add a safe model ID such as a compatible proxy model. Credentials and CLI arguments are never accepted here.</small></span><div class="custom-model-stack"><div class="custom-model-control"><input id="settings-custom-model" type="text" maxlength="120" autocomplete="off" placeholder="model-id" /><button id="add-custom-model-button" class="button button-secondary" type="button">Add model</button></div><small class="custom-model-note">This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.</small></div></div>
               <p id="settings-custom-model-error" class="form-error" role="alert"></p>
             </section>
 
@@ -673,6 +673,6 @@
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260829-20"></script>
+    <script type="module" src="./src/main.js?v=20260829-22"></script>
   </body>
 </html>

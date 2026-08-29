@@ -4,15 +4,27 @@ import assert from "node:assert/strict";
 import {
   contextBudgetInputBytes,
   digitsOnly,
+  numericPresetAction,
   numericPresetUpdate,
-  shouldPreviewSettingsInput,
 } from "../src/settings-controls.js";
 
-test("numeric preset input events wait for the change handler instead of restoring stale values", () => {
-  assert.equal(shouldPreviewSettingsInput("settings-text-scale-preset"), false);
-  assert.equal(shouldPreviewSettingsInput("settings-left-width-preset"), false);
-  assert.equal(shouldPreviewSettingsInput("settings-context-preset"), false);
-  assert.equal(shouldPreviewSettingsInput("settings-context-budget"), true);
+test("numeric preset actions apply during input events without waiting for change", () => {
+  assert.deepEqual(numericPresetAction("settings-text-scale-preset", "90"), {
+    kind: "apply",
+    inputId: "settings-text-scale",
+    inputValue: "90",
+  });
+  assert.deepEqual(numericPresetAction("settings-context-preset", "2097152"), {
+    kind: "apply",
+    inputId: "settings-context-budget",
+    inputValue: "2",
+    unit: "MiB",
+  });
+  assert.deepEqual(numericPresetAction("settings-left-width-preset", "custom"), {
+    kind: "focus",
+    inputId: "settings-left-width",
+  });
+  assert.deepEqual(numericPresetAction("settings-theme", "dark"), { kind: "preview" });
 });
 
 test("numeric presets resolve to their exact input value and context unit", () => {

@@ -4,12 +4,16 @@
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-**GatherThread** is a harness-neutral collaboration layer for people who each work with their own local AI agent.
+**One room, many minds.**
+
+**GatherThread** is where people collaborate in one shared workspace, each with their own local Agent, while context stays ordered, attributable, and live. It remains harness-neutral, so every collaborator can keep the local Agent and workflow they already use.
 
 - `solo`: its creator publishes a complete canonical session stream; every other project member, including the project owner when someone else created it, follows it read-only.
 - `multi`: people share one ordered project conversation. A human chat message is shared without invoking an agent. An agent request is claimed only by the sender's local runtime, and the response is labelled with username, harness, provider, model, and capture fidelity; local device and native-session identifiers are not exposed to non-owner collaborators reading another user's activity.
 
 The server persists an append-only canonical event log in SQLite WAL, assigns authoritative per-session sequence numbers, enforces role-based access, and provides durable replay plus WebSocket live delivery. For each writable Codex session, the local bridge keeps a Desktop-owned interactive task and a separate background execution projection. Trusted hooks publish Desktop turns through a durable idempotent outbox, while Web requests and canonical-history hydration run only on the background projection, so two processes never compete for one native writer.
+
+The bilingual Web workspace is responsive and resizable. Project-scoped settings control the default Agent model, reasoning effort, and context-injection ceiling; accessible custom controls, default high contrast, and theme-aware ambient lighting keep the interface legible without competing with the conversation.
 
 ## Project and role model
 
@@ -30,7 +34,7 @@ An MCP server cannot independently read an entire host conversation. Therefore r
 | Path | Responsibility |
 |---|---|
 | `apps/server` | Authenticated HTTP/WebSocket service, SQLite WAL, ACL, replay, runtime claims |
-| `apps/web` | Responsive solo/multi collaboration UI with chat/request controls and gap recovery |
+| `apps/web` | Bilingual, resizable solo/multi workspace with Agent settings, chat/request controls, and gap recovery |
 | `packages/protocol` | Canonical event and API schemas |
 | `packages/adapters` | Authorized Codex and Claude Code transcript discovery, parsing, and redaction |
 | `packages/bridge` | Local runtime registration, cursoring, context upload, claim/complete workflow |
@@ -75,6 +79,8 @@ npm run codex:connect -- \
   --model gpt-5.6-sol \
   --install-hooks
 ```
+
+Project Agent settings seed the model, reasoning effort, and context-injection ceiling used by new connection commands and Web Agent requests.
 
 The copied command contains no token. The connector prompts for the user's device token without echoing it, safely creates or reuses a same-name workspace under `~/GatherThread Projects/`, and opens that local project in Codex Desktop. A newly materialized editable session starts with a Desktop task named `<session> · GatherThread` plus an implementation-private `exec` projection named `<session> · GatherThread background`. The local and cloud titles are independent after that first materialization; changing either title never changes the stable session/thread binding and never creates a second session. Codex Desktop is the sole writer of the visible task; Web **Request my agent** turns execute in the background projection and converge through canonical history. Do not use a background-labelled task for direct work if the current Desktop version lists it. If Desktop nevertheless claims that implementation detail, the next Web request replaces it from authoritative canonical history instead of retrying the locked writer forever. Later sessions are discovered automatically. Keep the connector terminal running. To bind an existing source checkout instead, omit `--create-workspace` and pass `--workspace "/absolute/path/to/project"` explicitly.
 
