@@ -1,4 +1,4 @@
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 4;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -43,8 +43,8 @@ export const DEFAULT_SETTINGS = deepFreeze({
     highContrast: true,
   },
   layout: {
-    leftRailPixels: 260,
-    rightPanelPixels: 290,
+    leftRailPixels: 340,
+    rightPanelPixels: 320,
     composerPixels: 280,
   },
   sync: {
@@ -236,13 +236,20 @@ export function createSettingsStore(storage = globalThis.localStorage) {
 
 function migrateStoredSettings(input) {
   if (!isObject(input) || Number(input.version) >= SETTINGS_VERSION) return input;
+  const previousVersion = Number(input.version);
   const appearance = isObject(input.appearance) ? input.appearance : {};
+  const layout = isObject(input.layout) ? input.layout : {};
   return {
     ...input,
     appearance: {
       ...appearance,
-      ambientCanvas: "pronounced",
-      highContrast: true,
+      ambientCanvas: previousVersion < 3 ? "pronounced" : appearance.ambientCanvas,
+      highContrast: previousVersion < 3 ? true : appearance.highContrast,
+    },
+    layout: {
+      ...layout,
+      leftRailPixels: layout.leftRailPixels == null || layout.leftRailPixels === 260 ? DEFAULT_SETTINGS.layout.leftRailPixels : layout.leftRailPixels,
+      rightPanelPixels: layout.rightPanelPixels == null || layout.rightPanelPixels === 290 ? DEFAULT_SETTINGS.layout.rightPanelPixels : layout.rightPanelPixels,
     },
   };
 }

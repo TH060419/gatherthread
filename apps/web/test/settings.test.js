@@ -27,7 +27,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 3);
+  assert.equal(normalized.version, 4);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -106,9 +106,25 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, 4);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");
   assert.equal(migrated.appearance.highContrast, true);
+  assert.equal(migrated.layout.leftRailPixels, 340);
+  assert.equal(migrated.layout.rightPanelPixels, 320);
+
+  const customizedLayout = createSettingsStore({
+    getItem: () => JSON.stringify({
+      version: 3,
+      appearance: { ambientCanvas: "off", highContrast: false },
+      layout: { leftRailPixels: 312, rightPanelPixels: 356, composerPixels: 330 },
+    }),
+    setItem: () => {},
+  }).get();
+  assert.equal(customizedLayout.appearance.ambientCanvas, "off");
+  assert.equal(customizedLayout.appearance.highContrast, false);
+  assert.equal(customizedLayout.layout.leftRailPixels, 312);
+  assert.equal(customizedLayout.layout.rightPanelPixels, 356);
+  assert.equal(customizedLayout.layout.composerPixels, 330);
 });

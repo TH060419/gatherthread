@@ -27,8 +27,8 @@
   --response-surface: color-mix(in srgb, var(--teal-wash) 62%, var(--paper-raised));
   --response-border: color-mix(in srgb, var(--teal) 38%, var(--line));
   --switch-thumb: #ffffff;
-  --left-rail-width: 260px;
-  --right-panel-width: 290px;
+  --left-rail-width: 340px;
+  --right-panel-width: 320px;
   --composer-height: 280px;
   --text-scale: 1;
   --locale-text-boost: 1;
@@ -914,11 +914,18 @@ code {
 }
 
 .session-button strong {
+  display: -webkit-box;
   margin-bottom: 5px;
+  max-height: 2.7em;
   font-size: 0.88rem;
   overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .session-button > span:first-child {
@@ -1048,11 +1055,18 @@ code {
 }
 
 .title-line h1 {
+  display: -webkit-box;
   flex: 1 1 auto;
   min-width: 0;
+  max-height: 2.24em;
   overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.12;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .title-line .mode-badge,
@@ -2159,7 +2173,7 @@ time,
   transition-duration: 0.01ms !important;
 }
 
-@media (max-width: 1040px) {
+@media (max-width: 1160px) {
   .layout-resizer {
     display: none;
   }
@@ -2704,7 +2718,7 @@ time,
   display: none;
 }
 
-@media (max-width: 1040px) {
+@media (max-width: 1160px) {
   .workspace-grid {
     grid-template-columns: 230px minmax(440px, 1fr);
   }
@@ -3480,7 +3494,7 @@ html[lang="zh-CN"] .project-select {
   min-height: 680px;
   display: grid;
   grid-template-rows: 64px minmax(0, 1fr);
-  padding: 14px;
+  padding: 0;
   background:
     radial-gradient(ellipse at 8% 8%, rgba(32, 193, 220, 0.1), transparent 30%),
     radial-gradient(ellipse at 95% 88%, rgba(167, 102, 240, 0.075), transparent 31%),
@@ -3489,11 +3503,11 @@ html[lang="zh-CN"] .project-select {
 
 .topbar {
   height: 64px;
-  border: 1px solid var(--glass-edge);
-  border-bottom-color: var(--glass-hairline);
-  border-radius: var(--shell-radius) var(--shell-radius) 0 0;
+  border: 0;
+  border-bottom: 1px solid var(--glass-hairline);
+  border-radius: 0;
   background: var(--glass-navigation);
-  box-shadow: inset 0 1px var(--glass-specular), var(--shell-shadow);
+  box-shadow: inset 0 1px var(--glass-specular);
   backdrop-filter: blur(28px) saturate(155%);
   -webkit-backdrop-filter: blur(28px) saturate(155%);
 }
@@ -3502,11 +3516,10 @@ html[lang="zh-CN"] .project-select {
   height: auto;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--glass-edge);
-  border-top: 0;
-  border-radius: 0 0 var(--shell-radius) var(--shell-radius);
+  border: 0;
+  border-radius: 0;
   background: var(--glass-navigation);
-  box-shadow: var(--shell-shadow);
+  box-shadow: none;
 }
 
 .session-rail,

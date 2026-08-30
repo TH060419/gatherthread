@@ -1839,7 +1839,7 @@ function syncPreset(selectId, inputId, values) {
 function syncAllNumericPresets() {
   syncPreset("settings-text-scale-preset", "settings-text-scale", [90, 100, 110, 125]);
   syncPreset("settings-left-width-preset", "settings-left-width", [220, 260, 340]);
-  syncPreset("settings-right-width-preset", "settings-right-width", [260, 290, 380]);
+  syncPreset("settings-right-width-preset", "settings-right-width", [260, 290, 320, 380]);
   syncPreset("settings-composer-height-preset", "settings-composer-height", [220, 280, 380]);
   const factor = element("settings-context-unit").value === "MiB" ? 1024 * 1024 : 1024;
   const bytes = Number(element("settings-context-budget").value) * factor;

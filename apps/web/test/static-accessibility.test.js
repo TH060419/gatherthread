@@ -133,7 +133,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(main, /title\.title = session\.name/);
   assert.match(main, /element\("session-title"\)\.title = session\.name/);
   assert.match(main, /localizer\.t\("Continue"\)/);
-  assert.match(styles, /text-overflow:\s*ellipsis/);
+  assert.match(styles, /\.session-button strong \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
+  assert.match(styles, /\.title-line h1 \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /select:not\(:disabled\):hover/);
   assert.match(styles, /html\[lang="zh-CN"\] \.agent-request-profile select/);
   assert.match(styles, /\.composer-layout-resizer[\s\S]*?cursor:\s*row-resize/);
