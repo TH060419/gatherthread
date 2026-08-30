@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f4f1e8" />
+    <meta name="theme-color" content="#FBFAF7" />
     <link rel="icon" href="./favicon.ico" sizes="any" />
     <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="./favicon-16x16.png" />
@@ -14,52 +14,35 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260829-22" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260830-1" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
-    <svg class="brand-symbols" aria-hidden="true">
-      <defs>
-        <linearGradient id="brand-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#08B9D8"/><stop offset=".50" stop-color="#10C1E1"/><stop offset=".66" stop-color="#8878F4"/><stop offset="1" stop-color="#F35BAE"/></linearGradient>
-        <linearGradient id="brand-blue" x1="20" y1="135" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#168AF4"/><stop offset=".55" stop-color="#4E6CF4"/><stop offset="1" stop-color="#A06BE8"/></linearGradient>
-        <linearGradient id="brand-violet" x1="20" y1="228" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#9A50EE"/><stop offset=".58" stop-color="#AD61EA"/><stop offset="1" stop-color="#C66BDD"/></linearGradient>
-        <linearGradient id="brand-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F456AE"/><stop offset=".58" stop-color="#F15CAE"/><stop offset="1" stop-color="#D56FD5"/></linearGradient>
-        <symbol id="brand-mark-symbol" viewBox="0 0 590 364">
-          <g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#brand-blue)"/>
-            <path d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#brand-violet)"/>
-            <path d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#brand-pink)"/>
-            <path d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#brand-cyan)"/>
-          </g>
-          <circle cx="50" cy="42" r="28" fill="#08B9D8"/><circle cx="50" cy="135" r="28" fill="#168AF4"/><circle cx="50" cy="228" r="28" fill="#9A50EE"/><circle cx="50" cy="322" r="28" fill="#F456AE"/>
-        </symbol>
-      </defs>
-    </svg>
     <a class="skip-link" href="#main-content">Skip to conversation</a>
 
     <main id="auth-view" class="auth-shell" aria-labelledby="login-title">
       <section class="auth-story" aria-hidden="true">
         <svg class="auth-mark-motion" viewBox="0 0 590 380" aria-hidden="true">
           <defs>
-            <linearGradient id="auth-mark-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#08B9D8"/><stop offset=".50" stop-color="#10C1E1"/><stop offset=".66" stop-color="#8878F4"/><stop offset="1" stop-color="#F35BAE"/></linearGradient>
-            <linearGradient id="auth-mark-blue" x1="20" y1="135" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#168AF4"/><stop offset=".55" stop-color="#4E6CF4"/><stop offset="1" stop-color="#A06BE8"/></linearGradient>
-            <linearGradient id="auth-mark-violet" x1="20" y1="228" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#9A50EE"/><stop offset=".58" stop-color="#AD61EA"/><stop offset="1" stop-color="#C66BDD"/></linearGradient>
-            <linearGradient id="auth-mark-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F456AE"/><stop offset=".58" stop-color="#F15CAE"/><stop offset="1" stop-color="#D56FD5"/></linearGradient>
+            <linearGradient id="auth-mark-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#20C1DC"/><stop offset=".43" stop-color="#2AC9E5"/><stop offset=".57" stop-color="#60C0EC"/><stop offset=".68" stop-color="#9A96F5"/><stop offset=".80" stop-color="#C986E9"/><stop offset="1" stop-color="#F47BBC"/></linearGradient>
+            <linearGradient id="auth-mark-blue" x1="20" y1="135" x2="330" y2="241" gradientUnits="userSpaceOnUse"><stop stop-color="#2E96F5"/><stop offset=".48" stop-color="#4A8EF6"/><stop offset=".72" stop-color="#7689F3"/><stop offset="1" stop-color="#A789F0"/></linearGradient>
+            <linearGradient id="auth-mark-violet" x1="20" y1="228" x2="330" y2="129" gradientUnits="userSpaceOnUse"><stop stop-color="#A766F0"/><stop offset=".46" stop-color="#B273ED"/><stop offset=".72" stop-color="#B789F2"/><stop offset="1" stop-color="#A39CF8"/></linearGradient>
+            <linearGradient id="auth-mark-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F66DB9"/><stop offset=".48" stop-color="#F378BD"/><stop offset=".68" stop-color="#EA82CB"/><stop offset=".84" stop-color="#D28FE5"/><stop offset="1" stop-color="#BB99F1"/></linearGradient>
           </defs>
-          <g class="auth-mark-base" fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-blue)"/>
-            <path d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-violet)"/>
-            <path d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-pink)"/>
-            <path d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-cyan)"/>
+          <g class="auth-mark-base" fill="none" stroke-width="40" stroke-linejoin="round">
+            <path d="M50 135 H158 C210 135 245 215 298 240" stroke="url(#auth-mark-blue)" stroke-linecap="butt"/>
+            <path d="M50 228 H162 C214 228 247 143 298 130" stroke="url(#auth-mark-violet)" stroke-linecap="butt"/>
+            <path d="M50 322 H174 C248 322 322 184 404 184 H540" stroke="url(#auth-mark-pink)" stroke-linecap="round"/>
+            <path d="M50 42 H167 C241 42 320 184 404 184 H540" stroke="url(#auth-mark-cyan)" stroke-linecap="round"/>
           </g>
-          <g class="auth-mark-flow" fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
-            <path pathLength="1" d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-blue)"/>
-            <path pathLength="1" d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-violet)"/>
-            <path pathLength="1" d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-pink)"/>
-            <path pathLength="1" d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-cyan)"/>
+          <g class="auth-mark-flow" fill="none" stroke-width="40" stroke-linejoin="round">
+            <path pathLength="1" d="M50 135 H158 C210 135 245 215 298 240" stroke="url(#auth-mark-blue)" stroke-linecap="butt"/>
+            <path pathLength="1" d="M50 228 H162 C214 228 247 143 298 130" stroke="url(#auth-mark-violet)" stroke-linecap="butt"/>
+            <path pathLength="1" d="M50 322 H174 C248 322 322 184 404 184 H540" stroke="url(#auth-mark-pink)" stroke-linecap="round"/>
+            <path pathLength="1" d="M50 42 H167 C241 42 320 184 404 184 H540" stroke="url(#auth-mark-cyan)" stroke-linecap="round"/>
           </g>
           <g class="auth-mark-inputs">
-            <circle cx="50" cy="42" r="28" fill="#08B9D8"/><circle cx="50" cy="135" r="28" fill="#168AF4"/><circle cx="50" cy="228" r="28" fill="#9A50EE"/><circle cx="50" cy="322" r="28" fill="#F456AE"/>
+            <circle cx="50" cy="42" r="28" fill="#20C1DC"/><circle cx="50" cy="135" r="28" fill="#2E96F5"/><circle cx="50" cy="228" r="28" fill="#A766F0"/><circle cx="50" cy="322" r="28" fill="#F66DB9"/>
           </g>
         </svg>
         <p class="eyebrow">Human + agent workspace</p>
@@ -78,8 +61,8 @@
 
       <section class="login-panel">
         <div class="brand-lockup brand-lockup-login" role="img" aria-label="GatherThread">
-          <svg class="brand-lockup-mark" viewBox="0 0 590 364" aria-hidden="true"><use href="#brand-mark-symbol"></use></svg>
-          <span class="brand-lockup-name">GatherThread</span>
+          <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
+          <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
         </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
@@ -132,8 +115,8 @@
     <div id="workspace" class="workspace" hidden>
       <header class="topbar">
         <a class="wordmark" href="#" aria-label="GatherThread home">
-          <svg class="brand-lockup-mark" viewBox="0 0 590 364" aria-hidden="true"><use href="#brand-mark-symbol"></use></svg>
-          <span class="brand-lockup-name">GatherThread</span>
+          <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
+          <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
         </a>
         <div class="account-cluster">
           <div class="connection-chip" id="global-connection" role="status">

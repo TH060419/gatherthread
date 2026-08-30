@@ -15,6 +15,7 @@ await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 await cp(resolve(root, "index.html"), resolve(dist, "index.html"));
 await cp(resolve(root, "src"), resolve(dist, "src"), { recursive: true });
+await cp(resolve(root, "brand"), resolve(dist, "brand"), { recursive: true });
 await build({
   entryPoints: {
     markdown: resolve(root, "src/markdown.js"),

@@ -422,43 +422,44 @@ textarea:focus-visible,
   overflow: hidden;
 }
 
-.brand-symbols {
-  position: absolute;
-  width: 0;
-  height: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
 .brand-lockup,
 .wordmark {
   display: inline-flex;
   align-items: center;
   width: fit-content;
-  color: var(--ink);
-}
-
-.brand-lockup {
-  gap: 12px;
 }
 
 .brand-lockup-login {
   margin-bottom: clamp(18px, 3vh, 34px);
 }
 
-.brand-lockup-mark {
+.brand-lockup-image {
   display: block;
-  width: 58px;
-  height: 36px;
+  width: 184px;
+  height: auto;
   flex: 0 0 auto;
-  overflow: visible;
 }
 
-.brand-lockup-name {
-  font-size: 1.12rem;
-  font-weight: 560;
-  letter-spacing: -0.035em;
-  line-height: 1;
+.brand-lockup-image-dark {
+  display: none;
+}
+
+:root[data-theme="dark"] .brand-lockup-image-light {
+  display: none;
+}
+
+:root[data-theme="dark"] .brand-lockup-image-dark {
+  display: block;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-theme="system"] .brand-lockup-image-light {
+    display: none;
+  }
+
+  :root[data-theme="system"] .brand-lockup-image-dark {
+    display: block;
+  }
 }
 
 .login-panel h2 {
@@ -733,18 +734,11 @@ code {
 }
 
 .wordmark {
-  gap: 9px;
   text-decoration: none;
 }
 
-.wordmark .brand-lockup-mark {
-  width: 46px;
-  height: 29px;
-}
-
-.wordmark .brand-lockup-name {
-  font-size: 1rem;
-  font-weight: 580;
+.wordmark .brand-lockup-image {
+  width: 150px;
 }
 
 .account-cluster {
