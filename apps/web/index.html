@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260830-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260830-2" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -22,28 +22,24 @@
 
     <main id="auth-view" class="auth-shell" aria-labelledby="login-title">
       <section class="auth-story" aria-hidden="true">
-        <svg class="auth-mark-motion" viewBox="0 0 590 380" aria-hidden="true">
-          <defs>
-            <linearGradient id="auth-mark-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#20C1DC"/><stop offset=".43" stop-color="#2AC9E5"/><stop offset=".57" stop-color="#60C0EC"/><stop offset=".68" stop-color="#9A96F5"/><stop offset=".80" stop-color="#C986E9"/><stop offset="1" stop-color="#F47BBC"/></linearGradient>
-            <linearGradient id="auth-mark-blue" x1="20" y1="135" x2="330" y2="241" gradientUnits="userSpaceOnUse"><stop stop-color="#2E96F5"/><stop offset=".48" stop-color="#4A8EF6"/><stop offset=".72" stop-color="#7689F3"/><stop offset="1" stop-color="#A789F0"/></linearGradient>
-            <linearGradient id="auth-mark-violet" x1="20" y1="228" x2="330" y2="129" gradientUnits="userSpaceOnUse"><stop stop-color="#A766F0"/><stop offset=".46" stop-color="#B273ED"/><stop offset=".72" stop-color="#B789F2"/><stop offset="1" stop-color="#A39CF8"/></linearGradient>
-            <linearGradient id="auth-mark-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F66DB9"/><stop offset=".48" stop-color="#F378BD"/><stop offset=".68" stop-color="#EA82CB"/><stop offset=".84" stop-color="#D28FE5"/><stop offset="1" stop-color="#BB99F1"/></linearGradient>
-          </defs>
-          <g class="auth-mark-base" fill="none" stroke-width="40" stroke-linejoin="round">
-            <path d="M50 135 H158 C210 135 245 215 298 240" stroke="url(#auth-mark-blue)" stroke-linecap="butt"/>
-            <path d="M50 228 H162 C214 228 247 143 298 130" stroke="url(#auth-mark-violet)" stroke-linecap="butt"/>
-            <path d="M50 322 H174 C248 322 322 184 404 184 H540" stroke="url(#auth-mark-pink)" stroke-linecap="round"/>
-            <path d="M50 42 H167 C241 42 320 184 404 184 H540" stroke="url(#auth-mark-cyan)" stroke-linecap="round"/>
-          </g>
-          <g class="auth-mark-flow" fill="none" stroke-width="40" stroke-linejoin="round">
-            <path pathLength="1" d="M50 135 H158 C210 135 245 215 298 240" stroke="url(#auth-mark-blue)" stroke-linecap="butt"/>
-            <path pathLength="1" d="M50 228 H162 C214 228 247 143 298 130" stroke="url(#auth-mark-violet)" stroke-linecap="butt"/>
-            <path pathLength="1" d="M50 322 H174 C248 322 322 184 404 184 H540" stroke="url(#auth-mark-pink)" stroke-linecap="round"/>
-            <path pathLength="1" d="M50 42 H167 C241 42 320 184 404 184 H540" stroke="url(#auth-mark-cyan)" stroke-linecap="round"/>
-          </g>
-          <g class="auth-mark-inputs">
-            <circle cx="50" cy="42" r="28" fill="#20C1DC"/><circle cx="50" cy="135" r="28" fill="#2E96F5"/><circle cx="50" cy="228" r="28" fill="#A766F0"/><circle cx="50" cy="322" r="28" fill="#F66DB9"/>
-          </g>
+        <svg class="auth-mark-motion auth-thread-field" viewBox="0 0 760 640" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+          <path id="auth-branch-1" class="auth-thread-branch auth-thread-cyan" d="M72 66 C210 62 218 190 356 194 C438 196 442 300 525 314"/>
+          <path id="auth-branch-2" class="auth-thread-branch auth-thread-blue" d="M18 172 C170 169 224 226 342 231 C430 235 454 293 525 314"/>
+          <path id="auth-branch-3" class="auth-thread-branch auth-thread-violet" d="M104 284 C205 283 225 252 344 265 C430 274 462 303 525 314"/>
+          <path id="auth-branch-4" class="auth-thread-branch auth-thread-pink" d="M38 442 C176 438 225 338 350 336 C430 335 462 324 525 314"/>
+          <path id="auth-branch-5" class="auth-thread-branch auth-thread-cyan" d="M206 20 C225 119 306 108 365 175 C420 238 465 288 525 314"/>
+          <path id="auth-branch-6" class="auth-thread-branch auth-thread-violet" d="M166 560 C254 470 283 434 376 390 C444 358 474 326 525 314"/>
+          <path id="auth-branch-7" class="auth-thread-branch auth-thread-blue" d="M4 362 C150 360 209 393 333 365 C418 346 465 324 525 314"/>
+          <path class="auth-thread-output" d="M525 314 C610 314 672 314 760 314"/>
+          <circle class="auth-thread-merge" cx="525" cy="314" r="13"/>
+          <circle class="auth-thread-arrival" cx="525" cy="314" r="4" fill="#F66DB9"/>
+          <circle class="auth-thread-traveler" r="8" fill="#20C1DC"><animateMotion dur="7.9s" begin="-6.2s" repeatCount="indefinite"><mpath href="#auth-branch-1" xlink:href="#auth-branch-1"/></animateMotion></circle>
+          <circle class="auth-thread-traveler" r="7" fill="#2E96F5"><animateMotion dur="8.6s" begin="-2.1s" repeatCount="indefinite"><mpath href="#auth-branch-2" xlink:href="#auth-branch-2"/></animateMotion></circle>
+          <circle class="auth-thread-traveler" r="6" fill="#A766F0"><animateMotion dur="7.4s" begin="-4.8s" repeatCount="indefinite"><mpath href="#auth-branch-3" xlink:href="#auth-branch-3"/></animateMotion></circle>
+          <circle class="auth-thread-traveler" r="8" fill="#F66DB9"><animateMotion dur="9.1s" begin="-1.3s" repeatCount="indefinite"><mpath href="#auth-branch-4" xlink:href="#auth-branch-4"/></animateMotion></circle>
+          <circle class="auth-thread-traveler" r="5" fill="#20C1DC"><animateMotion dur="8.2s" begin="-3.7s" repeatCount="indefinite"><mpath href="#auth-branch-5" xlink:href="#auth-branch-5"/></animateMotion></circle>
+          <circle class="auth-thread-traveler" r="7" fill="#A766F0"><animateMotion dur="9.4s" begin="-7.5s" repeatCount="indefinite"><mpath href="#auth-branch-6" xlink:href="#auth-branch-6"/></animateMotion></circle>
+          <circle class="auth-thread-traveler" r="5" fill="#2E96F5"><animateMotion dur="7.7s" begin="-.4s" repeatCount="indefinite"><mpath href="#auth-branch-7" xlink:href="#auth-branch-7"/></animateMotion></circle>
         </svg>
         <p class="eyebrow">Human + agent workspace</p>
         <h1>
@@ -60,6 +56,7 @@
       </section>
 
       <section class="login-panel">
+        <div class="auth-canonical-extension" aria-hidden="true"><span></span><span></span><span></span><span></span><i></i><i></i></div>
         <div class="brand-lockup brand-lockup-login" role="img" aria-label="GatherThread">
           <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
           <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
@@ -125,8 +122,8 @@
           </div>
           <span class="avatar" id="current-user-avatar" aria-hidden="true"></span>
           <span id="current-username" class="current-username"></span>
-          <button id="settings-button" class="icon-button topbar-icon-button" type="button" aria-label="Open Settings" aria-haspopup="dialog" aria-controls="settings-dialog">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z"/><path d="M19.1 13.25a7.6 7.6 0 0 0 .05-2.5l2-1.56-2-3.46-2.48 1a7.75 7.75 0 0 0-2.17-1.25L14.15 2h-4.3L9.5 5.48a7.75 7.75 0 0 0-2.17 1.25l-2.48-1-2 3.46 2 1.56a7.6 7.6 0 0 0 .05 2.5l-2.05 1.56 2 3.46 2.5-1a7.8 7.8 0 0 0 2.15 1.24l.35 3.49h4.3l.35-3.49a7.8 7.8 0 0 0 2.15-1.24l2.5 1 2-3.46-2.05-1.56Z"/></svg>
+          <button id="settings-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Open Settings" title="Settings" data-tooltip aria-haspopup="dialog" aria-controls="settings-dialog">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.7 3.1 10.25 1.8h3.5l.55 1.3 1.2.5 1.3-.55 2.45 2.45-.55 1.3.5 1.2 1.35.55v3.5l-1.35.55-.5 1.2.55 1.3-2.45 2.45-1.3-.55-1.2.5-.55 1.35h-3.5l-.55-1.35-1.2-.5-1.3.55-2.45-2.45.55-1.3-.5-1.2-1.35-.55v-3.5l1.35-.55.5-1.2-.55-1.3L6.2 3.05l1.3.55 1.2-.5Z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
           <button id="logout-button" class="text-button" type="button">Log out</button>
         </div>
@@ -199,14 +196,17 @@
                   <span id="session-mode" class="mode-badge"></span>
                   <button
                     id="rename-session-button"
-                    class="text-button session-rename-button"
+                    class="icon-button workspace-icon-button session-rename-button"
                     type="button"
+                    aria-label="Rename session"
+                    title="Rename"
+                    data-tooltip
                     aria-haspopup="dialog"
                     aria-controls="rename-session-dialog"
                     hidden
-                  >Rename</button>
-                  <button id="delete-session-button" class="text-button danger-text-button session-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
-                    Delete
+                  ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg><span class="sr-only">Rename</span></button>
+                  <button id="delete-session-button" class="icon-button workspace-icon-button workspace-icon-button-danger session-delete-button" type="button" aria-label="Delete" title="Delete" data-tooltip aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg><span class="sr-only">Delete</span>
                   </button>
                 </div>
                 <p id="session-subtitle" class="session-subtitle"></p>

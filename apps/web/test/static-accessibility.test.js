@@ -61,7 +61,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   ]);
   for (const requirement of [
     'class="skip-link"',
-    'class="auth-mark-motion"',
+    'class="auth-mark-motion auth-thread-field"',
+    'class="auth-canonical-extension" aria-hidden="true"',
     '<span class="headline-line">One room,</span>',
     '<span class="headline-line">Many minds.</span>',
     '<nav class="session-rail"',
@@ -116,15 +117,18 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.doesNotMatch(html, /Subtle · recommended/);
   assert.equal((html.match(/brand\/lockup-color-transparent-light\.svg/g) ?? []).length, 2);
   assert.equal((html.match(/brand\/lockup-color-transparent-dark\.svg/g) ?? []).length, 2);
-  assert.match(html, /M50 135 H158 C210 135 245 215 298 240/);
-  assert.match(html, /M50 228 H162 C214 228 247 143 298 130/);
-  assert.match(html, /M50 322 H174 C248 322 322 184 404 184 H540/);
-  assert.match(html, /M50 42 H167 C241 42 320 184 404 184 H540/);
+  assert.match(html, /M72 66 C210 62 218 190 356 194 C438 196 442 300 525 314/);
+  assert.match(html, /M38 442 C176 438 225 338 350 336 C430 335 462 324 525 314/);
+  assert.match(html, /M166 560 C254 470 283 434 376 390 C444 358 474 326 525 314/);
+  assert.match(html, /M525 314 C610 314 672 314 760 314/);
+  assert.equal((html.match(/class="auth-thread-traveler"/g) ?? []).length, 7);
+  assert.match(html, /id="settings-button"[^>]*aria-label="Open Settings"[^>]*title="Settings"[^>]*data-tooltip/);
+  assert.match(html, /id="rename-session-button"[\s\S]*?aria-label="Rename session"[\s\S]*?title="Rename"[\s\S]*?<svg/);
+  assert.match(html, /id="delete-session-button"[^>]*aria-label="Delete"[^>]*title="Delete"[^>]*data-tooltip/);
   for (const color of ["#20C1DC", "#2E96F5", "#A766F0", "#F66DB9"]) {
     assert.match(html, new RegExp(color));
   }
   assert.doesNotMatch(html, /#08B9D8|#168AF4|#9A50EE|#F456AE/);
-  assert.doesNotMatch(html, /M50 135 H158 C207 135 245 220 300 241/);
   assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"/);
   assert.match(main, /title\.title = session\.name/);
   assert.match(main, /element\("session-title"\)\.title = session\.name/);
