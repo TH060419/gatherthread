@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260830-2" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260830-3" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -74,6 +74,10 @@
             aria-describedby="token-help login-error"
           />
           <p id="token-help" class="field-help">Enter the access token issued by this owner host.</p>
+          <label class="auth-remember" for="login-remember-device">
+            <input id="login-remember-device" name="remember-device" type="checkbox" />
+            <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+          </label>
           <p id="login-error" class="form-error" role="alert"></p>
           <button class="button button-primary button-wide" type="submit">
             Continue <span aria-hidden="true">→</span>
@@ -103,6 +107,10 @@
               <input id="claim-device-name" name="device-name" autocomplete="off" required maxlength="120" value="This browser" />
             </div>
           </div>
+          <label class="auth-remember" for="claim-remember-device">
+            <input id="claim-remember-device" name="remember-device" type="checkbox" />
+            <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+          </label>
           <p id="claim-invite-error" class="form-error" role="alert"></p>
           <button class="button button-secondary button-wide" type="submit">Join workspace</button>
         </form>
@@ -568,6 +576,7 @@
         <div class="settings-layout">
           <nav class="settings-navigation" aria-label="Settings sections">
             <a href="#settings-general">General</a>
+            <a href="#settings-device">This device</a>
             <a href="#settings-appearance">Appearance</a>
             <a href="#settings-layout">Layout</a>
             <a href="#settings-sync">Sync &amp; context</a>
@@ -586,6 +595,18 @@
                 <span><strong>Language</strong><small>English is the default. Product names stay in English.</small></span>
                 <select id="settings-locale" name="locale"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
               </label>
+            </section>
+
+            <section id="settings-device" class="settings-section" aria-labelledby="settings-device-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">This device</p><h3 id="settings-device-title">Device identity</h3></div>
+                <p>A friendly name helps you recognize this browser. It does not change your account or Codex credentials.</p>
+              </div>
+              <label class="settings-row" for="settings-device-name">
+                <span><strong>Device name</strong><small>Generated from the browser and operating system when you first join. You can change it at any time.</small></span>
+                <input id="settings-device-name" name="device-name" type="text" autocomplete="off" maxlength="120" required />
+              </label>
+              <p id="settings-device-status" class="field-help" role="status" aria-live="polite"></p>
             </section>
 
             <section id="settings-appearance" class="settings-section" aria-labelledby="settings-appearance-title">
@@ -681,6 +702,6 @@
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260829-23"></script>
+    <script type="module" src="./src/main.js?v=20260830-1"></script>
   </body>
 </html>

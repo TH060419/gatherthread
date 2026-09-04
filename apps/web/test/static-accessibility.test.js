@@ -242,6 +242,30 @@ test("empty canonical events do not render a visible placeholder message", async
   assert.match(main, /if \(content\) \{/);
 });
 
+test("remembered login and current-device naming remain explicit and accessible", async () => {
+  const [html, main, api] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(apiPath, "utf8"),
+  ]);
+  for (const id of [
+    "login-remember-device",
+    "claim-remember-device",
+    "settings-device",
+    "settings-device-name",
+    "settings-device-status",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /for="login-remember-device"/);
+  assert.match(html, /for="claim-remember-device"/);
+  assert.match(html, /for="settings-device-name"/);
+  assert.match(main, /automaticDeviceName\(\)/);
+  assert.match(main, /api\.renameDevice\(state\.currentUser\.device_id/);
+  assert.match(api, /remember_device: rememberDevice/);
+  assert.doesNotMatch(main, /localStorage.*device/i);
+});
+
 test("session rename updates local metadata and applies realtime control events", async () => {
   const [main, api] = await Promise.all([readFile(mainPath, "utf8"), readFile(apiPath, "utf8")]);
   assert.match(main, /api\.renameSession\(sessionId/);

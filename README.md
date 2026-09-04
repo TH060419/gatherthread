@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.1.0--beta.1-0f766e.svg)](docs/releases/0.1.0-beta.1.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **One room, many minds.**
 
@@ -59,15 +59,28 @@ npm run verify
 On first initialization, a missing `.env` or blank pepper is filled automatically with a stable random value in a private `0600` file. Create the first owner directly on the host, then start the same-origin Web/API/WebSocket service:
 
 ```bash
+npm run connection:local
 npm run owner-host:init -- --display-name "Alice" --device-name "Alice laptop"
 npm run owner-host
 ```
 
 To customize ports or paths, copy `.env.example` before initialization. `owner-host:init` fills only a blank pepper and preserves every other setting. `owner-host` builds the current source automatically on every start.
 
-Enter the one-time displayed device credential at `http://127.0.0.1:8787`. The page exchanges it for an opaque `HttpOnly; SameSite=Strict` browser session cookie and immediately clears the credential from JavaScript memory. Reloading restores the signed-in workspace without `localStorage` or `sessionStorage`. The browser session has a 24-hour absolute server-side lifetime and uses a non-persistent session cookie; explicit logout, device revocation, or device-token rotation revokes it. HTTPS deployments add `Secure` and the `__Host-` cookie prefix. WebSockets still use a separate 30-second, one-use, session-scoped ticket, and no credential is placed in a URL.
+Enter the one-time displayed device credential at `http://127.0.0.1:8787`. The page exchanges it for an opaque `HttpOnly; SameSite=Strict` browser session cookie and immediately clears the credential from JavaScript memory. Reloading restores the signed-in workspace without `localStorage` or `sessionStorage`. The default session has a 24-hour absolute server-side lifetime and a non-persistent Cookie. Choosing **Remember this device** instead creates a 30-day persistent Cookie; explicit logout, device revocation, or device-token rotation still revokes it immediately. HTTPS deployments add `Secure` and the `__Host-` cookie prefix. WebSockets still use a separate 30-second, one-use, session-scoped ticket, and no credential is placed in a URL.
 
 For UI-only development, `npm --workspace apps/web run dev` starts the loopback preview and proxies the local API. Explicit mock mode is available only at `http://127.0.0.1:4173/?mock=1` with `demo-token`.
+
+## Choose a connection mode
+
+Three connection modes work without a cloud account and preserve the same private `.env`, database, credential pepper, users, and history:
+
+| Mode | Command | Use case |
+|---|---|---|
+| Local-only | `npm run connection:local` | One computer; no network exposure |
+| LAN HTTPS | `npm run lan:start` | Known devices on one trusted LAN; address selection and both services are automatic |
+| Tailscale Serve | `npm run connection:tailscale -- --url https://host.tailnet.ts.net` | A small known group across networks |
+
+LAN mode keeps the application on loopback and runs a dedicated Caddy HTTPS proxy bound only to the selected private interface. Client devices must explicitly trust the dedicated local CA; never bypass a certificate warning or expose the port through the router. A campus network is usually institution-managed LAN infrastructure, but peer access is not guaranteed: use LAN mode only when school policy permits it and the devices can reach each other. If client isolation or VLAN separation blocks direct access, use the deployment's configured remote entry point; Tailscale is available now, while a unified hosted server should be preferred once deployed. See the bilingual [connection-mode guide](docs/CONNECTION_MODES.md) and the detailed [owner-hosting guide](docs/SELF_HOSTING.md).
 
 ## Connect a local Codex agent
 
@@ -96,11 +109,11 @@ Read-only sessions show **Download to Codex** instead of a composer. Every click
 
 The first release includes peppered device credentials, HMAC-protected and revocable browser sessions, strict Cookie-write Origin checks, single-use invitations and device authorization, device-bound runtime provenance, immediate session/socket/authorization invalidation on device or membership revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, per-user/project/deployment session-count limits, event and snapshot-job storage quotas, reconnect replay, and SQLite backup/restore scripts. A newly invited user sees the new device credential once and must save it before dismissing the dialog.
 
-The supported zero-cost alpha topology is one participant-owned host bound to loopback and shared privately through Tailscale Serve. See the [owner-hosting guide](docs/SELF_HOSTING.md). Do not expose the current service through router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
+The no-cloud-account paths are local-only, private LAN HTTPS, and private Tailscale Serve. For a shared public-beta entry point, `0.1.0-beta.1` adds an invitation-only [Alibaba Cloud ECS deployment](docs/ALIYUN_ECS.md). Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic. Never expose port 8787, use router port forwarding, enable Tailscale Funnel, or attach an unauthenticated public tunnel.
 
 Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, token-by-token agent streaming, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers. Current progress delivery is item-level public commentary rather than token streaming.
 
-See [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [architecture decisions](docs/adr/README.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
+See the [`0.1.0-beta.1` release notes](docs/releases/0.1.0-beta.1.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [architecture decisions](docs/adr/README.md), [connection modes](docs/CONNECTION_MODES.md), [Alibaba Cloud ECS deployment](docs/ALIYUN_ECS.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
 
 ## License
 

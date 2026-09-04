@@ -7,6 +7,8 @@ test("English is the unchanged default and Simplified Chinese preserves product 
   assert.equal(translateUiText("Settings", "en"), "Settings");
   assert.equal(translateUiText("Settings", "zh-CN"), "设置");
   assert.equal(translateUiText("Access token", "zh-CN"), "访问 token");
+  assert.equal(translateUiText("Remember this device", "zh-CN"), "记住此设备");
+  assert.equal(translateUiText("This device", "zh-CN"), "当前设备");
   assert.equal(translateUiText("Connect Codex", "zh-CN"), "连接 Codex");
   assert.equal(translateUiText("Conversations", "zh-CN"), "协作");
   assert.equal(translateUiText("Sessions", "zh-CN"), "会话");

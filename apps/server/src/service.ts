@@ -208,6 +208,10 @@ export class CollaborationService {
     return this.database.listDevices(actor);
   }
 
+  updateDeviceName(actor: Actor, deviceId: string, name: string) {
+    return this.database.updateDeviceName(actor, deviceId, name);
+  }
+
   rotateDeviceToken(actor: Actor, deviceId: string, expiresAt?: string | null) {
     this.database.assertActiveDevice(actor);
     return this.database.rotateDeviceToken(actor, deviceId, expiresAt);

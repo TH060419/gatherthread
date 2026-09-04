@@ -1,0 +1,36 @@
+[Unit]
+Description=GatherThread invitation-only beta
+Documentation=https://github.com/TH060419/gatherthread
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gatherthread
+Group=gatherthread
+WorkingDirectory=/opt/gatherthread/current
+EnvironmentFile=/etc/gatherthread/gatherthread.env
+ExecStart=/usr/local/bin/node /opt/gatherthread/current/apps/server/dist/src/cli.js start
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectClock=true
+ProtectControlGroups=true
+ProtectHome=true
+ProtectHostname=true
+ProtectKernelLogs=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gatherthread
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

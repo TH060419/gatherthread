@@ -1,6 +1,6 @@
 {
   "name": "gatherthread",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -19,6 +19,11 @@
     "start": "node apps/server/dist/src/cli.js start",
     "owner-host": "node --env-file-if-exists=.env scripts/self-host.mjs start",
     "owner-host:init": "node --env-file-if-exists=.env scripts/self-host.mjs init",
+    "connection:local": "node scripts/configure-connection.mjs local",
+    "connection:lan": "node scripts/configure-connection.mjs lan",
+    "connection:tailscale": "node scripts/configure-connection.mjs tailscale",
+    "lan:start": "node scripts/lan-start.mjs",
+    "owner-host:lan": "node --env-file-if-exists=.env scripts/self-host-lan.mjs",
     "owner-host:tailscale-serve": "node --env-file-if-exists=.env scripts/self-host-tailscale.mjs",
     "codex:connect": "npm run build:ts && node packages/bridge/dist/src/codex-connect.js",
     "test": "npm run test:unit && npm run test:scripts && npm run test:web && npm run test:integration && npm run test:e2e",
@@ -33,6 +38,9 @@
     "audit:branding": "node scripts/check-branding.mjs",
     "audit:secrets": "node scripts/check-secrets.mjs",
     "audit:vulnerabilities": "npm audit --audit-level=moderate",
+    "release:archive": "node scripts/package-release.mjs",
+    "release:check": "node scripts/check-release.mjs",
+    "release:verify": "npm run verify && npm run release:check",
     "verify": "npm run typecheck && npm run build:web && npm run test && npm run audit:references && npm run audit:licenses && npm run audit:branding && npm run audit:secrets && npm run audit:vulnerabilities"
   },
   "devDependencies": {

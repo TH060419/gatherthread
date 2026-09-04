@@ -156,6 +156,7 @@ export interface BrowserSessionIssue {
   session_id: string;
   token: string;
   expires_at: string;
+  remembered: boolean;
 }
 
 export interface BrowserSessionAuthentication {
@@ -231,6 +232,7 @@ const INVITATION_TTL_MS: Readonly<Record<InvitationTtl, number>> = {
 const PROCESS_CREDENTIAL_PEPPER = randomBytes(32).toString("base64url");
 const DEVICE_AUTHORIZATION_TTL_MS = 10 * 60 * 1_000;
 const BROWSER_SESSION_TTL_MS = 24 * 60 * 60 * 1_000;
+export const REMEMBERED_BROWSER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const DEFAULT_MAX_USER_EVENT_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_SESSION_EVENT_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_EVENT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -664,6 +666,27 @@ export class CollaborationDatabase {
     return row.journal_mode;
   }
 
+  readiness(): { journal_mode: string; foreign_keys: boolean; writable: boolean } {
+    const journalMode = this.journalMode();
+    const foreignKeys = (this.sqlite.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys === 1;
+    let transactionStarted = false;
+    try {
+      this.sqlite.exec("BEGIN IMMEDIATE;");
+      transactionStarted = true;
+      this.sqlite.exec("ROLLBACK;");
+      transactionStarted = false;
+    } finally {
+      if (transactionStarted) {
+        try {
+          this.sqlite.exec("ROLLBACK;");
+        } catch {
+          // Preserve the original readiness failure.
+        }
+      }
+    }
+    return { journal_mode: journalMode, foreign_keys: foreignKeys, writable: true };
+  }
+
   bootstrapIdentity(input: {
     user_id?: string | undefined;
     display_name: string;
@@ -752,10 +775,10 @@ export class CollaborationDatabase {
     return { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id };
   }
 
-  createBrowserSession(actor: Actor): BrowserSessionIssue {
+  createBrowserSession(actor: Actor, rememberDevice = false): BrowserSessionIssue {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
-      return this.insertBrowserSession(actor, this.clock());
+      return this.insertBrowserSession(actor, this.clock(), rememberDevice);
     });
   }
 
@@ -819,6 +842,16 @@ export class CollaborationDatabase {
              last_used_at, expires_at, revoked_at, rotated_at, token_version
       FROM devices WHERE user_id = ? ORDER BY created_at, id
     `).all(actor.user_id) as unknown as DeviceRecord[];
+  }
+
+  updateDeviceName(actor: Actor, deviceId: string, name: string): DeviceRecord {
+    this.assertActiveDevice(actor);
+    const result = this.sqlite.prepare(`
+      UPDATE devices SET name = ?
+      WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+    `).run(name, deviceId, actor.user_id);
+    if (Number(result.changes) === 0) throw notFound("Device");
+    return this.getDeviceForUser(actor.user_id, deviceId);
   }
 
   rotateDeviceToken(actor: Actor, deviceId: string, expiresAt: string | null = null): {
@@ -1186,6 +1219,7 @@ export class CollaborationDatabase {
     device_id?: string | undefined;
     device_name: string;
     device_expires_at?: string | null | undefined;
+    remember_device?: boolean | undefined;
   }): ClaimInvitationResult;
   claimInvitation(input: {
     invite_token: string;
@@ -1194,6 +1228,7 @@ export class CollaborationDatabase {
     device_id?: string | undefined;
     device_name: string;
     device_expires_at?: string | null | undefined;
+    remember_device?: boolean | undefined;
   }, options: { browserSession: true }): ClaimInvitationWithBrowserSessionResult;
   claimInvitation(input: {
     invite_token: string;
@@ -1202,6 +1237,7 @@ export class CollaborationDatabase {
     device_id?: string | undefined;
     device_name: string;
     device_expires_at?: string | null | undefined;
+    remember_device?: boolean | undefined;
   }, options: { browserSession?: boolean } = {}): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult {
     const projectInvitation = this.sqlite.prepare("SELECT id FROM project_invitations WHERE token_digest = ?")
       .get(this.tokenDigest(input.invite_token));
@@ -1294,7 +1330,7 @@ export class CollaborationDatabase {
         event,
       };
       return options.browserSession
-        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp)) }
+        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device === true) }
         : claimResult;
     });
     if ("failure" in result) {
@@ -1514,6 +1550,7 @@ export class CollaborationDatabase {
       device_id?: string | undefined;
       device_name: string;
       device_expires_at?: string | null | undefined;
+      remember_device?: boolean | undefined;
     },
     options: { browserSession?: boolean },
   ): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult {
@@ -1577,7 +1614,7 @@ export class CollaborationDatabase {
         event: null,
       };
       return options.browserSession
-        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp)) }
+        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device === true) }
         : claimResult;
     });
     if ("failure" in result) {
@@ -2694,9 +2731,10 @@ export class CollaborationDatabase {
     );
   }
 
-  private insertBrowserSession(actor: Actor, createdAtDate: Date): BrowserSessionIssue {
+  private insertBrowserSession(actor: Actor, createdAtDate: Date, rememberDevice = false): BrowserSessionIssue {
     const createdAt = createdAtDate.toISOString();
-    const expiresAt = new Date(createdAtDate.getTime() + BROWSER_SESSION_TTL_MS).toISOString();
+    const ttl = rememberDevice ? REMEMBERED_BROWSER_SESSION_TTL_MS : BROWSER_SESSION_TTL_MS;
+    const expiresAt = new Date(createdAtDate.getTime() + ttl).toISOString();
     const sessionId = randomUUID();
     const token = issueBrowserSessionToken();
     this.sqlite.prepare(`
@@ -2707,7 +2745,7 @@ export class CollaborationDatabase {
       INSERT INTO browser_sessions(id, user_id, device_id, token_digest, created_at, expires_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(sessionId, actor.user_id, actor.device_id, this.tokenDigest(token), createdAt, expiresAt);
-    return { session_id: sessionId, token, expires_at: expiresAt };
+    return { session_id: sessionId, token, expires_at: expiresAt, remembered: rememberDevice };
   }
 
   private expireInvitation(invitation: InvitationRecord, timestamp: string): void {

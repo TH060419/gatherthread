@@ -206,6 +206,7 @@ export const ClaimInvitationInputSchema = z.object({
   device_id: IdSchema.optional(),
   device_name: z.string().trim().min(1).max(120),
   device_expires_at: z.string().datetime().nullable().optional(),
+  remember_device: z.boolean().default(false),
 });
 
 export type ClaimInvitationInput = z.infer<typeof ClaimInvitationInputSchema>;
@@ -262,6 +263,18 @@ export const DeviceRecordSchema = z.object({
 });
 
 export type DeviceRecord = z.infer<typeof DeviceRecordSchema>;
+
+export const UpdateDeviceInputSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+});
+
+export type UpdateDeviceInput = z.infer<typeof UpdateDeviceInputSchema>;
+
+export const CreateBrowserSessionInputSchema = z.object({
+  remember_device: z.boolean().default(false),
+});
+
+export type CreateBrowserSessionInput = z.infer<typeof CreateBrowserSessionInputSchema>;
 
 export const ClaimDeviceAuthorizationInputSchema = z.object({
   authorization_token: z.string().min(32).max(512),

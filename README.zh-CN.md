@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.1.0--beta.1-0f766e.svg)](docs/releases/0.1.0-beta.1.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **一个空间，汇聚众智。**
 
@@ -59,15 +59,28 @@ npm run verify
 首次初始化会在缺少 `.env` 或 Pepper 留空时自动生成权限为 `0600` 的私有 `.env` 和稳定随机 Pepper。直接创建第一位所有者，然后启动同源的 Web/API/WebSocket 服务：
 
 ```bash
+npm run connection:local
 npm run owner-host:init -- --display-name "Alice" --device-name "Alice laptop"
 npm run owner-host
 ```
 
 如需自定义端口或路径，可以在初始化前手动复制 `.env.example`；`owner-host:init` 会只填充空的 Pepper，不会覆盖其他设置。`owner-host` 每次启动都会自动构建当前源码。
 
-在 `http://127.0.0.1:8787` 输入命令一次性显示的设备凭据。页面会用它换取一个不透明的 `HttpOnly; SameSite=Strict` 浏览器会话 Cookie，然后立即从 JavaScript 内存中清除设备凭据。刷新页面时可以自动恢复登录，不使用 `localStorage` 或 `sessionStorage`。浏览器会话在服务器端有24小时绝对有效期，Cookie 本身是非持久的会话 Cookie；主动退出、撤销设备或轮换设备 Token 都会使它失效。HTTPS 部署会额外启用 `Secure` 和 `__Host-` Cookie 前缀。WebSocket 仍使用独立的30秒有效、一次性、限定会话的 ticket，任何凭据都不会写入 URL。
+在 `http://127.0.0.1:8787` 输入命令一次性显示的设备凭据。页面会用它换取一个不透明的 `HttpOnly; SameSite=Strict` 浏览器会话 Cookie，然后立即从 JavaScript 内存中清除设备凭据。刷新页面时可以自动恢复登录，不使用 `localStorage` 或 `sessionStorage`。默认会话在服务器端有 24 小时绝对有效期，Cookie 本身不持久；勾选“记住此设备”后，会改用 30 天持久 Cookie。主动退出、撤销设备或轮换设备 Token 都会立即使两种会话失效。HTTPS 部署会额外启用 `Secure` 和 `__Host-` Cookie 前缀。WebSocket 仍使用独立的 30 秒有效、一次性、限定会话的 ticket，任何凭据都不会写入 URL。
 
 如果只开发 UI，运行 `npm --workspace apps/web run dev` 即可启动仅绑定 loopback 的预览服务并代理本地 API。显式 mock 模式只在 `http://127.0.0.1:4173/?mock=1` 可用，演示凭据为 `demo-token`。
+
+## 选择连接方式
+
+无需云账户即可使用三种连接方式，它们会保留同一个私有 `.env`、数据库、凭据 Pepper、用户和历史：
+
+| 方式 | 命令 | 场景 |
+|---|---|---|
+| 仅本机 | `npm run connection:local` | 一台电脑完整测试，不开放网络 |
+| 局域网 HTTPS | `npm run lan:start` | 同一可信局域网内的已知设备；自动选址并启动两个服务 |
+| Tailscale Serve | `npm run connection:tailscale -- --url https://主机.tailnet.ts.net` | 跨网络的小规模已知协作者 |
+
+局域网模式仍把应用限制在 loopback，只让专用 Caddy HTTPS 代理绑定选定的私网地址；客户端必须显式信任专用本地 CA，不能绕过证书警告，也不能配置路由器端口转发。校园网通常属于学校管理的局域网络，但不保证终端可以直接互访：只有校方策略允许且设备间可达时才使用局域网模式；遇到客户端隔离或 VLAN 分区时，应改用项目已经配置的远程入口。当前可使用 Tailscale，统一服务器上线后应优先使用服务器入口。完整操作与模式切换参见[无云账户连接方案](docs/CONNECTION_MODES.zh-CN.md)，Tailscale 权限和备份参见[单主机部署指南](docs/SELF_HOSTING.md)。
 
 ## 接入本地 Codex Agent
 
@@ -96,11 +109,11 @@ npm run codex:connect -- \
 
 首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、按用户/项目/部署限制会话数量、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。新邀请用户的设备 Token 只展示一次，必须在关闭提示前妥善保存。
 
-当前支持的零成本 Alpha 部署方式是：由一位参与者提供主机，服务器仅绑定 loopback，再通过 Tailscale Serve 在私有网络中共享。参见[单主机部署指南](docs/SELF_HOSTING.md)。不要通过路由器端口转发、Tailscale Funnel 或未经身份验证的公网隧道暴露当前服务。
+无需云账户时可使用仅本机、局域网 HTTPS 和私有 Tailscale Serve。需要统一的公网 Beta 入口时，`0.1.0-beta.1` 提供仅凭邀请加入的[阿里云 ECS 部署方案](docs/ALIYUN_ECS.zh-CN.md)。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。不要开放 8787、使用路由器端口转发、启用 Tailscale Funnel，或接入未经身份验证的公网隧道。
 
 尚未实现：主机自动故障转移、多进程 WebSocket fan-out、无人处理的 Agent 请求领取恢复、Agent token 级流式显示、附件对象存储、保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。
 
-更多信息请参阅[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[架构决策记录](docs/adr/README.md)、[单主机部署](docs/SELF_HOSTING.md)、[Tailscale 双人线上测试流程](docs/ONLINE_TESTING_TAILSCALE.zh-CN.md)、[安全模型](docs/SECURITY.md)、[运维说明](docs/OPERATIONS.md)，以及[相关项目与致谢](docs/REFERENCES.md)。
+更多信息请参阅 [`0.1.0-beta.1` 候选说明](docs/releases/0.1.0-beta.1.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[架构决策记录](docs/adr/README.md)、[无云账户连接方案](docs/CONNECTION_MODES.zh-CN.md)、[阿里云 ECS 部署](docs/ALIYUN_ECS.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[Tailscale 双人线上测试流程](docs/ONLINE_TESTING_TAILSCALE.zh-CN.md)、[安全模型](docs/SECURITY.md)、[运维说明](docs/OPERATIONS.md)，以及[相关项目与致谢](docs/REFERENCES.md)。
 
 ## 许可证
 

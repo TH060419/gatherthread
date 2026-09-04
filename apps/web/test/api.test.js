@@ -434,7 +434,29 @@ test("new-user invitation claim requests a browser session without retaining the
       invite_token: "one-use-invitation-secret-that-is-long",
       display_name: "New User",
       device_name: "Work laptop",
+      remember_device: false,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("browser login sends the remember-device choice without retaining the bearer", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return new Response(JSON.stringify({ data: {
+      actor: { id: "u1", username: "Alice", device_id: "d1" },
+      expires_at: "2026-09-29T00:00:00.000Z",
+    } }), { status: 201, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    await api.authenticate("device-token", { rememberDevice: true });
+    assert.deepEqual(JSON.parse(captured.options.body), { remember_device: true });
+    assert.equal(captured.options.headers.Authorization, "Bearer device-token");
+    assert.equal(api.token, "");
   } finally {
     globalThis.fetch = originalFetch;
   }

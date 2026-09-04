@@ -14,6 +14,7 @@ import {
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
   CompleteSnapshotRequestInputSchema,
+  CreateBrowserSessionInputSchema,
   CreateInvitationInputSchema,
   CreateIdentityInputSchema,
   CreateProjectInputSchema,
@@ -25,6 +26,7 @@ import {
   RotateDeviceTokenInputSchema,
   SetMembershipInputSchema,
   SubscribeMessageSchema,
+  UpdateDeviceInputSchema,
   UpdateSessionInputSchema,
   type ApiErrorBody,
   type CanonicalEvent,
@@ -32,7 +34,11 @@ import {
 } from "@gatherthread/protocol";
 import { WebSocket, WebSocketServer } from "ws";
 import { z, ZodError } from "zod";
-import { CollaborationDatabase, type Actor } from "./database.js";
+import {
+  CollaborationDatabase,
+  REMEMBERED_BROWSER_SESSION_TTL_MS,
+  type Actor,
+} from "./database.js";
 import { ApiError, notFound, unauthorized } from "./errors.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { CollaborationService } from "./service.js";
@@ -47,6 +53,7 @@ const MAX_JSON_DEPTH = 64;
 const MAX_JSON_NODES = 50_000;
 const DEVELOPMENT_BROWSER_SESSION_COOKIE = "gatherthread_session";
 const SECURE_BROWSER_SESSION_COOKIE = "__Host-gatherthread_session";
+const REMEMBERED_BROWSER_SESSION_MAX_AGE_SECONDS = REMEMBERED_BROWSER_SESSION_TTL_MS / 1_000;
 const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/bootstrap",
   "/v1/browser-sessions",
@@ -228,8 +235,16 @@ function browserSessionCookieValue(request: IncomingMessage, name: string): stri
   return /^gtb_[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
 }
 
-function serializeBrowserSessionCookie(name: string, token: string, secureTransport: boolean): string {
-  return `${name}=${token}; Path=/; HttpOnly; SameSite=Strict${secureTransport ? "; Secure" : ""}`;
+function serializeBrowserSessionCookie(
+  name: string,
+  token: string,
+  secureTransport: boolean,
+  rememberedUntil?: string,
+): string {
+  const persistence = rememberedUntil
+    ? `; Max-Age=${REMEMBERED_BROWSER_SESSION_MAX_AGE_SECONDS}; Expires=${new Date(rememberedUntil).toUTCString()}`
+    : "";
+  return `${name}=${token}; Path=/; HttpOnly; SameSite=Strict${persistence}${secureTransport ? "; Secure" : ""}`;
 }
 
 function serializeClearedBrowserSessionCookie(name: string, secureTransport: boolean): string {
@@ -423,8 +438,19 @@ export async function startCollaborationServer(
         return;
       }
 
-      if (request.method === "GET" && url.pathname === "/health") {
-        sendJson(response, 200, { data: { status: "ok", journal_mode: database.journalMode() } });
+      if (request.method === "GET" && url.pathname === "/health/live") {
+        sendJson(response, 200, { data: { status: "ok" } });
+        return;
+      }
+
+      if (request.method === "GET" && (url.pathname === "/health" || url.pathname === "/health/ready")) {
+        try {
+          const readiness = database.readiness();
+          const ready = readiness.journal_mode === "wal" && readiness.foreign_keys && readiness.writable;
+          sendJson(response, ready ? 200 : 503, { data: { status: ready ? "ready" : "unavailable", ...readiness } });
+        } catch {
+          sendJson(response, 503, { data: { status: "unavailable" } });
+        }
         return;
       }
 
@@ -438,7 +464,12 @@ export async function startCollaborationServer(
         const input = ClaimInvitationInputSchema.parse(await readJson(request));
         if (request.headers["x-gatherthread-browser-session"] === "1") {
           const { browser_session: browserSession, ...result } = service.claimInvitationWithBrowserSession(input);
-          response.setHeader("set-cookie", serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport));
+          response.setHeader("set-cookie", serializeBrowserSessionCookie(
+            browserCookieName,
+            browserSession.token,
+            secureTransport,
+            browserSession.remembered ? browserSession.expires_at : undefined,
+          ));
           sendJson(response, 201, { data: result });
           return;
         }
@@ -454,8 +485,14 @@ export async function startCollaborationServer(
 
       if (request.method === "POST" && url.pathname === "/v1/browser-sessions") {
         const actor = database.authenticate(bearerToken(request));
-        const browserSession = database.createBrowserSession(actor);
-        response.setHeader("set-cookie", serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport));
+        const input = CreateBrowserSessionInputSchema.parse(await readJson(request));
+        const browserSession = database.createBrowserSession(actor, input.remember_device);
+        response.setHeader("set-cookie", serializeBrowserSessionCookie(
+          browserCookieName,
+          browserSession.token,
+          secureTransport,
+          browserSession.remembered ? browserSession.expires_at : undefined,
+        ));
         sendJson(response, 201, { data: {
           actor: { id: actor.user_id, username: actor.display_name, device_id: actor.device_id },
           expires_at: browserSession.expires_at,
@@ -526,6 +563,12 @@ export async function startCollaborationServer(
 
       if (request.method === "GET" && url.pathname === "/v1/devices") {
         sendJson(response, 200, { data: { devices: service.listDevices(actor) } });
+        return;
+      }
+
+      if (request.method === "PATCH" && parts[0] === "v1" && parts[1] === "devices" && parts[2] && parts.length === 3) {
+        const input = UpdateDeviceInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: { device: service.updateDeviceName(actor, parts[2], input.name) } });
         return;
       }
 

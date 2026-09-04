@@ -66,6 +66,49 @@ function waitForSocketMessage(socket: WebSocket, predicate: (message: Record<str
   });
 }
 
+test("liveness and readiness endpoints remain unauthenticated and distinguish process from storage health", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-health-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+  }, 0);
+  try {
+    const live = await api<{ data: { status: string } }>(running.origin, "/health/live");
+    assert.equal(live.status, 200);
+    assert.deepEqual(live.body, { data: { status: "ok" } });
+
+    for (const path of ["/health", "/health/ready"]) {
+      const ready = await api<{ data: {
+        status: string;
+        journal_mode: string;
+        foreign_keys: boolean;
+        writable: boolean;
+      } }>(running.origin, path);
+      assert.equal(ready.status, 200);
+      assert.deepEqual(ready.body, {
+        data: { status: "ready", journal_mode: "wal", foreign_keys: true, writable: true },
+      });
+    }
+
+    running.database.sqlite.exec("PRAGMA foreign_keys = OFF;");
+    const unavailable = await api<{ data: {
+      status: string;
+      journal_mode: string;
+      foreign_keys: boolean;
+      writable: boolean;
+    } }>(running.origin, "/health/ready");
+    assert.equal(unavailable.status, 503);
+    assert.deepEqual(unavailable.body, {
+      data: { status: "unavailable", journal_mode: "wal", foreign_keys: false, writable: true },
+    });
+    assert.equal((await api<{ data: { status: string } }>(running.origin, "/health/live")).status, 200);
+    running.database.sqlite.exec("PRAGMA foreign_keys = ON;");
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 async function realtimeSocket(origin: string, token: string, sessionId: string, originHeader?: string): Promise<WebSocket> {
   const ticket = await api<{ data: { ticket: string; websocket_url: string } }>(origin, "/v1/realtime-ticket", {
     method: "POST",
@@ -831,6 +874,64 @@ test("blocked snapshot mutation revalidates browser session after logout before 
     assert.equal(rejected.body.error?.code, "unauthorized");
     assert.equal((running.database.sqlite.prepare("SELECT count(*) AS count FROM snapshot_requests")
       .get() as { count: number }).count, 0);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("remembered browser sessions persist for 30 days and the current device can be renamed", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-remembered-device-"));
+  const browserOrigin = "http://127.0.0.1:8787";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    allowedOrigins: [browserOrigin],
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Safari · macOS" },
+    });
+    const opened = await api<{ data: { expires_at: string } }>(running.origin, "/v1/browser-sessions", {
+      method: "POST",
+      token: owner.body.data.token,
+      origin: browserOrigin,
+      body: { remember_device: true },
+    });
+    assert.equal(opened.status, 201);
+    const setCookie = opened.headers.get("set-cookie") ?? "";
+    assert.match(setCookie, /; Max-Age=2592000; Expires=[^;]+ GMT$/);
+    const remaining = Date.parse(opened.body.data.expires_at) - Date.now();
+    assert.ok(remaining > 29 * 24 * 60 * 60 * 1_000);
+    assert.ok(remaining <= 30 * 24 * 60 * 60 * 1_000);
+
+    const cookie = setCookie.split(";", 1)[0] ?? "";
+    const renamed = await api<{ data: { device: { id: string; name: string } } }>(
+      running.origin,
+      "/v1/devices/owner-device",
+      {
+        method: "PATCH",
+        cookie,
+        origin: browserOrigin,
+        body: { name: "Personal MacBook Air" },
+      },
+    );
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.body.data.device.id, "owner-device");
+    assert.equal(renamed.body.data.device.name, "Personal MacBook Air");
+    const devices = await api<{ data: { devices: Array<{ id: string; name: string }> } }>(running.origin, "/v1/devices", { cookie });
+    assert.equal(devices.body.data.devices.find((device) => device.id === "owner-device")?.name, "Personal MacBook Air");
+
+    const invalid = await api<{ error: { code: string } }>(running.origin, "/v1/devices/owner-device", {
+      method: "PATCH",
+      cookie,
+      origin: browserOrigin,
+      body: { name: "" },
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal(invalid.body.error.code, "validation_error");
   } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });

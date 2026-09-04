@@ -12,4 +12,5 @@ coverage/
 .serena/
 .codegraph/
 .idea/
+release-artifacts/
 .codex/hooks.json

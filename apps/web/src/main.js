@@ -1,4 +1,4 @@
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260829-1";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260830-1";
 import {
   canAppend,
   createIdempotencyKey,
@@ -24,7 +24,8 @@ import {
 } from "./domain.js?v=20260829-3";
 import { SessionSync } from "./realtime.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260829-13";
+import { createLocalizer } from "./i18n.js?v=20260830-1";
+import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import {
   contextBudgetInputBytes,
@@ -140,8 +141,14 @@ let deleteCloudReturnFocus = null;
 let pendingCloudDeletion = null;
 let settingsReturnFocus = null;
 let settingsPreview = state.settings;
+let currentDeviceName = "";
+let settingsDeviceLoadGeneration = 0;
 
 applyVisualSettings(state.settings);
+setAutomaticClaimDeviceName({ force: true });
+element("claim-device-name").addEventListener("input", () => {
+  element("claim-device-name").dataset.automatic = "false";
+});
 
 clearSensitiveInputs();
 window.addEventListener("pagehide", () => {
@@ -183,12 +190,13 @@ loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const generation = ++authenticationGeneration;
   loginError.textContent = "";
-  const token = new FormData(loginForm).get("token")?.toString() ?? "";
+  const data = new FormData(loginForm);
+  const token = data.get("token")?.toString() ?? "";
   const submit = loginForm.querySelector("button[type='submit']");
   submit.disabled = true;
   submit.textContent = "Checking…";
   try {
-    const actor = await api.authenticate(token);
+    const actor = await api.authenticate(token, { rememberDevice: data.get("remember-device") === "on" });
     if (generation !== authenticationGeneration) return;
     state.currentUser = actor;
     loginForm.reset();
@@ -216,12 +224,13 @@ claimInvitationForm.addEventListener("submit", async (event) => {
       inviteToken: data.get("invite-secret")?.toString().trim() ?? "",
       displayName: data.get("display-name")?.toString().trim() ?? "",
       deviceName: data.get("device-name")?.toString().trim() ?? "",
+      rememberDevice: data.get("remember-device") === "on",
     });
     if (generation !== authenticationGeneration) return;
     state.currentUser = result.actor;
     showNewDeviceAccessToken(result.accessToken);
     claimInvitationForm.reset();
-    element("claim-device-name").value = localizer.t("This browser");
+    setAutomaticClaimDeviceName({ force: true });
     await enterWorkspace(result.invitation.projectId);
   } catch (error) {
     errorNode.textContent = error.message ?? "Unable to claim this invitation.";
@@ -583,6 +592,8 @@ function resetWorkspaceToAuth() {
   state.session = null;
   state.invitations = [];
   state.snapshotRequests = [];
+  currentDeviceName = "";
+  settingsDeviceLoadGeneration += 1;
   expandedWorklogs.clear();
   clearCreatedInvitationSecret();
   clearNewDeviceAccessToken();
@@ -590,6 +601,7 @@ function resetWorkspaceToAuth() {
   workspace.hidden = true;
   authView.hidden = false;
   loginForm.reset();
+  setAutomaticClaimDeviceName({ force: true });
 }
 
 async function enterWorkspace(preferredProjectId) {
@@ -1545,11 +1557,16 @@ function applyVisualSettings(settings) {
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
-  const deviceNameInput = element("claim-device-name");
-  if (["This browser", "当前浏览器", "此浏览器"].includes(deviceNameInput.value)) {
-    deviceNameInput.value = localizer.t("This browser");
-  }
+  setAutomaticClaimDeviceName();
   ambientCanvas.apply(normalized);
+}
+
+function setAutomaticClaimDeviceName({ force = false } = {}) {
+  const input = element("claim-device-name");
+  const legacyAutomaticName = ["This browser", "当前浏览器", "此浏览器"].includes(input.value);
+  if (!force && input.dataset.automatic === "false" && !legacyAutomaticName) return;
+  input.value = automaticDeviceName();
+  input.dataset.automatic = "true";
 }
 
 function renderModelOptions(select, selectedModel, settings = settingsPreview) {
@@ -1682,11 +1699,37 @@ function openSettingsDialog() {
   settingsPreview = normalizeSettings(state.settings);
   populateSettingsForm(settingsPreview);
   applyVisualSettings(settingsPreview);
+  const deviceInput = element("settings-device-name");
+  deviceInput.value = currentDeviceName || automaticDeviceName();
+  deviceInput.disabled = true;
+  element("settings-device-status").textContent = localizer.t("Loading this device…");
   settingsDialog.showModal();
+  void loadCurrentDeviceSettings();
   requestAnimationFrame(() => element("close-settings-button").focus());
 }
 
+async function loadCurrentDeviceSettings() {
+  const generation = ++settingsDeviceLoadGeneration;
+  const input = element("settings-device-name");
+  const status = element("settings-device-status");
+  try {
+    const devices = await api.listDevices();
+    if (generation !== settingsDeviceLoadGeneration || !settingsDialog.open) return;
+    const current = devices.find((device) => device.id === state.currentUser?.device_id);
+    if (!current) throw new Error(localizer.t("This device is unavailable."));
+    currentDeviceName = current.name;
+    input.value = current.name;
+    input.disabled = false;
+    status.textContent = "";
+  } catch (error) {
+    if (generation !== settingsDeviceLoadGeneration || !settingsDialog.open) return;
+    input.disabled = true;
+    status.textContent = error.message ?? localizer.t("Unable to load this device.");
+  }
+}
+
 function cancelSettingsDialog() {
+  settingsDeviceLoadGeneration += 1;
   applyVisualSettings(state.settings);
   settingsPreview = state.settings;
   if (settingsDialog.open) settingsDialog.close();
@@ -1754,13 +1797,35 @@ async function saveSettings(event) {
     element("settings-context-budget").focus();
     return;
   }
-  settingsPreview = readSettingsForm(settingsPreview);
-  state.settings = settingsStore.set(settingsPreview);
-  if (state.settings.notifications.agentCompleted) await ensureNotificationPermission();
-  applyVisualSettings(state.settings);
-  renderAgentProfileControls();
-  settingsDialog.close();
-  announce("Settings saved.");
+  const deviceInput = element("settings-device-name");
+  const deviceStatus = element("settings-device-status");
+  const nextDeviceName = deviceInput.value.trim();
+  if (!deviceInput.disabled && (!nextDeviceName || nextDeviceName.length > 120)) {
+    deviceStatus.textContent = localizer.t("Choose a device name between 1 and 120 characters.");
+    deviceInput.focus();
+    return;
+  }
+  const submit = event.submitter;
+  if (submit) submit.disabled = true;
+  try {
+    if (!deviceInput.disabled && nextDeviceName !== currentDeviceName) {
+      const updated = await api.renameDevice(state.currentUser.device_id, nextDeviceName);
+      currentDeviceName = updated.name;
+    }
+    settingsPreview = readSettingsForm(settingsPreview);
+    state.settings = settingsStore.set(settingsPreview);
+    if (state.settings.notifications.agentCompleted) await ensureNotificationPermission();
+    applyVisualSettings(state.settings);
+    renderAgentProfileControls();
+    settingsDeviceLoadGeneration += 1;
+    settingsDialog.close();
+    announce(localizer.t("Settings saved."));
+  } catch (error) {
+    deviceStatus.textContent = error.message ?? localizer.t("Unable to rename this device.");
+    if (!deviceInput.disabled) deviceInput.focus();
+  } finally {
+    if (submit) submit.disabled = false;
+  }
 }
 
 async function ensureNotificationPermission() {

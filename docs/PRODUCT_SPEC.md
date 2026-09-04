@@ -83,7 +83,7 @@ A new collaborator claims an invitation to create their own server identity and 
 
 ## First-release deployment
 
-One participating user runs the only active authoritative server for a deployment. The service and SQLite bind to the host loopback interface and are shared with named collaborators through private Tailscale Serve HTTPS. Other users run only their local Web client, MCP process, bridge, and harness. Public Funnel, router port forwarding, multi-primary replication, and automatic failover are outside the first release.
+One creator runs the only active authoritative server for a deployment. The service and SQLite stay on host loopback. The operator chooses local-only access, private LAN HTTPS through Caddy, private tailnet HTTPS through Tailscale Serve, or the invitation-only Alibaba Cloud ECS Caddy profile. Other users run only their local Web client, MCP process, bridge, and harness. Public Funnel, router port forwarding, arbitrary public tunnels, multi-primary replication, and automatic failover are outside the beta. See [ADR-0017](adr/0017-private-connection-profiles.md).
 
 ## Realtime guarantees
 
@@ -105,7 +105,7 @@ One participating user runs the only active authoritative server for a deploymen
 6. Reconnect replay, idempotent append, role enforcement, redaction, and concurrent writes have automated tests.
 7. A new user can claim a one-use project-role invitation without exposing their device credential to the inviter, and the owner can later change that role.
 8. A second device requires a separate expiring authorization and can be revoked without revoking the user's other devices.
-9. One loopback owner host serves Web, API, and WebSocket on a private HTTPS origin without a public application port.
+9. One loopback owner host serves Web, API, and WebSocket locally or through one exact private HTTPS origin without a public application port.
 10. One Codex connector binds a local project to a GatherThread project, discovers eligible sessions, preserves one Desktop-owned task and one distinctly labelled background execution projection per writable session, never opens the Desktop task through a competing App Server writer, and replaces an externally claimed completed background projection from canonical history without duplicating unresolved work.
 11. An unanswered agent request has an accessible answering indicator; it changes to queued when the local runtime is offline and disappears after the linked canonical response.
 12. With the reviewed project hooks installed and trusted, a completed prompt in a managed Codex desktop thread is uploaded atomically and exactly once as one canonical Agent turn, including allowed redacted tool events; without trusted hooks it remains local.

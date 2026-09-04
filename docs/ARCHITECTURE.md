@@ -5,7 +5,9 @@ Significant architectural choices and their rationale are recorded in the [ADR i
 ## Components
 
 ```text
-Collaborator browser / CLI ── private HTTPS + WSS over Tailscale Serve ─┐
+Same-device client ── loopback HTTP (local mode) ──────────────────────┐
+LAN client ── Caddy private HTTPS + WSS (LAN mode) ────────────────────┤
+Tailnet client ── Tailscale Serve HTTPS + WSS (tailnet mode) ──────────┤
                                                                        │
 Host loopback ── Collaboration server ── SQLite WAL                    │
                        │                                               │
@@ -92,4 +94,4 @@ MCP exposes collaboration capabilities but is not assumed to see a host's full c
 - No remote transfer of local tool approval authority.
 - Project role enforcement on every session write and runtime registration.
 - Content-free invitation audit metadata plus canonical session event history.
-- Loopback-only owner host behind tailnet-only HTTPS; no default public ingress.
+- Loopback-only application host behind an approved HTTPS edge; no direct application-port ingress and no anonymous registration.

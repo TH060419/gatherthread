@@ -58,10 +58,13 @@ export class HttpCollaborationApi {
     return body.data ?? body;
   }
 
-  async authenticate(token = this.token) {
+  async authenticate(token = this.token, { rememberDevice = false } = {}) {
     this.token = token;
     try {
-      const { actor } = await this.request("/v1/browser-sessions", { method: "POST" });
+      const { actor } = await this.request("/v1/browser-sessions", {
+        method: "POST",
+        body: JSON.stringify({ remember_device: rememberDevice }),
+      });
       this.actors.set(actor.id, actor.username);
       return actor;
     } finally {
@@ -301,7 +304,7 @@ export class HttpCollaborationApi {
     return member;
   }
 
-  async claimInvitation({ inviteToken, displayName, deviceName, userId, deviceId }) {
+  async claimInvitation({ inviteToken, displayName, deviceName, userId, deviceId, rememberDevice = false }) {
     const result = await this.request("/v1/invitations/claim", {
       method: "POST",
       headers: { "X-GatherThread-Browser-Session": "1" },
@@ -309,6 +312,7 @@ export class HttpCollaborationApi {
         invite_token: inviteToken,
         display_name: displayName,
         device_name: deviceName,
+        remember_device: rememberDevice,
         ...(userId ? { user_id: userId } : {}),
         ...(deviceId ? { device_id: deviceId } : {}),
       }),
@@ -328,6 +332,19 @@ export class HttpCollaborationApi {
       body: JSON.stringify({ invite_token: inviteToken }),
     });
     return { ...result, invitation: normalizeInvitation(result.invitation) };
+  }
+
+  async listDevices() {
+    const { devices } = await this.request("/v1/devices");
+    return devices;
+  }
+
+  async renameDevice(deviceId, name) {
+    const { device } = await this.request(`/v1/devices/${encodeURIComponent(deviceId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+    return device;
   }
 
   async replayEvents(sessionId, { afterSequence, limit = 100 }) {
@@ -465,6 +482,7 @@ export class MockCollaborationApi {
     this.invitations = new Map();
     this.snapshotRequests = new Map();
     this.credential = "";
+    this.deviceName = "Safari · macOS";
     this.projects = [{
       id: "project-orbit",
       name: "Project Orbit",
@@ -566,7 +584,7 @@ export class MockCollaborationApi {
   async authenticate(token) {
     await this.#wait();
     if (token !== "demo-token") throw new ApiError("That preview token is not valid.", { status: 401, code: "unauthorized" });
-    return structuredClone(this.currentUser);
+    return structuredClone({ ...this.currentUser, device_id: "device-demo" });
   }
 
   async restoreSession() {
@@ -840,8 +858,13 @@ export class MockCollaborationApi {
       throw new ApiError("Invitation is invalid or unavailable.", { status: 401, code: "unauthorized" });
     }
     if (!displayName?.trim() || !deviceName?.trim()) throw new ApiError("Name and device name are required.", { status: 422, code: "invalid_claim" });
-    const actor = { id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`, username: displayName.trim() };
+    const actor = {
+      id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`,
+      username: displayName.trim(),
+      device_id: "device-demo",
+    };
     this.currentUser = actor;
+    this.deviceName = deviceName.trim();
     this.credential = `mock-device-${createIdempotencyKey("token")}`;
     for (const session of this.sessions.filter((item) => item.projectId === invitation.projectId)) {
       session.members.push({ ...actor, userId: actor.id, role: invitation.role, runtime: null });
@@ -873,6 +896,20 @@ export class MockCollaborationApi {
     invitation.claimedAt = new Date().toISOString();
     invitation.claimedByUserId = this.currentUser.id;
     return { actor: structuredClone(this.currentUser), invitation: structuredClone(normalizeInvitation(invitation)) };
+  }
+
+  async listDevices() {
+    await this.#wait();
+    return [{ id: "device-demo", user_id: this.currentUser.id, name: this.deviceName }];
+  }
+
+  async renameDevice(deviceId, name) {
+    await this.#wait();
+    if (deviceId !== "device-demo") throw new ApiError("Device not found.", { status: 404, code: "not_found" });
+    const normalized = name?.trim() ?? "";
+    if (!normalized || normalized.length > 120) throw new ApiError("Choose a device name between 1 and 120 characters.", { status: 422, code: "validation_error" });
+    this.deviceName = normalized;
+    return { id: deviceId, user_id: this.currentUser.id, name: normalized };
   }
 
   async setProjectMemberRole(projectId, userId, role) {

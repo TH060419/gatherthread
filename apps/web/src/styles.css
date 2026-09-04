@@ -512,6 +512,41 @@ textarea:focus-visible,
   margin-bottom: clamp(12px, 2.2vh, 24px);
 }
 
+.auth-remember {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  margin: -4px 0 16px;
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.auth-remember input {
+  width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 2px 0 0;
+  accent-color: var(--teal);
+}
+
+.auth-remember strong,
+.auth-remember small {
+  display: block;
+}
+
+.auth-remember strong {
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.auth-remember small {
+  margin-top: 2px;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+  line-height: 1.45;
+}
+
 @media (min-width: 901px) and (max-height: 740px) {
   .auth-story {
     padding-block: 36px;

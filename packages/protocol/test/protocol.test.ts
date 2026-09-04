@@ -5,6 +5,7 @@ import {
   AppendEventInputSchema,
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
+  CreateBrowserSessionInputSchema,
   CommitLocalTurnInputSchema,
   CompleteSnapshotRequestInputSchema,
   CreateInvitationInputSchema,
@@ -122,6 +123,13 @@ test("invitation inputs allow only fixed TTLs and participant/viewer roles", () 
     display_name: "Invitee",
     device_name: "Laptop",
   }).success, false);
+  assert.equal(ClaimInvitationInputSchema.parse({
+    invite_token: "valid-invitation-secret-that-is-long-enough",
+    display_name: "Invitee",
+    device_name: "Safari · macOS",
+  }).remember_device, false);
+  assert.equal(CreateBrowserSessionInputSchema.parse({}).remember_device, false);
+  assert.equal(CreateBrowserSessionInputSchema.parse({ remember_device: true }).remember_device, true);
 });
 
 test("public invitation records never contain a token digest", () => {

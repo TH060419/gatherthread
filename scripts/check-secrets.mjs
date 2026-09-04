@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { execFile } from 'node:child_process'
-import { readFile, lstat } from 'node:fs/promises'
+import { readFile, lstat, readdir } from 'node:fs/promises'
 import { extname, resolve } from 'node:path'
 import { promisify } from 'node:util'
 
 const root = process.cwd()
 const execFileAsync = promisify(execFile)
-const excludedDirectories = new Set(['.git', '.local', 'coverage', 'dist', 'node_modules', 'playwright-report', 'test-results'])
+const excludedDirectories = new Set(['.git', '.local', 'coverage', 'dist', 'node_modules', 'playwright-report', 'release-artifacts', 'test-results'])
 const excludedFiles = new Set(['scripts/check-secrets.mjs'])
 const textExtensions = new Set(['', '.cjs', '.css', '.env', '.example', '.html', '.js', '.json', '.jsx', '.md', '.mjs', '.sh', '.ts', '.tsx', '.txt', '.yaml', '.yml'])
 const findings = []
@@ -28,6 +28,20 @@ async function gitVisibleFiles() {
   return stdout.toString('utf8').split('\0').filter(Boolean)
 }
 
+async function archiveFiles(directory = root, prefix = '') {
+  const files = []
+  const entries = await readdir(directory, { withFileTypes: true })
+  entries.sort((left, right) => left.name.localeCompare(right.name))
+  for (const entry of entries) {
+    const name = prefix ? `${prefix}/${entry.name}` : entry.name
+    if (isExcluded(name) || entry.isSymbolicLink()) continue
+    if (entry.isDirectory()) files.push(...await archiveFiles(resolve(directory, entry.name), name))
+    else if (entry.isFile()) files.push(name)
+    if (files.length > 100_000) throw new Error('release archive contains too many files')
+  }
+  return files
+}
+
 function isExcluded(name) {
   return excludedFiles.has(name) || name.split(/[\\/]/).some((part) => excludedDirectories.has(part))
 }
@@ -47,9 +61,10 @@ async function scanFile(name) {
 
 let files
 try {
-  files = await gitVisibleFiles()
+  const gitMetadata = await lstat(resolve(root, '.git')).catch(() => null)
+  files = gitMetadata ? await gitVisibleFiles() : await archiveFiles()
 } catch {
-  process.stderr.write('ERROR secrets: unable to enumerate Git-visible files\n')
+  process.stderr.write('ERROR secrets: unable to enumerate files\n')
   process.exit(2)
 }
 await Promise.all(files.map(scanFile))
