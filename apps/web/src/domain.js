@@ -4,8 +4,17 @@ export const INVITATION_ROLES = Object.freeze(["participant", "viewer"]);
 export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
 export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
+export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-beta.1";
 
-export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gpt-5.6-sol", contextWindowTokens = 128_000 }) {
+const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
+const DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS = 128_000;
+
+export function projectCodexConnectionCommands({
+  baseUrl,
+  projectId,
+  model = DEFAULT_CODEX_MODEL,
+  contextWindowTokens = DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS,
+}) {
   if (typeof baseUrl !== "string" || baseUrl.length === 0 || /[\u0000-\u001f\u007f]/.test(baseUrl)) {
     throw new Error("A valid GatherThread server URL is required.");
   }
@@ -17,14 +26,17 @@ export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gp
   }
   const isLoopbackHttp = parsed.protocol === "http:"
     && new Set(["127.0.0.1", "localhost", "[::1]"]).has(parsed.hostname);
+  const normalizedPath = parsed.pathname.replace(/\/+$/, "");
   if ((parsed.protocol !== "https:" && !isLoopbackHttp)
+    || (normalizedPath !== "" && normalizedPath !== "/v1")
     || parsed.username || parsed.password || parsed.search || parsed.hash) {
     throw new Error("The GatherThread server URL is not safe for a connector command.");
   }
   if (typeof projectId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(projectId)) {
     throw new Error("The GatherThread project ID is not safe for a connector command.");
   }
-  if (typeof model !== "string" || model.length === 0 || model.length > 120 || /[\u0000-\u001f\u007f]/.test(model)) {
+  if (typeof model !== "string" || !model.trim() || model.length > 120
+    || model.startsWith("-") || /[\u0000-\u001f\u007f]/.test(model)) {
     throw new Error("The Codex model is not safe for a connector command.");
   }
   if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 4_096 || contextWindowTokens > 2_000_000) {
@@ -33,25 +45,26 @@ export function projectCodexConnectionCommands({ baseUrl, projectId, model = "gp
   const normalizedBaseUrl = parsed.toString().replace(/\/$/, "");
   const posixQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
   const powerShellQuote = (value) => `'${value.replaceAll("'", "''")}'`;
-  const values = [normalizedBaseUrl, projectId, model];
+  const optionalArguments = (quote) => [
+    ...(model === DEFAULT_CODEX_MODEL ? [] : ["--model", quote(model)]),
+    ...(contextWindowTokens === DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS
+      ? []
+      : ["--context-window-tokens", String(contextWindowTokens)]),
+  ];
   return Object.freeze({
     posix: [
-      "npm run codex:connect --",
-      "--url", posixQuote(values[0]),
-      "--project", posixQuote(values[1]),
+      "npx", "--yes", CODEX_CONNECT_PACKAGE_SPEC,
+      "--url", posixQuote(normalizedBaseUrl),
+      "--project", posixQuote(projectId),
       "--create-workspace",
-      "--model", posixQuote(values[2]),
-      "--context-window-tokens", String(contextWindowTokens),
-      "--install-hooks",
+      ...optionalArguments(posixQuote),
     ].join(" "),
     powershell: [
-      "npm.cmd run codex:connect --",
-      "--url", powerShellQuote(values[0]),
-      "--project", powerShellQuote(values[1]),
+      "npx.cmd", "--yes", CODEX_CONNECT_PACKAGE_SPEC,
+      "--url", powerShellQuote(normalizedBaseUrl),
+      "--project", powerShellQuote(projectId),
       "--create-workspace",
-      "--model", powerShellQuote(values[2]),
-      "--context-window-tokens", String(contextWindowTokens),
-      "--install-hooks",
+      ...optionalArguments(powerShellQuote),
     ].join(" "),
   });
 }

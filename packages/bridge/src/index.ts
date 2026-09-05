@@ -11,3 +11,4 @@ export * from "./project-harness.js";
 export * from "./project-session-permissions.js";
 export * from "./project-workspace.js";
 export * from "./daemon.js";
+export * from "./local-api-relay.js";

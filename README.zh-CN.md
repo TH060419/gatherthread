@@ -85,26 +85,25 @@ npm run owner-host
 
 ## 接入本地 Codex Agent
 
-每位协作者在 GatherThread 网页中选择项目，点击 **Connect Codex / 连接 Codex**，复制与自己系统对应的命令，并在本地 GatherThread 仓库根目录运行。命令类似：
+每位协作者在 GatherThread 网页中选择项目，点击 **Connect Codex / 连接 Codex**，复制与自己系统对应的固定版本命令。无需 clone GatherThread，也无需预先执行 `npm install`：
 
 ```bash
-npm run codex:connect -- \
-  --url https://your-host.your-tailnet.ts.net \
-  --project PROJECT_ID \
-  --create-workspace \
-  --model gpt-5.6-sol \
-  --install-hooks
+npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url 'https://your-host.your-tailnet.ts.net/v1' --project 'PROJECT_ID' --create-workspace
 ```
 
-项目级 Agent 设置会为新的连接命令和网页 Agent 请求提供默认模型、推理强度与上下文注入上限。
+PowerShell 使用 `npx.cmd` 传递同一组无凭据参数。项目级 Agent 设置继续控制网页请求；非默认模型或上下文设置经过严格校验后才会进入连接命令。
 
-命令不含任何 Token；连接器会在终端中隐藏输入自己的设备 Token，在 `~/GatherThread Projects/` 下安全创建或复用与云端项目同名的本地工作区，并在 Codex Desktop 中打开它。首次实体化可编辑会话时，会建立一个名为 `会话名 · GatherThread` 的 Desktop 任务，以及一个名为 `会话名 · GatherThread background` 的实现私有 `exec` 后台投影。首次建立后，本地标题与云端标题彼此独立；任意一侧改名都不会改变稳定的 session/thread 绑定，也不会新建第二个会话。Desktop 是可见任务的唯一 writer；网页 **请求我的 Agent** 在后台投影执行，再通过规范历史汇合。如果当前 Desktop 版本列出了带 `background` 的任务，请不要把它用于直接工作；即使 Desktop 意外接管了它，下一次网页请求也会根据权威规范历史替换该后台投影，而不是无限重试被锁定的 writer。连接器会自动发现后续新会话，请保持终端运行。若要绑定已有源码目录，请改用 `--workspace "/本地项目绝对路径"`。
+命令不含任何 Token；连接器会在终端中隐藏输入自己的设备 Token，在 `~/GatherThread Projects/` 下安全创建或复用与云端项目同名的本地工作区，并在 Codex Desktop 中打开它。连接器还会建立由每次启动随机 capability 保护的私有用户工具 IPC；设备 Token 只留在连接器内存，不会传给插件 MCP 进程或 Codex。首次实体化可编辑会话时，会建立一个名为 `会话名 · GatherThread` 的 Desktop 任务，以及一个名为 `会话名 · GatherThread background` 的实现私有 `exec` 后台投影。Desktop 是可见任务的唯一 writer；网页 **请求我的 Agent** 在后台投影执行，再通过规范历史汇合。连接器会自动发现后续新会话，请保持终端运行。若要绑定已有源码目录，请改用 `--workspace "/本地项目绝对路径"`。
+
+仓库内可发布的 **共序 / GatherThread** Codex 插件提供项目、会话、历史、发送消息/请求和脱敏连接状态等普通用户 MCP 工具。真实的 Beta 基础模式是“一个或多个固定版本常驻项目连接器 + 插件”；Finder 启动的 Desktop 通常不会继承终端凭据环境，因此插件会把同一端点的崩溃重启重叠登记合并为租约较新的实例，再聚合所有不同的非秘密活动登记，并按唯一项目/会话 ID 路由私有 IPC；不同端点的 ID 歧义或目标下线时失败关闭。环境变量直连仅属于开发者预览。完整模式再给连接器加 `--plugin-hooks`，并在 Codex 中明确审查和信任 Hooks。插件自带极小 Hook 转发脚本，每回合不运行 `npx`，但要求连接器在线且不会离线暂存；它允许从工作区根目录或子目录发起回合，并以连接器生成的根 registry 为准。Hook 不能唤醒空闲 Codex，也不能启动新回合。旧的 `--install-hooks` 项目文件方式保留为带有界离线暂存的显式兼容入口；切换模式后即使该文件仍在，运行时来源门也会阻止两套 Hook 同时返回上下文或共用 spool。
+
+Safari、Chrome 和 Edge 只负责复制命令；出于浏览器安全边界，网页不会直接启动、安装或控制本地 Codex。固定 release ref 存在后，先运行 `codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread`，再运行 `codex plugin add gatherthread@gatherthread`。随后重启 Desktop，并在启用前审查 **共序 / GatherThread** 及其 Hooks。公开发布前仍须确认 npm scope/包名所有权；通用公共插件目录仍是后续工作。
 
 规范事件会按顺序导入后台投影，并使用冻结且按类型区分的前缀：`用户名 · Human Chat：`、`用户名 · Agent Request：` 和 `用户名 · Agent Response · harness · model：`。安装并信任项目 Hook 后，`UserPromptSubmit` 会把经过确认、受上下文预算约束的 capsule 交给 Desktop Agent。可见回复先显示 `Loaded N cloud updates / 已加载 N 条云端更新`，最多展示三条短预览；精确正文只放在供模型推理的上下文块中。超长事件会按 UTF-8 安全分段，在后续完成的 Desktop 回合继续同步。取消回合不会确认任何分段，持久投递游标也绝不会越过被省略的内容。同步内容被明确标成不可信共享历史，不会作为新请求再次执行。`Stop` 则把这次 prompt 与最终回复恰好上传一次。当前公开 Hook 不提供完整结构化工具流，因此桌面端工具事件会被省略，而不是通过争抢 writer 去补读。当前公开 Codex API 无法把远端事件补画成 Desktop 已有任务中的历史气泡。后台长历史会独立 compact，会话对齐不会回滚源码文件。
 
 启用并信任 Hook 后，此前尚未绑定的 Codex Desktop 任务会以“第一次提交 prompt”为创建边界。项目创建者或参与者的连接器会幂等创建一个本人所有的个人 Solo，绑定现有 Desktop 任务，并把同一个已完成回合恰好上传一次；仅仅打开空任务不会创建云端内容。访者的任务始终留在本地。连接器自己的后台执行任务与快照任务会被明确排除，不能递归触发创建。
 
-只读会话不显示输入框，而显示 **下载到 Codex**。每次点击都会冻结一个新的 `through_sequence`，创建互相独立的本地快照任务，之后绝不向云端回传。创建者与参与者实时同步 `multi` 和自己创建的个人 Solo，并下载其他成员的 Solo；访者下载全部会话。若要回传 Desktop prompt，必须先在 Codex Desktop 设置中启用 Hooks，再检查生成工作区中的 `.codex/hooks.json`。GatherThread 凭据不会进入 Codex 子进程环境，自动权限提升始终禁用，并且不支持 `danger-full-access`。当前流程参见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)、[ADR-0013](docs/adr/0013-single-writer-dual-codex-projections.md)、[ADR-0014](docs/adr/0014-acknowledged-bounded-desktop-relay-capsules.md)和[ADR-0015](docs/adr/0015-create-personal-solos-from-first-local-prompt.md)。
+只读会话不显示输入框，而显示 **下载到 Codex**。每次点击都会冻结一个新的 `through_sequence`，创建互相独立的本地快照任务，之后绝不向云端回传。创建者与参与者实时同步 `multi` 和自己创建的个人 Solo，并下载其他成员的 Solo；访者下载全部会话。Hook 安装和信任始终是显式操作。GatherThread 凭据不会进入 Codex 子进程环境，自动权限提升始终禁用，并且不支持 `danger-full-access`。当前流程参见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)、[ADR-0013](docs/adr/0013-single-writer-dual-codex-projections.md)、[ADR-0014](docs/adr/0014-acknowledged-bounded-desktop-relay-capsules.md)、[ADR-0015](docs/adr/0015-create-personal-solos-from-first-local-prompt.md)和[ADR-0018](docs/adr/0018-unified-codex-plugin-and-connector.md)。
 
 ## 接入 DeepSeek Harness
 

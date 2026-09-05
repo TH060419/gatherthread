@@ -109,8 +109,10 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     'id="connect-codex-activation"',
     'data-copy-command="posix"',
     'data-copy-command="powershell"',
+    'data-copy-command="marketplace"',
     'id="copy-posix-command-status"',
     'id="copy-powershell-command-status"',
+    'id="copy-marketplace-command-status"',
   ]) {
     assert.match(html, new RegExp(requirement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
@@ -170,7 +172,7 @@ test("project Codex connector explains scope, credential prompting, hook trust, 
     readFile(stylesPath, "utf8"),
     readFile(i18nPath, "utf8"),
   ]);
-  assert.match(html, /root of your local GatherThread repository/i);
+  assert.match(html, /no GatherThread checkout or prior npm install is needed/i);
   assert.match(html, /creates or reuses and opens the same-name local Desktop project/i);
   assert.match(html, /connects every editable session with one Desktop task and one isolated background Agent runtime/i);
   assert.match(html, /Single-writer synchronization/i);
@@ -178,14 +180,25 @@ test("project Codex connector explains scope, credential prompting, hook trust, 
   assert.match(html, /Web Agent requests run in an isolated background projection/i);
   assert.doesNotMatch(html, /Move to project|manual Desktop step/i);
   assert.match(html, /device token is requested by a hidden CLI prompt/i);
-  assert.match(html, /open Codex Desktop Settings and enable Hooks/i);
-  assert.match(html, /review the generated <code>\.codex\/hooks\.json<\/code>/i);
+  assert.match(html, /only copies commands and cannot launch local Codex/i);
+  assert.match(html, /--plugin-hooks plus explicit review and trust of the plugin Hooks/i);
+  assert.match(html, /1\. Run the fixed-version connector[\s\S]*2\. Install the plugin once[\s\S]*3\. Optionally sync direct Desktop turns/);
+  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-beta\.1 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(html, /codex plugin marketplace add[\s\S]*codex plugin add gatherthread@gatherthread/);
+  assert.match(html, /Run the two commands below[\s\S]*Restart Codex Desktop[\s\S]*enable Hooks only for optional step 3/i);
+  assert.match(html, /--plugin-hooks[\s\S]*enable and explicitly trust the Hooks/i);
+  assert.match(html, /This page only copies the commands; it does not run them/i);
+  const pluginCommands = html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "";
+  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Hooks（钩子）/);
+  assert.match(i18n, /1\. 运行固定版本连接器[\s\S]*2\. 一次性安装插件[\s\S]*3\. 可选启用 Desktop 直接回合同步/);
   assert.doesNotMatch(html, /Codex <code>\/hooks<\/code>/i);
   assert.match(main, /projectCodexConnectionCommands\(\{[\s\S]*?baseUrl: location\.origin[\s\S]*?projectId: state\.project\.id/);
   assert.doesNotMatch(main, /connect-codex-move-project-name|renderCodexDesktopMoveGuide/);
   assert.match(main, /connectCodexDialog\.addEventListener\("close"[\s\S]*?returnFocus\.focus\(\)/);
   assert.match(main, /navigator\.clipboard\?\.writeText[\s\S]*?document\.execCommand\?\.\("copy"\)/);
+  assert.match(main, /"Plugin install commands copied\."/);
   assert.match(styles, /\.codex-connect-dialog[\s\S]*?width: min\(720px/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.command-heading[\s\S]*?flex-direction: column/);
   assert.doesNotMatch(main, /searchParams\.(?:set|append)\([^\n]*(?:device|token|credential)/i);

@@ -32,14 +32,9 @@ test("English is the unchanged default and Simplified Chinese preserves product 
     "用于连接 https://example.test。token 会被交换为安全的浏览器会话，且不会被页面存储。",
   );
   assert.match(
-    translateUiText("Your device token is requested by a hidden CLI prompt. It is not included in either command. After hooks are installed for the first time, open Codex Desktop Settings and enable Hooks, then review the generated .codex/hooks.json before use.", "zh-CN"),
+    translateUiText("Your device token is requested by a hidden CLI prompt and is not included in any command. This page only copies commands and cannot launch local Codex. Keep the connector running for Web requests and plugin MCP tools. Direct Desktop turn sync additionally requires --plugin-hooks plus explicit review and trust of the plugin Hooks.", "zh-CN"),
     /Hooks（钩子）/,
   );
-  assert.equal(
-    translateUiText("Your device token is requested by a hidden CLI prompt. It is not included in either command. After hooks are installed for the first time, open Codex Desktop Settings and enable Hooks, then review the generated", "zh-CN"),
-    "设备 token 会通过隐藏的 CLI 提示输入，不会出现在任何命令中。首次安装 Hooks（钩子）后，请在 Codex Desktop 设置中启用 Hooks，并检查生成的",
-  );
-  assert.equal(translateUiText("before use.", "zh-CN"), "，确认无误后再使用。");
   assert.equal(translateUiText("macOS / Linux shell", "zh-CN"), "macOS / Linux 终端");
   assert.equal(translateUiText("Windows PowerShell", "zh-CN"), "Windows PowerShell 终端");
   assert.equal(translateUiText("Connect DeepSeek Harness", "zh-CN"), "连接 DeepSeek Harness");
@@ -54,6 +49,20 @@ test("English is the unchanged default and Simplified Chinese preserves product 
     translateUiText("The short code expires once and is bound to this server and DSH device. The long-lived device credential stays in DSH’s local credential store and never enters a URL, command, page storage, log, or shared history.", "zh-CN"),
     /长期设备凭据只保存在 DSH 本机凭据库/,
   );
+  assert.equal(translateUiText("1. Run the fixed-version connector.", "zh-CN"), "1. 运行固定版本连接器。");
+  assert.equal(translateUiText("2. Install the plugin once.", "zh-CN"), "2. 一次性安装插件。");
+  assert.equal(translateUiText("3. Optionally sync direct Desktop turns.", "zh-CN"), "3. 可选启用 Desktop 直接回合同步。");
+  assert.equal(translateUiText("One-time plugin setup", "zh-CN"), "一次性插件安装");
+  assert.equal(translateUiText("Copy commands", "zh-CN"), "复制命令");
+  assert.match(
+    translateUiText("Run the two commands below to add the fixed GitHub release source and install the", "zh-CN"),
+    /固定 GitHub 发布版插件源/,
+  );
+  assert.match(
+    translateUiText("plugin. Restart Codex Desktop and review its MCP server and Hooks; enable Hooks only for optional step 3. This page only copies the commands; it does not run them.", "zh-CN"),
+    /只有选择第 3 步时才启用 Hooks/,
+  );
+  assert.equal(translateUiText("Plugin install commands copied.", "zh-CN"), "插件安装命令已复制。");
 });
 
 test("dynamic collaboration labels translate without touching unknown user text", () => {

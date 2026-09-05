@@ -1,0 +1,29 @@
+{
+  "name": "gatherthread",
+  "version": "0.1.0-beta.1",
+  "description": "Use 共序 / GatherThread collaboration projects safely from Codex.",
+  "author": {
+    "name": "Yuhan He and contributors",
+    "url": "https://github.com/TH060419/gatherthread"
+  },
+  "homepage": "https://github.com/TH060419/gatherthread#readme",
+  "repository": "https://github.com/TH060419/gatherthread",
+  "license": "Apache-2.0",
+  "keywords": ["gatherthread", "collaboration", "codex", "mcp"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "共序 / GatherThread",
+    "shortDescription": "Collaborate through your local Codex runtime.",
+    "longDescription": "Inspect projects, sessions, history, connection status, and send collaboration messages through the authenticated local GatherThread connector.",
+    "developerName": "Yuhan He and contributors",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://github.com/TH060419/gatherthread",
+    "defaultPrompt": [
+      "Show my GatherThread projects and connector status.",
+      "Read the latest history in a GatherThread session.",
+      "Send a message to a GatherThread session after I approve it."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

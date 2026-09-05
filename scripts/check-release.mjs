@@ -12,6 +12,7 @@ const manifestPaths = [
   "apps/web/package.json",
   "packages/adapters/package.json",
   "packages/bridge/package.json",
+  "packages/codex-connect/package.json",
   "packages/dsh-host/package.json",
   "packages/mcp/package.json",
   "packages/protocol/package.json",
@@ -28,7 +29,7 @@ for (const path of manifestPaths) {
 
 const lock = await json("package-lock.json");
 assert.equal(lock.version, EXPECTED_VERSION, "package-lock.json must declare the candidate version");
-for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/dsh-host", "packages/mcp", "packages/protocol"]) {
+for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/dsh-host", "packages/mcp", "packages/protocol"]) {
   assert.equal(lock.packages?.[path]?.version, EXPECTED_VERSION, `package-lock.json package ${path || "root"} is stale`);
 }
 
@@ -82,6 +83,17 @@ const requiredFiles = [
   "docs/ALIYUN_ECS.md",
   "docs/ALIYUN_ECS.zh-CN.md",
   "docs/releases/0.1.0-beta.1.md",
+  "docs/CODEX_CONNECT.md",
+  "docs/CODEX_CONNECT.zh-CN.md",
+  "docs/adr/0018-unified-codex-plugin-and-connector.md",
+  ".agents/plugins/marketplace.json",
+  "packages/codex-connect/README.md",
+  "plugins/gatherthread/.codex-plugin/plugin.json",
+  "plugins/gatherthread/.mcp.json",
+  "plugins/gatherthread/hooks/hooks.json",
+  "plugins/gatherthread/scripts/hook-forwarder.mjs",
+  "plugins/gatherthread/scripts/mcp-launcher.mjs",
+  "plugins/gatherthread/skills/gatherthread/SKILL.md",
   "deploy/aliyun-ecs/Caddyfile.in",
   "deploy/aliyun-ecs/create-owner.sh",
   "deploy/aliyun-ecs/gatherthread.service.in",
@@ -106,8 +118,43 @@ const requiredFiles = [
   "scripts/test-dsh-host-real.mjs",
   "scripts/test-dsh-npm-plugin-real.mjs",
   "scripts/package-release.mjs",
+  "scripts/verify-codex-package.mjs",
 ];
 await Promise.all(requiredFiles.map((path) => readFile(join(root, path), "utf8")));
+
+const connector = await json("packages/codex-connect/package.json");
+assert.equal(connector.name, "@gatherthread/codex-connect");
+assert.equal(connector.private, undefined);
+assert.deepEqual(connector.bin, { "gatherthread-codex-connect": "dist/codex-connect.js" });
+assert.deepEqual(connector.dependencies ?? {}, {});
+
+const plugin = await json("plugins/gatherthread/.codex-plugin/plugin.json");
+assert.equal(plugin.version, EXPECTED_VERSION);
+assert.equal(plugin.interface?.displayName, "共序 / GatherThread");
+assert.equal(plugin.hooks, undefined, "hooks/hooks.json must use automatic discovery");
+const pluginMcp = await json("plugins/gatherthread/.mcp.json");
+assert.equal(pluginMcp.mcpServers?.gatherthread?.command, "node");
+assert.deepEqual(pluginMcp.mcpServers?.gatherthread?.args, ["${PLUGIN_ROOT}/scripts/mcp-launcher.mjs"]);
+assert.equal(pluginMcp.mcpServers?.gatherthread?.env, undefined);
+assert.equal(pluginMcp.mcpServers?.gatherthread?.env_vars, undefined);
+const pluginLauncher = await readFile(join(root, "plugins/gatherthread/scripts/mcp-launcher.mjs"), "utf8");
+assert.match(pluginLauncher, new RegExp(`@gatherthread/codex-connect@${EXPECTED_VERSION.replaceAll(".", "\\.")}`));
+assert.match(pluginLauncher, /"npx\.cmd"/);
+assert.match(pluginLauncher, /!name\.startsWith\("GATHERTHREAD_"\)/);
+
+const marketplace = await json(".agents/plugins/marketplace.json");
+assert.equal(marketplace.interface?.displayName, "共序 / GatherThread");
+assert.deepEqual(marketplace.plugins?.[0]?.source, { source: "local", path: "./plugins/gatherthread" });
+const marketplaceCommand = `codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v${EXPECTED_VERSION} --sparse .agents/plugins --sparse plugins/gatherthread`;
+const pluginInstallCommand = "codex plugin add gatherthread@gatherthread";
+for (const path of ["apps/web/index.html", "README.md", "README.zh-CN.md", "docs/CODEX_CONNECT.md", "docs/CODEX_CONNECT.zh-CN.md", "docs/releases/0.1.0-beta.1.md", "packages/codex-connect/README.md"]) {
+  assert.match(await readFile(join(root, path), "utf8"), new RegExp(marketplaceCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(await readFile(join(root, path), "utf8"), new RegExp(pluginInstallCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+}
+assert.doesNotMatch(`${marketplaceCommand}\n${pluginInstallCommand}`, /gta_|Bearer|cookie|token=|password|client_secret/i);
+
+const webDomain = await readFile(join(root, "apps/web/src/domain.js"), "utf8");
+assert.match(webDomain, /@gatherthread\/codex-connect@0\.1\.0-beta\.1/);
 
 const installer = await readFile(join(root, "deploy/aliyun-ecs/install.sh"), "utf8");
 assert.match(installer, /release_version="0\.1\.0-beta\.1"/);

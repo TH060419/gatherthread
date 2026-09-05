@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
@@ -6,7 +5,7 @@ import { access, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { redactText } from "@gatherthread/adapters";
 import { LocalBridge } from "./bridge.js";
 import { CodexProjectHarness, codexSessionKey } from "./codex-app-server.js";
@@ -16,16 +15,21 @@ import {
   installCodexHookConfig,
   isAllowedCodexHookEvent,
   renderCodexHookConfig,
+  resolveCodexHookRelayPath,
+  resolveWorkspaceCodexHookPaths,
   updateCodexHookRegistry,
   type CodexHookEvent,
+  type CodexHookSource,
 } from "./codex-hooks.js";
 import { validateCodexWorkspace, type CodexSandboxMode } from "./codex-executor.js";
 import { FileCursorStore } from "./cursors.js";
-import { HttpCollaborationClient } from "./http-client.js";
+import { CollaborationHttpError, HttpCollaborationClient } from "./http-client.js";
+import { LocalConnectorApiRelayServer, resolveWorkspaceConnectorApiPath } from "./local-api-relay.js";
 import { withoutGatherThreadCredentials } from "./executor.js";
 import { ensureProjectWorkspace } from "./project-workspace.js";
 import type {
   ProjectHarnessAdapter,
+  ProjectHarnessDeactivationReason,
   ProjectHarnessSessionBinding,
 } from "./project-harness.js";
 import {
@@ -39,6 +43,8 @@ export {
 } from "./project-session-permissions.js";
 import type { CollaborationApi, HarnessExecutor, ProjectSummary, SessionSummary } from "./types.js";
 
+export { resolveCodexHookRelayPath, resolveWorkspaceCodexHookPaths };
+
 interface CodexConnectOptions {
   apiUrl: string;
   workspacePath: string;
@@ -51,6 +57,8 @@ interface CodexConnectOptions {
   shareToolEvents: boolean;
   resetCodexSession: boolean;
   installHooks: boolean;
+  pluginHooks: boolean;
+  preflightOnly: boolean;
 }
 
 export type CodexDesktopRevealResult =
@@ -87,6 +95,9 @@ const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const HELP = `GatherThread Codex connector
 
 Usage:
+  npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url <GatherThread URL> [options]
+
+Repository development / compatibility entry:
   npm run codex:connect -- --url <GatherThread URL> [options]
 
 Options:
@@ -102,6 +113,8 @@ Options:
   --no-share-tool-events   Share only the final Codex answer, not redacted tool events
   --reset-codex-session    Reset all local Codex App Server threads for this project binding
   --install-hooks          Enable trusted direct-desktop publishing via reviewed project hooks
+  --plugin-hooks           Enable the reviewed GatherThread plugin hooks without writing project config
+  --preflight-only         Validate server access, workspace, Codex login, and App Server, then exit
   --help                   Show this help
 
 The device access token is read from GATHERTHREAD_TOKEN when set. Otherwise it
@@ -130,13 +143,17 @@ export async function runCodexConnectCli(
   const actor = await api.getCurrentActor();
   const projects = (await api.listProjects()).filter((project) => project.state === "active");
   const selected = await selectProject(projects, parsed.projectId);
-  const workspacePath = parsed.createWorkspace
+  const requestedWorkspacePath = parsed.createWorkspace
     ? await ensureProjectWorkspace({
       apiUrl: parsed.apiUrl,
       projectId: selected.id,
       projectName: selected.name,
     })
     : parsed.workspacePath;
+  // Resolve symlinks before deriving any state, hook, or local-MCP endpoint.
+  // Codex itself reports the real workspace cwd, so every integration surface
+  // must use that same canonical root to find the connector from descendants.
+  const workspacePath = await validateCodexWorkspace(requestedWorkspacePath);
   const mappingId = createHash("sha256")
     .update([parsed.apiUrl, actor.deviceId, selected.id, path.resolve(workspacePath)].join("\0"))
     .digest("hex")
@@ -148,34 +165,62 @@ export async function runCodexConnectCli(
   // hooks.json stable for a workspace so switching GatherThread projects or
   // credentials does not silently invalidate the user's Codex approval.
   const { hookSocketPath, hookSpoolPath, hookRegistryPath } = resolveWorkspaceCodexHookPaths(workspacePath);
-  if (!parsed.installHooks) {
-    await mkdir(stateRoot, { recursive: true, mode: 0o700 });
-    await updateCodexHookRegistry({
-      registryPath: hookRegistryPath,
-      workspacePath: path.resolve(workspacePath),
-      clearThreads: true,
-      discoverUnregistered: false,
-    });
-    process.stdout.write("Desktop local-turn sync is disabled. Re-run with --install-hooks and approve the definition with /hooks to enable it.\n");
-  }
-  if (parsed.installHooks) {
-    const configPath = await installCodexHookConfig({
-      workspacePath,
-      config: renderCodexHookConfig({
-        hookScriptPath: fileURLToPath(new URL("./codex-hook.js", import.meta.url)),
-        socketPath: hookSocketPath,
-        spoolPath: hookSpoolPath,
-        registryPath: hookRegistryPath,
-      }),
-    });
-    process.stdout.write(`Installed GatherThread project hooks: ${configPath}\nOpen Codex Desktop Settings and enable Hooks, then review this exact generated file before use.\n`);
-  }
+  const hookMode: "disabled" | CodexHookSource = parsed.installHooks
+    ? "project"
+    : parsed.pluginHooks ? "plugin" : "disabled";
+  const hooksEnabled = hookMode !== "disabled";
 
   const shutdown = new AbortController();
   const stop = () => shutdown.abort(new Error("Codex connector shutdown requested"));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  const userApiRelay = new LocalConnectorApiRelayServer({
+    endpoint: resolveWorkspaceConnectorApiPath(workspacePath),
+    api,
+    projectId: selected.id,
+  });
   try {
+    await userApiRelay.start();
+    // Refuse a duplicate workspace connector before mutating any Hook source
+    // registry or project configuration. A failed second launch must leave the
+    // active connector's relay, capability, and trust selection untouched.
+    if (!hooksEnabled) {
+      await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+      await updateCodexHookRegistry({
+        registryPath: hookRegistryPath,
+        workspacePath: path.resolve(workspacePath),
+        clearThreads: true,
+        discoverUnregistered: false,
+        hookSource: "disabled",
+      });
+      process.stdout.write("Desktop local-turn sync is disabled. Re-run with --plugin-hooks after installing and reviewing the GatherThread plugin, or use --install-hooks for the project-hook compatibility path.\n");
+    }
+    if (hooksEnabled) {
+      // Set the source gate before Codex is opened. A trusted project Hook file
+      // may remain after switching modes, but it cannot share this relay with the
+      // plugin or create compatibility spool entries while plugin mode is active.
+      await updateCodexHookRegistry({
+        registryPath: hookRegistryPath,
+        workspacePath: path.resolve(workspacePath),
+        hookSource: hookMode,
+      });
+    }
+    if (parsed.installHooks) {
+      const configPath = await installCodexHookConfig({
+        workspacePath,
+        config: renderCodexHookConfig({
+          hookScriptPath: fileURLToPath(new URL("./codex-hook.js", import.meta.url)),
+          socketPath: hookSocketPath,
+          spoolPath: hookSpoolPath,
+          registryPath: hookRegistryPath,
+        }),
+      });
+      process.stdout.write(`Installed GatherThread project hooks: ${configPath}\nOpen Codex Desktop Settings and enable Hooks, then review this exact generated file before use.\n`);
+    }
+    if (parsed.pluginHooks) {
+      process.stdout.write("GatherThread plugin hook relay enabled. In Codex, review the plugin's UserPromptSubmit and Stop hooks with /hooks before trusting them.\n");
+    }
+    process.stdout.write("Local GatherThread MCP relay ready for this project; no device token is passed to Codex.\n");
     const harness = new CodexProjectHarness({
       workspacePath,
       stateRoot,
@@ -188,7 +233,7 @@ export async function runCodexConnectCli(
       shareToolEvents: parsed.shareToolEvents,
       signal: shutdown.signal,
       env,
-      ...(parsed.installHooks ? { hookRegistryPath, localTurnsEnabled: true } : { localTurnsEnabled: false }),
+      ...(hooksEnabled ? { hookRegistryPath, localTurnsEnabled: true } : { localTurnsEnabled: false }),
       revealThread: async (threadId) => {
         const revealed = await revealCodexDesktopThread({
           threadId,
@@ -196,7 +241,7 @@ export async function runCodexConnectCli(
           env,
         });
         if (revealed.status === "failed") {
-          process.stderr.write(`gatherthread-codex: ${safeError(new Error(
+          process.stderr.write(`gatherthread-codex: ${formatCodexConnectFailure(new Error(
             `Could not reveal the Desktop-owned Codex task (${revealed.error.message}); synchronization remains active and a connector restart can retry`,
           ), token)}\n`);
         }
@@ -207,6 +252,10 @@ export async function runCodexConnectCli(
       const preflight = await harness.preflight();
       process.stdout.write(`Codex App Server ready: ${oneLine(preflight.version)}; ${oneLine(preflight.authentication)}\n`);
       process.stdout.write(`Workspace: ${preflight.workspacePath}\n`);
+      if (parsed.preflightOnly) {
+        process.stdout.write("Preflight complete; no session runtime was registered and no Agent request was claimed.\n");
+        return;
+      }
       const desktopReveal = await revealCodexDesktopProject({
         enabled: parsed.createWorkspace,
         command: codexCommand,
@@ -214,7 +263,7 @@ export async function runCodexConnectCli(
         env,
       });
       if (desktopReveal.status === "opened") {
-        process.stdout.write(`Opened Codex Desktop project: ${safeError(new Error(preflight.workspacePath), token)}\n`);
+        process.stdout.write(`Opened Codex Desktop project: ${formatCodexConnectFailure(new Error(preflight.workspacePath), token)}\n`);
       } else if (desktopReveal.status === "failed") {
         process.stderr.write(`gatherthread-codex: ${formatCodexDesktopRevealWarning(
           desktopReveal.error,
@@ -240,12 +289,13 @@ export async function runCodexConnectCli(
         hookSpoolPath,
         hookRegistryPath,
         hookWorkspacePath: preflight.workspacePath,
-        hooksEnabled: parsed.installHooks,
+        hookMode,
       });
     } finally {
       await harness.close();
     }
   } finally {
+    await userApiRelay.close();
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
   }
@@ -403,7 +453,7 @@ async function launchCodexDesktopTarget(options: {
 }
 
 export function formatCodexDesktopRevealWarning(error: Error, workspacePath: string, token: string): string {
-  return safeError(new Error(
+  return formatCodexConnectFailure(new Error(
     `Could not open the Codex Desktop project (${error.message}); synchronization will continue. Open it manually: ${workspacePath}`,
   ), token);
 }
@@ -426,6 +476,8 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   let shareToolEvents = true;
   let resetCodexSession = false;
   let installHooks = false;
+  let pluginHooks = false;
+  let preflightOnly = false;
   let createWorkspace = false;
   let workspaceSpecified = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -441,6 +493,14 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
     }
     if (argument === "--install-hooks") {
       installHooks = true;
+      continue;
+    }
+    if (argument === "--plugin-hooks") {
+      pluginHooks = true;
+      continue;
+    }
+    if (argument === "--preflight-only") {
+      preflightOnly = true;
       continue;
     }
     if (argument === "--create-workspace") {
@@ -472,13 +532,21 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   if (createWorkspace && workspaceSpecified) {
     throw new Error("--create-workspace cannot be combined with --workspace");
   }
+  if (installHooks && pluginHooks) {
+    throw new Error("--install-hooks cannot be combined with --plugin-hooks");
+  }
   if (!model.trim() || model.length > 200 || model.startsWith("-") || /[\0\r\n]/.test(model)) {
     throw new Error("--model must be a valid non-empty model identifier");
   }
   if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 4_096 || contextWindowTokens > 2_000_000) {
     throw new Error("--context-window-tokens must be an integer from 4096 to 2000000");
   }
-  if (!codexCommand.trim()) throw new Error("--codex-command must be non-empty");
+  if (!codexCommand.trim() || codexCommand.length > 4_096 || /[\0\r\n]/.test(codexCommand)) {
+    throw new Error("--codex-command must be a valid non-empty Codex command or path");
+  }
+  if (projectId !== undefined && !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(projectId)) {
+    throw new Error("--project must be a valid GatherThread project ID");
+  }
   return {
     apiUrl: normalizeApiUrl(url),
     workspacePath: path.resolve(workspacePath),
@@ -491,6 +559,8 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
     shareToolEvents,
     resetCodexSession,
     installHooks,
+    pluginHooks,
+    preflightOnly,
   };
 }
 
@@ -684,15 +754,17 @@ export async function runProjectConnector(options: {
   hookSpoolPath: string;
   hookRegistryPath: string;
   hookWorkspacePath: string;
-  hooksEnabled: boolean;
+  hookMode: "disabled" | CodexHookSource;
   hookRelay?: Pick<CodexHookRelayServer, "start" | "close">;
 }): Promise<void> {
+  const hooksEnabled = options.hookMode !== "disabled";
+  const projectHookSpoolEnabled = options.hookMode === "project";
   const managed = new Map<string, ManagedSession>();
   const discoveries = new Map<string, Promise<ManagedSession>>();
   const discoverySessionIds = new Set<string>();
   const retryReporter = new ConnectorRetryReporter({ token: options.token });
   const setDiscoveryPermission = async (enabled: boolean) => {
-    if (!options.hooksEnabled) return;
+    if (!hooksEnabled) return;
     await updateCodexHookRegistry({
       registryPath: options.hookRegistryPath,
       workspacePath: path.resolve(options.hookWorkspacePath),
@@ -772,22 +844,24 @@ export async function runProjectConnector(options: {
     }
     throw new Error("Codex hook event does not match an active GatherThread session binding");
   };
-  const relay = options.hooksEnabled
+  const relay = hooksEnabled
     ? options.hookRelay ?? new CodexHookRelayServer({
       socketPath: options.hookSocketPath,
+      hookSource: options.hookMode === "disabled" ? "project" : options.hookMode,
       onEvent: async (event) => {
         if (!await isAllowedCodexHookEvent(options.hookRegistryPath, event)) return {};
         return dispatchHook(event, false);
       },
     })
     : undefined;
-  if (options.hooksEnabled) {
+  if (hooksEnabled) {
     const currentProject = (await options.api.listProjects()).find((candidate) => candidate.id === options.project.id);
     if (!currentProject) throw new Error("GatherThread project access was revoked before Hook discovery activation");
     await updateCodexHookRegistry({
       registryPath: options.hookRegistryPath,
       workspacePath: path.resolve(options.hookWorkspacePath),
       discoverUnregistered: currentProject.role !== "viewer",
+      hookSource: options.hookMode,
     });
   }
   await relay?.start();
@@ -810,7 +884,7 @@ export async function runProjectConnector(options: {
         visibleSessions = refresh.visibleSessions;
         eligibleSessions = refresh.eligibleSessions;
         authoritativeAclLoaded = true;
-        if (options.hooksEnabled) {
+        if (hooksEnabled) {
           try {
             const currentProject = (await options.api.listProjects()).find((candidate) => candidate.id === options.project.id);
             await setDiscoveryPermission(currentProject !== undefined && currentProject.role !== "viewer");
@@ -833,7 +907,7 @@ export async function runProjectConnector(options: {
           await current.deactivateLocalPublishing?.("project_inaccessible").catch(() => undefined);
         }
         await options.harness.deactivateExecutionBindings?.().catch(() => undefined);
-        if (options.hooksEnabled) {
+        if (projectHookSpoolEnabled) {
           await drainCodexHookSpool(options.hookSpoolPath, async () => undefined).catch(() => undefined);
         }
         throw new Error("GatherThread project access was revoked; local execution publishing has been disabled", { cause: refresh.error });
@@ -887,7 +961,7 @@ export async function runProjectConnector(options: {
       }
       nextSnapshotPollAt = Date.now() + 5_000;
     }
-    if (options.hooksEnabled) {
+    if (projectHookSpoolEnabled) {
       try {
         await drainCodexHookSpool(options.hookSpoolPath, async (event) => {
           if (authoritativeAclLoaded && !await isAllowedCodexHookEvent(options.hookRegistryPath, event)) return;
@@ -928,7 +1002,7 @@ export class ConnectorRetryReporter {
   }
 
   retrying(scope: string, error: unknown): void {
-    const message = safeError(error, this.#token);
+    const message = formatCodexConnectFailure(error, this.#token);
     const now = this.#now();
     const previous = this.#failures.get(scope);
     if (!previous || previous.message !== message || now - previous.lastReportedAt >= this.#intervalMs) {
@@ -943,17 +1017,14 @@ export class ConnectorRetryReporter {
   }
 }
 
-export function resolveCodexHookRelayPath(
-  mappingId: string,
-  stateRoot: string,
-  platform: NodeJS.Platform = process.platform,
-): string {
-  if (!/^[a-f0-9]{24}$/.test(mappingId)) {
-    throw new Error("Codex project mapping ID must contain exactly 24 lowercase hexadecimal characters");
-  }
-  return platform === "win32"
-    ? `\\\\.\\pipe\\gatherthread-${mappingId}-hook-relay`
-    : path.posix.join(stateRoot, "hook-relay.sock");
+function deactivationReason(session: SessionSummary | undefined): ProjectHarnessDeactivationReason {
+  if (!session) return "removed";
+  if (session.state === "archived") return "archived";
+  return "read_only";
+}
+
+function isProjectAccessRevoked(error: unknown): error is CollaborationHttpError {
+  return error instanceof CollaborationHttpError && (error.status === 403 || error.status === 404);
 }
 
 export async function resolveCodexCommand(
@@ -1013,24 +1084,6 @@ export async function resolveCodexCommand(
     }
   }
   return command;
-}
-
-export function resolveWorkspaceCodexHookPaths(
-  workspacePath: string,
-  homeDirectory = homedir(),
-  platform: NodeJS.Platform = process.platform,
-): { hookSocketPath: string; hookSpoolPath: string; hookRegistryPath: string } {
-  const resolvedWorkspace = path.resolve(workspacePath);
-  const hookId = createHash("sha256")
-    .update(platform === "win32" ? resolvedWorkspace.toLowerCase() : resolvedWorkspace)
-    .digest("hex")
-    .slice(0, 24);
-  const hookStateRoot = path.join(homeDirectory, ".gatherthread", "codex", "hooks", hookId);
-  return {
-    hookSocketPath: resolveCodexHookRelayPath(hookId, hookStateRoot, platform),
-    hookSpoolPath: path.join(hookStateRoot, "hook-outbox.jsonl"),
-    hookRegistryPath: path.join(hookStateRoot, "hook-registry.json"),
-  };
 }
 
 export function waitForConnectorPoll(milliseconds: number, signal: AbortSignal): Promise<void> {
@@ -1108,20 +1161,24 @@ function readSecret(label: string): Promise<string> {
   });
 }
 
-function safeError(error: unknown, token: string): string {
+export function formatCodexConnectFailure(error: unknown, token: string): string {
   const message = error instanceof Error ? error.message : "Codex connector failed";
   const withoutToken = token ? message.replaceAll(token, "[REDACTED]") : message;
   return redactText(withoutToken.replace(/[\r\n]+/g, " "));
 }
 
-function oneLine(value: string): string {
-  return value.replace(/[\r\n]+/g, " ").trim();
+export async function runCodexConnectMain(
+  argv: readonly string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  try {
+    await runCodexConnectCli(argv, env);
+  } catch (error) {
+    process.stderr.write(`gatherthread-codex: ${formatCodexConnectFailure(error, env.GATHERTHREAD_TOKEN ?? "")}\n`);
+    process.exitCode = 1;
+  }
 }
 
-const entryPoint = process.argv[1];
-if (entryPoint && import.meta.url === pathToFileURL(path.resolve(entryPoint)).href) {
-  runCodexConnectCli().catch((error) => {
-    process.stderr.write(`gatherthread-codex: ${safeError(error, process.env.GATHERTHREAD_TOKEN ?? "")}\n`);
-    process.exitCode = 1;
-  });
+function oneLine(value: string): string {
+  return value.replace(/[\r\n]+/g, " ").trim();
 }

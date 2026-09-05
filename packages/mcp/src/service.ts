@@ -31,9 +31,24 @@ export interface CollaborationMcpServiceOptions {
   serverName?: string;
   serverVersion?: string;
   allowProviderRequestCapture?: boolean;
+  toolProfile?: "user" | "runtime";
 }
 
-const TOOL_DEFINITIONS = [
+const READ_ONLY_TOOL_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const MUTATING_TOOL_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+const USER_TOOL_DEFINITIONS = [
   tool("collaboration_list_projects", "List collaboration projects visible to the authenticated user", {}),
   tool("collaboration_list_project_sessions", "List sessions in one visible collaboration project", {
     project_id: stringSchema("Project identifier"),
@@ -49,13 +64,19 @@ const TOOL_DEFINITIONS = [
     content: stringSchema("Visible chat content"),
     idempotency_key: idempotencySchema(),
     reply_to: stringSchema("Optional event ID being replied to"),
-  }, ["session_id", "content", "idempotency_key"]),
-  tool("collaboration_request_agent", "Append an agent request routed to the initiating user's runtime", {
+  }, ["session_id", "content", "idempotency_key"], MUTATING_TOOL_ANNOTATIONS),
+  tool("collaboration_request_agent", "Mutating remote operation that requests an Agent run and may consume compute or other resources", {
     session_id: stringSchema("Session identifier"),
     content: stringSchema("Visible agent request"),
     idempotency_key: idempotencySchema(),
     reply_to: stringSchema("Optional event ID being replied to"),
-  }, ["session_id", "content", "idempotency_key"]),
+  }, ["session_id", "content", "idempotency_key"], MUTATING_TOOL_ANNOTATIONS),
+  tool("collaboration_get_connection_status", "Show sanitized connector presence for sessions in one visible project", {
+    project_id: stringSchema("Project identifier"),
+  }, ["project_id"]),
+] as const;
+
+const RUNTIME_TOOL_DEFINITIONS = [
   tool("collaboration_register_runtime", "Register a local Codex or Claude Code runtime", {
     session_id: stringSchema("Session identifier"),
     device_id: stringSchema("Stable local device identifier"),
@@ -65,19 +86,19 @@ const TOOL_DEFINITIONS = [
     local_session_id: stringSchema("Local harness session identifier"),
     capture_fidelity: enumSchema(["canonical_history", "harness_transcript", "provider_request"]),
     capabilities: { type: "array", items: { type: "string" } },
-  }, ["session_id", "device_id", "harness", "provider", "model", "local_session_id", "capture_fidelity"]),
+  }, ["session_id", "device_id", "harness", "provider", "model", "local_session_id", "capture_fidelity"], MUTATING_TOOL_ANNOTATIONS),
   tool("collaboration_claim_agent_request", "Claim an eligible agent request for a registered runtime", {
     session_id: stringSchema("Session identifier"),
     request_id: stringSchema("Agent request event ID"),
     runtime_id: stringSchema("Registered runtime ID"),
-  }, ["session_id", "request_id", "runtime_id"]),
+  }, ["session_id", "request_id", "runtime_id"], MUTATING_TOOL_ANNOTATIONS),
   tool("collaboration_complete_agent_request", "Complete a claimed request with one canonical agent response", {
     session_id: stringSchema("Session identifier"),
     request_id: stringSchema("Agent request event ID"),
     runtime_id: stringSchema("Registered runtime ID"),
     idempotency_key: idempotencySchema(),
     payload: {},
-  }, ["session_id", "request_id", "runtime_id", "idempotency_key", "payload"]),
+  }, ["session_id", "request_id", "runtime_id", "idempotency_key", "payload"], MUTATING_TOOL_ANNOTATIONS),
   tool("collaboration_upload_context_snapshot", "Upload an explicitly fidelity-labelled and redacted context snapshot", {
     session_id: stringSchema("Session identifier"),
     capture_fidelity: enumSchema(["canonical_history", "harness_transcript", "provider_request"]),
@@ -88,7 +109,7 @@ const TOOL_DEFINITIONS = [
     exact_provider_request: { type: "boolean" },
     observed_by: enumSchema(["harness_hook", "authorized_proxy"]),
     runtime_id: stringSchema("Runtime that observed the snapshot"),
-  }, ["session_id", "capture_fidelity", "content"]),
+  }, ["session_id", "capture_fidelity", "content"], MUTATING_TOOL_ANNOTATIONS),
 ] as const;
 
 export class CollaborationMcpService {
@@ -96,12 +117,18 @@ export class CollaborationMcpService {
   readonly #serverName: string;
   readonly #serverVersion: string;
   readonly #allowProviderRequestCapture: boolean;
+  readonly #toolProfile: "user" | "runtime";
+  readonly #toolDefinitions: readonly (typeof USER_TOOL_DEFINITIONS[number] | typeof RUNTIME_TOOL_DEFINITIONS[number])[];
+  readonly #toolNames: ReadonlySet<string>;
 
   constructor(options: CollaborationMcpServiceOptions) {
     this.#api = options.api;
     this.#serverName = options.serverName ?? "gatherthread";
     this.#serverVersion = options.serverVersion ?? "0.1.0";
     this.#allowProviderRequestCapture = options.allowProviderRequestCapture === true;
+    this.#toolProfile = options.toolProfile ?? "user";
+    this.#toolDefinitions = this.#toolProfile === "runtime" ? RUNTIME_TOOL_DEFINITIONS : USER_TOOL_DEFINITIONS;
+    this.#toolNames = new Set(this.#toolDefinitions.map(({ name }) => name));
   }
 
   async handle(input: unknown): Promise<JsonRpcResponse | undefined> {
@@ -118,7 +145,7 @@ export class CollaborationMcpService {
       const result = await this.#dispatch(request.method, request.params);
       return { jsonrpc: "2.0", id: request.id ?? null, result };
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown MCP error";
+      const message = redactText(error instanceof Error ? error.message : "Unknown MCP error");
       const code = error instanceof MethodNotFoundError ? -32601 : -32602;
       return failure(request.id ?? null, code, message);
     }
@@ -133,12 +160,19 @@ export class CollaborationMcpService {
       };
     }
     if (method === "ping") return {};
-    if (method === "tools/list") return { tools: TOOL_DEFINITIONS };
-    if (method === "resources/list") return { resources: await this.#listResources() };
-    if (method === "resources/read") return this.#readResource(requiredString(requiredObject(params), "uri"));
+    if (method === "tools/list") return { tools: this.#toolDefinitions };
+    if (method === "resources/list") {
+      return { resources: this.#toolProfile === "user" ? await this.#listResources() : [] };
+    }
+    if (method === "resources/read") {
+      if (this.#toolProfile !== "user") throw new MethodNotFoundError("Method not found: resources/read");
+      return this.#readResource(requiredString(requiredObject(params), "uri"));
+    }
     if (method === "tools/call") {
       const input = requiredObject(params);
-      return this.#callTool(requiredString(input, "name"), optionalObject(input.arguments));
+      const name = requiredString(input, "name");
+      if (!this.#toolNames.has(name)) throw new MethodNotFoundError(`Unknown tool: ${name}`);
+      return this.#callTool(name, optionalObject(input.arguments));
     }
     throw new MethodNotFoundError(`Method not found: ${method}`);
   }
@@ -168,6 +202,9 @@ export class CollaborationMcpService {
       case "collaboration_request_agent":
         result = await this.#appendVisibleMessage(args, "agent_request");
         break;
+      case "collaboration_get_connection_status":
+        result = await this.#connectionStatus(requiredString(args, "project_id"));
+        break;
       case "collaboration_register_runtime":
         result = await this.#api.registerRuntime(runtimeInput(args));
         break;
@@ -196,6 +233,28 @@ export class CollaborationMcpService {
         throw new MethodNotFoundError(`Unknown tool: ${name}`);
     }
     return toolResult(result);
+  }
+
+  async #connectionStatus(projectId: string): Promise<unknown> {
+    const projects = await this.#requireProjectApi("listProjects")();
+    const project = projects.find((candidate) => candidate.id === projectId);
+    if (!project) throw new Error("The requested project is unavailable for this user");
+    const listMembers = this.#api.listSessionMembers;
+    if (!listMembers) throw new Error("The configured collaboration API does not support listSessionMembers");
+    const sessions = await this.#requireProjectApi("listProjectSessions")(projectId);
+    return {
+      project: { id: project.id, name: project.name, role: project.role, state: project.state },
+      sessions: await Promise.all(sessions.map(async (session) => ({
+        id: session.id,
+        name: session.name,
+        mode: session.mode,
+        members: (await listMembers.call(this.#api, session.id)).map((member) => ({
+          displayName: member.displayName,
+          role: member.role,
+          runtime: member.runtime,
+        })),
+      }))),
+    };
   }
 
   async #appendVisibleMessage(
@@ -313,11 +372,13 @@ function tool(
   description: string,
   properties: Record<string, unknown>,
   required: readonly string[] = [],
+  annotations: typeof READ_ONLY_TOOL_ANNOTATIONS | typeof MUTATING_TOOL_ANNOTATIONS = READ_ONLY_TOOL_ANNOTATIONS,
 ) {
   return {
     name,
     description,
     inputSchema: { type: "object", properties, required, additionalProperties: false },
+    annotations,
   };
 }
 

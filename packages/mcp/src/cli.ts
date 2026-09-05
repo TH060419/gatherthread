@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import {
   HttpCollaborationClient,
+  LocalConnectorCollaborationClient,
   booleanEnv,
   loadGatherThreadConnectionConfig,
 } from "@gatherthread/bridge";
@@ -8,20 +9,19 @@ import { CollaborationMcpService } from "./service.js";
 import { StdioMcpServer } from "./stdio.js";
 
 export async function runMcpCli(env: NodeJS.ProcessEnv = process.env): Promise<void> {
-  const config = loadGatherThreadConnectionConfig(env);
   const shutdown = new AbortController();
   const stop = () => shutdown.abort(new Error("MCP shutdown requested"));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
   try {
-    const api = new HttpCollaborationClient({
-      baseUrl: config.apiUrl,
-      bearerToken: config.bearerToken,
-      requestTimeoutMs: config.requestTimeoutMs,
-      signal: shutdown.signal,
-    });
+    const profile = toolProfileEnv(env);
+    const transport = mcpTransportEnv(env, profile);
+    const api = transport === "connector"
+      ? new LocalConnectorCollaborationClient({ workspacePath: process.cwd() })
+      : httpClientFromEnvironment(env, shutdown.signal);
     const service = new CollaborationMcpService({
       api,
+      toolProfile: profile,
       allowProviderRequestCapture: booleanEnv(
         env,
         "GATHERTHREAD_ALLOW_PROVIDER_REQUEST_CAPTURE",
@@ -36,6 +36,39 @@ export async function runMcpCli(env: NodeJS.ProcessEnv = process.env): Promise<v
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
   }
+}
+
+function httpClientFromEnvironment(env: NodeJS.ProcessEnv, signal: AbortSignal): HttpCollaborationClient {
+  const config = loadGatherThreadConnectionConfig(env);
+  return new HttpCollaborationClient({
+    baseUrl: config.apiUrl,
+    bearerToken: config.bearerToken,
+    requestTimeoutMs: config.requestTimeoutMs,
+    signal,
+  });
+}
+
+export function mcpTransportEnv(
+  env: NodeJS.ProcessEnv,
+  profile: "user" | "runtime",
+): "connector" | "server-env" {
+  const transport = env.GATHERTHREAD_MCP_TRANSPORT?.trim()
+    || (profile === "runtime" ? "server-env" : "connector");
+  if (transport !== "connector" && transport !== "server-env") {
+    throw new Error("GATHERTHREAD_MCP_TRANSPORT must be connector or server-env");
+  }
+  if (profile === "runtime" && transport !== "server-env") {
+    throw new Error("The runtime MCP profile requires the server-env transport");
+  }
+  return transport;
+}
+
+export function toolProfileEnv(env: NodeJS.ProcessEnv): "user" | "runtime" {
+  const profile = env.GATHERTHREAD_MCP_TOOL_PROFILE?.trim() || "user";
+  if (profile !== "user" && profile !== "runtime") {
+    throw new Error("GATHERTHREAD_MCP_TOOL_PROFILE must be user or runtime");
+  }
+  return profile;
 }
 
 function integerEnv(env: NodeJS.ProcessEnv, name: string, fallback: number): number {

@@ -1,10 +1,12 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { appendFile, chmod, link, lstat, mkdir, open, readFile, readdir, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { appendFile, chmod, link, lstat, mkdir, open, readFile, readdir, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import net from "node:net";
+import { homedir } from "node:os";
 import path from "node:path";
 
 export type CodexHookEvent = CodexUserPromptHookEvent | CodexStopHookEvent;
+export type CodexHookSource = "project" | "plugin";
 
 export interface CodexUserPromptHookEvent {
   hook_event_name: "UserPromptSubmit";
@@ -33,6 +35,7 @@ export interface CodexHookRelayResult {
 
 export interface CodexHookRelayServerOptions {
   socketPath: string;
+  hookSource?: CodexHookSource;
   platform?: NodeJS.Platform;
   serverFactory?: (connectionListener: (socket: net.Socket) => void) => net.Server;
   maxMessageBytes?: number;
@@ -108,7 +111,12 @@ export class CodexHookRelayServer {
       void (async () => {
         let event: CodexHookEvent;
         try {
-          event = validateCodexHookEvent(JSON.parse(buffer.toString("utf8")));
+          const envelope = validateCodexHookRelayEnvelope(JSON.parse(buffer.toString("utf8")));
+          if (envelope.source !== (this.#options.hookSource ?? "project")) {
+            socket.end("{}\n");
+            return;
+          }
+          event = envelope.event;
         } catch {
           socket.end("{}\n");
           return;
@@ -244,17 +252,36 @@ export async function runCodexHookForwarder(input: {
 }): Promise<void> {
   const raw = await readStream(input.stdin ?? process.stdin, input.maxMessageBytes ?? 1024 * 1024);
   const event = validateCodexHookEvent(JSON.parse(raw));
+  await forwardValidatedCodexHookEvent(event, input);
+}
+
+async function forwardValidatedCodexHookEvent(event: CodexHookEvent, input: {
+  socketPath: string;
+  spoolPath: string;
+  registryPath: string;
+  stdout?: NodeJS.WritableStream | undefined;
+  maxMessageBytes?: number | undefined;
+  maxSpoolBytes?: number | undefined;
+  maxSpoolEntries?: number | undefined;
+}): Promise<void> {
   // A newly discovered MULTI session can fire its first Desktop hook while the
   // connector is atomically activating the execution allowlist entry. Retry
   // that narrow transition instead of reporting a misleading successful `{}`.
-  if (!await waitForAllowedCodexHookEvent(input.registryPath, event)) {
+  if (!await waitForAllowedCodexHookEvent(input.registryPath, event, "project")) {
     (input.stdout ?? process.stdout).write("{}\n");
     return;
   }
   let relay: CodexHookRelayResult = {};
   try {
-    relay = await sendRelay(input.socketPath, event, input.maxMessageBytes ?? 1024 * 1024);
+    relay = await sendRelay(input.socketPath, event, input.maxMessageBytes ?? 1024 * 1024, "project");
   } catch {
+    // A persisted project Hook may still be trusted after the user switches to
+    // plugin Hooks. Source mode is authoritative: do not turn the stale project
+    // invocation into a duplicate offline event during or after that switch.
+    if (!await isCodexHookSourceEnabled(input.registryPath, "project")) {
+      (input.stdout ?? process.stdout).write("{}\n");
+      return;
+    }
     await appendCodexHookSpool(input.spoolPath, event, {
       maxBytes: input.maxSpoolBytes,
       maxEntries: input.maxSpoolEntries,
@@ -266,9 +293,46 @@ export async function runCodexHookForwarder(input: {
   (input.stdout ?? process.stdout).write(`${JSON.stringify(output)}\n`);
 }
 
-async function waitForAllowedCodexHookEvent(registryPath: string, event: CodexHookEvent): Promise<boolean> {
+export function resolveWorkspaceCodexHookPaths(
+  workspacePath: string,
+  homeDirectory = homedir(),
+  platform: NodeJS.Platform = process.platform,
+): { hookSocketPath: string; hookSpoolPath: string; hookRegistryPath: string } {
+  const resolvedWorkspace = path.resolve(workspacePath);
+  const hookId = createHash("sha256")
+    .update(platform === "win32" ? resolvedWorkspace.toLowerCase() : resolvedWorkspace)
+    .digest("hex")
+    .slice(0, 24);
+  const hookStateRoot = path.join(homeDirectory, ".gatherthread", "codex", "hooks", hookId);
+  return {
+    hookSocketPath: resolveCodexHookRelayPath(hookId, hookStateRoot, platform),
+    hookSpoolPath: path.join(hookStateRoot, "hook-outbox.jsonl"),
+    hookRegistryPath: path.join(hookStateRoot, "hook-registry.json"),
+  };
+}
+
+export function resolveCodexHookRelayPath(
+  mappingId: string,
+  stateRoot: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (!/^[a-f0-9]{24}$/.test(mappingId)) {
+    throw new Error("Codex project mapping ID must contain exactly 24 lowercase hexadecimal characters");
+  }
+  return platform === "win32"
+    ? `\\\\.\\pipe\\gatherthread-${mappingId}-hook-relay`
+    : path.posix.join(stateRoot, "hook-relay.sock");
+}
+
+async function waitForAllowedCodexHookEvent(
+  registryPath: string,
+  event: CodexHookEvent,
+  source: CodexHookSource,
+): Promise<boolean> {
   for (let attempt = 0; attempt < 6; attempt += 1) {
-    if (await isAllowedCodexHookEvent(registryPath, event)) return true;
+    const activeSource = await readCodexHookSource(registryPath);
+    if (activeSource !== undefined && activeSource !== source) return false;
+    if (activeSource === source && await isAllowedCodexHookEvent(registryPath, event)) return true;
     if (attempt < 5) await new Promise<void>((resolve) => setTimeout(resolve, 40));
   }
   return false;
@@ -279,6 +343,7 @@ interface CodexHookRegistry {
   workspacePath: string;
   threads: Record<string, "execution" | "snapshot_connector" | "background_execution">;
   discoverUnregistered?: boolean;
+  hookSource?: "disabled" | CodexHookSource;
 }
 
 const REGISTRY_WRITERS = new Map<string, Promise<void>>();
@@ -291,6 +356,7 @@ export async function updateCodexHookRegistry(input: {
   remove?: readonly string[];
   removePurpose?: "execution" | "snapshot_connector" | "background_execution";
   discoverUnregistered?: boolean;
+  hookSource?: "disabled" | CodexHookSource;
 }): Promise<void> {
   const key = path.resolve(input.registryPath);
   const previous = REGISTRY_WRITERS.get(key) ?? Promise.resolve();
@@ -311,6 +377,7 @@ async function updateCodexHookRegistryFile(input: {
   remove?: readonly string[];
   removePurpose?: "execution" | "snapshot_connector" | "background_execution";
   discoverUnregistered?: boolean;
+  hookSource?: "disabled" | CodexHookSource;
 }): Promise<void> {
   let registry: CodexHookRegistry = { version: 1, workspacePath: path.resolve(input.workspacePath), threads: {} };
   try {
@@ -333,6 +400,7 @@ async function updateCodexHookRegistryFile(input: {
   if (input.discoverUnregistered !== undefined) {
     registry.discoverUnregistered = input.discoverUnregistered;
   }
+  if (input.hookSource !== undefined) registry.hookSource = input.hookSource;
   await preparePrivateDirectory(
     path.dirname(input.registryPath),
     "Codex hook registry directory must be private (mode 0700 or stricter)",
@@ -668,7 +736,12 @@ function positiveInteger(value: number, label: string): number {
   return value;
 }
 
-async function sendRelay(socketPath: string, event: CodexHookEvent, maxBytes: number): Promise<CodexHookRelayResult> {
+async function sendRelay(
+  socketPath: string,
+  event: CodexHookEvent,
+  maxBytes: number,
+  source: CodexHookSource,
+): Promise<CodexHookRelayResult> {
   return new Promise((resolve, reject) => {
     const socket = net.createConnection(socketPath);
     let buffer = Buffer.alloc(0);
@@ -683,7 +756,7 @@ async function sendRelay(socketPath: string, event: CodexHookEvent, maxBytes: nu
       buffer = Buffer.concat([buffer, chunk]);
       if (buffer.length > maxBytes) socket.destroy(new Error("Codex hook relay response exceeded its limit"));
     });
-    socket.once("connect", () => socket.write(`${JSON.stringify(event)}\n`));
+    socket.once("connect", () => socket.write(`${JSON.stringify({ source, event })}\n`));
     socket.once("end", () => {
       if (settled) return;
       try {
@@ -744,7 +817,7 @@ function requiredBoundedLabel(value: unknown, field: string, maxLength: number):
 export async function isAllowedCodexHookEvent(registryPath: string, event: CodexHookEvent): Promise<boolean> {
   try {
     const registry = JSON.parse(await readFile(registryPath, "utf8")) as unknown;
-    if (!isHookRegistry(registry) || path.resolve(event.cwd) !== registry.workspacePath) return false;
+    if (!isHookRegistry(registry) || !await isWorkspacePathOrDescendant(event.cwd, registry.workspacePath)) return false;
     const purpose = registry.threads[event.session_id];
     return purpose === "execution" || (purpose === undefined && registry.discoverUnregistered === true);
   } catch {
@@ -752,12 +825,65 @@ export async function isAllowedCodexHookEvent(registryPath: string, event: Codex
   }
 }
 
+export async function isCodexHookSourceEnabled(
+  registryPath: string,
+  source: CodexHookSource,
+): Promise<boolean> {
+  return await readCodexHookSource(registryPath) === source;
+}
+
+async function readCodexHookSource(registryPath: string): Promise<"disabled" | CodexHookSource | undefined> {
+  try {
+    const registry = JSON.parse(await readFile(registryPath, "utf8")) as unknown;
+    if (!isHookRegistry(registry)) return undefined;
+    // Registries created before source isolation belong to the compatibility
+    // project Hook. They must never implicitly authorize the newer plugin Hook.
+    return registry.hookSource ?? "project";
+  } catch {
+    return undefined;
+  }
+}
+
+async function isWorkspacePathOrDescendant(candidatePath: string, workspacePath: string): Promise<boolean> {
+  const lexicalWorkspace = path.resolve(workspacePath);
+  let resolvedWorkspace = lexicalWorkspace;
+  let workspaceExists = false;
+  try {
+    resolvedWorkspace = await realpath(lexicalWorkspace);
+    workspaceExists = true;
+  } catch {
+    // Older isolated fixtures may use a virtual workspace. A live connector
+    // always registers an existing canonical directory.
+  }
+  let resolvedCandidate: string;
+  try {
+    resolvedCandidate = await realpath(path.resolve(candidatePath));
+  } catch {
+    if (workspaceExists) return false;
+    resolvedCandidate = path.resolve(candidatePath);
+  }
+  const relative = path.relative(resolvedWorkspace, resolvedCandidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 function isHookRegistry(value: unknown): value is CodexHookRegistry {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
   if (input.version !== 1 || typeof input.workspacePath !== "string" || !input.threads || typeof input.threads !== "object" || Array.isArray(input.threads)) return false;
   if (input.discoverUnregistered !== undefined && typeof input.discoverUnregistered !== "boolean") return false;
+  if (input.hookSource !== undefined
+    && input.hookSource !== "disabled" && input.hookSource !== "project" && input.hookSource !== "plugin") return false;
   return Object.values(input.threads as Record<string, unknown>).every((purpose) =>
     purpose === "execution" || purpose === "snapshot_connector" || purpose === "background_execution",
   );
+}
+
+function validateCodexHookRelayEnvelope(value: unknown): { source: CodexHookSource; event: CodexHookEvent } {
+  const input = requiredObject(value);
+  if ((input.source === "project" || input.source === "plugin") && input.event !== undefined) {
+    return { source: input.source, event: validateCodexHookEvent(input.event) };
+  }
+  // Existing installed project forwarders sent the event as the top-level
+  // payload. Preserve their compatibility, but classify them as project-only.
+  return { source: "project", event: validateCodexHookEvent(value) };
 }

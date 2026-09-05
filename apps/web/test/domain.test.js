@@ -30,15 +30,19 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
     baseUrl: "https://gatherthread.example/v1",
     projectId: "project-alpha_1",
   });
-  assert.match(commands.posix, /^npm run codex:connect -- /);
-  assert.match(commands.powershell, /^npm\.cmd run codex:connect -- /);
+  assert.equal(
+    commands.posix,
+    "npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace",
+  );
+  assert.equal(
+    commands.powershell,
+    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-beta.1 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace",
+  );
   for (const command of Object.values(commands)) {
     assert.match(command, /--url 'https:\/\/gatherthread\.example\/v1'/);
     assert.match(command, /--project 'project-alpha_1'/);
-    assert.match(command, /--model 'gpt-5\.6-sol'/);
-    assert.match(command, /--context-window-tokens 128000/);
     assert.match(command, /--create-workspace/);
-    assert.match(command, /--install-hooks/);
+    assert.doesNotMatch(command, /--model|--context-window-tokens|--install-hooks/);
     assert.doesNotMatch(command, /access[-_ ]?token|Bearer|cookie|password/i);
   }
   assert.throws(() => projectCodexConnectionCommands({
@@ -57,19 +61,33 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
     baseUrl: "https://gatherthread.example?device_token=secret",
     projectId: "project-alpha",
   }), /URL is not safe/);
+  assert.throws(() => projectCodexConnectionCommands({
+    baseUrl: "https://gatherthread.example/untrusted-path",
+    projectId: "project-alpha",
+  }), /URL is not safe/);
 
   const quoted = projectCodexConnectionCommands({
     baseUrl: "http://localhost:4317/",
     projectId: "project-alpha",
     model: "gpt-'preview",
+    contextWindowTokens: 257_000,
   });
   assert.match(quoted.posix, /--model 'gpt-'"'"'preview'/);
   assert.match(quoted.powershell, /--model 'gpt-''preview'/);
+  assert.match(quoted.posix, /--context-window-tokens 257000/);
+  assert.match(quoted.powershell, /--context-window-tokens 257000/);
   assert.throws(() => projectCodexConnectionCommands({
     baseUrl: "https://gatherthread.example",
     projectId: "project-alpha",
     contextWindowTokens: 3,
   }), /context window is not safe/);
+  for (const model of ["   ", "--dangerous-model-option"]) {
+    assert.throws(() => projectCodexConnectionCommands({
+      baseUrl: "https://gatherthread.example",
+      projectId: "project-alpha",
+      model,
+    }), /model is not safe/);
+  }
 });
 
 const currentUser = { id: "u1", username: "User One" };

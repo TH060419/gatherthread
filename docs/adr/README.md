@@ -21,3 +21,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0015](0015-create-personal-solos-from-first-local-prompt.md) | Create creator-owned Solo sessions from the first local prompt | accepted | 2026-08-26 |
 | [0016](0016-independent-cloud-and-local-session-titles.md) | Keep cloud and local session titles independent | accepted | 2026-08-28 |
 | [0017](0017-private-connection-profiles.md) | Support local, private LAN, and tailnet connection profiles | accepted | 2026-08-30 |
+| [0018](0018-unified-codex-plugin-and-connector.md) | Pair a Codex plugin with the persistent npm connector | accepted | 2026-09-06 |

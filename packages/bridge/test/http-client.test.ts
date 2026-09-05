@@ -12,6 +12,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     { data: { id: "u1", username: "Alice", device_id: "device-1" } },
     { data: { projects: [{ id: "p1", title: "Demo project", state: "active", role: "owner", session_count: 1, created_at: "2026-08-25T00:00:00.000Z", updated_at: "2026-08-25T00:00:00.000Z" }] } },
     { data: { sessions: [{ id: "s1", project_id: "p1", title: "Demo", mode: "multi", state: "active", role: "owner", current_sequence: 2, updated_at: "2026-08-25T00:00:00.000Z" }] } },
+    { data: { members: [{ user_id: "u1", display_name: "Alice", role: "owner", runtime: { id: "r1", device_id: "private", local_session_id: "private", purpose: "execution", harness: "codex", provider: "openai", model: "gpt-5.6-sol", status: "online" } }] } },
     { data: { sessions: [{ id: "s1", project_id: "p1", title: "Demo", mode: "multi", state: "active", role: "owner", current_sequence: 2, updated_at: "2026-08-25T00:00:00.000Z" }] } },
     { data: { session: { id: "s1", project_id: "p1", title: "Renamed", mode: "multi", state: "active", role: "owner", current_sequence: 3 } } },
     { data: { events: [wireEvent("e1", 1)], cursor: 1, has_more: false } },
@@ -54,6 +55,11 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   });
   assert.equal((await client.listProjects())[0]?.name, "Demo project");
   assert.equal((await client.listProjectSessions("p1"))[0]?.projectId, "p1");
+  assert.deepEqual((await client.listSessionMembers("s1"))[0], {
+    displayName: "Alice",
+    role: "owner",
+    runtime: { purpose: "execution", harness: "codex", provider: "openai", model: "gpt-5.6-sol", status: "online" },
+  });
   assert.equal((await client.listSessions())[0]?.latestSequence, 2);
   assert.equal((await client.updateSession("s1", { title: "Renamed", idempotencyKey: "rename-key-0001" })).name, "Renamed");
   assert.equal((await client.readEvents("s1", 0)).events[0]?.sessionId, "s1");
@@ -113,6 +119,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     "https://collab.example/v1/me",
     "https://collab.example/v1/projects",
     "https://collab.example/v1/projects/p1/sessions",
+    "https://collab.example/v1/sessions/s1/members",
     "https://collab.example/v1/sessions",
     "https://collab.example/v1/sessions/s1",
     "https://collab.example/v1/sessions/s1/events?after_sequence=0&limit=200",
@@ -130,27 +137,27 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     "https://collab.example/v1/snapshot-requests/snapshot-1/complete",
     "https://collab.example/v1/snapshot-requests/snapshot-1/fail",
   ]);
-  assert.equal(requests[4]?.init.method, "PATCH");
-  assert.deepEqual(JSON.parse(String(requests[4]?.init.body)), {
+  assert.equal(requests[5]?.init.method, "PATCH");
+  assert.deepEqual(JSON.parse(String(requests[5]?.init.body)), {
     title: "Renamed",
     idempotency_key: "rename-key-0001",
   });
-  assert.deepEqual(JSON.parse(String(requests[6]?.init.body)), {
+  assert.deepEqual(JSON.parse(String(requests[7]?.init.body)), {
     type: "human_chat",
     idempotency_key: "chat-key-0001",
     payload: { text: "hello" },
     visibility: "session",
   });
-  assert.equal(JSON.parse(String(requests[7]?.init.body)).capture_fidelity, "harness_transcript");
-  assert.equal(JSON.parse(String(requests[7]?.init.body)).purpose, "execution");
+  assert.equal(JSON.parse(String(requests[8]?.init.body)).capture_fidelity, "harness_transcript");
+  assert.equal(JSON.parse(String(requests[8]?.init.body)).purpose, "execution");
   assert.equal(requests[0]?.init.headers && new Headers(requests[0].init.headers).get("authorization"), "Bearer secret-token");
   assert.equal(requests[0]?.init.redirect, "error");
-  assert.deepEqual(JSON.parse(String(requests[10]?.init.body)), {
+  assert.deepEqual(JSON.parse(String(requests[11]?.init.body)), {
     runtime_id: "runtime-1",
     idempotency_key: "progress-key-0001",
     payload: { content: "Checking files" },
   });
-  assert.deepEqual(JSON.parse(String(requests[12]?.init.body)), {
+  assert.deepEqual(JSON.parse(String(requests[13]?.init.body)), {
     local_turn_id: "codex-local-1",
     runtime_id: "runtime-1",
     based_on_sequence: 3,
@@ -165,7 +172,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
       occurred_at: "2026-08-25T00:00:03.500Z",
     }],
   });
-  assert.deepEqual(JSON.parse(String(requests[17]?.init.body)), {
+  assert.deepEqual(JSON.parse(String(requests[18]?.init.body)), {
     runtime_id: "runtime-1",
     result: {
       thread_id: "snapshot-thread",

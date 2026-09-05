@@ -547,16 +547,21 @@
           <button id="close-connect-codex-button" class="icon-button" type="button" aria-label="Close Connect Codex dialog">×</button>
         </div>
         <p id="connect-codex-summary">
-          <span>Run one command from the root of your local GatherThread repository. It creates or reuses and opens the same-name local Desktop project</span>
+          <span>Run this fixed-version command in a terminal; no GatherThread checkout or prior npm install is needed. It creates or reuses and opens the same-name local Desktop project</span>
           <strong id="connect-codex-project-name"></strong><span>, then connects every editable session with one Desktop task and one isolated background Agent runtime.</span>
         </p>
+        <ol id="connect-codex-steps" class="codex-connect-steps">
+          <li><strong>1. Run the fixed-version connector.</strong> Choose the command for this computer below, enter the device token only in the hidden terminal prompt, and keep the connector running.</li>
+          <li><strong>2. Install the plugin once.</strong> Run the two commands below to add the fixed GitHub release source and install the <strong>共序 / GatherThread</strong> plugin. Restart Codex Desktop and review its MCP server and Hooks; enable Hooks only for optional step 3. This page only copies the commands; it does not run them.</li>
+          <li><strong>3. Optionally sync direct Desktop turns.</strong> After reviewing the plugin, restart the same connector command with <code>--plugin-hooks</code>, then enable and explicitly trust the Hooks. Web Agent requests and MCP tools do not require Hook trust.</li>
+        </ol>
         <section id="connect-codex-activation" class="codex-desktop-activation-guide" aria-labelledby="connect-codex-activation-title">
           <h3 id="connect-codex-activation-title">Single-writer synchronization</h3>
           <p>Codex Desktop exclusively owns the visible task. Web Agent requests run in an isolated background projection, and trusted hooks merge Desktop turns and the latest shared context through GatherThread.</p>
           <p>An owner or participant can start a new Desktop task normally. Its first submitted prompt creates and binds a personal Solo in this project; an empty task creates nothing. Viewer tasks always remain local.</p>
         </section>
         <p id="connect-codex-security" class="codex-connect-notice">
-          Your device token is requested by a hidden CLI prompt. It is not included in either command. After hooks are installed for the first time, open Codex Desktop Settings and enable Hooks, then review the generated <code>.codex/hooks.json</code> before use.
+          Your device token is requested by a hidden CLI prompt and is not included in any command. This page only copies commands and cannot launch local Codex. Keep the connector running for Web requests and plugin MCP tools. Direct Desktop turn sync additionally requires --plugin-hooks plus explicit review and trust of the plugin Hooks.
         </p>
 
         <section class="command-card" aria-labelledby="connect-codex-posix-title">
@@ -575,6 +580,16 @@
           </div>
           <code id="connect-codex-powershell-command" class="connector-command" tabindex="0" aria-label="Windows PowerShell connector command"></code>
           <p id="copy-powershell-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
+        </section>
+
+        <section class="command-card" aria-labelledby="connect-codex-marketplace-title">
+          <div class="command-heading">
+            <h3 id="connect-codex-marketplace-title">One-time plugin setup</h3>
+            <button class="button button-secondary" type="button" data-copy-command="marketplace" aria-describedby="copy-marketplace-command-status">Copy commands</button>
+          </div>
+          <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin add gatherthread@gatherthread</code>
+          <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
         </section>
 
         <p id="connect-codex-error" class="form-error" role="alert"></p>

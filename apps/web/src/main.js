@@ -1673,7 +1673,9 @@ async function copyCodexCommand(platform) {
       selection.removeAllRanges();
     }
     status.textContent = "Copied.";
-    announce(`${platform === "posix" ? "Shell" : "PowerShell"} connector command copied.`);
+    announce(platform === "posix" ? "Shell connector command copied."
+      : platform === "powershell" ? "PowerShell connector command copied."
+        : "Plugin install commands copied.");
   } catch {
     const selection = window.getSelection();
     const range = document.createRange();
