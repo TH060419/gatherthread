@@ -152,6 +152,47 @@ test("HTTP session rename uses the existing PATCH contract", async () => {
   }
 });
 
+test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push([String(url), options]);
+    return new Response(null, { status: 204 });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    await api.deleteSession("session / one");
+    await api.deleteProject("project / one");
+    assert.deepEqual(requests.map(([url, options]) => [url, options.method, options.body]), [
+      ["https://gatherthread.example/v1/sessions/session%20%2F%20one", "DELETE", undefined],
+      ["https://gatherthread.example/v1/projects/project%20%2F%20one", "DELETE", undefined],
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("mock cloud deletion allows session or project creators and clears only cloud state", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const project = await api.createProject({ name: "Deletion" });
+  const ownerSession = await api.createSession(project.id, { name: "Owner session", mode: "multi" });
+  api.currentUser = { id: "user-maya", username: "Maya Ortiz" };
+  api.projects.find((item) => item.id === project.id).role = "participant";
+  await assert.rejects(() => api.deleteSession(ownerSession.id), (error) => error.status === 404);
+  await assert.rejects(() => api.deleteProject(project.id), (error) => error.status === 404);
+
+  const participantSession = await api.createSession(project.id, { name: "Participant Solo", mode: "solo" });
+  await api.appendHumanChat(participantSession.id, { content: "Cloud history", idempotencyKey: "delete-cloud-history" });
+  await api.deleteSession(participantSession.id);
+  await assert.rejects(() => api.getSession(participantSession.id), (error) => error.status === 404);
+  assert.deepEqual((await api.listProjectSessions(project.id)).map((session) => session.id), [ownerSession.id]);
+
+  api.currentUser = { id: "user-avery", username: "Avery Chen" };
+  api.projects.find((item) => item.id === project.id).role = "owner";
+  await api.deleteProject(project.id);
+  await assert.rejects(() => api.getProject(project.id), (error) => error.status === 404);
+});
+
 test("snapshot API creates independent frozen jobs and polls one record", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];

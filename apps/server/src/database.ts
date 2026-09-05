@@ -323,7 +323,7 @@ CREATE TABLE IF NOT EXISTS events (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   sequence INTEGER NOT NULL,
   idempotency_key TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('human_chat','agent_request','agent_response','tool_call','tool_result','attachment','context_snapshot','membership_change','session_state_change')),
+  type TEXT NOT NULL CHECK (type IN ('human_chat','agent_request','agent_progress','agent_response','tool_call','tool_result','attachment','context_snapshot','membership_change','session_state_change')),
   actor_user_id TEXT NOT NULL REFERENCES users(id),
   actor_display_name TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -649,6 +649,7 @@ export class CollaborationDatabase {
     this.migrateProjectModel();
     this.migrateRuntimePurposeColumn();
     this.migrateEventActorDisplayNameColumn();
+    this.migrateAgentProgressEventType();
     this.migrateCanonicalProvenancePrivacy();
     this.migrateSnapshotStorageLedger();
     this.initializeEventStorageUsage();
@@ -991,6 +992,18 @@ export class CollaborationDatabase {
     });
   }
 
+  deleteProject(actor: Actor, projectId: string): { project_id: string; session_ids: string[] } {
+    return this.transaction(() => {
+      this.requireProjectOwnedBy(projectId, actor.user_id);
+      const sessions = this.sqlite.prepare("SELECT id FROM sessions WHERE project_id = ? ORDER BY id")
+        .all(projectId) as Array<{ id: string }>;
+      const result = this.sqlite.prepare("DELETE FROM projects WHERE id = ? AND owner_user_id = ?")
+        .run(projectId, actor.user_id);
+      if (Number(result.changes) !== 1) throw notFound("Project");
+      return { project_id: projectId, session_ids: sessions.map((session) => session.id) };
+    });
+  }
+
   requireProject(projectId: string): ProjectRecord {
     const row = this.sqlite.prepare("SELECT * FROM projects WHERE id = ?")
       .get(projectId) as unknown as ProjectRow | undefined;
@@ -1097,6 +1110,29 @@ export class CollaborationDatabase {
       WHERE sessions.project_id = ?
       ORDER BY sessions.updated_at DESC, sessions.id ASC
     `).all(role, projectId) as unknown as SessionListItem[];
+  }
+
+  deleteSession(actor: Actor, sessionId: string): { project_id: string; session_id: string } {
+    return this.transaction(() => {
+      const row = this.sqlite.prepare(`
+        SELECT sessions.project_id, sessions.owner_user_id AS session_owner_user_id,
+               projects.owner_user_id AS project_owner_user_id
+        FROM sessions
+        JOIN projects ON projects.id = sessions.project_id
+        WHERE sessions.id = ?
+      `).get(sessionId) as {
+        project_id: string;
+        session_owner_user_id: string;
+        project_owner_user_id: string;
+      } | undefined;
+      if (!row || (row.session_owner_user_id !== actor.user_id && row.project_owner_user_id !== actor.user_id)) {
+        throw notFound("Session");
+      }
+      const result = this.sqlite.prepare("DELETE FROM sessions WHERE id = ?").run(sessionId);
+      if (Number(result.changes) !== 1) throw notFound("Session");
+      this.touchProject(row.project_id);
+      return { project_id: row.project_id, session_id: sessionId };
+    });
   }
 
   createInvitation(actor: Actor, sessionId: string, input: {
@@ -2107,6 +2143,54 @@ export class CollaborationDatabase {
     });
   }
 
+  appendAgentProgress(
+    actor: Actor,
+    sessionId: string,
+    requestEventId: string,
+    runtimeId: string,
+    idempotencyKey: string,
+    payload: JsonValue,
+    observedModel?: string,
+    observedReasoningEffort?: string,
+  ): CanonicalEvent {
+    this.assertActiveDevice(actor);
+    return this.transaction(() => {
+      const runtime = this.getRuntime(runtimeId);
+      if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
+        || runtime.session_id !== sessionId || runtime.status === "revoked" || runtime.purpose !== "execution") {
+        throw conflict("A matching active runtime on the authenticated device is required");
+      }
+      const existingEvent = this.findByIdempotencyKey(sessionId, idempotencyKey);
+      if (existingEvent) return this.requireIdempotencyMatch(
+        existingEvent,
+        actor.user_id,
+        "agent_progress",
+        payload,
+        requestEventId,
+        "session",
+        runtimeId,
+      );
+      const claim = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+        .get(requestEventId) as unknown as ClaimRow | undefined;
+      if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed") {
+        throw conflict("A matching active claim is required to append progress for this request");
+      }
+      const provenance = {
+        ...this.runtimeProvenance(runtime),
+        ...(observedModel === undefined ? {} : { model: observedModel }),
+        ...(observedReasoningEffort === undefined ? {} : { reasoning_effort: observedReasoningEffort }),
+      };
+      return this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: idempotencyKey,
+        type: "agent_progress",
+        visibility: "session",
+        reply_to_event_id: requestEventId,
+        payload,
+        runtime_id: runtimeId,
+      }, provenance);
+    });
+  }
+
   commitLocalTurn(actor: Actor, sessionId: string, input: CommitLocalTurnInput): CommitLocalTurnResult {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
@@ -2812,6 +2896,65 @@ export class CollaborationDatabase {
         SELECT RAISE(ABORT, 'actor_display_name is required');
       END;
     `);
+  }
+
+  private migrateAgentProgressEventType(): void {
+    const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+      .get() as { sql?: string } | undefined;
+    if (table?.sql?.includes("'agent_progress'")) return;
+    this.sqlite.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.sqlite.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE events_next (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          sequence INTEGER NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          type TEXT NOT NULL CHECK (type IN ('human_chat','agent_request','agent_progress','agent_response','tool_call','tool_result','attachment','context_snapshot','membership_change','session_state_change')),
+          actor_user_id TEXT NOT NULL REFERENCES users(id),
+          actor_display_name TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          visibility TEXT NOT NULL CHECK (visibility IN ('session', 'owner_only')),
+          reply_to_event_id TEXT REFERENCES events_next(id),
+          payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+          runtime_provenance_json TEXT CHECK (runtime_provenance_json IS NULL OR json_valid(runtime_provenance_json)),
+          UNIQUE (session_id, sequence),
+          UNIQUE (session_id, idempotency_key)
+        ) STRICT;
+        INSERT INTO events_next(
+          id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name,
+          created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json
+        ) SELECT
+          id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name,
+          created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json
+        FROM events;
+        DROP TABLE events;
+        ALTER TABLE events_next RENAME TO events;
+        CREATE INDEX events_replay_idx ON events(session_id, sequence);
+        CREATE INDEX events_actor_idx ON events(actor_user_id);
+        CREATE TRIGGER events_actor_display_name_required_insert
+        BEFORE INSERT ON events
+        WHEN NEW.actor_display_name IS NULL OR NEW.actor_display_name = ''
+        BEGIN
+          SELECT RAISE(ABORT, 'actor_display_name is required');
+        END;
+        CREATE TRIGGER events_actor_display_name_required_update
+        BEFORE UPDATE OF actor_display_name ON events
+        WHEN NEW.actor_display_name IS NULL OR NEW.actor_display_name = ''
+        BEGIN
+          SELECT RAISE(ABORT, 'actor_display_name is required');
+        END;
+        COMMIT;
+      `);
+    } catch (error) {
+      try { this.sqlite.exec("ROLLBACK"); } catch { /* The migration may have failed before BEGIN. */ }
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) throw new Error("Agent progress migration failed foreign-key validation");
   }
 
   private migrateSnapshotStorageLedger(): void {

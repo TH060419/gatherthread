@@ -3,58 +3,46 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#f4f1e8" />
+    <meta name="theme-color" content="#FBFAF7" />
+    <link rel="icon" href="./favicon.ico" sizes="any" />
+    <link rel="icon" type="image/png" sizes="32x32" href="./favicon-32x32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="./favicon-16x16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon.png" />
+    <link rel="manifest" href="./site.webmanifest" />
     <meta
       name="description"
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260829-18" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260830-1" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
-    <svg class="brand-symbols" aria-hidden="true">
-      <defs>
-        <linearGradient id="brand-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#08B9D8"/><stop offset=".50" stop-color="#10C1E1"/><stop offset=".66" stop-color="#8878F4"/><stop offset="1" stop-color="#F35BAE"/></linearGradient>
-        <linearGradient id="brand-blue" x1="20" y1="135" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#168AF4"/><stop offset=".55" stop-color="#4E6CF4"/><stop offset="1" stop-color="#A06BE8"/></linearGradient>
-        <linearGradient id="brand-violet" x1="20" y1="228" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#9A50EE"/><stop offset=".58" stop-color="#AD61EA"/><stop offset="1" stop-color="#C66BDD"/></linearGradient>
-        <linearGradient id="brand-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F456AE"/><stop offset=".58" stop-color="#F15CAE"/><stop offset="1" stop-color="#D56FD5"/></linearGradient>
-        <symbol id="brand-mark-symbol" viewBox="0 0 590 364">
-          <g fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#brand-blue)"/>
-            <path d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#brand-violet)"/>
-            <path d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#brand-pink)"/>
-            <path d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#brand-cyan)"/>
-          </g>
-          <circle cx="50" cy="42" r="28" fill="#08B9D8"/><circle cx="50" cy="135" r="28" fill="#168AF4"/><circle cx="50" cy="228" r="28" fill="#9A50EE"/><circle cx="50" cy="322" r="28" fill="#F456AE"/>
-        </symbol>
-      </defs>
-    </svg>
     <a class="skip-link" href="#main-content">Skip to conversation</a>
 
     <main id="auth-view" class="auth-shell" aria-labelledby="login-title">
       <section class="auth-story" aria-hidden="true">
         <svg class="auth-mark-motion" viewBox="0 0 590 380" aria-hidden="true">
           <defs>
-            <linearGradient id="auth-mark-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#08B9D8"/><stop offset=".50" stop-color="#10C1E1"/><stop offset=".66" stop-color="#8878F4"/><stop offset="1" stop-color="#F35BAE"/></linearGradient>
-            <linearGradient id="auth-mark-blue" x1="20" y1="135" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#168AF4"/><stop offset=".55" stop-color="#4E6CF4"/><stop offset="1" stop-color="#A06BE8"/></linearGradient>
-            <linearGradient id="auth-mark-violet" x1="20" y1="228" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#9A50EE"/><stop offset=".58" stop-color="#AD61EA"/><stop offset="1" stop-color="#C66BDD"/></linearGradient>
-            <linearGradient id="auth-mark-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F456AE"/><stop offset=".58" stop-color="#F15CAE"/><stop offset="1" stop-color="#D56FD5"/></linearGradient>
+            <linearGradient id="auth-mark-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#20C1DC"/><stop offset=".43" stop-color="#2AC9E5"/><stop offset=".57" stop-color="#60C0EC"/><stop offset=".68" stop-color="#9A96F5"/><stop offset=".80" stop-color="#C986E9"/><stop offset="1" stop-color="#F47BBC"/></linearGradient>
+            <linearGradient id="auth-mark-blue" x1="20" y1="135" x2="330" y2="241" gradientUnits="userSpaceOnUse"><stop stop-color="#2E96F5"/><stop offset=".48" stop-color="#4A8EF6"/><stop offset=".72" stop-color="#7689F3"/><stop offset="1" stop-color="#A789F0"/></linearGradient>
+            <linearGradient id="auth-mark-violet" x1="20" y1="228" x2="330" y2="129" gradientUnits="userSpaceOnUse"><stop stop-color="#A766F0"/><stop offset=".46" stop-color="#B273ED"/><stop offset=".72" stop-color="#B789F2"/><stop offset="1" stop-color="#A39CF8"/></linearGradient>
+            <linearGradient id="auth-mark-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F66DB9"/><stop offset=".48" stop-color="#F378BD"/><stop offset=".68" stop-color="#EA82CB"/><stop offset=".84" stop-color="#D28FE5"/><stop offset="1" stop-color="#BB99F1"/></linearGradient>
           </defs>
-          <g class="auth-mark-base" fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-blue)"/>
-            <path d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-violet)"/>
-            <path d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-pink)"/>
-            <path d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-cyan)"/>
+          <g class="auth-mark-base" fill="none" stroke-width="40" stroke-linejoin="round">
+            <path d="M50 135 H158 C210 135 245 215 298 240" stroke="url(#auth-mark-blue)" stroke-linecap="butt"/>
+            <path d="M50 228 H162 C214 228 247 143 298 130" stroke="url(#auth-mark-violet)" stroke-linecap="butt"/>
+            <path d="M50 322 H174 C248 322 322 184 404 184 H540" stroke="url(#auth-mark-pink)" stroke-linecap="round"/>
+            <path d="M50 42 H167 C241 42 320 184 404 184 H540" stroke="url(#auth-mark-cyan)" stroke-linecap="round"/>
           </g>
-          <g class="auth-mark-flow" fill="none" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
-            <path pathLength="1" d="M50 135 H158 C207 135 245 220 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-blue)"/>
-            <path pathLength="1" d="M50 228 H162 C213 228 248 136 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-violet)"/>
-            <path pathLength="1" d="M50 322 H174 C243 322 272 260 300 241 C328 222 360 184 390 184 H540" stroke="url(#auth-mark-pink)"/>
-            <path pathLength="1" d="M50 42 H167 C229 42 275 108 300 129 C325 150 360 184 390 184 H540" stroke="url(#auth-mark-cyan)"/>
+          <g class="auth-mark-flow" fill="none" stroke-width="40" stroke-linejoin="round">
+            <path pathLength="1" d="M50 135 H158 C210 135 245 215 298 240" stroke="url(#auth-mark-blue)" stroke-linecap="butt"/>
+            <path pathLength="1" d="M50 228 H162 C214 228 247 143 298 130" stroke="url(#auth-mark-violet)" stroke-linecap="butt"/>
+            <path pathLength="1" d="M50 322 H174 C248 322 322 184 404 184 H540" stroke="url(#auth-mark-pink)" stroke-linecap="round"/>
+            <path pathLength="1" d="M50 42 H167 C241 42 320 184 404 184 H540" stroke="url(#auth-mark-cyan)" stroke-linecap="round"/>
           </g>
           <g class="auth-mark-inputs">
-            <circle cx="50" cy="42" r="28" fill="#08B9D8"/><circle cx="50" cy="135" r="28" fill="#168AF4"/><circle cx="50" cy="228" r="28" fill="#9A50EE"/><circle cx="50" cy="322" r="28" fill="#F456AE"/>
+            <circle cx="50" cy="42" r="28" fill="#20C1DC"/><circle cx="50" cy="135" r="28" fill="#2E96F5"/><circle cx="50" cy="228" r="28" fill="#A766F0"/><circle cx="50" cy="322" r="28" fill="#F66DB9"/>
           </g>
         </svg>
         <p class="eyebrow">Human + agent workspace</p>
@@ -73,8 +61,8 @@
 
       <section class="login-panel">
         <div class="brand-lockup brand-lockup-login" role="img" aria-label="GatherThread">
-          <svg class="brand-lockup-mark" viewBox="0 0 590 364" aria-hidden="true"><use href="#brand-mark-symbol"></use></svg>
-          <span class="brand-lockup-name">GatherThread</span>
+          <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
+          <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
         </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
@@ -127,8 +115,8 @@
     <div id="workspace" class="workspace" hidden>
       <header class="topbar">
         <a class="wordmark" href="#" aria-label="GatherThread home">
-          <svg class="brand-lockup-mark" viewBox="0 0 590 364" aria-hidden="true"><use href="#brand-mark-symbol"></use></svg>
-          <span class="brand-lockup-name">GatherThread</span>
+          <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
+          <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
         </a>
         <div class="account-cluster">
           <div class="connection-chip" id="global-connection" role="status">
@@ -170,6 +158,9 @@
             hidden
           >
             <span>Connect Codex</span>
+          </button>
+          <button id="delete-project-button" class="text-button danger-text-button project-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
+            Delete cloud project
           </button>
           <div class="rail-heading session-heading">
             <div>
@@ -214,6 +205,9 @@
                     aria-controls="rename-session-dialog"
                     hidden
                   >Rename</button>
+                  <button id="delete-session-button" class="text-button danger-text-button session-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
+                    Delete
+                  </button>
                 </div>
                 <p id="session-subtitle" class="session-subtitle"></p>
                 <p id="session-access-note" class="session-access-note" hidden>Only the creator can edit this Solo session.</p>
@@ -489,6 +483,25 @@
       </form>
     </dialog>
 
+    <dialog id="delete-cloud-dialog" class="create-dialog delete-cloud-dialog" aria-labelledby="delete-cloud-title" aria-describedby="delete-cloud-description delete-cloud-local-note">
+      <form id="delete-cloud-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">Cloud deletion</p>
+            <h2 id="delete-cloud-title">Delete from cloud?</h2>
+          </div>
+          <button id="close-delete-cloud-button" class="icon-button" type="button" aria-label="Close cloud deletion dialog">×</button>
+        </div>
+        <p id="delete-cloud-description" class="delete-cloud-description"></p>
+        <p id="delete-cloud-local-note" class="delete-cloud-local-note">Shared cloud history will be permanently removed. Local projects, files, Codex tasks, and Agent conversations stay on every device.</p>
+        <p id="delete-cloud-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="cancel-delete-cloud-button" class="button button-secondary" type="button">Cancel</button>
+          <button id="confirm-delete-cloud-button" class="button button-danger" type="submit">Delete from cloud</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog
       id="connect-codex-dialog"
       class="create-dialog codex-connect-dialog"
@@ -583,7 +596,7 @@
               <label class="settings-row" for="settings-theme"><span><strong>Theme</strong><small>Follow the system or choose a fixed appearance.</small></span><select id="settings-theme" name="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
               <div class="settings-row">
                 <span><strong>Text size</strong><small>Use a preset or enter an exact percentage.</small></span>
-                <div class="numeric-setting"><select id="settings-text-scale-preset" aria-label="Text size preset"><option value="90">Small · 90%</option><option value="100">Default · 100%</option><option value="110">Large · 110%</option><option value="125">Extra large · 125%</option><option value="custom">Custom</option></select><label><span class="sr-only">Exact text size</span><input id="settings-text-scale" name="text-scale" type="number" min="90" max="125" step="1" inputmode="numeric" /><span>%</span></label></div>
+                <div class="numeric-setting"><select id="settings-text-scale-preset" aria-label="Text size preset"><option value="90">Small · 90%</option><option value="100">Default · 100%</option><option value="110">Large · 110%</option><option value="125">Extra large · 125%</option><option value="custom">Custom</option></select><label><span class="sr-only">Exact text size</span><input id="settings-text-scale" name="text-scale" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" /><span>%</span></label></div>
               </div>
               <label class="settings-row" for="settings-density"><span><strong>Density</strong><small>Compact reduces spacing without shrinking targets below accessibility limits.</small></span><select id="settings-density" name="density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
               <label class="settings-row" for="settings-motion"><span><strong>Motion</strong><small>Reduced motion disables blur and non-essential transitions for comfort and performance.</small></span><select id="settings-motion" name="motion"><option value="system">Follow system</option><option value="reduce">Reduce motion</option><option value="full">Full motion</option></select></label>
@@ -596,9 +609,9 @@
                 <div><p class="eyebrow">Layout</p><h3 id="settings-layout-title">Workspace panels</h3></div>
                 <p>Drag the vertical and horizontal dividers in the workspace, or set exact sizes here.</p>
               </div>
-              <div class="settings-row"><span><strong>Session sidebar</strong><small>210-420 px.</small></span><div class="numeric-setting"><select id="settings-left-width-preset" aria-label="Session sidebar width preset"><option value="220">Narrow · 220</option><option value="260">Default · 260</option><option value="340">Wide · 340</option><option value="custom">Custom</option></select><label><input id="settings-left-width" name="left-width" type="number" min="210" max="420" step="1" inputmode="numeric" aria-label="Exact session sidebar width" /><span>px</span></label></div></div>
-              <div class="settings-row"><span><strong>Member sidebar</strong><small>260-480 px.</small></span><div class="numeric-setting"><select id="settings-right-width-preset" aria-label="Member sidebar width preset"><option value="260">Narrow · 260</option><option value="290">Default · 290</option><option value="380">Wide · 380</option><option value="custom">Custom</option></select><label><input id="settings-right-width" name="right-width" type="number" min="260" max="480" step="1" inputmode="numeric" aria-label="Exact member sidebar width" /><span>px</span></label></div></div>
-              <div class="settings-row"><span><strong>Message composer</strong><small>210-560 px. You can also drag the divider above the composer.</small></span><div class="numeric-setting"><select id="settings-composer-height-preset" aria-label="Message composer height preset"><option value="220">Compact · 220</option><option value="280">Default · 280</option><option value="380">Tall · 380</option><option value="custom">Custom</option></select><label><input id="settings-composer-height" name="composer-height" type="number" min="210" max="560" step="1" inputmode="numeric" aria-label="Exact message composer height" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Session sidebar</strong><small>210-420 px.</small></span><div class="numeric-setting"><select id="settings-left-width-preset" aria-label="Session sidebar width preset"><option value="220">Narrow · 220</option><option value="260">Default · 260</option><option value="340">Wide · 340</option><option value="custom">Custom</option></select><label><input id="settings-left-width" name="left-width" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact session sidebar width" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Member sidebar</strong><small>260-480 px.</small></span><div class="numeric-setting"><select id="settings-right-width-preset" aria-label="Member sidebar width preset"><option value="260">Narrow · 260</option><option value="290">Default · 290</option><option value="380">Wide · 380</option><option value="custom">Custom</option></select><label><input id="settings-right-width" name="right-width" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact member sidebar width" /><span>px</span></label></div></div>
+              <div class="settings-row"><span><strong>Message composer</strong><small>210-560 px. You can also drag the divider above the composer.</small></span><div class="numeric-setting"><select id="settings-composer-height-preset" aria-label="Message composer height preset"><option value="220">Compact · 220</option><option value="280">Default · 280</option><option value="380">Tall · 380</option><option value="custom">Custom</option></select><label><input id="settings-composer-height" name="composer-height" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" aria-label="Exact message composer height" /><span>px</span></label></div></div>
               <button id="reset-layout-button" class="button button-secondary" type="button">Reset panel sizes</button>
             </section>
 
@@ -623,7 +636,7 @@
               <label class="settings-row" for="settings-agent-harness"><span><strong>Agent harness</strong><small>Claude Code and DeepSeek Harness adapters are reserved for future releases.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option disabled>Claude Code · coming later</option><option disabled>DeepSeek Harness · coming later</option></select></label>
               <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
               <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
-              <div class="settings-row settings-row-tall"><span><strong>Custom Codex model</strong><small>Add a safe model ID such as a compatible proxy model. Credentials and CLI arguments are never accepted here.</small></span><div class="custom-model-control"><input id="settings-custom-model" type="text" maxlength="120" autocomplete="off" placeholder="model-id" /><button id="add-custom-model-button" class="button button-secondary" type="button">Add model</button></div></div>
+              <div class="settings-row settings-row-tall"><span><strong>Custom Codex model</strong><small>Add a safe model ID such as a compatible proxy model. Credentials and CLI arguments are never accepted here.</small></span><div class="custom-model-stack"><div class="custom-model-control"><input id="settings-custom-model" type="text" maxlength="120" autocomplete="off" placeholder="model-id" /><button id="add-custom-model-button" class="button button-secondary" type="button">Add model</button></div><small class="custom-model-note">This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.</small></div></div>
               <p id="settings-custom-model-error" class="form-error" role="alert"></p>
             </section>
 
@@ -668,6 +681,6 @@
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260829-20"></script>
+    <script type="module" src="./src/main.js?v=20260829-23"></script>
   </body>
 </html>

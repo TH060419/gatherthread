@@ -14,5 +14,8 @@ This project studies public repositories and open-source work. Unless a future f
 | [acp-memory-server](https://github.com/SrulyRosenblat/agent_memory_mcp) | Cross-harness local transcript discovery and parsing | NOASSERTION (no license file detected; reference only, no code copied) |
 | [harness-exchange](https://github.com/cnmoro/harness-exchange) | Codex/Claude/OpenCode transcript normalization boundaries | MIT |
 | [OpenAI Codex](https://github.com/openai/codex) | Official App Server thread/turn lifecycle, `codex exec --json` migration behavior, and local sandbox controls used through the installed CLI; no source copied | Apache-2.0 |
+| [micromark](https://github.com/micromark/micromark) | CommonMark parsing with raw HTML and dangerous URL protocols disabled for Web Agent output | MIT |
+| [micromark-extension-gfm](https://github.com/micromark/micromark-extension-gfm) | GFM tables, task lists, autolinks, and strikethrough for Web Agent output | MIT |
+| [KaTeX](https://github.com/KaTeX/KaTeX) | Bundled, accessible inline and display math rendering for Web Agent Markdown | MIT |
 
 Any later adaptation must record the exact upstream path, commit, applicable license, and modifications in this document and in the adapted source file.

@@ -610,6 +610,64 @@ test("project creation leaves the project empty until the owner creates a sessio
   }
 });
 
+test("cloud deletion is creator-scoped, cascades server history, and leaves unrelated projects intact", () => {
+  const f = fixture();
+  try {
+    const project = f.service.createProject(f.owner, {
+      project_id: "delete-project", idempotency_key: "delete-project-create", title: "Delete me",
+    });
+    const retainedProject = f.service.createProject(f.owner, {
+      project_id: "retained-project", idempotency_key: "retained-project-create", title: "Keep me",
+    });
+    const ownerSession = f.service.createSession(f.owner, {
+      project_id: project.id, session_id: "owner-delete-session", idempotency_key: "owner-delete-session-create",
+      mode: "multi", title: "Owner session",
+    }).session;
+    const invitation = f.service.createProjectInvitation(f.owner, project.id, { role: "participant", ttl: "1h" });
+    f.service.claimInvitationForActor(f.member, invitation.invite_token);
+    const memberSession = f.service.createSession(f.member, {
+      project_id: project.id, session_id: "member-delete-session", idempotency_key: "member-delete-session-create",
+      mode: "solo", title: "Member session",
+    }).session;
+    f.service.appendEvent(f.member, memberSession.id, {
+      idempotency_key: "member-delete-event", type: "human_chat", visibility: "session", payload: { content: "cloud only" },
+    });
+
+    assert.throws(
+      () => f.service.deleteSession(f.member, ownerSession.id),
+      (error: unknown) => error instanceof ApiError && error.status === 404,
+    );
+    assert.throws(
+      () => f.service.deleteProject(f.member, project.id),
+      (error: unknown) => error instanceof ApiError && error.status === 404,
+    );
+    assert.deepEqual(f.service.deleteSession(f.member, memberSession.id), {
+      project_id: project.id, session_id: memberSession.id,
+    });
+    assert.throws(
+      () => f.database.requireSession(memberSession.id),
+      (error: unknown) => error instanceof ApiError && error.status === 404,
+    );
+    assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM events WHERE session_id = ?")
+      .get(memberSession.id) as { count: number }).count, 0);
+
+    const secondMemberSession = f.service.createSession(f.member, {
+      project_id: project.id, session_id: "member-delete-by-owner", idempotency_key: "member-delete-by-owner-create",
+      mode: "solo", title: "Owner may delete this cloud copy",
+    }).session;
+    assert.equal(f.service.deleteSession(f.owner, secondMemberSession.id).session_id, secondMemberSession.id);
+    const deleted = f.service.deleteProject(f.owner, project.id);
+    assert.deepEqual(deleted, { project_id: project.id, session_ids: [ownerSession.id] });
+    assert.throws(
+      () => f.database.requireProject(project.id),
+      (error: unknown) => error instanceof ApiError && error.status === 404,
+    );
+    assert.equal(f.database.requireProject(retainedProject.id).title, "Keep me");
+  } finally {
+    f.close();
+  }
+});
+
 test("owner rename is transactional, monotonic, idempotent, and emits metadata only", () => {
   let timestamp = new Date("2026-08-25T12:00:00.000Z");
   const f = fixture({ clock: () => timestamp });
@@ -760,6 +818,56 @@ test("only the initiating user's runtime can claim and complete an agent request
       f.service.claimAgentRequest(f.member, session.id, secondRequest.id, runtime.id).status,
       "claimed",
       "terminal completion must release the runtime for the next request",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("agent progress is ordered, idempotent, claim-bound, and cannot follow completion", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "agent-progress",
+      idempotency_key: "create-agent-progress",
+      mode: "multi",
+      title: "Agent progress",
+    });
+    const request = f.service.appendEvent(f.owner, session.id, {
+      idempotency_key: "agent-progress-request",
+      type: "agent_request",
+      visibility: "session",
+      payload: { content: "work" },
+    });
+    const runtime = f.service.registerRuntime(f.owner, {
+      runtime_id: "agent-progress-runtime",
+      session_id: session.id,
+      device_id: f.owner.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-test",
+      local_session_id: "agent-progress-local",
+      capture_fidelity: "harness_transcript",
+    });
+    f.service.claimAgentRequest(f.owner, session.id, request.id, runtime.id);
+    const progress = f.service.appendAgentProgress(
+      f.owner, session.id, request.id, runtime.id, "agent-progress-event", { content: "Checking files" },
+    );
+    const retry = f.service.appendAgentProgress(
+      f.owner, session.id, request.id, runtime.id, "agent-progress-event", { content: "Checking files" },
+    );
+    assert.equal(progress.id, retry.id);
+    assert.equal(progress.type, "agent_progress");
+    assert.equal(progress.reply_to_event_id, request.id);
+    const response = f.service.completeAgentRequest(
+      f.owner, session.id, request.id, runtime.id, "agent-progress-response", { content: "Done" },
+    );
+    assert.equal(response.sequence, progress.sequence + 1);
+    assert.throws(
+      () => f.service.appendAgentProgress(
+        f.owner, session.id, request.id, runtime.id, "agent-progress-late", { content: "Too late" },
+      ),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
     );
   } finally {
     f.close();

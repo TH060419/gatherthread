@@ -51,10 +51,11 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 | `POST` | `/v1/runtimes` | Register or refresh an owned local runtime |
 | `POST` | `/v1/runtimes/:runtime_id/heartbeat` | Mark an owned runtime online |
 | `POST` | `/v1/sessions/:session_id/agent-requests/:event_id/claim` | Atomically claim the initiating user's request |
+| `POST` | `/v1/sessions/:session_id/agent-requests/:event_id/progress` | Append idempotent public lifecycle or commentary progress under the active claim |
 | `POST` | `/v1/sessions/:session_id/agent-requests/:event_id/complete` | Append a provenance-labelled response and complete its claim |
 | `POST` | `/v1/realtime-ticket` | Issue a short-lived, one-use browser WebSocket ticket |
 
-The server derives actor identity from the credential and always assigns event ID (unless the client supplies a stable one), sequence, and canonical server timestamp. A local capture time is retained only as payload metadata and cannot change project ordering. An idempotency key is scoped to one session and is bound to the actor, event type, visibility, reply target, payload, and runtime; only an identical retry receives the original event, while a different operation returns `409 idempotency_conflict`. `agent_response`, `tool_call`, and `tool_result` appends require an owned execution `runtime_id`. A runtime may hold only one active request claim. `human_chat` is only an event append and has no execution side effect.
+The server derives actor identity from the credential and always assigns event ID (unless the client supplies a stable one), sequence, and canonical server timestamp. A local capture time is retained only as payload metadata and cannot change project ordering. An idempotency key is scoped to one session and is bound to the actor, event type, visibility, reply target, payload, and runtime; only an identical retry receives the original event, while a different operation returns `409 idempotency_conflict`. `agent_progress` requires the exact owned runtime and an active matching request claim; the generic event route cannot forge it. `agent_response`, `tool_call`, and `tool_result` appends require an owned execution `runtime_id`. A runtime may hold only one active request claim. `human_chat` is only an event append and has no execution side effect.
 
 `GET /v1/projects/:project_id/sessions` returns integration-friendly summaries with their project ID:
 

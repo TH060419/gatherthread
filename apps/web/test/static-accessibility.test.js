@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
@@ -9,6 +10,48 @@ const apiPath = fileURLToPath(new URL("../src/api.js", import.meta.url));
 const stylesPath = fileURLToPath(new URL("../src/styles.css", import.meta.url));
 const domainPath = fileURLToPath(new URL("../src/domain.js", import.meta.url));
 const i18nPath = fileURLToPath(new URL("../src/i18n.js", import.meta.url));
+const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.url));
+const brandLightPath = fileURLToPath(new URL("../brand/lockup-color-transparent-light.svg", import.meta.url));
+const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-dark.svg", import.meta.url));
+
+const brandedIconHashes = new Map([
+  ["android-chrome-192x192.png", "f94f61adcee6cf206813081db0d286bbfde7f49445fcdb3f2c9da4f8892c2fce"],
+  ["android-chrome-512x512.png", "d1f713c5434387b9ae0dcc5a25c9846bb2e6b9d9d9bd449627a634f295a6a0b8"],
+  ["apple-touch-icon.png", "add47d2906d2e948164c888f55553294d04bb7def730dae64049ff0ec4f2fb7f"],
+  ["favicon-16x16.png", "9129a203731aa9a79507337413ad8fad72598cb12c9f1fc0e3f679785eb2b446"],
+  ["favicon-32x32.png", "b4a73786d625adcd01383dcf560c1ee53d08f326005d66ebc091716e80e91cc9"],
+  ["favicon.ico", "26ea324379621f9b9bb48bb7ea4a47640def8e8bb2f6768b24105dacf69545ba"],
+]);
+
+test("site icons retain GatherThread identity without forcing standalone launch behavior", async () => {
+  const [html, manifestText] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(manifestPath, "utf8"),
+  ]);
+  for (const reference of [
+    'href="./favicon.ico"',
+    'href="./favicon-32x32.png"',
+    'href="./favicon-16x16.png"',
+    'href="./apple-touch-icon.png"',
+    'href="./site.webmanifest"',
+  ]) {
+    assert.match(html, new RegExp(reference.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  }
+  const manifest = JSON.parse(manifestText);
+  assert.equal(manifest.name, "GatherThread");
+  assert.equal(manifest.short_name, "GatherThread");
+  assert.equal(manifest.theme_color, "#FBFAF7");
+  assert.equal(manifest.background_color, "#FBFAF7");
+  assert.equal(Object.hasOwn(manifest, "display"), false);
+  assert.deepEqual(manifest.icons.map((icon) => icon.src), [
+    "./android-chrome-192x192.png",
+    "./android-chrome-512x512.png",
+  ]);
+  for (const [file, expectedHash] of brandedIconHashes) {
+    const icon = await readFile(new URL(`../${file}`, import.meta.url));
+    assert.equal(createHash("sha256").update(icon).digest("hex"), expectedHash, `${file} must use the approved app icon`);
+  }
+});
 
 test("the shell exposes landmarks, labelled forms, status regions, and separate send controls", async () => {
   const [html, main, styles] = await Promise.all([
@@ -71,9 +114,17 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   }
   assert.match(html, /value="pronounced">Pronounced</);
   assert.doesNotMatch(html, /Subtle · recommended/);
-  assert.match(html, /id="brand-mark-symbol"/);
-  assert.equal((html.match(/class="brand-lockup-mark"/g) ?? []).length, 2);
-  assert.equal((html.match(/class="brand-lockup-name">GatherThread</g) ?? []).length, 2);
+  assert.equal((html.match(/brand\/lockup-color-transparent-light\.svg/g) ?? []).length, 2);
+  assert.equal((html.match(/brand\/lockup-color-transparent-dark\.svg/g) ?? []).length, 2);
+  assert.match(html, /M50 135 H158 C210 135 245 215 298 240/);
+  assert.match(html, /M50 228 H162 C214 228 247 143 298 130/);
+  assert.match(html, /M50 322 H174 C248 322 322 184 404 184 H540/);
+  assert.match(html, /M50 42 H167 C241 42 320 184 404 184 H540/);
+  for (const color of ["#20C1DC", "#2E96F5", "#A766F0", "#F66DB9"]) {
+    assert.match(html, new RegExp(color));
+  }
+  assert.doesNotMatch(html, /#08B9D8|#168AF4|#9A50EE|#F456AE/);
+  assert.doesNotMatch(html, /M50 135 H158 C207 135 245 220 300 241/);
   assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"/);
   assert.match(main, /title\.title = session\.name/);
   assert.match(main, /element\("session-title"\)\.title = session\.name/);
@@ -83,6 +134,27 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(styles, /html\[lang="zh-CN"\] \.agent-request-profile select/);
   assert.match(styles, /\.composer-layout-resizer[\s\S]*?cursor:\s*row-resize/);
   assert.match(main, /installComposerLayoutResizer\(composerLayoutResizer\)/);
+  assert.match(main, /renderMarkdown\(content\)/);
+  assert.match(main, /renderProgressDisclosure\(progressByRequest\.get\(event\.replyTo\), false\)/);
+  assert.match(main, /details\.open = live/);
+  assert.match(main, /expandedWorklogs\.has\(worklogId\)/);
+  assert.match(main, /details\.addEventListener\("toggle"/);
+});
+
+test("official light and dark lockups include the approved mark and outlined wordmark", async () => {
+  const [light, dark] = await Promise.all([
+    readFile(brandLightPath, "utf8"),
+    readFile(brandDarkPath, "utf8"),
+  ]);
+  for (const asset of [light, dark]) {
+    assert.match(asset, /viewBox="0 0 890 145"/);
+    assert.match(asset, /M50 135 H158 C210 135 245 215 298 240/);
+    assert.match(asset, /M50 42 H167 C241 42 320 184 404 184 H540/);
+    assert.match(asset, /#20C1DC/);
+    assert.match(asset, /#F66DB9/);
+  }
+  assert.match(light, /color="#111318"/);
+  assert.match(dark, /color="#FFFFFF"/);
 });
 
 test("project Codex connector explains scope, credential prompting, hook trust, and focus restoration", async () => {
@@ -176,6 +248,34 @@ test("session rename updates local metadata and applies realtime control events"
   assert.match(api, /method: "PATCH"/);
 });
 
+test("cloud deletion is explicit, creator-gated, and preserves local work in the confirmation copy", async () => {
+  const [html, main, api, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(apiPath, "utf8"),
+    readFile(i18nPath, "utf8"),
+  ]);
+  for (const id of [
+    "delete-project-button",
+    "delete-session-button",
+    "delete-cloud-dialog",
+    "delete-cloud-form",
+    "delete-cloud-description",
+    "delete-cloud-local-note",
+    "delete-cloud-error",
+    "confirm-delete-cloud-button",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /Local projects, files, Codex tasks, and Agent conversations stay on every device/);
+  assert.match(main, /session\.ownerUserId === state\.currentUser\?\.id \|\| state\.project\?\.role === "owner"/);
+  assert.match(main, /await api\.deleteSession\(target\.id\)/);
+  assert.match(main, /await api\.deleteProject\(target\.id\)/);
+  assert.match(api, /async deleteSession\(sessionId\)[\s\S]*?method: "DELETE"/);
+  assert.match(api, /async deleteProject\(projectId\)[\s\S]*?method: "DELETE"/);
+  assert.match(i18n, /共享的云端历史将被永久删除/);
+});
+
 test("an empty project lets owners and participants create an eligible first session", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /element\("empty-state-title"\)\.textContent = "Start a shared thread\."/);
@@ -208,4 +308,26 @@ test("settings switches use a Safari-safe visual track and dark responses use se
   assert.match(styles, /\.settings-toggle input\[type="checkbox"\]:checked \+ \.settings-switch-visual::after/);
   assert.match(styles, /\.event-agent_response \{[\s\S]*?background: var\(--response-surface\);[\s\S]*?color: var\(--ink\);/);
   assert.match(styles, /html\[lang="zh-CN"\] \{[\s\S]*?--locale-text-boost: 1\.08;/);
+});
+
+test("custom numeric settings use spinner-free digit inputs", async () => {
+  const [html, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(stylesPath, "utf8")]);
+  assert.doesNotMatch(html, /type="number"/);
+  for (const id of [
+    "settings-text-scale",
+    "settings-left-width",
+    "settings-right-width",
+    "settings-composer-height",
+    "settings-context-budget",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*class="digits-only-input"[^>]*type="text"[^>]*inputmode="numeric"`));
+  }
+  assert.match(styles, /\.numeric-setting-context label \{[\s\S]*?grid-template-columns: minmax\(64px, 1fr\) 100px;/);
+});
+
+test("custom Codex models explain that access must already be configured", async () => {
+  const [html, i18n] = await Promise.all([readFile(htmlPath, "utf8"), readFile(i18nPath, "utf8")]);
+  const explanation = "This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.";
+  assert.match(html, new RegExp(explanation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(i18n, /这里只登记调用模型名，不配置模型接入。请先自行在 Codex 中配置受支持的模型，再将其名称添加到这里。/);
 });

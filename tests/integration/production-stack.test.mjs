@@ -106,10 +106,11 @@ test("production server and local bridge complete a provenance-labelled agent tu
 
     const history = await api.readEvents("shared-project", 0, 100);
     assert.deepEqual(
-      history.events.slice(-3).map((event) => event.type),
-      ["human_chat", "agent_request", "agent_response"],
+      history.events.slice(-4).map((event) => event.type),
+      ["human_chat", "agent_request", "agent_progress", "agent_response"],
     );
-    assert.equal(history.nextSequence, 4);
+    assert.equal(history.events.at(-2)?.payload?.phase, "lifecycle");
+    assert.equal(history.nextSequence, 5);
   } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });

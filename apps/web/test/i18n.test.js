@@ -47,6 +47,12 @@ test("dynamic collaboration labels translate without touching unknown user text"
   assert.equal(translateUiText("You are owner", "zh-CN"), "你的角色是 创建者");
   assert.equal(translateUiText("You are viewer", "zh-CN"), "你的角色是 访者");
   assert.equal(translateUiText("Only the creator can edit this Solo session.", "zh-CN"), "Solo 会话仅可由其创建者编辑。");
+  assert.equal(translateUiText("Delete cloud project", "zh-CN"), "删除云端项目");
+  assert.equal(translateUiText("Delete the cloud session “长会话名称”?", "zh-CN"), "删除云端会话“长会话名称”？");
+  assert.equal(
+    translateUiText("Delete the cloud project “量子项目” and all of its cloud sessions?", "zh-CN"),
+    "删除云端项目“量子项目”及其全部云端会话？",
+  );
   assert.equal(
     translateUiText("Participants edit multi sessions and read solo sessions. Viewers are read only everywhere.", "zh-CN"),
     "参与者可编辑 Multi；访者在所有位置均为只读。",

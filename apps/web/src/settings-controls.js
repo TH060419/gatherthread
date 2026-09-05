@@ -6,12 +6,16 @@ const NUMERIC_PRESETS = Object.freeze({
   "settings-context-preset": Object.freeze({ inputId: "settings-context-budget", context: true }),
 });
 
-export function shouldPreviewSettingsInput(controlId) {
-  return !Object.hasOwn(NUMERIC_PRESETS, controlId);
-}
-
 export function numericPresetInputId(controlId) {
   return NUMERIC_PRESETS[controlId]?.inputId ?? null;
+}
+
+export function numericPresetAction(controlId, selectedValue) {
+  const inputId = numericPresetInputId(controlId);
+  if (!inputId) return { kind: "preview" };
+  if (selectedValue === "custom") return { kind: "focus", inputId };
+  const update = numericPresetUpdate(controlId, selectedValue);
+  return update ? { kind: "apply", ...update } : { kind: "ignore" };
 }
 
 export function numericPresetUpdate(controlId, selectedValue) {

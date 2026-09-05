@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type {
   AgentRequestClaim,
+  AgentProgressInput,
   AppendEventInput,
   CanonicalEvent,
   CollaborationApi,
@@ -191,6 +192,24 @@ export class HttpCollaborationClient implements CollaborationApi {
         runtime_id: input.runtimeId,
         idempotency_key: input.idempotencyKey,
         payload: truncateJsonValue(input.payload, 160 * 1024),
+        ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
+        ...(input.observedReasoningEffort === undefined ? {} : { observed_reasoning_effort: input.observedReasoningEffort }),
+      }),
+    }));
+    return fromWireEvent(body.event ?? body);
+  }
+
+  async appendAgentProgress(
+    sessionId: string,
+    requestId: string,
+    input: AgentProgressInput,
+  ): Promise<CanonicalEvent> {
+    const body = requiredObject(await this.#request(`/sessions/${encodeURIComponent(sessionId)}/agent-requests/${encodeURIComponent(requestId)}/progress`, {
+      method: "POST",
+      body: JSON.stringify({
+        runtime_id: input.runtimeId,
+        idempotency_key: input.idempotencyKey,
+        payload: truncateJsonValue(input.payload, 32 * 1024),
         ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
         ...(input.observedReasoningEffort === undefined ? {} : { observed_reasoning_effort: input.observedReasoningEffort }),
       }),

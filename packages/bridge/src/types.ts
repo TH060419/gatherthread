@@ -7,6 +7,7 @@ import type {
 export type CanonicalEventType =
   | "human_chat"
   | "agent_request"
+  | "agent_progress"
   | "agent_response"
   | "tool_call"
   | "tool_result"
@@ -155,6 +156,14 @@ export interface CompleteAgentRequestInput {
   observedReasoningEffort?: string;
 }
 
+export type AgentProgressInput = CompleteAgentRequestInput;
+
+export interface HarnessProgressUpdate {
+  id: string;
+  content: string;
+  occurredAt?: string;
+}
+
 export interface CollaborationApi {
   listSessions(): Promise<SessionSummary[]>;
   listProjects?(): Promise<ProjectSummary[]>;
@@ -170,6 +179,11 @@ export interface CollaborationApi {
   registerRuntime(runtime: RuntimeRegistration): Promise<RegisteredRuntime>;
   heartbeatRuntime?(runtimeId: string): Promise<RegisteredRuntime>;
   claimAgentRequest(sessionId: string, requestId: string, runtimeId: string): Promise<AgentRequestClaim>;
+  appendAgentProgress?(
+    sessionId: string,
+    requestId: string,
+    input: AgentProgressInput,
+  ): Promise<CanonicalEvent>;
   completeAgentRequest(sessionId: string, requestId: string, input: CompleteAgentRequestInput): Promise<CanonicalEvent>;
   commitLocalTurn?(sessionId: string, input: CommitLocalTurnInput): Promise<CommitLocalTurnResult>;
   createSnapshotRequest?(sessionId: string): Promise<SnapshotRequestSummary>;
@@ -188,6 +202,7 @@ export interface HarnessExecutionInput {
   request: CanonicalEvent;
   canonicalHistory: CanonicalEvent[];
   runtime: RegisteredRuntime;
+  publishProgress?: (update: HarnessProgressUpdate) => Promise<void>;
 }
 
 export interface HarnessExecutionResult {

@@ -318,9 +318,39 @@ export class LocalBridge {
     if (!claim.claimed) return { claimed: false, completed: [] };
 
     const canonicalHistory = await this.#readCanonicalHistory(request.sessionId, request.sequence);
+    await this.#appendProgressFailSoft(request, runtime, {
+      idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:start`,
+      payload: {
+        content: "Agent started processing the request.",
+        phase: "lifecycle",
+        status: "started",
+        capture_fidelity: "harness_transcript",
+        source_harness: runtime.harness,
+      },
+    });
     let execution: HarnessExecutionResult;
     try {
-      execution = await executor.execute({ request, canonicalHistory, runtime });
+      execution = await executor.execute({
+        request,
+        canonicalHistory,
+        runtime,
+        ...(this.#api.appendAgentProgress === undefined ? {} : {
+          publishProgress: async (update) => {
+            const content = redactText(update.content).trim();
+            if (!content) return;
+            await this.#appendProgressFailSoft(request, runtime, {
+              idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:${hash(update.id)}`,
+              payload: redactValue({
+                content,
+                phase: "commentary",
+                ...(update.occurredAt === undefined ? {} : { occurred_at: update.occurredAt }),
+                capture_fidelity: "harness_transcript",
+                source_harness: runtime.harness,
+              }, this.#redaction),
+            });
+          },
+        }),
+      });
     } catch (error) {
       if (!(error instanceof HarnessExecutionTerminatedError)) throw error;
       const failure = await this.#api.completeAgentRequest(request.sessionId, request.id, {
@@ -365,6 +395,24 @@ export class LocalBridge {
       ...(execution.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: execution.observedReasoningEffort }),
     }));
     return { claimed: true, completed };
+  }
+
+  async #appendProgressFailSoft(
+    request: CanonicalEvent,
+    runtime: RegisteredRuntime,
+    input: { idempotencyKey: string; payload: unknown },
+  ): Promise<void> {
+    if (this.#api.appendAgentProgress === undefined) return;
+    try {
+      await this.#api.appendAgentProgress(request.sessionId, request.id, {
+        runtimeId: runtime.id,
+        idempotencyKey: input.idempotencyKey,
+        payload: input.payload,
+      });
+    } catch {
+      // Progress is supplementary. A transient progress upload failure must not
+      // strand an already-claimed request before its canonical final response.
+    }
   }
 
   async #readCanonicalHistory(sessionId: string, throughSequence: number): Promise<CanonicalEvent[]> {

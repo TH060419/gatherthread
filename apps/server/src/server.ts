@@ -5,6 +5,7 @@ import type { AddressInfo } from "node:net";
 import { extname, resolve, sep } from "node:path";
 import {
   AppendEventInputSchema,
+  AgentProgressInputSchema,
   AcceptInvitationInputSchema,
   ClaimAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
@@ -125,7 +126,7 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 }
 
 function setSecurityHeaders(response: ServerResponse, secureTransport: boolean): void {
-  response.setHeader("content-security-policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'");
+  response.setHeader("content-security-policy", "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'");
   response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=(), payment=(), usb=()");
   response.setHeader("referrer-policy", "no-referrer");
   response.setHeader("x-content-type-options", "nosniff");
@@ -142,6 +143,9 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".svg": "image/svg+xml",
   ".txt": "text/plain; charset=utf-8",
   ".webmanifest": "application/manifest+json",
+  ".ttf": "font/ttf",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
 };
 
 function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string): boolean {
@@ -368,11 +372,17 @@ export async function startCollaborationServer(
   const actorWriteLimiter = new FixedWindowRateLimiter(options.actorWriteRateLimit ?? { windowMs: 60_000, limit: 120 });
   const maxConnections = options.maxConnections ?? 128;
 
-  const closeSocketsWithoutMembership = (): void => {
+  const closeRealtimeWithoutMembership = (): void => {
     for (const [socket, state] of sockets) {
       if (state.sessionId !== null && database.membershipRole(state.sessionId, state.actor.user_id) === null) {
         socket.close(1008, "membership_revoked");
         sockets.delete(socket);
+      }
+    }
+    for (const [ticketValue, ticket] of realtimeTickets) {
+      if (ticket.allowedSessionId !== null
+        && database.membershipRole(ticket.allowedSessionId, ticket.actor.user_id) === null) {
+        realtimeTickets.delete(ticketValue);
       }
     }
   };
@@ -583,6 +593,13 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (projectId && request.method === "DELETE" && parts.length === 3) {
+        service.deleteProject(actor, projectId);
+        closeRealtimeWithoutMembership();
+        response.writeHead(204).end();
+        return;
+      }
+
       if (projectId && parts[3] === "sessions" && parts.length === 4 && request.method === "GET") {
         sendJson(response, 200, { data: { sessions: service.listProjectSessions(actor, projectId) } });
         return;
@@ -611,7 +628,7 @@ export async function startCollaborationServer(
       if (projectId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
         await readAuthenticatedJson();
         service.removeProjectMembership(actor, projectId, parts[4]);
-        closeSocketsWithoutMembership();
+        closeRealtimeWithoutMembership();
         response.writeHead(204).end();
         return;
       }
@@ -666,6 +683,13 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (sessionId && request.method === "DELETE" && parts.length === 3) {
+        service.deleteSession(actor, sessionId);
+        closeRealtimeWithoutMembership();
+        response.writeHead(204).end();
+        return;
+      }
+
       if (sessionId && parts[3] === "members" && parts.length === 4 && request.method === "GET") {
         sendJson(response, 200, { data: { members: service.listMembers(actor, sessionId) } });
         return;
@@ -701,7 +725,7 @@ export async function startCollaborationServer(
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
         const input = z.object({ idempotency_key: IdempotencyKeySchema }).parse(await readAuthenticatedJson());
         const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key);
-        closeSocketsWithoutMembership();
+        closeRealtimeWithoutMembership();
         sendJson(response, 200, { data: { event } });
         return;
       }
@@ -780,6 +804,21 @@ export async function startCollaborationServer(
       if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "claim" && parts.length === 6 && request.method === "POST") {
         const input = ClaimAgentRequestInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: service.claimAgentRequest(actor, sessionId, parts[4], input.runtime_id) });
+        return;
+      }
+
+      if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "progress" && parts.length === 6 && request.method === "POST") {
+        const input = AgentProgressInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: { event: service.appendAgentProgress(
+          actor,
+          sessionId,
+          parts[4],
+          input.runtime_id,
+          input.idempotency_key,
+          input.payload,
+          input.observed_model,
+          input.observed_reasoning_effort,
+        ) } });
         return;
       }
 

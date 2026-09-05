@@ -6,7 +6,7 @@ Enable multiple people to collaborate on an agent-assisted project while each pe
 
 ## Project collaboration boundary
 
-A project groups related sessions and is the stable membership, invitation, and local-agent binding boundary. Creating a project atomically creates only its owner membership; an owner or participant then creates an eligible first session explicitly. Existing sessions named `General` are preserved, but new and historical projects are never backfilled with one. A project invitation grants access to the project's current and future sessions. The project owner creates and renames `multi` sessions and can change every other member between `participant` and `viewer`. Owners and participants create and rename only their own personal `solo` sessions.
+A project groups related sessions and is the stable membership, invitation, and local-agent binding boundary. Creating a project atomically creates only its owner membership; an owner or participant then creates an eligible first session explicitly. Existing sessions named `General` are preserved, but new and historical projects are never backfilled with one. A project invitation grants access to the project's current and future sessions. The project owner creates and renames `multi` sessions and can change every other member between `participant` and `viewer`. Owners and participants create and rename only their own personal `solo` sessions. A session creator or project owner may permanently delete that session's cloud copy; only the project owner may delete the whole cloud project. Neither operation deletes local workspaces or Agent conversations.
 
 One collaborator maps the project to one local working directory and harness configuration. Sessions inside that project keep independent canonical histories, cursors, native agent conversations, and local compaction.
 
@@ -24,6 +24,7 @@ Project owners and participants can append human chat and agent requests. A huma
 
 - `human_chat`
 - `agent_request`
+- `agent_progress`
 - `agent_response`
 - `tool_call`
 - `tool_result`
@@ -33,6 +34,8 @@ Project owners and participants can append human chat and agent requests. A huma
 - `session_state_change`
 
 Every event has a server-assigned monotonic sequence, stable event ID, idempotency key, actor identity, frozen actor display name, timestamp, visibility, reply target, and optional runtime provenance.
+
+`agent_progress` records a bounded execution lifecycle marker and any public harness commentary emitted during a claimed Web Agent request. It remains pending state rather than request completion. The Web client shows it live while work is active, then places all linked progress under a closed-by-default work log beside the final Markdown-rendered `agent_response`. GFM tables and bundled KaTeX inline/display formulas are supported. Hidden model reasoning and chain-of-thought are never canonical events.
 
 Internal runtime provenance binds `user_id`, `device_id`, runtime identity, `harness`, `provider`, `model`, native-session identity, and capture fidelity. Shared attribution exposes the username, harness, provider, model, and fidelity while replacing local device, runtime, and native-session identifiers outside the owning user or authorized owner view.
 
@@ -62,7 +65,7 @@ Solo sessions reject every writer except their immutable creator, and a viewer d
 
 ## Local project synchronization
 
-One connector binds an accessible GatherThread project to one local working directory. The Web project page generates separate credential-free macOS/Linux and Windows commands. Every live-writable Codex session has a Desktop-owned interactive task and a distinctly labelled background execution projection. Web Agent requests run only in the background; trusted Hooks upload Desktop turns and provide the next acknowledged canonical capsule at the following local prompt. The visible response shows no more than three short previews, while exact bodies remain bounded model context. Oversized events resume across completed turns from a durable UTF-8 checkpoint, and cancellation never advances delivery. A completed background projection that is externally claimed is replaceable from canonical history, while unresolved execution remains fail-closed. Human chat is authored only in GatherThread and becomes context without triggering the local Agent. [ADR-0013](adr/0013-single-writer-dual-codex-projections.md) records the single-writer boundary, and [ADR-0014](adr/0014-acknowledged-bounded-desktop-relay-capsules.md) records the relay contract.
+One connector binds an accessible GatherThread project to one local working directory. The Web project page generates separate credential-free macOS/Linux and Windows commands. Every live-writable Codex session has a Desktop-owned interactive task and a distinctly labelled background execution projection. Web Agent requests run only in the background; trusted Hooks upload Desktop turns and provide the next acknowledged canonical capsule at the following local prompt. The visible response shows no more than three short previews, while exact bodies remain bounded model context. Oversized events resume across completed turns from a durable UTF-8 checkpoint, and cancellation never advances delivery. A completed background projection that is externally claimed or belongs to a previous configured model is replaceable from canonical history, while unresolved execution remains fail-closed. Changing the connector model never replaces the Desktop-owned task. Human chat is authored only in GatherThread and becomes context without triggering the local Agent. [ADR-0013](adr/0013-single-writer-dual-codex-projections.md) records the single-writer boundary, and [ADR-0014](adr/0014-acknowledged-bounded-desktop-relay-capsules.md) records the relay contract.
 
 With reviewed project hooks installed and trusted, a completed prompt typed directly into a managed local conversation is an Agent request. The connector persists the request, allowed redacted tool events, and final response in an idempotent outbox before uploading the complete turn atomically. The server assigns its canonical position and returns the event bindings; retries cannot create another request or Agent run for the same local turn. Without trusted hooks, direct desktop turns remain local and are not inferred from native history.
 
@@ -113,3 +116,5 @@ One participating user runs the only active authoritative server for a deploymen
 17. A new project starts with no sessions, lets an owner create `solo` or `multi` and a participant create only a personal `solo`, and produces credential-free project connection commands for macOS/Linux and Windows.
 18. A project owner can rename `multi`; a Solo creator can rename that Solo. Subscribed Web clients converge on the cloud title without rebuilding history. Local Agent titles remain independently editable after their initial `<session> · GatherThread` label, and neither title may participate in session/thread identity or duplicate creation.
 19. With trusted Hooks enabled, the first prompt in an unbound local Codex task creates one idempotent creator-owned Solo for an owner or participant and binds the same task. Empty tasks create nothing; viewer tasks remain local-only; connector-owned background and snapshot tasks cannot trigger discovery.
+20. A session creator or project owner can delete a session's cloud copy, and only the project owner can delete the cloud project. The server removes dependent cloud history atomically, closes affected realtime scopes, and leaves every local workspace, file, Codex task, and Agent conversation untouched.
+21. Every claimed Web Agent turn exposes a lifecycle progress marker and any public Codex commentary as ordered `agent_progress`; the linked final answer renders GFM plus bounded KaTeX formulas and folds earlier progress closed by default, while private reasoning never reaches the server.
