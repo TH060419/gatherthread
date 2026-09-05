@@ -7,6 +7,8 @@ import {
   AppendEventInputSchema,
   AgentProgressInputSchema,
   AcceptInvitationInputSchema,
+  ApproveDshPairingInputSchema,
+  BeginDshPairingInputSchema,
   ClaimAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
   ClaimInvitationInputSchema,
@@ -40,6 +42,7 @@ import {
   type Actor,
 } from "./database.js";
 import { ApiError, notFound, unauthorized } from "./errors.js";
+import { DshDevicePairingBroker, dshPairingPollToken } from "./dsh-pairing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { CollaborationService } from "./service.js";
 
@@ -60,6 +63,12 @@ const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/invitations/claim",
   "/v1/device-authorizations/claim",
 ]);
+
+function isSensitiveUnauthenticatedPath(pathname: string): boolean {
+  return SENSITIVE_UNAUTHENTICATED_PATHS.has(pathname)
+    || pathname === "/v1/dsh-pairings"
+    || /^\/v1\/dsh-pairings\/[^/]+\/poll$/u.test(pathname);
+}
 
 interface SocketState {
   actor: Actor;
@@ -369,6 +378,7 @@ export async function startCollaborationServer(
     maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
+  const dshPairings = new DshDevicePairingBroker();
   const secureTransport = options.secureTransport ?? false;
   const browserCookieName = browserSessionCookieName(secureTransport);
   const sockets = new Map<WebSocket, SocketState>();
@@ -415,7 +425,7 @@ export async function startCollaborationServer(
         response.setHeader("retry-after", rateLimit.retryAfterSeconds);
         throw new ApiError(429, "rate_limited", "Too many requests");
       }
-      if (SENSITIVE_UNAUTHENTICATED_PATHS.has(url.pathname)) {
+      if (isSensitiveUnauthenticatedPath(url.pathname)) {
         const sensitiveLimit = sensitiveLimiter.consume(`${remoteAddress}:${url.pathname}`);
         if (!sensitiveLimit.allowed) {
           response.setHeader("retry-after", sensitiveLimit.retryAfterSeconds);
@@ -451,6 +461,34 @@ export async function startCollaborationServer(
         } catch {
           sendJson(response, 503, { data: { status: "unavailable" } });
         }
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/dsh-pairings") {
+        if (requestOrigin !== undefined) {
+          throw new ApiError(403, "pairing_host_only", "DSH pairing must start from the local Host plugin");
+        }
+        const input = BeginDshPairingInputSchema.parse(await readJson(request));
+        sendJson(response, 201, { data: dshPairings.begin(input.device_name) });
+        return;
+      }
+
+      if (request.method === "POST"
+        && parts[0] === "v1"
+        && parts[1] === "dsh-pairings"
+        && parts[2]
+        && parts[3] === "poll"
+        && parts.length === 4) {
+        if (requestOrigin !== undefined) {
+          throw new ApiError(403, "pairing_host_only", "DSH pairing must be polled by the local Host plugin");
+        }
+        z.object({}).parse(await readJson(request));
+        const result = dshPairings.poll(
+          parts[2],
+          dshPairingPollToken(request.headers.authorization),
+          (userId, deviceName, deviceId) => database.createDevice(userId, deviceName, deviceId),
+        );
+        sendJson(response, result.status === "pending" ? 202 : 201, { data: result });
         return;
       }
 
@@ -552,6 +590,15 @@ export async function startCollaborationServer(
         }
         response.setHeader("set-cookie", serializeClearedBrowserSessionCookie(browserCookieName, secureTransport));
         response.writeHead(204).end();
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/dsh-pairings/approve") {
+        if (authentication.kind !== "browser_session") {
+          throw new ApiError(403, "browser_session_required", "DSH pairing approval requires the signed-in browser session");
+        }
+        const input = ApproveDshPairingInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: { pairing: dshPairings.approve(actor, input.user_code) } });
         return;
       }
 
@@ -735,6 +782,11 @@ export async function startCollaborationServer(
 
       if (sessionId && parts[3] === "members" && parts.length === 4 && request.method === "GET") {
         sendJson(response, 200, { data: { members: service.listMembers(actor, sessionId) } });
+        return;
+      }
+
+      if (sessionId && parts[3] === "runtimes" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: { runtimes: service.listOwnExecutionRuntimes(actor, sessionId) } });
         return;
       }
 
@@ -1025,6 +1077,7 @@ export async function startCollaborationServer(
     async close() {
       clearInterval(heartbeat);
       unsubscribe();
+      dshPairings.clear();
       for (const socket of sockets.keys()) socket.terminate();
       wsServer.close();
       await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));

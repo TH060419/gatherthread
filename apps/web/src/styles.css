@@ -887,6 +887,13 @@ code {
   font-weight: 700;
 }
 
+.project-connect-button small {
+  margin-top: 5px;
+  color: var(--ink-soft);
+  font-size: 0.66rem;
+  font-weight: 550;
+}
+
 .project-connect-button[hidden] {
   display: none;
 }
@@ -1817,13 +1824,27 @@ time,
 
 .agent-request-profile {
   display: grid;
-  grid-template-columns: auto minmax(170px, 1fr) auto minmax(140px, 0.72fr);
+  grid-template-columns: auto minmax(130px, 0.65fr) auto minmax(170px, 1fr) auto minmax(130px, 0.65fr);
   align-items: center;
   gap: 8px;
   margin: 10px 0 0;
   padding: 0;
   border: 0;
   color: var(--ink-soft);
+}
+
+.agent-profile-fields,
+.settings-agent-fields {
+  display: contents;
+}
+
+.agent-profile-fields[hidden],
+.settings-agent-fields[hidden] {
+  display: none;
+}
+
+.dsh-agent-profile-fields select {
+  grid-column: span 3;
 }
 
 .agent-request-profile legend {
@@ -2231,6 +2252,14 @@ time,
     grid-template-columns: auto minmax(0, 1fr);
   }
 
+  .dsh-agent-profile-fields select {
+    grid-column: auto;
+  }
+
+  .dsh-runtime-row {
+    grid-template-columns: 1fr;
+  }
+
   .settings-dialog {
     width: 100vw;
     height: 100dvh;
@@ -2620,6 +2649,118 @@ time,
 .codex-connect-dialog {
   width: min(720px, calc(100vw - 28px));
   max-height: min(88vh, 780px);
+}
+
+.dsh-connect-dialog {
+  width: min(760px, calc(100vw - 28px));
+}
+
+.dsh-connect-steps {
+  display: grid;
+  gap: 12px;
+  margin: 18px 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dsh-connect-steps > li,
+.dsh-runtime-section {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper-raised);
+}
+
+.dsh-connect-steps .command-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.dsh-connect-steps h3,
+.dsh-runtime-section h3 {
+  margin: 0;
+  font-family: inherit;
+  font-size: 0.92rem;
+  font-weight: 720;
+}
+
+.dsh-connect-steps p,
+.dsh-advanced-fallback p {
+  margin: 10px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.step-number {
+  display: grid;
+  width: 25px;
+  height: 25px;
+  place-items: center;
+  border-radius: 50%;
+  color: var(--teal-dark);
+  background: var(--teal-wash);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.dsh-runtime-section {
+  margin-top: 18px;
+}
+
+.dsh-runtime-list {
+  display: grid;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dsh-runtime-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+
+.dsh-runtime-row strong,
+.dsh-runtime-row small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.dsh-runtime-row small {
+  margin-top: 3px;
+  color: var(--ink-soft);
+  font-size: 0.68rem;
+}
+
+.dsh-runtime-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.dsh-advanced-fallback {
+  margin-top: 16px;
+  color: var(--ink-soft);
+  font-size: 0.76rem;
+}
+
+.pairing-code {
+  display: block;
+  margin: 20px 0;
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--paper-muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: clamp(1.35rem, 5vw, 2rem);
+  font-weight: 760;
+  letter-spacing: 0.08em;
+  text-align: center;
 }
 
 .codex-connect-content {

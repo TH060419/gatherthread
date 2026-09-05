@@ -21,14 +21,22 @@ import {
 } from "./codex-hooks.js";
 import { validateCodexWorkspace, type CodexSandboxMode } from "./codex-executor.js";
 import { FileCursorStore } from "./cursors.js";
-import { CollaborationHttpError, HttpCollaborationClient } from "./http-client.js";
+import { HttpCollaborationClient } from "./http-client.js";
 import { withoutGatherThreadCredentials } from "./executor.js";
 import { ensureProjectWorkspace } from "./project-workspace.js";
 import type {
   ProjectHarnessAdapter,
-  ProjectHarnessDeactivationReason,
   ProjectHarnessSessionBinding,
 } from "./project-harness.js";
+import {
+  reconcileProjectSessionPermissions,
+  refreshProjectSessionPermissions,
+} from "./project-session-permissions.js";
+export {
+  isSessionWritableBy,
+  reconcileProjectSessionPermissions,
+  refreshProjectSessionPermissions,
+} from "./project-session-permissions.js";
 import type { CollaborationApi, HarnessExecutor, ProjectSummary, SessionSummary } from "./types.js";
 
 interface CodexConnectOptions {
@@ -527,10 +535,6 @@ interface ManagedSession {
   relayLocalHarnessEvent?: ProjectHarnessSessionBinding["relayLocalHarnessEvent"];
 }
 
-interface ManagedPublishingBinding {
-  deactivateLocalPublishing?: ProjectHarnessSessionBinding["deactivateLocalPublishing"];
-}
-
 function managedThreadName(sessionName: string): string {
   return [sessionName, "GatherThread"].join(" · ").slice(0, 240);
 }
@@ -611,75 +615,6 @@ export async function initializeProjectSession(options: {
     ...(binding.deactivateLocalPublishing === undefined ? {} : { deactivateLocalPublishing: binding.deactivateLocalPublishing }),
     ...(binding.relayLocalHarnessEvent === undefined ? {} : { relayLocalHarnessEvent: binding.relayLocalHarnessEvent }),
   };
-}
-
-export async function reconcileProjectSessionPermissions<T extends ManagedPublishingBinding>(input: {
-  sessions: readonly SessionSummary[];
-  actorUserId?: string;
-  managed: Map<string, T>;
-  harness: ProjectHarnessAdapter;
-}): Promise<{
-  visibleSessions: SessionSummary[];
-  eligibleSessions: SessionSummary[];
-  errors: Error[];
-}> {
-  const visibleSessions = input.sessions.filter((session) => session.state !== "archived");
-  const eligibleSessions = visibleSessions.filter((session) => isSessionWritableBy(session, input.actorUserId));
-  const eligibleIds = new Set(eligibleSessions.map((session) => session.id));
-  const sessionsById = new Map(input.sessions.map((session) => [session.id, session]));
-  const errors: Error[] = [];
-  for (const [sessionId, current] of [...input.managed]) {
-    if (eligibleIds.has(sessionId)) continue;
-    input.managed.delete(sessionId);
-    try {
-      await current.deactivateLocalPublishing?.(deactivationReason(sessionsById.get(sessionId)));
-    } catch (error) {
-      errors.push(error instanceof Error ? error : new Error("Local publishing deactivation failed"));
-    }
-  }
-  try {
-    await input.harness.deactivateExecutionBindings?.({
-      retainSessionIds: [...input.managed.keys()],
-      preserveSessionIds: [...eligibleIds],
-    });
-  } catch (error) {
-    errors.push(error instanceof Error ? error : new Error("Execution allowlist reconciliation failed"));
-  }
-  return { visibleSessions, eligibleSessions, errors };
-}
-
-export function isSessionWritableBy(session: SessionSummary, actorUserId?: string): boolean {
-  if (session.role === "viewer") return false;
-  if (session.mode === "solo") {
-    return session.ownerUserId === undefined ? session.role === "owner" : session.ownerUserId === actorUserId;
-  }
-  return session.role === "owner" || session.role === "participant";
-}
-
-export async function refreshProjectSessionPermissions<T extends ManagedPublishingBinding>(input: {
-  loadSessions: () => Promise<SessionSummary[]>;
-  actorUserId?: string;
-  managed: Map<string, T>;
-  harness: ProjectHarnessAdapter;
-}): Promise<
-  | { status: "updated"; visibleSessions: SessionSummary[]; eligibleSessions: SessionSummary[]; errors: Error[] }
-  | { status: "transient_failure"; error: unknown }
-  | { status: "project_inaccessible"; error: CollaborationHttpError }
-> {
-  let sessions: SessionSummary[];
-  try {
-    sessions = await input.loadSessions();
-  } catch (error) {
-    return isProjectAccessRevoked(error)
-      ? { status: "project_inaccessible", error }
-      : { status: "transient_failure", error };
-  }
-  return { status: "updated", ...await reconcileProjectSessionPermissions({
-    sessions,
-    ...(input.actorUserId === undefined ? {} : { actorUserId: input.actorUserId }),
-    managed: input.managed,
-    harness: input.harness,
-  }) };
 }
 
 class LocalTaskDiscoveryDisabledError extends Error {}
@@ -1019,16 +954,6 @@ export function resolveCodexHookRelayPath(
   return platform === "win32"
     ? `\\\\.\\pipe\\gatherthread-${mappingId}-hook-relay`
     : path.posix.join(stateRoot, "hook-relay.sock");
-}
-
-function deactivationReason(session: SessionSummary | undefined): ProjectHarnessDeactivationReason {
-  if (!session) return "removed";
-  if (session.state === "archived") return "archived";
-  return "read_only";
-}
-
-function isProjectAccessRevoked(error: unknown): error is CollaborationHttpError {
-  return error instanceof CollaborationHttpError && (error.status === 403 || error.status === 404);
 }
 
 export async function resolveCodexCommand(

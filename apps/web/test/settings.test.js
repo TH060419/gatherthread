@@ -12,9 +12,13 @@ import {
   effectiveContextBudget,
   normalizeCodexProfile,
   normalizeSettings,
+  projectAgentHarness,
   projectCodexProfile,
+  projectDshProfile,
   SETTINGS_STORAGE_KEY,
+  withProjectAgentHarness,
   withProjectCodexProfile,
+  withProjectDshProfile,
 } from "../src/settings.js";
 
 test("settings normalize invalid or stale browser data without retaining unknown fields", () => {
@@ -27,7 +31,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 4);
+  assert.equal(normalized.version, 5);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -65,6 +69,47 @@ test("project Agent profiles are isolated and custom models remain safe data", (
   assert.throws(() => addCustomCodexModel(settings, "--danger"), /may not start/);
   assert.throws(() => addCustomCodexModel(settings, "bad\nmodel"), /single-line/);
   assert.throws(() => withProjectCodexProfile(settings, "bad project", { model: "deepseek-chat", effort: "high" }), /safe project ID/);
+});
+
+test("project harness and DSH runtime selections are exact, isolated, and credential-free", () => {
+  let settings = withProjectAgentHarness(DEFAULT_SETTINGS, "project-alpha", "deepseek-harness");
+  settings = withProjectDshProfile(settings, "project-alpha", {
+    deviceId: "dsh-device-1",
+    provider: "My Provider",
+    model: "CaseSensitive/Model-X",
+    token: "must-not-survive",
+  });
+  assert.equal(projectAgentHarness(settings, "project-alpha"), "deepseek-harness");
+  assert.equal(projectAgentHarness(settings, "project-beta"), "deepseek-harness");
+  assert.deepEqual(projectDshProfile(settings, "project-alpha"), {
+    deviceId: "dsh-device-1",
+    provider: "My Provider",
+    model: "CaseSensitive/Model-X",
+  });
+  assert.equal(projectDshProfile(settings, "project-beta"), null);
+  assert.doesNotMatch(JSON.stringify(settings), /must-not-survive|token/i);
+  assert.throws(() => withProjectAgentHarness(settings, "project-alpha", "unknown"), /supported Agent harness/);
+  assert.throws(() => withProjectDshProfile(settings, "project-alpha", {
+    deviceId: "dsh-device-1",
+    provider: "provider",
+    model: "bad\nmodel",
+  }), /connected DeepSeek Harness runtime/);
+});
+
+test("legacy flat Codex project profiles migrate without changing their model or effort", () => {
+  const migrated = normalizeSettings({
+    version: 4,
+    agents: {
+      activeHarness: "codex",
+      customCodexModels: ["Legacy/Model"],
+      projectProfiles: {
+        "project-alpha": { model: "Legacy/Model", effort: "high" },
+      },
+    },
+  });
+  assert.equal(migrated.version, 5);
+  assert.equal(projectAgentHarness(migrated, "project-alpha"), "codex");
+  assert.deepEqual(projectCodexProfile(migrated, "project-alpha"), { model: "Legacy/Model", effort: "high" });
 });
 
 test("context budget keeps a precise configured value while reporting connector limits", () => {
@@ -106,7 +151,7 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 4);
+  assert.equal(migrated.version, 5);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");

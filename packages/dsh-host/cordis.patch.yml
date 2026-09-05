@@ -1,0 +1,13 @@
+# Official GatherThread profile layer for the published DSH Web profile.
+# Installing this package is the explicit opt-in; no GatherThread credential is
+# present in this patch. Pairing and project selection happen inside DSH.
+
+- insert:
+    - id: gatherthread-dsh-native
+      # The Loader row must use the package root. DSH 0.1.2's public Client
+      # module discovery intentionally ignores package subpaths, while this
+      # package's root export is the same native Host plugin.
+      name: '@gatherthread/dsh-host'
+      inject: [agents, sessions, sessionPersistence, llm, credentials, connection]
+      config:
+        enabled: true

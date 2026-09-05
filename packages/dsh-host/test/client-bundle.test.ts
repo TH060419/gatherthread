@@ -1,0 +1,276 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import test from "node:test";
+import vm from "node:vm";
+import { fileURLToPath } from "node:url";
+
+interface Handoff {
+  id: string;
+  factory(require: (specifier: string) => unknown): {
+    inject: string[];
+    apply(context: unknown): void;
+  };
+}
+
+const packageRoot = fileURLToPath(new URL("../..", import.meta.url));
+
+async function loadClient(options: {
+  fetch?: typeof fetch;
+  setTimeout?: typeof setTimeout;
+  clearTimeout?: typeof clearTimeout;
+} = {}) {
+  const source = await readFile(path.join(packageRoot, "client", "client.js"), "utf8");
+  let handoff: Handoff | undefined;
+  let effect: (() => (() => void)) | undefined;
+  const stateWrites: unknown[] = [];
+  const React = {
+    useState(initial: unknown) {
+      return [initial, (value: unknown) => { stateWrites.push(value); }];
+    },
+    useEffect(callback: () => () => void) { effect = callback; },
+    createElement(type: unknown, props: unknown, ...children: unknown[]) {
+      return { type, props, children };
+    },
+  };
+  const context = vm.createContext({
+    window: { __ModuleLoader__: { load(value: Handoff) { handoff = value; } } },
+    fetch: options.fetch ?? globalThis.fetch,
+    setTimeout: options.setTimeout ?? globalThis.setTimeout,
+    clearTimeout: options.clearTimeout ?? globalThis.clearTimeout,
+    AbortController,
+    Date,
+    Number,
+    JSON,
+    Set,
+    Object,
+    String,
+  });
+  vm.runInContext(source, context, { filename: "gatherthread-dsh-client.js" });
+  if (handoff === undefined) throw new Error("client bundle did not register");
+  const plugin = handoff.factory((specifier) => {
+    if (specifier !== "react") throw new Error(`unexpected client external: ${specifier}`);
+    return React;
+  });
+  return {
+    source,
+    handoff,
+    plugin,
+    stateWrites,
+    getEffect: () => effect,
+  };
+}
+
+test("dsh.client bundle registers the official settings Slot without credential material", async () => {
+  const loaded = await loadClient();
+  assert.equal(loaded.handoff.id, "@gatherthread/dsh-host");
+  assert.deepEqual(Array.from(loaded.plugin.inject), ["slots", "connection"]);
+  let registration: { options: Record<string, unknown>; component: () => unknown } | undefined;
+  loaded.plugin.apply({
+    slots: {
+      inject(name: string, create: () => unknown) {
+        assert.equal(name, "settings.section");
+        create();
+      },
+      register(options: Record<string, unknown>, component: () => unknown) {
+        registration = { options, component };
+        return () => undefined;
+      },
+    },
+  });
+  assert.equal(registration?.options.id, "gatherthread");
+  assert.equal(typeof registration?.component, "function");
+  assert.doesNotMatch(loaded.source, /GATHERTHREAD_DSH_TOKEN|GATHERTHREAD_TOKEN|Authorization|localStorage|sessionStorage/);
+  assert.doesNotMatch(loaded.source, /\/Users\/|[A-Za-z]:\\\\/);
+  assert.doesNotMatch(loaded.source, /#[0-9a-f]{3,8}\b/iu, "Client surfaces must not hard-code light-theme colors");
+  assert.match(loaded.source, /已验证兼容：[\s\S]*state\.compatibility\.version/);
+});
+
+test("Client prefers the authenticated DSH RPC channel and accepts only the pinned native status shape", async () => {
+  const calls: Array<{ channel: string; endpoint: string; payload: unknown }> = [];
+  const loaded = await loadClient({
+    fetch: (async () => { throw new Error("native Client must not use the legacy Fetch route"); }) as typeof fetch,
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    connection: {
+      rpc: {
+        async call(channel: string, endpoint: string, payload: unknown) {
+          calls.push({ channel, endpoint, payload });
+          return { ok: true, value: {
+            schemaVersion: 1,
+            integration: "gatherthread",
+            authorization: "unpaired",
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+            runtime: {
+              schemaVersion: 1,
+              integration: "gatherthread",
+              connection: "stopped",
+              bindingMode: "project",
+              projectName: "GatherThread / 共序",
+              activeSessionCount: 0,
+              sessions: [],
+              updatedAt: "2026-09-06T00:00:00.000Z",
+            },
+          } };
+        },
+      },
+    },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  component?.();
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.channel, "/gatherthread");
+  assert.equal(calls[0]?.endpoint, "status/get");
+  assert.deepEqual(Object.keys(calls[0]?.payload as object), []);
+  assert.ok(loaded.stateWrites.some((value) => (
+    value !== null && typeof value === "object" && Reflect.get(value, "authorization") === "unpaired"
+  )));
+  cleanup?.();
+});
+
+test("Client fails closed on malformed native RPC state instead of falling back to the legacy route", async () => {
+  let fetchCount = 0;
+  const callbacks: Array<() => void> = [];
+  const loaded = await loadClient({
+    fetch: (async () => {
+      fetchCount += 1;
+      return new Response("{}");
+    }) as typeof fetch,
+    setTimeout: ((callback: () => void) => {
+      callbacks.push(callback);
+      return callbacks.length as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    connection: { rpc: { async call() { return { ok: true, value: { schemaVersion: 999 } }; } } },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  component?.();
+  loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(fetchCount, 0);
+  assert.equal(callbacks.length, 0, "an incompatible native contract must not retry or use another channel");
+  assert.equal(loaded.stateWrites.includes(true), true);
+});
+
+test("Client status request is same-origin, cookie-based, bounded, and aborts on unmount", async () => {
+  const calls: Array<{ input: string | URL | Request; init: RequestInit | undefined }> = [];
+  let scheduled: (() => void) | undefined;
+  let cleared = 0;
+  const snapshot = {
+    schemaVersion: 1,
+    integration: "gatherthread",
+    connection: "connected",
+    bindingMode: "project",
+    projectName: "Project One",
+    activeSessionCount: 1,
+    sessions: [{ sessionId: "session-1", title: "General", state: "idle" }],
+    updatedAt: "2026-09-06T00:00:00.000Z",
+  };
+  const loaded = await loadClient({
+    fetch: (async (input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ input, init });
+      return new Response(JSON.stringify(snapshot), {
+        headers: { "content-length": String(JSON.stringify(snapshot).length) },
+      });
+    }) as typeof fetch,
+    setTimeout: ((callback: () => void) => {
+      scheduled = callback;
+      return 7 as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout,
+    clearTimeout: (() => { cleared += 1; }) as typeof clearTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  component?.();
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]?.input, "/api/gatherthread.status");
+  assert.deepEqual({
+    method: calls[0]?.init?.method,
+    credentials: calls[0]?.init?.credentials,
+    cache: calls[0]?.init?.cache,
+    redirect: calls[0]?.init?.redirect,
+  }, {
+    method: "GET",
+    credentials: "same-origin",
+    cache: "no-store",
+    redirect: "error",
+  });
+  assert.equal(new Headers(calls[0]?.init?.headers).has("authorization"), false);
+  assert.equal(typeof scheduled, "function");
+  const signal = calls[0]?.init?.signal;
+  cleanup?.();
+  assert.equal(signal?.aborted, true);
+  assert.equal(cleared, 1);
+  assert.ok(loaded.stateWrites.some((value) => (
+    value !== null && typeof value === "object" && Reflect.get(value, "integration") === "gatherthread"
+  )));
+});
+
+test("Client clears stale details and stops polling after a permanent Host status failure", async () => {
+  const callbacks: Array<() => void> = [];
+  const loaded = await loadClient({
+    fetch: (async () => new Response("not found", { status: 404 })) as typeof fetch,
+    setTimeout: ((callback: () => void) => {
+      callbacks.push(callback);
+      return callbacks.length as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  component?.();
+  loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(callbacks.length, 0, "a permanent 4xx must not retain a retry timer");
+  assert.equal(loaded.stateWrites.includes(undefined), true, "stale public status must be cleared");
+  assert.equal(loaded.stateWrites.includes(true), true, "the panel must enter its generic unavailable state");
+});
+
+test("Client transient retries are bounded", async () => {
+  const callbacks: Array<() => void> = [];
+  const loaded = await loadClient({
+    fetch: (async () => { throw new Error("offline"); }) as typeof fetch,
+    setTimeout: ((callback: () => void) => {
+      callbacks.push(callback);
+      return callbacks.length as unknown as ReturnType<typeof setTimeout>;
+    }) as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  component?.();
+  loaded.getEffect()?.();
+  for (let index = 0; index < 4; index += 1) {
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    callbacks[index]?.();
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(callbacks.length, 3, "transient status failure must stop after three retries");
+});

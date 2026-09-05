@@ -245,6 +245,19 @@ export class HttpCollaborationApi {
     });
   }
 
+  async listSessionRuntimes(sessionId) {
+    const { runtimes } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/runtimes`);
+    return runtimes.map((runtime) => ({
+      id: runtime.id,
+      deviceId: runtime.device_id,
+      harness: runtime.harness,
+      provider: runtime.provider,
+      model: runtime.model,
+      status: runtime.status,
+      lastSeenAt: runtime.last_seen_at,
+    }));
+  }
+
   async createSnapshotRequest(sessionId) {
     const result = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/snapshot-requests`, {
       method: "POST",
@@ -347,6 +360,18 @@ export class HttpCollaborationApi {
     return device;
   }
 
+  async revokeDevice(deviceId) {
+    await this.request(`/v1/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+  }
+
+  async approveDshPairing(userCode) {
+    const { pairing } = await this.request("/v1/dsh-pairings/approve", {
+      method: "POST",
+      body: JSON.stringify({ user_code: userCode }),
+    });
+    return pairing;
+  }
+
   async replayEvents(sessionId, { afterSequence, limit = 100 }) {
     const query = new URLSearchParams({
       after_sequence: String(afterSequence),
@@ -380,8 +405,16 @@ export class HttpCollaborationApi {
           ...(type === "agent_request" && input.executionProfile ? {
             execution_profile: {
               harness: input.executionProfile.harness,
+              ...(input.executionProfile.provider === undefined ? {} : {
+                provider: input.executionProfile.provider,
+              }),
               model: input.executionProfile.model,
-              reasoning_effort: input.executionProfile.reasoningEffort,
+              ...(input.executionProfile.reasoningEffort === undefined ? {} : {
+                reasoning_effort: input.executionProfile.reasoningEffort,
+              }),
+              ...(input.executionProfile.runtimeId === undefined ? {} : {
+                runtime_id: input.executionProfile.runtimeId,
+              }),
             },
           } : {}),
         },
@@ -483,6 +516,8 @@ export class MockCollaborationApi {
     this.snapshotRequests = new Map();
     this.credential = "";
     this.deviceName = "Safari · macOS";
+    this.dshDeviceName = "DeepSeek Harness · macOS";
+    this.dshRevoked = false;
     this.projects = [{
       id: "project-orbit",
       name: "Project Orbit",
@@ -771,6 +806,21 @@ export class MockCollaborationApi {
     return structuredClone(this.#findSession(sessionId).members);
   }
 
+  async listSessionRuntimes(sessionId) {
+    await this.#wait();
+    this.#findSession(sessionId);
+    if (this.dshRevoked) return [];
+    return [{
+      id: `runtime-dsh-${sessionId}`,
+      deviceId: "dsh-device-demo",
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      status: "online",
+      lastSeenAt: new Date().toISOString(),
+    }];
+  }
+
   async createSnapshotRequest(sessionId) {
     await this.#wait();
     const session = this.#findSession(sessionId);
@@ -900,16 +950,44 @@ export class MockCollaborationApi {
 
   async listDevices() {
     await this.#wait();
-    return [{ id: "device-demo", user_id: this.currentUser.id, name: this.deviceName }];
+    return [
+      { id: "device-demo", user_id: this.currentUser.id, name: this.deviceName },
+      ...(!this.dshRevoked ? [{ id: "dsh-device-demo", user_id: this.currentUser.id, name: this.dshDeviceName }] : []),
+    ];
   }
 
   async renameDevice(deviceId, name) {
     await this.#wait();
-    if (deviceId !== "device-demo") throw new ApiError("Device not found.", { status: 404, code: "not_found" });
+    if (!new Set(["device-demo", "dsh-device-demo"]).has(deviceId) || (deviceId === "dsh-device-demo" && this.dshRevoked)) {
+      throw new ApiError("Device not found.", { status: 404, code: "not_found" });
+    }
     const normalized = name?.trim() ?? "";
     if (!normalized || normalized.length > 120) throw new ApiError("Choose a device name between 1 and 120 characters.", { status: 422, code: "validation_error" });
-    this.deviceName = normalized;
+    if (deviceId === "device-demo") this.deviceName = normalized;
+    else this.dshDeviceName = normalized;
     return { id: deviceId, user_id: this.currentUser.id, name: normalized };
+  }
+
+  async revokeDevice(deviceId) {
+    await this.#wait();
+    if (deviceId !== "dsh-device-demo" || this.dshRevoked) {
+      throw new ApiError("Device not found.", { status: 404, code: "not_found" });
+    }
+    this.dshRevoked = true;
+  }
+
+  async approveDshPairing(userCode) {
+    await this.#wait();
+    if (!/^[A-Z2-9]{4}-[A-Z2-9]{4}$/u.test(userCode)) {
+      throw new ApiError("DSH pairing is invalid, expired, or already consumed.", { status: 404, code: "pairing_unavailable" });
+    }
+    return {
+      pairing_id: "mock-pairing",
+      user_code: userCode,
+      device_name: this.dshDeviceName,
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      status: "approved",
+    };
   }
 
   async setProjectMemberRole(projectId, userId, role) {
@@ -956,8 +1034,8 @@ export class MockCollaborationApi {
             userId: this.currentUser.id,
             username: this.currentUser.username,
             deviceId: "device-demo",
-            harness: "Codex",
-            provider: "OpenAI",
+            harness: input.executionProfile?.harness ?? "codex",
+            provider: input.executionProfile?.harness === "deepseek-harness" ? "deepseek-official" : "OpenAI",
             model: input.executionProfile?.model ?? "gpt-5",
             localSessionId: "local-demo",
             fidelity: "harness_transcript",
@@ -976,8 +1054,8 @@ export class MockCollaborationApi {
           userId: this.currentUser.id,
           username: this.currentUser.username,
           deviceId: "device-demo",
-          harness: "Codex",
-          provider: "OpenAI",
+          harness: input.executionProfile?.harness ?? "codex",
+          provider: input.executionProfile?.harness === "deepseek-harness" ? "deepseek-official" : "OpenAI",
           model: input.executionProfile?.model ?? "gpt-5",
           ...(input.executionProfile?.reasoningEffort ? { reasoningEffort: input.executionProfile.reasoningEffort } : {}),
           localSessionId: "local-demo",
@@ -1045,8 +1123,16 @@ export class MockCollaborationApi {
         ...(type === "agent_request" && executionProfile ? {
           execution_profile: {
             harness: executionProfile.harness,
+            ...(executionProfile.provider === undefined ? {} : {
+              provider: executionProfile.provider,
+            }),
             model: executionProfile.model,
-            reasoning_effort: executionProfile.reasoningEffort,
+            ...(executionProfile.reasoningEffort === undefined ? {} : {
+              reasoning_effort: executionProfile.reasoningEffort,
+            }),
+            ...(executionProfile.runtimeId === undefined ? {} : {
+              runtime_id: executionProfile.runtimeId,
+            }),
           },
         } : {}),
       },

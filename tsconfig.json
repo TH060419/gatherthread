@@ -4,6 +4,7 @@
     { "path": "packages/protocol" },
     { "path": "packages/adapters" },
     { "path": "packages/bridge" },
+    { "path": "packages/dsh-host" },
     { "path": "packages/mcp" },
     { "path": "apps/server" }
   ]

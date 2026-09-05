@@ -73,7 +73,7 @@ Server order wins after an offline period. When no cloud event followed the loca
 
 Read-only access is download rather than synchronization. Each **Download to Codex** action freezes the session at the current `through_sequence` and creates a fresh immutable native conversation for that requester. It never receives future cloud events or publishes local activity; another click creates another independent snapshot.
 
-The project scheduling contract is harness-neutral through `ProjectHarnessAdapter`. The built-in first implementation targets Codex App Server. Claude Code and DeepSeek Harness integrations can supply their own descriptor, preflight, native-session identity, execution, projection, compaction, and snapshot behavior without changing project authorization or server ordering.
+The project scheduling contract is harness-neutral through `ProjectHarnessAdapter`. Codex App Server remains the default implementation. The optional DeepSeek Harness package reuses the same project/session permission checks, runtime provenance, claim, canonical cursor, idempotency, replay, redaction, and durable outbox rules while executing inside DSH's native Host lifecycle. It maps each writable GatherThread Session to a distinct persisted DSH Session and selects an exact online device/provider/model without silent Codex fallback. Installation and short-code pairing are explicit; the browser never probes localhost. Claude Code and later harnesses can supply their own descriptor, preflight, native-session identity, execution, projection, compaction, and snapshot behavior without changing project authorization or server ordering.
 
 ## Identity, invitations, and devices
 

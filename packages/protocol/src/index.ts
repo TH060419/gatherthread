@@ -285,6 +285,24 @@ export const ClaimDeviceAuthorizationInputSchema = z.object({
 
 export type ClaimDeviceAuthorizationInput = z.infer<typeof ClaimDeviceAuthorizationInputSchema>;
 
+export const BeginDshPairingInputSchema = z.object({
+  device_name: z.string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+});
+
+export type BeginDshPairingInput = z.infer<typeof BeginDshPairingInputSchema>;
+
+export const DshPairingUserCodeSchema = z.string().regex(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/u);
+
+export const ApproveDshPairingInputSchema = z.object({
+  user_code: DshPairingUserCodeSchema,
+});
+
+export type ApproveDshPairingInput = z.infer<typeof ApproveDshPairingInputSchema>;
+
 export const DeviceAuthorizationRecordSchema = z.object({
   id: IdSchema,
   user_id: IdSchema,

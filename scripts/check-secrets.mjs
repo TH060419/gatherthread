@@ -10,6 +10,7 @@ const excludedDirectories = new Set(['.git', '.local', 'coverage', 'dist', 'node
 const excludedFiles = new Set(['scripts/check-secrets.mjs'])
 const textExtensions = new Set(['', '.cjs', '.css', '.env', '.example', '.html', '.js', '.json', '.jsx', '.md', '.mjs', '.sh', '.ts', '.tsx', '.txt', '.yaml', '.yml'])
 const findings = []
+const unexpectedTextControl = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/u
 const patterns = [
   ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
   ['AWS access key', /\bAKIA[A-Z0-9]{16}\b/],
@@ -51,7 +52,17 @@ async function scanFile(name) {
   const absolute = resolve(root, name)
   const info = await lstat(absolute)
   if (!info.isFile() || info.size > 1_000_000) return
-  const lines = (await readFile(absolute, 'utf8')).split('\n')
+  const bytes = await readFile(absolute)
+  const text = bytes.toString('utf8')
+  if (!bytes.equals(Buffer.from(text, 'utf8'))) {
+    findings.push(`${name}: invalid UTF-8 in text source`)
+    return
+  }
+  if (unexpectedTextControl.test(text)) {
+    findings.push(`${name}: unexpected control byte in text source`)
+    return
+  }
+  const lines = text.split('\n')
   for (const [index, line] of lines.entries()) {
     for (const [kind, pattern] of patterns) {
       if (pattern.test(line)) findings.push(`${name}:${index + 1}: possible ${kind}`)

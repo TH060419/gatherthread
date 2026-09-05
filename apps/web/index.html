@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260830-3" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260906-1" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -163,6 +163,17 @@
             hidden
           >
             <span>Connect Codex</span>
+          </button>
+          <button
+            id="connect-dsh-button"
+            class="button button-secondary project-connect-button"
+            type="button"
+            aria-haspopup="dialog"
+            aria-controls="connect-dsh-dialog"
+            hidden
+          >
+            <span>Connect DeepSeek Harness</span>
+            <small id="connect-dsh-button-status">Not connected</small>
           </button>
           <button id="delete-project-button" class="text-button danger-text-button project-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
             Delete cloud project
@@ -314,10 +325,21 @@
               <p id="composer-permission" class="permission-note"></p>
               <fieldset id="agent-request-profile" class="agent-request-profile">
                 <legend>Agent request settings</legend>
-                <label for="agent-model-select">Model</label>
-                <select id="agent-model-select" name="agent-model"></select>
-                <label for="agent-effort-select">Reasoning</label>
-                <select id="agent-effort-select" name="agent-effort"></select>
+                <label for="agent-harness-select">Harness</label>
+                <select id="agent-harness-select" name="agent-harness">
+                  <option value="codex">Codex</option>
+                  <option value="deepseek-harness">DeepSeek Harness</option>
+                </select>
+                <div id="codex-agent-profile-fields" class="agent-profile-fields">
+                  <label for="agent-model-select">Model</label>
+                  <select id="agent-model-select" name="agent-model"></select>
+                  <label for="agent-effort-select">Reasoning</label>
+                  <select id="agent-effort-select" name="agent-effort"></select>
+                </div>
+                <div id="dsh-agent-profile-fields" class="agent-profile-fields dsh-agent-profile-fields" hidden>
+                  <label for="agent-dsh-runtime-select">DSH runtime</label>
+                  <select id="agent-dsh-runtime-select" name="agent-dsh-runtime"></select>
+                </div>
               </fieldset>
               <div class="composer-actions">
                 <div class="intent-help" id="send-chat-help">
@@ -562,6 +584,90 @@
       </div>
     </dialog>
 
+    <dialog
+      id="connect-dsh-dialog"
+      class="create-dialog codex-connect-dialog dsh-connect-dialog"
+      aria-labelledby="connect-dsh-title"
+      aria-describedby="connect-dsh-summary connect-dsh-security"
+    >
+      <div class="codex-connect-content">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">Plugin-first connection</p>
+            <h2 id="connect-dsh-title">Connect DeepSeek Harness</h2>
+          </div>
+          <button id="close-connect-dsh-button" class="icon-button" type="button" aria-label="Close Connect DeepSeek Harness dialog">×</button>
+        </div>
+        <p id="connect-dsh-summary">DeepSeek Harness connects out to this GatherThread server. The browser never probes localhost or tries to launch a local process.</p>
+        <ol class="dsh-connect-steps">
+          <li>
+            <div class="command-heading">
+              <div><span class="step-number" aria-hidden="true">1</span><h3>Open DeepSeek Harness</h3></div>
+              <button class="button button-secondary" type="button" data-copy-dsh-command="start" aria-describedby="copy-dsh-start-status">Copy command</button>
+            </div>
+            <code id="connect-dsh-start-command" class="connector-command" tabindex="0" aria-label="DeepSeek Harness start command"></code>
+            <p id="copy-dsh-start-status" class="field-help copy-command-status" role="status" aria-live="polite"></p>
+            <p class="field-help"><span>Verified DSH version: 0.1.2-rc.1.</span> <code id="connect-dsh-version-command"></code></p>
+            <p class="field-help">Incompatible Host APIs fail closed.</p>
+            <details class="dsh-version-help">
+              <summary>Version mismatch</summary>
+              <p>Start the verified package explicitly:</p>
+              <code id="connect-dsh-pinned-start-command" class="connector-command" tabindex="0" aria-label="Pinned DeepSeek Harness start command"></code>
+            </details>
+          </li>
+          <li>
+            <div class="command-heading">
+              <div><span class="step-number" aria-hidden="true">2</span><h3>Install the GatherThread plugin</h3></div>
+              <button class="button button-secondary" type="button" data-copy-dsh-command="install" aria-describedby="copy-dsh-install-status">Copy command</button>
+            </div>
+            <p class="field-help">DSH 0.1.2 has no public plugin market. This is its official profile installer; the package command becomes usable when the GatherThread plugin is published.</p>
+            <code id="connect-dsh-install-command" class="connector-command" tabindex="0" aria-label="GatherThread DSH plugin install command"></code>
+            <p id="copy-dsh-install-status" class="field-help copy-command-status" role="status" aria-live="polite"></p>
+          </li>
+          <li>
+            <div class="command-heading"><div><span class="step-number" aria-hidden="true">3</span><h3>Connect inside DSH</h3></div></div>
+            <p>Open Settings → GatherThread / 共序 in DSH, choose the official service or enter this HTTPS LAN, self-hosted, or Tailscale server address, then select “Sign in and pair”.</p>
+            <code id="connect-dsh-server-url" class="connector-command" tabindex="0" aria-label="Current GatherThread server address"></code>
+            <p>Current compatibility authorization uses your existing signed GatherThread browser session or invitation. Public account registration is not assumed.</p>
+          </li>
+        </ol>
+        <p id="connect-dsh-security" class="codex-connect-notice">The short code expires once and is bound to this server and DSH device. The long-lived device credential stays in DSH’s local credential store and never enters a URL, command, page storage, log, or shared history.</p>
+        <section class="dsh-runtime-section" aria-labelledby="connect-dsh-runtime-title">
+          <div class="command-heading">
+            <h3 id="connect-dsh-runtime-title">Your DeepSeek Harness devices</h3>
+            <button id="refresh-dsh-runtimes-button" class="button button-secondary" type="button">Refresh</button>
+          </div>
+          <p id="connect-dsh-runtime-status" class="field-help" role="status" aria-live="polite"></p>
+          <ul id="connect-dsh-runtime-list" class="dsh-runtime-list"></ul>
+        </section>
+        <p id="connect-dsh-error" class="form-error" role="alert"></p>
+        <details class="dsh-advanced-fallback">
+          <summary>Advanced / offline fallback</summary>
+          <p>The repository CLI connector remains available for diagnostics and offline development. It is not required for the normal npm plugin path.</p>
+        </details>
+        <div class="dialog-actions">
+          <button id="done-connect-dsh-button" class="button button-primary" type="button">Done</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="approve-dsh-pairing-dialog" class="create-dialog" aria-labelledby="approve-dsh-pairing-title" aria-describedby="approve-dsh-pairing-description">
+      <form id="approve-dsh-pairing-form" method="dialog">
+        <div class="dialog-heading">
+          <div><p class="eyebrow">One-time device authorization</p><h2 id="approve-dsh-pairing-title">Connect this DeepSeek Harness?</h2></div>
+          <button id="cancel-dsh-pairing-button" class="icon-button" type="button" aria-label="Cancel DSH pairing">×</button>
+        </div>
+        <p id="approve-dsh-pairing-description">Confirm that this short code matches the code shown in DSH. Approval creates a new local Agent device for your current GatherThread identity.</p>
+        <output id="approve-dsh-pairing-code" class="pairing-code" aria-label="DSH pairing code"></output>
+        <p class="codex-connect-notice">Only approve a DSH instance you control. This code is single-use and expires shortly.</p>
+        <p id="approve-dsh-pairing-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="decline-dsh-pairing-button" class="button button-secondary" type="button">Cancel</button>
+          <button id="confirm-dsh-pairing-button" class="button button-primary" type="submit">Approve and connect</button>
+        </div>
+      </form>
+    </dialog>
+
     <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
       <form id="settings-form" method="dialog">
         <header class="settings-header">
@@ -654,11 +760,18 @@
                 <div><p class="eyebrow">Agents</p><h3 id="settings-agents-title">Default local Agent</h3></div>
                 <p>These defaults seed Connect Codex and new Agent requests for the current project.</p>
               </div>
-              <label class="settings-row" for="settings-agent-harness"><span><strong>Agent harness</strong><small>Claude Code and DeepSeek Harness adapters are reserved for future releases.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option disabled>Claude Code · coming later</option><option disabled>DeepSeek Harness · coming later</option></select></label>
-              <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
-              <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
-              <div class="settings-row settings-row-tall"><span><strong>Custom Codex model</strong><small>Add a safe model ID such as a compatible proxy model. Credentials and CLI arguments are never accepted here.</small></span><div class="custom-model-stack"><div class="custom-model-control"><input id="settings-custom-model" type="text" maxlength="120" autocomplete="off" placeholder="model-id" /><button id="add-custom-model-button" class="button button-secondary" type="button">Add model</button></div><small class="custom-model-note">This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.</small></div></div>
-              <p id="settings-custom-model-error" class="form-error" role="alert"></p>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Agent harness</strong><small>Choose Codex or an online DeepSeek Harness runtime for this project. Requests never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option disabled>Claude Code · coming later</option></select></label>
+              <div id="settings-codex-agent-fields" class="settings-agent-fields">
+                <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
+                <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
+                <div class="settings-row settings-row-tall"><span><strong>Custom Codex model</strong><small>Add a safe model ID such as a compatible proxy model. Credentials and CLI arguments are never accepted here.</small></span><div class="custom-model-stack"><div class="custom-model-control"><input id="settings-custom-model" type="text" maxlength="120" autocomplete="off" placeholder="model-id" /><button id="add-custom-model-button" class="button button-secondary" type="button">Add model</button></div><small class="custom-model-note">This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.</small></div></div>
+                <p id="settings-custom-model-error" class="form-error" role="alert"></p>
+              </div>
+              <div id="settings-dsh-agent-fields" class="settings-agent-fields" hidden>
+                <label class="settings-row" for="settings-dsh-runtime"><span><strong>DeepSeek Harness runtime</strong><small>Provider and model names come only from your connected DSH configuration.</small></span><select id="settings-dsh-runtime" name="dsh-runtime"></select></label>
+                <p class="field-help">Install and pair the plugin from “Connect DeepSeek Harness” if no runtime appears.</p>
+                <p id="settings-dsh-runtime-error" class="form-error" role="alert"></p>
+              </div>
             </section>
 
             <section id="settings-composer" class="settings-section" aria-labelledby="settings-composer-title">
@@ -702,6 +815,6 @@
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260830-1"></script>
+    <script type="module" src="./src/main.js?v=20260906-1"></script>
   </body>
 </html>

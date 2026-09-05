@@ -824,6 +824,98 @@ test("only the initiating user's runtime can claim and complete an agent request
   }
 });
 
+test("DeepSeek Harness claims honor the exact Web-selected runtime and model without changing Codex claims", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "dsh-runtime-routing",
+      idempotency_key: "create-dsh-runtime-routing",
+      mode: "multi",
+      title: "DSH routing",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "dsh-routing-member");
+    const secondDevice = f.database.createDevice(f.member.user_id, "Second DSH", "dsh-routing-device-2");
+    const secondActor = { ...f.member, device_id: secondDevice.device_id };
+    const firstRuntime = f.service.registerRuntime(f.member, {
+      runtime_id: "dsh-routing-runtime-1",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "provider-one",
+      model: "CaseSensitive/Model-X",
+      local_session_id: "dsh-routing-local-1",
+      capture_fidelity: "harness_transcript",
+    });
+    const secondRuntime = f.service.registerRuntime(secondActor, {
+      runtime_id: "dsh-routing-runtime-2",
+      session_id: session.id,
+      device_id: secondDevice.device_id,
+      harness: "deepseek-harness",
+      provider: "provider-two",
+      model: "CaseSensitive/Model-X",
+      local_session_id: "dsh-routing-local-2",
+      capture_fidelity: "harness_transcript",
+    });
+    const request = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-routing-request-1",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use the selected DSH device",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "provider-two",
+          model: "CaseSensitive/Model-X",
+          runtime_id: secondRuntime.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, request.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+    assert.equal(
+      f.service.claimAgentRequest(secondActor, session.id, request.id, secondRuntime.id).runtime_id,
+      secondRuntime.id,
+    );
+
+    const wrongProvider = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-routing-request-wrong-provider",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Do not cross provider bindings",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "provider-two",
+          model: "CaseSensitive/Model-X",
+          runtime_id: firstRuntime.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, wrongProvider.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+
+    const ambiguous = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-routing-request-2",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "An old untargeted DSH request",
+        execution_profile: { harness: "deepseek-harness", model: "CaseSensitive/Model-X" },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, ambiguous.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("agent progress is ordered, idempotent, claim-bound, and cannot follow completion", () => {
   const f = fixture();
   try {

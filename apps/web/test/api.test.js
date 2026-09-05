@@ -56,6 +56,98 @@ test("Agent requests carry the selected model and reasoning profile on the produ
   }
 });
 
+test("DeepSeek Harness requests target one exact runtime without Codex fallback or credentials", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: { event: {
+      id: "e-dsh", session_id: "s1", sequence: 2, idempotency_key: "agent-request-dsh-0001",
+      type: "agent_request", actor_user_id: "u1", actor_display_name: "Alice",
+      created_at: "2026-09-06T00:00:00.000Z", visibility: "session", reply_to_event_id: null,
+      payload: {
+        content: "Inspect this with DSH",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "Local Provider",
+          model: "CaseSensitive/Model-X",
+          runtime_id: "runtime-dsh-1",
+        },
+      },
+    } } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    await api.appendAgentRequest("s1", {
+      content: "Inspect this with DSH",
+      idempotencyKey: "agent-request-dsh-0001",
+      executionProfile: {
+        harness: "deepseek-harness",
+        provider: "Local Provider",
+        model: "CaseSensitive/Model-X",
+        runtimeId: "runtime-dsh-1",
+      },
+    });
+    assert.equal(captured.url, "https://gatherthread.example/v1/sessions/s1/events");
+    assert.equal(captured.options.credentials, "include");
+    assert.equal(captured.options.headers.Authorization, undefined);
+    assert.deepEqual(JSON.parse(captured.options.body).payload.execution_profile, {
+      harness: "deepseek-harness",
+      provider: "Local Provider",
+      model: "CaseSensitive/Model-X",
+      runtime_id: "runtime-dsh-1",
+    });
+    assert.doesNotMatch(captured.options.body, /reasoning|token|authorization/iu);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("DeepSeek Harness discovery, pairing approval, and revocation use Cookie-authenticated server routes", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const responses = [
+    { data: { runtimes: [{
+      id: "runtime-dsh-1", device_id: "device-dsh-1", harness: "deepseek-harness",
+      provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
+      last_seen_at: "2026-09-06T00:00:00.000Z",
+    }] } },
+    { data: { pairing: {
+      pairing_id: "dshp-one-use", user_code: "ABCD-2345", device_name: "Studio DSH",
+      expires_at: "2026-09-06T00:05:00.000Z", status: "approved",
+    } } },
+    undefined,
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    const body = responses.shift();
+    return body === undefined
+      ? new Response(null, { status: 204 })
+      : Response.json(body);
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const runtimes = await api.listSessionRuntimes("session / one");
+    assert.deepEqual(runtimes, [{
+      id: "runtime-dsh-1", deviceId: "device-dsh-1", harness: "deepseek-harness",
+      provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
+      lastSeenAt: "2026-09-06T00:00:00.000Z",
+    }]);
+    assert.equal((await api.approveDshPairing("ABCD-2345")).status, "approved");
+    await api.revokeDevice("device / dsh");
+    assert.deepEqual(requests.map(({ url, options }) => [options.method ?? "GET", url]), [
+      ["GET", "https://gatherthread.example/v1/sessions/session%20%2F%20one/runtimes"],
+      ["POST", "https://gatherthread.example/v1/dsh-pairings/approve"],
+      ["DELETE", "https://gatherthread.example/v1/devices/device%20%2F%20dsh"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[1].options.body), { user_code: "ABCD-2345" });
+    assert.ok(requests.every(({ options }) => options.credentials === "include"));
+    assert.ok(requests.every(({ options }) => options.headers.Authorization === undefined));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("project participants cannot append to solo sessions", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   api.currentUser = { id: "user-maya", username: "Maya Ortiz" };

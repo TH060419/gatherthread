@@ -40,6 +40,7 @@ An MCP server cannot independently read an entire host conversation. Therefore r
 | `packages/protocol` | Canonical event and API schemas |
 | `packages/adapters` | Authorized Codex and Claude Code transcript discovery, parsing, and redaction |
 | `packages/bridge` | Local runtime registration, cursoring, context upload, claim/complete workflow |
+| `packages/dsh-host` | Opt-in DeepSeek Harness Host/Client plugin, pairing, project binding, recovery, and redaction |
 | `packages/mcp` | MCP tools, resources, and stateless Streamable HTTP JSON-RPC handler |
 | `tests` | Contract, security, backup, and real server-to-bridge integration tests |
 
@@ -104,6 +105,21 @@ Canonical events are imported into the background projection in order with froze
 With trusted Hooks enabled, the first prompt submitted in a previously unbound Codex Desktop task is also the creation boundary. For a project owner or participant, the connector creates one deterministic personal Solo, binds that existing Desktop task, and uploads the same completed turn exactly once. Merely opening an empty task creates nothing. For a viewer the task stays entirely local. Connector-owned background and snapshot tasks are explicitly excluded from this discovery path.
 
 Read-only sessions show **Download to Codex** instead of a composer. Every click freezes a new `through_sequence` and creates an independent local snapshot task that never uploads later changes. Owners and participants synchronize `multi` plus their own personal Solos, and download other members' Solos; viewers download every session. To publish prompts typed directly in Codex Desktop, open Desktop Settings and enable Hooks, then inspect the generated workspace's `.codex/hooks.json`; this trust-sensitive capability is never enabled implicitly. Unrelated Codex tasks and immutable snapshot tasks are excluded by a private thread registry. GatherThread credentials are stripped from the Codex child environment, automatic privilege escalation is disabled, and `danger-full-access` is unsupported. See the current [Codex connector guide](docs/CODEX_CONNECT.md), [ADR-0013](docs/adr/0013-single-writer-dual-codex-projections.md), [ADR-0014](docs/adr/0014-acknowledged-bounded-desktop-relay-capsules.md), and [ADR-0015](docs/adr/0015-create-personal-solos-from-first-local-prompt.md).
+
+## Connect DeepSeek Harness
+
+DeepSeek Harness uses a plugin-first flow. In the selected GatherThread Project, open **Connect DeepSeek Harness**. The browser never probes localhost or tries to launch a local process. When no runtime is online, it shows the same browser-safe fallback in Safari, Chrome, and Edge:
+
+```bash
+npx @deepseek-ai/dsh web
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
+```
+
+The second command is DSH 0.1.2's verified profile-plugin mechanism; that release has no verified public plugin marketplace. This candidate prepares `@gatherthread/dsh-host` for publication but does not publish it, so the registry command becomes usable only after the package release. Check `npx @deepseek-ai/dsh --version`; the verified npm distribution is `0.1.2-rc.1`, and the explicit fallback is `npx @deepseek-ai/dsh@0.1.2-rc.1 web`. DSH 0.1.2 does not expose its root CLI version through a stable Host service, so GatherThread validates the required Host API contract and fails closed instead of reading npx cache internals.
+
+After installation, open **Settings → GatherThread / 共序** in DSH. Choose the future official GatherThread service or enter one custom origin for an HTTPS LAN host, self-hosted deployment, or Tailscale. The plugin always connects outward; the server never reaches into local DSH. **Sign in and pair** opens the selected GatherThread origin with a five-minute, single-use short code. Approval uses the existing signed browser session or invitation identity because a separate public account-registration system is not assumed. The long-lived device grant stays in DSH's credential store and never enters a URL, argv, Web Storage, logs, status responses, or canonical history.
+
+Once the runtime is online, choose **DeepSeek Harness**, then the exact DSH device/provider/model, and use **Request my agent**. Requests are claimed only by that runtime and never silently fall back to Codex. Multiple devices can be selected, renamed, or revoked; a unique online runtime is selected automatically. The repository `dsh:connect` command remains an advanced source-checkout diagnostic, not the normal path. Maintainers can exercise the isolated, credential-free npm/Loader/browser gate with `npm run test:dsh-npm-plugin:real`; it uses temporary state and requires the pinned packages to exist locally.
 
 ## Security and current limits
 

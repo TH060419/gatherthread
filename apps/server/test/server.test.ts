@@ -109,6 +109,182 @@ test("liveness and readiness endpoints remain unauthenticated and distinguish pr
   }
 });
 
+test("DSH device pairing is Host-initiated, browser-approved, single-use, and CSRF protected", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-dsh-pairing-"));
+  const browserOrigin = "http://127.0.0.1:4173";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+    allowedOrigins: [browserOrigin],
+  }, 0);
+  try {
+    const bootstrap = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST",
+      body: { user_id: "owner", display_name: "Owner", device_id: "browser-device", device_name: "Browser" },
+    });
+    const ownerToken = bootstrap.body.data.token;
+    const browserSession = await api<{ data: { actor: { id: string } } }>(running.origin, "/v1/browser-sessions", {
+      method: "POST",
+      token: ownerToken,
+      origin: browserOrigin,
+      body: { remember_device: false },
+    });
+    const cookie = browserSession.headers.get("set-cookie")?.split(";", 1)[0];
+    if (!cookie?.startsWith("gatherthread_session=")) throw new Error("browser session cookie was not issued");
+
+    const browserStart = await api(running.origin, "/v1/dsh-pairings", {
+      method: "POST",
+      origin: browserOrigin,
+      body: { device_name: "DSH browser attempt" },
+    });
+    assert.equal(browserStart.status, 403);
+
+    const started = await api<{ data: {
+      pairing_id: string;
+      poll_token: string;
+      user_code: string;
+      verification_path: string;
+      expires_at: string;
+      interval_seconds: number;
+    } }>(running.origin, "/v1/dsh-pairings", {
+      method: "POST",
+      body: { device_name: "DeepSeek Harness · macOS" },
+    });
+    assert.equal(started.status, 201);
+    assert.deepEqual(Object.keys(started.body.data).sort(), [
+      "expires_at", "interval_seconds", "pairing_id", "poll_token", "user_code", "verification_path",
+    ]);
+    assert.equal(JSON.stringify(started.body).includes("gta_"), false);
+
+    const pairing = started.body.data;
+    const pending = await api<{ data: { status: string } }>(
+      running.origin,
+      `/v1/dsh-pairings/${encodeURIComponent(pairing.pairing_id)}/poll`,
+      {
+        method: "POST",
+        headers: { authorization: `DSH-Pairing ${pairing.poll_token}` },
+        body: {},
+      },
+    );
+    assert.equal(pending.status, 202);
+    assert.equal(pending.body.data.status, "pending");
+
+    const missingCookie = await api(running.origin, "/v1/dsh-pairings/approve", {
+      method: "POST",
+      origin: browserOrigin,
+      body: { user_code: pairing.user_code },
+    });
+    assert.equal(missingCookie.status, 401);
+    const missingOrigin = await api(running.origin, "/v1/dsh-pairings/approve", {
+      method: "POST",
+      cookie,
+      body: { user_code: pairing.user_code },
+    });
+    assert.equal(missingOrigin.status, 403);
+    const wrongOrigin = await api(running.origin, "/v1/dsh-pairings/approve", {
+      method: "POST",
+      cookie,
+      origin: "https://attacker.example",
+      body: { user_code: pairing.user_code },
+    });
+    assert.equal(wrongOrigin.status, 403);
+    const bearerApproval = await api(running.origin, "/v1/dsh-pairings/approve", {
+      method: "POST",
+      token: ownerToken,
+      origin: browserOrigin,
+      body: { user_code: pairing.user_code },
+    });
+    assert.equal(bearerApproval.status, 403);
+
+    const approved = await api<{ data: { pairing: Record<string, unknown> } }>(
+      running.origin,
+      "/v1/dsh-pairings/approve",
+      {
+        method: "POST",
+        cookie,
+        origin: browserOrigin,
+        body: { user_code: pairing.user_code },
+      },
+    );
+    assert.equal(approved.status, 200);
+    assert.deepEqual(Object.keys(approved.body.data.pairing).sort(), [
+      "device_name", "expires_at", "pairing_id", "status", "user_code",
+    ]);
+    assert.equal(JSON.stringify(approved.body).includes("gta_"), false);
+
+    const claimed = await api<{ data: { status: string; device_id: string; token: string } }>(
+      running.origin,
+      `/v1/dsh-pairings/${encodeURIComponent(pairing.pairing_id)}/poll`,
+      {
+        method: "POST",
+        headers: { authorization: `DSH-Pairing ${pairing.poll_token}` },
+        body: {},
+      },
+    );
+    assert.equal(claimed.status, 201);
+    assert.equal(claimed.body.data.status, "paired");
+    assert.match(claimed.body.data.token, /^gta_/u);
+    const authenticated = await api<{ data: { id: string; device_id: string } }>(running.origin, "/v1/me", {
+      token: claimed.body.data.token,
+    });
+    assert.equal(authenticated.status, 200);
+    assert.equal(authenticated.body.data.id, "owner");
+    assert.equal(authenticated.body.data.device_id, claimed.body.data.device_id);
+
+    const session = await api<{ data: { session: { id: string } } }>(running.origin, "/v1/sessions", {
+      method: "POST",
+      token: ownerToken,
+      body: {
+        session_id: "dsh-runtime-session",
+        idempotency_key: "dsh-runtime-session-create",
+        mode: "solo",
+        title: "DSH runtime",
+      },
+    });
+    assert.equal(session.status, 201);
+    const runtime = await api<{ data: { runtime: { id: string } } }>(running.origin, "/v1/runtimes", {
+      method: "POST",
+      token: claimed.body.data.token,
+      body: {
+        session_id: session.body.data.session.id,
+        device_id: claimed.body.data.device_id,
+        harness: "deepseek-harness",
+        provider: "deepseek-official",
+        model: "DeepSeek-CustomCase",
+        local_session_id: "private-dsh-session-id",
+        capture_fidelity: "harness_transcript",
+      },
+    });
+    assert.equal(runtime.status, 201);
+    const runtimes = await api<{ data: { runtimes: Array<Record<string, unknown>> } }>(
+      running.origin,
+      `/v1/sessions/${session.body.data.session.id}/runtimes`,
+      { cookie },
+    );
+    assert.equal(runtimes.status, 200);
+    assert.equal(runtimes.body.data.runtimes.length, 1);
+    assert.deepEqual(Object.keys(runtimes.body.data.runtimes[0] ?? {}).sort(), [
+      "device_id", "harness", "id", "last_seen_at", "model", "provider", "status",
+    ]);
+    assert.equal(JSON.stringify(runtimes.body).includes("private-dsh-session-id"), false);
+
+    const replay = await api(
+      running.origin,
+      `/v1/dsh-pairings/${encodeURIComponent(pairing.pairing_id)}/poll`,
+      {
+        method: "POST",
+        headers: { authorization: `DSH-Pairing ${pairing.poll_token}` },
+        body: {},
+      },
+    );
+    assert.equal(replay.status, 401);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 async function realtimeSocket(origin: string, token: string, sessionId: string, originHeader?: string): Promise<WebSocket> {
   const ticket = await api<{ data: { ticket: string; websocket_url: string } }>(origin, "/v1/realtime-ticket", {
     method: "POST",

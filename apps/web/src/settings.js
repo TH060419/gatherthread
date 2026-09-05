@@ -1,4 +1,4 @@
-export const SETTINGS_VERSION = 4;
+export const SETTINGS_VERSION = 5;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -28,6 +28,10 @@ export const CURRENT_CODEX_DESKTOP_RELAY_CAP_BYTES = 7 * 1024;
 
 const MODEL_ID_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,120}$/u;
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const DEVICE_ID_PATTERN = PROJECT_ID_PATTERN;
+const DSH_PROVIDER_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,80}$/u;
+const DSH_MODEL_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,160}$/u;
+const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness"]);
 
 export const DEFAULT_SETTINGS = deepFreeze({
   version: SETTINGS_VERSION,
@@ -80,15 +84,18 @@ export function normalizeSettings(input) {
     .filter((model) => MODEL_ID_PATTERN.test(model))
     .slice(0, 40);
   const availableModels = new Set([...CODEX_MODELS.map((model) => model.id), ...customCodexModels]);
+  const activeHarness = oneOf(agents.activeHarness, AGENT_HARNESSES, DEFAULT_SETTINGS.agents.activeHarness);
   const projectProfiles = {};
   if (isObject(agents.projectProfiles)) {
     for (const [projectId, profile] of Object.entries(agents.projectProfiles)) {
       if (!PROJECT_ID_PATTERN.test(projectId) || !isObject(profile)) continue;
-      const model = availableModels.has(profile.model) ? profile.model : DEFAULT_SETTINGS.agents.projectProfiles.model;
-      projectProfiles[projectId] = normalizeCodexProfile({
-        model: model ?? "gpt-5.6-sol",
-        effort: profile.effort,
-      }, customCodexModels);
+      const legacyCodex = isObject(profile.codex) ? profile.codex : profile;
+      const model = availableModels.has(legacyCodex.model) ? legacyCodex.model : "gpt-5.6-sol";
+      projectProfiles[projectId] = {
+        harness: oneOf(profile.harness, AGENT_HARNESSES, activeHarness),
+        codex: normalizeCodexProfile({ model, effort: legacyCodex.effort }, customCodexModels),
+        dsh: normalizeDshProfile(profile.dsh),
+      };
     }
   }
   return {
@@ -128,7 +135,7 @@ export function normalizeSettings(input) {
       connectionLost: notifications.connectionLost !== false,
     },
     agents: {
-      activeHarness: "codex",
+      activeHarness,
       customCodexModels,
       projectProfiles,
     },
@@ -147,7 +154,7 @@ export function normalizeCodexProfile(profile, customModels = []) {
 
 export function projectCodexProfile(settings, projectId) {
   const normalized = normalizeSettings(settings);
-  return normalizeCodexProfile(normalized.agents.projectProfiles[projectId], normalized.agents.customCodexModels);
+  return normalizeCodexProfile(normalized.agents.projectProfiles[projectId]?.codex, normalized.agents.customCodexModels);
 }
 
 export function withProjectCodexProfile(settings, projectId, profile) {
@@ -159,7 +166,63 @@ export function withProjectCodexProfile(settings, projectId, profile) {
       ...normalized.agents,
       projectProfiles: {
         ...normalized.agents.projectProfiles,
-        [projectId]: normalizeCodexProfile(profile, normalized.agents.customCodexModels),
+        [projectId]: {
+          ...(normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized)),
+          codex: normalizeCodexProfile(profile, normalized.agents.customCodexModels),
+        },
+      },
+    },
+  });
+}
+
+export function projectAgentHarness(settings, projectId) {
+  const normalized = normalizeSettings(settings);
+  return normalized.agents.projectProfiles[projectId]?.harness ?? normalized.agents.activeHarness;
+}
+
+export function withProjectAgentHarness(settings, projectId, harness) {
+  if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
+  const normalized = normalizeSettings(settings);
+  const selected = oneOf(harness, AGENT_HARNESSES, undefined);
+  if (selected === undefined) throw new Error("Choose a supported Agent harness.");
+  return normalizeSettings({
+    ...normalized,
+    agents: {
+      ...normalized.agents,
+      activeHarness: selected,
+      projectProfiles: {
+        ...normalized.agents.projectProfiles,
+        [projectId]: {
+          ...(normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized)),
+          harness: selected,
+        },
+      },
+    },
+  });
+}
+
+export function projectDshProfile(settings, projectId) {
+  const normalized = normalizeSettings(settings);
+  return normalized.agents.projectProfiles[projectId]?.dsh ?? null;
+}
+
+export function withProjectDshProfile(settings, projectId, profile) {
+  if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
+  const normalized = normalizeSettings(settings);
+  const dsh = normalizeDshProfile(profile);
+  if (dsh === null) throw new Error("Choose a connected DeepSeek Harness runtime.");
+  return normalizeSettings({
+    ...normalized,
+    agents: {
+      ...normalized.agents,
+      activeHarness: "deepseek-harness",
+      projectProfiles: {
+        ...normalized.agents.projectProfiles,
+        [projectId]: {
+          ...(normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized)),
+          harness: "deepseek-harness",
+          dsh,
+        },
       },
     },
   });
@@ -251,6 +314,25 @@ function migrateStoredSettings(input) {
       leftRailPixels: layout.leftRailPixels == null || layout.leftRailPixels === 260 ? DEFAULT_SETTINGS.layout.leftRailPixels : layout.leftRailPixels,
       rightPanelPixels: layout.rightPanelPixels == null || layout.rightPanelPixels === 290 ? DEFAULT_SETTINGS.layout.rightPanelPixels : layout.rightPanelPixels,
     },
+  };
+}
+
+function normalizeDshProfile(profile) {
+  if (!isObject(profile)) return null;
+  const deviceId = typeof profile.deviceId === "string" ? profile.deviceId.trim() : "";
+  const provider = typeof profile.provider === "string" ? profile.provider.trim() : "";
+  const model = typeof profile.model === "string" ? profile.model.trim() : "";
+  if (!DEVICE_ID_PATTERN.test(deviceId) || !DSH_PROVIDER_PATTERN.test(provider) || !DSH_MODEL_PATTERN.test(model)) {
+    return null;
+  }
+  return { deviceId, provider, model };
+}
+
+function defaultProjectAgentProfile(settings) {
+  return {
+    harness: settings.agents.activeHarness,
+    codex: normalizeCodexProfile(undefined, settings.agents.customCodexModels),
+    dsh: null,
   };
 }
 

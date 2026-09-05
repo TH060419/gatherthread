@@ -55,6 +55,16 @@ test("secret scan checks a source archive without requiring Git metadata", async
     const leaked = scan(directory);
     assert.equal(leaked.status, 1);
     assert.match(leaked.stderr, /nested\/leak\.env:1: possible environment secret/);
+
+    await rm(join(directory, "nested", "leak.env"));
+    await writeFile(join(directory, "nested", "binary-looking.ts"), Buffer.from([
+      ...Buffer.from("const value = ", "utf8"),
+      0,
+      ...Buffer.from(";\n", "utf8"),
+    ]));
+    const controlByte = scan(directory);
+    assert.equal(controlByte.status, 1);
+    assert.match(controlByte.stderr, /nested\/binary-looking\.ts: unexpected control byte in text source/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

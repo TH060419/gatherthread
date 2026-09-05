@@ -545,6 +545,35 @@ function runtimeStatus(
     : "offline";
 }
 
+function deepSeekRequestTarget(event: CanonicalEvent): { provider?: string; model: string; runtimeId?: string } | null {
+  const payload = event.payload !== null && typeof event.payload === "object" && !Array.isArray(event.payload)
+    ? event.payload as Record<string, JsonValue>
+    : undefined;
+  const raw = payload?.execution_profile;
+  const profile = raw !== null && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, JsonValue>
+    : undefined;
+  const harness = typeof profile?.harness === "string" ? profile.harness.trim().toLowerCase() : "";
+  if (harness !== "deepseek-harness") return null;
+  const model = typeof profile?.model === "string" ? profile.model.trim() : "";
+  if (!model || model.length > 160 || /[\u0000-\u001f\u007f-\u009f]/u.test(model)) {
+    throw conflict("DeepSeek Harness Agent request has an invalid model target");
+  }
+  const rawProvider = profile?.provider;
+  const provider = typeof rawProvider === "string" ? rawProvider.trim() : "";
+  if (rawProvider !== undefined
+    && (!provider || provider.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(provider))) {
+    throw conflict("DeepSeek Harness Agent request has an invalid provider target");
+  }
+  const rawRuntimeId = profile?.runtime_id;
+  if (rawRuntimeId === undefined) return { ...(rawProvider === undefined ? {} : { provider }), model };
+  const runtimeId = typeof rawRuntimeId === "string" ? rawRuntimeId.trim() : "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(runtimeId)) {
+    throw conflict("DeepSeek Harness Agent request has an invalid runtime target");
+  }
+  return { ...(rawProvider === undefined ? {} : { provider }), model, runtimeId };
+}
+
 function mapEvent(row: EventRow): CanonicalEvent {
   const storedProvenance = row.runtime_provenance_json === null
     ? null
@@ -1856,6 +1885,22 @@ export class CollaborationDatabase {
     }));
   }
 
+  listSessionRuntimesForUser(sessionId: string, userId: string): RuntimeRecord[] {
+    const rows = this.sqlite.prepare(`
+      SELECT id, session_id, user_id, device_id, purpose, harness, provider,
+             model, local_session_id, capture_fidelity, status, last_seen_at
+      FROM runtimes
+      WHERE session_id = ? AND user_id = ? AND status != 'revoked'
+      ORDER BY CASE WHEN status = 'online' THEN 0 ELSE 1 END,
+               last_seen_at DESC, id ASC
+    `).all(sessionId, userId) as unknown as RuntimeRow[];
+    const now = this.clock().getTime();
+    return rows.map((row) => ({
+      ...row,
+      status: runtimeStatus(row.status, row.last_seen_at, now),
+    }));
+  }
+
   membershipRole(sessionId: string, userId: string): MembershipRole | null {
     const row = this.sqlite.prepare(`
       SELECT project_memberships.role
@@ -2110,6 +2155,24 @@ export class CollaborationDatabase {
       if (runtime.session_id !== sessionId || runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
         || event.actor_user_id !== actor.user_id || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("The request is eligible only for the initiating user's active runtime");
+      }
+      const dshTarget = deepSeekRequestTarget(event);
+      if (dshTarget !== null) {
+        const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
+          candidate.purpose === "execution"
+          && candidate.status === "online"
+          && candidate.harness.toLowerCase() === "deepseek-harness"
+          && (dshTarget.provider === undefined || candidate.provider === dshTarget.provider)
+          && candidate.model === dshTarget.model);
+        const selectedRuntimeId = dshTarget.runtimeId ?? (matching.length === 1 ? matching[0]?.id : undefined);
+        if (runtime.harness.toLowerCase() !== "deepseek-harness"
+          || (dshTarget.provider !== undefined && runtime.provider !== dshTarget.provider)
+          || runtime.model !== dshTarget.model
+          || selectedRuntimeId === undefined
+          || runtime.id !== selectedRuntimeId
+          || !matching.some((candidate) => candidate.id === runtime.id)) {
+          throw conflict("A matching online DeepSeek Harness runtime is required for this Agent request");
+        }
       }
       const existing = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;

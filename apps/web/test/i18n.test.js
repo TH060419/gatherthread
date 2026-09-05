@@ -42,6 +42,18 @@ test("English is the unchanged default and Simplified Chinese preserves product 
   assert.equal(translateUiText("before use.", "zh-CN"), "，确认无误后再使用。");
   assert.equal(translateUiText("macOS / Linux shell", "zh-CN"), "macOS / Linux 终端");
   assert.equal(translateUiText("Windows PowerShell", "zh-CN"), "Windows PowerShell 终端");
+  assert.equal(translateUiText("Connect DeepSeek Harness", "zh-CN"), "连接 DeepSeek Harness");
+  assert.equal(translateUiText("Open DeepSeek Harness", "zh-CN"), "打开 DeepSeek Harness");
+  assert.equal(translateUiText("Install the GatherThread plugin", "zh-CN"), "安装共序 GatherThread 插件");
+  assert.equal(translateUiText("Connect inside DSH", "zh-CN"), "在 DSH 中连接共序");
+  assert.match(
+    translateUiText("Current compatibility authorization uses your existing signed GatherThread browser session or invitation. Public account registration is not assumed.", "zh-CN"),
+    /不假设公共账户注册系统已经上线/,
+  );
+  assert.match(
+    translateUiText("The short code expires once and is bound to this server and DSH device. The long-lived device credential stays in DSH’s local credential store and never enters a URL, command, page storage, log, or shared history.", "zh-CN"),
+    /长期设备凭据只保存在 DSH 本机凭据库/,
+  );
 });
 
 test("dynamic collaboration labels translate without touching unknown user text", () => {
@@ -60,6 +72,19 @@ test("dynamic collaboration labels translate without touching unknown user text"
     "参与者可编辑 Multi；访者在所有位置均为只读。",
   );
   assert.equal(translateUiText("Contiguous through sequence #42", "zh-CN"), "连续历史已到 sequence #42");
+  assert.equal(translateUiText("2 online", "zh-CN"), "2 个在线");
+  assert.equal(
+    translateUiText("2 DeepSeek Harness runtimes are online for this session.", "zh-CN"),
+    "当前会话有 2 个 DeepSeek Harness runtime 在线。",
+  );
+  assert.equal(
+    translateUiText("Online · Local Provider · CaseSensitive/Model-X · last seen 09:30", "zh-CN"),
+    "在线 · Local Provider · CaseSensitive/Model-X · 最近在线 09:30",
+  );
+  assert.equal(
+    translateUiText("Revoke Studio DSH? Its DSH plugin must pair again before accepting requests.", "zh-CN"),
+    "撤销 Studio DSH？其 DSH 插件必须重新配对后才能接收请求。",
+  );
   assert.equal(translateUiText("我的自定义会话", "zh-CN"), "我的自定义会话");
   assert.match(
     translateUiText("Configured projection ceiling: 256 KiB (about 65,536 tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. Reconnect Codex after changing this value. Desktop Hook updates use a separate 7 KiB capsule and continue across turns.", "zh-CN"),

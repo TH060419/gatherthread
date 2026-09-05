@@ -143,6 +143,21 @@ export class CollaborationService {
     });
   }
 
+  listOwnExecutionRuntimes(actor: Actor, sessionId: string) {
+    this.requireMembership(actor, sessionId);
+    return this.database.listSessionRuntimesForUser(sessionId, actor.user_id)
+      .filter((runtime) => runtime.purpose === "execution")
+      .map((runtime) => ({
+        id: runtime.id,
+        device_id: runtime.device_id,
+        harness: runtime.harness,
+        provider: runtime.provider,
+        model: runtime.model,
+        status: runtime.status,
+        last_seen_at: runtime.last_seen_at,
+      }));
+  }
+
   createInvitation(
     actor: Actor,
     sessionId: string,

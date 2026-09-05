@@ -10,6 +10,7 @@ const apiPath = fileURLToPath(new URL("../src/api.js", import.meta.url));
 const stylesPath = fileURLToPath(new URL("../src/styles.css", import.meta.url));
 const domainPath = fileURLToPath(new URL("../src/domain.js", import.meta.url));
 const i18nPath = fileURLToPath(new URL("../src/i18n.js", import.meta.url));
+const dshPath = fileURLToPath(new URL("../src/dsh.js", import.meta.url));
 const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.url));
 const brandLightPath = fileURLToPath(new URL("../brand/lockup-color-transparent-light.svg", import.meta.url));
 const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-dark.svg", import.meta.url));
@@ -188,6 +189,56 @@ test("project Codex connector explains scope, credential prompting, hook trust, 
   assert.match(styles, /\.codex-connect-dialog[\s\S]*?width: min\(720px/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.command-heading[\s\S]*?flex-direction: column/);
   assert.doesNotMatch(main, /searchParams\.(?:set|append)\([^\n]*(?:device|token|credential)/i);
+});
+
+test("DeepSeek Harness is a selectable exact runtime with a browser-safe three-step fallback", async () => {
+  const [html, main, api, dsh, styles, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(apiPath, "utf8"),
+    readFile(dshPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+    readFile(i18nPath, "utf8"),
+  ]);
+  for (const id of [
+    "connect-dsh-button",
+    "connect-dsh-dialog",
+    "connect-dsh-start-command",
+    "connect-dsh-version-command",
+    "connect-dsh-pinned-start-command",
+    "connect-dsh-install-command",
+    "connect-dsh-server-url",
+    "connect-dsh-runtime-list",
+    "approve-dsh-pairing-dialog",
+    "approve-dsh-pairing-form",
+    "approve-dsh-pairing-code",
+    "agent-harness-select",
+    "agent-dsh-runtime-select",
+    "settings-agent-harness",
+    "settings-dsh-runtime",
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /value="deepseek-harness">DeepSeek Harness<\/option>/);
+  assert.match(html, /DeepSeek Harness connects out to this GatherThread server/);
+  assert.match(html, /browser never probes localhost or tries to launch a local process/);
+  assert.match(html, /Open DeepSeek Harness[\s\S]*Install the GatherThread plugin[\s\S]*Connect inside DSH/);
+  assert.match(html, /DSH 0\.1\.2 has no public plugin market/);
+  assert.match(html, /Verified DSH version: 0\.1\.2-rc\.1/);
+  assert.match(html, /HTTPS LAN, self-hosted, or Tailscale/);
+  assert.match(html, /Public account registration is not assumed/);
+  assert.match(html, /single-use and expires shortly/);
+  assert.match(dsh, /DSH_START_COMMAND = "npx @deepseek-ai\/dsh web"/);
+  assert.match(dsh, /plugin --profile web add @gatherthread\/dsh-host/);
+  assert.doesNotMatch(dsh, /--dsh-source|(?:https?|dsh):\/\/localhost|deep[-_ ]?link/iu);
+  assert.match(main, /api\.listSessionRuntimes\(sessionId\)/);
+  assert.match(main, /dshExecutionProfile\(currentDshResolution\(\)\.runtime\)/);
+  assert.match(api, /runtime_id: input\.executionProfile\.runtimeId/);
+  assert.match(api, /provider: input\.executionProfile\.provider/);
+  assert.doesNotMatch(main, /fetch\([^\n]*(?:localhost|127\.0\.0\.1)|new WebSocket\([^\n]*(?:localhost|127\.0\.0\.1)/iu);
+  assert.doesNotMatch(`${main}\n${dsh}`, /(?:local|session)Storage[^\n]*(?:pair|token|credential)/iu);
+  assert.match(styles, /\.dsh-connect-steps/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.dsh-runtime-row/);
+  assert.match(i18n, /不假设公共账户注册系统已经上线/);
+  assert.match(i18n, /长期设备凭据只保存在 DSH 本机凭据库/);
 });
 
 test("read-only Codex downloads remain one-way and poll independent snapshot jobs", async () => {

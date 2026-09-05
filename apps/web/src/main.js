@@ -1,4 +1,4 @@
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260830-1";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260906-1";
 import {
   canAppend,
   createIdempotencyKey,
@@ -24,8 +24,20 @@ import {
 } from "./domain.js?v=20260829-3";
 import { SessionSync } from "./realtime.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260830-1";
+import { createLocalizer } from "./i18n.js?v=20260906-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
+import {
+  DSH_HARNESS,
+  DSH_INSTALL_COMMAND,
+  DSH_PINNED_START_COMMAND,
+  DSH_START_COMMAND,
+  DSH_VERSION_COMMAND,
+  dshExecutionProfile,
+  dshPairingCodeFromHash,
+  dshRuntimeChoices,
+  resolveDshRuntime,
+  withoutDshPairingHash,
+} from "./dsh.js?v=20260906-2";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import {
   contextBudgetInputBytes,
@@ -44,9 +56,13 @@ import {
   effectiveContextBudget,
   normalizeCodexProfile,
   normalizeSettings,
+  projectAgentHarness,
   projectCodexProfile,
+  projectDshProfile,
+  withProjectAgentHarness,
   withProjectCodexProfile,
-} from "./settings.js?v=20260829-4";
+  withProjectDshProfile,
+} from "./settings.js?v=20260906-2";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -79,6 +95,8 @@ const state = {
   session: null,
   invitations: [],
   snapshotRequests: [],
+  dshRuntimes: [],
+  devices: [],
   sync: sync.snapshot(),
   settings: settingsStore.get(),
 };
@@ -90,7 +108,11 @@ let memberRefreshTimer;
 let memberRefreshInFlight = false;
 let snapshotPollTimer;
 let snapshotPollGeneration = 0;
+let dshRuntimePollTimer;
+let dshRuntimePollGeneration = 0;
+let dshRuntimeLoadInFlight = false;
 let selectedSessionGeneration = 0;
+let pendingDshPairingCode = dshPairingCodeFromHash(location.hash);
 const expandedWorklogs = new Set();
 
 const element = (id) => document.getElementById(id);
@@ -124,6 +146,10 @@ const deleteCloudDialog = element("delete-cloud-dialog");
 const deleteCloudForm = element("delete-cloud-form");
 const connectCodexDialog = element("connect-codex-dialog");
 const connectCodexButton = element("connect-codex-button");
+const connectDshDialog = element("connect-dsh-dialog");
+const connectDshButton = element("connect-dsh-button");
+const approveDshPairingDialog = element("approve-dsh-pairing-dialog");
+const approveDshPairingForm = element("approve-dsh-pairing-form");
 const memberPanel = element("member-panel");
 const acceptInvitationForm = element("accept-invitation-form");
 const createInvitationForm = element("create-invitation-form");
@@ -133,9 +159,12 @@ const settingsDialog = element("settings-dialog");
 const settingsForm = element("settings-form");
 const agentModelSelect = element("agent-model-select");
 const agentEffortSelect = element("agent-effort-select");
+const agentHarnessSelect = element("agent-harness-select");
+const agentDshRuntimeSelect = element("agent-dsh-runtime-select");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
 let connectCodexReturnFocus = null;
+let connectDshReturnFocus = null;
 let renameSessionReturnFocus = null;
 let deleteCloudReturnFocus = null;
 let pendingCloudDeletion = null;
@@ -158,6 +187,7 @@ window.addEventListener("pagehide", () => {
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
+  stopDshRuntimePolling();
   api.clearCredential?.();
   clearCreatedInvitationSecret();
   clearNewDeviceAccessToken();
@@ -167,6 +197,12 @@ window.addEventListener("pageshow", (event) => {
   if (!event.persisted) return;
   resetWorkspaceToAuth();
   void restoreBrowserSession();
+});
+window.addEventListener("hashchange", () => {
+  const code = dshPairingCodeFromHash(location.hash);
+  if (!code) return;
+  pendingDshPairingCode = code;
+  maybeOpenPendingDshPairing();
 });
 
 void restoreBrowserSession();
@@ -380,6 +416,22 @@ connectCodexDialog.addEventListener("close", () => {
 for (const button of connectCodexDialog.querySelectorAll("button[data-copy-command]")) {
   button.addEventListener("click", () => void copyCodexCommand(button.dataset.copyCommand));
 }
+connectDshButton.addEventListener("click", openConnectDshDialog);
+element("close-connect-dsh-button").addEventListener("click", () => connectDshDialog.close());
+element("done-connect-dsh-button").addEventListener("click", () => connectDshDialog.close());
+element("refresh-dsh-runtimes-button").addEventListener("click", () => void refreshDshRuntimes({ announceFailure: true }));
+connectDshDialog.addEventListener("close", () => {
+  const returnFocus = connectDshReturnFocus;
+  connectDshReturnFocus = null;
+  requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
+});
+for (const button of connectDshDialog.querySelectorAll("button[data-copy-dsh-command]")) {
+  button.addEventListener("click", () => void copyDshCommand(button.dataset.copyDshCommand));
+}
+approveDshPairingForm.addEventListener("submit", approvePendingDshPairing);
+for (const id of ["cancel-dsh-pairing-button", "decline-dsh-pairing-button"]) {
+  element(id).addEventListener("click", cancelPendingDshPairing);
+}
 projectSelect.addEventListener("change", () => void selectProject(projectSelect.value));
 
 createForm.addEventListener("submit", async (event) => {
@@ -528,6 +580,8 @@ settingsDialog.addEventListener("close", () => {
 });
 agentModelSelect.addEventListener("change", () => updateComposerAgentProfile("model"));
 agentEffortSelect.addEventListener("change", () => updateComposerAgentProfile("effort"));
+agentHarnessSelect.addEventListener("change", updateComposerHarness);
+agentDshRuntimeSelect.addEventListener("change", updateComposerDshRuntime);
 messageInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
   const behavior = state.settings.composer.enterBehavior;
@@ -576,11 +630,14 @@ async function restoreBrowserSession() {
 
 function resetWorkspaceToAuth() {
   if (connectCodexDialog.open) connectCodexDialog.close();
+  if (connectDshDialog.open) connectDshDialog.close();
+  if (approveDshPairingDialog.open) approveDshPairingDialog.close();
   if (renameSessionDialog.open) renameSessionDialog.close();
   if (deleteCloudDialog.open) deleteCloudDialog.close();
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
+  stopDshRuntimePolling();
   selectedSessionGeneration += 1;
   projectSelectionGuard.invalidate();
   api.clearCredential?.();
@@ -592,6 +649,8 @@ function resetWorkspaceToAuth() {
   state.session = null;
   state.invitations = [];
   state.snapshotRequests = [];
+  state.dshRuntimes = [];
+  state.devices = [];
   currentDeviceName = "";
   settingsDeviceLoadGeneration += 1;
   expandedWorklogs.clear();
@@ -628,6 +687,7 @@ async function enterWorkspace(preferredProjectId) {
     element("new-session-button").hidden = true;
     element("owner-invitations").hidden = true;
   }
+  maybeOpenPendingDshPairing();
 }
 
 async function selectProject(projectId) {
@@ -635,8 +695,10 @@ async function selectProject(projectId) {
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
+  stopDshRuntimePolling();
   selectedSessionGeneration += 1;
   state.session = null;
+  state.dshRuntimes = [];
   clearCreatedInvitationSecret();
   const project = await api.getProject(projectId);
   if (!projectSelectionGuard.isCurrent(selection)) return;
@@ -687,6 +749,7 @@ async function selectSession(sessionId) {
   ]);
   if (generation !== selectedSessionGeneration) return;
   state.session = { ...session, members };
+  state.dshRuntimes = [];
   startMemberRefresh(sessionId);
   location.hash = new URLSearchParams({ project: state.project.id, session: sessionId }).toString();
   emptyState.hidden = true;
@@ -696,6 +759,9 @@ async function selectSession(sessionId) {
   renderMembers();
   renderComposerPermissions();
   renderSessionDeliveryControls();
+  await refreshDshRuntimes({ sessionId, generation });
+  if (generation !== selectedSessionGeneration) return;
+  startDshRuntimePolling();
   downloadCodexButton.disabled = false;
   element("session-title").focus({ preventScroll: true });
   const membership = members.find((member) => member.userId === state.currentUser?.id);
@@ -721,6 +787,8 @@ function renderProjectSelect() {
   }
   projectSelect.disabled = state.projects.length < 2;
   connectCodexButton.hidden = !state.project;
+  connectDshButton.hidden = !state.project;
+  renderDshConnectionStatus();
   element("delete-project-button").hidden = state.project?.role !== "owner";
 }
 
@@ -741,6 +809,81 @@ function stopMemberRefresh() {
   if (memberRefreshTimer !== undefined) clearInterval(memberRefreshTimer);
   memberRefreshTimer = undefined;
   memberRefreshInFlight = false;
+}
+
+function startDshRuntimePolling() {
+  stopDshRuntimePolling();
+  const generation = dshRuntimePollGeneration;
+  const poll = async () => {
+    if (generation !== dshRuntimePollGeneration || !state.session) return;
+    await refreshDshRuntimes();
+    if (generation !== dshRuntimePollGeneration || !state.session) return;
+    dshRuntimePollTimer = setTimeout(poll, mockEnabled ? 350 : 5_000);
+    dshRuntimePollTimer.unref?.();
+  };
+  dshRuntimePollTimer = setTimeout(poll, mockEnabled ? 350 : 5_000);
+  dshRuntimePollTimer.unref?.();
+}
+
+function stopDshRuntimePolling() {
+  dshRuntimePollGeneration += 1;
+  if (dshRuntimePollTimer !== undefined) clearTimeout(dshRuntimePollTimer);
+  dshRuntimePollTimer = undefined;
+  dshRuntimeLoadInFlight = false;
+}
+
+async function refreshDshRuntimes({ sessionId = state.session?.id, generation = selectedSessionGeneration, announceFailure = false } = {}) {
+  if (!sessionId || dshRuntimeLoadInFlight) return;
+  dshRuntimeLoadInFlight = true;
+  try {
+    const [runtimesResult, devicesResult] = await Promise.allSettled([
+      api.listSessionRuntimes(sessionId),
+      api.listDevices(),
+    ]);
+    if (generation !== selectedSessionGeneration || state.session?.id !== sessionId) return;
+    if (runtimesResult.status === "rejected") throw runtimesResult.reason;
+    state.dshRuntimes = runtimesResult.value;
+    state.devices = devicesResult.status === "fulfilled" ? devicesResult.value : [];
+    if (state.project
+      && projectAgentHarness(state.settings, state.project.id) === DSH_HARNESS
+      && projectDshProfile(state.settings, state.project.id) === null) {
+      const resolved = resolveDshRuntime(state.dshRuntimes, state.devices, null);
+      if (resolved.runtime) {
+        state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, resolved.runtime));
+      }
+    }
+    element("connect-dsh-error").textContent = "";
+  } catch (error) {
+    if (generation !== selectedSessionGeneration || state.session?.id !== sessionId) return;
+    state.dshRuntimes = [];
+    if (announceFailure || connectDshDialog.open) {
+      element("connect-dsh-error").textContent = error?.message ?? "Unable to refresh DeepSeek Harness status.";
+    }
+  } finally {
+    dshRuntimeLoadInFlight = false;
+    if (generation === selectedSessionGeneration && state.session?.id === sessionId) {
+      renderAgentProfileControls();
+      renderComposerPermissions();
+      renderDshConnectionStatus();
+      renderDshRuntimeList();
+    }
+  }
+}
+
+function currentDshResolution(settings = state.settings) {
+  const profile = state.project ? projectDshProfile(settings, state.project.id) : null;
+  return resolveDshRuntime(state.dshRuntimes, state.devices, profile);
+}
+
+function renderDshConnectionStatus() {
+  const choices = dshRuntimeChoices(state.dshRuntimes, state.devices);
+  const online = choices.filter((runtime) => runtime.status === "online");
+  element("connect-dsh-button-status").textContent = online.length
+    ? `${online.length} online`
+    : "Not connected";
+  element("connect-dsh-runtime-status").textContent = online.length
+    ? `${online.length} DeepSeek Harness runtime${online.length === 1 ? " is" : "s are"} online for this session.`
+    : "No DeepSeek Harness runtime is online for this session yet. This page checks automatically.";
 }
 
 async function refreshMembers(sessionId) {
@@ -1374,13 +1517,21 @@ function renderComposerPermissions() {
   const chat = canAppend({ ...common, kind: "human_chat" });
   const agent = canAppend({ ...common, kind: "agent_request" });
   const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
-  sendChatButton.disabled = !chat.allowed;
-  sendAgentButton.disabled = !agent.allowed;
-  messageInput.disabled = !chat.allowed && !agent.allowed;
-  element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
-  element("agent-target-label").textContent = agent.allowed
-    ? runtimeLabel(membership.runtime)
+  const harness = currentProjectHarness();
+  const dsh = harness === DSH_HARNESS ? currentDshResolution() : null;
+  const agentAllowed = harness === DSH_HARNESS ? chat.allowed && dsh.runtime !== null : agent.allowed;
+  const agentReason = harness === DSH_HARNESS
+    ? (chat.allowed ? dsh.reason : chat.reason)
     : agent.reason;
+  sendChatButton.disabled = !chat.allowed;
+  sendAgentButton.disabled = !agentAllowed;
+  messageInput.disabled = !chat.allowed && !agentAllowed;
+  element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
+  element("agent-target-label").textContent = agentAllowed
+    ? harness === DSH_HARNESS
+      ? `${dsh.runtime.deviceName} · ${dsh.runtime.provider} · ${dsh.runtime.model}`
+      : runtimeLabel(membership.runtime)
+    : agentReason;
   renderAgentProfileControls();
 }
 
@@ -1393,7 +1544,7 @@ async function sendMessage(kind) {
   }
   sendError.textContent = "";
   if (kind === "agent_request" && state.settings.composer.confirmAgentRequest
-    && !window.confirm("Start this Agent request with the selected model and reasoning level?")) {
+    && !window.confirm("Start this Agent request with the selected harness and model?")) {
     messageInput.focus();
     return;
   }
@@ -1404,14 +1555,17 @@ async function sendMessage(kind) {
   try {
     const input = { content, idempotencyKey: createIdempotencyKey(kind) };
     if (kind === "human_chat") await api.appendHumanChat(state.session.id, input);
-    else await api.appendAgentRequest(state.session.id, {
-      ...input,
-      executionProfile: {
-        harness: "codex",
-        model: agentModelSelect.value,
-        reasoningEffort: agentEffortSelect.value,
-      },
-    });
+    else {
+      const harness = currentProjectHarness();
+      const executionProfile = harness === DSH_HARNESS
+        ? dshExecutionProfile(currentDshResolution().runtime)
+        : {
+          harness: "codex",
+          model: agentModelSelect.value,
+          reasoningEffort: agentEffortSelect.value,
+        };
+      await api.appendAgentRequest(state.session.id, { ...input, executionProfile });
+    }
     messageInput.value = "";
     messageInput.focus();
   } catch (error) {
@@ -1530,6 +1684,149 @@ async function copyCodexCommand(platform) {
   }
 }
 
+function openConnectDshDialog() {
+  if (!state.project) return;
+  connectDshReturnFocus = document.activeElement;
+  element("connect-dsh-start-command").textContent = DSH_START_COMMAND;
+  element("connect-dsh-version-command").textContent = DSH_VERSION_COMMAND;
+  element("connect-dsh-pinned-start-command").textContent = DSH_PINNED_START_COMMAND;
+  element("connect-dsh-install-command").textContent = DSH_INSTALL_COMMAND;
+  const configuredServer = api.baseUrl || location.origin;
+  try {
+    element("connect-dsh-server-url").textContent = new URL(configuredServer, location.origin).origin;
+    element("connect-dsh-error").textContent = "";
+  } catch {
+    element("connect-dsh-server-url").textContent = "";
+    element("connect-dsh-error").textContent = "The configured GatherThread server URL is invalid.";
+  }
+  for (const status of [element("copy-dsh-start-status"), element("copy-dsh-install-status")]) status.textContent = "";
+  renderDshConnectionStatus();
+  renderDshRuntimeList();
+  if (!connectDshDialog.open) connectDshDialog.showModal();
+  void refreshDshRuntimes({ announceFailure: true });
+  requestAnimationFrame(() => element("close-connect-dsh-button").focus());
+}
+
+async function copyDshCommand(kind) {
+  const node = element(kind === "install" ? "connect-dsh-install-command" : "connect-dsh-start-command");
+  const status = element(kind === "install" ? "copy-dsh-install-status" : "copy-dsh-start-status");
+  const value = node.textContent;
+  if (!value) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(value);
+    status.textContent = "Copied.";
+  } catch {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    status.textContent = "Clipboard access is unavailable. The command is selected for manual copy.";
+  }
+}
+
+function renderDshRuntimeList() {
+  const list = element("connect-dsh-runtime-list");
+  list.replaceChildren();
+  const seenDevices = new Set();
+  for (const runtime of dshRuntimeChoices(state.dshRuntimes, state.devices)) {
+    if (seenDevices.has(runtime.deviceId)) continue;
+    seenDevices.add(runtime.deviceId);
+    const item = document.createElement("li");
+    item.className = "dsh-runtime-row";
+    const copy = document.createElement("div");
+    const name = document.createElement("strong");
+    const detail = document.createElement("small");
+    name.textContent = runtime.deviceName;
+    detail.textContent = `${runtime.status === "online" ? "Online" : "Offline"} · ${runtime.provider} · ${runtime.model} · last seen ${formatDateTime(runtime.lastSeenAt)}`;
+    copy.append(name, detail);
+    const actions = document.createElement("div");
+    actions.className = "dsh-runtime-actions";
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "text-button";
+    rename.textContent = "Rename";
+    rename.setAttribute("aria-label", `Rename ${runtime.deviceName}`);
+    rename.addEventListener("click", () => void renameDshDevice(runtime));
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.className = "text-button danger-text-button";
+    revoke.textContent = "Revoke";
+    revoke.setAttribute("aria-label", `Revoke ${runtime.deviceName}`);
+    revoke.addEventListener("click", () => void revokeDshDevice(runtime));
+    actions.append(rename, revoke);
+    item.append(copy, actions);
+    list.append(item);
+  }
+}
+
+async function renameDshDevice(runtime) {
+  const next = window.prompt(localizer.t("Choose a new name for this DeepSeek Harness device."), runtime.deviceName)?.trim();
+  if (!next || next === runtime.deviceName) return;
+  if (next.length > 120) {
+    element("connect-dsh-error").textContent = "Choose a device name between 1 and 120 characters.";
+    return;
+  }
+  try {
+    await api.renameDevice(runtime.deviceId, next);
+    await refreshDshRuntimes({ announceFailure: true });
+    announce("DeepSeek Harness device renamed.");
+  } catch (error) {
+    element("connect-dsh-error").textContent = error?.message ?? "Unable to rename the DeepSeek Harness device.";
+  }
+}
+
+async function revokeDshDevice(runtime) {
+  if (!window.confirm(localizer.t(`Revoke ${runtime.deviceName}? Its DSH plugin must pair again before accepting requests.`))) return;
+  try {
+    await api.revokeDevice(runtime.deviceId);
+    await refreshDshRuntimes({ announceFailure: true });
+    announce("DeepSeek Harness device access revoked.");
+  } catch (error) {
+    element("connect-dsh-error").textContent = error?.message ?? "Unable to revoke the DeepSeek Harness device.";
+  }
+}
+
+function maybeOpenPendingDshPairing() {
+  if (!state.currentUser || !pendingDshPairingCode || approveDshPairingDialog.open) return;
+  element("approve-dsh-pairing-code").textContent = pendingDshPairingCode;
+  element("approve-dsh-pairing-error").textContent = "";
+  approveDshPairingDialog.showModal();
+  requestAnimationFrame(() => element("confirm-dsh-pairing-button").focus());
+}
+
+async function approvePendingDshPairing(event) {
+  event.preventDefault();
+  if (!pendingDshPairingCode || !state.currentUser) return;
+  const submit = element("confirm-dsh-pairing-button");
+  submit.disabled = true;
+  element("approve-dsh-pairing-error").textContent = "";
+  try {
+    await api.approveDshPairing(pendingDshPairingCode);
+    clearPendingDshPairing();
+    approveDshPairingDialog.close();
+    announce("DeepSeek Harness pairing approved. Waiting for the local plugin to come online.");
+    openConnectDshDialog();
+  } catch (error) {
+    element("approve-dsh-pairing-error").textContent = error?.message ?? "Unable to approve this DeepSeek Harness pairing.";
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function cancelPendingDshPairing() {
+  clearPendingDshPairing();
+  if (approveDshPairingDialog.open) approveDshPairingDialog.close();
+}
+
+function clearPendingDshPairing() {
+  pendingDshPairingCode = "";
+  element("approve-dsh-pairing-code").textContent = "";
+  const remaining = withoutDshPairingHash(location.hash);
+  history.replaceState(null, "", `${location.pathname}${location.search}${remaining ? `#${remaining}` : ""}`);
+}
+
 function announce(message) {
   element("announcement").textContent = "";
   requestAnimationFrame(() => {
@@ -1605,13 +1902,50 @@ function currentProjectProfile(settings = state.settings) {
   return state.project ? projectCodexProfile(settings, state.project.id) : normalizeCodexProfile(undefined);
 }
 
+function currentProjectHarness(settings = state.settings) {
+  return state.project ? projectAgentHarness(settings, state.project.id) : "codex";
+}
+
+function renderDshRuntimeOptions(select, settings = state.settings) {
+  const resolution = currentDshResolution(settings);
+  select.replaceChildren();
+  if (resolution.choices.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No connected DSH runtime";
+    select.append(option);
+    select.disabled = true;
+    return;
+  }
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = resolution.runtime ? "Choose a DSH runtime" : resolution.reason;
+  placeholder.selected = resolution.runtime === null;
+  select.append(placeholder);
+  for (const runtime of resolution.choices) {
+    const option = document.createElement("option");
+    option.value = runtime.id;
+    option.textContent = runtime.label;
+    option.disabled = runtime.status !== "online";
+    option.selected = runtime.id === resolution.runtime?.id;
+    select.append(option);
+  }
+  select.disabled = false;
+}
+
 function renderAgentProfileControls() {
+  const harness = currentProjectHarness();
   const profile = currentProjectProfile();
+  agentHarnessSelect.value = harness;
   renderModelOptions(agentModelSelect, profile.model, state.settings);
   updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
+  renderDshRuntimeOptions(agentDshRuntimeSelect, state.settings);
   const disabled = !state.project;
+  agentHarnessSelect.disabled = disabled;
   agentModelSelect.disabled = disabled;
   agentEffortSelect.disabled = disabled;
+  element("codex-agent-profile-fields").hidden = harness !== "codex";
+  element("dsh-agent-profile-fields").hidden = harness !== DSH_HARNESS;
 }
 
 function updateComposerAgentProfile(changed) {
@@ -1623,6 +1957,30 @@ function updateComposerAgentProfile(changed) {
   };
   state.settings = settingsStore.set(withProjectCodexProfile(state.settings, state.project.id, requested));
   renderAgentProfileControls();
+}
+
+function updateComposerHarness() {
+  if (!state.project) return;
+  state.settings = settingsStore.set(withProjectAgentHarness(state.settings, state.project.id, agentHarnessSelect.value));
+  if (agentHarnessSelect.value === DSH_HARNESS) {
+    const resolution = currentDshResolution();
+    if (resolution.runtime) {
+      state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, resolution.runtime));
+    }
+  }
+  renderComposerPermissions();
+}
+
+function updateComposerDshRuntime() {
+  if (!state.project || !agentDshRuntimeSelect.value) return;
+  const selected = dshRuntimeChoices(state.dshRuntimes, state.devices)
+    .find((runtime) => runtime.id === agentDshRuntimeSelect.value && runtime.status === "online");
+  if (!selected) {
+    renderComposerPermissions();
+    return;
+  }
+  state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, selected));
+  renderComposerPermissions();
 }
 
 function populateSettingsForm(settings) {
@@ -1646,9 +2004,14 @@ function populateSettingsForm(settings) {
   element("settings-auto-scroll").checked = normalized.composer.autoScroll;
   element("settings-notify-agent").checked = normalized.notifications.agentCompleted;
   element("settings-notify-connection").checked = normalized.notifications.connectionLost;
+  const harness = currentProjectHarness(normalized);
+  element("settings-agent-harness").value = harness;
   const profile = currentProjectProfile(normalized);
   renderModelOptions(element("settings-default-model"), profile.model, normalized);
   updateEffortControl(element("settings-default-model"), element("settings-default-effort"), profile.effort, normalized);
+  renderDshRuntimeOptions(element("settings-dsh-runtime"), normalized);
+  element("settings-codex-agent-fields").hidden = harness !== "codex";
+  element("settings-dsh-agent-fields").hidden = harness !== DSH_HARNESS;
   syncAllNumericPresets();
   renderContextDiagnostic(normalized);
 }
@@ -1690,6 +2053,12 @@ function readSettingsForm(baseSettings = settingsPreview) {
       model: element("settings-default-model").value,
       effort: element("settings-default-effort").value,
     });
+    next = withProjectAgentHarness(next, state.project.id, element("settings-agent-harness").value);
+    if (element("settings-agent-harness").value === DSH_HARNESS) {
+      const selected = dshRuntimeChoices(state.dshRuntimes, state.devices)
+        .find((runtime) => runtime.id === element("settings-dsh-runtime").value && runtime.status === "online");
+      if (selected) next = withProjectDshProfile(next, state.project.id, selected);
+    }
   }
   return next;
 }
@@ -1782,6 +2151,11 @@ function handleSettingsControlChange(event) {
   if (event.target.id === "settings-default-model") {
     updateEffortControl(event.target, element("settings-default-effort"), element("settings-default-effort").value, settingsPreview);
   }
+  if (event.target.id === "settings-agent-harness") {
+    const dsh = event.target.value === DSH_HARNESS;
+    element("settings-codex-agent-fields").hidden = dsh;
+    element("settings-dsh-agent-fields").hidden = !dsh;
+  }
   if (handleNumericPresetSelection(event.target, { focusCustom: true })) return;
   updateSettingsPreviewFromForm();
 }
@@ -1795,6 +2169,14 @@ async function saveSettings(event) {
   if (contextBytes == null || contextBytes < CONTEXT_BUDGET_MIN_BYTES || contextBytes > CONTEXT_BUDGET_MAX_BYTES) {
     renderContextDiagnostic(settingsPreview);
     element("settings-context-budget").focus();
+    return;
+  }
+  element("settings-dsh-runtime-error").textContent = "";
+  if (state.project
+    && element("settings-agent-harness").value === DSH_HARNESS
+    && !element("settings-dsh-runtime").value) {
+    element("settings-dsh-runtime-error").textContent = "Connect and choose an online DeepSeek Harness runtime first.";
+    element("settings-dsh-runtime").focus();
     return;
   }
   const deviceInput = element("settings-device-name");

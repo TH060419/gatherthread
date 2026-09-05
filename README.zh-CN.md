@@ -40,6 +40,7 @@ MCP 服务器无法自行读取 host 中的完整会话。因此，根据历史�
 | `packages/protocol` | 规范事件和 API schema |
 | `packages/adapters` | 已授权的 Codex、Claude Code 会话发现、解析和脱敏 |
 | `packages/bridge` | 本地 runtime 注册、游标、上下文上传和请求领取/完成流程 |
+| `packages/dsh-host` | 默认关闭的 DeepSeek Harness Host/Client 插件、配对、项目绑定、恢复与脱敏 |
 | `packages/mcp` | MCP 工具、资源和无状态 Streamable HTTP JSON-RPC handler |
 | `tests` | 契约、安全、备份和真实 server-to-bridge 集成测试 |
 
@@ -104,6 +105,21 @@ npm run codex:connect -- \
 启用并信任 Hook 后，此前尚未绑定的 Codex Desktop 任务会以“第一次提交 prompt”为创建边界。项目创建者或参与者的连接器会幂等创建一个本人所有的个人 Solo，绑定现有 Desktop 任务，并把同一个已完成回合恰好上传一次；仅仅打开空任务不会创建云端内容。访者的任务始终留在本地。连接器自己的后台执行任务与快照任务会被明确排除，不能递归触发创建。
 
 只读会话不显示输入框，而显示 **下载到 Codex**。每次点击都会冻结一个新的 `through_sequence`，创建互相独立的本地快照任务，之后绝不向云端回传。创建者与参与者实时同步 `multi` 和自己创建的个人 Solo，并下载其他成员的 Solo；访者下载全部会话。若要回传 Desktop prompt，必须先在 Codex Desktop 设置中启用 Hooks，再检查生成工作区中的 `.codex/hooks.json`。GatherThread 凭据不会进入 Codex 子进程环境，自动权限提升始终禁用，并且不支持 `danger-full-access`。当前流程参见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)、[ADR-0013](docs/adr/0013-single-writer-dual-codex-projections.md)、[ADR-0014](docs/adr/0014-acknowledged-bounded-desktop-relay-capsules.md)和[ADR-0015](docs/adr/0015-create-personal-solos-from-first-local-prompt.md)。
+
+## 接入 DeepSeek Harness
+
+DeepSeek Harness 采用“插件优先”的连接方式。在 GatherThread 当前项目中打开 **连接 DeepSeek Harness**。网页不会探测 localhost，也不会尝试静默拉起本机进程；没有在线 runtime 时，Safari、Chrome 和 Edge 都使用同一套三步降级引导：
+
+```bash
+npx @deepseek-ai/dsh web
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
+```
+
+第二条是 DSH 0.1.2 已验证的官方 profile 插件机制；该版本没有已证实的公开插件市场。本候选只把 `@gatherthread/dsh-host` 准备为可发布包，没有实际发布，因此 npm 安装命令要等包发布后才能使用。可用 `npx @deepseek-ai/dsh --version` 检查版本；当前已验证 npm 版本为 `0.1.2-rc.1`，不一致时使用 `npx @deepseek-ai/dsh@0.1.2-rc.1 web`。DSH 0.1.2 没有通过稳定 Host service 暴露根 CLI 版本，所以 GatherThread 会严格校验所需 Host API 并安全失败，不读取 npx 缓存私有路径来伪装版本检测。
+
+安装后，在 DSH 中打开 **Settings → GatherThread / 共序**。可以选择未来的共序官方服务，也可以输入一个自定义服务器 origin，统一覆盖 HTTPS 局域网、自托管和 Tailscale。插件只主动向外连接，服务器不会反向访问本地 DSH。点击 **登录并配对** 后，会用五分钟有效、只能消费一次的短码打开所选 GatherThread 地址。当前授权复用已有的签名浏览器会话或邀请身份，不假设独立公共账户注册系统已经上线。长期设备凭据只保存在 DSH 的 credential store 中，不进入 URL、argv、Web Storage、日志、状态响应或 canonical history。
+
+runtime 上线后，在项目设置或 composer 中选择 **DeepSeek Harness**，再选择精确的 DSH 设备/provider/model，点击 **请求我的 Agent**。请求只会由匹配 runtime 领取，绝不会静默降级到 Codex。多台设备可以选择、重命名和撤销；仅有一台在线时会自动选中。仓库里的 `dsh:connect` 只保留为源码 checkout 的高级诊断工具，不是普通用户路径。维护者可运行 `npm run test:dsh-npm-plugin:real`，在不使用真实凭据和真实 DSH_HOME 的前提下验证固定 npm 包、Loader、浏览器配对和 Agent 闭环；运行前需让固定依赖已经存在于本机缓存。
 
 ## 安全机制与当前限制
 
