@@ -4,6 +4,8 @@ import {
   CollaborationHttpError,
   type AgentRequestClaim,
   type CanonicalEvent,
+  type CommitLocalTurnInput,
+  type CommitLocalTurnResult,
   type CompleteAgentRequestInput,
   type CurrentActor,
   type ReadEventsResult,
@@ -81,6 +83,10 @@ class DiscoveryApi implements DshProjectCollaborationApi {
   sessions: SessionSummary[] = [];
   listError: unknown;
   listCalls = 0;
+  readonly createCalls: Array<{
+    projectId: string;
+    input: { sessionId: string; title: string; mode: "solo" | "multi"; idempotencyKey: string };
+  }> = [];
 
   async getCurrentActor(): Promise<CurrentActor> {
     return structuredClone(this.actor);
@@ -97,6 +103,24 @@ class DiscoveryApi implements DshProjectCollaborationApi {
     return structuredClone(this.sessions);
   }
 
+  async createSession(
+    projectId: string,
+    input: { sessionId: string; title: string; mode: "solo" | "multi"; idempotencyKey: string },
+  ): Promise<SessionSummary> {
+    this.createCalls.push({ projectId, input: structuredClone(input) });
+    const existing = this.sessions.find((candidate) => candidate.id === input.sessionId);
+    if (existing !== undefined) return structuredClone(existing);
+    const created = session(input.sessionId, {
+      name: input.title,
+      mode: input.mode,
+      ownerUserId: this.actor.id,
+      role: "owner",
+      latestSequence: 1,
+    });
+    this.sessions.push(created);
+    return structuredClone(created);
+  }
+
   async readEvents(): Promise<ReadEventsResult> { throw new Error("unused"); }
   async registerRuntime(): Promise<DshRegisteredRuntime> { throw new Error("unused"); }
   async heartbeatRuntime(): Promise<DshRegisteredRuntime> { throw new Error("unused"); }
@@ -104,6 +128,7 @@ class DiscoveryApi implements DshProjectCollaborationApi {
   async appendAgentProgress(): Promise<CanonicalEvent> { throw new Error("unused"); }
   async appendEvent(): Promise<CanonicalEvent> { throw new Error("unused"); }
   async completeAgentRequest(): Promise<CanonicalEvent> { throw new Error("unused"); }
+  async commitLocalTurn(): Promise<CommitLocalTurnResult> { throw new Error("unused"); }
 }
 
 class FakeManagedConnector implements DshManagedConnector {
@@ -162,6 +187,73 @@ test("project discovery reuses authoritative Solo/Multi permissions and reconcil
   assert.equal(created.get("multi")?.[0]?.stops, 1);
   assert.equal(created.get("owned-solo")?.[0]?.stops, 1);
   assert.equal(created.get("new-session")?.[0]?.stops, 1);
+  await manager.stop();
+});
+
+test("a completed native DSH session becomes one idempotent cloud Solo and keeps its native identity", async () => {
+  const api = new DiscoveryApi();
+  const nativeCandidates = [{ localSessionId: "session-native-1", title: "First DSH task" }];
+  const attached: Array<{ sessionId: string; dshSessionId: string }> = [];
+  const manager = new DshProjectManager({
+    config: projectConfig(),
+    api,
+    canCreateLocalSessions: true,
+    discoverLocalSessions: async () => structuredClone(nativeCandidates),
+    createConnector: ({ config }) => {
+      attached.push({ sessionId: config.sessionId, dshSessionId: config.dshSessionId });
+      return new FakeManagedConnector();
+    },
+  });
+
+  await manager.start();
+  assert.equal(api.createCalls.length, 1);
+  assert.equal(api.createCalls[0]?.projectId, "project-1");
+  assert.deepEqual({ ...api.createCalls[0]?.input, idempotencyKey: undefined }, {
+    sessionId: "session-native-1",
+    title: "First DSH task",
+    mode: "solo",
+    idempotencyKey: undefined,
+  });
+  assert.match(api.createCalls[0]?.input.idempotencyKey ?? "", /^dsh-native:[a-f0-9]{64}$/u);
+  assert.deepEqual(attached, [{ sessionId: "session-native-1", dshSessionId: "session-native-1" }]);
+  assert.deepEqual(manager.activeSessionIds(), ["session-native-1"]);
+
+  await manager.refreshOnce();
+  assert.equal(api.createCalls.length, 1, "an already represented native Session must not be recreated");
+  await manager.stop();
+});
+
+test("project manager accepts a native-only cloud Session identity mapper", async () => {
+  const api = new DiscoveryApi();
+  api.sessions = [session("cloud-session")];
+  const attached: Array<{ sessionId: string; dshSessionId: string }> = [];
+  const manager = new DshProjectManager({
+    config: projectConfig(),
+    api,
+    mapCloudSessionId: (sessionId) => `native-v2-${sessionId}`,
+    createConnector: ({ config }) => {
+      attached.push({ sessionId: config.sessionId, dshSessionId: config.dshSessionId });
+      return new FakeManagedConnector();
+    },
+  });
+  await manager.start();
+  assert.deepEqual(attached, [{ sessionId: "cloud-session", dshSessionId: "native-v2-cloud-session" }]);
+  await manager.stop();
+});
+
+test("viewer project bindings never create cloud Sessions from local DSH activity", async () => {
+  const api = new DiscoveryApi();
+  const manager = new DshProjectManager({
+    config: projectConfig(),
+    api,
+    canCreateLocalSessions: false,
+    discoverLocalSessions: async () => [{ localSessionId: "session-viewer-local", title: "Private local work" }],
+    createConnector: () => new FakeManagedConnector(),
+  });
+
+  await manager.start();
+  assert.equal(api.createCalls.length, 0);
+  assert.deepEqual(manager.activeSessionIds(), []);
   await manager.stop();
 });
 
@@ -330,6 +422,10 @@ class RuntimeApi implements DshProjectCollaborationApi {
     }));
   }
 
+  async createSession(): Promise<SessionSummary> {
+    throw new Error("unused");
+  }
+
   async readEvents(sessionId: string, afterSequence: number, limit = 200): Promise<ReadEventsResult> {
     this.readCounts.set(sessionId, (this.readCounts.get(sessionId) ?? 0) + 1);
     const remaining = (this.events.get(sessionId) ?? []).filter((event) => event.sequence > afterSequence);
@@ -390,6 +486,13 @@ class RuntimeApi implements DshProjectCollaborationApi {
     return this.publish(sessionId, "agent_response", input.payload);
   }
 
+  async commitLocalTurn(
+    _sessionId: string,
+    _input: CommitLocalTurnInput,
+  ): Promise<CommitLocalTurnResult> {
+    throw new Error("unused");
+  }
+
   private publish(
     sessionId: string,
     type: CanonicalEvent["type"],
@@ -432,6 +535,8 @@ class PromptHost implements DshHostFacade {
   snapshotFrom(sequence: number): readonly DshSessionEventRecord[] {
     return structuredClone(this.#events.slice(sequence));
   }
+  async projectCanonicalEvents(): Promise<void> {}
+  async flush(): Promise<void> {}
 
   blockPrompt(): void {
     this.#promptGate = new Promise<void>((resolve) => { this.#releasePrompt = resolve; });

@@ -184,6 +184,7 @@ export interface CollaborationApi {
   listProjectSessions?(projectId: string): Promise<SessionSummary[]>;
   listSessionMembers?(sessionId: string): Promise<SessionMemberSummary[]>;
   createSession?(projectId: string, input: {
+    sessionId?: string;
     title: string;
     mode: "solo" | "multi";
     idempotencyKey: string;

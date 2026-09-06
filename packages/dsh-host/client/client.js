@@ -12,7 +12,7 @@ const CONNECTION_STATES = new Set(["connecting", "connected", "offline", "error"
 const SESSION_STATES = new Set(["connecting", "idle", "running", "offline", "error"]);
 const AUTHORIZATION_STATES = new Set(["unpaired", "pairing", "paired"]);
 
-const inject = ["slots", "connection"];
+const inject = ["slots", "connection", "sessions"];
 
 function apply(ctx) {
   ctx.slots.inject("settings.section", () => ctx.slots.register({
@@ -20,10 +20,10 @@ function apply(ctx) {
     id: "gatherthread",
     order: 30,
     label: "GatherThread / 共序",
-  }, () => GatherThreadStatusPanel({ connection: ctx.connection })));
+  }, () => GatherThreadStatusPanel({ connection: ctx.connection, sessions: ctx.sessions })));
 }
 
-function GatherThreadStatusPanel({ connection }) {
+function GatherThreadStatusPanel({ connection, sessions }) {
   const [snapshot, setSnapshot] = React.useState(undefined);
   const [nativeState, setNativeState] = React.useState(undefined);
   const [catalog, setCatalog] = React.useState(undefined);
@@ -32,9 +32,9 @@ function GatherThreadStatusPanel({ connection }) {
   const [notice, setNotice] = React.useState("");
   const [serverUrl, setServerUrl] = React.useState("");
   const [deviceName, setDeviceName] = React.useState("DeepSeek Harness");
-  const [projectId, setProjectId] = React.useState("");
   const [provider, setProvider] = React.useState("");
   const [model, setModel] = React.useState("");
+  const visibleSessionSignature = React.useRef("");
 
   React.useEffect(() => {
     let disposed = false;
@@ -50,6 +50,14 @@ function GatherThreadStatusPanel({ connection }) {
         terminalFailure = result.terminalFailure;
         if (!disposed) {
           transientFailures = 0;
+          const nextSignature = result.nativeState?.runtime.sessions
+            .map((session) => session.sessionId)
+            .sort()
+            .join("\n") ?? "";
+          if (nextSignature !== visibleSessionSignature.current) {
+            visibleSessionSignature.current = nextSignature;
+            void Promise.resolve(sessions.refresh()).catch(() => undefined);
+          }
           setSnapshot(result.snapshot);
           setNativeState(result.nativeState);
           setUnavailable(false);
@@ -75,7 +83,7 @@ function GatherThreadStatusPanel({ connection }) {
       if (timer !== undefined) clearTimeout(timer);
       activeRequest?.abort();
     };
-  }, [connection]);
+  }, [connection, sessions]);
 
   const runAction = async (endpoint, payload, onSuccess) => {
     if (busy) return;
@@ -87,14 +95,13 @@ function GatherThreadStatusPanel({ connection }) {
       const next = endpoint === "catalog/get" ? parseCatalog(value) : parseNativeState(value);
       if (endpoint === "catalog/get") {
         setCatalog(next);
-        const firstProject = next.projects[0];
         const firstProvider = next.providers[0];
-        setProjectId((current) => current || firstProject?.id || "");
         setProvider((current) => current || firstProvider?.id || "");
         setModel((current) => current || firstProvider?.models[0]?.id || "");
       } else {
         setNativeState(next);
         setSnapshot(next.runtime);
+        if (endpoint === "connection/configure") await sessions.refresh();
       }
       onSuccess?.(next);
     } catch {
@@ -106,7 +113,7 @@ function GatherThreadStatusPanel({ connection }) {
 
   const connectionState = snapshot?.connection ?? "connecting";
   const project = snapshot?.projectName ?? "GatherThread";
-  const sessions = snapshot?.sessions ?? [];
+  const sessionRows = snapshot?.sessions ?? [];
   return React.createElement("section", {
     "data-gatherthread-status": connectionState,
     style: styles.panel,
@@ -120,9 +127,9 @@ function GatherThreadStatusPanel({ connection }) {
     ? React.createElement("p", { role: "status", style: styles.notice }, "状态暂不可用。请在 Host 恢复后刷新页面。")
     : null,
   React.createElement("p", { style: styles.summary },
-    `活跃会话 ${String(snapshot?.activeSessionCount ?? 0)} / ${String(sessions.length)}`),
+    `活跃会话 ${String(snapshot?.activeSessionCount ?? 0)} / ${String(sessionRows.length)}`),
   React.createElement("div", { style: styles.list },
-    ...sessions.map((session) => React.createElement("div", {
+    ...sessionRows.map((session) => React.createElement("div", {
       key: session.sessionId,
       style: styles.row,
     },
@@ -140,12 +147,10 @@ function GatherThreadStatusPanel({ connection }) {
       notice,
       serverUrl,
       deviceName,
-      projectId,
       provider,
       model,
       setServerUrl,
       setDeviceName,
-      setProjectId,
       setProvider,
       setModel,
       runAction,
@@ -264,7 +269,7 @@ function renderNativeControls(input) {
           onClick: () => void input.runAction("pairing/cancel", {}),
         }, "取消配对")),
     );
-  } else if (state.binding === undefined) {
+  } else if (state.route === undefined) {
     const providers = input.catalog?.providers ?? [];
     const selectedProvider = providers.find((entry) => entry.id === input.provider) ?? providers[0];
     const models = selectedProvider?.models ?? [];
@@ -277,26 +282,20 @@ function renderNativeControls(input) {
           disabled: input.busy,
           style: styles.primaryButton,
           onClick: () => void input.runAction("catalog/get", {}),
-        }, input.busy ? "正在读取…" : "选择项目与 DSH 模型")
+        }, input.busy ? "正在读取…" : "选择 DSH 模型")
         : React.createElement("form", {
           key: "binding-form",
           style: styles.form,
           onSubmit: (event) => {
             event.preventDefault();
             void input.runAction("connection/configure", {
-              projectId: input.projectId,
               provider: input.provider,
               model: input.model,
             }, () => input.setCatalog(undefined));
           },
         },
-        field("GatherThread 项目", selectControl(
-          input.catalog.projects,
-          input.projectId,
-          input.setProjectId,
-          (entry) => entry.id,
-          (entry) => entry.name,
-        )),
+        React.createElement("p", { style: styles.muted },
+          `将同步全部 ${String(input.catalog.projects.length)} 个可访问的 GatherThread 项目；项目权限分别生效。`),
         field("DSH Provider", selectControl(
           providers,
           input.provider,
@@ -317,18 +316,20 @@ function renderNativeControls(input) {
         )),
         React.createElement("button", {
           type: "submit",
-          disabled: input.busy || !input.projectId || !input.provider || !input.model,
+          disabled: input.busy || !input.provider || !input.model,
           style: styles.primaryButton,
-        }, input.busy ? "正在连接…" : "连接此项目")),
+        }, input.busy ? "正在连接…" : "连接全部可访问项目")),
       disconnectButton(input),
     );
   } else {
     controls.push(
       connectionSummary(state),
       React.createElement("dl", { key: "binding", style: styles.details },
-        detail("项目", state.binding.projectName),
-        detail("Provider", state.binding.provider),
-        detail("Model", state.binding.model)),
+        detail("项目", `${String(state.projectCount)} 个可访问项目`),
+        detail("Provider", state.route.provider),
+        detail("Model", state.route.model)),
+      React.createElement("p", { key: "projects", style: styles.muted },
+        state.bindings.map((binding) => binding.projectName).join(" · ") || "当前没有可访问的活跃项目。"),
       disconnectButton(input),
     );
   }
@@ -385,9 +386,9 @@ function detail(label, value) {
 function parseNativeState(value) {
   exactObject(value, [
     "schemaVersion", "integration", "authorization", "compatibility", "runtime",
-    "officialServerUrl", "serverUrl", "deviceName", "binding", "pairing", "recoverableError",
+    "officialServerUrl", "serverUrl", "deviceName", "route", "projectCount", "bindings", "pairing", "recoverableError",
   ]);
-  if (value.schemaVersion !== 1 || value.integration !== "gatherthread") throw new Error("invalid native status identity");
+  if (value.schemaVersion !== 2 || value.integration !== "gatherthread") throw new Error("invalid native status identity");
   if (!AUTHORIZATION_STATES.has(value.authorization)) throw new Error("invalid native authorization state");
   exactObject(value.compatibility, ["package", "version", "profile"]);
   if (value.compatibility.package !== "@deepseek-ai/dsh"
@@ -406,14 +407,29 @@ function parseNativeState(value) {
   const serverUrl = optionalUrl(value.serverUrl);
   const officialServerUrl = optionalUrl(value.officialServerUrl);
   if (value.deviceName !== undefined) boundedText(value.deviceName, 120);
-  let binding;
-  if (value.binding !== undefined) {
-    exactObject(value.binding, ["projectId", "projectName", "provider", "model"]);
-    boundedText(value.binding.projectId, 128);
-    boundedText(value.binding.projectName, 160);
-    boundedText(value.binding.provider, 80);
-    boundedText(value.binding.model, 160);
-    binding = { ...value.binding };
+  let route;
+  let bindings;
+  if (value.route !== undefined || value.bindings !== undefined || value.projectCount !== undefined) {
+    if (value.route === undefined || !Number.isSafeInteger(value.projectCount) || value.projectCount < 0
+      || !Array.isArray(value.bindings) || value.bindings.length > 100
+      || value.bindings.length > value.projectCount) {
+      throw new Error("invalid native Project bindings");
+    }
+    exactObject(value.route, ["provider", "model"]);
+    boundedText(value.route.provider, 80);
+    boundedText(value.route.model, 160);
+    route = { ...value.route };
+    bindings = value.bindings.map((binding) => {
+      exactObject(binding, ["projectId", "projectName", "provider", "model"]);
+      boundedText(binding.projectId, 128);
+      boundedText(binding.projectName, 160);
+      boundedText(binding.provider, 80);
+      boundedText(binding.model, 160);
+      if (binding.provider !== route.provider || binding.model !== route.model) {
+        throw new Error("inconsistent native Project route");
+      }
+      return { ...binding };
+    });
   }
   let pairing;
   if (value.pairing !== undefined) {
@@ -441,7 +457,7 @@ function parseNativeState(value) {
     && value.recoverableError !== "pairing_failed"
     && value.recoverableError !== "connection_failed") throw new Error("invalid native recovery state");
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     integration: "gatherthread",
     authorization: value.authorization,
     compatibility: { ...value.compatibility },
@@ -449,7 +465,7 @@ function parseNativeState(value) {
     ...(officialServerUrl === undefined ? {} : { officialServerUrl }),
     ...(serverUrl === undefined ? {} : { serverUrl }),
     ...(value.deviceName === undefined ? {} : { deviceName: value.deviceName }),
-    ...(binding === undefined ? {} : { binding }),
+    ...(route === undefined ? {} : { route, projectCount: value.projectCount, bindings }),
     ...(pairing === undefined ? {} : { pairing }),
     ...(value.recoverableError === undefined ? {} : { recoverableError: value.recoverableError }),
   };
@@ -584,7 +600,7 @@ const styles = {
   field: { display: "grid", gap: 6 },
   fieldLabel: { fontSize: 12, fontWeight: 600, opacity: 0.76 },
   input: { width: "100%", minHeight: 36, boxSizing: "border-box", padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(127,127,127,.28)", background: "transparent", color: "inherit", font: "inherit" },
-  primaryButton: { minHeight: 36, padding: "8px 12px", borderRadius: 9, border: "1px solid currentColor", background: "currentColor", color: "Canvas", font: "inherit", fontWeight: 600, cursor: "pointer" },
+  primaryButton: { minHeight: 36, padding: "8px 12px", borderRadius: 9, border: "1px solid Highlight", background: "Highlight", color: "HighlightText", WebkitTextFillColor: "HighlightText", font: "inherit", fontWeight: 600, cursor: "pointer" },
   secondaryButton: { minHeight: 36, padding: "8px 12px", borderRadius: 9, border: "1px solid rgba(127,127,127,.3)", background: "transparent", color: "inherit", font: "inherit", cursor: "pointer" },
   linkButton: { display: "inline-flex", alignItems: "center", justifyContent: "center", minHeight: 36, padding: "0 12px", borderRadius: 9, border: "1px solid rgba(127,127,127,.3)", color: "inherit", textDecoration: "none", fontWeight: 600 },
   muted: { margin: 0, fontSize: 12, lineHeight: 1.55, opacity: 0.68 },

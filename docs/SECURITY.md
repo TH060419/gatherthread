@@ -4,7 +4,7 @@
 
 This document defines the first-release security boundary for the collaboration server, browser client, MCP surface, local bridge, transcript adapters, and operational tooling.
 
-The repository contains an executable single-process `0.1.0-beta.1` server and owner-host tooling. Automated checks cover core contracts, but passing `npm run release:verify` does not certify a host, network policy, operating system, filing status, backup location, or Internet-facing deployment. Public ingress is supported only through the documented invitation-only Alibaba Cloud ECS profile and still requires operator preflight and monitoring.
+The repository contains an executable single-process `0.1.0-alpha.1` server and owner-host tooling. Automated checks cover core contracts, but passing `npm run release:verify` does not certify a host, network policy, operating system, filing status, backup location, or Internet-facing deployment. Public ingress is prepared only through the documented invitation-only Alibaba Cloud ECS profile and still requires operator preflight and monitoring; no official hosted service is open in this Alpha.
 
 ## Assets and trust boundaries
 
@@ -44,7 +44,11 @@ The collaboration service never inherits authority to approve local tools. Trans
 - Shared attribution keeps the username, harness, provider, model, and fidelity needed for collaboration. A non-owner reading another user's activity receives placeholders instead of local device, runtime, and native-session identifiers; canonical event storage never retains a raw native-session identifier.
 - The built-in Codex connector treats prior shared events as untrusted data, accepts execution only for the server-verified initiating user's request, retains a bounded local sandbox, and disables automatic privilege escalation.
 - Codex hook installation is explicit and subject to project trust review. A private registry allowlists managed execution thread IDs before relay or offline spooling; unrelated tasks and immutable snapshot threads are rejected locally.
+- Compatible Codex 0.151 native projection rechecks that the Desktop task is idle before a brief rejoin and `thread/inject_items`; active turns queue the update, incompatible clients retain the Hook capsule, and ambiguous multiple Codex runtimes fail closed.
+- DSH canonical projection uses only public Session append/flush services, persists projected event IDs before advancing its cursor, and uploads native turns through a durable outbox plus one authenticated `commitLocalTurn`.
+- An `agent_request` is executable only by its selected authenticated runtime. Other harness connectors may passively project the canonical result but cannot claim the request.
 - Conversation reconciliation can replace only the connector's native-thread binding. It does not reset, check out, or overwrite the local source working tree, and the previous thread is preserved as an offline fork.
+- Conversation synchronization is not a global lock for source files; concurrently running harnesses in one working directory can still produce ordinary filesystem conflicts.
 
 ## Threat model
 
@@ -68,6 +72,7 @@ The collaboration service never inherits authority to approve local tools. Trans
 | T16 | Snapshot worker gains write authority or exhausts storage | distinct runtime purpose; same-user/device/session checks; frozen sequence; no canonical event; per-row metadata charge; active-count, per-result, and cumulative quotas; byte-bounded listing | snapshot ACL, purpose, idempotency, quota, and integration tests |
 | T17 | A role downgrade or project removal later uploads work created while read-only | reconcile only from a successful authoritative ACL response; remove affected execution bindings and clear unpublished local state; preserve but never retroactively upload the native transcript; explicit 403/404 project cleanup | owner-to-viewer, participant-solo, removal, transient-failure, and regrant tests |
 | T18 | Hook discovery creates a cloud Solo from an unrelated, viewer-owned, background, or snapshot task | exact workspace match; authoritative project-role recheck; viewer discovery disabled; explicit background/snapshot purposes; stable hashed creation key; server-side creator ACL | first-prompt discovery, viewer no-op, purpose isolation, and idempotent retry tests |
+| T19 | Passive projection echoes a canonical event or another harness executes the same request | durable per-runtime cursor and projected event IDs; server-bound selected runtime; atomic idempotent local-turn commit; ambiguous Codex selection fails closed | cross-harness replay, echo-suppression, runtime-selection, and switch tests |
 
 ## Authentication and authorization requirements
 
@@ -103,7 +108,9 @@ The registry is bound to the selected workspace and labels known native threads 
 
 The plugin's user MCP surface reaches one or more running connectors through a separate local relay. Its active registry contains only leased instance, endpoint, and project routing metadata. An unpredictable per-run capability is stored separately with current-user filesystem protections; neither record contains the GatherThread bearer. Read discovery aggregates every active registration, and both reads and writes fail closed if the result would be ambiguous or incomplete. Runtime registration, request claiming/completion, and snapshot upload stay on a separate internal MCP profile and are not model-callable through the user plugin. On Windows the named-pipe path is not treated as authorization; the random capability is mandatory, and a native two-account ACL test remains a public-release gate.
 
-A hook draft queues connector-side canonical injection, compaction, reconciliation, and Web-triggered execution until the matching desktop `Stop` exposes the final turn. App Server thread status is a second point-in-time check, not a proven atomic lock across independent App Server processes. Operators must not start a Web Agent request on the same managed desktop task while its direct desktop turn is running. `thread/unsubscribe` is lifecycle cleanup and must not be treated as a lock.
+A hook draft queues fallback-capsule acknowledgement, local-turn upload, compaction, and reconciliation until the matching Desktop `Stop` exposes the final turn. On compatible Codex 0.151 clients, passive canonical projection is separate: it first observes the Desktop task as idle, briefly rejoins it, persists `thread/inject_items`, and releases the client; an active turn queues the update. App Server thread status is a point-in-time safety check, not a proven atomic lock across independent App Server processes, so a failed rejoin or ambiguous runtime must stop without mutation. `thread/unsubscribe` is lifecycle cleanup and must not be treated as a lock. Web-triggered execution stays in the background projection.
+
+The DSH plugin stores its server cursor, projected-event IDs, and local-turn outbox in private persistent state. It advances projection only after public `Session.append` with `surfaceOp: "append"` and flush succeed, and advances an outgoing turn only after the authenticated server returns its canonical event bindings. An unselected DSH or Codex runtime may receive passive canonical updates but cannot claim the request. These controls prevent duplicate conversation execution; they do not serialize tools or direct file edits performed by different harnesses.
 
 ## Default private deployment
 

@@ -6,6 +6,7 @@ import {
 } from "../src/native-connection.js";
 import {
   apply,
+  DSH_NATIVE_AGENT_PRESET,
   DshNativeHostController,
   parseNativePluginConfig,
   registerNativeDshRpc,
@@ -49,13 +50,17 @@ function status() {
 }
 
 const unboundGrant: DshNativeGrant = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   serverUrl: "https://gatherthread.example",
   apiUrl: "https://gatherthread.example/v1",
   deviceId: "dsh_device-1",
   deviceName: "DSH Mac",
   token: "gta_fixture-long-lived-secret",
 };
+
+test("native GatherThread Sessions use DSH's editable standard preset", () => {
+  assert.equal(DSH_NATIVE_AGENT_PRESET, "standard");
+});
 
 function pairingFetch() {
   const calls: Array<{ url: string; init: RequestInit }> = [];
@@ -107,6 +112,7 @@ test("native controller pairs, configures one project owner, and resumes it afte
     validateModel: async (provider, model) => {
       validated.push(`${provider}/${model}`);
     },
+    resolveWorkspace: async () => "/readonly/workspace",
     createOwner: async (_grant, binding) => {
       ownerStarts.push(`${binding.projectId}/${binding.provider}/${binding.model}`);
       let stopped = false;
@@ -133,12 +139,17 @@ test("native controller pairs, configures one project owner, and resumes it afte
   const catalog = await controller.catalog();
   assert.equal(catalog.projects[0]?.name, "Project One");
   assert.equal(catalog.providers[0]?.models[0]?.id, "CaseSensitiveModel");
-  const connected = await controller.configure({
+  await assert.rejects(controller.configure({
     projectId: "project-1",
     provider: "deepseek-official",
     model: "CaseSensitiveModel",
+  }), /refresh DSH and explicitly confirm/);
+  const connected = await controller.configure({
+    provider: "deepseek-official",
+    model: "CaseSensitiveModel",
   });
-  assert.equal(connected.binding?.model, "CaseSensitiveModel");
+  assert.equal(connected.route?.model, "CaseSensitiveModel");
+  assert.deepEqual(connected.bindings?.map((binding) => binding.projectId), ["project-1"]);
   assert.equal(JSON.stringify(connected).includes(unboundGrant.token), false);
   assert.deepEqual(validated, ["deepseek-official/CaseSensitiveModel"]);
   assert.deepEqual(ownerStarts, ["project-1/deepseek-official/CaseSensitiveModel"]);
@@ -148,7 +159,7 @@ test("native controller pairs, configures one project owner, and resumes it afte
 
   const reloaded = makeController();
   await reloaded.start();
-  assert.equal(reloaded.publicState().binding?.projectId, "project-1");
+  assert.equal(reloaded.publicState().bindings?.[0]?.projectId, "project-1");
   assert.deepEqual(ownerStarts, [
     "project-1/deepseek-official/CaseSensitiveModel",
     "project-1/deepseek-official/CaseSensitiveModel",
@@ -158,6 +169,169 @@ test("native controller pairs, configures one project owner, and resumes it afte
   assert.equal(reloaded.publicState().authorization, "unpaired");
   await reloaded.dispose();
   assert.equal(ownerStops.length, 2);
+});
+
+test("one paired route reconciles every active accessible project and isolates project failure", async () => {
+  const credentials = credentialsFixture(unboundGrant);
+  let projects: Array<{
+    id: string;
+    name: string;
+    role: "owner" | "participant" | "viewer";
+    state: "active";
+    sessionCount: number;
+  }> = [
+    { id: "project-a", name: "Project A", role: "owner", state: "active", sessionCount: 2 },
+    { id: "project-b", name: "Project B", role: "viewer", state: "active", sessionCount: 3 },
+  ];
+  const starts: string[] = [];
+  const stops: string[] = [];
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service },
+    status: status(),
+    workspacePath: "/readonly/workspace",
+    listProjects: async () => projects.map((project) => ({ ...project })),
+    validateModel: async () => undefined,
+    resolveWorkspace: async () => "/readonly/workspace",
+    createOwner: async (_grant, binding) => {
+      starts.push(binding.projectId);
+      if (binding.projectId === "project-b") throw new Error("isolated viewer workspace failure");
+      return { async stop() { stops.push(binding.projectId); } };
+    },
+  });
+  await controller.start();
+  const connected = await controller.configure({
+    provider: "deepseek-official",
+    model: "deepseek-chat",
+  });
+  assert.deepEqual(connected.bindings?.map((binding) => binding.projectId), ["project-a", "project-b"]);
+  assert.deepEqual(starts, ["project-a", "project-b"]);
+  assert.equal(connected.runtime.connection, "connected", "one Project failure does not stop a healthy peer");
+
+  projects = [
+    { id: "project-b", name: "Project B", role: "viewer", state: "active", sessionCount: 3 },
+    { id: "project-c", name: "Project C", role: "participant", state: "active", sessionCount: 1 },
+  ];
+  await controller.refreshProjects();
+  assert.deepEqual(stops, ["project-a"], "inaccessible Project owner stops without deleting its workspace");
+  assert.deepEqual(starts, ["project-a", "project-b", "project-b", "project-c"]);
+  assert.deepEqual(controller.publicState().bindings?.map((binding) => binding.projectId), ["project-b", "project-c"]);
+  await controller.dispose();
+});
+
+test("paired account periodically discovers newly accessible Projects", async () => {
+  const routedGrant: DshNativeGrant = {
+    ...unboundGrant,
+    route: { provider: "deepseek-official", model: "deepseek-chat" },
+  };
+  const credentials = credentialsFixture(routedGrant);
+  let projects = [{
+    id: "project-a",
+    name: "Project A",
+    role: "owner" as const,
+    state: "active" as const,
+    sessionCount: 1,
+  }];
+  const starts: string[] = [];
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service },
+    status: status(),
+    workspacePath: "/readonly/workspace",
+    projectRefreshIntervalMs: 5,
+    listProjects: async () => projects.map((project) => ({ ...project })),
+    resolveWorkspace: async (_grant, binding) => `/managed/${binding.projectId}`,
+    createOwner: async (_grant, binding, _signal, _status, workspacePath) => {
+      assert.equal(workspacePath, `/managed/${binding.projectId}`);
+      starts.push(binding.projectId);
+      return { async stop() {} };
+    },
+  });
+  await controller.start();
+  assert.deepEqual(starts, ["project-a"]);
+  projects = [...projects, {
+    id: "project-b",
+    name: "Project B",
+    role: "owner",
+    state: "active",
+    sessionCount: 1,
+  }];
+  await eventually(() => starts.includes("project-b"));
+  await controller.dispose();
+});
+
+test("paired account retries Project discovery after an initial startup failure", async () => {
+  const routedGrant: DshNativeGrant = {
+    ...unboundGrant,
+    route: { provider: "deepseek-official", model: "deepseek-chat" },
+  };
+  const credentials = credentialsFixture(routedGrant);
+  let attempts = 0;
+  const starts: string[] = [];
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service },
+    status: status(),
+    workspacePath: "/readonly/workspace",
+    projectRefreshIntervalMs: 5,
+    listProjects: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("temporary Project catalog failure");
+      return [{
+        id: "project-recovered",
+        name: "Recovered Project",
+        role: "owner",
+        state: "active",
+        sessionCount: 1,
+      }];
+    },
+    resolveWorkspace: async () => "/managed/project-recovered",
+    createOwner: async (_grant, binding) => {
+      starts.push(binding.projectId);
+      return { async stop() {} };
+    },
+  });
+
+  await controller.start();
+  assert.equal(controller.publicState().runtime.connection, "error");
+  await eventually(() => starts.includes("project-recovered"));
+  assert.equal(controller.publicState().runtime.connection, "connected");
+  await controller.dispose();
+});
+
+test("configuration cancellation reaches an in-flight Project activation", async () => {
+  const credentials = credentialsFixture(unboundGrant);
+  const activationStarted = deferred<AbortSignal>();
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service },
+    status: status(),
+    workspacePath: "/readonly/workspace",
+    listProjects: async () => [{
+      id: "project-cancelled",
+      name: "Cancelled Project",
+      role: "owner",
+      state: "active",
+      sessionCount: 1,
+    }],
+    validateModel: async () => undefined,
+    resolveWorkspace: async (_grant, _binding, signal) => {
+      activationStarted.resolve(signal);
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      });
+    },
+    createOwner: async () => {
+      throw new Error("cancelled activation must not create an owner");
+    },
+  });
+  await controller.start();
+  const abort = new AbortController();
+  const configuring = controller.configure({
+    provider: "deepseek-official",
+    model: "deepseek-chat",
+  }, abort.signal);
+  const activationSignal = await activationStarted.promise;
+  abort.abort(new Error("cancel test"));
+  await assert.rejects(bounded(configuring, 500), /cancel test/);
+  assert.equal(activationSignal.aborted, true);
+  await controller.dispose();
 });
 
 test("native controller disposal prevents a delayed pairing poll from writing a late grant", async () => {
@@ -344,4 +518,12 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+async function eventually(predicate: () => boolean, milliseconds = 500): Promise<void> {
+  const deadline = Date.now() + milliseconds;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition was not reached before timeout");
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+  }
 }

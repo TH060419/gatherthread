@@ -1,6 +1,6 @@
 {
   "name": "gatherthread",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-alpha.1",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -47,7 +47,10 @@
     "release:archive": "node scripts/package-release.mjs",
     "release:check": "node scripts/check-release.mjs",
     "release:verify-codex": "node scripts/verify-codex-package.mjs",
-    "release:verify": "npm run verify && npm run release:check && npm run release:verify-codex",
+    "release:verify-dsh": "node scripts/verify-dsh-package.mjs",
+    "release:pack-npm": "node scripts/pack-npm-release.mjs",
+    "release:dry-run-npm": "node scripts/dry-run-npm-release.mjs",
+    "release:verify": "npm run verify && npm run release:check && npm run release:verify-codex && npm run release:verify-dsh",
     "verify": "npm run typecheck && npm run build:dsh-plugin && npm run build:web && npm run test && npm run audit:references && npm run audit:licenses && npm run audit:branding && npm run audit:secrets && npm run audit:vulnerabilities"
   },
   "devDependencies": {

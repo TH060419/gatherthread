@@ -298,6 +298,22 @@ export function deriveDshSessionId(
   return `gatherthread-${digest}`;
 }
 
+/**
+ * Native Web projections use a versioned identity so Sessions created by the
+ * earlier read-only integration are not resumed under an incompatible preset.
+ */
+export function deriveNativeDshSessionId(
+  projectId: string,
+  sessionId: string,
+  workspacePath: string,
+): string {
+  const digest = createHash("sha256")
+    .update(JSON.stringify(["native-web-v2", projectId, sessionId, path.resolve(workspacePath)]))
+    .digest("hex")
+    .slice(0, 32);
+  return `gatherthread-${digest}`;
+}
+
 function normalizeApiUrl(value: string): string {
   let url: URL;
   try {

@@ -19,21 +19,28 @@ import {
   SnapshotRequestRecordSchema,
   SubscribeMessageSchema,
   UpdateSessionInputSchema,
+  UpdateProjectInputSchema,
 } from "../src/index.js";
 
 test("Agent execution profiles are bounded single-line data", () => {
   assert.deepEqual(AgentExecutionProfileSchema.parse({
     harness: "codex",
+    provider: "openai",
     model: "gpt-5.6-terra",
     reasoning_effort: "high",
+    runtime_id: "runtime-codex-1",
   }), {
     harness: "codex",
+    provider: "openai",
     model: "gpt-5.6-terra",
     reasoning_effort: "high",
+    runtime_id: "runtime-codex-1",
   });
   assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "bad\nmodel" }).success, false);
   assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "x".repeat(161) }).success, false);
   assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "gpt-5.6-sol", reasoning_effort: "bad\u0085value" }).success, false);
+  assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", provider: "bad\nprovider", model: "gpt-5.6-sol" }).success, false);
+  assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "gpt-5.6-sol", runtime_id: "bad runtime" }).success, false);
 });
 
 test("append input rejects unknown event types and short idempotency keys", () => {
@@ -77,7 +84,7 @@ test("project contracts keep invitations and session grouping project-scoped", (
   }).success, true);
 });
 
-test("session rename uses the same trimmed Unicode title contract as creation", () => {
+test("project and session renames use the same trimmed Unicode title contract as creation", () => {
   assert.equal(SessionTitleSchema.parse("  研究计划 🚀  "), "研究计划 🚀");
   assert.equal(CreateProjectInputSchema.parse({
     title: "  量子项目 🚀  ",
@@ -90,6 +97,17 @@ test("session rename uses the same trimmed Unicode title contract as creation", 
     title: "Renamed session",
     idempotency_key: "rename-session-0001",
   });
+  assert.deepEqual(UpdateProjectInputSchema.parse({
+    title: "  Renamed project  ",
+    idempotency_key: "rename-project-0001",
+  }), {
+    title: "Renamed project",
+    idempotency_key: "rename-project-0001",
+  });
+  assert.equal(UpdateProjectInputSchema.safeParse({
+    title: "   ",
+    idempotency_key: "rename-project-0002",
+  }).success, false);
   assert.equal(UpdateSessionInputSchema.safeParse({
     title: "   ",
     idempotency_key: "rename-session-0002",
@@ -107,6 +125,10 @@ test("session rename uses the same trimmed Unicode title contract as creation", 
     assert.equal(UpdateSessionInputSchema.safeParse({
       title,
       idempotency_key: "control-rename-0001",
+    }).success, false);
+    assert.equal(UpdateProjectInputSchema.safeParse({
+      title,
+      idempotency_key: "control-project-rename-0001",
     }).success, false);
   }
 });

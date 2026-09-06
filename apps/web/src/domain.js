@@ -4,7 +4,7 @@ export const INVITATION_ROLES = Object.freeze(["participant", "viewer"]);
 export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
 export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
-export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-beta.1";
+export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.1";
 
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 const DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS = 128_000;
@@ -57,6 +57,7 @@ export function projectCodexConnectionCommands({
       "--url", posixQuote(normalizedBaseUrl),
       "--project", posixQuote(projectId),
       "--create-workspace",
+      "--plugin-hooks",
       ...optionalArguments(posixQuote),
     ].join(" "),
     powershell: [
@@ -64,6 +65,7 @@ export function projectCodexConnectionCommands({
       "--url", powerShellQuote(normalizedBaseUrl),
       "--project", powerShellQuote(projectId),
       "--create-workspace",
+      "--plugin-hooks",
       ...optionalArguments(powerShellQuote),
     ].join(" "),
   });
@@ -288,16 +290,18 @@ export function isTimelineEventVisible(event) {
 
 export function sessionMetadataFromEvent(event) {
   const title = event?.payload?.title;
+  const mode = event?.payload?.mode;
   if (
     event?.type !== "session_state_change"
     || !new Set(["renamed", "updated"]).has(event?.payload?.action)
-    || typeof title !== "string"
-    || title.trim().length === 0
-    || title.length > 200
   ) return null;
+  if (title !== undefined && (typeof title !== "string" || title.trim().length === 0 || title.length > 200)) return null;
+  if (mode !== undefined && !new Set(["solo", "multi"]).has(mode)) return null;
+  if (title === undefined && mode === undefined) return null;
   return {
     sessionId: event.sessionId ?? event.session_id,
-    name: title,
+    ...(title === undefined ? {} : { name: title }),
+    ...(mode === undefined ? {} : { mode }),
   };
 }
 

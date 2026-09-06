@@ -35,6 +35,7 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 | `GET` | `/v1/me` | Return the authenticated user and device identity |
 | `POST/GET` | `/v1/projects` | Create an empty project or list projects visible to the actor |
 | `GET` | `/v1/projects/:project_id` | Read one visible project and the actor's role |
+| `PATCH` | `/v1/projects/:project_id` | Owner-only idempotent project title update |
 | `POST/GET` | `/v1/projects/:project_id/sessions` | Owner creates solo/multi; participant creates personal solo; members list sessions |
 | `GET` | `/v1/projects/:project_id/members` | List project members |
 | `PUT/DELETE` | `/v1/projects/:project_id/members/:user_id` | Owner-change or remove another member |
@@ -81,7 +82,7 @@ The server derives actor identity from the credential and always assigns event I
 
 Project membership is the broad ACL boundary. A participant can write `multi`; a viewer reads all project sessions. Owners and participants may create personal `solo`, and the persisted `owner_user_id` identifies its immutable creator: only that creator can write or rename the Solo while retaining a non-viewer project role. Even the project owner reads another member's Solo. The project owner alone creates `multi` and can change or remove every other member.
 
-Project creation inserts only the project and its owner membership, so a new project's `session_count` is `0`. An owner or participant explicitly creates an eligible first session; existing sessions named `General` are preserved and no migration backfills one. Project creation, session creation, and authorized `PATCH /v1/sessions/:session_id` share a trimmed 1–200 character, control-character-free `title` policy; invalid title mutations return `422 validation_error`. A title-only change emits a metadata-only `session_state_change` event with `{ "action": "renamed", "title": "..." }`, allowing subscribed clients to refresh their title and session list without exposing the previous name or conversation content.
+Project creation inserts only the project and its owner membership, so a new project's `session_count` is `0`. An owner or participant explicitly creates an eligible first session; existing sessions named `General` are preserved and no migration backfills one. Project creation, session creation, owner-only `PATCH /v1/projects/:project_id`, and authorized `PATCH /v1/sessions/:session_id` share a trimmed 1–200 character, control-character-free `title` policy; invalid title mutations return `422 validation_error`. A session title or mode change emits a metadata-only `session_state_change` event, allowing subscribed clients to refresh session metadata without exposing previous names or conversation content. Project title changes are owner-only and idempotent; they update project metadata without renaming local harness workspaces.
 
 ## WebSocket contract
 

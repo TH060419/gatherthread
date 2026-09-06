@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import {
   refreshProjectSessionPermissions,
   type CurrentActor,
@@ -13,6 +14,7 @@ import {
 import { BoundedDshExecutionGate } from "./execution-gate.js";
 import type {
   DshExecutionGate,
+  DshLocalSessionCandidate,
   DshProjectCollaborationApi,
 } from "./types.js";
 
@@ -41,6 +43,14 @@ export interface DshProjectManagerOptions {
   readonly onBackgroundError?: (error: Error) => void;
   readonly now?: () => number;
   readonly onStatus?: (update: DshProjectManagerStatusUpdate) => void;
+  /** Completed, user-created DSH Sessions currently attached to this Project workspace. */
+  readonly discoverLocalSessions?: () => Promise<readonly DshLocalSessionCandidate[]>;
+  /** Project viewers remain local-only and must never create canonical Sessions. */
+  readonly canCreateLocalSessions?: boolean;
+  /** Wake discovery immediately after DSH closes a local turn. */
+  readonly subscribeToLocalSessionChanges?: (listener: () => void) => () => void;
+  /** Native UI may version generated identities without changing legacy connectors. */
+  readonly mapCloudSessionId?: (sessionId: string) => string;
 }
 
 export type DshProjectManagerStatusUpdate =
@@ -87,7 +97,12 @@ export class DshProjectManager {
   readonly #now: () => number;
   readonly #executionGate: BoundedDshExecutionGate;
   readonly #onStatus: ((update: DshProjectManagerStatusUpdate) => void) | undefined;
+  readonly #discoverLocalSessions: (() => Promise<readonly DshLocalSessionCandidate[]>) | undefined;
+  readonly #canCreateLocalSessions: boolean;
+  readonly #subscribeToLocalSessionChanges: ((listener: () => void) => () => void) | undefined;
+  readonly #mapCloudSessionId: ((sessionId: string) => string) | undefined;
   readonly #managed = new Map<string, ManagedBinding>();
+  readonly #nativeLocalSessionIds = new Set<string>();
   readonly #retries = new Map<string, RetryState>();
   #actor: CurrentActor | undefined;
   #started = false;
@@ -96,6 +111,7 @@ export class DshProjectManager {
   #refreshPromise: Promise<DshProjectRefreshResult> | undefined;
   #stopPromise: Promise<void> | undefined;
   #discoveryFailures = 0;
+  #stopLocalSessionSubscription: (() => void) | undefined;
 
   constructor(options: DshProjectManagerOptions) {
     this.#config = options.config;
@@ -107,6 +123,10 @@ export class DshProjectManager {
       options.config.maxConcurrentSessions,
     );
     this.#onStatus = options.onStatus;
+    this.#discoverLocalSessions = options.discoverLocalSessions;
+    this.#canCreateLocalSessions = options.canCreateLocalSessions === true;
+    this.#subscribeToLocalSessionChanges = options.subscribeToLocalSessionChanges;
+    this.#mapCloudSessionId = options.mapCloudSessionId;
   }
 
   get stopped(): boolean {
@@ -135,6 +155,13 @@ export class DshProjectManager {
       if (initial.status === "transient_failure") {
         throw publicError(initial.error, "Initial GatherThread Project discovery failed");
       }
+      this.#stopLocalSessionSubscription = this.#subscribeToLocalSessionChanges?.(() => {
+        if (this.#stopped) return;
+        void this.refreshOnce().catch((error: unknown) => this.#reportError(publicError(
+          error,
+          "DSH local Session discovery failed",
+        )));
+      });
       this.#scheduleNextRefresh();
     } catch (error) {
       await this.stop();
@@ -156,6 +183,8 @@ export class DshProjectManager {
         clearTimeout(this.#timer);
         this.#timer = undefined;
       }
+      this.#stopLocalSessionSubscription?.();
+      this.#stopLocalSessionSubscription = undefined;
       this.#executionGate.close(new Error("DSH project manager stopped"));
       await this.#deactivateAll();
       const refresh = this.#refreshPromise;
@@ -226,12 +255,39 @@ export class DshProjectManager {
 
     this.#discoveryFailures = 0;
     for (const error of permissions.errors) this.#reportError(error);
-    const eligibleIds = new Set(permissions.eligibleSessions.map((session) => session.id));
+    const eligibleSessions = [...permissions.eligibleSessions];
+    if (this.#discoverLocalSessions !== undefined) {
+      try {
+        const candidates = await this.#discoverLocalSessions();
+        this.#nativeLocalSessionIds.clear();
+        for (const candidate of candidates) this.#nativeLocalSessionIds.add(candidate.localSessionId);
+        if (this.#canCreateLocalSessions) {
+          const representedIds = new Set(eligibleSessions.map((session) => session.id));
+          for (const candidate of candidates) {
+            if (representedIds.has(candidate.localSessionId)) continue;
+            const created = await this.#api.createSession(this.#config.projectId, {
+              sessionId: candidate.localSessionId,
+              title: candidate.title,
+              mode: "solo",
+              idempotencyKey: nativeSessionCreationKey(
+                this.#config.projectId,
+                candidate.localSessionId,
+              ),
+            });
+            eligibleSessions.push(created);
+            representedIds.add(created.id);
+          }
+        }
+      } catch (error) {
+        this.#reportError(publicError(error, "DSH local Session discovery failed"));
+      }
+    }
+    const eligibleIds = new Set(eligibleSessions.map((session) => session.id));
     for (const sessionId of [...this.#retries.keys()]) {
       if (!eligibleIds.has(sessionId)) this.#retries.delete(sessionId);
     }
     const now = this.#now();
-    const candidates = permissions.eligibleSessions.filter((session) => {
+    const candidates = eligibleSessions.filter((session) => {
       if (this.#managed.has(session.id)) return false;
       return (this.#retries.get(session.id)?.nextAttemptAt ?? 0) <= now;
     });
@@ -249,7 +305,7 @@ export class DshProjectManager {
     };
     this.#notifyStatus({
       state: "connected",
-      eligibleSessions: permissions.eligibleSessions,
+      eligibleSessions,
       activeSessionIds: result.activeSessionIds,
     });
     return result;
@@ -260,7 +316,13 @@ export class DshProjectManager {
     let binding: ManagedBinding | undefined;
     try {
       const connector = this.#createConnector({
-        config: projectSessionConfig(this.#config, session.id),
+        config: projectSessionConfig(
+          this.#config,
+          session.id,
+          this.#nativeLocalSessionIds.has(session.id)
+            ? session.id
+            : this.#mapCloudSessionId?.(session.id),
+        ),
         session,
         actorUserId,
         executionGate: this.#executionGate,
@@ -356,8 +418,10 @@ export class DshProjectManager {
 export function projectSessionConfig(
   config: EnabledDshProjectHostConfig,
   sessionId: string,
+  nativeSessionId?: string,
 ): EnabledDshHostConfig {
-  const dshSessionId = deriveDshSessionId(config.projectId, sessionId, config.workspacePath);
+  const dshSessionId = nativeSessionId
+    ?? deriveDshSessionId(config.projectId, sessionId, config.workspacePath);
   return {
     enabled: true,
     bindingMode: "single",
@@ -376,6 +440,13 @@ export function projectSessionConfig(
     shareToolEvents: config.shareToolEvents,
     dshSessionId,
   };
+}
+
+function nativeSessionCreationKey(projectId: string, localSessionId: string): string {
+  const identity = createHash("sha256")
+    .update(`${projectId}\0${localSessionId}`)
+    .digest("hex");
+  return `dsh-native:${identity}`;
 }
 
 function retryDelay(config: EnabledDshProjectHostConfig, attempts: number): number {

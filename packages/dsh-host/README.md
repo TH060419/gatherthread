@@ -19,13 +19,13 @@ The package does not install a DSH runtime dependency.
 After `@gatherthread/dsh-host` is published, the ordinary three-step path is:
 
 ```text
-npx @deepseek-ai/dsh web
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.1
+npx @deepseek-ai/dsh@0.1.2-rc.1 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
 ```
 
-Check the active CLI with `npx @deepseek-ai/dsh --version`. If it is not
-`0.1.2-rc.1`, use `npx @deepseek-ai/dsh@0.1.2-rc.1 web`. DSH 0.1.2 does not
+Check the active CLI with `npx @deepseek-ai/dsh --version`. The normal start
+command already pins `0.1.2-rc.1`. DSH 0.1.2 does not
 expose the root CLI version as a stable Host service, so the package does not
 inspect npx cache paths or claim runtime-version introspection. The install
 command pins the exact verified CLI, while every required Host/Client service is
@@ -91,7 +91,8 @@ page; it is not treated as Host-entry disposal.
 `GET /v1/projects/:project_id/sessions` and authenticates identity through
 `GET /v1/me`. Viewer Sessions are never writable. A Solo Session is writable
 only by its `owner_user_id`; Multi Sessions use the authoritative owner or
-participant role. A 403 or 404 project response stops every binding, while a
+participant role. A 403 or 404 Project response stops every Session binding for
+that Project, while a
 transient discovery failure preserves the last safe set and retries with a
 bounded exponential delay.
 
@@ -103,3 +104,58 @@ lease-expiry API. Removing or downgrading a Session cancels its queued permit
 before it can claim a request. Existing single-Session configuration remains
 valid when `bindingMode` is omitted; both modes resolve the real current actor
 before applying Solo permissions.
+
+The installed native plugin stores one account-level model route and reconciles
+every active Project visible to the paired GatherThread identity. Adding a
+Project starts its isolated manager without another pairing step. Archiving a
+Project or revoking access stops only that Project manager; its local workspace
+and DSH Session history are retained. A failure in one Project does not stop
+healthy peers, and discovery retries periodically.
+
+An existing schema-v1 single-Project pairing keeps its device credential when
+the plugin is upgraded, but deliberately drops the old model binding. The user
+must choose the DSH model and explicitly select **Connect all accessible
+Projects** once; the migration never broadens the former Project scope in the
+background. Likewise, an obsolete Client that still submits `projectId` is
+rejected instead of silently treating that choice as account-wide consent.
+
+Each Project uses the same marker-validated `~/GatherThread Projects/<name>`
+workspace as the Codex connection path. The plugin registers that directory
+through DSH's public `workspaceRegistry` service, including for viewer-only
+Projects, but creates and attaches native Agent Sessions only for Sessions the
+paired actor may edit. Existing GatherThread Session titles are applied through
+the public `sessionTitle` service, flushed, and then attached to the Project
+workspace so they appear in DSH's native work page. No private DSH persistence
+file is read or modified. GatherThread-origin conversations use DSH's ordinary
+editable `standard` preset; an obsolete read-only projection is detached from
+the workspace after its editable replacement is durable, without deleting the
+old local log.
+
+For an owner or participant, the first successfully completed human/assistant
+turn in a new DSH conversation creates one creator-owned cloud Solo with the
+same stable Session identity, then uploads that turn atomically. The live Agent
+remains owned by DSH while GatherThread borrows its public handle, so neither
+side disposes the other's conversation. Empty conversations, failed turns, and
+all viewer conversations remain local-only. Creation and turn upload are both
+idempotent across refreshes and reconnects.
+
+## Native bidirectional history
+
+Canonical history is replayed in server sequence order through DSH's public
+`Session.append(..., { surfaceOp: "append" })` API and acknowledged only after
+the public Session flush completes. Human requests use ordinary identified user
+messages. External Agent answers use identified `gatherthread` plugin relay
+messages with visible attribution; this keeps them model-visible without
+forging an `assistant/message` whose provider stream could not pass DSH's
+restore invariants. Stable `gatherthread:<event-id>` message IDs make a retry
+after an uncertain cursor save harmless.
+
+A complete turn typed directly in the bound DSH Session is flushed, reduced to
+public request/final-answer text, and stored in the private connector outbox
+before one atomic `commitLocalTurn`. Reasoning, raw streams, replay state and
+private tool metadata never enter that commit. Transport failures retain the
+same local-turn ID for idempotent replay. Canonical events attributed to the
+same runtime advance the projection cursor but are not appended back to DSH,
+while events written through another harness are imported normally. V1
+connector state deliberately restarts only the native projection cursor at zero
+once so history that the earlier poller observed but discarded is backfilled.

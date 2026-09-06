@@ -20,9 +20,9 @@ test("Alibaba Cloud ECS deployment shell entrypoints parse as Bash", () => {
   }
 });
 
-test("Alibaba installer requires beta and mainland ICP acknowledgements", async () => {
+test("Alibaba installer requires private Alpha and mainland ICP acknowledgements", async () => {
   const installer = await deploymentFile("install.sh");
-  assert.match(installer, /--acknowledge-invitation-only-beta/);
+  assert.match(installer, /--acknowledge-private-alpha/);
   assert.match(installer, /--acknowledge-mainland-icp-ready/);
   assert.match(installer, /Refusing public ingress/);
   assert.match(installer, /Refusing mainland-China public deployment/);
@@ -46,7 +46,7 @@ test("Alibaba reverse proxy and service retain the loopback security boundary", 
 
 test("Alibaba preflight checks the active candidate and storage readiness", async () => {
   const preflight = await deploymentFile("preflight.sh");
-  assert.match(preflight, /0\.1\.0-beta\.1/);
+  assert.match(preflight, /0\.1\.0-alpha\.1/);
   assert.match(preflight, /\/health\/live/);
   assert.match(preflight, /\/health\/ready/);
   assert.match(preflight, /foreign_keys/);

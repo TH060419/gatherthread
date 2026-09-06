@@ -492,7 +492,7 @@ test("HTTP project participants create personal solos that remain read only to t
   }
 });
 
-test("owner session rename validates input and reaches another client as metadata-only control", async () => {
+test("owner project and session renames validate input while session metadata reaches another client", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-rename-"));
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
@@ -520,6 +520,23 @@ test("owner session rename validates input and reaches another client as metadat
       method: "POST",
       body: { invite_token: invitation.body.data.invite_token, user_id: "rename-member", display_name: "Member", device_id: "rename-member-device", device_name: "Phone" },
     });
+    const renamedProject = await api<{ data: { project: { title: string } } }>(running.origin, "/v1/projects/rename-project", {
+      method: "PATCH", token: owner.body.data.token,
+      body: { title: "Renamed project 🚀", idempotency_key: "rename-project-title-0001" },
+    });
+    assert.equal(renamedProject.status, 200);
+    assert.equal(renamedProject.body.data.project.title, "Renamed project 🚀");
+    assert.equal((await api<{ data: { projects: Array<{ id: string; title: string }> } }>(running.origin, "/v1/projects", {
+      token: owner.body.data.token,
+    })).body.data.projects.find((project) => project.id === "rename-project")?.title, "Renamed project 🚀");
+    assert.equal((await api(running.origin, "/v1/projects/rename-project", {
+      method: "PATCH", token: member.body.data.token,
+      body: { title: "Denied", idempotency_key: "rename-project-denied-0001" },
+    })).status, 404);
+    assert.equal((await api(running.origin, "/v1/projects/rename-project", {
+      method: "PATCH", token: owner.body.data.token,
+      body: { title: "   ", idempotency_key: "rename-project-invalid-0001" },
+    })).status, 422);
     socket = await realtimeSocket(running.origin, member.body.data.token, "rename-room");
     const subscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
     socket.send(JSON.stringify({ type: "subscribe", session_id: "rename-room", after_sequence: 0 }));
@@ -535,6 +552,14 @@ test("owner session rename validates input and reaches another client as metadat
     const message = await delivered;
     assert.deepEqual((message.event as { payload: unknown }).payload, { action: "renamed", title: "After 🚀" });
     assert.equal(JSON.stringify(message).includes("Before"), false);
+
+    const modeChanged = await api<{ data: { session: { mode: string }; event: { payload: unknown } } }>(running.origin, "/v1/sessions/rename-room", {
+      method: "PATCH", token: owner.body.data.token,
+      body: { mode: "solo", idempotency_key: "rename-room-mode-0001" },
+    });
+    assert.equal(modeChanged.status, 200);
+    assert.equal(modeChanged.body.data.session.mode, "solo");
+    assert.deepEqual(modeChanged.body.data.event.payload, { action: "updated", mode: "solo" });
 
     assert.equal((await api(running.origin, "/v1/sessions/rename-room", {
       method: "PATCH", token: member.body.data.token,

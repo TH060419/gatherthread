@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260906-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260906-3" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -49,10 +49,7 @@
         <p>
           People collaborate in one space, each with a local Agent, sharing context that stays ordered, attributable, and live.
         </p>
-        <div class="signal-card">
-          <span class="signal-dot"></span>
-          <span>Canonical history is the source of truth</span>
-        </div>
+        <p class="auth-credit">By T.H. and M.E.</p>
       </section>
 
       <section class="login-panel">
@@ -147,7 +144,7 @@
             </div>
             <button
               id="new-project-button"
-              class="icon-button"
+              class="icon-button rail-create-button"
               type="button"
               aria-label="Create project"
             >
@@ -175,9 +172,14 @@
             <span>Connect DeepSeek Harness</span>
             <small id="connect-dsh-button-status">Not connected</small>
           </button>
-          <button id="delete-project-button" class="text-button danger-text-button project-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
-            Delete cloud project
-          </button>
+          <div class="project-action-row">
+            <button id="rename-project-button" class="text-button project-rename-button" type="button" aria-haspopup="dialog" aria-controls="rename-project-dialog" hidden>
+              Rename project
+            </button>
+            <button id="delete-project-button" class="text-button danger-text-button project-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
+              Delete cloud project
+            </button>
+          </div>
           <div class="rail-heading session-heading">
             <div>
               <p class="eyebrow">Conversations</p>
@@ -185,7 +187,7 @@
             </div>
             <button
               id="new-session-button"
-              class="icon-button"
+              class="icon-button rail-create-button"
               type="button"
               aria-label="Create session"
             >
@@ -480,15 +482,42 @@
         <div class="dialog-heading">
           <div>
             <p class="eyebrow">Session settings</p>
-            <h2 id="rename-session-title">Rename session</h2>
+            <h2 id="rename-session-title">Edit session</h2>
           </div>
           <button id="cancel-rename-session-button" class="icon-button" type="button" aria-label="Close rename session dialog">×</button>
         </div>
         <label for="rename-session-name">Session name</label>
         <input id="rename-session-name" name="name" required maxlength="200" aria-describedby="rename-session-error" />
+        <div id="rename-session-mode-field" class="dialog-field" hidden>
+          <label for="rename-session-mode">Session mode</label>
+          <select id="rename-session-mode" name="mode">
+            <option value="solo">Solo</option>
+            <option value="multi">Multi</option>
+          </select>
+          <p class="field-help">Only the project creator can change the mode of a session they created.</p>
+        </div>
         <p id="rename-session-error" class="form-error" role="alert"></p>
         <div class="dialog-actions">
           <button id="dialog-cancel-rename-session-button" class="button button-secondary" type="button">Cancel</button>
+          <button class="button button-primary" type="submit">Save changes</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="rename-project-dialog" class="create-dialog" aria-labelledby="rename-project-title">
+      <form id="rename-project-form" method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">Project settings</p>
+            <h2 id="rename-project-title">Rename project</h2>
+          </div>
+          <button id="cancel-rename-project-button" class="icon-button" type="button" aria-label="Close rename project dialog">×</button>
+        </div>
+        <label for="rename-project-name">Project name</label>
+        <input id="rename-project-name" name="name" required maxlength="200" aria-describedby="rename-project-error" />
+        <p id="rename-project-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="dialog-cancel-rename-project-button" class="button button-secondary" type="button">Cancel</button>
           <button class="button button-primary" type="submit">Save name</button>
         </div>
       </form>
@@ -546,51 +575,56 @@
           </div>
           <button id="close-connect-codex-button" class="icon-button" type="button" aria-label="Close Connect Codex dialog">×</button>
         </div>
-        <p id="connect-codex-summary">
-          <span>Run this fixed-version command in a terminal; no GatherThread checkout or prior npm install is needed. It creates or reuses and opens the same-name local Desktop project</span>
-          <strong id="connect-codex-project-name"></strong><span>, then connects every editable session with one Desktop task and one isolated background Agent runtime.</span>
-        </p>
-        <ol id="connect-codex-steps" class="codex-connect-steps">
-          <li><strong>1. Run the fixed-version connector.</strong> Choose the command for this computer below, enter the device token only in the hidden terminal prompt, and keep the connector running.</li>
-          <li><strong>2. Install the plugin once.</strong> Run the two commands below to add the fixed GitHub release source and install the <strong>共序 / GatherThread</strong> plugin. Restart Codex Desktop and review its MCP server and Hooks; enable Hooks only for optional step 3. This page only copies the commands; it does not run them.</li>
-          <li><strong>3. Optionally sync direct Desktop turns.</strong> After reviewing the plugin, restart the same connector command with <code>--plugin-hooks</code>, then enable and explicitly trust the Hooks. Web Agent requests and MCP tools do not require Hook trust.</li>
-        </ol>
-        <section id="connect-codex-activation" class="codex-desktop-activation-guide" aria-labelledby="connect-codex-activation-title">
-          <h3 id="connect-codex-activation-title">Single-writer synchronization</h3>
-          <p>Codex Desktop exclusively owns the visible task. Web Agent requests run in an isolated background projection, and trusted hooks merge Desktop turns and the latest shared context through GatherThread.</p>
-          <p>An owner or participant can start a new Desktop task normally. Its first submitted prompt creates and binds a personal Solo in this project; an empty task creates nothing. Viewer tasks always remain local.</p>
-        </section>
-        <p id="connect-codex-security" class="codex-connect-notice">
-          Your device token is requested by a hidden CLI prompt and is not included in any command. This page only copies commands and cannot launch local Codex. Keep the connector running for Web requests and plugin MCP tools. Direct Desktop turn sync additionally requires --plugin-hooks plus explicit review and trust of the plugin Hooks.
-        </p>
-
-        <section class="command-card" aria-labelledby="connect-codex-posix-title">
-          <div class="command-heading">
-            <h3 id="connect-codex-posix-title">macOS / Linux shell</h3>
-            <button class="button button-secondary" type="button" data-copy-command="posix" aria-describedby="copy-posix-command-status">Copy command</button>
-          </div>
-          <code id="connect-codex-posix-command" class="connector-command" tabindex="0" aria-label="macOS and Linux connector command"></code>
-          <p id="copy-posix-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
-        </section>
-
-        <section class="command-card" aria-labelledby="connect-codex-powershell-title">
-          <div class="command-heading">
-            <h3 id="connect-codex-powershell-title">Windows PowerShell</h3>
-            <button class="button button-secondary" type="button" data-copy-command="powershell" aria-describedby="copy-powershell-command-status">Copy command</button>
-          </div>
-          <code id="connect-codex-powershell-command" class="connector-command" tabindex="0" aria-label="Windows PowerShell connector command"></code>
-          <p id="copy-powershell-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
-        </section>
-
-        <section class="command-card" aria-labelledby="connect-codex-marketplace-title">
-          <div class="command-heading">
-            <h3 id="connect-codex-marketplace-title">One-time plugin setup</h3>
-            <button class="button button-secondary" type="button" data-copy-command="marketplace" aria-describedby="copy-marketplace-command-status">Copy commands</button>
-          </div>
-          <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
+        <p id="connect-codex-summary" class="connection-lead">The terminal keeps this project connected to Codex Desktop. Setup takes three steps.</p>
+        <div class="connection-preview-banner" role="note">
+          <span class="connection-preview-badge">Alpha preview</span>
+          <span>Current server only</span>
+          <button class="button button-secondary" type="button" disabled>Official service is not open yet</button>
+        </div>
+        <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
+          <li>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>Requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.</p></div></div>
+            <div class="command-heading">
+              <span id="connect-codex-marketplace-title" class="command-label">Codex plugin</span>
+              <button class="button button-secondary" type="button" data-copy-command="marketplace" aria-describedby="copy-marketplace-command-status">Copy commands</button>
+            </div>
+            <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread</code>
           <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
-        </section>
+          </li>
+          <li>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Connect this project</h3><p>Choose your terminal. The device token is requested by a hidden CLI prompt.</p></div></div>
+            <strong id="connect-codex-project-name" class="connection-project-name"></strong>
+            <section class="command-card command-card-compact" aria-labelledby="connect-codex-posix-title">
+              <div class="command-heading">
+                <span id="connect-codex-posix-title" class="command-label">macOS / Linux</span>
+                <button class="button button-secondary" type="button" data-copy-command="posix" aria-describedby="copy-posix-command-status">Copy command</button>
+              </div>
+              <code id="connect-codex-posix-command" class="connector-command" tabindex="0" aria-label="macOS and Linux connector command"></code>
+              <p id="copy-posix-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
+            </section>
+            <details class="connection-alternative">
+              <summary>Windows PowerShell</summary>
+              <section class="command-card command-card-compact" aria-labelledby="connect-codex-powershell-title">
+                <div class="command-heading">
+                  <span id="connect-codex-powershell-title" class="command-label">Windows PowerShell</span>
+                  <button class="button button-secondary" type="button" data-copy-command="powershell" aria-describedby="copy-powershell-command-status">Copy command</button>
+                </div>
+                <code id="connect-codex-powershell-command" class="connector-command" tabindex="0" aria-label="Windows PowerShell connector command"></code>
+                <p id="copy-powershell-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
+              </section>
+            </details>
+          </li>
+          <li>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">3</span><div><h3>Confirm in Codex</h3><p>Restart Codex Desktop. Review and enable the GatherThread Hooks, then keep the terminal open.</p></div></div>
+          </li>
+        </ol>
+        <details id="connect-codex-activation" class="connection-details">
+          <summary id="connect-codex-activation-title">What gets synchronized?</summary>
+          <p>Editable sessions appear as Codex tasks. Web requests run separately; approved Hooks return direct Desktop turns to the same shared history.</p>
+          <p>A new local task creates a personal Solo only after its first completed turn. Viewer tasks stay local.</p>
+        </details>
+        <p id="connect-codex-security" class="codex-connect-notice">This page only copies commands. No token is placed in a command, URL, or shared history.</p>
 
         <p id="connect-codex-error" class="form-error" role="alert"></p>
         <div class="dialog-actions">
@@ -613,40 +647,39 @@ codex plugin add gatherthread@gatherthread</code>
           </div>
           <button id="close-connect-dsh-button" class="icon-button" type="button" aria-label="Close Connect DeepSeek Harness dialog">×</button>
         </div>
-        <p id="connect-dsh-summary">DeepSeek Harness connects out to this GatherThread server. The browser never probes localhost or tries to launch a local process.</p>
-        <ol class="dsh-connect-steps">
+        <p id="connect-dsh-summary" class="connection-lead">The plugin connects outward from DSH to the current GatherThread server. Setup takes three steps.</p>
+        <div class="connection-preview-banner" role="note">
+          <span class="connection-preview-badge">Alpha preview</span>
+          <span>Current server only</span>
+          <button class="button button-secondary" type="button" disabled>Official service is not open yet</button>
+        </div>
+        <ol class="connection-guide dsh-connect-steps">
           <li>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>Requires Node 24+ and pnpm 10. Add the GatherThread plugin to the DSH Web profile.</p></div></div>
             <div class="command-heading">
-              <div><span class="step-number" aria-hidden="true">1</span><h3>Open DeepSeek Harness</h3></div>
-              <button class="button button-secondary" type="button" data-copy-dsh-command="start" aria-describedby="copy-dsh-start-status">Copy command</button>
-            </div>
-            <code id="connect-dsh-start-command" class="connector-command" tabindex="0" aria-label="DeepSeek Harness start command"></code>
-            <p id="copy-dsh-start-status" class="field-help copy-command-status" role="status" aria-live="polite"></p>
-            <p class="field-help"><span>Verified DSH version: 0.1.2-rc.1.</span> <code id="connect-dsh-version-command"></code></p>
-            <p class="field-help">Incompatible Host APIs fail closed.</p>
-            <details class="dsh-version-help">
-              <summary>Version mismatch</summary>
-              <p>Start the verified package explicitly:</p>
-              <code id="connect-dsh-pinned-start-command" class="connector-command" tabindex="0" aria-label="Pinned DeepSeek Harness start command"></code>
-            </details>
-          </li>
-          <li>
-            <div class="command-heading">
-              <div><span class="step-number" aria-hidden="true">2</span><h3>Install the GatherThread plugin</h3></div>
+              <span class="command-label">DSH plugin</span>
               <button class="button button-secondary" type="button" data-copy-dsh-command="install" aria-describedby="copy-dsh-install-status">Copy command</button>
             </div>
-            <p class="field-help">DSH 0.1.2 has no public plugin market. This is its official profile installer; the package command becomes usable when the GatherThread plugin is published.</p>
             <code id="connect-dsh-install-command" class="connector-command" tabindex="0" aria-label="GatherThread DSH plugin install command"></code>
             <p id="copy-dsh-install-status" class="field-help copy-command-status" role="status" aria-live="polite"></p>
           </li>
           <li>
-            <div class="command-heading"><div><span class="step-number" aria-hidden="true">3</span><h3>Connect inside DSH</h3></div></div>
-            <p>Open Settings → GatherThread / 共序 in DSH, choose the official service or enter this HTTPS LAN, self-hosted, or Tailscale server address, then select “Sign in and pair”.</p>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Open DSH</h3><p>Start the verified Web profile, then leave it running.</p></div></div>
+            <div class="command-heading">
+              <span class="command-label">Verified DSH version: 0.1.2-rc.1</span>
+              <button class="button button-secondary" type="button" data-copy-dsh-command="start" aria-describedby="copy-dsh-start-status">Copy command</button>
+            </div>
+            <code id="connect-dsh-start-command" class="connector-command" tabindex="0" aria-label="DeepSeek Harness start command"></code>
+            <p id="copy-dsh-start-status" class="field-help copy-command-status" role="status" aria-live="polite"></p>
+            <span id="connect-dsh-version-command" hidden></span>
+            <details class="dsh-version-help connection-alternative" hidden><summary>Version mismatch</summary><p>Run this pinned version:</p><code id="connect-dsh-pinned-start-command" class="connector-command" tabindex="0" aria-label="Pinned DeepSeek Harness start command"></code></details>
+          </li>
+          <li>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">3</span><div><h3>Pair this server</h3><p>Open Settings → GatherThread / 共序 in DSH. Paste the current local, LAN, self-hosted, or Tailscale server, then choose “Sign in and pair”.</p></div></div>
             <code id="connect-dsh-server-url" class="connector-command" tabindex="0" aria-label="Current GatherThread server address"></code>
-            <p>Current compatibility authorization uses your existing signed GatherThread browser session or invitation. Public account registration is not assumed.</p>
           </li>
         </ol>
-        <p id="connect-dsh-security" class="codex-connect-notice">The short code expires once and is bound to this server and DSH device. The long-lived device credential stays in DSH’s local credential store and never enters a URL, command, page storage, log, or shared history.</p>
+        <p id="connect-dsh-security" class="codex-connect-notice">Approve the single-use code in this browser. The saved device credential stays inside DSH.</p>
         <section class="dsh-runtime-section" aria-labelledby="connect-dsh-runtime-title">
           <div class="command-heading">
             <h3 id="connect-dsh-runtime-title">Your DeepSeek Harness devices</h3>
@@ -738,7 +771,7 @@ codex plugin add gatherthread@gatherthread</code>
               <label class="settings-row" for="settings-theme"><span><strong>Theme</strong><small>Follow the system or choose a fixed appearance.</small></span><select id="settings-theme" name="theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label>
               <div class="settings-row">
                 <span><strong>Text size</strong><small>Use a preset or enter an exact percentage.</small></span>
-                <div class="numeric-setting"><select id="settings-text-scale-preset" aria-label="Text size preset"><option value="90">Small · 90%</option><option value="100">Default · 100%</option><option value="110">Large · 110%</option><option value="125">Extra large · 125%</option><option value="custom">Custom</option></select><label><span class="sr-only">Exact text size</span><input id="settings-text-scale" name="text-scale" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" /><span>%</span></label></div>
+                <div class="numeric-setting"><select id="settings-text-scale-preset" aria-label="Text size preset"><option value="90">Default · 90%</option><option value="100">Standard · 100%</option><option value="110">Large · 110%</option><option value="125">Extra large · 125%</option><option value="custom">Custom</option></select><label><span class="sr-only">Exact text size</span><input id="settings-text-scale" name="text-scale" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="3" autocomplete="off" /><span>%</span></label></div>
               </div>
               <label class="settings-row" for="settings-density"><span><strong>Density</strong><small>Compact reduces spacing without shrinking targets below accessibility limits.</small></span><select id="settings-density" name="density"><option value="comfortable">Comfortable</option><option value="compact">Compact</option></select></label>
               <label class="settings-row" for="settings-motion"><span><strong>Motion</strong><small>Reduced motion disables blur and non-essential transitions for comfort and performance.</small></span><select id="settings-motion" name="motion"><option value="system">Follow system</option><option value="reduce">Reduce motion</option><option value="full">Full motion</option></select></label>
@@ -764,7 +797,7 @@ codex plugin add gatherthread@gatherthread</code>
               </div>
               <label class="settings-row" for="settings-sync-mode"><span><strong>Budget mode</strong><small>Adaptive respects the configured maximum and local connector capability.</small></span><select id="settings-sync-mode" name="sync-mode"><option value="adaptive">Adaptive · recommended</option><option value="fixed">Fixed maximum</option></select></label>
               <div class="settings-row settings-row-tall">
-                <span><strong>Projection context ceiling</strong><small>Small values load faster but compact long histories more often. Large values can be slower, consume more memory, or exceed a model limit. Match this to the connected model. Desktop Hook updates use a separate bounded capsule.</small></span>
+                <span><strong>Projection context ceiling</strong><small>Small values load faster but compact long histories more often. Large values can be slower, consume more memory, or exceed a model limit. Match this to the connected model. Limits and reconnect guidance for every enabled Agent appear below.</small></span>
                 <div class="numeric-setting numeric-setting-context"><select id="settings-context-preset" aria-label="Context budget preset"><option value="8192">8 KiB</option><option value="32768">32 KiB</option><option value="131072">128 KiB</option><option value="524288">512 KiB</option><option value="2097152">2 MiB</option><option value="5242880">5 MiB</option><option value="custom">Custom</option></select><label><input id="settings-context-budget" name="context-budget" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" aria-label="Exact context budget" /><select id="settings-context-unit" aria-label="Context budget unit"><option value="KiB">KiB</option><option value="MiB">MiB</option></select></label></div>
               </div>
               <div id="settings-context-diagnostic" class="capability-diagnostic" role="status"></div>
@@ -773,9 +806,17 @@ codex plugin add gatherthread@gatherthread</code>
             <section id="settings-agents" class="settings-section" aria-labelledby="settings-agents-title">
               <div class="settings-section-heading">
                 <div><p class="eyebrow">Agents</p><h3 id="settings-agents-title">Default local Agent</h3></div>
-                <p>These defaults seed Connect Codex and new Agent requests for the current project.</p>
+                <p id="settings-agent-summary">Codex supplies this project's connection command and handles new Agent requests by default.</p>
               </div>
-              <label class="settings-row" for="settings-agent-harness"><span><strong>Agent harness</strong><small>Choose Codex or an online DeepSeek Harness runtime for this project. Requests never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option disabled>Claude Code · coming later</option></select></label>
+              <fieldset class="settings-agent-picker">
+                <legend>Connection shortcuts</legend>
+                <p>Choose one or more Agent connection buttons to keep in the project sidebar.</p>
+                <div class="settings-agent-options">
+                  <label class="settings-agent-option" for="settings-enabled-codex"><input id="settings-enabled-codex" name="enabled-agent" type="checkbox" value="codex" /><span>Codex</span></label>
+                  <label class="settings-agent-option" for="settings-enabled-dsh"><input id="settings-enabled-dsh" name="enabled-agent" type="checkbox" value="deepseek-harness" /><span>DeepSeek Harness</span></label>
+                </div>
+              </fieldset>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option disabled>Claude Code · coming later</option></select></label>
               <div id="settings-codex-agent-fields" class="settings-agent-fields">
                 <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
                 <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
@@ -830,6 +871,6 @@ codex plugin add gatherthread@gatherthread</code>
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260906-1"></script>
+    <script type="module" src="./src/main.js?v=20260906-4"></script>
   </body>
 </html>

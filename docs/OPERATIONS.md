@@ -2,7 +2,7 @@
 
 ## Release state
 
-This guide covers the executable single-process `0.1.0-beta.1` candidate. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. Supported edges are local-only loopback, private LAN HTTPS, private Tailscale Serve, and the invitation-only Alibaba Cloud ECS profile. The application remains on loopback in every mode.
+This guide covers the executable single-process `0.1.0-alpha.1` preview candidate. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. Supported edges are local-only loopback, private LAN HTTPS, private Tailscale Serve, and the not-yet-open invitation-only Alibaba Cloud ECS profile. The application remains on loopback in every mode.
 
 ## Private-by-default startup
 

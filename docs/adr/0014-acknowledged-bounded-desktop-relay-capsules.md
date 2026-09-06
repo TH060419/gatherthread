@@ -1,12 +1,15 @@
 # ADR-0014: Use acknowledged bounded capsules for Desktop cloud relay
 
 **Date**: 2026-08-26  
-**Status**: accepted  
+**Status**: partially superseded by [ADR-0019](0019-native-history-projection-across-harness-switches.md)
 **Deciders**: Yuhan He  
 **Partially superseded by**: [ADR-0015](0015-create-personal-solos-from-first-local-prompt.md) for first-prompt discovery of previously unregistered user tasks
+**Also partially superseded by**: [ADR-0019](0019-native-history-projection-across-harness-switches.md) for compatible Codex 0.151 idle native injection; capsules remain the acknowledged fallback
 **Builds on**: [ADR-0013](0013-single-writer-dual-codex-projections.md)
 
 ## Context
+
+> Supersession note: ADR-0019 adds compatible Codex 0.151 idle native injection. The capsule design below remains the acknowledged fallback for older or incompatible clients and still governs direct Desktop-turn publication.
 
 Codex Desktop is the sole writer of its visible task, so GatherThread can provide remote history only at trusted Hook prompt boundaries. A fixed-size Hook context prevents a model-window overflow, but simply truncating that context can both produce an excessively long visible reply and falsely advance past content the model never received. One canonical event can itself exceed the Hook budget, and cancelled turns must not acknowledge delivery.
 

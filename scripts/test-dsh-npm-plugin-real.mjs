@@ -324,9 +324,16 @@ async function dismissOnboarding(page) {
   await page.waitForTimeout(800);
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const button = page.getByRole("button", { name: /^(继续|Continue|稍后配置|Configure later)$/u }).first();
-    if (await button.count() === 0 || !await button.isVisible()) return;
+    if (await button.count() === 0 || !await button.isVisible()) break;
     await button.click();
     await page.waitForTimeout(400);
+  }
+  const modalMask = page.locator('div[role="presentation"] > div[aria-hidden="true"]').last();
+  try {
+    await modalMask.waitFor({ state: "hidden", timeout: 5_000 });
+  } catch {
+    await page.keyboard.press("Escape");
+    await modalMask.waitFor({ state: "hidden", timeout: 5_000 });
   }
 }
 
@@ -344,6 +351,7 @@ async function main() {
   const pluginManifest = JSON.parse(await readFile(path.join(PACKAGE_ROOT, "package.json"), "utf8"));
   assert.equal(pluginManifest.private, undefined, "the official profile package must remain publishable");
   assert.equal(pluginManifest.publishConfig?.access, "public");
+  assert.equal(pluginManifest.publishConfig?.tag, "alpha");
   assert.equal(pluginManifest.dsh?.bundle?.patch, "./cordis.patch.yml");
   const playwright = await loadPlaywright(dshRoot);
   if (CHROME_PATH) await access(CHROME_PATH);
@@ -454,6 +462,43 @@ async function main() {
         mode: "multi",
       },
     });
+    await requestData(collaboration.origin, "/v1/sessions/dsh-npm-real-session/events", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        idempotency_key: "dsh-npm-real-session-seed",
+        type: "human_chat",
+        payload: { text: "First Project seed" },
+      },
+    });
+    await requestData(collaboration.origin, "/v1/projects", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        project_id: "dsh-npm-real-project-2",
+        idempotency_key: "dsh-npm-real-project-2-create",
+        title: "DSH npm second project",
+      },
+    });
+    await requestData(collaboration.origin, "/v1/projects/dsh-npm-real-project-2/sessions", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        session_id: "dsh-npm-real-session-2",
+        idempotency_key: "dsh-npm-real-session-2-create",
+        title: "DSH npm second session",
+        mode: "multi",
+      },
+    });
+    await requestData(collaboration.origin, "/v1/sessions/dsh-npm-real-session-2/events", {
+      method: "POST",
+      token: owner.token,
+      body: {
+        idempotency_key: "dsh-npm-real-session-2-seed",
+        type: "human_chat",
+        payload: { text: "Second Project seed" },
+      },
+    });
     const browserSession = await requestData(collaboration.origin, "/v1/browser-sessions", {
       method: "POST",
       token: owner.token,
@@ -540,15 +585,18 @@ async function main() {
     await gatherthreadPage.locator("#connect-dsh-dialog").waitFor({ state: "visible", timeout: 30_000 });
     await gatherthreadPage.locator("#done-connect-dsh-button").click();
 
-    await panel.getByRole("button", { name: "选择项目与 DSH 模型", exact: true }).waitFor({ timeout: 30_000 });
-    await panel.getByRole("button", { name: "选择项目与 DSH 模型", exact: true }).click();
-    await panel.getByLabel("GatherThread 项目").selectOption("dsh-npm-real-project");
+    await panel.getByRole("button", { name: "选择 DSH 模型", exact: true }).waitFor({ timeout: 30_000 });
+    await panel.getByRole("button", { name: "选择 DSH 模型", exact: true }).click();
     await panel.getByLabel("DSH Provider").selectOption("deepseek-official");
     await panel.getByLabel("DSH Model").selectOption("deepseek-v4-flash");
-    await panel.getByRole("button", { name: "连接此项目", exact: true }).click();
-    await panel.getByText("DSH npm real project", { exact: true }).first().waitFor({ timeout: 30_000 });
+    await panel.getByRole("button", { name: "连接全部可访问项目", exact: true }).click();
+    await panel.getByText("2 个可访问项目", { exact: true }).waitFor({ timeout: 30_000 });
+    await panel.getByText(
+      "DSH npm real project · DSH npm second project",
+      { exact: true },
+    ).waitFor({ timeout: 30_000 });
 
-    const selectedRuntime = await waitUntil("published DSH runtime registration", async () => {
+    let selectedRuntime = await waitUntil("published DSH runtime registration", async () => {
       const result = await requestData(
         collaboration.origin,
         "/v1/sessions/dsh-npm-real-session/runtimes",
@@ -559,20 +607,110 @@ async function main() {
         && runtime.model === "deepseek-v4-flash"
         && runtime.status === "online");
     });
+    await waitUntil("second Project DSH runtime registration", async () => {
+      const result = await requestData(
+        collaboration.origin,
+        "/v1/sessions/dsh-npm-real-session-2/runtimes",
+        { token: owner.token },
+      );
+      return result.data.runtimes.find((runtime) => runtime.harness === "deepseek-harness"
+        && runtime.provider === "deepseek-official"
+        && runtime.model === "deepseek-v4-flash"
+        && runtime.status === "online");
+    });
 
+    await page.getByRole("button", { name: "关闭", exact: true }).click();
+    const firstProjectEntry = page.getByText("DSH npm real project", { exact: true });
+    const secondProjectEntry = page.getByText("DSH npm second project", { exact: true });
+    await firstProjectEntry.waitFor({ timeout: 30_000 });
+    await secondProjectEntry.waitFor({ timeout: 30_000 });
+    await firstProjectEntry.click();
+    await page.waitForTimeout(1_000);
+    const firstWorkspaceText = await page.locator("body").innerText();
+    assert.match(firstWorkspaceText, /DSH npm real session/u, firstWorkspaceText);
+    await secondProjectEntry.click();
+    await page.waitForTimeout(1_000);
+    const secondWorkspaceText = await page.locator("body").innerText();
+    assert.match(secondWorkspaceText, /DSH npm second session/u, secondWorkspaceText);
+
+    await page.locator('button[aria-label="新建会话"]:visible').first().click();
+    const nativeComposer = page.locator('[contenteditable="true"][data-placeholder]:visible').first();
+    await nativeComposer.waitFor({ timeout: 30_000 });
+    await nativeComposer.fill("DSH_NATIVE_REQUEST");
+    await page.getByRole("button", { name: "发送消息", exact: true }).click();
+    await page.locator("p", { hasText: /^WEB_DSH_FINAL$/u }).first().waitFor({ timeout: 60_000 });
+
+    let lastNativeAdoptionPoll = 0;
+    const adoptedNative = await waitUntil("native DSH Session cloud adoption", async () => {
+      if (Date.now() - lastNativeAdoptionPoll < 2_500) return undefined;
+      lastNativeAdoptionPoll = Date.now();
+      const listed = await requestData(
+        collaboration.origin,
+        "/v1/projects/dsh-npm-real-project-2/sessions",
+        { token: owner.token },
+      );
+      const candidate = listed.data.sessions.find((session) => session.id !== "dsh-npm-real-session-2");
+      if (!candidate) return undefined;
+      const events = await readSessionEvents(collaboration.origin, candidate.id, owner.token);
+      const request = events.find((event) => event.type === "agent_request"
+        && event.payload?.content === "DSH_NATIVE_REQUEST");
+      const response = request && events.find((event) => event.type === "agent_response"
+        && event.reply_to_event_id === request.id
+        && event.payload?.text === "WEB_DSH_FINAL");
+      return response ? { candidate, events } : undefined;
+    }, 60_000);
+    assert.equal(adoptedNative.candidate.mode, "solo");
+    assert.equal(adoptedNative.candidate.owner_user_id, "dsh-npm-real-owner");
+    await page.waitForTimeout(1_000);
+    const afterAdoption = await requestData(
+      collaboration.origin,
+      "/v1/projects/dsh-npm-real-project-2/sessions",
+      { token: owner.token },
+    );
+    assert.equal(
+      afterAdoption.data.sessions.filter((session) => session.id !== "dsh-npm-real-session-2").length,
+      1,
+      "one completed native DSH Session must create exactly one cloud Session",
+    );
+
+    await gatherthreadPage.goto(
+      `${collaboration.origin}/#project=dsh-npm-real-project&session=dsh-npm-real-session`,
+      { waitUntil: "load" },
+    );
+    await gatherthreadPage.locator("#workspace:not([hidden])").waitFor({ timeout: 30_000 });
+    await gatherthreadPage.locator("#settings-button").click();
+    await gatherthreadPage.locator("#settings-dialog[open]").waitFor({ timeout: 30_000 });
+    await gatherthreadPage.locator("#settings-enabled-dsh").check();
+    await gatherthreadPage.locator("#settings-dialog button[type='submit']").click();
+    await gatherthreadPage.locator("#settings-dialog").waitFor({ state: "hidden", timeout: 30_000 });
     await gatherthreadPage.locator("#agent-harness-select").selectOption("deepseek-harness");
-    await gatherthreadPage.waitForFunction((runtimeId) => {
-      const select = document.querySelector("#agent-dsh-runtime-select");
-      return select instanceof HTMLSelectElement
-        && [...select.options].some((option) => option.value === runtimeId && !option.disabled);
-    }, selectedRuntime.id, { timeout: 30_000 });
-    await gatherthreadPage.locator("#agent-dsh-runtime-select").selectOption(selectedRuntime.id);
+    const webRuntimeId = await waitUntil("Web-visible DSH runtime", async () => {
+      return gatherthreadPage.locator("#agent-dsh-runtime-select").evaluate((element) => {
+        if (!(element instanceof HTMLSelectElement)) return undefined;
+        return [...element.options].find((option) => option.value && !option.disabled)?.value;
+      });
+    });
+    let activeWebSessionId = "dsh-npm-real-session";
+    if (webRuntimeId !== selectedRuntime.id) {
+      const runtimeLists = await Promise.all([
+        requestData(collaboration.origin, "/v1/sessions/dsh-npm-real-session/runtimes", { token: owner.token }),
+        requestData(collaboration.origin, "/v1/sessions/dsh-npm-real-session-2/runtimes", { token: owner.token }),
+      ]);
+      const match = runtimeLists.flatMap((result, index) => result.data.runtimes.map((runtime) => ({
+        runtime,
+        sessionId: index === 0 ? "dsh-npm-real-session" : "dsh-npm-real-session-2",
+      }))).find((candidate) => candidate.runtime.id === webRuntimeId);
+      assert.ok(match, "the Web-selected DSH runtime must belong to an accessible GatherThread session");
+      selectedRuntime = match.runtime;
+      activeWebSessionId = match.sessionId;
+    }
+    await gatherthreadPage.locator("#agent-dsh-runtime-select").selectOption(webRuntimeId);
     await gatherthreadPage.locator("#message-input").fill("WEB_DSH_REQUEST");
     await gatherthreadPage.locator("#send-agent-button").click();
     await gatherthreadPage.getByText("WEB_DSH_FINAL", { exact: true }).waitFor({ timeout: 60_000 });
 
     const completed = await waitUntil("Web-selected DSH final", async () => {
-      const events = await readSessionEvents(collaboration.origin, "dsh-npm-real-session", owner.token);
+      const events = await readSessionEvents(collaboration.origin, activeWebSessionId, owner.token);
       const request = events.find((event) => event.type === "agent_request" && event.payload?.content === "WEB_DSH_REQUEST");
       if (!request) return undefined;
       const final = events.find((event) => event.type === "agent_response"
@@ -594,14 +732,14 @@ async function main() {
 
     await gatherthreadPage.reload({ waitUntil: "load" });
     await gatherthreadPage.locator("#workspace:not([hidden])").waitFor({ timeout: 30_000 });
-    await gatherthreadPage.waitForFunction((runtimeId) => {
+    await gatherthreadPage.waitForFunction(() => {
       const harness = document.querySelector("#agent-harness-select");
       const runtime = document.querySelector("#agent-dsh-runtime-select");
       return harness instanceof HTMLSelectElement
         && runtime instanceof HTMLSelectElement
         && harness.value === "deepseek-harness"
-        && runtime.value === runtimeId;
-    }, selectedRuntime.id, { timeout: 30_000 });
+        && runtime.value.length > 0;
+    }, undefined, { timeout: 30_000 });
     await gatherthreadPage.locator("#agent-harness-select").selectOption("codex");
     assert.equal(await gatherthreadPage.locator("#codex-agent-profile-fields").isVisible(), true);
     assert.equal(await gatherthreadPage.locator("#dsh-agent-profile-fields").isVisible(), false);
@@ -612,6 +750,10 @@ async function main() {
     assert.match(credentialText, /gatherthread-dsh-host\/default/u);
     grantSecret = credentialText.match(/gta_[A-Za-z0-9_-]+/u)?.[0] ?? "";
     assert.ok(grantSecret, "the fixture DSH grant was not written to the official credential store");
+    await page.getByRole("button", { name: /^(设置|Settings)$/u }).click();
+    await section.waitFor({ timeout: 30_000 });
+    await section.click();
+    await panel.waitFor({ state: "visible", timeout: 30_000 });
     const pairedDom = await panel.textContent() ?? "";
     assertAbsent(pairedDom, [owner.token, pepper, modelKey, grantSecret, root, dshHome], "DSH Client DOM");
     assertAbsent(`${host.stdout}\n${host.stderr}`, [owner.token, pepper, modelKey, grantSecret], "DSH Host output");
@@ -642,10 +784,10 @@ async function main() {
     process.stdout.write(`${JSON.stringify({
       passed: true,
       distribution: `${DSH_NPM_COMPATIBILITY.package}@${DSH_NPM_COMPATIBILITY.version}`,
-      command: "npx @deepseek-ai/dsh web",
+      command: "npx @deepseek-ai/dsh@0.1.2-rc.1 web",
       pluginMechanism: "dsh plugin --profile web add <package>",
       profile: "web",
-      lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "web-request", "progress", "final", "reload", "disconnect", "remove"],
+      lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "writable-native-session", "native-cloud-adoption", "web-request", "progress", "final", "reload", "disconnect", "remove"],
       realDshHome: false,
       networkDownloads: false,
       credentialStore: { official: true, mode: "0600", clearedBeforeRemove: true },

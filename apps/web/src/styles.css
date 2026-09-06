@@ -326,8 +326,7 @@ textarea:focus-visible,
 @media (prefers-reduced-motion: no-preference) {
   .auth-story .eyebrow,
   .auth-story h1,
-  .auth-story > p:not(.eyebrow),
-  .auth-story .signal-card {
+  .auth-story > p:not(.eyebrow) {
     animation: auth-content-arrival 760ms cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
@@ -339,9 +338,6 @@ textarea:focus-visible,
     animation-delay: 140ms;
   }
 
-  .auth-story .signal-card {
-    animation-delay: 210ms;
-  }
 }
 
 @keyframes auth-content-arrival {
@@ -380,20 +376,6 @@ textarea:focus-visible,
   line-height: 1.7;
 }
 
-.signal-card {
-  width: fit-content;
-  margin-top: 56px;
-  padding: 13px 17px;
-  border: 1px solid color-mix(in srgb, var(--paper) 22%, transparent);
-  border-radius: 100px;
-  color: color-mix(in srgb, var(--paper) 88%, var(--ink));
-  font-size: 0.82rem;
-  background: color-mix(in srgb, var(--ink) 70%, transparent);
-  box-shadow: inset 0 1px color-mix(in srgb, var(--paper) 13%, transparent);
-  backdrop-filter: blur(16px) saturate(135%);
-  -webkit-backdrop-filter: blur(16px) saturate(135%);
-}
-
 @media (prefers-reduced-motion: reduce) {
   .auth-story::before,
   .auth-story::after,
@@ -403,7 +385,6 @@ textarea:focus-visible,
   }
 }
 
-.signal-dot,
 .status-dot {
   display: inline-block;
   width: 8px;
@@ -560,10 +541,6 @@ textarea:focus-visible,
   .auth-story > p:not(.eyebrow) {
     font-size: 1rem;
     line-height: 1.55;
-  }
-
-  .signal-card {
-    margin-top: 26px;
   }
 
   .login-panel {
@@ -898,14 +875,29 @@ code {
   display: none;
 }
 
-.project-delete-button {
-  align-self: flex-start;
+.project-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 14px;
   margin: 8px 4px 0;
+}
+
+.project-action-row .text-button {
   font-size: 0.72rem;
 }
 
+.project-rename-button[hidden],
 .project-delete-button[hidden] {
   display: none;
+}
+
+.project-rename-button {
+  color: var(--teal-dark);
+}
+
+.project-delete-button {
+  font-size: 0.72rem;
 }
 
 .session-heading {
@@ -2647,15 +2639,15 @@ time,
 }
 
 .codex-connect-dialog {
-  width: min(720px, calc(100vw - 28px));
-  max-height: min(88vh, 780px);
+  width: min(760px, calc(100vw - 28px));
+  max-height: min(90vh, 840px);
 }
 
 .dsh-connect-dialog {
   width: min(760px, calc(100vw - 28px));
 }
 
-.dsh-connect-steps {
+.connection-guide {
   display: grid;
   gap: 12px;
   margin: 18px 0;
@@ -2663,21 +2655,22 @@ time,
   list-style: none;
 }
 
-.dsh-connect-steps > li,
+.connection-guide > li,
 .dsh-runtime-section {
-  padding: 14px;
+  padding: 16px;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--paper-raised);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--paper-raised) 94%, var(--paper-muted));
+  box-shadow: inset 0 1px var(--surface-highlight);
 }
 
-.dsh-connect-steps .command-heading > div {
+.connection-step-heading {
   display: flex;
-  align-items: center;
-  gap: 9px;
+  align-items: flex-start;
+  gap: 11px;
 }
 
-.dsh-connect-steps h3,
+.connection-step-heading h3,
 .dsh-runtime-section h3 {
   margin: 0;
   font-family: inherit;
@@ -2685,12 +2678,50 @@ time,
   font-weight: 720;
 }
 
-.dsh-connect-steps p,
+.connection-step-heading p,
 .dsh-advanced-fallback p {
-  margin: 10px 0 0;
+  margin: 3px 0 0;
   color: var(--ink-soft);
   font-size: 0.76rem;
   line-height: 1.5;
+}
+
+.connection-preview-banner {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  margin-top: 15px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--teal) 28%, var(--line));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--teal-wash) 42%, var(--paper-raised));
+  color: var(--ink-soft);
+  font-size: 0.74rem;
+}
+
+.connection-preview-banner .button {
+  min-height: 32px;
+  padding: 6px 10px;
+  opacity: 0.72;
+}
+
+.connection-preview-badge {
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: var(--teal-dark);
+  background: var(--teal-wash);
+  font-size: 0.66rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.connection-project-name {
+  display: block;
+  margin: 12px 0 -6px 36px;
+  overflow-wrap: anywhere;
+  font-size: 0.76rem;
 }
 
 .step-number {
@@ -2773,35 +2804,40 @@ time,
   line-height: 1.55;
 }
 
+.connection-lead {
+  max-width: 60ch;
+  margin: 10px 0 0;
+}
+
 .codex-connect-notice {
-  padding: 12px 14px;
-  border-left: 3px solid #b77a19;
-  background: var(--amber-wash);
-}
-
-.codex-desktop-activation-guide {
-  margin-top: 18px;
-  padding: 14px;
-  border: 1px solid #d5aa65;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--amber) 34%, var(--line));
   border-radius: 10px;
-  background: var(--amber-wash);
+  background: color-mix(in srgb, var(--amber-wash) 65%, var(--paper-raised));
 }
 
-.codex-desktop-activation-guide h3,
-.codex-desktop-activation-guide p {
-  margin: 0;
-}
-
-.codex-desktop-activation-guide h3 {
-  font-family: Georgia, serif;
-  font-size: 1rem;
-  font-weight: 500;
-}
-
-.codex-desktop-activation-guide p {
-  margin-top: 8px;
+.connection-details,
+.connection-alternative {
+  margin-top: 11px;
   color: var(--ink-soft);
-  font-size: 0.78rem;
+  font-size: 0.76rem;
+}
+
+.connection-details {
+  margin-bottom: 14px;
+  padding: 0 3px;
+}
+
+.connection-details summary,
+.connection-alternative summary {
+  width: fit-content;
+  color: var(--ink);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.connection-details p {
+  margin-top: 8px;
   line-height: 1.5;
 }
 
@@ -2811,6 +2847,13 @@ time,
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--paper-raised);
+}
+
+.command-card-compact {
+  margin-top: 12px;
+  padding: 0;
+  border: 0;
+  background: transparent;
 }
 
 .command-heading {
@@ -2825,6 +2868,26 @@ time,
   font-family: Georgia, serif;
   font-size: 1rem;
   font-weight: 500;
+}
+
+.command-label {
+  color: var(--ink-soft);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.connection-guide .command-heading {
+  margin-top: 12px;
+  padding-left: 36px;
+}
+
+.connection-guide .connector-command,
+.connection-guide .copy-command-status {
+  margin-left: 36px;
+}
+
+.connection-guide .connector-command {
+  width: calc(100% - 36px);
 }
 
 .connector-command {
@@ -2943,8 +3006,7 @@ time,
     font-size: clamp(3.1rem, 10vw, 4.2rem);
   }
 
-  .auth-story > p:not(.eyebrow),
-  .signal-card {
+  .auth-story > p:not(.eyebrow) {
     display: none;
   }
 }
@@ -3012,6 +3074,28 @@ time,
 
   .command-heading .button {
     width: 100%;
+  }
+
+  .connection-preview-banner {
+    grid-template-columns: 1fr;
+  }
+
+  .connection-preview-badge {
+    width: fit-content;
+  }
+
+  .connection-guide .command-heading,
+  .connection-guide .connector-command,
+  .connection-guide .copy-command-status {
+    margin-left: 0;
+  }
+
+  .connection-guide .connector-command {
+    width: 100%;
+  }
+
+  .connection-project-name {
+    margin-left: 0;
   }
 
   .session-list li + li {
@@ -3461,7 +3545,7 @@ html[lang="zh-CN"] .project-select {
 .auth-shell {
   position: relative;
   z-index: 1;
-  grid-template-columns: minmax(0, 1.12fr) minmax(400px, 0.68fr);
+  grid-template-columns: minmax(0, 1fr) minmax(500px, 0.78fr);
   background:
     radial-gradient(ellipse at 16% 92%, rgba(246, 109, 185, 0.1), transparent 31%),
     radial-gradient(ellipse at 78% 5%, rgba(32, 193, 220, 0.11), transparent 35%),
@@ -3539,8 +3623,7 @@ html[lang="zh-CN"] .project-select {
 }
 
 .auth-story h1,
-.auth-story > p:not(.eyebrow),
-.auth-story .signal-card {
+.auth-story > p:not(.eyebrow) {
   position: relative;
   z-index: 2;
 }
@@ -3555,13 +3638,13 @@ html[lang="zh-CN"] .project-select {
   color: #5e626b;
 }
 
-.signal-card {
-  border-color: rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.54);
-  color: #5b5e66;
-  box-shadow: inset 0 1px rgba(255, 255, 255, 0.9), 0 12px 32px rgba(39, 45, 54, 0.045);
-  backdrop-filter: blur(16px) saturate(130%);
-  -webkit-backdrop-filter: blur(16px) saturate(130%);
+.auth-story > p.auth-credit {
+  margin: 30px 0 0;
+  color: #777b83;
+  font-size: 0.7rem;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.045em;
 }
 
 .login-panel {
@@ -3570,9 +3653,9 @@ html[lang="zh-CN"] .project-select {
   isolation: isolate;
   align-self: center;
   justify-self: center;
-  width: min(460px, calc(100% - 44px));
-  max-height: calc(100dvh - 40px);
-  padding: clamp(24px, 3.5vh, 35px);
+  width: min(520px, calc(100% - 34px));
+  max-height: calc(100dvh - 28px);
+  padding: clamp(24px, 3.2vh, 32px);
   border-radius: 31px;
   background: transparent;
   overflow: visible;
@@ -3608,6 +3691,53 @@ html[lang="zh-CN"] .project-select {
 .login-panel > :not(.auth-canonical-extension) {
   position: relative;
   z-index: 2;
+}
+
+.login-panel h2 {
+  margin-bottom: 8px;
+  font-size: clamp(2.15rem, 3.35vw, 2.85rem);
+  line-height: 1.04;
+}
+
+.login-panel > .muted {
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+
+.login-panel > form:first-of-type {
+  margin-top: clamp(14px, 2vh, 20px);
+}
+
+.login-panel label:not(.auth-remember) {
+  margin-bottom: 6px;
+}
+
+.login-panel input {
+  min-height: 44px;
+}
+
+.login-panel .field-help {
+  margin-top: 5px;
+  margin-bottom: 11px;
+  font-size: 0.74rem;
+  line-height: 1.38;
+}
+
+.login-panel .form-error:empty {
+  min-height: 0;
+  margin: 0;
+}
+
+.login-panel .button {
+  min-height: 42px;
+}
+
+.login-panel .auth-remember {
+  margin: 0 0 12px;
+}
+
+.login-panel .auth-divider {
+  margin: 13px 0 11px;
 }
 
 .auth-canonical-extension {
@@ -3893,11 +4023,11 @@ html[lang="zh-CN"] .project-select {
 :root[data-theme="dark"] .auth-story::before { background: rgba(10, 12, 16, 0.44); }
 :root[data-theme="dark"] .auth-story h1 { color: #f7f7f9; text-shadow: 0 2px 24px rgba(0, 0, 0, 0.2); }
 :root[data-theme="dark"] .auth-story > p:not(.eyebrow) { color: #aaadb5; }
+:root[data-theme="dark"] .auth-story > p.auth-credit { color: #7f838c; }
 :root[data-theme="dark"] .auth-story .eyebrow { color: #7bd4c8; }
 :root[data-theme="dark"] .auth-thread-branch { opacity: 0.27; }
 :root[data-theme="dark"] .auth-thread-merge { fill: rgba(20, 23, 29, 0.74); stroke: rgba(255, 255, 255, 0.24); }
 :root[data-theme="dark"] .auth-thread-traveler { filter: drop-shadow(0 0 7px rgba(151, 128, 244, 0.3)); }
-:root[data-theme="dark"] .signal-card { border-color: rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.055); color: #adb0b8; box-shadow: inset 0 1px rgba(255, 255, 255, 0.08); }
 :root[data-theme="dark"] .login-panel::before { border-color: rgba(255, 255, 255, 0.1); background: linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(30, 35, 40, 0.15) 51%, rgba(42, 35, 44, 0.12)); box-shadow: inset 18px 20px 48px rgba(255, 255, 255, 0.04), inset -18px -20px 46px rgba(0, 0, 0, 0.16), 0 34px 86px rgba(0, 0, 0, 0.34); }
 :root[data-theme="dark"] .login-panel::after { border-color: rgba(255, 255, 255, 0.13); background: linear-gradient(145deg, rgba(38, 41, 48, 0.8), rgba(24, 27, 32, 0.74) 50%, rgba(29, 28, 34, 0.75)); box-shadow: 0 42px 100px rgba(0, 0, 0, 0.46), 0 3px 12px rgba(0, 0, 0, 0.28), inset 0 1px rgba(255, 255, 255, 0.13), inset 0 -1px rgba(255, 255, 255, 0.035); }
 
@@ -3914,11 +4044,11 @@ html[lang="zh-CN"] .project-select {
   :root[data-theme="system"] .auth-story::before { background: rgba(10, 12, 16, 0.44); }
   :root[data-theme="system"] .auth-story h1 { color: #f7f7f9; text-shadow: 0 2px 24px rgba(0, 0, 0, 0.2); }
   :root[data-theme="system"] .auth-story > p:not(.eyebrow) { color: #aaadb5; }
+  :root[data-theme="system"] .auth-story > p.auth-credit { color: #7f838c; }
   :root[data-theme="system"] .auth-story .eyebrow { color: #7bd4c8; }
   :root[data-theme="system"] .auth-thread-branch { opacity: 0.27; }
   :root[data-theme="system"] .auth-thread-merge { fill: rgba(20, 23, 29, 0.74); stroke: rgba(255, 255, 255, 0.24); }
   :root[data-theme="system"] .auth-thread-traveler { filter: drop-shadow(0 0 7px rgba(151, 128, 244, 0.3)); }
-  :root[data-theme="system"] .signal-card { border-color: rgba(255, 255, 255, 0.08); background: rgba(255, 255, 255, 0.055); color: #adb0b8; box-shadow: inset 0 1px rgba(255, 255, 255, 0.08); }
   :root[data-theme="system"] .login-panel::before { border-color: rgba(255, 255, 255, 0.1); background: linear-gradient(145deg, rgba(255, 255, 255, 0.075), rgba(30, 35, 40, 0.15) 51%, rgba(42, 35, 44, 0.12)); box-shadow: inset 18px 20px 48px rgba(255, 255, 255, 0.04), inset -18px -20px 46px rgba(0, 0, 0, 0.16), 0 34px 86px rgba(0, 0, 0, 0.34); }
   :root[data-theme="system"] .login-panel::after { border-color: rgba(255, 255, 255, 0.13); background: linear-gradient(145deg, rgba(38, 41, 48, 0.8), rgba(24, 27, 32, 0.74) 50%, rgba(29, 28, 34, 0.75)); box-shadow: 0 42px 100px rgba(0, 0, 0, 0.46), 0 3px 12px rgba(0, 0, 0, 0.28), inset 0 1px rgba(255, 255, 255, 0.13), inset 0 -1px rgba(255, 255, 255, 0.035); }
 }
@@ -3961,6 +4091,62 @@ html[lang="zh-CN"] .project-select {
   }
 
   .auth-canonical-extension { display: none; }
+}
+
+@media (min-width: 901px) and (max-height: 820px) {
+  .auth-story {
+    padding-block: clamp(40px, 7vh, 64px);
+  }
+
+  .auth-story h1 {
+    margin-bottom: 20px;
+    font-size: clamp(3.5rem, 6.65vw, 6.4rem);
+  }
+
+  .auth-story > p:not(.eyebrow) {
+    font-size: 1rem;
+    line-height: 1.55;
+  }
+
+  .auth-story > p.auth-credit {
+    margin-top: 24px;
+    font-size: 0.68rem;
+    line-height: 1;
+  }
+
+  .login-panel {
+    max-height: calc(100dvh - 22px);
+    padding: 22px 26px;
+  }
+
+  .brand-lockup-login {
+    margin-bottom: 13px;
+  }
+
+  .brand-lockup-login .brand-lockup-image {
+    width: 164px;
+  }
+
+  .login-panel h2 {
+    margin-bottom: 5px;
+    font-size: clamp(2rem, 4.8vh, 2.45rem);
+  }
+
+  .login-panel > form:first-of-type {
+    margin-top: 13px;
+  }
+
+  .login-panel .field-help {
+    margin-bottom: 8px;
+  }
+
+  .login-panel .auth-remember {
+    margin-bottom: 9px;
+  }
+
+  .login-panel .auth-divider {
+    margin-block: 10px 9px;
+  }
 }
 
 @media (min-width: 901px) and (max-height: 600px) {
@@ -4099,5 +4285,312 @@ html[lang="zh-CN"] .project-select {
   .workspace-icon-button,
   .composer {
     border: 1px solid CanvasText;
+  }
+}
+
+/* Compact project controls and a fixed project header with an independently scrolling session list. */
+.session-rail {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.session-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 0 5px 18px 0;
+  scrollbar-color: color-mix(in srgb, var(--ink) 22%, transparent) transparent;
+  scrollbar-width: thin;
+}
+
+.session-list::-webkit-scrollbar {
+  width: 7px;
+}
+
+.session-list::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 24%, transparent);
+  background-clip: padding-box;
+}
+
+.rail-create-button {
+  width: 34px;
+  height: 34px;
+  border-color: color-mix(in srgb, var(--ink) 16%, transparent);
+  background: color-mix(in srgb, var(--paper-raised) 58%, transparent);
+  font-size: 1.08rem;
+  font-weight: 500;
+  box-shadow: inset 0 1px var(--surface-highlight), 0 3px 10px rgba(18, 24, 28, 0.05);
+}
+
+.rail-create-button span {
+  transform: translateY(-0.5px);
+}
+
+.session-rail > .rail-heading:first-child #new-project-button {
+  top: -2px;
+}
+
+.settings-agent-picker {
+  margin: 0;
+  padding: 15px 0 16px;
+  border: 0;
+  border-top: 1px solid var(--line);
+}
+
+.settings-agent-picker legend {
+  padding: 0;
+  font-size: 0.84rem;
+  font-weight: 760;
+}
+
+.settings-agent-picker > p {
+  margin: 5px 0 11px;
+  color: var(--ink-soft);
+  font-size: 0.7rem;
+  line-height: 1.45;
+}
+
+.settings-agent-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-agent-option {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--paper-raised) 76%, transparent);
+  font-size: 0.78rem;
+  font-weight: 680;
+  cursor: pointer;
+  box-shadow: inset 0 1px var(--surface-highlight);
+}
+
+.settings-agent-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--teal) 42%, var(--glass-border));
+  background: color-mix(in srgb, var(--teal-wash) 72%, transparent);
+  color: var(--teal-dark);
+}
+
+.settings-agent-option input {
+  width: 17px;
+  height: 17px;
+  margin: 0;
+  accent-color: var(--teal);
+}
+
+.settings-agent-option:has(input:disabled) {
+  cursor: default;
+}
+
+@media (max-width: 760px) {
+  .session-rail {
+    overflow: visible;
+  }
+
+  .session-list {
+    flex: 0 0 auto;
+    min-height: auto;
+    overflow-x: auto;
+    overflow-y: hidden;
+    padding: 0 0 5px;
+    scrollbar-gutter: auto;
+  }
+}
+
+/* The composer is resized only by its divider; its controls stay locked in a compact grid. */
+.composer {
+  display: grid;
+  grid-template-rows: minmax(58px, 1fr) auto auto auto auto;
+  gap: 8px;
+  overflow: hidden;
+  padding: 14px 28px 16px;
+}
+
+.composer > textarea {
+  width: 100%;
+  height: 100%;
+  min-height: 58px;
+  resize: none;
+  overflow-y: auto;
+}
+
+.composer .permission-note,
+.composer .agent-request-profile,
+.composer .composer-actions,
+.composer #send-error {
+  margin-block: 0;
+}
+
+.composer .permission-note,
+.composer #send-error {
+  min-height: 0;
+}
+
+.composer .permission-note:empty,
+.composer #send-error:empty {
+  display: none;
+}
+
+.composer-actions {
+  gap: 10px;
+}
+
+.composer .intent-help > span {
+  margin-top: 3px;
+}
+
+/* Keep the composer controls aligned across Safari and Chromium. */
+.composer .agent-request-profile {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-rows: auto 40px;
+  align-items: end;
+  column-gap: 12px;
+  row-gap: 5px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--glass-hairline) 76%, transparent);
+}
+
+.composer .agent-request-profile label {
+  min-width: 0;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: max(0.72rem, 12px);
+  font-weight: 650;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.composer .agent-request-profile select {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 40px;
+  min-height: 40px;
+  padding: 7px 34px 7px 11px;
+  border-radius: 11px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--ink-soft) 50%),
+    linear-gradient(135deg, var(--ink-soft) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) calc(50% - 2px),
+    calc(100% - 10px) calc(50% - 2px);
+  background-repeat: no-repeat;
+  background-size: 5px 5px, 5px 5px;
+  font-size: max(0.8rem, 13px);
+  line-height: 1.2;
+}
+
+.composer .agent-request-profile > label[for="agent-harness-select"],
+.composer #agent-harness-select {
+  grid-column: 1;
+}
+
+.composer .agent-request-profile > label[for="agent-harness-select"],
+.composer #codex-agent-profile-fields > label[for="agent-model-select"],
+.composer #codex-agent-profile-fields > label[for="agent-effort-select"],
+.composer #dsh-agent-profile-fields > label[for="agent-dsh-runtime-select"] {
+  grid-row: 1;
+}
+
+.composer #agent-harness-select,
+.composer #agent-model-select,
+.composer #agent-effort-select,
+.composer #agent-dsh-runtime-select {
+  grid-row: 2;
+}
+
+.composer #codex-agent-profile-fields > label[for="agent-model-select"],
+.composer #agent-model-select {
+  grid-column: 2;
+}
+
+.composer #codex-agent-profile-fields > label[for="agent-effort-select"],
+.composer #agent-effort-select {
+  grid-column: 3;
+}
+
+.composer #dsh-agent-profile-fields > label[for="agent-dsh-runtime-select"],
+.composer #agent-dsh-runtime-select {
+  grid-column: 2 / 4;
+}
+
+.composer .composer-actions {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+.composer .intent-help {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 220px;
+}
+
+.composer .intent-help .button {
+  width: 100%;
+  min-height: 40px;
+  padding: 8px 13px;
+  white-space: nowrap;
+}
+
+.composer .intent-help > span {
+  width: 100%;
+  color: var(--ink-soft);
+  font-size: max(0.62rem, 10px);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+html[lang="zh-CN"] .composer .agent-request-profile label {
+  font-size: max(0.74rem, 13px);
+}
+
+html[lang="zh-CN"] .composer .agent-request-profile select {
+  font-size: max(0.84rem, 14px);
+}
+
+@media (max-width: 760px) {
+  .composer {
+    grid-template-rows: minmax(72px, 1fr) auto auto auto auto;
+    padding: 12px 16px 16px;
+  }
+
+  .composer .agent-request-profile {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto 40px auto 40px;
+    column-gap: 10px;
+  }
+
+  .composer #codex-agent-profile-fields > label[for="agent-effort-select"] {
+    grid-column: 1 / 3;
+    grid-row: 3;
+    margin-top: 3px;
+  }
+
+  .composer #agent-effort-select {
+    grid-column: 1 / 3;
+    grid-row: 4;
+  }
+
+  .composer #dsh-agent-profile-fields > label[for="agent-dsh-runtime-select"],
+  .composer #agent-dsh-runtime-select {
+    grid-column: 2;
+  }
+
+  .composer .intent-help {
+    max-width: none;
   }
 }

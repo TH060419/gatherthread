@@ -3,6 +3,8 @@ import { createHash } from "node:crypto";
 import test from "node:test";
 import type {
   AgentRequestClaim,
+  CommitLocalTurnInput,
+  CommitLocalTurnResult,
   CompleteAgentRequestInput,
   ReadEventsResult,
   SessionSummary,
@@ -99,11 +101,12 @@ class FakeApi implements DshCollaborationApi {
   readonly progress: CompleteAgentRequestInput[] = [];
   readonly appended: DshAppendEventInput[] = [];
   readonly completions: CompleteAgentRequestInput[] = [];
+  readonly localTurns: CommitLocalTurnInput[] = [];
   readonly idempotent = new Map<string, DshCanonicalEvent>();
   readCount = 0;
   heartbeatCount = 0;
   claimConflictCode: string | undefined;
-  failNextKind: "progress" | "append" | "complete" | undefined;
+  failNextKind: "progress" | "append" | "complete" | "local_turn" | undefined;
   failNextHeartbeat = false;
   readGate: Promise<void> | undefined;
   forcedRuntimeId: string | undefined;
@@ -212,7 +215,53 @@ class FakeApi implements DshCollaborationApi {
     return this.appendCanonical("agent_response", input.payload, input.idempotencyKey, requestId, input.runtimeId);
   }
 
-  private maybeFail(kind: "progress" | "append" | "complete"): void {
+  async commitLocalTurn(
+    _sessionId: string,
+    input: CommitLocalTurnInput,
+  ): Promise<CommitLocalTurnResult> {
+    this.maybeFail("local_turn");
+    const previous = this.localTurns.find((candidate) => candidate.localTurnId === input.localTurnId);
+    if (previous === undefined) this.localTurns.push(structuredClone(input));
+    const existingRequest = this.idempotent.get(`${input.localTurnId}:request`);
+    const existingResponse = this.idempotent.get(`${input.localTurnId}:response`);
+    if (existingRequest !== undefined && existingResponse !== undefined) {
+      return {
+        localTurnId: input.localTurnId,
+        runtimeId: input.runtimeId,
+        headBeforeCommit: existingRequest.sequence - 1,
+        reconciliationRequired: existingRequest.sequence - 1 > input.basedOnSequence,
+        requestEvent: existingRequest,
+        responseEvent: existingResponse,
+        toolEvents: [],
+      };
+    }
+    const headBeforeCommit = this.events.at(-1)?.sequence ?? 0;
+    const requestEvent = this.appendCanonical(
+      "agent_request",
+      input.requestPayload,
+      `${input.localTurnId}:request`,
+      undefined,
+      input.runtimeId,
+    );
+    const responseEvent = this.appendCanonical(
+      "agent_response",
+      input.responsePayload,
+      `${input.localTurnId}:response`,
+      requestEvent.id,
+      input.runtimeId,
+    );
+    return {
+      localTurnId: input.localTurnId,
+      runtimeId: input.runtimeId,
+      headBeforeCommit,
+      reconciliationRequired: headBeforeCommit > input.basedOnSequence,
+      requestEvent,
+      responseEvent,
+      toolEvents: [],
+    };
+  }
+
+  private maybeFail(kind: "progress" | "append" | "complete" | "local_turn"): void {
     if (this.failNextKind === kind) {
       this.failNextKind = undefined;
       throw new Error("simulated offline transport");
@@ -263,6 +312,9 @@ class FakeHost implements DshHostFacade {
   duplicateReturnedEvent = false;
   nextAnswer = "public final";
   promptGate: Promise<void> | undefined;
+  flushCount = 0;
+  failNextProjection = false;
+  readonly projected: Array<{ eventId: string; role: string; content: string }> = [];
 
   constructor(sessionId: string, persistence: FakeDshPersistence) {
     this.sessionId = sessionId;
@@ -279,6 +331,10 @@ class FakeHost implements DshHostFacade {
 
   currentSequence(): number {
     return this.#persistence.events.length;
+  }
+
+  get prompts(): readonly string[] {
+    return this.#persistence.prompts;
   }
 
   snapshotFrom(sequence: number): readonly DshSessionEventRecord[] {
@@ -349,6 +405,59 @@ class FakeHost implements DshHostFacade {
     };
   }
 
+  async projectCanonicalEvents(
+    events: ReadonlyArray<{ eventId: string; role: string; content: string }>,
+  ): Promise<void> {
+    if (this.failNextProjection) {
+      this.failNextProjection = false;
+      throw new Error("simulated native projection failure");
+    }
+    for (const event of events) {
+      if (!this.projected.some((candidate) => candidate.eventId === event.eventId)) {
+        this.projected.push(structuredClone(event));
+      }
+    }
+    this.flushCount += 1;
+  }
+
+  async flush(): Promise<void> {
+    this.flushCount += 1;
+  }
+
+  emitLocalTurn(input = "LOCAL_DSH_REQUEST", output = "LOCAL_DSH_RESPONSE"): void {
+    const turn = 99;
+    const definitions: Array<{ type: string; data: unknown }> = [
+      { type: "turn/start", data: { turn } },
+      { type: "step/start", data: { turn, step: 1 } },
+      { type: "user/message", data: {
+        id: `local-user-${this.currentSequence()}`,
+        role: "user",
+        source: { kind: "user" },
+        content: [{ type: "text", text: input }],
+      } },
+      { type: "assistant/message", data: {
+        turn,
+        step: 1,
+        message: {
+          id: `local-assistant-${this.currentSequence()}`,
+          role: "assistant",
+          source: { kind: "model", provider: "deepseek-official", model: "deepseek-v4-flash" },
+          content: [
+            { type: "reasoning", text: "PRIVATE_LOCAL_REASONING" },
+            { type: "text", text: output },
+          ],
+        },
+      } },
+      { type: "step/end", data: { turn, step: 1 } },
+      { type: "turn/end", data: { turn, reason: { kind: "completed" } } },
+    ];
+    for (const definition of definitions) {
+      const event = this.event(definition.type, definition.data);
+      this.#persistence.events.push(event);
+      for (const listener of this.#eventListeners) listener(event);
+    }
+  }
+
   onSessionEvent(listener: (event: DshSessionEventRecord) => void): () => void {
     this.#eventListeners.add(listener);
     return () => { this.#eventListeners.delete(listener); };
@@ -382,6 +491,160 @@ function freshPersistence(): FakeDshPersistence {
   return { exists: false, events: [], prompts: [] };
 }
 
+test("ordinary canonical updates are durably projected before a later request without duplicate prompt history", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await connector.start({ runImmediately: false, schedule: false });
+
+  api.events.push(canonical(1, "human_chat", { content: "EARLY_REMOTE_CONTEXT" }, "user-2"));
+  await connector.pollOnce();
+  assert.deepEqual(host.projected.map((event) => event.eventId), ["event-1"]);
+
+  api.events.push(request(2));
+  await connector.pollOnce();
+  assert.equal(host.projected.filter((event) => event.eventId === "event-1").length, 1);
+  assert.equal(host.projected.some((event) => event.eventId === "event-2"), false);
+  assert.equal(host.projected[0]?.content, "EARLY_REMOTE_CONTEXT");
+  assert.doesNotMatch(host.projected[0]?.content ?? "", /PRIVATE_/);
+  assert.match(host.projected[0]?.role ?? "", /^user$/);
+  assert.doesNotMatch(host.prompts.at(-1) ?? "", /EARLY_REMOTE_CONTEXT|canonical context follows/);
+  assert.match(host.prompts.at(-1) ?? "", /Do the work password=\[REDACTED\]/);
+  await connector.stop();
+});
+
+test("a completed local DSH turn is atomically committed and its canonical echo is not projected back", async () => {
+  const cfg = config({ shareToolEvents: false });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const store = new MemoryConnectorStateStore();
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ runImmediately: false, schedule: false });
+
+  host.emitLocalTurn();
+  await connector.pollOnce();
+  assert.equal(api.localTurns.length, 1);
+  assert.deepEqual(api.localTurns[0]?.requestPayload, {
+    content: "LOCAL_DSH_REQUEST",
+    capture_fidelity: "harness_transcript",
+    source_harness: "deepseek-harness",
+  });
+  assert.deepEqual(api.localTurns[0]?.responsePayload, {
+    text: "LOCAL_DSH_RESPONSE",
+    capture_fidelity: "harness_transcript",
+    source_harness: "deepseek-harness",
+  });
+  assert.doesNotMatch(JSON.stringify(api.localTurns), /PRIVATE_LOCAL_REASONING|reasoning/i);
+
+  await connector.pollOnce();
+  assert.equal(api.localTurns.length, 1, "local turn retries must be idempotent");
+  assert.deepEqual(host.projected, [], "this runtime's canonical request/response must not echo into DSH");
+  assert.equal((await store.load())?.outbox.length, 0);
+  await connector.stop();
+});
+
+test("a newly adopted native DSH Session uploads its existing completed turn before canonical replay", async () => {
+  const cfg = config({ dshSessionId: "session-1" });
+  const api = new FakeApi();
+  const persistence = freshPersistence();
+  persistence.exists = true;
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  host.emitLocalTurn("NATIVE_FIRST_REQUEST", "NATIVE_FIRST_RESPONSE");
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+    adoptExistingLocalSession: true,
+  });
+
+  await connector.start({ schedule: false });
+  assert.equal(api.localTurns.length, 1);
+  assert.deepEqual(api.localTurns[0]?.requestPayload, {
+    content: "NATIVE_FIRST_REQUEST",
+    capture_fidelity: "harness_transcript",
+    source_harness: "deepseek-harness",
+  });
+  assert.deepEqual(api.localTurns[0]?.responsePayload, {
+    text: "NATIVE_FIRST_RESPONSE",
+    capture_fidelity: "harness_transcript",
+    source_harness: "deepseek-harness",
+  });
+  await connector.stop();
+});
+
+test("a failed native projection retains its canonical cursor and retries without loss", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  api.events.push(canonical(1, "human_chat", { content: "RETRY_REMOTE_CONTEXT" }, "user-2"));
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  host.failNextProjection = true;
+  const store = new MemoryConnectorStateStore();
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ runImmediately: false, schedule: false });
+
+  await assert.rejects(connector.pollOnce(), /simulated native projection failure/);
+  assert.equal((await store.load())?.projectionCursor, 0);
+  assert.equal((await store.load())?.serverCursor, 0);
+  await connector.pollOnce();
+  assert.deepEqual(host.projected.map((event) => event.eventId), ["event-1"]);
+  assert.equal((await store.load())?.projectionCursor, 1);
+  await connector.stop();
+});
+
+test("a local-turn transport failure replays its durable outbox after restart", async () => {
+  const cfg = config({ shareToolEvents: false });
+  const api = new FakeApi();
+  const persistence = freshPersistence();
+  const store = new MemoryConnectorStateStore();
+  const firstHost = new FakeHost(cfg.dshSessionId, persistence);
+  const first = new DshHostConnector({ config: cfg, api, host: firstHost, stateStore: store });
+  await first.start({ runImmediately: false, schedule: false });
+  firstHost.emitLocalTurn("OFFLINE_LOCAL_REQUEST", "OFFLINE_LOCAL_RESPONSE");
+  api.failNextKind = "local_turn";
+  await assert.rejects(first.pollOnce(), /simulated offline transport/);
+  assert.equal((await store.load())?.outbox[0]?.kind, "local_turn");
+  await first.stop();
+
+  const resumedHost = new FakeHost(cfg.dshSessionId, persistence);
+  const resumed = new DshHostConnector({ config: cfg, api, host: resumedHost, stateStore: store });
+  await resumed.start({ schedule: false });
+  assert.equal(api.localTurns.length, 1);
+  assert.equal((await store.load())?.outbox.length, 0);
+  assert.deepEqual(resumedHost.projected, [], "the replayed local turn must not echo back");
+  await resumed.stop();
+});
+
+test("legacy transport cursors backfill canonical history into a resumed native Session", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  api.events.push(canonical(1, "human_chat", { content: "LEGACY_MISSING_HISTORY" }, "user-2"));
+  const persistence: FakeDshPersistence = { exists: true, events: [], prompts: [] };
+  const store = new MemoryConnectorStateStore({
+    version: 1,
+    binding: {
+      projectId: cfg.projectId,
+      sessionId: cfg.sessionId,
+      dshSessionId: cfg.dshSessionId,
+    },
+    serverCursor: 1,
+    publishedDshSequence: 0,
+    outbox: [],
+  });
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false });
+  assert.deepEqual(host.projected.map((event) => event.content), ["LEGACY_MISSING_HISTORY"]);
+  assert.equal((await store.load())?.projectionCursor, 1);
+  await connector.stop();
+});
+
 test("connector runs register, replay, claim, prompt, progress/tool/final, cursor, and clean reload end to end", async () => {
   const cfg = config();
   const api = new FakeApi();
@@ -399,7 +662,8 @@ test("connector runs register, replay, claim, prompt, progress/tool/final, curso
   assert.equal(api.registrations.length, 1);
   assert.equal(api.claims.get("event-2"), "completed");
   assert.equal(persistence.prompts.length, 1);
-  assert.match(persistence.prompts[0] ?? "", /shared context/);
+  assert.deepEqual(host.projected.map((event) => event.content), ["shared context"]);
+  assert.doesNotMatch(persistence.prompts[0] ?? "", /shared context/);
   assert.match(persistence.prompts[0] ?? "", /password=\[REDACTED\]/);
   assert.doesNotMatch(persistence.prompts[0] ?? "", /PRIVATE_/);
   assert.deepEqual(api.progress.map((item) => (item.payload as { status: string }).status), ["running", "idle"]);
@@ -411,13 +675,14 @@ test("connector runs register, replay, claim, prompt, progress/tool/final, curso
   assert.doesNotMatch(uploaded, /PRIVATE_|hunter2|reasoning|replayState|stream/i);
   assert.match(uploaded, /\[REDACTED\]/);
   assert.deepEqual(await store.load(), {
-    version: 1,
+    version: 2,
     binding: {
       projectId: "project-1",
       sessionId: "session-1",
       dshSessionId: cfg.dshSessionId,
     },
     serverCursor: 2,
+    projectionCursor: 2,
     publishedDshSequence: 5,
     outbox: [],
   });
@@ -534,8 +799,11 @@ test("a second request skips this runtime's native outputs but retains other col
   await connector.pollOnce();
   assert.equal(persistence.prompts.length, 2);
   const secondPrompt = persistence.prompts[1] ?? "";
-  assert.match(secondPrompt, /OTHER_PARTICIPANT_UPDATE/);
-  assert.match(secondPrompt, /OTHER_RUNTIME_RESPONSE/);
+  assert.equal(secondPrompt, "second request");
+  assert.deepEqual(
+    host.projected.map((event) => event.content),
+    ["first shared context", "OTHER_PARTICIPANT_UPDATE", "OTHER_RUNTIME_RESPONSE"],
+  );
   assert.doesNotMatch(
     secondPrompt,
     /FIRST_NATIVE_ANSWER|DeepSeek Harness started processing|DeepSeek Harness returned to idle|safe result|echo safe/,
@@ -594,13 +862,14 @@ test("crash-repaired active request resumes through DSH context instead of repla
     ],
   };
   const state: ConnectorState = {
-    version: 1,
+    version: 2,
     binding: {
       projectId: cfg.projectId,
       sessionId: cfg.sessionId,
       dshSessionId: cfg.dshSessionId,
     },
     serverCursor: 0,
+    projectionCursor: 0,
     publishedDshSequence: 0,
     activeRequest: {
       requestId: activeRequest.id,
@@ -842,13 +1111,14 @@ test("ambiguous state/session identity and viewer access fail closed", async () 
   assert.equal(viewerHost.disposeCount, 1);
 
   const staleState: ConnectorState = {
-    version: 1,
+    version: 2,
     binding: {
       projectId: cfg.projectId,
       sessionId: cfg.sessionId,
       dshSessionId: cfg.dshSessionId,
     },
     serverCursor: 5,
+    projectionCursor: 5,
     publishedDshSequence: 0,
     outbox: [],
   };

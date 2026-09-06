@@ -96,7 +96,19 @@ test("dynamic collaboration labels translate without touching unknown user text"
   );
   assert.equal(translateUiText("我的自定义会话", "zh-CN"), "我的自定义会话");
   assert.match(
-    translateUiText("Configured projection ceiling: 256 KiB (about 65,536 tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. Reconnect Codex after changing this value. Desktop Hook updates use a separate 7 KiB capsule and continue across turns.", "zh-CN"),
-    /Desktop Hooks（钩子）更新使用独立的 7 KiB 胶囊/,
+    translateUiText("Configured projection ceiling: 256 KiB (about 65,536 tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. Reconnect Codex after changing this value. Codex Desktop Hooks use a separate 7 KiB capsule and continue across turns.", "zh-CN"),
+    /Codex Desktop Hooks（钩子）使用独立的 7 KiB 胶囊/,
   );
+  assert.match(
+    translateUiText("Configured projection ceiling: 128 KiB (about 32,768 tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. DeepSeek Harness uses the context limit configured by its GatherThread plugin instead of this browser value. Reconnect the DSH plugin after changing its local limit.", "zh-CN"),
+    /DeepSeek Harness 使用其 GatherThread 插件中配置的上下文上限/,
+  );
+  assert.equal(translateUiText("Harness", "zh-CN"), "Agent");
+  assert.equal(
+    translateUiText("Connect Codex before requesting this Agent.", "zh-CN"),
+    "请先连接 Codex，再请求此 Agent。",
+  );
+  const combinedDiagnostic = translateUiText("Configured projection ceiling: 256 KiB (about 65,536 tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. Reconnect Codex after changing this value. Codex Desktop Hooks use a separate 7 KiB capsule and continue across turns. DeepSeek Harness uses the context limit configured by its GatherThread plugin instead of this browser value. Reconnect the DSH plugin after changing its local limit.", "zh-CN");
+  assert.match(combinedDiagnostic, /重新连接 Codex/);
+  assert.match(combinedDiagnostic, /重新连接 DSH 插件/);
 });

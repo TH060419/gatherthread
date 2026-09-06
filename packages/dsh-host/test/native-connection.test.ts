@@ -9,11 +9,12 @@ import {
   normalizeDshServerUrl,
   pollDshNativePairing,
   publicPairingView,
+  parseNativeGrant,
   type DshNativeGrant,
 } from "../src/native-connection.js";
 
 const grant: DshNativeGrant = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   serverUrl: "https://gatherthread.example",
   apiUrl: "https://gatherthread.example/v1",
   deviceId: "dsh_device-1",
@@ -57,6 +58,39 @@ test("native DSH grant uses only the official opaque credential record", async (
 
   const incompatible = new DshNativeCredentialStore(credentialFixture({ kind: "api-key", key: "private" }).context);
   await assert.rejects(incompatible.load(), /incompatible kind/);
+});
+
+test("legacy single-project grants require explicit account-wide reconfirmation without losing credentials", async () => {
+  const legacy = {
+    schemaVersion: 1,
+    serverUrl: grant.serverUrl,
+    apiUrl: grant.apiUrl,
+    deviceId: grant.deviceId,
+    deviceName: grant.deviceName,
+    token: grant.token,
+    binding: {
+      projectId: "project-legacy",
+      projectName: "Legacy Project",
+      provider: "deepseek-official",
+      model: "deepseek-chat",
+    },
+  };
+  assert.deepEqual(parseNativeGrant(legacy), {
+    schemaVersion: 2,
+    serverUrl: grant.serverUrl,
+    apiUrl: grant.apiUrl,
+    deviceId: grant.deviceId,
+    deviceName: grant.deviceName,
+    token: grant.token,
+  });
+
+  const fixture = credentialFixture({ kind: "grant", payload: legacy });
+  const store = new DshNativeCredentialStore(fixture.context);
+  const migrated = await store.load();
+  assert.equal(migrated?.schemaVersion, 2);
+  assert.equal(migrated?.route, undefined, "migration must not silently broaden one Project to the account");
+  assert.deepEqual((fixture.records.get(DSH_NATIVE_CREDENTIAL_KEY) as { payload?: unknown })?.payload, migrated);
+  assert.equal(fixture.calls.modify, 1, "migration is durably rewritten through the credential service");
 });
 
 test("native DSH grant parsing fails closed without echoing credential material", async () => {

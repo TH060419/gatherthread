@@ -1,8 +1,10 @@
 import { createHash } from "node:crypto";
-import { redactValue } from "@gatherthread/adapters";
+import { redactText, redactValue } from "@gatherthread/adapters";
 import { isSessionWritableBy } from "@gatherthread/bridge";
 import {
   buildDshCanonicalPrompt,
+  buildDshRequestPrompt,
+  extractPublicText,
   requestedDshProfile,
 } from "./canonical-prompt.js";
 import { isTerminalClaimConflict } from "./collaboration-api.js";
@@ -17,6 +19,7 @@ import type {
   ConnectorStateStore,
   DshAgentStatus,
   DshCanonicalEvent,
+  DshCanonicalProjection,
   DshCollaborationApi,
   DshConnectorLifecycleState,
   DshConnectorLifecycleUpdate,
@@ -38,6 +41,8 @@ export interface DshHostConnectorOptions {
   actorUserId?: string;
   executionGate?: DshExecutionGate;
   onLifecycle?: (update: DshConnectorLifecycleUpdate) => void;
+  /** Adopt a completed DSH-native Session whose canonical Session was just created. */
+  adoptExistingLocalSession?: boolean;
 }
 
 export interface DshConnectorStartOptions {
@@ -66,6 +71,7 @@ export class DshHostConnector {
   readonly #actorUserId: string | undefined;
   readonly #executionGate: DshExecutionGate | undefined;
   readonly #onLifecycle: ((update: DshConnectorLifecycleUpdate) => void) | undefined;
+  readonly #adoptExistingLocalSession: boolean;
   #state: ConnectorState | undefined;
   #runtime: DshRegisteredRuntime | undefined;
   #started = false;
@@ -82,6 +88,7 @@ export class DshHostConnector {
   #liveEventSequences = new Set<number>();
   #session: SessionSummary | undefined;
   #visibleState: DshConnectorLifecycleState = "connecting";
+  #automaticPolling = false;
 
   constructor(options: DshHostConnectorOptions) {
     if (options.host.sessionId !== options.config.dshSessionId) {
@@ -95,6 +102,7 @@ export class DshHostConnector {
     this.#actorUserId = options.actorUserId;
     this.#executionGate = options.executionGate;
     this.#onLifecycle = options.onLifecycle;
+    this.#adoptExistingLocalSession = options.adoptExistingLocalSession === true;
     if (options.heartbeatIntervalMs !== undefined
       && (!Number.isSafeInteger(options.heartbeatIntervalMs) || options.heartbeatIntervalMs < 1)) {
       throw new Error("DSH connector heartbeat interval must be a positive integer");
@@ -110,11 +118,24 @@ export class DshHostConnector {
     if (this.#started) throw new Error("DSH connector is already started");
     if (this.#stopped) throw new Error("DSH connector cannot restart after disposal");
     this.#started = true;
+    this.#automaticPolling = options.schedule !== false;
     this.#notifyLifecycle("connecting");
     this.#listenerDisposers.push(this.#host.onSessionEvent((event) => {
       const active = this.#state?.activeRequest;
       if (active !== undefined && event.seq >= active.dshFromSequence) {
         this.#liveEventSequences.add(event.seq);
+      }
+      if (active === undefined
+        && event.type === "turn/end"
+        && turnSettlement([event]) === "completed"
+        && this.#automaticPolling) {
+        queueMicrotask(() => {
+          if (this.#started && !this.#stopped) {
+            void this.pollOnce().catch((error: unknown) => {
+              this.#onBackgroundError?.(publicError(error));
+            });
+          }
+        });
       }
     }));
     this.#listenerDisposers.push(this.#host.onStatus((status) => {
@@ -150,6 +171,8 @@ export class DshHostConnector {
           "durable_session_events",
           "native_session_resume",
           "outbox_replay",
+          "canonical_history_projection",
+          "bidirectional_local_turns",
         ],
         purpose: "execution",
       });
@@ -231,8 +254,10 @@ export class DshHostConnector {
       return { scanned: 0, claimed: 0, completed: 1 };
     }
 
-    let scanCursor = state.serverCursor;
-    const pending: DshCanonicalEvent[] = [];
+    await this.#captureLocalTurns();
+    await this.#flushOutbox();
+
+    let scanCursor = state.projectionCursor;
     let scanned = 0;
     while (!this.#stopped) {
       const page = await this.#api.readEvents(
@@ -241,13 +266,21 @@ export class DshHostConnector {
         this.#config.pollLimit,
       );
       this.#validatePage(page.events, scanCursor);
+      const passive: DshCanonicalEvent[] = [];
       for (const event of page.events) {
         scanCursor = Math.max(scanCursor, event.sequence);
         scanned += 1;
-        pending.push(event);
         const profile = requestedDshProfile(event);
-        if (profile === undefined || event.actorId !== this.#requireRuntime().userId) continue;
-        if (profile.runtimeId !== undefined && profile.runtimeId !== this.#requireRuntime().id) continue;
+        if (profile === undefined
+          || event.actorId !== this.#requireRuntime().userId
+          || (profile.runtimeId !== undefined && profile.runtimeId !== this.#requireRuntime().id)) {
+          passive.push(event);
+          continue;
+        }
+        await this.#projectCanonicalBatch(
+          passive,
+          passive.at(-1)?.sequence ?? state.projectionCursor,
+        );
         if (profile.provider !== undefined && profile.provider !== this.#config.provider) {
           throw new Error("DeepSeek Harness Agent request provider does not match the configured Host binding");
         }
@@ -258,7 +291,7 @@ export class DshHostConnector {
         // and this connector's lifecycle therefore gate the entire
         // claim -> prompt -> durable settlement transaction.
         const outcome = await this.#withExecutionPermit(
-          () => this.#executeRequest(event, pending),
+          () => this.#executeRequest(event),
         );
         return {
           scanned,
@@ -267,9 +300,12 @@ export class DshHostConnector {
         };
       }
 
+      await this.#projectCanonicalBatch(
+        passive,
+        Math.max(scanCursor, page.hasMore ? scanCursor : page.nextSequence),
+      );
+
       if (!page.hasMore) {
-        state.serverCursor = Math.max(state.serverCursor, page.nextSequence, scanCursor);
-        await this.#stateStore.save(state);
         return { scanned, claimed: 0, completed: 0 };
       }
       if (page.nextSequence <= scanCursor && page.events.length === 0) {
@@ -282,7 +318,6 @@ export class DshHostConnector {
 
   async #executeRequest(
     request: DshCanonicalEvent,
-    history: readonly DshCanonicalEvent[],
   ): Promise<{ claimed: boolean; completed: boolean }> {
     if (this.#stopped) throw new Error("DSH connector stopped before claiming an Agent request");
     const state = this.#requireState();
@@ -296,17 +331,15 @@ export class DshHostConnector {
       );
     } catch (error) {
       if (!isTerminalClaimConflict(error)) throw error;
-      state.serverCursor = Math.max(state.serverCursor, request.sequence);
-      await this.#stateStore.save(state);
+      await this.#projectCanonicalBatch([request], request.sequence);
       return { claimed: false, completed: false };
     }
     if (!claim.claimed || claim.status === "completed") {
-      state.serverCursor = Math.max(state.serverCursor, request.sequence);
-      await this.#stateStore.save(state);
+      await this.#projectCanonicalBatch([request], request.sequence);
       return { claimed: false, completed: false };
     }
 
-    const prompt = buildDshCanonicalPrompt(history, request, runtime.id);
+    const prompt = buildDshRequestPrompt(request);
     const baseline = this.#host.currentSequence();
     state.activeRequest = {
       requestId: request.id,
@@ -341,8 +374,9 @@ export class DshHostConnector {
     if (request === undefined || request.type !== "agent_request") {
       throw new Error("Active GatherThread request is unavailable during DSH resume");
     }
-    const prompt = buildDshCanonicalPrompt(history, request, this.#requireRuntime().id);
-    if (digest(prompt) !== active.promptDigest) {
+    const prompt = buildDshRequestPrompt(request);
+    const legacyPrompt = buildDshCanonicalPrompt(history, request, this.#requireRuntime().id);
+    if (digest(prompt) !== active.promptDigest && digest(legacyPrompt) !== active.promptDigest) {
       throw new Error("Active GatherThread request changed during DSH resume");
     }
 
@@ -399,6 +433,98 @@ export class DshHostConnector {
     await this.#stateStore.save(state);
     await this.#flushOutbox();
     await this.#finalizeDeliveredRequest();
+  }
+
+  async #projectCanonicalBatch(
+    events: readonly DshCanonicalEvent[],
+    throughSequence: number,
+  ): Promise<void> {
+    const state = this.#requireState();
+    if (throughSequence <= state.projectionCursor) return;
+    const runtime = this.#requireRuntime();
+    const projections: DshCanonicalProjection[] = [];
+    for (const event of events) {
+      if (event.sequence > throughSequence || event.runtime?.runtimeId === runtime.id) continue;
+      const content = boundedPublicText(extractPublicText(event.payload));
+      if (!content) continue;
+      if (event.type === "human_chat" || event.type === "agent_request") {
+        projections.push({
+          eventId: event.id,
+          canonicalSequence: event.sequence,
+          role: "user",
+          content,
+          occurredAt: event.timestamp,
+          ...(event.actorDisplayName === undefined ? {} : {
+            actorDisplayName: event.actorDisplayName,
+          }),
+        });
+      } else if (event.type === "agent_response") {
+        projections.push({
+          eventId: event.id,
+          canonicalSequence: event.sequence,
+          role: "assistant",
+          content,
+          occurredAt: event.timestamp,
+          ...(event.actorDisplayName === undefined ? {} : {
+            actorDisplayName: event.actorDisplayName,
+          }),
+          ...(event.runtime?.provider === undefined ? {} : { provider: event.runtime.provider }),
+          ...(event.runtime?.model === undefined ? {} : { model: event.runtime.model }),
+        });
+      }
+    }
+    if (projections.length > 0) {
+      // The facade does not resolve until official Session.append() values have
+      // been flushed. Cursor advancement therefore proves native durability.
+      await this.#host.projectCanonicalEvents(projections);
+    }
+    state.projectionCursor = Math.max(state.projectionCursor, throughSequence);
+    state.serverCursor = Math.max(state.serverCursor, throughSequence);
+    await this.#stateStore.save(state);
+  }
+
+  async #captureLocalTurns(): Promise<void> {
+    const state = this.#requireState();
+    if (state.activeRequest !== undefined || state.outbox.length > 0) return;
+    const current = this.#host.currentSequence();
+    if (current <= state.publishedDshSequence) return;
+    await this.#host.flush();
+    const snapshot = this.#host.snapshotFrom(state.publishedDshSequence);
+    const capture = captureCompletedLocalTurns(
+      snapshot,
+      state.publishedDshSequence,
+      this.#config.dshSessionId,
+    );
+    const runtime = this.#requireRuntime();
+    state.outbox = capture.turns.map((turn) => ({
+      id: turn.localTurnId,
+      kind: "local_turn" as const,
+      dshToSequence: turn.dshToSequence,
+      input: {
+        localTurnId: turn.localTurnId,
+        runtimeId: runtime.id,
+        basedOnSequence: state.serverCursor,
+        occurredAt: turn.occurredAt,
+        observedModel: this.#config.model,
+        requestPayload: {
+          content: turn.request,
+          capture_fidelity: "harness_transcript",
+          source_harness: "deepseek-harness",
+        },
+        responsePayload: {
+          text: turn.response,
+          capture_fidelity: "harness_transcript",
+          source_harness: "deepseek-harness",
+        },
+      },
+    }));
+    if (state.outbox.length === 0) {
+      state.publishedDshSequence = Math.max(
+        state.publishedDshSequence,
+        capture.safeThroughSequence,
+      );
+    }
+    await this.#stateStore.save(state);
   }
 
   #outboxFor(
@@ -508,11 +634,24 @@ export class DshHostConnector {
         );
       } else if (operation.kind === "append") {
         await this.#api.appendEvent(this.#config.sessionId, operation.input);
-      } else {
+      } else if (operation.kind === "complete") {
         await this.#api.completeAgentRequest(
           this.#config.sessionId,
           operation.requestId,
           operation.input,
+        );
+      } else {
+        const result = await this.#api.commitLocalTurn(
+          this.#config.sessionId,
+          operation.input,
+        );
+        if (result.localTurnId !== operation.input.localTurnId
+          || result.runtimeId !== runtime.id) {
+          throw new Error("GatherThread returned an incompatible local-turn acknowledgement");
+        }
+        state.publishedDshSequence = Math.max(
+          state.publishedDshSequence,
+          operation.dshToSequence,
         );
       }
       state.outbox.shift();
@@ -525,6 +664,7 @@ export class DshHostConnector {
     const active = state.activeRequest;
     if (active?.dshToSequence === undefined || state.outbox.length > 0) return;
     state.serverCursor = Math.max(state.serverCursor, active.requestSequence);
+    state.projectionCursor = Math.max(state.projectionCursor, active.requestSequence);
     state.publishedDshSequence = Math.max(
       state.publishedDshSequence,
       active.dshToSequence,
@@ -537,7 +677,7 @@ export class DshHostConnector {
 
   async #readThroughRequest(requestId: string, requestSequence: number): Promise<DshCanonicalEvent[]> {
     const state = this.#requireState();
-    let cursor = state.serverCursor;
+    let cursor = state.projectionCursor;
     const events: DshCanonicalEvent[] = [];
     while (true) {
       const page = await this.#api.readEvents(this.#config.sessionId, cursor, this.#config.pollLimit);
@@ -583,17 +723,18 @@ export class DshHostConnector {
     mode: "created" | "resumed",
   ): ConnectorState {
     if (stored === undefined) {
-      if (mode === "resumed") {
+      if (mode === "resumed" && !this.#adoptExistingLocalSession) {
         throw new Error("Persisted DSH Session exists without connector state; refusing ambiguous resume");
       }
       return {
-        version: 1,
+        version: 2,
         binding: {
           projectId: this.#config.projectId,
           sessionId: this.#config.sessionId,
           dshSessionId: this.#config.dshSessionId,
         },
         serverCursor: 0,
+        projectionCursor: 0,
         publishedDshSequence: 0,
         outbox: [],
       };
@@ -612,6 +753,9 @@ export class DshHostConnector {
       stored.binding.dshSessionId,
     ]);
     if (actual !== expected) throw new Error("DSH connector state belongs to a different binding");
+    if (stored.publishedDshSequence > this.#host.currentSequence()) {
+      throw new Error("Persisted DSH publication cursor exceeds the native Session head");
+    }
     return stored;
   }
 
@@ -742,6 +886,134 @@ function digest(value: string): string {
 function publicError(error: unknown): Error {
   if (error instanceof Error) return error;
   return new Error("DeepSeek Harness connector background operation failed");
+}
+
+interface CapturedLocalTurn {
+  readonly localTurnId: string;
+  readonly dshToSequence: number;
+  readonly occurredAt: string;
+  readonly request: string;
+  readonly response: string;
+}
+
+function captureCompletedLocalTurns(
+  events: readonly DshSessionEventRecord[],
+  fromSequence: number,
+  dshSessionId: string,
+): { turns: CapturedLocalTurn[]; safeThroughSequence: number } {
+  const turns: CapturedLocalTurn[] = [];
+  let safeThroughSequence = fromSequence;
+  let openTurn: DshSessionEventRecord[] | undefined;
+  let pendingUser: DshSessionEventRecord | undefined;
+  for (const event of events) {
+    if (openTurn === undefined) {
+      if (event.type === "user/message" && isDirectLocalUserMessage(event)) {
+        pendingUser = event;
+        continue;
+      }
+      if (event.type === "turn/start") {
+        openTurn = pendingUser === undefined ? [event] : [pendingUser, event];
+        continue;
+      }
+      safeThroughSequence = Math.max(safeThroughSequence, event.seq + 1);
+      continue;
+    }
+    openTurn.push(event);
+    if (event.type !== "turn/end") continue;
+    if (turnSettlement(openTurn) === "completed") {
+      const userEvents = openTurn.filter(isDirectLocalUserMessage);
+      const request = boundedPublicText(userEvents
+        .map(publicMessageText)
+        .filter(Boolean)
+        .join("\n\n"));
+      const responseEvent = openTurn.findLast(isNativeAssistantMessage);
+      const response = responseEvent === undefined
+        ? ""
+        : boundedPublicText(publicAssistantText(responseEvent));
+      if (request && response && userEvents[0] !== undefined) {
+        const identity = `${dshSessionId}:${userEvents[0].seq}:${event.seq}`;
+        turns.push({
+          localTurnId: `dsh:${digest(identity)}`,
+          dshToSequence: event.seq + 1,
+          occurredAt: sessionTimestamp(event.time),
+          request,
+          response,
+        });
+      }
+    }
+    safeThroughSequence = Math.max(safeThroughSequence, event.seq + 1);
+    openTurn = undefined;
+    pendingUser = undefined;
+  }
+  return { turns, safeThroughSequence };
+}
+
+/** True only after DSH durably closes a local human/assistant turn successfully. */
+export function hasCompletedDshLocalTurn(
+  events: readonly DshSessionEventRecord[],
+  dshSessionId: string,
+): boolean {
+  return captureCompletedLocalTurns(events, 0, dshSessionId).turns.length > 0;
+}
+
+function isDirectLocalUserMessage(event: DshSessionEventRecord): boolean {
+  if (event.type !== "user/message") return false;
+  const message = messageObject(event.data);
+  const source = asObject(message?.source);
+  return source?.kind === "user"
+    && typeof message?.id === "string"
+    && !message.id.startsWith("gatherthread:");
+}
+
+function isNativeAssistantMessage(event: DshSessionEventRecord): boolean {
+  if (event.type !== "assistant/message") return false;
+  const data = asObject(event.data);
+  const message = asObject(data?.message);
+  return typeof message?.id !== "string" || !message.id.startsWith("gatherthread:");
+}
+
+function publicMessageText(value: DshSessionEventRecord): string {
+  return publicContentText(messageObject(value.data)?.content);
+}
+
+function publicAssistantText(value: DshSessionEventRecord): string {
+  const data = asObject(value.data);
+  return publicContentText(asObject(data?.message)?.content);
+}
+
+function messageObject(value: unknown): Record<string, unknown> | undefined {
+  const data = asObject(value);
+  return asObject(data?.message) ?? data;
+}
+
+function publicContentText(value: unknown): string {
+  if (!Array.isArray(value)) return "";
+  return value.flatMap((block) => {
+    const item = asObject(block);
+    return item?.type === "text" && typeof item.text === "string" ? [item.text] : [];
+  }).join("");
+}
+
+function boundedPublicText(value: string): string {
+  const redacted = redactText(value).trim();
+  const maximumBytes = 64 * 1_024;
+  if (Buffer.byteLength(redacted, "utf8") <= maximumBytes) return redacted;
+  const suffix = "\n[TRUNCATED]";
+  const target = maximumBytes - Buffer.byteLength(suffix, "utf8");
+  let low = 0;
+  let high = redacted.length;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (Buffer.byteLength(redacted.slice(0, middle), "utf8") <= target) low = middle;
+    else high = middle - 1;
+  }
+  return `${redacted.slice(0, low)}${suffix}`;
+}
+
+function sessionTimestamp(value: number): string {
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) throw new Error("DSH local turn has an invalid timestamp");
+  return date.toISOString();
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {

@@ -74,8 +74,10 @@ export type RuntimeProvenance = z.infer<typeof RuntimeProvenanceSchema>;
 
 export const AgentExecutionProfileSchema = z.object({
   harness: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+  provider: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
   model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
   reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
+  runtime_id: IdSchema.optional(),
 });
 
 export type AgentExecutionProfile = z.infer<typeof AgentExecutionProfileSchema>;
@@ -145,6 +147,13 @@ export const CreateProjectInputSchema = z.object({
 });
 
 export type CreateProjectInput = z.infer<typeof CreateProjectInputSchema>;
+
+export const UpdateProjectInputSchema = z.object({
+  title: ProjectTitleSchema,
+  idempotency_key: IdempotencyKeySchema,
+});
+
+export type UpdateProjectInput = z.infer<typeof UpdateProjectInputSchema>;
 
 export const ProjectRecordSchema = z.object({
   id: IdSchema,

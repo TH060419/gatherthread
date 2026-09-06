@@ -1,6 +1,6 @@
 {
   "name": "gatherthread",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-alpha.1",
   "description": "Use 共序 / GatherThread collaboration projects safely from Codex.",
   "author": {
     "name": "Yuhan He and contributors",

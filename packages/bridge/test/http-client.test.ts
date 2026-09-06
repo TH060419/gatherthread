@@ -221,6 +221,7 @@ test("HTTP client creates creator-owned project solos with a stable idempotency 
   });
 
   const session = await client.createSession("project-1", {
+    sessionId: "session-dsh-native",
     title: "First local prompt",
     mode: "solo",
     idempotencyKey: "codex-solo-stable-key",
@@ -231,6 +232,7 @@ test("HTTP client creates creator-owned project solos with a stable idempotency 
   assert.equal(requests[0]?.url, "https://collab.example/v1/projects/project-1/sessions");
   assert.equal(requests[0]?.init.method, "POST");
   assert.deepEqual(JSON.parse(String(requests[0]?.init.body)), {
+    session_id: "session-dsh-native",
     title: "First local prompt",
     mode: "solo",
     idempotency_key: "codex-solo-stable-key",

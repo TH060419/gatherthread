@@ -1,7 +1,8 @@
 export const DSH_HARNESS = "deepseek-harness";
+export const CODEX_HARNESS = "codex";
 export const DSH_NPM_VERSION = "0.1.2-rc.1";
-export const GATHERTHREAD_DSH_PLUGIN_VERSION = "0.1.0-beta.1";
-export const DSH_START_COMMAND = "npx @deepseek-ai/dsh web";
+export const GATHERTHREAD_DSH_PLUGIN_VERSION = "0.1.0-alpha.1";
+export const DSH_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
 export const DSH_VERSION_COMMAND = "npx @deepseek-ai/dsh --version";
 export const DSH_PINNED_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
 export const DSH_INSTALL_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} plugin --profile web add @gatherthread/dsh-host@${GATHERTHREAD_DSH_PLUGIN_VERSION}`;
@@ -10,7 +11,7 @@ const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const SAFE_TEXT = /^[^\u0000-\u001f\u007f-\u009f]+$/u;
 const USER_CODE_PATTERN = /^[A-Z2-9]{4}-[A-Z2-9]{4}$/u;
 
-export function normalizeDshRuntime(value) {
+export function normalizeExecutionRuntime(value) {
   if (!isObject(value)) return null;
   const id = safeId(value.id);
   const deviceId = safeId(value.deviceId ?? value.device_id);
@@ -19,8 +20,13 @@ export function normalizeDshRuntime(value) {
   const model = safeText(value.model, 160);
   const status = ["online", "offline", "revoked"].includes(value.status) ? value.status : null;
   const lastSeenAt = safeDate(value.lastSeenAt ?? value.last_seen_at);
-  if (!id || !deviceId || harness !== DSH_HARNESS || !provider || !model || !status || !lastSeenAt) return null;
-  return { id, deviceId, harness: DSH_HARNESS, provider, model, status, lastSeenAt };
+  if (!id || !deviceId || !harness || !provider || !model || !status || !lastSeenAt) return null;
+  return { id, deviceId, harness, provider, model, status, lastSeenAt };
+}
+
+export function normalizeDshRuntime(value) {
+  const runtime = normalizeExecutionRuntime(value);
+  return runtime?.harness === DSH_HARNESS ? runtime : null;
 }
 
 export function normalizeDshDevice(value) {
@@ -63,6 +69,38 @@ export function resolveDshRuntime(runtimes, devices, profile) {
     return { runtime: null, choices, reason: "Connect DeepSeek Harness before requesting this Agent." };
   }
   return { runtime: null, choices, reason: "Choose which online DeepSeek Harness runtime should handle this request." };
+}
+
+export function resolveCodexRuntime(runtimes) {
+  const choices = runtimes
+    .map(normalizeExecutionRuntime)
+    .filter((runtime) => runtime?.harness === CODEX_HARNESS);
+  const online = choices.filter((runtime) => runtime.status === "online");
+  if (online.length === 1) return { runtime: online[0], choices, reason: "" };
+  if (online.length === 0) {
+    return { runtime: null, choices, reason: "Connect Codex before requesting this Agent." };
+  }
+  return {
+    runtime: null,
+    choices,
+    reason: "More than one Codex runtime is online for this session. Disconnect the extra runtime before sending.",
+  };
+}
+
+export function codexExecutionProfile(runtime, { model, reasoningEffort }) {
+  const normalized = normalizeExecutionRuntime(runtime);
+  const safeModel = safeText(model, 160);
+  const safeEffort = safeText(reasoningEffort, 40);
+  if (!normalized || normalized.harness !== CODEX_HARNESS || normalized.status !== "online") {
+    throw new Error("A matching online Codex runtime is required.");
+  }
+  if (!safeModel || !safeEffort) throw new Error("A valid Codex model and reasoning effort are required.");
+  return {
+    harness: CODEX_HARNESS,
+    model: safeModel,
+    reasoningEffort: safeEffort,
+    runtimeId: normalized.id,
+  };
 }
 
 export function dshExecutionProfile(runtime) {

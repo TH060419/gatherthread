@@ -32,16 +32,17 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
   });
   assert.equal(
     commands.posix,
-    "npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace",
+    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.1 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks",
   );
   assert.equal(
     commands.powershell,
-    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-beta.1 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace",
+    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.1 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks",
   );
   for (const command of Object.values(commands)) {
     assert.match(command, /--url 'https:\/\/gatherthread\.example\/v1'/);
     assert.match(command, /--project 'project-alpha_1'/);
     assert.match(command, /--create-workspace/);
+    assert.match(command, /--plugin-hooks/);
     assert.doesNotMatch(command, /--model|--context-window-tokens|--install-hooks/);
     assert.doesNotMatch(command, /access[-_ ]?token|Bearer|cookie|password/i);
   }
@@ -234,12 +235,17 @@ test("empty control events stay in canonical history but not in the conversation
   assert.equal(isTimelineEventVisible({ type: "human_chat", payload: { content: "Hello" } }), true);
 });
 
-test("session rename control events expose only validated metadata patches", () => {
+test("session settings control events expose only validated metadata patches", () => {
   assert.deepEqual(sessionMetadataFromEvent({
     sessionId: "s1",
     type: "session_state_change",
     payload: { action: "renamed", title: "After 🚀" },
   }), { sessionId: "s1", name: "After 🚀" });
+  assert.deepEqual(sessionMetadataFromEvent({
+    sessionId: "s1",
+    type: "session_state_change",
+    payload: { action: "updated", mode: "solo" },
+  }), { sessionId: "s1", mode: "solo" });
   assert.equal(sessionMetadataFromEvent({
     sessionId: "s1",
     type: "session_state_change",

@@ -1,5 +1,5 @@
 [Unit]
-Description=GatherThread invitation-only beta
+Description=GatherThread private Alpha preview
 Documentation=https://github.com/TH060419/gatherthread
 After=network-online.target
 Wants=network-online.target

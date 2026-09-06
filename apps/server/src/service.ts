@@ -53,6 +53,11 @@ export class CollaborationService {
     return this.database.deleteProject(actor, projectId);
   }
 
+  updateProject(actor: Actor, projectId: string, input: Parameters<CollaborationDatabase["updateProject"]>[2]) {
+    this.database.assertActiveDevice(actor);
+    return this.database.updateProject(actor, projectId, input);
+  }
+
   getProject(actor: Actor, projectId: string) {
     const role = this.requireProjectMembership(actor, projectId);
     return { project: this.database.requireProject(projectId), role };

@@ -93,11 +93,12 @@ export class HttpCollaborationClient implements CollaborationApi {
 
   async createSession(
     projectId: string,
-    input: { title: string; mode: "solo" | "multi"; idempotencyKey: string },
+    input: { sessionId?: string; title: string; mode: "solo" | "multi"; idempotencyKey: string },
   ): Promise<SessionSummary> {
     const body = requiredObject(await this.#request(`/projects/${encodeURIComponent(projectId)}/sessions`, {
       method: "POST",
       body: JSON.stringify({
+        ...(input.sessionId === undefined ? {} : { session_id: input.sessionId }),
         title: input.title,
         mode: input.mode,
         idempotency_key: input.idempotencyKey,

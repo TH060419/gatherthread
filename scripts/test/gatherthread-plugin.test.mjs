@@ -9,7 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const pluginRoot = path.join(root, "plugins", "gatherthread");
-const PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-beta.1";
+const PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.1";
 
 async function json(relativePath) {
   return JSON.parse(await readFile(path.join(pluginRoot, relativePath), "utf8"));
@@ -18,7 +18,7 @@ async function json(relativePath) {
 test("GatherThread plugin manifest has valid local components and bilingual brand", async () => {
   const manifest = await json(".codex-plugin/plugin.json");
   assert.equal(manifest.name, "gatherthread");
-  assert.equal(manifest.version, "0.1.0-beta.1");
+  assert.equal(manifest.version, "0.1.0-alpha.1");
   assert.equal(manifest.interface.displayName, "共序 / GatherThread");
   assert.equal(manifest.skills, "./skills/");
   assert.equal(manifest.hooks, undefined);
@@ -69,7 +69,7 @@ test("repo marketplace exposes the real plugin and all install surfaces pin one 
     policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" },
     category: "Productivity",
   }]);
-  const fixedCommand = "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread";
+  const fixedCommand = "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread";
   const [html, english, chinese, rootEnglish, rootChinese, packageReadme, release, translations] = await Promise.all([
     readFile(path.join(root, "apps", "web", "index.html"), "utf8"),
     readFile(path.join(root, "docs", "CODEX_CONNECT.md"), "utf8"),
@@ -77,7 +77,7 @@ test("repo marketplace exposes the real plugin and all install surfaces pin one 
     readFile(path.join(root, "README.md"), "utf8"),
     readFile(path.join(root, "README.zh-CN.md"), "utf8"),
     readFile(path.join(root, "packages", "codex-connect", "README.md"), "utf8"),
-    readFile(path.join(root, "docs", "releases", "0.1.0-beta.1.md"), "utf8"),
+    readFile(path.join(root, "docs", "releases", "0.1.0-alpha.1.md"), "utf8"),
     readFile(path.join(root, "apps", "web", "src", "i18n.js"), "utf8"),
   ]);
   const installCommand = "codex plugin add gatherthread@gatherthread";
@@ -85,9 +85,10 @@ test("repo marketplace exposes the real plugin and all install surfaces pin one 
     assert.match(surface, new RegExp(fixedCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(surface, new RegExp(installCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  assert.match(html, /1\. Run the fixed-version connector[\s\S]*2\. Install the plugin once[\s\S]*3\. Optionally sync direct Desktop turns/);
-  assert.match(html, /codex plugin marketplace add[\s\S]*codex plugin add gatherthread@gatherthread/);
-  assert.match(translations, /1\. 运行固定版本连接器[\s\S]*2\. 一次性安装插件[\s\S]*3\. 可选启用 Desktop 直接回合同步/);
+  assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Connect this project<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Confirm in Codex<\/h3>/);
+  assert.match(translations, /"Install once": "仅需安装一次"/);
+  assert.match(translations, /"Connect this project": "连接当前项目"/);
+  assert.match(translations, /"Confirm in Codex": "在 Codex 中确认"/);
   assert.doesNotMatch(`${fixedCommand}\n${installCommand}`, /gta_|Bearer|cookie|token=|password|client_secret/i);
 });
 

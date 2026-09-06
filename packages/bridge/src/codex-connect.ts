@@ -95,7 +95,7 @@ const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const HELP = `GatherThread Codex connector
 
 Usage:
-  npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url <GatherThread URL> [options]
+  npx --yes @gatherthread/codex-connect@0.1.0-alpha.1 --url <GatherThread URL> [options]
 
 Repository development / compatibility entry:
   npm run codex:connect -- --url <GatherThread URL> [options]
@@ -595,11 +595,12 @@ async function selectProject(
   }
 }
 
-interface ManagedSession {
+export interface ManagedSession {
   bridge: LocalBridge;
   executor: HarnessExecutor;
   lastHeartbeatAt: number;
-  synchronize?: ProjectHarnessSessionBinding["synchronize"];
+  synchronizeLocalTurns?: ProjectHarnessSessionBinding["synchronizeLocalTurns"];
+  synchronizeCanonicalHistory?: ProjectHarnessSessionBinding["synchronizeCanonicalHistory"];
   activateLocalPublishing?: ProjectHarnessSessionBinding["activateLocalPublishing"];
   deactivateLocalPublishing?: ProjectHarnessSessionBinding["deactivateLocalPublishing"];
   relayLocalHarnessEvent?: ProjectHarnessSessionBinding["relayLocalHarnessEvent"];
@@ -680,11 +681,33 @@ export async function initializeProjectSession(options: {
     bridge,
     executor: binding.executor,
     lastHeartbeatAt: Date.now(),
-    ...(binding.synchronize === undefined ? {} : { synchronize: binding.synchronize }),
+    ...(binding.synchronizeLocalTurns === undefined ? {} : { synchronizeLocalTurns: binding.synchronizeLocalTurns }),
+    ...(binding.synchronizeCanonicalHistory === undefined
+      ? {}
+      : { synchronizeCanonicalHistory: binding.synchronizeCanonicalHistory }),
     ...(binding.activateLocalPublishing === undefined ? {} : { activateLocalPublishing: binding.activateLocalPublishing }),
     ...(binding.deactivateLocalPublishing === undefined ? {} : { deactivateLocalPublishing: binding.deactivateLocalPublishing }),
     ...(binding.relayLocalHarnessEvent === undefined ? {} : { relayLocalHarnessEvent: binding.relayLocalHarnessEvent }),
   };
+}
+
+export async function runManagedSessionCycle(
+  current: ManagedSession,
+  api: CollaborationApi,
+): Promise<void> {
+  const runtime = current.bridge.runtime;
+  if (current.synchronizeLocalTurns && runtime) {
+    // Never swallow local outbox failures: Web execution must not overtake an
+    // uncommitted local turn whose canonical result is still uncertain.
+    await current.synchronizeLocalTurns({ api, runtime });
+  }
+  await current.bridge.processPendingAgentRequests(current.executor, 200);
+  if (current.synchronizeCanonicalHistory && runtime) {
+    // This additive Desktop projection is deliberately last. Its executor
+    // bounds and suppresses a contended thread/resume lease while trusted
+    // Hooks continue to preserve canonical correctness.
+    await current.synchronizeCanonicalHistory({ api, runtime });
+  }
 }
 
 class LocalTaskDiscoveryDisabledError extends Error {}
@@ -937,10 +960,7 @@ export async function runProjectConnector(options: {
           await current.bridge.heartbeat();
           current.lastHeartbeatAt = Date.now();
         }
-        if (current.synchronize && current.bridge.runtime) {
-          await current.synchronize({ api: options.api, runtime: current.bridge.runtime });
-        }
-        await current.bridge.processPendingAgentRequests(current.executor, 200);
+        await runManagedSessionCycle(current, options.api);
         retryReporter.recovered(session.id);
       } catch (error) {
         if (!options.signal.aborted) {

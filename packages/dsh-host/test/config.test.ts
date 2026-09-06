@@ -8,6 +8,7 @@ import {
   assertSafeDshPaths,
   assertSafeDshStateRoot,
   deriveDshSessionId,
+  deriveNativeDshSessionId,
   parseDshHostConfig,
   resolveCredentialReference,
 } from "../src/config.js";
@@ -53,6 +54,14 @@ test("enabled configuration derives a stable DSH-native identity without equatin
   assert.equal(parsed.pollIntervalMs, 1_000);
   assert.equal(parsed.pollLimit, 200);
   assert.equal(parsed.shareToolEvents, false);
+});
+
+test("native Web integration uses a versioned identity distinct from legacy read-only projections", () => {
+  const legacy = deriveDshSessionId("project-1", "session-1", "/work/project");
+  const native = deriveNativeDshSessionId("project-1", "session-1", "/work/project");
+  assert.match(native, /^gatherthread-[a-f0-9]{32}$/u);
+  assert.notEqual(native, legacy);
+  assert.equal(native, deriveNativeDshSessionId("project-1", "session-1", "/work/project"));
 });
 
 test("project binding is explicit while legacy configurations remain single-session compatible", () => {

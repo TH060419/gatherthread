@@ -26,6 +26,7 @@ import {
   resolveCodexCommand,
   resolveCodexHookRelayPath,
   resolveWorkspaceCodexHookPaths,
+  runManagedSessionCycle,
   runProjectConnector,
 } from "../src/codex-connect.js";
 import type { HttpCollaborationClient } from "../src/http-client.js";
@@ -405,6 +406,55 @@ test("Codex connector polling keeps the process alive until the next cycle", asy
   const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
   assert.equal(code, 0, stderr);
   assert.equal(stdout, "poll-completed");
+});
+
+test("managed session cycle commits local Hooks before Web execution and defers visible history until after it", async () => {
+  const order: string[] = [];
+  let releaseVisibleHistory: (() => void) | undefined;
+  const visibleHistoryGate = new Promise<void>((resolve) => { releaseVisibleHistory = resolve; });
+  const runtime = {
+    id: "runtime-1",
+    runtimeId: "runtime-1",
+    userId: "user-1",
+    sessionId: "session-1",
+    deviceId: "device-1",
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-test",
+    localSessionId: "local-1",
+    captureFidelity: "harness_transcript",
+  } as const;
+  const current = {
+    bridge: {
+      runtime,
+      processPendingAgentRequests: async () => { order.push("web-agent"); },
+    },
+    executor: {},
+    lastHeartbeatAt: 0,
+    synchronizeLocalTurns: async () => { order.push("local-hooks"); },
+    synchronizeCanonicalHistory: async () => {
+      order.push("visible-history:start");
+      await visibleHistoryGate;
+      order.push("visible-history:end");
+    },
+  } as unknown as Parameters<typeof runManagedSessionCycle>[0];
+
+  const running = runManagedSessionCycle(current, {} as CollaborationApi);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["local-hooks", "web-agent", "visible-history:start"],
+    "a blocked visible Desktop lease must begin only after the Web Agent has been serviced");
+  releaseVisibleHistory?.();
+  await running;
+  assert.deepEqual(order, ["local-hooks", "web-agent", "visible-history:start", "visible-history:end"]);
+
+  const localFailure = {
+    ...current,
+    synchronizeLocalTurns: async () => { throw new Error("local commit uncertain"); },
+    synchronizeCanonicalHistory: async () => { throw new Error("must not run"); },
+  } as unknown as Parameters<typeof runManagedSessionCycle>[0];
+  await assert.rejects(runManagedSessionCycle(localFailure, {} as CollaborationApi), /local commit uncertain/);
+  assert.equal(order.filter((step) => step === "web-agent").length, 1,
+    "a local-turn commit error must not be swallowed or overtaken by another Web execution");
 });
 
 test("Codex hook relay paths are stable, platform-correct, and credential-free", () => {

@@ -24,7 +24,10 @@ export interface ProjectHarnessSessionBinding {
   executor: HarnessExecutor;
   localSessionId: string;
   adoptLocalConversation?: (localConversationId: string) => Promise<void>;
-  synchronize?: (input: { api: CollaborationApi; runtime: RegisteredRuntime }) => Promise<void>;
+  /** Safety-critical local Hook outbox commit; runs before Web Agent execution. */
+  synchronizeLocalTurns?: (input: { api: CollaborationApi; runtime: RegisteredRuntime }) => Promise<void>;
+  /** Best-effort visible native-history catch-up; runs after Web Agent execution. */
+  synchronizeCanonicalHistory?: (input: { api: CollaborationApi; runtime: RegisteredRuntime }) => Promise<void>;
   activateLocalPublishing?: () => Promise<void>;
   deactivateLocalPublishing?: (reason: ProjectHarnessDeactivationReason) => Promise<void>;
   relayLocalHarnessEvent?: (input: {

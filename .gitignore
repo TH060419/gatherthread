@@ -13,4 +13,5 @@ coverage/
 .codegraph/
 .idea/
 release-artifacts/
+design-demos/
 .codex/hooks.json

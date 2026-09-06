@@ -34,6 +34,7 @@ export function createHttpDshCollaborationApi(options: DshHttpApiOptions): DshPr
   return {
     ...adaptCollaborationApi(client),
     getCurrentActor: () => client.getCurrentActor(),
+    createSession: (projectId, input) => client.createSession(projectId, input),
   };
 }
 
@@ -41,10 +42,12 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
   const listProjectSessions = client.listProjectSessions;
   const heartbeatRuntime = client.heartbeatRuntime;
   const appendAgentProgress = client.appendAgentProgress;
+  const commitLocalTurn = client.commitLocalTurn;
   if (listProjectSessions === undefined
     || heartbeatRuntime === undefined
-    || appendAgentProgress === undefined) {
-    throw new Error("GatherThread Collaboration API lacks required session, heartbeat, or progress support");
+    || appendAgentProgress === undefined
+    || commitLocalTurn === undefined) {
+    throw new Error("GatherThread Collaboration API lacks required session, heartbeat, progress, or local-turn support");
   }
   return {
     listProjectSessions: (projectId) => listProjectSessions.call(client, projectId),
@@ -73,6 +76,7 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
       requestId,
       input,
     ),
+    commitLocalTurn: (sessionId, input) => commitLocalTurn.call(client, sessionId, input),
   };
 }
 

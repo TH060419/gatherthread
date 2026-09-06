@@ -181,6 +181,13 @@ interface EventRow {
 
 interface SessionRow extends SessionRecord {}
 interface ProjectRow extends ProjectRecord { creation_idempotency_key: string }
+interface ProjectMutationRow {
+  project_id: string;
+  idempotency_key: string;
+  actor_user_id: string;
+  title: string;
+  created_at: string;
+}
 interface RuntimeRow extends RuntimeRecord {}
 interface CountRow { count: number }
 interface BytesRow { bytes: number }
@@ -284,6 +291,14 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_id, user_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_mutations (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  actor_user_id TEXT NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, idempotency_key)
 ) STRICT;
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -545,33 +560,59 @@ function runtimeStatus(
     : "offline";
 }
 
-function deepSeekRequestTarget(event: CanonicalEvent): { provider?: string; model: string; runtimeId?: string } | null {
+interface AgentRequestTarget {
+  harness: string;
+  provider?: string;
+  model?: string;
+  runtimeId?: string;
+}
+
+function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
   const payload = event.payload !== null && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? event.payload as Record<string, JsonValue>
     : undefined;
   const raw = payload?.execution_profile;
+  if (raw === undefined) return { harness: "codex" };
   const profile = raw !== null && typeof raw === "object" && !Array.isArray(raw)
     ? raw as Record<string, JsonValue>
     : undefined;
   const harness = typeof profile?.harness === "string" ? profile.harness.trim().toLowerCase() : "";
-  if (harness !== "deepseek-harness") return null;
-  const model = typeof profile?.model === "string" ? profile.model.trim() : "";
-  if (!model || model.length > 160 || /[\u0000-\u001f\u007f-\u009f]/u.test(model)) {
-    throw conflict("DeepSeek Harness Agent request has an invalid model target");
+  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/u.test(harness)) {
+    throw conflict("Agent request has an invalid harness target");
   }
   const rawProvider = profile?.provider;
   const provider = typeof rawProvider === "string" ? rawProvider.trim() : "";
   if (rawProvider !== undefined
     && (!provider || provider.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(provider))) {
-    throw conflict("DeepSeek Harness Agent request has an invalid provider target");
+    throw conflict("Agent request has an invalid provider target");
+  }
+  const rawModel = profile?.model;
+  const model = typeof rawModel === "string" ? rawModel.trim() : "";
+  if (rawModel !== undefined
+    && (!model || model.length > 160 || /[\u0000-\u001f\u007f-\u009f]/u.test(model))) {
+    throw conflict("Agent request has an invalid model target");
+  }
+  if (harness === "deepseek-harness" && !model) {
+    throw conflict("DeepSeek Harness Agent request requires a model target");
   }
   const rawRuntimeId = profile?.runtime_id;
-  if (rawRuntimeId === undefined) return { ...(rawProvider === undefined ? {} : { provider }), model };
+  if (rawRuntimeId === undefined) {
+    return {
+      harness,
+      ...(rawProvider === undefined ? {} : { provider }),
+      ...(rawModel === undefined ? {} : { model }),
+    };
+  }
   const runtimeId = typeof rawRuntimeId === "string" ? rawRuntimeId.trim() : "";
   if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(runtimeId)) {
-    throw conflict("DeepSeek Harness Agent request has an invalid runtime target");
+    throw conflict("Agent request has an invalid runtime target");
   }
-  return { ...(rawProvider === undefined ? {} : { provider }), model, runtimeId };
+  return {
+    harness,
+    ...(rawProvider === undefined ? {} : { provider }),
+    ...(rawModel === undefined ? {} : { model }),
+    runtimeId,
+  };
 }
 
 function mapEvent(row: EventRow): CanonicalEvent {
@@ -1063,6 +1104,35 @@ export class CollaborationDatabase {
         .run(projectId, actor.user_id);
       if (Number(result.changes) !== 1) throw notFound("Project");
       return { project_id: projectId, session_ids: sessions.map((session) => session.id) };
+    });
+  }
+
+  updateProject(actor: Actor, projectId: string, input: {
+    title: string;
+    idempotency_key: string;
+  }): ProjectRecord {
+    return this.transaction(() => {
+      this.requireProjectOwnedBy(projectId, actor.user_id);
+      const existing = this.sqlite.prepare(`
+        SELECT * FROM project_mutations WHERE project_id = ? AND idempotency_key = ?
+      `).get(projectId, input.idempotency_key) as unknown as ProjectMutationRow | undefined;
+      if (existing) {
+        if (existing.actor_user_id !== actor.user_id || existing.title !== input.title) {
+          throw idempotencyConflict("Project update retry does not match the original request");
+        }
+        return this.requireProject(projectId);
+      }
+      const timestamp = this.now();
+      this.sqlite.prepare(`
+        UPDATE projects SET title = ?,
+          updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END
+        WHERE id = ? AND owner_user_id = ?
+      `).run(input.title, timestamp, timestamp, projectId, actor.user_id);
+      this.sqlite.prepare(`
+        INSERT INTO project_mutations(project_id, idempotency_key, actor_user_id, title, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(projectId, input.idempotency_key, actor.user_id, input.title, timestamp);
+      return this.requireProject(projectId);
     });
   }
 
@@ -2156,23 +2226,22 @@ export class CollaborationDatabase {
         || event.actor_user_id !== actor.user_id || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("The request is eligible only for the initiating user's active runtime");
       }
-      const dshTarget = deepSeekRequestTarget(event);
-      if (dshTarget !== null) {
-        const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
-          candidate.purpose === "execution"
-          && candidate.status === "online"
-          && candidate.harness.toLowerCase() === "deepseek-harness"
-          && (dshTarget.provider === undefined || candidate.provider === dshTarget.provider)
-          && candidate.model === dshTarget.model);
-        const selectedRuntimeId = dshTarget.runtimeId ?? (matching.length === 1 ? matching[0]?.id : undefined);
-        if (runtime.harness.toLowerCase() !== "deepseek-harness"
-          || (dshTarget.provider !== undefined && runtime.provider !== dshTarget.provider)
-          || runtime.model !== dshTarget.model
-          || selectedRuntimeId === undefined
-          || runtime.id !== selectedRuntimeId
-          || !matching.some((candidate) => candidate.id === runtime.id)) {
-          throw conflict("A matching online DeepSeek Harness runtime is required for this Agent request");
-        }
+      const target = agentRequestTarget(event);
+      const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
+        candidate.purpose === "execution"
+        && candidate.status === "online"
+        && candidate.harness.trim().toLowerCase() === target.harness
+        && (target.provider === undefined || candidate.provider === target.provider)
+        && (target.harness === "codex" || target.model === undefined || candidate.model === target.model));
+      const selectedRuntimeId = target.runtimeId
+        ?? (target.harness === "codex" ? runtime.id : matching.length === 1 ? matching[0]?.id : undefined);
+      if (runtime.harness.trim().toLowerCase() !== target.harness
+        || (target.provider !== undefined && runtime.provider !== target.provider)
+        || (target.harness !== "codex" && target.model !== undefined && runtime.model !== target.model)
+        || selectedRuntimeId === undefined
+        || runtime.id !== selectedRuntimeId
+        || !matching.some((candidate) => candidate.id === runtime.id)) {
+        throw conflict(`A matching online ${target.harness} runtime is required for this Agent request`);
       }
       const existing = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;

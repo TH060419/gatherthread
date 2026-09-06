@@ -2,7 +2,7 @@
 export interface GatherThreadDshPluginConfig {
   /** The package layer is opt-in and inert unless explicitly enabled. */
   readonly enabled?: boolean;
-  /** Workspace exposed to DSH under the profile's read-only permission policy. */
+  /** Deprecated compatibility hint; native pairing now uses managed GatherThread Project workspaces. */
   readonly workspacePath?: string;
   /** Optional test or advanced-profile home. Normal npm users omit this. */
   readonly dshHome?: string;
@@ -15,6 +15,9 @@ export declare const inject: readonly [
   "agents",
   "sessions",
   "sessionPersistence",
+  "sessionQuery",
+  "sessionTitle",
+  "workspaceRegistry",
   "llm",
   "credentials",
   "connection",

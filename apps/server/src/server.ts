@@ -29,6 +29,7 @@ import {
   SetMembershipInputSchema,
   SubscribeMessageSchema,
   UpdateDeviceInputSchema,
+  UpdateProjectInputSchema,
   UpdateSessionInputSchema,
   type ApiErrorBody,
   type CanonicalEvent,
@@ -680,6 +681,13 @@ export async function startCollaborationServer(
       const projectId = parts[0] === "v1" && parts[1] === "projects" ? parts[2] : undefined;
       if (projectId && request.method === "GET" && parts.length === 3) {
         sendJson(response, 200, { data: service.getProject(actor, projectId) });
+        return;
+      }
+
+      if (projectId && request.method === "PATCH" && parts.length === 3) {
+        const body = await readAuthenticatedJson();
+        const input = parseTitleMutationInput(() => UpdateProjectInputSchema.parse(body));
+        sendJson(response, 200, { data: { project: service.updateProject(actor, projectId, input) } });
         return;
       }
 

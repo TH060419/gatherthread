@@ -2,16 +2,18 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/badge/release-0.1.0--beta.1-0f766e.svg)](docs/releases/0.1.0-beta.1.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.1.0--alpha.1-0f766e.svg)](docs/releases/0.1.0-alpha.1.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **One room, many minds.**
 
 **GatherThread** is where people collaborate in one shared workspace, each with their own local Agent, while context stays ordered, attributable, and live. It remains harness-neutral, so every collaborator can keep the local Agent and workflow they already use.
 
+> **Alpha preview.** The repository remains private and the hosted GatherThread service is not open. A collaborator with repository access can run the full local, LAN, or Tailscale experience, including Codex and DeepSeek Harness; only the future public-server path is unavailable.
+
 - `solo`: its creator publishes a complete canonical session stream; every other project member, including the project owner when someone else created it, follows it read-only.
 - `multi`: people share one ordered project conversation. A human chat message is shared without invoking an agent. An agent request is claimed only by the sender's local runtime, and the response is labelled with username, harness, provider, model, and capture fidelity; local device and native-session identifiers are not exposed to non-owner collaborators reading another user's activity.
 
-The server persists an append-only canonical event log in SQLite WAL, assigns authoritative per-session sequence numbers, enforces role-based access, and provides durable replay plus WebSocket live delivery. For each writable Codex session, the local bridge keeps a Desktop-owned interactive task and a separate background execution projection. Trusted hooks publish Desktop turns through a durable idempotent outbox, while Web requests and canonical-history hydration run only on the background projection, so two processes never compete for one native writer.
+The server persists an append-only canonical event log in SQLite WAL, assigns authoritative per-session sequence numbers, enforces role-based access, and provides durable replay plus WebSocket live delivery. Codex and DeepSeek Harness keep separate native projections of that same history, recover from durable cursors and outboxes, and route each Agent request only to the runtime the user selected.
 
 The bilingual Web workspace is responsive and resizable. Project-scoped settings control the default Agent model, reasoning effort, and context-injection ceiling; accessible custom controls, default high contrast, and theme-aware ambient lighting keep the interface legible without competing with the conversation.
 
@@ -19,7 +21,7 @@ Web Agent turns mirror Codex Desktop's reading hierarchy: public work updates ar
 
 ## Project and role model
 
-A project is the collaboration and invitation boundary. The project owner creates `multi` sessions and may change any other member between `participant` and `viewer` later. Owners and participants may each create personal `solo` sessions; only that Solo's creator may write or rename it, while every other project member reads it. A participant can also write and run their own agent in every `multi` session. A viewer is read-only across the entire project, and local tasks created by a viewer never create cloud sessions. A session creator or the project owner may permanently delete that session's cloud copy; only the project owner may delete the whole cloud project. Cloud deletion stops synchronization and removes shared server history, but never deletes local workspaces, files, Codex tasks, or Agent conversations.
+A project is the collaboration and invitation boundary. The project owner can rename the project, creates `multi` sessions, can switch their own sessions between `solo` and `multi`, and may change any other member between `participant` and `viewer` later. Owners and participants may each create personal `solo` sessions; only that Solo's creator may write or rename it, while every other project member reads it. A participant can also write and run their own agent in every `multi` session. A viewer is read-only across the entire project, and local tasks created by a viewer never create cloud sessions. A session creator or the project owner may permanently delete that session's cloud copy; only the project owner may delete the whole cloud project. Cloud deletion stops synchronization and removes shared server history, but never deletes local workspaces, files, Codex tasks, or Agent conversations.
 
 ## What “complete context” means
 
@@ -85,50 +87,44 @@ LAN mode keeps the application on loopback and runs a dedicated Caddy HTTPS prox
 
 ## Connect a local Codex agent
 
-Each collaborator selects a project in the GatherThread Web UI, opens **Connect Codex**, and copies the fixed-version command for their operating system. No GatherThread checkout or prior `npm install` is required:
+The Web dialog uses one short, three-step flow:
+
+1. Install the fixed **共序 / GatherThread** Codex plugin once.
+2. Copy the generated macOS/Linux or PowerShell connector command. The command includes `--plugin-hooks`, but no credential.
+3. Restart Codex Desktop, review and enable the plugin Hooks, then keep the connector terminal open.
+
+One-time plugin install:
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url 'https://your-host.your-tailnet.ts.net/v1' --project 'PROJECT_ID' --create-workspace
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin add gatherthread@gatherthread
 ```
 
-PowerShell receives the same credential-free arguments through `npx.cmd`. Project Agent settings continue to control Web requests; non-default model or context settings are included as data in the generated connector command after strict validation.
+The connector asks for the device token in a hidden terminal prompt, creates or reuses the local project, opens Codex Desktop, and discovers later sessions automatically. Editable GatherThread sessions become Codex tasks; Web Agent requests run in an isolated background projection, while trusted Hooks return direct Desktop turns to the same canonical history. A new local task creates a personal Solo only after its first completed turn; viewer tasks remain local. Some Codex builds may persist injected history for model context without immediately redrawing every imported item as a visible Desktop bubble.
 
-The copied command contains no token. The connector prompts for the user's device token without echoing it, safely creates or reuses a same-name workspace under `~/GatherThread Projects/`, and opens that local project in Codex Desktop. It also exposes a private local user-tool relay protected by a per-run capability; the device token remains only in the connector process and is never passed to the plugin MCP process or Codex. A newly materialized editable session starts with a Desktop task named `<session> · GatherThread` plus an implementation-private `exec` projection named `<session> · GatherThread background`. The local and cloud titles are independent after that first materialization; changing either title never changes the stable session/thread binding and never creates a second session. Codex Desktop is the sole writer of the visible task; Web **Request my agent** turns execute in the background projection and converge through canonical history. Later sessions are discovered automatically. Keep the connector terminal running. To bind an existing source checkout instead, omit `--create-workspace` and pass `--workspace "/absolute/path/to/project"` explicitly.
-
-The repo-local **共序 / GatherThread** Codex plugin adds reviewed user MCP tools for projects, sessions, history, messages, requests, and sanitized connection status. The realistic Beta basic mode is one or more running project connectors plus this plugin; Finder-launched Desktop does not reliably inherit terminal credential variables. The plugin MCP therefore collapses same-endpoint crash/restart overlap to the newest lease, aggregates distinct non-secret active registrations, and uniquely routes local IPC by project/session ID, failing closed on cross-endpoint ambiguity or an offline target. An environment-token server transport remains developer preview only. Full mode adds `--plugin-hooks`, followed by an explicit Codex Hooks review and trust decision. The plugin's tiny built-in Hook forwarder does not invoke `npx` per turn, requires the connector online, and does not spool missed turns. It accepts a workspace root or descendant `cwd`, resolves the connector's authoritative root registry, and cannot wake idle Codex or start a new turn. The older `--install-hooks` project-file path remains an explicit compatibility option with bounded offline spooling; if its file remains during a switch, a runtime source gate prevents both Hook sources from returning context or sharing the spool.
-
-Safari, Chrome, and Edge only copy commands. A Web page is intentionally not allowed to launch, install, or control local Codex. Once the release ref exists, run `codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread`, then `codex plugin add gatherthread@gatherthread`. Restart Desktop and review **共序 / GatherThread** and its Hooks before enabling them. The npm scope and package ownership must be confirmed before public publication; a universal public plugin-directory listing remains future work.
-
-Canonical events are imported into the background projection in order with frozen, type-specific visible prefixes: `username · Human Chat：`, `username · Agent Request：`, and `username · Agent Response · harness · model：`. With reviewed project hooks installed and trusted, `UserPromptSubmit` supplies an acknowledged, context-bounded capsule to the Desktop Agent. The visible response begins with `Loaded N cloud updates / 已加载 N 条云端更新` and at most three short previews; exact ordered bodies remain in the model-only context block. Oversized events are split on UTF-8 boundaries and continue on later completed Desktop turns. A cancelled turn acknowledges nothing, and a persisted delivery cursor never advances past an omitted chunk. Relayed content is untrusted shared history and is not executed as a new request. `Stop` uploads that exact prompt and final response once. Public Codex hooks do not expose the completed structured tool stream, so Desktop-originated tool events are omitted rather than recovered by opening a competing writer. Current public Codex APIs cannot insert remote events as historical bubbles into a Desktop-owned task. Background imports compact locally, and local source files are never rolled back.
-
-With trusted Hooks enabled, the first prompt submitted in a previously unbound Codex Desktop task is also the creation boundary. For a project owner or participant, the connector creates one deterministic personal Solo, binds that existing Desktop task, and uploads the same completed turn exactly once. Merely opening an empty task creates nothing. For a viewer the task stays entirely local. Connector-owned background and snapshot tasks are explicitly excluded from this discovery path.
-
-Read-only sessions show **Download to Codex** instead of a composer. Every click freezes a new `through_sequence` and creates an independent local snapshot task that never uploads later changes. Owners and participants synchronize `multi` plus their own personal Solos, and download other members' Solos; viewers download every session. Hook installation and trust are never implicit. Unrelated Codex tasks and immutable snapshot tasks are excluded by a private thread registry. GatherThread credentials are stripped from the Codex child environment, automatic privilege escalation is disabled, and `danger-full-access` is unsupported. See the current [Codex connector guide](docs/CODEX_CONNECT.md), [ADR-0013](docs/adr/0013-single-writer-dual-codex-projections.md), [ADR-0014](docs/adr/0014-acknowledged-bounded-desktop-relay-capsules.md), [ADR-0015](docs/adr/0015-create-personal-solos-from-first-local-prompt.md), and [ADR-0018](docs/adr/0018-unified-codex-plugin-and-connector.md).
+The fixed Alpha commands are documented in the [Codex connection guide](docs/CODEX_CONNECT.md). Registry commands become usable only after the packages and `v0.1.0-alpha.1` ref are published. Before that, collaborators with private repository access use the source-checkout path in the same guide.
 
 ## Connect DeepSeek Harness
 
-DeepSeek Harness uses a plugin-first flow. In the selected GatherThread Project, open **Connect DeepSeek Harness**. The browser never probes localhost or tries to launch a local process. When no runtime is online, it shows the same browser-safe fallback in Safari, Chrome, and Edge:
+DeepSeek Harness uses the same three-step shape:
 
-```bash
-npx @deepseek-ai/dsh web
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
-```
+1. Install `@gatherthread/dsh-host` into the verified DSH Web profile.
+2. Start `@deepseek-ai/dsh@0.1.2-rc.1 web` and keep it running.
+3. Open **Settings → GatherThread / 共序**, enter the current server, and approve the one-use pairing code in the already signed-in browser.
 
-The second command is DSH 0.1.2's verified profile-plugin mechanism; that release has no verified public plugin marketplace. This candidate prepares `@gatherthread/dsh-host` for publication but does not publish it, so the registry command becomes usable only after the package release. Check `npx @deepseek-ai/dsh --version`; the verified npm distribution is `0.1.2-rc.1`, and the explicit fallback is `npx @deepseek-ai/dsh@0.1.2-rc.1 web`. DSH 0.1.2 does not expose its root CLI version through a stable Host service, so GatherThread validates the required Host API contract and fails closed instead of reading npx cache internals.
+One explicit pairing connects every active Project visible to that identity and discovers new access later. Writable GatherThread sessions appear as editable native DSH conversations; completed DSH turns upload once, and canonical server history projects back in order. A successful first turn in a new DSH conversation creates a creator-owned cloud Solo; empty, failed, and viewer conversations remain local. Only the explicitly selected runtime handles an Agent request, with no Codex fallback.
 
-After installation, open **Settings → GatherThread / 共序** in DSH. Choose the future official GatherThread service or enter one custom origin for an HTTPS LAN host, self-hosted deployment, or Tailscale. The plugin always connects outward; the server never reaches into local DSH. **Sign in and pair** opens the selected GatherThread origin with a five-minute, single-use short code. Approval uses the existing signed browser session or invitation identity because a separate public account-registration system is not assumed. The long-lived device grant stays in DSH's credential store and never enters a URL, argv, Web Storage, logs, status responses, or canonical history.
-
-Once the runtime is online, choose **DeepSeek Harness**, then the exact DSH device/provider/model, and use **Request my agent**. Requests are claimed only by that runtime and never silently fall back to Codex. Multiple devices can be selected, renamed, or revoked; a unique online runtime is selected automatically. The repository `dsh:connect` command remains an advanced source-checkout diagnostic, not the normal path. Maintainers can exercise the isolated, credential-free npm/Loader/browser gate with `npm run test:dsh-npm-plugin:real`; it uses temporary state and requires the pinned packages to exist locally.
+The official GatherThread service button is present but disabled in this Alpha. Local, LAN, self-hosted, and Tailscale origins work now. See the [DSH connection guide](docs/DSH_CONNECT.md) for the published-package and private-checkout paths.
 
 ## Security and current limits
 
 The first release includes peppered device credentials, HMAC-protected and revocable browser sessions, strict Cookie-write Origin checks, single-use invitations and device authorization, device-bound runtime provenance, immediate session/socket/authorization invalidation on device or membership revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, per-user/project/deployment session-count limits, event and snapshot-job storage quotas, reconnect replay, and SQLite backup/restore scripts. A newly invited user sees the new device credential once and must save it before dismissing the dialog.
 
-The no-cloud-account paths are local-only, private LAN HTTPS, and private Tailscale Serve. For a shared public-beta entry point, `0.1.0-beta.1` adds an invitation-only [Alibaba Cloud ECS deployment](docs/ALIYUN_ECS.md). Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic. Never expose port 8787, use router port forwarding, enable Tailscale Funnel, or attach an unauthenticated public tunnel.
+The hosted GatherThread service and public Beta are not open in `0.1.0-alpha.1`. Local-only, private LAN HTTPS, and private Tailscale Serve are available. The [Alibaba Cloud ECS profile](docs/ALIYUN_ECS.md) is deployment-ready documentation for the next stage, not a claim that the service is online. Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic.
 
 Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, token-by-token agent streaming, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers. Current progress delivery is item-level public commentary rather than token streaming.
 
-See the [`0.1.0-beta.1` release notes](docs/releases/0.1.0-beta.1.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [architecture decisions](docs/adr/README.md), [connection modes](docs/CONNECTION_MODES.md), [Alibaba Cloud ECS deployment](docs/ALIYUN_ECS.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), [operations](docs/OPERATIONS.md), and [related work and attribution](docs/REFERENCES.md).
+See the [`0.1.0-alpha.1` notes](docs/releases/0.1.0-alpha.1.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [connection modes](docs/CONNECTION_MODES.md), [Codex guide](docs/CODEX_CONNECT.md), [DSH guide](docs/DSH_CONNECT.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), and [operations](docs/OPERATIONS.md).
 
 ## License
 

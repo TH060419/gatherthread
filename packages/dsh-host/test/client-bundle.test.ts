@@ -29,6 +29,7 @@ async function loadClient(options: {
       return [initial, (value: unknown) => { stateWrites.push(value); }];
     },
     useEffect(callback: () => () => void) { effect = callback; },
+    useRef(initial: unknown) { return { current: initial }; },
     createElement(type: unknown, props: unknown, ...children: unknown[]) {
       return { type, props, children };
     },
@@ -64,9 +65,10 @@ async function loadClient(options: {
 test("dsh.client bundle registers the official settings Slot without credential material", async () => {
   const loaded = await loadClient();
   assert.equal(loaded.handoff.id, "@gatherthread/dsh-host");
-  assert.deepEqual(Array.from(loaded.plugin.inject), ["slots", "connection"]);
+  assert.deepEqual(Array.from(loaded.plugin.inject), ["slots", "connection", "sessions"]);
   let registration: { options: Record<string, unknown>; component: () => unknown } | undefined;
   loaded.plugin.apply({
+    sessions: { async refresh() {} },
     slots: {
       inject(name: string, create: () => unknown) {
         assert.equal(name, "settings.section");
@@ -86,20 +88,35 @@ test("dsh.client bundle registers the official settings Slot without credential 
   assert.match(loaded.source, /已验证兼容：[\s\S]*state\.compatibility\.version/);
 });
 
+test("Client primary actions keep a visible system foreground in light, dark, and Safari themes", async () => {
+  const loaded = await loadClient();
+  assert.match(
+    loaded.source,
+    /primaryButton:\s*\{[^}]*background:\s*"Highlight"[^}]*color:\s*"HighlightText"[^}]*WebkitTextFillColor:\s*"HighlightText"/su,
+  );
+  assert.doesNotMatch(
+    loaded.source,
+    /background:\s*"currentColor",\s*color:\s*"Canvas"/u,
+    "currentColor must not be derived from the foreground color used to paint the label",
+  );
+});
+
 test("Client prefers the authenticated DSH RPC channel and accepts only the pinned native status shape", async () => {
   const calls: Array<{ channel: string; endpoint: string; payload: unknown }> = [];
+  let sessionListRefreshes = 0;
   const loaded = await loadClient({
     fetch: (async () => { throw new Error("native Client must not use the legacy Fetch route"); }) as typeof fetch,
     setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
   });
   let component: (() => unknown) | undefined;
   loaded.plugin.apply({
+    sessions: { async refresh() { sessionListRefreshes += 1; } },
     connection: {
       rpc: {
         async call(channel: string, endpoint: string, payload: unknown) {
           calls.push({ channel, endpoint, payload });
           return { ok: true, value: {
-            schemaVersion: 1,
+            schemaVersion: 2,
             integration: "gatherthread",
             authorization: "unpaired",
             compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
@@ -109,8 +126,8 @@ test("Client prefers the authenticated DSH RPC channel and accepts only the pinn
               connection: "stopped",
               bindingMode: "project",
               projectName: "GatherThread / 共序",
-              activeSessionCount: 0,
-              sessions: [],
+              activeSessionCount: 1,
+              sessions: [{ sessionId: "session-1", title: "General", state: "idle" }],
               updatedAt: "2026-09-06T00:00:00.000Z",
             },
           } };
@@ -129,6 +146,7 @@ test("Client prefers the authenticated DSH RPC channel and accepts only the pinn
   assert.equal(calls[0]?.channel, "/gatherthread");
   assert.equal(calls[0]?.endpoint, "status/get");
   assert.deepEqual(Object.keys(calls[0]?.payload as object), []);
+  assert.equal(sessionListRefreshes, 1, "a newly attached native Session must refresh DSH's work-page list");
   assert.ok(loaded.stateWrites.some((value) => (
     value !== null && typeof value === "object" && Reflect.get(value, "authorization") === "unpaired"
   )));
@@ -150,6 +168,7 @@ test("Client fails closed on malformed native RPC state instead of falling back 
   });
   let component: (() => unknown) | undefined;
   loaded.plugin.apply({
+    sessions: { async refresh() {} },
     connection: { rpc: { async call() { return { ok: true, value: { schemaVersion: 999 } }; } } },
     slots: {
       inject(_name: string, create: () => unknown) { create(); },
@@ -193,6 +212,7 @@ test("Client status request is same-origin, cookie-based, bounded, and aborts on
   });
   let component: (() => unknown) | undefined;
   loaded.plugin.apply({
+    sessions: { async refresh() {} },
     slots: {
       inject(_name: string, create: () => unknown) { create(); },
       register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
@@ -236,6 +256,7 @@ test("Client clears stale details and stops polling after a permanent Host statu
   });
   let component: (() => unknown) | undefined;
   loaded.plugin.apply({
+    sessions: { async refresh() {} },
     slots: {
       inject(_name: string, create: () => unknown) { create(); },
       register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
@@ -260,6 +281,7 @@ test("Client transient retries are bounded", async () => {
   });
   let component: (() => unknown) | undefined;
   loaded.plugin.apply({
+    sessions: { async refresh() {} },
     slots: {
       inject(_name: string, create: () => unknown) { create(); },
       register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },

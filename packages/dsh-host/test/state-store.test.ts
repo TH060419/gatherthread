@@ -20,13 +20,14 @@ import {
 import type { ConnectorState } from "../src/types.js";
 
 const state: ConnectorState = {
-  version: 1,
+  version: 2,
   binding: {
     projectId: "project-1",
     sessionId: "session-1",
     dshSessionId: "gatherthread-deadbeef",
   },
   serverCursor: 8,
+  projectionCursor: 8,
   publishedDshSequence: 34,
   activeRequest: {
     requestId: "request-1",
@@ -54,6 +55,18 @@ test("memory state is cloned and schema validated", async () => {
   assert.deepEqual(loaded, state);
   loaded!.binding.sessionId = "mutated";
   assert.equal((await store.load())?.binding.sessionId, "session-1");
+});
+
+test("legacy state resets only its native projection cursor for safe history backfill", () => {
+  const legacy = {
+    ...state,
+    version: 1,
+  };
+  delete (legacy as { projectionCursor?: number }).projectionCursor;
+  assert.deepEqual(validateConnectorState(legacy), {
+    ...state,
+    projectionCursor: 0,
+  });
 });
 
 test("file state uses an atomic private artifact and restores exactly", async () => {

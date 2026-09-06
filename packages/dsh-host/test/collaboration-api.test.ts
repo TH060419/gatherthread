@@ -66,13 +66,13 @@ test("HTTP compatibility sends credentials only as an Authorization header", asy
   }
 });
 
-test("compatibility boundary rejects a Collaboration API without heartbeat support", () => {
+test("compatibility boundary rejects a Collaboration API without required realtime support", () => {
   const withoutHeartbeat = {
     listProjectSessions: async () => [],
     appendAgentProgress: async () => { throw new Error("unused"); },
   } as unknown as CollaborationApi;
   assert.throws(
     () => adaptCollaborationApi(withoutHeartbeat),
-    /lacks required session, heartbeat, or progress support/,
+    /lacks required session, heartbeat, progress, or local-turn support/,
   );
 });

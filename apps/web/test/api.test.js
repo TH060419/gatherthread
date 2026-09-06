@@ -173,6 +173,22 @@ test("mock project creation leaves an empty project until the owner creates a se
   assert.deepEqual(sessions, []);
 });
 
+test("mock project rename updates project summaries and is creator-only", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const project = await api.createProject({ name: "Before" });
+  const renamed = await api.renameProject(project.id, {
+    name: "After 🚀",
+    idempotencyKey: "rename-project-0001",
+  });
+  assert.equal(renamed.name, "After 🚀");
+  assert.equal((await api.listProjects()).find((item) => item.id === project.id)?.name, "After 🚀");
+  api.projects.find((item) => item.id === project.id).role = "participant";
+  await assert.rejects(() => api.renameProject(project.id, {
+    name: "Denied",
+    idempotencyKey: "rename-project-denied-0001",
+  }), (error) => error.status === 404);
+});
+
 test("mock session rename updates summaries and publishes metadata without the previous name", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   const project = await api.createProject({ name: "New research" });
@@ -196,6 +212,17 @@ test("mock session rename updates summaries and publishes metadata without the p
   } finally {
     socket.close();
   }
+});
+
+test("mock project creator can switch an owned session between multi and solo", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const updated = await api.updateSession("session-orbit", {
+    name: "Project Orbit",
+    mode: "solo",
+    idempotencyKey: "session-mode-0001",
+  });
+  assert.equal(updated.mode, "solo");
+  assert.equal((await api.listProjectSessions("project-orbit")).find((session) => session.id === "session-orbit")?.mode, "solo");
 });
 
 test("mock project, session, and rename titles reject C0/C1 controls but keep Unicode", async () => {
@@ -238,6 +265,60 @@ test("HTTP session rename uses the existing PATCH contract", async () => {
     assert.deepEqual(JSON.parse(captured.options.body), {
       title: "After",
       idempotency_key: "rename-session-0001",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP session settings update title and mode through one PATCH", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: {
+      session: {
+        id: "s1", project_id: "p1", title: "After", mode: "solo", state: "active",
+        updated_at: "2026-08-25T10:00:00.000Z",
+      },
+      event: { id: "e1" },
+    } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const updated = await api.updateSession("s1", {
+      name: "After", mode: "solo", idempotencyKey: "session-settings-0001",
+    });
+    assert.equal(updated.mode, "solo");
+    assert.equal(captured.options.method, "PATCH");
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      title: "After",
+      mode: "solo",
+      idempotency_key: "session-settings-0001",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP project rename uses the project PATCH contract", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: { project: {
+      id: "p1", title: "After", state: "active", updated_at: "2026-08-25T10:00:00.000Z",
+    } } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const renamed = await api.renameProject("p1", { name: "After", idempotencyKey: "rename-project-0001" });
+    assert.equal(renamed.name, "After");
+    assert.equal(captured.url, "https://gatherthread.example/v1/projects/p1");
+    assert.equal(captured.options.method, "PATCH");
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      title: "After",
+      idempotency_key: "rename-project-0001",
     });
   } finally {
     globalThis.fetch = originalFetch;

@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const EXPECTED_VERSION = "0.1.0-beta.1";
+const EXPECTED_VERSION = "0.1.0-alpha.1";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifestPaths = [
   "package.json",
@@ -55,7 +55,7 @@ assert.deepEqual(dshBundle.deepseekHarness?.sourceFallback, {
 });
 assert.deepEqual(dshBundle.runtimeDependencies, [], "GatherThread installation must not acquire a DSH runtime dependency");
 assert.equal(dshPackage.private, undefined, "DSH plugin package must remain publishable through the official profile installer");
-assert.equal(dshPackage.publishConfig?.access, "public");
+assert.deepEqual(dshPackage.publishConfig, { access: "public", tag: "alpha" });
 assert.equal(dshPackage.engines?.node, ">=24");
 assert.equal(
   Object.keys(dshPackage.dependencies ?? {}).some((name) => name.startsWith("@deepseek-ai/")),
@@ -82,9 +82,11 @@ const requiredFiles = [
   "CHANGELOG.md",
   "docs/ALIYUN_ECS.md",
   "docs/ALIYUN_ECS.zh-CN.md",
-  "docs/releases/0.1.0-beta.1.md",
+  "docs/releases/0.1.0-alpha.1.md",
   "docs/CODEX_CONNECT.md",
   "docs/CODEX_CONNECT.zh-CN.md",
+  "docs/DSH_CONNECT.md",
+  "docs/DSH_CONNECT.zh-CN.md",
   "docs/adr/0018-unified-codex-plugin-and-connector.md",
   ".agents/plugins/marketplace.json",
   "packages/codex-connect/README.md",
@@ -118,13 +120,17 @@ const requiredFiles = [
   "scripts/test-dsh-host-real.mjs",
   "scripts/test-dsh-npm-plugin-real.mjs",
   "scripts/package-release.mjs",
+  "scripts/pack-npm-release.mjs",
+  "scripts/dry-run-npm-release.mjs",
   "scripts/verify-codex-package.mjs",
+  "scripts/verify-dsh-package.mjs",
 ];
 await Promise.all(requiredFiles.map((path) => readFile(join(root, path), "utf8")));
 
 const connector = await json("packages/codex-connect/package.json");
 assert.equal(connector.name, "@gatherthread/codex-connect");
 assert.equal(connector.private, undefined);
+assert.deepEqual(connector.publishConfig, { access: "public", tag: "alpha" });
 assert.deepEqual(connector.bin, { "gatherthread-codex-connect": "dist/codex-connect.js" });
 assert.deepEqual(connector.dependencies ?? {}, {});
 
@@ -147,17 +153,17 @@ assert.equal(marketplace.interface?.displayName, "共序 / GatherThread");
 assert.deepEqual(marketplace.plugins?.[0]?.source, { source: "local", path: "./plugins/gatherthread" });
 const marketplaceCommand = `codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v${EXPECTED_VERSION} --sparse .agents/plugins --sparse plugins/gatherthread`;
 const pluginInstallCommand = "codex plugin add gatherthread@gatherthread";
-for (const path of ["apps/web/index.html", "README.md", "README.zh-CN.md", "docs/CODEX_CONNECT.md", "docs/CODEX_CONNECT.zh-CN.md", "docs/releases/0.1.0-beta.1.md", "packages/codex-connect/README.md"]) {
+for (const path of ["apps/web/index.html", "README.md", "README.zh-CN.md", "docs/CODEX_CONNECT.md", "docs/CODEX_CONNECT.zh-CN.md", "docs/releases/0.1.0-alpha.1.md", "packages/codex-connect/README.md"]) {
   assert.match(await readFile(join(root, path), "utf8"), new RegExp(marketplaceCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(await readFile(join(root, path), "utf8"), new RegExp(pluginInstallCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
 }
 assert.doesNotMatch(`${marketplaceCommand}\n${pluginInstallCommand}`, /gta_|Bearer|cookie|token=|password|client_secret/i);
 
 const webDomain = await readFile(join(root, "apps/web/src/domain.js"), "utf8");
-assert.match(webDomain, /@gatherthread\/codex-connect@0\.1\.0-beta\.1/);
+assert.match(webDomain, /@gatherthread\/codex-connect@0\.1\.0-alpha\.1/);
 
 const installer = await readFile(join(root, "deploy/aliyun-ecs/install.sh"), "utf8");
-assert.match(installer, /release_version="0\.1\.0-beta\.1"/);
+assert.match(installer, /release_version="0\.1\.0-alpha\.1"/);
 assert.match(installer, /GATHERTHREAD_SERVER_HOST=127\.0\.0\.1/);
 assert.match(installer, /GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP=false/);
 assert.match(installer, /GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true/);

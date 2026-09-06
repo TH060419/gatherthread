@@ -144,6 +144,22 @@ export class HttpCollaborationApi {
     };
   }
 
+  async renameProject(projectId, input) {
+    const { project } = await this.request(`/v1/projects/${encodeURIComponent(projectId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        title: input.name,
+        idempotency_key: input.idempotencyKey,
+      }),
+    });
+    return {
+      id: project.id,
+      name: project.title,
+      state: project.state,
+      updatedAt: project.updated_at,
+    };
+  }
+
   async deleteProject(projectId) {
     await this.request(`/v1/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
     this.sessionHeads.clear();
@@ -207,15 +223,20 @@ export class HttpCollaborationApi {
     return this.#sessionDetail(session, role);
   }
 
-  async renameSession(sessionId, input) {
+  async updateSession(sessionId, input) {
     const { session } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
       method: "PATCH",
       body: JSON.stringify({
         title: input.name,
+        ...(input.mode === undefined ? {} : { mode: input.mode }),
         idempotency_key: input.idempotencyKey,
       }),
     });
     return this.#sessionDetail(session, "owner");
+  }
+
+  async renameSession(sessionId, input) {
+    return this.updateSession(sessionId, input);
   }
 
   async deleteSession(sessionId) {
@@ -512,6 +533,7 @@ export class MockCollaborationApi {
     this.currentUser = users.avery;
     this.listeners = new Map();
     this.idempotentEvents = new Map();
+    this.projectMutations = new Map();
     this.invitations = new Map();
     this.snapshotRequests = new Map();
     this.credential = "";
@@ -663,6 +685,26 @@ export class MockCollaborationApi {
     return structuredClone(project);
   }
 
+  async renameProject(projectId, { name, idempotencyKey }) {
+    await this.#wait();
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project || project.role !== "owner") {
+      throw new ApiError("Project not found.", { status: 404, code: "not_found" });
+    }
+    const title = normalizeMockTitle(name, "Project");
+    const key = `${projectId}:${idempotencyKey}`;
+    const existing = this.projectMutations.get(key);
+    if (existing !== undefined && existing !== title) {
+      throw new ApiError("Idempotency key already used for another request.", { status: 409, code: "idempotency_conflict" });
+    }
+    if (existing === undefined) {
+      this.projectMutations.set(key, title);
+      project.name = title;
+      project.updatedAt = new Date().toISOString();
+    }
+    return structuredClone(project);
+  }
+
   async deleteProject(projectId) {
     await this.#wait();
     const project = this.projects.find((item) => item.id === projectId);
@@ -748,26 +790,40 @@ export class MockCollaborationApi {
     return structuredClone(session);
   }
 
-  async renameSession(sessionId, { name, idempotencyKey }) {
+  async updateSession(sessionId, { name, mode, idempotencyKey }) {
     await this.#wait();
     const session = this.#findSession(sessionId);
     const member = session.members.find((item) => item.userId === this.currentUser.id);
+    const project = this.projects.find((item) => item.id === session.projectId);
     const mayRename = session.mode === "solo"
       ? member?.role !== "viewer" && session.ownerUserId === this.currentUser.id
       : member?.role === "owner";
     if (!mayRename) {
       throw new ApiError("You cannot rename this session.", { status: 403, code: "forbidden" });
     }
+    if (mode !== undefined && !new Set(["solo", "multi"]).has(mode)) {
+      throw new ApiError("Choose solo or multi.", { status: 422, code: "invalid_mode" });
+    }
+    const mayChangeMode = project?.role === "owner" && session.ownerUserId === this.currentUser.id;
+    if (mode !== undefined && mode !== session.mode && !mayChangeMode) {
+      throw new ApiError("Only the project creator can change this session mode.", { status: 403, code: "forbidden" });
+    }
     const title = normalizeMockTitle(name, "Session");
+    const payload = {
+      action: mode === undefined ? "renamed" : "updated",
+      title,
+      ...(mode === undefined ? {} : { mode }),
+    };
     const key = `${sessionId}:${idempotencyKey}`;
     const existing = this.idempotentEvents.get(key);
     if (existing) {
-      if (existing.type !== "session_state_change" || existing.payload?.title !== title) {
+      if (existing.type !== "session_state_change" || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
         throw new ApiError("Idempotency key already used for another request.", { status: 409, code: "idempotency_conflict" });
       }
       return this.#summary(session);
     }
     session.name = title;
+    if (mode !== undefined) session.mode = mode;
     session.updatedAt = new Date().toISOString();
     const bucket = this.events.get(sessionId) ?? [];
     const event = {
@@ -780,13 +836,17 @@ export class MockCollaborationApi {
       createdAt: session.updatedAt,
       visibility: "session",
       replyTo: null,
-      payload: { action: "renamed", title },
+      payload,
     };
     bucket.push(event);
     this.events.set(sessionId, bucket);
     this.idempotentEvents.set(key, event);
     this.#publish(sessionId, event);
     return this.#summary(session);
+  }
+
+  async renameSession(sessionId, input) {
+    return this.updateSession(sessionId, input);
   }
 
   async deleteSession(sessionId) {
@@ -809,16 +869,26 @@ export class MockCollaborationApi {
   async listSessionRuntimes(sessionId) {
     await this.#wait();
     this.#findSession(sessionId);
-    if (this.dshRevoked) return [];
-    return [{
-      id: `runtime-dsh-${sessionId}`,
-      deviceId: "dsh-device-demo",
-      harness: "deepseek-harness",
-      provider: "deepseek-official",
-      model: "deepseek-v4-flash",
-      status: "online",
-      lastSeenAt: new Date().toISOString(),
-    }];
+    return [
+      {
+        id: `runtime-codex-${sessionId}`,
+        deviceId: "device-avery",
+        harness: "codex",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        status: "online",
+        lastSeenAt: new Date().toISOString(),
+      },
+      ...(this.dshRevoked ? [] : [{
+        id: `runtime-dsh-${sessionId}`,
+        deviceId: "dsh-device-demo",
+        harness: "deepseek-harness",
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        status: "online",
+        lastSeenAt: new Date().toISOString(),
+      }]),
+    ];
   }
 
   async createSnapshotRequest(sessionId) {

@@ -2,7 +2,7 @@
 
 All notable changes to GatherThread are documented here. The project follows Semantic Versioning while pre-release APIs may still change.
 
-## [0.1.0-beta.1] - 2026-09-05
+## [0.1.0-alpha.1] - 2026-09-07
 
 ### Added
 
@@ -23,11 +23,11 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Known limitations
 
-- The beta is a single Node.js process with one SQLite database and no automatic failover or multi-process WebSocket fan-out.
+- The Alpha is a single Node.js process with one SQLite database and no automatic failover or multi-process WebSocket fan-out.
 - Agent progress is item-level rather than token-level streaming. Hidden reasoning is never uploaded.
 - Attachments, retention workers, abandoned claim recovery, offline Web outbox, and open registration are not implemented.
 - The DSH package is prepared but not published by this candidate; its verified npm Host surface is `@deepseek-ai/dsh@0.1.2-rc.1`, and DSH does not yet expose a stable root-version service or public plugin marketplace.
 - Alibaba Cloud deployment is intended for a small, invitation-only beta and requires operator-managed domain, filing, security-group, monitoring, and restore checks.
 - Public npm scope ownership, public plugin-directory distribution, and remote OAuth 2.1/PKCE MCP remain release follow-ups.
 
-[0.1.0-beta.1]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-beta.1
+[0.1.0-alpha.1]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.1

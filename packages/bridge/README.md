@@ -5,11 +5,12 @@
 For Codex, prefer the standalone connector. Copy the fixed-version operating-system-specific command from the project's **Connect Codex** dialog. It needs no repository checkout, binds one GatherThread project to a safe same-name local workspace, and discovers eligible sessions automatically. Each writable session has a Desktop-owned task plus a separate `exec`-source background projection.
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-beta.1 \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.1 \
   --url https://your-host.your-tailnet.ts.net \
   --project PROJECT_ID \
   --create-workspace \
-  --model gpt-5.6-sol
+  --model gpt-5.6-sol \
+  --plugin-hooks
 ```
 
 `--create-workspace` creates or exactly reuses `~/GatherThread Projects/<safe project name>` using a private credential-free binding marker, then opens that verified directory in Codex Desktop once. A failed or timed-out Desktop reveal is non-fatal and prints the directory for manual opening. Use `--workspace "/absolute/path"` instead when deliberately binding an existing source checkout. The token is always requested through hidden terminal input and is never copied from the Web page.

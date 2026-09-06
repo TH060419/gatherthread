@@ -2,6 +2,8 @@ import type {
   AgentRequestClaim,
   AppendEventInput,
   CanonicalEvent,
+  CommitLocalTurnInput,
+  CommitLocalTurnResult,
   CompleteAgentRequestInput,
   CurrentActor,
   ReadEventsResult,
@@ -55,10 +57,25 @@ export interface DshCollaborationApi {
     requestId: string,
     input: CompleteAgentRequestInput,
   ): Promise<CanonicalEvent>;
+  commitLocalTurn(
+    sessionId: string,
+    input: CommitLocalTurnInput,
+  ): Promise<CommitLocalTurnResult>;
 }
 
 export interface DshProjectCollaborationApi extends DshCollaborationApi {
   getCurrentActor(): Promise<CurrentActor>;
+  createSession(projectId: string, input: {
+    sessionId: string;
+    title: string;
+    mode: "solo" | "multi";
+    idempotencyKey: string;
+  }): Promise<SessionSummary>;
+}
+
+export interface DshLocalSessionCandidate {
+  readonly localSessionId: string;
+  readonly title: string;
 }
 
 export interface DshExecutionGate {
@@ -97,11 +114,25 @@ export interface DshPromptResult {
   readonly events: readonly DshSessionEventRecord[];
 }
 
+/** A public canonical message admitted to the DSH model-visible surface. */
+export interface DshCanonicalProjection {
+  readonly eventId: string;
+  readonly canonicalSequence: number;
+  readonly role: "user" | "assistant";
+  readonly content: string;
+  readonly occurredAt: string;
+  readonly actorDisplayName?: string;
+  readonly provider?: string;
+  readonly model?: string;
+}
+
 export interface DshHostFacade {
   readonly sessionId: string;
   open(): Promise<"created" | "resumed">;
   currentSequence(): number;
   snapshotFrom(sequence: number): readonly DshSessionEventRecord[];
+  projectCanonicalEvents(events: readonly DshCanonicalProjection[]): Promise<void>;
+  flush(): Promise<void>;
   prompt(text: string): Promise<DshPromptResult>;
   onSessionEvent(listener: (event: DshSessionEventRecord) => void): () => void;
   onStatus(listener: (status: DshAgentStatus) => void): () => void;
@@ -167,16 +198,24 @@ export type ConnectorOutboxOperation =
     kind: "complete";
     requestId: string;
     input: CompleteAgentRequestInput;
+  }
+  | {
+    id: string;
+    kind: "local_turn";
+    dshToSequence: number;
+    input: CommitLocalTurnInput;
   };
 
 export interface ConnectorState {
-  version: 1;
+  version: 2;
   binding: {
     projectId: string;
     sessionId: string;
     dshSessionId: string;
   };
   serverCursor: number;
+  /** Canonical sequence durably materialized in the native DSH Session. */
+  projectionCursor: number;
   publishedDshSequence: number;
   activeRequest?: ConnectorActiveRequest;
   outbox: ConnectorOutboxOperation[];

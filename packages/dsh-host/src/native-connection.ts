@@ -14,7 +14,7 @@ import {
 } from "./config.js";
 
 export const DSH_NATIVE_CREDENTIAL_KEY = "gatherthread-dsh-host/default";
-export const DSH_NATIVE_GRANT_SCHEMA_VERSION = 1;
+export const DSH_NATIVE_GRANT_SCHEMA_VERSION = 2;
 export const DSH_NATIVE_PAIRING_CHANNEL = "/gatherthread";
 export const DSH_NATIVE_MAX_RESPONSE_BYTES = 64 * 1_024;
 
@@ -25,14 +25,20 @@ export interface DshNativeBinding {
   readonly model: string;
 }
 
+export interface DshNativeRoute {
+  readonly provider: string;
+  readonly model: string;
+}
+
 export interface DshNativeGrant {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly serverUrl: string;
   readonly apiUrl: string;
   readonly deviceId: string;
   readonly deviceName: string;
   readonly token: string;
-  readonly binding?: DshNativeBinding;
+  /** One model route is applied independently to every active accessible Project. */
+  readonly route?: DshNativeRoute;
 }
 
 export interface DshNativePairingView {
@@ -97,7 +103,12 @@ export class DshNativeCredentialStore {
     if (record.kind !== "grant") {
       throw new Error("GatherThread DSH credential record has an incompatible kind");
     }
-    return parseNativeGrant(record.payload);
+    const grant = parseNativeGrant(record.payload);
+    const raw = requiredObject(record.payload);
+    if (raw.schemaVersion === 1) {
+      return this.save(grant);
+    }
+    return grant;
   }
 
   async save(grantValue: DshNativeGrant): Promise<DshNativeGrant> {
@@ -287,14 +298,16 @@ export function activeNativeProjects(projects: readonly ProjectSummary[]): Proje
 }
 
 export function parseNativeGrant(value: unknown): DshNativeGrant {
-  const input = exactObject(value, new Set([
+  const candidate = requiredObject(value);
+  if (candidate.schemaVersion === 1) return parseLegacyNativeGrant(candidate);
+  const input = exactObject(candidate, new Set([
     "schemaVersion",
     "serverUrl",
     "apiUrl",
     "deviceId",
     "deviceName",
     "token",
-    "binding",
+    "route",
   ]), "GatherThread DSH grant");
   if (input.schemaVersion !== DSH_NATIVE_GRANT_SCHEMA_VERSION) {
     throw new Error("GatherThread DSH credential grant has an unsupported schema version");
@@ -304,15 +317,15 @@ export function parseNativeGrant(value: unknown): DshNativeGrant {
   if (apiUrl !== normalized.apiUrl) {
     throw new Error("GatherThread DSH credential grant has inconsistent server identity");
   }
-  const binding = input.binding === undefined ? undefined : parseBinding(input.binding);
+  const route = input.route === undefined ? undefined : parseRoute(input.route);
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     serverUrl: normalized.serverUrl,
     apiUrl: normalized.apiUrl,
     deviceId: safeIdentifier(input.deviceId, "device id"),
     deviceName: boundedText(input.deviceName, "device name", 120),
     token: pairingSecret(input.token, "device credential", "gta_"),
-    ...(binding === undefined ? {} : { binding }),
+    ...(route === undefined ? {} : { route }),
   };
 }
 
@@ -377,6 +390,40 @@ function parseBinding(value: unknown): DshNativeBinding {
     projectName: boundedText(input.projectName, "project name", 160),
     provider: boundedText(input.provider, "provider", 80),
     model: boundedText(input.model, "model", 160),
+  };
+}
+
+function parseRoute(value: unknown): DshNativeRoute {
+  const input = exactObject(value, new Set(["provider", "model"]), "GatherThread DSH route");
+  return {
+    provider: boundedText(input.provider, "provider", 80),
+    model: boundedText(input.model, "model", 160),
+  };
+}
+
+function parseLegacyNativeGrant(value: Record<string, unknown>): DshNativeGrant {
+  const input = exactObject(value, new Set([
+    "schemaVersion",
+    "serverUrl",
+    "apiUrl",
+    "deviceId",
+    "deviceName",
+    "token",
+    "binding",
+  ]), "GatherThread DSH grant");
+  const normalized = normalizeDshServerUrl(requiredString(input.serverUrl, "server URL", 2_048));
+  const apiUrl = requiredString(input.apiUrl, "API URL", 2_048);
+  if (apiUrl !== normalized.apiUrl) {
+    throw new Error("GatherThread DSH credential grant has inconsistent server identity");
+  }
+  if (input.binding !== undefined) parseBinding(input.binding);
+  return {
+    schemaVersion: 2,
+    serverUrl: normalized.serverUrl,
+    apiUrl: normalized.apiUrl,
+    deviceId: safeIdentifier(input.deviceId, "device id"),
+    deviceName: boundedText(input.deviceName, "device name", 120),
+    token: pairingSecret(input.token, "device credential", "gta_"),
   };
 }
 
