@@ -54,7 +54,7 @@
     "verify": "npm run typecheck && npm run build:dsh-plugin && npm run build:web && npm run test && npm run audit:references && npm run audit:licenses && npm run audit:branding && npm run audit:secrets && npm run audit:vulnerabilities"
   },
   "devDependencies": {
-    "@types/node": "^24.3.0",
+    "@types/node": "^26.4.1",
     "@types/ws": "^8.18.1",
     "typescript": "^5.9.2"
   }
