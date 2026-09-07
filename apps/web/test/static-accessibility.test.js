@@ -194,7 +194,8 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(html, /only copies commands/i);
   assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.2 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
   assert.match(domain, /--plugin-hooks/);
-  const pluginCommands = html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "";
+  const pluginCommands = (html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "")
+    .replace(/\r\n?/gu, "\n");
   assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.2 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Alpha 预览版/);

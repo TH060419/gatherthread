@@ -14,6 +14,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 - Make the Codex plugin Hook relay preserve the connector's lexical workspace key before trying a canonical fallback and compare Windows paths case-insensitively.
 - Make DSH path contract tests platform-aware so the Windows release gate validates native paths rather than POSIX-only fixture strings.
+- Normalize checkout line endings in the Web onboarding contract test so Windows validates the same command text as POSIX.
 
 ### Known limitations
 
