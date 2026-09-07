@@ -12,9 +12,15 @@ import {
   effectiveContextBudget,
   normalizeCodexProfile,
   normalizeSettings,
+  projectAgentHarness,
   projectCodexProfile,
+  projectDshProfile,
+  projectEnabledHarnesses,
   SETTINGS_STORAGE_KEY,
+  withProjectAgentHarness,
   withProjectCodexProfile,
+  withProjectDshProfile,
+  withProjectEnabledHarnesses,
 } from "../src/settings.js";
 
 test("settings normalize invalid or stale browser data without retaining unknown fields", () => {
@@ -27,7 +33,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 3);
+  assert.equal(normalized.version, 7);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -65,6 +71,91 @@ test("project Agent profiles are isolated and custom models remain safe data", (
   assert.throws(() => addCustomCodexModel(settings, "--danger"), /may not start/);
   assert.throws(() => addCustomCodexModel(settings, "bad\nmodel"), /single-line/);
   assert.throws(() => withProjectCodexProfile(settings, "bad project", { model: "deepseek-chat", effort: "high" }), /safe project ID/);
+});
+
+test("project harness and DSH runtime selections are exact, isolated, and credential-free", () => {
+  let settings = withProjectAgentHarness(DEFAULT_SETTINGS, "project-alpha", "deepseek-harness");
+  settings = withProjectDshProfile(settings, "project-alpha", {
+    deviceId: "dsh-device-1",
+    provider: "My Provider",
+    model: "CaseSensitive/Model-X",
+    token: "must-not-survive",
+  });
+  assert.equal(projectAgentHarness(settings, "project-alpha"), "deepseek-harness");
+  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness"]);
+  assert.equal(projectAgentHarness(settings, "project-beta"), "deepseek-harness");
+  assert.deepEqual(projectDshProfile(settings, "project-alpha"), {
+    deviceId: "dsh-device-1",
+    provider: "My Provider",
+    model: "CaseSensitive/Model-X",
+  });
+  assert.equal(projectDshProfile(settings, "project-beta"), null);
+  assert.doesNotMatch(JSON.stringify(settings), /must-not-survive|token/i);
+  assert.throws(() => withProjectAgentHarness(settings, "project-alpha", "unknown"), /supported Agent harness/);
+  assert.throws(() => withProjectDshProfile(settings, "project-alpha", {
+    deviceId: "dsh-device-1",
+    provider: "provider",
+    model: "bad\nmodel",
+  }), /connected DeepSeek Harness runtime/);
+});
+
+test("project connection shortcuts are ordered, multi-select, and always keep one default Agent", () => {
+  assert.deepEqual(projectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha"), ["codex"]);
+  let settings = withProjectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha", ["codex", "deepseek-harness", "codex"]);
+  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness"]);
+  assert.deepEqual(
+    projectEnabledHarnesses(settings, "project-new"),
+    ["codex", "deepseek-harness"],
+    "a newly opened project inherits the user's enabled connection shortcuts",
+  );
+  assert.equal(projectAgentHarness(settings, "project-alpha"), "codex");
+
+  settings = withProjectEnabledHarnesses(settings, "project-alpha", ["deepseek-harness"]);
+  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["deepseek-harness"]);
+  assert.equal(projectAgentHarness(settings, "project-alpha"), "deepseek-harness");
+  assert.throws(() => withProjectEnabledHarnesses(settings, "project-alpha", []), /at least one Agent connection shortcut/);
+});
+
+test("legacy flat Codex project profiles migrate without changing their model or effort", () => {
+  const migrated = normalizeSettings({
+    version: 4,
+    agents: {
+      activeHarness: "codex",
+      customCodexModels: ["Legacy/Model"],
+      projectProfiles: {
+        "project-alpha": { model: "Legacy/Model", effort: "high" },
+      },
+    },
+  });
+  assert.equal(migrated.version, 7);
+  assert.equal(projectAgentHarness(migrated, "project-alpha"), "codex");
+  assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex"]);
+  assert.deepEqual(projectCodexProfile(migrated, "project-alpha"), { model: "Legacy/Model", effort: "high" });
+});
+
+test("version 6 connection shortcuts become the default for newly opened projects", () => {
+  const stored = JSON.stringify({
+    version: 6,
+    agents: {
+      activeHarness: "codex",
+      projectProfiles: {
+        "project-alpha": {
+          harness: "codex",
+          enabledHarnesses: ["codex", "deepseek-harness"],
+          codex: { model: "gpt-5.6-sol", effort: "low" },
+          dsh: null,
+        },
+      },
+    },
+  });
+  const migrated = createSettingsStore({
+    getItem: () => stored,
+    setItem: () => {},
+    removeItem: () => {},
+  }).get();
+  assert.equal(migrated.version, 7);
+  assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness"]);
+  assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
 });
 
 test("context budget keeps a precise configured value while reporting connector limits", () => {
@@ -106,9 +197,32 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 3);
+  assert.equal(migrated.version, 7);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");
   assert.equal(migrated.appearance.highContrast, true);
+  assert.equal(migrated.appearance.textScalePercent, 90);
+  assert.equal(migrated.layout.leftRailPixels, 340);
+  assert.equal(migrated.layout.rightPanelPixels, 320);
+
+  const customizedLayout = createSettingsStore({
+    getItem: () => JSON.stringify({
+      version: 3,
+      appearance: { ambientCanvas: "off", highContrast: false },
+      layout: { leftRailPixels: 312, rightPanelPixels: 356, composerPixels: 330 },
+    }),
+    setItem: () => {},
+  }).get();
+  assert.equal(customizedLayout.appearance.ambientCanvas, "off");
+  assert.equal(customizedLayout.appearance.highContrast, false);
+  assert.equal(customizedLayout.layout.leftRailPixels, 312);
+  assert.equal(customizedLayout.layout.rightPanelPixels, 356);
+  assert.equal(customizedLayout.layout.composerPixels, 330);
+
+  const customizedTextScale = createSettingsStore({
+    getItem: () => JSON.stringify({ version: 5, appearance: { textScalePercent: 110 } }),
+    setItem: () => {},
+  }).get();
+  assert.equal(customizedTextScale.appearance.textScalePercent, 110);
 });

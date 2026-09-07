@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { getEventListeners } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -186,6 +187,291 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
   assert.equal(committedReasoningEffort, "high", "reasoning effort is frozen when the Hook exposes it");
   assert.equal(state.cloudCursor, 6);
   assert.equal(state.pendingLocalTurns.length, 0);
+});
+
+test("idle Desktop-owned tasks receive remote canonical history through native item injection", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-native-history-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  const calls: Array<{ method: string; threadId?: string; items?: readonly unknown[] }> = [];
+  const client = {
+    readThread: async (threadId: string) => {
+      calls.push({ method: "thread/read", threadId });
+      return { id: threadId, name: "Session · GatherThread", status: "idle", turns: [] };
+    },
+    resumeThread: async ({ threadId }: { threadId: string }) => { calls.push({ method: "thread/resume", threadId }); },
+    injectItems: async (threadId: string, items: readonly unknown[]) => { calls.push({ method: "thread/inject_items", threadId, items }); },
+    unsubscribeThread: async (threadId: string) => { calls.push({ method: "thread/unsubscribe", threadId }); },
+    getThreadTokenUsage: () => undefined,
+    close: async () => { calls.push({ method: "client/close" }); },
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Session · GatherThread",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+  });
+  const runtime = registeredRuntime("desktop-native-history");
+  const remoteRuntime = { ...runtimeProvenance(runtime), runtimeId: "other-harness-remote", harness: "claude-code" as const };
+  const events = [
+    canonical(3, "human_chat", { text: "remote human message" }, "user-2"),
+    canonical(4, "agent_response", { text: "remote DSH answer" }, "user-2", remoteRuntime),
+  ];
+
+  await executor.projectCanonicalEvents(events, runtime);
+  await executor.projectCanonicalEvents(events, runtime);
+
+  const injections = calls.filter((call) => call.method === "thread/inject_items");
+  assert.equal(injections.length, 2, "each canonical event must be injected exactly once across repeated polls");
+  assert.deepEqual(injections.map((call) => (call.items?.[0] as any)?.role), ["user", "assistant"]);
+  assert.equal(calls.filter((call) => call.method === "thread/resume").length, 1,
+    "an idempotent retry with no new history must not claim another writer lease");
+  assert.equal(calls.filter((call) => call.method === "thread/unsubscribe").length, 1,
+    "the short-lived writer lease must be released after native history projection");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(state.desktopProjectionCursor, 4);
+  assert.equal(state.desktopDeliveryCursor, 4, "native model history supersedes Hook-only delivery for these events");
+  assert.equal(state.lastInjectedSequence, 2, "the background projection cursor must remain independent");
+});
+
+test("Desktop native history skips acknowledged local turns and queues while its turn is active", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-native-queue-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  await writeFile(statePath, JSON.stringify({
+    ...projectionState(workspacePath),
+    localTurnBindings: {
+      "codex:local": {
+        localTurnId: "codex:local",
+        threadId: "old-thread",
+        turnId: "local-turn",
+        basedOnSequence: 3,
+        status: "acked",
+        requestEventId: "event-4",
+        responseEventId: "event-5",
+      },
+    },
+  }));
+  let status: "active" | "idle" = "active";
+  const injected: string[] = [];
+  let resumes = 0;
+  const client = {
+    readThread: async (threadId: string) => ({ id: threadId, name: null, status, turns: [] }),
+    resumeThread: async () => { resumes += 1; },
+    injectItems: async (_threadId: string, items: readonly any[]) => { injected.push(items[0].content[0].text); },
+    unsubscribeThread: async () => undefined,
+    getThreadTokenUsage: () => undefined,
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Session · GatherThread",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+  });
+  const runtime = registeredRuntime("desktop-native-queue");
+  const events = [
+    { ...canonical(3, "human_chat", { text: "remote before local" }, "user-2"), actorDisplayName: "Remote" },
+    canonical(4, "agent_request", { text: "local request" }),
+    canonical(5, "agent_response", { text: "local response" }),
+    { ...canonical(6, "human_chat", { text: "remote after local" }, "user-2"), actorDisplayName: "Remote" },
+  ];
+
+  await assert.rejects(executor.projectCanonicalEvents(events, runtime), /active|queued/);
+  assert.equal(resumes, 0);
+  assert.deepEqual(injected, []);
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).desktopProjectionCursor, undefined,
+    "a busy Desktop task must retain the replay cursor for the next poll");
+
+  status = "idle";
+  await executor.projectCanonicalEvents(events, runtime);
+  assert.equal(resumes, 1);
+  assert.deepEqual(injected, [
+    "Remote · Human Chat：remote before local",
+    "Remote · Human Chat：remote after local",
+  ]);
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).desktopProjectionCursor, 6);
+});
+
+test("Desktop native history abandons its lease when a local turn starts during resume", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-native-resume-race-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  let status: "idle" | "active" = "idle";
+  let injections = 0;
+  let unsubscribes = 0;
+  const client = {
+    readThread: async (threadId: string) => ({ id: threadId, name: null, status, turns: [] }),
+    resumeThread: async () => { status = "active"; },
+    injectItems: async () => { injections += 1; },
+    unsubscribeThread: async () => { unsubscribes += 1; },
+    getThreadTokenUsage: () => undefined,
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Session · GatherThread",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+  });
+
+  await assert.rejects(
+    executor.projectCanonicalEvents([
+      { ...canonical(3, "human_chat", { text: "raced update" }, "user-2"), actorDisplayName: "Remote" },
+    ], registeredRuntime("desktop-native-resume-race")),
+    /active|queued/,
+  );
+
+  assert.equal(injections, 0, "a turn that wins the resume race must retain the visible thread writer");
+  assert.equal(unsubscribes, 1, "the connector must release the short-lived subscription after losing the race");
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).desktopProjectionCursor, undefined);
+});
+
+test("Desktop history polling advances across ACL-hidden canonical sequences", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-native-poll-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  const injected: string[] = [];
+  const client = {
+    readThread: async (threadId: string) => ({ id: threadId, name: null, status: "idle", turns: [] }),
+    resumeThread: async () => undefined,
+    injectItems: async (_threadId: string, items: readonly any[]) => { injected.push(items[0].content[0].text); },
+    unsubscribeThread: async () => undefined,
+    getThreadTokenUsage: () => undefined,
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Session · GatherThread",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+  });
+  const afterSequences: number[] = [];
+  const api = {
+    readEvents: async (_sessionId: string, afterSequence: number) => {
+      afterSequences.push(afterSequence);
+      return {
+        events: afterSequence < 4
+          ? [{ ...canonical(3, "human_chat", { text: "visible three" }, "user-2"), actorDisplayName: "Remote" }]
+          : [],
+        nextSequence: 4,
+        hasMore: false,
+      };
+    },
+  } as unknown as CollaborationApi;
+
+  await executor.synchronizeCanonicalHistory(api, registeredRuntime("desktop-native-poll"));
+  await executor.synchronizeCanonicalHistory(api, registeredRuntime("desktop-native-poll"));
+
+  assert.deepEqual(afterSequences, [0, 4]);
+  assert.deepEqual(injected, ["Remote · Human Chat：visible three"]);
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(state.desktopProjectionCursor, 4, "the hidden sequence must not cause a permanent replay gap");
+  assert.equal(state.desktopDeliveryCursor, 4);
+});
+
+test("Desktop native history disables repeated polling after a resume timeout", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-resume-timeout-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  let resumes = 0;
+  let injections = 0;
+  const client = {
+    readThread: async (threadId: string) => ({ id: threadId, name: null, status: "idle", turns: [] }),
+    resumeThread: async (input: { timeoutMs?: number }) => {
+      resumes += 1;
+      assert.equal(input.timeoutMs, 3_000, "visible history uses a short lease distinct from normal App Server requests");
+      throw new Error("Codex App Server thread/resume request timed out");
+    },
+    injectItems: async () => { injections += 1; },
+    unsubscribeThread: async () => undefined,
+    getThreadTokenUsage: () => undefined,
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Session · GatherThread",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+  });
+  const api = {
+    readEvents: async () => ({
+      events: [{ ...canonical(3, "human_chat", { text: "remote delta" }, "user-2"), actorDisplayName: "Remote" }],
+      nextSequence: 3,
+      hasMore: false,
+    }),
+  } as unknown as CollaborationApi;
+
+  await executor.synchronizeCanonicalHistory(api, registeredRuntime("desktop-resume-timeout"));
+  await executor.synchronizeCanonicalHistory(api, registeredRuntime("desktop-resume-timeout"));
+
+  assert.equal(resumes, 1, "a timed-out visible-thread lease must not stall every connector poll");
+  assert.equal(injections, 0);
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).desktopProjectionCursor ?? 0, 0,
+    "trusted Hook delivery remains the fallback and native projection must not claim an undelivered event");
+});
+
+test("Desktop native history recovers an acknowledged injection without duplicating its stable item id", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-desktop-native-recovery-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  const event = canonical(3, "human_chat", { text: "already persisted" }, "user-2");
+  await writeFile(statePath, JSON.stringify({
+    ...projectionState(workspacePath),
+    desktopProjectionCursor: 2,
+    desktopProjectionJournal: { eventId: event.id, sequence: event.sequence, nextChunk: 0, totalChunks: 1 },
+  }));
+  const digest = createHash("sha256")
+    .update(`${event.sessionId}\0${event.id}\0${event.sequence}\0${0}`)
+    .digest("hex");
+  const persistedItemId = `msg_gatherthread_${digest.slice(0, 40)}`;
+  let injections = 0;
+  let itemLists = 0;
+  const client = {
+    readThread: async (threadId: string) => ({ id: threadId, name: null, status: "idle", turns: [] }),
+    resumeThread: async () => undefined,
+    listThreadItemIds: async () => { itemLists += 1; return new Set([persistedItemId]); },
+    injectItems: async () => { injections += 1; },
+    unsubscribeThread: async () => undefined,
+    getThreadTokenUsage: () => undefined,
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Session · GatherThread",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+  });
+
+  await executor.projectCanonicalEvents([event], registeredRuntime("desktop-native-recovery"));
+
+  assert.equal(itemLists, 1);
+  assert.equal(injections, 0, "a lost JSON-RPC acknowledgement must not duplicate the native history item");
+  const state = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(state.desktopProjectionCursor, 3);
+  assert.equal(state.desktopProjectionJournal, undefined);
 });
 
 test("oversized Desktop cloud deltas advance only after acknowledged UTF-8 chunks", async (t) => {
@@ -421,6 +707,72 @@ function fail(id, message) { process.stdout.write(JSON.stringify({ id, error: { 
   assert.ok(binding.relayLocalHarnessEvent, "trusted Desktop hooks must be routed to the Desktop projection");
 });
 
+test("project harness polling projects canonical deltas into its visible Desktop binding", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-project-visible-poll-"));
+  const workspacePath = await realpath(directory);
+  const stateRoot = path.join(directory, "state");
+  const desktopStatePath = path.join(stateRoot, "binding-session.json");
+  const registryPath = path.join(stateRoot, "hook-registry.json");
+  const capturePath = path.join(directory, "capture.jsonl");
+  const fakeCodex = path.join(directory, "fake-codex.mjs");
+  await mkdir(stateRoot, { recursive: true });
+  await writeFile(desktopStatePath, JSON.stringify(projectionState(workspacePath)));
+  await writeFile(fakeCodex, `
+import { appendFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  const message = JSON.parse(line);
+  await appendFile(process.env.CAPTURE, JSON.stringify(message) + "\\n");
+  if (message.method === "initialized") continue;
+  if (message.method === "initialize") respond(message.id, {});
+  else if (message.method === "thread/read") respond(message.id, { thread: {
+    id: message.params.threadId, name: "Session · GatherThread", status: { type: "idle" }, turns: [],
+  } });
+  else if (message.method === "thread/resume") respond(message.id, { thread: { id: message.params.threadId } });
+  else respond(message.id, {});
+}
+function respond(id, result) { process.stdout.write(JSON.stringify({ id, result }) + "\\n"); }
+`);
+  const harness = new CodexProjectHarness({
+    workspacePath,
+    stateRoot,
+    mappingId: "mapping-visible-poll",
+    projectName: "Visible poll",
+    model: "gpt-test",
+    command: process.execPath,
+    commandArgs: [fakeCodex],
+    env: { ...process.env, CAPTURE: capturePath },
+    hookRegistryPath: registryPath,
+    localTurnsEnabled: true,
+  });
+  t.after(() => harness.close());
+  const binding = harness.createSessionBinding({
+    session: { id: "session-1", projectId: "project-1", name: "Session", mode: "multi" },
+    sessionKey: "binding",
+    statePath: desktopStatePath,
+  });
+  const api = {
+    readEvents: async () => ({
+      events: [{ ...canonical(3, "human_chat", { text: "live delta" }, "user-2"), actorDisplayName: "Remote" }],
+      nextSequence: 3,
+      hasMore: false,
+    }),
+  } as unknown as CollaborationApi;
+
+  assert.ok(binding.synchronizeLocalTurns);
+  assert.ok(binding.synchronizeCanonicalHistory);
+  const runtime = registeredRuntime(binding.localSessionId);
+  await binding.synchronizeLocalTurns({ api, runtime });
+  await binding.synchronizeCanonicalHistory({ api, runtime });
+
+  const captures = (await readFile(capturePath, "utf8"))
+    .trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(captures.filter((message) => message.method === "thread/inject_items").length, 1);
+  assert.ok(captures.some((message) => message.method === "thread/unsubscribe"));
+  assert.equal(JSON.parse(await readFile(desktopStatePath, "utf8")).desktopProjectionCursor, 3);
+});
+
 test("canonical projection uses type-specific visible prefixes and only canonical response provenance", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-prefixes-"));
   const statePath = path.join(directory, "state.json");
@@ -630,6 +982,156 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   const finalStarts = (await readFile(capturePath, "utf8")).trim().split("\n")
     .map((line) => JSON.parse(line)).filter((event) => event.event === "start");
   assert.equal(finalStarts.length, 2, "disposed clients must never spawn another child");
+});
+
+test("a timed-out thread start recycles the shared App Server before the next retry", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-thread-start-timeout-"));
+  const capturePath = path.join(directory, "capture.jsonl");
+  const generationPath = path.join(directory, "first-generation-seen");
+  const fakeCodex = path.join(directory, "fake-codex.mjs");
+  await writeFile(fakeCodex, `
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const capture = process.env.CAPTURE;
+const generation = process.env.GENERATION;
+const staleGeneration = !existsSync(generation);
+appendFileSync(capture, JSON.stringify({ event: "start", pid: process.pid, staleGeneration }) + "\\n");
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  appendFileSync(capture, JSON.stringify({ event: "request", pid: process.pid, method: message.method }) + "\\n");
+  if (message.method === "initialize") respond(message.id, {});
+  else if (message.method === "thread/start" && staleGeneration) writeFileSync(generation, "seen");
+  else if (message.method === "thread/start") respond(message.id, { thread: { id: "recovered-thread" } });
+  else respond(message.id, {});
+}
+function respond(id, result) { process.stdout.write(JSON.stringify({ id, result }) + "\\n"); }
+`);
+  const client = new CodexAppServerClient({
+    command: process.execPath,
+    commandArgs: [fakeCodex],
+    cwd: directory,
+    env: { ...process.env, CAPTURE: capturePath, GENERATION: generationPath },
+    requestTimeoutMs: 1_000,
+    threadStartTimeoutMs: 250,
+  });
+  t.after(() => client.dispose());
+
+  await assert.rejects(
+    client.startThread({ cwd: directory, model: "gpt-test", sandbox: "workspace-write", threadSource: "exec" }),
+    /thread\/start request timed out/,
+  );
+  assert.equal(
+    await client.startThread({ cwd: directory, model: "gpt-test", sandbox: "workspace-write", threadSource: "exec" }),
+    "recovered-thread",
+    "the persistent project client must not reuse the generation that stopped answering",
+  );
+
+  const lifecycle = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const starts = lifecycle.filter((event) => event.event === "start");
+  assert.equal(starts.length, 2);
+  assert.notEqual(starts[0]?.pid, starts[1]?.pid);
+});
+
+test("project discovery falls back cleanly when an older App Server lacks project/list", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-old-project-api-"));
+  const fakeCodex = path.join(directory, "fake-codex.mjs");
+  await writeFile(fakeCodex, `
+import { createInterface } from "node:readline";
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  if (message.method === "initialize") respond(message.id, {});
+  else if (message.method === "project/list") fail(message.id, -32601, "Method not found");
+  else respond(message.id, {});
+}
+function respond(id, result) { process.stdout.write(JSON.stringify({ id, result }) + "\\n"); }
+function fail(id, code, message) { process.stdout.write(JSON.stringify({ id, error: { code, message } }) + "\\n"); }
+`);
+  const client = new CodexAppServerClient({
+    command: process.execPath,
+    commandArgs: [fakeCodex],
+    cwd: directory,
+  });
+  t.after(() => client.dispose());
+
+  assert.equal(await client.findProjectIdForRoot(directory), undefined);
+});
+
+test("recycling a shared App Server invalidates other sessions' ephemeral thread leases", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-shared-timeout-"));
+  const workspacePath = await realpath(directory);
+  const capturePath = path.join(directory, "capture.jsonl");
+  const generationPath = path.join(directory, "generation");
+  const fakeCodex = path.join(directory, "fake-codex.mjs");
+  await writeFile(fakeCodex, `
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const capture = process.env.CAPTURE;
+const generationPath = process.env.GENERATION;
+const generation = existsSync(generationPath) ? 2 : 1;
+if (generation === 1) writeFileSync(generationPath, "started");
+let threadStarts = 0;
+appendFileSync(capture, JSON.stringify({ event: "start", pid: process.pid, generation }) + "\\n");
+const lines = createInterface({ input: process.stdin });
+for await (const line of lines) {
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  appendFileSync(capture, JSON.stringify({ event: "request", pid: process.pid, generation, method: message.method, threadId: message.params?.threadId }) + "\\n");
+  if (message.method === "initialize") respond(message.id, {});
+  else if (message.method === "thread/start" && generation === 1 && threadStarts++ === 0) {
+    respond(message.id, { thread: { id: "old-thread" } });
+  } else if (message.method === "thread/start" && generation === 1) {
+    // Leave the second session's creation indeterminate to force recycling.
+  } else if (message.method === "thread/start") {
+    respond(message.id, { thread: { id: "replacement-thread" } });
+  } else if (message.method === "thread/inject_items" && message.params.threadId !== "replacement-thread") {
+    process.stdout.write(JSON.stringify({ id: message.id, error: { code: -32000, message: "unknown thread in this process" } }) + "\\n");
+  } else respond(message.id, {});
+}
+function respond(id, result) { process.stdout.write(JSON.stringify({ id, result }) + "\\n"); }
+`);
+  const client = new CodexAppServerClient({
+    command: process.execPath,
+    commandArgs: [fakeCodex],
+    cwd: directory,
+    env: { ...process.env, CAPTURE: capturePath, GENERATION: generationPath },
+    requestTimeoutMs: 1_000,
+    threadStartTimeoutMs: 250,
+  });
+  t.after(() => client.dispose());
+  const survivor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath: path.join(directory, "survivor.json"),
+    threadName: "Survivor background",
+    model: "gpt-test",
+    threadSource: "exec",
+  });
+  const stalled = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath: path.join(directory, "stalled.json"),
+    threadName: "Stalled background",
+    model: "gpt-test",
+    threadSource: "exec",
+  });
+  const survivorRuntime = registeredRuntime("survivor-session");
+
+  assert.equal(await survivor.prepareCanonicalProjection(survivorRuntime), 0);
+  await assert.rejects(stalled.prepareCanonicalProjection(registeredRuntime("stalled-session")), /thread\/start request timed out/);
+  await survivor.projectCanonicalEvents([
+    { ...canonical(1, "human_chat", { text: "after recycle" }, "user-2"), sessionId: survivorRuntime.sessionId },
+  ], survivorRuntime);
+
+  const survivorState = JSON.parse(await readFile(path.join(directory, "survivor.json"), "utf8"));
+  assert.equal(survivorState.threadId, "replacement-thread");
+  assert.equal(survivorState.projectionGeneration, 2);
+  const lifecycle = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  assert.ok(lifecycle.some((event) => event.method === "thread/inject_items" && event.threadId === "replacement-thread"));
+  assert.equal(lifecycle.some((event) => event.method === "thread/inject_items" && event.threadId === "old-thread"), false);
 });
 
 test("close during pending turn and compact starts rejects cleanly without unhandled completions", async () => {
@@ -1377,6 +1879,108 @@ test("new Desktop binding is committed only after cross-process rollout verifica
   assert.equal(calls.some((call) => call.method === "thread/delete"), false);
   assert.equal(JSON.parse(await readFile(statePath, "utf8")).threadId, "persisted-thread");
   assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, { "persisted-thread": "execution" });
+});
+
+test("new Desktop binding is assigned to the exact Codex project before it becomes a Hook writer", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-project-bound-desktop-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "binding-session.json");
+  const registryPath = path.join(directory, "hook-registry.json");
+  await writeFile(registryPath, JSON.stringify({ version: 1, workspacePath, threads: {} }));
+  const starts: Array<Record<string, unknown>> = [];
+  const assignments: Array<{ threadId: string; projectId: string }> = [];
+  let closed = false;
+  const client = {
+    findProjectIdForRoot: async (root: string) => {
+      assert.equal(root, workspacePath);
+      return "desktop-project-1";
+    },
+    startThread: async (input: Record<string, unknown>) => {
+      starts.push(input);
+      return "project-bound-thread";
+    },
+    setThreadProject: async (threadId: string, projectId: string) => {
+      assignments.push({ threadId, projectId });
+      return true;
+    },
+    setThreadName: async () => undefined,
+    unsubscribeThread: async () => undefined,
+    close: async () => { closed = true; },
+    readThread: async (threadId: string) => {
+      assert.equal(closed, true, "project verification must cross an App Server process boundary");
+      return {
+        id: threadId,
+        name: "Session · GatherThread",
+        projectId: "desktop-project-1",
+        status: "notLoaded",
+        turns: [],
+      };
+    },
+    deleteThread: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Session · GatherThread",
+    model: "gpt-test",
+    hookRegistryPath: registryPath,
+    localPublishingInitiallyActive: false,
+    desktopHookOnly: true,
+    threadSource: "vscode",
+    gatherThreadSessionId: "session-1",
+  });
+
+  await executor.activateLocalPublishing();
+
+  assert.equal(starts.length, 1);
+  assert.equal(starts[0]?.projectId, "desktop-project-1",
+    "thread/start must persist the project assignment instead of relying on cwd inference");
+  assert.deepEqual(assignments, [{ threadId: "project-bound-thread", projectId: "desktop-project-1" }]);
+  assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, {
+    "project-bound-thread": "execution",
+  });
+});
+
+test("activation repairs an older Desktop binding's missing project before authorizing Hooks", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-repair-project-binding-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "binding-session.json");
+  const registryPath = path.join(directory, "hook-registry.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  await writeFile(registryPath, JSON.stringify({ version: 1, workspacePath, threads: {} }));
+  const calls: string[] = [];
+  let assignedProjectId: string | undefined;
+  const client = {
+    findProjectIdForRoot: async () => "desktop-project-1",
+    setThreadProject: async (_threadId: string, projectId: string) => {
+      calls.push("thread/metadata/update");
+      assignedProjectId = projectId;
+      return true;
+    },
+    close: async () => { calls.push("client/close"); },
+    readThread: async (threadId: string) => {
+      calls.push("thread/read");
+      return { id: threadId, name: "Session · GatherThread", projectId: assignedProjectId ?? null, status: "notLoaded", turns: [] };
+    },
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Session · GatherThread",
+    model: "gpt-test",
+    hookRegistryPath: registryPath,
+    localPublishingInitiallyActive: false,
+    desktopHookOnly: true,
+    threadSource: "vscode",
+    gatherThreadSessionId: "session-1",
+  });
+
+  await executor.activateLocalPublishing();
+
+  assert.deepEqual(calls, ["thread/metadata/update", "client/close", "thread/read", "client/close"]);
+  assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, { "old-thread": "execution" });
 });
 
 test("unpersisted empty Desktop thread never becomes a binding or Hook writer", async () => {
@@ -2490,7 +3094,10 @@ function fail(id, message) {
     sessionKey: "session-key",
     statePath,
   });
-  assert.equal(binding.synchronize, undefined, "desktop local-turn upload stays disabled without explicitly enabled trusted hooks");
+  assert.equal(binding.synchronizeLocalTurns, undefined,
+    "desktop local-turn upload stays disabled without explicitly enabled trusted hooks");
+  assert.equal(binding.synchronizeCanonicalHistory, undefined,
+    "visible Desktop projection stays disabled without explicitly enabled trusted hooks");
   const runtime = registeredRuntime(binding.localSessionId);
   const firstRequest = canonical(2, "agent_request", {
     content: "implement first",

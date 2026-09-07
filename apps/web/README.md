@@ -99,7 +99,7 @@ New projects start with no sessions. Owners may create `solo` or `multi`; partic
 
 ## First-release limits
 
-- The entered device bearer is used only to create a 24-hour server-side browser session and is then cleared from JavaScript. The opaque session token is held in a non-persistent `HttpOnly; SameSite=Strict; Path=/` Cookie, with `Secure` and `__Host-` under HTTPS. Reload restores the workspace; logout, device revocation, and token rotation revoke the session. Cookie-authenticated writes require an exact allowed Origin. Neither bearer nor browser token is placed in Web Storage or a URL.
+- The entered device bearer is used only to create a browser session and is then cleared from JavaScript. The default is a 24-hour server-side session held in a non-persistent `HttpOnly; SameSite=Strict; Path=/` Cookie. **Remember this device** uses a 30-day persistent Cookie instead. HTTPS adds `Secure` and `__Host-`. Reload restores the workspace; logout, device revocation, and token rotation revoke either session. Cookie-authenticated writes require an exact allowed Origin. Neither bearer nor browser token is placed in Web Storage or a URL.
 - Project owners can change participant/viewer roles. There is no member-removal UI, attachment upload, reply UI, offline outbox, search, or runtime selection yet.
 - The mock emits illustrative agent responses; real responses use the local bridge claim/complete workflow.
 - An unanswered `agent_request` shows an accessible pulsing response indicator while its local runtime is online. If the runtime disconnects, the indicator changes to a static queued state and disappears only when a canonical linked response arrives.

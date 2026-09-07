@@ -26,14 +26,22 @@ import {
   resolveCodexCommand,
   resolveCodexHookRelayPath,
   resolveWorkspaceCodexHookPaths,
+  runManagedSessionCycle,
   runProjectConnector,
 } from "../src/codex-connect.js";
 import type { HttpCollaborationClient } from "../src/http-client.js";
 import { CollaborationHttpError } from "../src/http-client.js";
 import type { ProjectHarnessAdapter, SessionSummary } from "../src/index.js";
-import { codexSessionKey, type CanonicalEvent, type CollaborationApi } from "../src/index.js";
+import {
+  codexSessionKey,
+  readCodexHookSpool,
+  updateCodexHookRegistry,
+  type CanonicalEvent,
+  type CollaborationApi,
+} from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
+const socketTemporaryBase = process.platform === "darwin" ? "/private/tmp" : tmpdir();
 
 test("Windows Codex discovery skips shell shims and selects a native executable", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-path-"));
@@ -200,6 +208,9 @@ test("Codex connector accepts a private HTTPS origin and applies safe defaults",
   assert.equal(parsed.shareToolEvents, true);
   assert.equal(parsed.projectId, "project-alpha");
   assert.equal(parsed.createWorkspace, false);
+  assert.equal(parsed.installHooks, false);
+  assert.equal(parsed.pluginHooks, false);
+  assert.equal(parsed.preflightOnly, false);
 });
 
 test("Codex connector parses project workspace creation without accepting an ambiguous workspace", () => {
@@ -232,6 +243,32 @@ test("Codex connector accepts a bounded context ceiling", () => {
   ]), /4096 to 2000000/);
 });
 
+test("Codex connector enables exactly one explicit Hook source", () => {
+  const parsed = parseCodexConnectArgs([
+    "--url", "https://host.tailnet.ts.net",
+    "--plugin-hooks",
+  ]);
+  assert.notEqual(parsed, "help");
+  if (parsed === "help") return;
+  assert.equal(parsed.pluginHooks, true);
+  assert.equal(parsed.installHooks, false);
+  assert.throws(() => parseCodexConnectArgs([
+    "--url", "https://host.tailnet.ts.net",
+    "--plugin-hooks",
+    "--install-hooks",
+  ]), /cannot be combined/);
+});
+
+test("Codex connector parses a side-effect-bounded preflight", () => {
+  const parsed = parseCodexConnectArgs([
+    "--url", "https://host.tailnet.ts.net",
+    "--preflight-only",
+  ]);
+  assert.notEqual(parsed, "help");
+  if (parsed === "help") return;
+  assert.equal(parsed.preflightOnly, true);
+});
+
 test("Codex connector rejects public plaintext URLs and unsafe sandbox modes", () => {
   assert.throws(() => parseCodexConnectArgs([
     "--url", "http://example.com",
@@ -247,18 +284,26 @@ test("Codex connector rejects public plaintext URLs and unsafe sandbox modes", (
     "--url", "https://example.com",
     "--model", "--dangerously-treated-as-an-option",
   ]), /requires a value/);
+  assert.throws(() => parseCodexConnectArgs([
+    "--url", "https://example.com",
+    "--project", "project-alpha'; Remove-Item -Recurse ~; '",
+  ]), /project ID/);
+  assert.throws(() => parseCodexConnectArgs([
+    "--url", "https://example.com",
+    "--codex-command", "codex\nmalicious",
+  ]), /Codex command/);
 });
 
 test("Codex connector direct entry point runs on native filesystem paths", async () => {
-  const entryPoint = fileURLToPath(new URL("../src/codex-connect.js", import.meta.url));
+  const entryPoint = fileURLToPath(new URL("../src/codex-connect-bin.js", import.meta.url));
   const { stdout, stderr } = await execFileAsync(process.execPath, [entryPoint, "--help"]);
   assert.match(stdout, /GatherThread Codex connector/);
   assert.equal(stderr, "");
 });
 
 test("Codex connector default CLI initializes a disabled Hook registry under a fresh home", async () => {
-  const homeDirectory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-home-"));
-  const workspacePath = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-workspace-"));
+  const homeDirectory = await mkdtemp(path.join(socketTemporaryBase, "gt-home-"));
+  const workspacePath = await mkdtemp(path.join(socketTemporaryBase, "gatherthread-codex-workspace-"));
   const server = createServer((request, response) => {
     response.setHeader("content-type", "application/json");
     if (request.url === "/v1/me") {
@@ -287,7 +332,7 @@ test("Codex connector default CLI initializes a disabled Hook registry under a f
   });
   const address = server.address();
   assert.ok(address && typeof address !== "string");
-  const entryPoint = fileURLToPath(new URL("../src/codex-connect.js", import.meta.url));
+  const entryPoint = fileURLToPath(new URL("../src/codex-connect-bin.js", import.meta.url));
   const child = spawn(process.execPath, [
     entryPoint,
     "--url", `http://127.0.0.1:${address.port}`,
@@ -335,11 +380,13 @@ test("Codex connector default CLI initializes a disabled Hook registry under a f
     });
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }
-  const registryPath = resolveWorkspaceCodexHookPaths(workspacePath, homeDirectory).hookRegistryPath;
+  const canonicalWorkspacePath = await realpath(workspacePath);
+  const registryPath = resolveWorkspaceCodexHookPaths(canonicalWorkspacePath, homeDirectory).hookRegistryPath;
   const registry = JSON.parse(await readFile(registryPath, "utf8"));
-  assert.equal(registry.workspacePath, path.resolve(workspacePath));
+  assert.equal(registry.workspacePath, canonicalWorkspacePath);
   assert.deepEqual(registry.threads, {});
   assert.equal(registry.discoverUnregistered, false);
+  assert.equal(registry.hookSource, "disabled");
 });
 
 test("Codex connector polling keeps the process alive until the next cycle", async () => {
@@ -359,6 +406,55 @@ test("Codex connector polling keeps the process alive until the next cycle", asy
   const code = await new Promise<number | null>((resolve) => child.once("close", resolve));
   assert.equal(code, 0, stderr);
   assert.equal(stdout, "poll-completed");
+});
+
+test("managed session cycle commits local Hooks before Web execution and defers visible history until after it", async () => {
+  const order: string[] = [];
+  let releaseVisibleHistory: (() => void) | undefined;
+  const visibleHistoryGate = new Promise<void>((resolve) => { releaseVisibleHistory = resolve; });
+  const runtime = {
+    id: "runtime-1",
+    runtimeId: "runtime-1",
+    userId: "user-1",
+    sessionId: "session-1",
+    deviceId: "device-1",
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-test",
+    localSessionId: "local-1",
+    captureFidelity: "harness_transcript",
+  } as const;
+  const current = {
+    bridge: {
+      runtime,
+      processPendingAgentRequests: async () => { order.push("web-agent"); },
+    },
+    executor: {},
+    lastHeartbeatAt: 0,
+    synchronizeLocalTurns: async () => { order.push("local-hooks"); },
+    synchronizeCanonicalHistory: async () => {
+      order.push("visible-history:start");
+      await visibleHistoryGate;
+      order.push("visible-history:end");
+    },
+  } as unknown as Parameters<typeof runManagedSessionCycle>[0];
+
+  const running = runManagedSessionCycle(current, {} as CollaborationApi);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, ["local-hooks", "web-agent", "visible-history:start"],
+    "a blocked visible Desktop lease must begin only after the Web Agent has been serviced");
+  releaseVisibleHistory?.();
+  await running;
+  assert.deepEqual(order, ["local-hooks", "web-agent", "visible-history:start", "visible-history:end"]);
+
+  const localFailure = {
+    ...current,
+    synchronizeLocalTurns: async () => { throw new Error("local commit uncertain"); },
+    synchronizeCanonicalHistory: async () => { throw new Error("must not run"); },
+  } as unknown as Parameters<typeof runManagedSessionCycle>[0];
+  await assert.rejects(runManagedSessionCycle(localFailure, {} as CollaborationApi), /local commit uncertain/);
+  assert.equal(order.filter((step) => step === "web-agent").length, 1,
+    "a local-turn commit error must not be swallowed or overtaken by another Web execution");
 });
 
 test("Codex hook relay paths are stable, platform-correct, and credential-free", () => {
@@ -399,7 +495,7 @@ test("connector with hooks disabled starts and closes no IPC relay", async () =>
     hookSpoolPath: "/must/not/drain.jsonl",
     hookRegistryPath: "/must/not/read.json",
     hookWorkspacePath: "/private/workspace",
-    hooksEnabled: false,
+    hookMode: "disabled",
     hookRelay: {
       start: async () => { starts += 1; },
       close: async () => { closes += 1; },
@@ -407,6 +503,59 @@ test("connector with hooks disabled starts and closes no IPC relay", async () =>
   });
   assert.equal(starts, 0);
   assert.equal(closes, 0);
+});
+
+test("plugin Hook mode preserves but never drains the compatibility project Hook spool", async () => {
+  for (const hookMode of ["project", "plugin"] as const) {
+    const directory = await mkdtemp(path.join(tmpdir(), `gatherthread-codex-${hookMode}-spool-`));
+    const workspacePath = path.join(directory, "workspace");
+    await mkdir(workspacePath);
+    const paths = resolveWorkspaceCodexHookPaths(workspacePath, directory);
+    await updateCodexHookRegistry({
+      registryPath: paths.hookRegistryPath,
+      workspacePath,
+      add: { "snapshot-thread": "snapshot_connector" },
+      hookSource: "project",
+    });
+    await writeFile(paths.hookSpoolPath, `${JSON.stringify({
+      hook_event_name: "UserPromptSubmit",
+      session_id: "snapshot-thread",
+      turn_id: "turn-1",
+      cwd: workspacePath,
+      model: "gpt-test",
+      prompt: "must not be replayed by plugin mode",
+    })}\n`, { mode: 0o600 });
+    const shutdown = new AbortController();
+    let scheduled = false;
+    const project = { id: "project-1", name: "Project", role: "owner", state: "active", sessionCount: 0 } as const;
+    const api = {
+      listProjects: async () => [project],
+      listProjectSessions: async () => {
+        if (!scheduled) {
+          scheduled = true;
+          setTimeout(() => shutdown.abort(), 10);
+        }
+        return [];
+      },
+    } as unknown as HttpCollaborationClient;
+    await runProjectConnector({
+      api,
+      actorUserId: "user-1",
+      actorDeviceId: "device-1",
+      project,
+      stateRoot: path.join(directory, "state"),
+      harness: {} as ProjectHarnessAdapter,
+      signal: shutdown.signal,
+      token: "test-token",
+      hookSocketPath: paths.hookSocketPath,
+      hookSpoolPath: paths.hookSpoolPath,
+      hookRegistryPath: paths.hookRegistryPath,
+      hookWorkspacePath: workspacePath,
+      hookMode,
+      hookRelay: { start: async () => undefined, close: async () => undefined },
+    });
+    assert.equal((await readCodexHookSpool(paths.hookSpoolPath)).length, hookMode === "plugin" ? 1 : 0);
+  }
 });
 
 test("create-workspace reveals the exact validated project once with no GatherThread environment", async () => {

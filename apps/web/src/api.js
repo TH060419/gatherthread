@@ -58,10 +58,13 @@ export class HttpCollaborationApi {
     return body.data ?? body;
   }
 
-  async authenticate(token = this.token) {
+  async authenticate(token = this.token, { rememberDevice = false } = {}) {
     this.token = token;
     try {
-      const { actor } = await this.request("/v1/browser-sessions", { method: "POST" });
+      const { actor } = await this.request("/v1/browser-sessions", {
+        method: "POST",
+        body: JSON.stringify({ remember_device: rememberDevice }),
+      });
       this.actors.set(actor.id, actor.username);
       return actor;
     } finally {
@@ -141,6 +144,22 @@ export class HttpCollaborationApi {
     };
   }
 
+  async renameProject(projectId, input) {
+    const { project } = await this.request(`/v1/projects/${encodeURIComponent(projectId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        title: input.name,
+        idempotency_key: input.idempotencyKey,
+      }),
+    });
+    return {
+      id: project.id,
+      name: project.title,
+      state: project.state,
+      updatedAt: project.updated_at,
+    };
+  }
+
   async deleteProject(projectId) {
     await this.request(`/v1/projects/${encodeURIComponent(projectId)}`, { method: "DELETE" });
     this.sessionHeads.clear();
@@ -204,15 +223,20 @@ export class HttpCollaborationApi {
     return this.#sessionDetail(session, role);
   }
 
-  async renameSession(sessionId, input) {
+  async updateSession(sessionId, input) {
     const { session } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}`, {
       method: "PATCH",
       body: JSON.stringify({
         title: input.name,
+        ...(input.mode === undefined ? {} : { mode: input.mode }),
         idempotency_key: input.idempotencyKey,
       }),
     });
     return this.#sessionDetail(session, "owner");
+  }
+
+  async renameSession(sessionId, input) {
+    return this.updateSession(sessionId, input);
   }
 
   async deleteSession(sessionId) {
@@ -240,6 +264,19 @@ export class HttpCollaborationApi {
         } : null,
       };
     });
+  }
+
+  async listSessionRuntimes(sessionId) {
+    const { runtimes } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/runtimes`);
+    return runtimes.map((runtime) => ({
+      id: runtime.id,
+      deviceId: runtime.device_id,
+      harness: runtime.harness,
+      provider: runtime.provider,
+      model: runtime.model,
+      status: runtime.status,
+      lastSeenAt: runtime.last_seen_at,
+    }));
   }
 
   async createSnapshotRequest(sessionId) {
@@ -301,7 +338,7 @@ export class HttpCollaborationApi {
     return member;
   }
 
-  async claimInvitation({ inviteToken, displayName, deviceName, userId, deviceId }) {
+  async claimInvitation({ inviteToken, displayName, deviceName, userId, deviceId, rememberDevice = false }) {
     const result = await this.request("/v1/invitations/claim", {
       method: "POST",
       headers: { "X-GatherThread-Browser-Session": "1" },
@@ -309,6 +346,7 @@ export class HttpCollaborationApi {
         invite_token: inviteToken,
         display_name: displayName,
         device_name: deviceName,
+        remember_device: rememberDevice,
         ...(userId ? { user_id: userId } : {}),
         ...(deviceId ? { device_id: deviceId } : {}),
       }),
@@ -328,6 +366,31 @@ export class HttpCollaborationApi {
       body: JSON.stringify({ invite_token: inviteToken }),
     });
     return { ...result, invitation: normalizeInvitation(result.invitation) };
+  }
+
+  async listDevices() {
+    const { devices } = await this.request("/v1/devices");
+    return devices;
+  }
+
+  async renameDevice(deviceId, name) {
+    const { device } = await this.request(`/v1/devices/${encodeURIComponent(deviceId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    });
+    return device;
+  }
+
+  async revokeDevice(deviceId) {
+    await this.request(`/v1/devices/${encodeURIComponent(deviceId)}`, { method: "DELETE" });
+  }
+
+  async approveDshPairing(userCode) {
+    const { pairing } = await this.request("/v1/dsh-pairings/approve", {
+      method: "POST",
+      body: JSON.stringify({ user_code: userCode }),
+    });
+    return pairing;
   }
 
   async replayEvents(sessionId, { afterSequence, limit = 100 }) {
@@ -363,8 +426,16 @@ export class HttpCollaborationApi {
           ...(type === "agent_request" && input.executionProfile ? {
             execution_profile: {
               harness: input.executionProfile.harness,
+              ...(input.executionProfile.provider === undefined ? {} : {
+                provider: input.executionProfile.provider,
+              }),
               model: input.executionProfile.model,
-              reasoning_effort: input.executionProfile.reasoningEffort,
+              ...(input.executionProfile.reasoningEffort === undefined ? {} : {
+                reasoning_effort: input.executionProfile.reasoningEffort,
+              }),
+              ...(input.executionProfile.runtimeId === undefined ? {} : {
+                runtime_id: input.executionProfile.runtimeId,
+              }),
             },
           } : {}),
         },
@@ -462,9 +533,13 @@ export class MockCollaborationApi {
     this.currentUser = users.avery;
     this.listeners = new Map();
     this.idempotentEvents = new Map();
+    this.projectMutations = new Map();
     this.invitations = new Map();
     this.snapshotRequests = new Map();
     this.credential = "";
+    this.deviceName = "Safari · macOS";
+    this.dshDeviceName = "DeepSeek Harness · macOS";
+    this.dshRevoked = false;
     this.projects = [{
       id: "project-orbit",
       name: "Project Orbit",
@@ -566,7 +641,7 @@ export class MockCollaborationApi {
   async authenticate(token) {
     await this.#wait();
     if (token !== "demo-token") throw new ApiError("That preview token is not valid.", { status: 401, code: "unauthorized" });
-    return structuredClone(this.currentUser);
+    return structuredClone({ ...this.currentUser, device_id: "device-demo" });
   }
 
   async restoreSession() {
@@ -607,6 +682,26 @@ export class MockCollaborationApi {
       updatedAt: now,
     };
     this.projects.unshift(project);
+    return structuredClone(project);
+  }
+
+  async renameProject(projectId, { name, idempotencyKey }) {
+    await this.#wait();
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project || project.role !== "owner") {
+      throw new ApiError("Project not found.", { status: 404, code: "not_found" });
+    }
+    const title = normalizeMockTitle(name, "Project");
+    const key = `${projectId}:${idempotencyKey}`;
+    const existing = this.projectMutations.get(key);
+    if (existing !== undefined && existing !== title) {
+      throw new ApiError("Idempotency key already used for another request.", { status: 409, code: "idempotency_conflict" });
+    }
+    if (existing === undefined) {
+      this.projectMutations.set(key, title);
+      project.name = title;
+      project.updatedAt = new Date().toISOString();
+    }
     return structuredClone(project);
   }
 
@@ -695,26 +790,40 @@ export class MockCollaborationApi {
     return structuredClone(session);
   }
 
-  async renameSession(sessionId, { name, idempotencyKey }) {
+  async updateSession(sessionId, { name, mode, idempotencyKey }) {
     await this.#wait();
     const session = this.#findSession(sessionId);
     const member = session.members.find((item) => item.userId === this.currentUser.id);
+    const project = this.projects.find((item) => item.id === session.projectId);
     const mayRename = session.mode === "solo"
       ? member?.role !== "viewer" && session.ownerUserId === this.currentUser.id
       : member?.role === "owner";
     if (!mayRename) {
       throw new ApiError("You cannot rename this session.", { status: 403, code: "forbidden" });
     }
+    if (mode !== undefined && !new Set(["solo", "multi"]).has(mode)) {
+      throw new ApiError("Choose solo or multi.", { status: 422, code: "invalid_mode" });
+    }
+    const mayChangeMode = project?.role === "owner" && session.ownerUserId === this.currentUser.id;
+    if (mode !== undefined && mode !== session.mode && !mayChangeMode) {
+      throw new ApiError("Only the project creator can change this session mode.", { status: 403, code: "forbidden" });
+    }
     const title = normalizeMockTitle(name, "Session");
+    const payload = {
+      action: mode === undefined ? "renamed" : "updated",
+      title,
+      ...(mode === undefined ? {} : { mode }),
+    };
     const key = `${sessionId}:${idempotencyKey}`;
     const existing = this.idempotentEvents.get(key);
     if (existing) {
-      if (existing.type !== "session_state_change" || existing.payload?.title !== title) {
+      if (existing.type !== "session_state_change" || JSON.stringify(existing.payload) !== JSON.stringify(payload)) {
         throw new ApiError("Idempotency key already used for another request.", { status: 409, code: "idempotency_conflict" });
       }
       return this.#summary(session);
     }
     session.name = title;
+    if (mode !== undefined) session.mode = mode;
     session.updatedAt = new Date().toISOString();
     const bucket = this.events.get(sessionId) ?? [];
     const event = {
@@ -727,13 +836,17 @@ export class MockCollaborationApi {
       createdAt: session.updatedAt,
       visibility: "session",
       replyTo: null,
-      payload: { action: "renamed", title },
+      payload,
     };
     bucket.push(event);
     this.events.set(sessionId, bucket);
     this.idempotentEvents.set(key, event);
     this.#publish(sessionId, event);
     return this.#summary(session);
+  }
+
+  async renameSession(sessionId, input) {
+    return this.updateSession(sessionId, input);
   }
 
   async deleteSession(sessionId) {
@@ -751,6 +864,31 @@ export class MockCollaborationApi {
   async listMembers(sessionId) {
     await this.#wait();
     return structuredClone(this.#findSession(sessionId).members);
+  }
+
+  async listSessionRuntimes(sessionId) {
+    await this.#wait();
+    this.#findSession(sessionId);
+    return [
+      {
+        id: `runtime-codex-${sessionId}`,
+        deviceId: "device-avery",
+        harness: "codex",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        status: "online",
+        lastSeenAt: new Date().toISOString(),
+      },
+      ...(this.dshRevoked ? [] : [{
+        id: `runtime-dsh-${sessionId}`,
+        deviceId: "dsh-device-demo",
+        harness: "deepseek-harness",
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        status: "online",
+        lastSeenAt: new Date().toISOString(),
+      }]),
+    ];
   }
 
   async createSnapshotRequest(sessionId) {
@@ -840,8 +978,13 @@ export class MockCollaborationApi {
       throw new ApiError("Invitation is invalid or unavailable.", { status: 401, code: "unauthorized" });
     }
     if (!displayName?.trim() || !deviceName?.trim()) throw new ApiError("Name and device name are required.", { status: 422, code: "invalid_claim" });
-    const actor = { id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`, username: displayName.trim() };
+    const actor = {
+      id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`,
+      username: displayName.trim(),
+      device_id: "device-demo",
+    };
     this.currentUser = actor;
+    this.deviceName = deviceName.trim();
     this.credential = `mock-device-${createIdempotencyKey("token")}`;
     for (const session of this.sessions.filter((item) => item.projectId === invitation.projectId)) {
       session.members.push({ ...actor, userId: actor.id, role: invitation.role, runtime: null });
@@ -873,6 +1016,48 @@ export class MockCollaborationApi {
     invitation.claimedAt = new Date().toISOString();
     invitation.claimedByUserId = this.currentUser.id;
     return { actor: structuredClone(this.currentUser), invitation: structuredClone(normalizeInvitation(invitation)) };
+  }
+
+  async listDevices() {
+    await this.#wait();
+    return [
+      { id: "device-demo", user_id: this.currentUser.id, name: this.deviceName },
+      ...(!this.dshRevoked ? [{ id: "dsh-device-demo", user_id: this.currentUser.id, name: this.dshDeviceName }] : []),
+    ];
+  }
+
+  async renameDevice(deviceId, name) {
+    await this.#wait();
+    if (!new Set(["device-demo", "dsh-device-demo"]).has(deviceId) || (deviceId === "dsh-device-demo" && this.dshRevoked)) {
+      throw new ApiError("Device not found.", { status: 404, code: "not_found" });
+    }
+    const normalized = name?.trim() ?? "";
+    if (!normalized || normalized.length > 120) throw new ApiError("Choose a device name between 1 and 120 characters.", { status: 422, code: "validation_error" });
+    if (deviceId === "device-demo") this.deviceName = normalized;
+    else this.dshDeviceName = normalized;
+    return { id: deviceId, user_id: this.currentUser.id, name: normalized };
+  }
+
+  async revokeDevice(deviceId) {
+    await this.#wait();
+    if (deviceId !== "dsh-device-demo" || this.dshRevoked) {
+      throw new ApiError("Device not found.", { status: 404, code: "not_found" });
+    }
+    this.dshRevoked = true;
+  }
+
+  async approveDshPairing(userCode) {
+    await this.#wait();
+    if (!/^[A-Z2-9]{4}-[A-Z2-9]{4}$/u.test(userCode)) {
+      throw new ApiError("DSH pairing is invalid, expired, or already consumed.", { status: 404, code: "pairing_unavailable" });
+    }
+    return {
+      pairing_id: "mock-pairing",
+      user_code: userCode,
+      device_name: this.dshDeviceName,
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      status: "approved",
+    };
   }
 
   async setProjectMemberRole(projectId, userId, role) {
@@ -919,8 +1104,8 @@ export class MockCollaborationApi {
             userId: this.currentUser.id,
             username: this.currentUser.username,
             deviceId: "device-demo",
-            harness: "Codex",
-            provider: "OpenAI",
+            harness: input.executionProfile?.harness ?? "codex",
+            provider: input.executionProfile?.harness === "deepseek-harness" ? "deepseek-official" : "OpenAI",
             model: input.executionProfile?.model ?? "gpt-5",
             localSessionId: "local-demo",
             fidelity: "harness_transcript",
@@ -939,8 +1124,8 @@ export class MockCollaborationApi {
           userId: this.currentUser.id,
           username: this.currentUser.username,
           deviceId: "device-demo",
-          harness: "Codex",
-          provider: "OpenAI",
+          harness: input.executionProfile?.harness ?? "codex",
+          provider: input.executionProfile?.harness === "deepseek-harness" ? "deepseek-official" : "OpenAI",
           model: input.executionProfile?.model ?? "gpt-5",
           ...(input.executionProfile?.reasoningEffort ? { reasoningEffort: input.executionProfile.reasoningEffort } : {}),
           localSessionId: "local-demo",
@@ -1008,8 +1193,16 @@ export class MockCollaborationApi {
         ...(type === "agent_request" && executionProfile ? {
           execution_profile: {
             harness: executionProfile.harness,
+            ...(executionProfile.provider === undefined ? {} : {
+              provider: executionProfile.provider,
+            }),
             model: executionProfile.model,
-            reasoning_effort: executionProfile.reasoningEffort,
+            ...(executionProfile.reasoningEffort === undefined ? {} : {
+              reasoning_effort: executionProfile.reasoningEffort,
+            }),
+            ...(executionProfile.runtimeId === undefined ? {} : {
+              runtime_id: executionProfile.runtimeId,
+            }),
           },
         } : {}),
       },

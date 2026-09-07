@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "name": "@gatherthread/dsh-host",
+  "version": "0.1.0-alpha.1",
+  "license": "Apache-2.0",
+  "defaultEnabled": false,
+  "hostEntry": "@gatherthread/dsh-host",
+  "clientEntry": "@gatherthread/dsh-host/client",
+  "profileExamples": {
+    "disabled": "disabled.cordis.patch.yml",
+    "singleSession": "enabled.example.cordis.patch.yml",
+    "project": "project.example.cordis.patch.yml"
+  },
+  "deepseekHarness": {
+    "primary": {
+      "distribution": "npm",
+      "package": "@deepseek-ai/dsh",
+      "version": "0.1.2-rc.1",
+      "profile": "web",
+      "persistenceProbe": "list"
+    },
+    "sourceFallback": {
+      "distribution": "source",
+      "tag": "dsh-v0.1.3-alpha.1",
+      "version": "0.1.3-alpha.1",
+      "commit": "d347e703908d0406b7a7ef80e3a0e594d86b2215",
+      "verifiedProfiles": ["headless", "web"],
+      "persistenceProbe": "stat"
+    }
+  },
+  "runtimeDependencies": []
+}

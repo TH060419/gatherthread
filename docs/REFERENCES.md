@@ -14,6 +14,7 @@ This project studies public repositories and open-source work. Unless a future f
 | [acp-memory-server](https://github.com/SrulyRosenblat/agent_memory_mcp) | Cross-harness local transcript discovery and parsing | NOASSERTION (no license file detected; reference only, no code copied) |
 | [harness-exchange](https://github.com/cnmoro/harness-exchange) | Codex/Claude/OpenCode transcript normalization boundaries | MIT |
 | [OpenAI Codex](https://github.com/openai/codex) | Official App Server thread/turn lifecycle, `codex exec --json` migration behavior, and local sandbox controls used through the installed CLI; no source copied | Apache-2.0 |
+| [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh/v/0.1.2-rc.1) | Official npm profile/plugin/Client mechanism at `0.1.2-rc.1`, plus Host Agent/Session/persistence recovery at source commit [`d347e703`](https://github.com/deepseek-ai/deepseek-harness/tree/d347e703908d0406b7a7ef80e3a0e594d86b2215) (`dsh-v0.1.3-alpha.1`); compatibility calls are original and isolated, no source copied | MIT |
 | [micromark](https://github.com/micromark/micromark) | CommonMark parsing with raw HTML and dangerous URL protocols disabled for Web Agent output | MIT |
 | [micromark-extension-gfm](https://github.com/micromark/micromark-extension-gfm) | GFM tables, task lists, autolinks, and strikethrough for Web Agent output | MIT |
 | [KaTeX](https://github.com/KaTeX/KaTeX) | Bundled, accessible inline and display math rendering for Web Agent Markdown | MIT |

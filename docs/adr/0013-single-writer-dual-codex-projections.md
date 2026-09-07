@@ -1,16 +1,19 @@
 # ADR-0013: Use single-writer dual projections for Codex Desktop
 
 **Date**: 2026-08-26  
-**Status**: accepted  
+**Status**: partially superseded by [ADR-0019](0019-native-history-projection-across-harness-switches.md)
 **Deciders**: Yuhan He  
 **Builds on**: [ADR-0008](0008-local-agent-conversations-as-rebuildable-projections.md)  
 **Partially supersedes**: ADR-0008's single native thread design and [ADR-0012](0012-activate-codex-desktop-tasks-with-registered-links.md)
+**Partially superseded by**: [ADR-0019](0019-native-history-projection-across-harness-switches.md) for compatible Codex 0.151 idle rejoin and native history injection; the separate execution projection and Hook fallback remain in force
 
 ## Context
 
 Codex Desktop and a separate App Server process cannot safely write the same native task. Codex Desktop may retain the task's exclusive writer lock even while its UI reports the task as idle. Public Codex App Server 0.148 has no attach-to-current-writer, release-other-writer, or Desktop-project assignment API. Repeatedly resuming that task from the connector therefore produces `already has an active writer`, blocks synchronization, and can flood the terminal.
 
 ## Decision
+
+> Supersession note: the following prohibition records the Codex App Server 0.148 boundary. ADR-0019 replaces only that absolute prohibition for compatible 0.151 clients with an idle-state check, brief rejoin, and `thread/inject_items`. It does not permit mutation during an active Desktop turn or move Web execution into the visible task.
 
 Each writable GatherThread session has two local Codex projections behind one `ProjectHarnessSessionBinding`:
 

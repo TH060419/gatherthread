@@ -1,0 +1,20 @@
+{
+  "name": "gatherthread",
+  "interface": {
+    "displayName": "共序 / GatherThread"
+  },
+  "plugins": [
+    {
+      "name": "gatherthread",
+      "source": {
+        "source": "local",
+        "path": "./plugins/gatherthread"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

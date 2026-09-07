@@ -1,0 +1,12 @@
+# Safe persistent-profile load smoke: import only, with no one-shot runner.
+- id: headless-startup
+  disabled: true
+
+- id: headless-runner
+  disabled: true
+
+- insert:
+    - id: gatherthread-dsh-host
+      name: '@gatherthread/dsh-host/plugin'
+      config:
+        enabled: false

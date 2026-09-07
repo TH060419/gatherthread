@@ -1,0 +1,32 @@
+# Persistent Host connector example for the pinned DSH headless profile.
+# The stock one-shot headless driver is disabled; this plugin owns its DSH Agent.
+- id: headless-startup
+  disabled: true
+
+- id: headless-runner
+  disabled: true
+
+- insert:
+    - id: gatherthread-dsh-host
+      name: '@gatherthread/dsh-host/plugin'
+      inject: [agents, sessions, sessionPersistence, llm]
+      config:
+        enabled: true
+        # Omission remains backward-compatible with the single binding mode.
+        bindingMode: single
+        apiUrl: !!js process.env.GATHERTHREAD_API_URL
+        credentialReference:
+          kind: environment
+          variable: GATHERTHREAD_DSH_TOKEN
+        projectId: !!js process.env.GATHERTHREAD_PROJECT_ID
+        sessionId: !!js process.env.GATHERTHREAD_SESSION_ID
+        deviceId: !!js process.env.GATHERTHREAD_DEVICE_ID
+        workspacePath: !!js process.env.GATHERTHREAD_DSH_WORKSPACE
+        statePath: !!js process.env.GATHERTHREAD_DSH_STATE_PATH
+        provider: !!js process.env.GATHERTHREAD_DSH_PROVIDER
+        model: !!js process.env.GATHERTHREAD_DSH_MODEL
+        pollIntervalMs: 1000
+        pollLimit: 200
+        # Remains false unless an explicit local supervisor opts into the
+        # already-redacted public tool projection.
+        shareToolEvents: !!js "process.env.GATHERTHREAD_DSH_SHARE_TOOL_EVENTS === '1'"

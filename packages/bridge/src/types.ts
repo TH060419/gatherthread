@@ -97,6 +97,20 @@ export interface ProjectSummary {
   sessionCount: number;
 }
 
+export interface SessionRuntimeSummary {
+  purpose: "execution" | "snapshot_connector";
+  harness: string;
+  provider: string;
+  model: string;
+  status: "online" | "offline";
+}
+
+export interface SessionMemberSummary {
+  displayName: string;
+  role: "owner" | "participant" | "viewer";
+  runtime: SessionRuntimeSummary | null;
+}
+
 export interface ReadEventsResult {
   events: CanonicalEvent[];
   nextSequence: number;
@@ -168,7 +182,9 @@ export interface CollaborationApi {
   listSessions(): Promise<SessionSummary[]>;
   listProjects?(): Promise<ProjectSummary[]>;
   listProjectSessions?(projectId: string): Promise<SessionSummary[]>;
+  listSessionMembers?(sessionId: string): Promise<SessionMemberSummary[]>;
   createSession?(projectId: string, input: {
+    sessionId?: string;
     title: string;
     mode: "solo" | "multi";
     idempotencyKey: string;

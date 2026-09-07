@@ -12,8 +12,10 @@ import {
   drainCodexHookSpool,
   installCodexHookConfig,
   isAllowedCodexHookEvent,
+  isCodexHookSourceEnabled,
   readCodexHookSpool,
   renderCodexHookConfig,
+  resolveWorkspaceCodexHookPaths,
   runCodexHookForwarder,
   updateCodexHookRegistry,
 } from "../src/index.js";
@@ -39,11 +41,35 @@ test("Hook discovery admits only unknown project tasks and excludes connector-ow
     },
   });
   assert.equal(await isAllowedCodexHookEvent(registryPath, event), true);
+  assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, cwd: "/workspace/subdirectory" }), true);
   assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, session_id: "background-task" }), false);
   assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, session_id: "snapshot-task" }), false);
   assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, cwd: "/other" }), false);
   await updateCodexHookRegistry({ registryPath, workspacePath: "/workspace", discoverUnregistered: false });
   assert.equal(await isAllowedCodexHookEvent(registryPath, event), false);
+});
+
+test("Hook workspace checks resolve symlinks and reject a lexical descendant outside the root", {
+  skip: process.platform === "win32" ? "POSIX symlink containment fixture" : false,
+}, async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-hook-containment-"));
+  const workspacePath = path.join(directory, "workspace");
+  const outsidePath = path.join(directory, "outside");
+  await Promise.all([mkdir(workspacePath), mkdir(outsidePath)]);
+  await mkdir(path.join(workspacePath, "nested"));
+  await symlink(outsidePath, path.join(workspacePath, "escape"), "dir");
+  const registryPath = path.join(directory, "registry.json");
+  await updateCodexHookRegistry({
+    registryPath,
+    workspacePath,
+    add: { "thread-1": "execution" },
+  });
+  assert.equal(await isAllowedCodexHookEvent(registryPath, {
+    ...promptEvent(), cwd: path.join(workspacePath, "nested"),
+  }), true);
+  assert.equal(await isAllowedCodexHookEvent(registryPath, {
+    ...promptEvent(), cwd: path.join(workspacePath, "escape"),
+  }), false);
 });
 
 test("disabling Hooks atomically creates a private registry and clears stale thread authorization", async () => {
@@ -200,6 +226,102 @@ test("Codex hook installation does not rewrite an unchanged trusted definition",
   await utimes(configPath, fixedTime, fixedTime);
   await installCodexHookConfig({ workspacePath: directory, config });
   assert.equal((await stat(configPath)).mtimeMs, fixedTime.getTime());
+});
+
+test("switching from installed project Hooks to plugin Hooks authorizes exactly one source", async (t) => {
+  const temporaryBase = process.platform === "darwin" ? "/private/tmp" : tmpdir();
+  const directory = await mkdtemp(path.join(temporaryBase, "gths-"));
+  const homeDirectory = path.join(directory, "home");
+  const workspacePath = path.join(directory, "workspace");
+  await mkdir(workspacePath, { recursive: true });
+  const paths = resolveWorkspaceCodexHookPaths(workspacePath, homeDirectory);
+  const projectConfigPath = await installCodexHookConfig({
+    workspacePath,
+    config: renderCodexHookConfig({
+      hookScriptPath: "/safe/codex-hook.js",
+      socketPath: paths.hookSocketPath,
+      spoolPath: paths.hookSpoolPath,
+      registryPath: paths.hookRegistryPath,
+    }),
+  });
+  await updateCodexHookRegistry({
+    registryPath: paths.hookRegistryPath,
+    workspacePath,
+    add: { "thread-1": "execution" },
+    hookSource: "project",
+  });
+  // The mode switch changes runtime authorization; it deliberately leaves the
+  // already reviewed project configuration on disk.
+  await updateCodexHookRegistry({
+    registryPath: paths.hookRegistryPath,
+    workspacePath,
+    hookSource: "plugin",
+  });
+  assert.equal(await isCodexHookSourceEnabled(paths.hookRegistryPath, "project"), false);
+  assert.equal(await isCodexHookSourceEnabled(paths.hookRegistryPath, "plugin"), true);
+  assert.match(await readFile(projectConfigPath, "utf8"), /GatherThread local hook relay/);
+
+  const events: unknown[] = [];
+  const relay = new CodexHookRelayServer({
+    socketPath: paths.hookSocketPath,
+    hookSource: "plugin",
+    onEvent: async (event) => {
+      events.push(event);
+      return { additionalContext: "one plugin capsule" };
+    },
+  });
+  try {
+    await relay.start();
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "EPERM") {
+      t.diagnostic("Hook IPC is blocked by the current test sandbox; source-registry assertions still ran");
+      return;
+    }
+    throw error;
+  }
+  try {
+    const event = { ...promptEvent("switch modes"), cwd: workspacePath };
+    const projectInput = new PassThrough();
+    const projectOutput = new PassThrough();
+    let projectRendered = "";
+    projectOutput.on("data", (chunk) => { projectRendered += chunk.toString("utf8"); });
+    projectInput.end(JSON.stringify(event));
+    await runCodexHookForwarder({
+      socketPath: paths.hookSocketPath,
+      spoolPath: paths.hookSpoolPath,
+      registryPath: paths.hookRegistryPath,
+      stdin: projectInput,
+      stdout: projectOutput,
+    });
+    assert.deepEqual(JSON.parse(projectRendered), {});
+    assert.deepEqual(await readCodexHookSpool(paths.hookSpoolPath), []);
+    assert.equal(events.length, 0);
+
+    const pluginScript = path.join(process.cwd(), "plugins", "gatherthread", "scripts", "hook-forwarder.mjs");
+    const plugin = spawn(process.execPath, [pluginScript], {
+      env: { ...process.env, HOME: homeDirectory, USERPROFILE: homeDirectory },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    plugin.stdout.setEncoding("utf8").on("data", (chunk) => { stdout += chunk; });
+    plugin.stderr.setEncoding("utf8").on("data", (chunk) => { stderr += chunk; });
+    plugin.stdin.end(JSON.stringify(event));
+    const code = await new Promise<number | null>((resolve, reject) => {
+      plugin.once("error", reject);
+      plugin.once("close", resolve);
+    });
+    assert.equal(code, 0, stderr);
+    assert.deepEqual(JSON.parse(stdout), {
+      hookSpecificOutput: {
+        hookEventName: "UserPromptSubmit",
+        additionalContext: "one plugin capsule",
+      },
+    });
+    assert.equal(events.length, 1);
+  } finally {
+    await relay.close();
+  }
 });
 
 test("Windows hook configuration uses a PowerShell-safe override for the same forwarder", () => {
@@ -598,7 +720,7 @@ async function forwardOffline(input: {
 
 function promptEvent(prompt = "local request") {
   return {
-    hook_event_name: "UserPromptSubmit",
+    hook_event_name: "UserPromptSubmit" as const,
     session_id: "thread-1",
     turn_id: "turn-1",
     cwd: "/workspace",

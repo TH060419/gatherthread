@@ -15,6 +15,19 @@ class FakeApi implements CollaborationApi {
   async listProjectSessions(projectId: string) {
     return [{ id: "s1", projectId, name: "Demo", mode: "multi" as const, role: "owner" as const }];
   }
+  async listSessionMembers() {
+    return [{
+      displayName: "Owner",
+      role: "owner" as const,
+      runtime: {
+        status: "online" as const,
+        purpose: "execution" as const,
+        harness: "codex",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+      },
+    }];
+  }
   async listSessions() { return [{ id: "s1", name: "Demo", mode: "multi" as const }]; }
   async readEvents(_sessionId: string, after: number) {
     return { events: [], nextSequence: after, hasMore: false };
@@ -37,11 +50,12 @@ class FakeApi implements CollaborationApi {
   }
 }
 
-test("MCP exposes the required collaboration tools and resources", async () => {
+test("user MCP exposes collaboration tools but no internal runtime controls", async () => {
   const service = new CollaborationMcpService({ api: new FakeApi() });
   const tools = await service.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" });
   assert.ok(tools && "result" in tools);
-  const names = (tools as any).result.tools.map((item: any) => item.name);
+  const listedTools = (tools as any).result.tools;
+  const names = listedTools.map((item: any) => item.name);
   assert.deepEqual(names, [
     "collaboration_list_projects",
     "collaboration_list_project_sessions",
@@ -49,15 +63,77 @@ test("MCP exposes the required collaboration tools and resources", async () => {
     "collaboration_read_history",
     "collaboration_append_chat",
     "collaboration_request_agent",
+    "collaboration_get_connection_status",
+  ]);
+  const readOnlyNames = names.filter((name: string) =>
+    name !== "collaboration_append_chat" && name !== "collaboration_request_agent",
+  );
+  for (const name of readOnlyNames) {
+    assert.deepEqual(listedTools.find((item: any) => item.name === name).annotations, {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+  }
+  for (const name of ["collaboration_append_chat", "collaboration_request_agent"]) {
+    assert.deepEqual(listedTools.find((item: any) => item.name === name).annotations, {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: true,
+    });
+  }
+  assert.match(
+    listedTools.find((item: any) => item.name === "collaboration_request_agent").description,
+    /consume compute or other resources/,
+  );
+  for (const internalName of [
+    "collaboration_register_runtime",
+    "collaboration_claim_agent_request",
+    "collaboration_complete_agent_request",
+    "collaboration_upload_context_snapshot",
+  ]) {
+    const blocked = await service.handle({
+      jsonrpc: "2.0",
+      id: internalName,
+      method: "tools/call",
+      params: { name: internalName, arguments: {} },
+    });
+    assert.ok(blocked && "error" in blocked);
+    assert.equal((blocked as any).error.code, -32601);
+  }
+
+  const resources = await service.handle({ jsonrpc: "2.0", id: 2, method: "resources/list" });
+  assert.ok(resources && "result" in resources);
+  assert.equal((resources as any).result.resources.length, 4);
+});
+
+test("runtime MCP profile exposes only internal execution tools", async () => {
+  const service = new CollaborationMcpService({ api: new FakeApi(), toolProfile: "runtime" });
+  const tools = await service.handle({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+  assert.ok(tools && "result" in tools);
+  assert.deepEqual((tools as any).result.tools.map((item: any) => item.name), [
     "collaboration_register_runtime",
     "collaboration_claim_agent_request",
     "collaboration_complete_agent_request",
     "collaboration_upload_context_snapshot",
   ]);
+});
 
-  const resources = await service.handle({ jsonrpc: "2.0", id: 2, method: "resources/list" });
-  assert.ok(resources && "result" in resources);
-  assert.equal((resources as any).result.resources.length, 4);
+test("connection status omits private runtime and device identifiers", async () => {
+  const service = new CollaborationMcpService({ api: new FakeApi() });
+  const response = await service.handle({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "collaboration_get_connection_status", arguments: { project_id: "p1" } },
+  });
+  assert.ok(response && "result" in response);
+  const serialized = JSON.stringify((response as any).result.structuredContent.result);
+  assert.match(serialized, /"status":"online"/);
+  assert.match(serialized, /"harness":"codex"/);
+  assert.doesNotMatch(serialized, /deviceId|device_id|localSession|local_session|runtimeId|runtime_id/);
 });
 
 test("project tools preserve project grouping before session-level history access", async () => {
@@ -98,12 +174,12 @@ test("chat and agent request tools append distinct canonical events and redact s
 
 test("provider request fidelity is rejected unless exact capture is explicitly authorized", async () => {
   const api = new FakeApi();
-  const blocked = new CollaborationMcpService({ api });
+  const blocked = new CollaborationMcpService({ api, toolProfile: "runtime" });
   const failure = await callSnapshot(blocked);
   assert.ok(failure && "error" in failure);
   assert.match((failure as any).error.message, /explicit service authorization/);
 
-  const allowed = new CollaborationMcpService({ api, allowProviderRequestCapture: true });
+  const allowed = new CollaborationMcpService({ api, toolProfile: "runtime", allowProviderRequestCapture: true });
   const success = await callSnapshot(allowed);
   assert.ok(success && "result" in success);
   assert.equal((api.appended.at(-1)?.payload as any).capture_fidelity, "provider_request");
@@ -111,7 +187,7 @@ test("provider request fidelity is rejected unless exact capture is explicitly a
 
 test("harness transcript snapshots fingerprint native session identifiers before append", async () => {
   const api = new FakeApi();
-  const service = new CollaborationMcpService({ api });
+  const service = new CollaborationMcpService({ api, toolProfile: "runtime" });
   const localSessionId = "/private/local/codex/thread.jsonl";
   const response = await service.handle({
     jsonrpc: "2.0",

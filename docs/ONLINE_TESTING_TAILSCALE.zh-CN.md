@@ -92,7 +92,7 @@ https://gatherthread-host.example-tailnet.ts.net
 
 共享设备的协作者必须使用完整的 `.ts.net` 地址，不能只输入短机器名。
 
-## 6. 配置主机 `.env`
+## 6. 生成主机连接配置
 
 进入 GatherThread 仓库：
 
@@ -100,14 +100,13 @@ https://gatherthread-host.example-tailnet.ts.net
 cd "/path/to/gatherthread"
 ```
 
-如果还没有 `.env`：
+使用控制台显示的完整 `.ts.net` HTTPS 地址生成配置：
 
 ```bash
-cp .env.example .env
-chmod 600 .env
+npm run connection:tailscale -- --url https://gatherthread-host.example-tailnet.ts.net
 ```
 
-编辑 `.env`，至少确认以下设置。将示例域名替换成真实的 Tailscale 完整域名：
+该命令会创建或更新权限为 `0600` 的 `.env`，保留现有数据库路径和 Pepper，并把应用继续限制在回环地址。随后确认以下关键设置：
 
 ```dotenv
 NODE_ENV=production

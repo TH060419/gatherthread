@@ -1,0 +1,20 @@
+[Unit]
+Description=Back up the GatherThread SQLite database
+After=gatherthread.service
+
+[Service]
+Type=oneshot
+User=gatherthread
+Group=gatherthread
+WorkingDirectory=@@REPOSITORY_ROOT@@
+ExecStart=@@REPOSITORY_ROOT@@/scripts/backup-sqlite.sh /var/lib/gatherthread/collaboration.sqlite /var/backups/gatherthread
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gatherthread /var/backups/gatherthread
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native

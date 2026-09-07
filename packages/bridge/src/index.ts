@@ -8,5 +8,7 @@ export * from "./codex-executor.js";
 export * from "./codex-app-server.js";
 export * from "./codex-hooks.js";
 export * from "./project-harness.js";
+export * from "./project-session-permissions.js";
 export * from "./project-workspace.js";
 export * from "./daemon.js";
+export * from "./local-api-relay.js";

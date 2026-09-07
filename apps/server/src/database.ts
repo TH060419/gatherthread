@@ -156,6 +156,7 @@ export interface BrowserSessionIssue {
   session_id: string;
   token: string;
   expires_at: string;
+  remembered: boolean;
 }
 
 export interface BrowserSessionAuthentication {
@@ -180,6 +181,13 @@ interface EventRow {
 
 interface SessionRow extends SessionRecord {}
 interface ProjectRow extends ProjectRecord { creation_idempotency_key: string }
+interface ProjectMutationRow {
+  project_id: string;
+  idempotency_key: string;
+  actor_user_id: string;
+  title: string;
+  created_at: string;
+}
 interface RuntimeRow extends RuntimeRecord {}
 interface CountRow { count: number }
 interface BytesRow { bytes: number }
@@ -231,6 +239,7 @@ const INVITATION_TTL_MS: Readonly<Record<InvitationTtl, number>> = {
 const PROCESS_CREDENTIAL_PEPPER = randomBytes(32).toString("base64url");
 const DEVICE_AUTHORIZATION_TTL_MS = 10 * 60 * 1_000;
 const BROWSER_SESSION_TTL_MS = 24 * 60 * 60 * 1_000;
+export const REMEMBERED_BROWSER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const DEFAULT_MAX_USER_EVENT_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_SESSION_EVENT_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_EVENT_BYTES = 2 * 1024 * 1024 * 1024;
@@ -282,6 +291,14 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_id, user_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_mutations (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  actor_user_id TEXT NOT NULL REFERENCES users(id),
+  title TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, idempotency_key)
 ) STRICT;
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
@@ -543,6 +560,61 @@ function runtimeStatus(
     : "offline";
 }
 
+interface AgentRequestTarget {
+  harness: string;
+  provider?: string;
+  model?: string;
+  runtimeId?: string;
+}
+
+function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
+  const payload = event.payload !== null && typeof event.payload === "object" && !Array.isArray(event.payload)
+    ? event.payload as Record<string, JsonValue>
+    : undefined;
+  const raw = payload?.execution_profile;
+  if (raw === undefined) return { harness: "codex" };
+  const profile = raw !== null && typeof raw === "object" && !Array.isArray(raw)
+    ? raw as Record<string, JsonValue>
+    : undefined;
+  const harness = typeof profile?.harness === "string" ? profile.harness.trim().toLowerCase() : "";
+  if (!/^[a-z0-9][a-z0-9._-]{0,79}$/u.test(harness)) {
+    throw conflict("Agent request has an invalid harness target");
+  }
+  const rawProvider = profile?.provider;
+  const provider = typeof rawProvider === "string" ? rawProvider.trim() : "";
+  if (rawProvider !== undefined
+    && (!provider || provider.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(provider))) {
+    throw conflict("Agent request has an invalid provider target");
+  }
+  const rawModel = profile?.model;
+  const model = typeof rawModel === "string" ? rawModel.trim() : "";
+  if (rawModel !== undefined
+    && (!model || model.length > 160 || /[\u0000-\u001f\u007f-\u009f]/u.test(model))) {
+    throw conflict("Agent request has an invalid model target");
+  }
+  if (harness === "deepseek-harness" && !model) {
+    throw conflict("DeepSeek Harness Agent request requires a model target");
+  }
+  const rawRuntimeId = profile?.runtime_id;
+  if (rawRuntimeId === undefined) {
+    return {
+      harness,
+      ...(rawProvider === undefined ? {} : { provider }),
+      ...(rawModel === undefined ? {} : { model }),
+    };
+  }
+  const runtimeId = typeof rawRuntimeId === "string" ? rawRuntimeId.trim() : "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(runtimeId)) {
+    throw conflict("Agent request has an invalid runtime target");
+  }
+  return {
+    harness,
+    ...(rawProvider === undefined ? {} : { provider }),
+    ...(rawModel === undefined ? {} : { model }),
+    runtimeId,
+  };
+}
+
 function mapEvent(row: EventRow): CanonicalEvent {
   const storedProvenance = row.runtime_provenance_json === null
     ? null
@@ -664,6 +736,27 @@ export class CollaborationDatabase {
     return row.journal_mode;
   }
 
+  readiness(): { journal_mode: string; foreign_keys: boolean; writable: boolean } {
+    const journalMode = this.journalMode();
+    const foreignKeys = (this.sqlite.prepare("PRAGMA foreign_keys").get() as { foreign_keys: number }).foreign_keys === 1;
+    let transactionStarted = false;
+    try {
+      this.sqlite.exec("BEGIN IMMEDIATE;");
+      transactionStarted = true;
+      this.sqlite.exec("ROLLBACK;");
+      transactionStarted = false;
+    } finally {
+      if (transactionStarted) {
+        try {
+          this.sqlite.exec("ROLLBACK;");
+        } catch {
+          // Preserve the original readiness failure.
+        }
+      }
+    }
+    return { journal_mode: journalMode, foreign_keys: foreignKeys, writable: true };
+  }
+
   bootstrapIdentity(input: {
     user_id?: string | undefined;
     display_name: string;
@@ -752,10 +845,10 @@ export class CollaborationDatabase {
     return { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id };
   }
 
-  createBrowserSession(actor: Actor): BrowserSessionIssue {
+  createBrowserSession(actor: Actor, rememberDevice = false): BrowserSessionIssue {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
-      return this.insertBrowserSession(actor, this.clock());
+      return this.insertBrowserSession(actor, this.clock(), rememberDevice);
     });
   }
 
@@ -819,6 +912,16 @@ export class CollaborationDatabase {
              last_used_at, expires_at, revoked_at, rotated_at, token_version
       FROM devices WHERE user_id = ? ORDER BY created_at, id
     `).all(actor.user_id) as unknown as DeviceRecord[];
+  }
+
+  updateDeviceName(actor: Actor, deviceId: string, name: string): DeviceRecord {
+    this.assertActiveDevice(actor);
+    const result = this.sqlite.prepare(`
+      UPDATE devices SET name = ?
+      WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+    `).run(name, deviceId, actor.user_id);
+    if (Number(result.changes) === 0) throw notFound("Device");
+    return this.getDeviceForUser(actor.user_id, deviceId);
   }
 
   rotateDeviceToken(actor: Actor, deviceId: string, expiresAt: string | null = null): {
@@ -1004,6 +1107,35 @@ export class CollaborationDatabase {
     });
   }
 
+  updateProject(actor: Actor, projectId: string, input: {
+    title: string;
+    idempotency_key: string;
+  }): ProjectRecord {
+    return this.transaction(() => {
+      this.requireProjectOwnedBy(projectId, actor.user_id);
+      const existing = this.sqlite.prepare(`
+        SELECT * FROM project_mutations WHERE project_id = ? AND idempotency_key = ?
+      `).get(projectId, input.idempotency_key) as unknown as ProjectMutationRow | undefined;
+      if (existing) {
+        if (existing.actor_user_id !== actor.user_id || existing.title !== input.title) {
+          throw idempotencyConflict("Project update retry does not match the original request");
+        }
+        return this.requireProject(projectId);
+      }
+      const timestamp = this.now();
+      this.sqlite.prepare(`
+        UPDATE projects SET title = ?,
+          updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END
+        WHERE id = ? AND owner_user_id = ?
+      `).run(input.title, timestamp, timestamp, projectId, actor.user_id);
+      this.sqlite.prepare(`
+        INSERT INTO project_mutations(project_id, idempotency_key, actor_user_id, title, created_at)
+        VALUES (?, ?, ?, ?, ?)
+      `).run(projectId, input.idempotency_key, actor.user_id, input.title, timestamp);
+      return this.requireProject(projectId);
+    });
+  }
+
   requireProject(projectId: string): ProjectRecord {
     const row = this.sqlite.prepare("SELECT * FROM projects WHERE id = ?")
       .get(projectId) as unknown as ProjectRow | undefined;
@@ -1186,6 +1318,7 @@ export class CollaborationDatabase {
     device_id?: string | undefined;
     device_name: string;
     device_expires_at?: string | null | undefined;
+    remember_device?: boolean | undefined;
   }): ClaimInvitationResult;
   claimInvitation(input: {
     invite_token: string;
@@ -1194,6 +1327,7 @@ export class CollaborationDatabase {
     device_id?: string | undefined;
     device_name: string;
     device_expires_at?: string | null | undefined;
+    remember_device?: boolean | undefined;
   }, options: { browserSession: true }): ClaimInvitationWithBrowserSessionResult;
   claimInvitation(input: {
     invite_token: string;
@@ -1202,6 +1336,7 @@ export class CollaborationDatabase {
     device_id?: string | undefined;
     device_name: string;
     device_expires_at?: string | null | undefined;
+    remember_device?: boolean | undefined;
   }, options: { browserSession?: boolean } = {}): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult {
     const projectInvitation = this.sqlite.prepare("SELECT id FROM project_invitations WHERE token_digest = ?")
       .get(this.tokenDigest(input.invite_token));
@@ -1294,7 +1429,7 @@ export class CollaborationDatabase {
         event,
       };
       return options.browserSession
-        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp)) }
+        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device === true) }
         : claimResult;
     });
     if ("failure" in result) {
@@ -1514,6 +1649,7 @@ export class CollaborationDatabase {
       device_id?: string | undefined;
       device_name: string;
       device_expires_at?: string | null | undefined;
+      remember_device?: boolean | undefined;
     },
     options: { browserSession?: boolean },
   ): ClaimInvitationResult | ClaimInvitationWithBrowserSessionResult {
@@ -1577,7 +1713,7 @@ export class CollaborationDatabase {
         event: null,
       };
       return options.browserSession
-        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp)) }
+        ? { ...claimResult, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device === true) }
         : claimResult;
     });
     if ("failure" in result) {
@@ -1816,6 +1952,22 @@ export class CollaborationDatabase {
         status: runtimeStatus(row.status, row.last_seen_at, now),
         last_seen_at: String(row.last_seen_at),
       },
+    }));
+  }
+
+  listSessionRuntimesForUser(sessionId: string, userId: string): RuntimeRecord[] {
+    const rows = this.sqlite.prepare(`
+      SELECT id, session_id, user_id, device_id, purpose, harness, provider,
+             model, local_session_id, capture_fidelity, status, last_seen_at
+      FROM runtimes
+      WHERE session_id = ? AND user_id = ? AND status != 'revoked'
+      ORDER BY CASE WHEN status = 'online' THEN 0 ELSE 1 END,
+               last_seen_at DESC, id ASC
+    `).all(sessionId, userId) as unknown as RuntimeRow[];
+    const now = this.clock().getTime();
+    return rows.map((row) => ({
+      ...row,
+      status: runtimeStatus(row.status, row.last_seen_at, now),
     }));
   }
 
@@ -2073,6 +2225,23 @@ export class CollaborationDatabase {
       if (runtime.session_id !== sessionId || runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
         || event.actor_user_id !== actor.user_id || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("The request is eligible only for the initiating user's active runtime");
+      }
+      const target = agentRequestTarget(event);
+      const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
+        candidate.purpose === "execution"
+        && candidate.status === "online"
+        && candidate.harness.trim().toLowerCase() === target.harness
+        && (target.provider === undefined || candidate.provider === target.provider)
+        && (target.harness === "codex" || target.model === undefined || candidate.model === target.model));
+      const selectedRuntimeId = target.runtimeId
+        ?? (target.harness === "codex" ? runtime.id : matching.length === 1 ? matching[0]?.id : undefined);
+      if (runtime.harness.trim().toLowerCase() !== target.harness
+        || (target.provider !== undefined && runtime.provider !== target.provider)
+        || (target.harness !== "codex" && target.model !== undefined && runtime.model !== target.model)
+        || selectedRuntimeId === undefined
+        || runtime.id !== selectedRuntimeId
+        || !matching.some((candidate) => candidate.id === runtime.id)) {
+        throw conflict(`A matching online ${target.harness} runtime is required for this Agent request`);
       }
       const existing = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
@@ -2694,9 +2863,10 @@ export class CollaborationDatabase {
     );
   }
 
-  private insertBrowserSession(actor: Actor, createdAtDate: Date): BrowserSessionIssue {
+  private insertBrowserSession(actor: Actor, createdAtDate: Date, rememberDevice = false): BrowserSessionIssue {
     const createdAt = createdAtDate.toISOString();
-    const expiresAt = new Date(createdAtDate.getTime() + BROWSER_SESSION_TTL_MS).toISOString();
+    const ttl = rememberDevice ? REMEMBERED_BROWSER_SESSION_TTL_MS : BROWSER_SESSION_TTL_MS;
+    const expiresAt = new Date(createdAtDate.getTime() + ttl).toISOString();
     const sessionId = randomUUID();
     const token = issueBrowserSessionToken();
     this.sqlite.prepare(`
@@ -2707,7 +2877,7 @@ export class CollaborationDatabase {
       INSERT INTO browser_sessions(id, user_id, device_id, token_digest, created_at, expires_at)
       VALUES (?, ?, ?, ?, ?, ?)
     `).run(sessionId, actor.user_id, actor.device_id, this.tokenDigest(token), createdAt, expiresAt);
-    return { session_id: sessionId, token, expires_at: expiresAt };
+    return { session_id: sessionId, token, expires_at: expiresAt, remembered: rememberDevice };
   }
 
   private expireInvitation(invitation: InvitationRecord, timestamp: string): void {

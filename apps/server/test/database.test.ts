@@ -365,6 +365,10 @@ test("participants create creator-owned solo sessions while project owners and v
       title: "Renamed by creator",
       idempotency_key: "member-personal-solo-rename",
     }).session.title, "Renamed by creator");
+    assert.throws(() => f.service.updateSession(f.member, created.session.id, {
+      mode: "multi",
+      idempotency_key: "member-personal-solo-mode",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
 
     assert.throws(() => f.service.createSession(f.member, {
       project_id: project.id,
@@ -692,9 +696,46 @@ test("owner rename is transactional, monotonic, idempotent, and emits metadata o
     assert.equal(f.service.updateSession(f.owner, session.id, {
       title: "After", idempotency_key: "rename-session-0001",
     }).event.id, renamed.event.id);
+    const changedMode = f.service.updateSession(f.owner, session.id, {
+      mode: "solo", idempotency_key: "session-mode-0001",
+    });
+    assert.equal(changedMode.session.mode, "solo");
+    assert.deepEqual(changedMode.event.payload, { action: "updated", mode: "solo" });
     assert.throws(() => f.service.updateSession(f.member, session.id, {
       title: "Denied", idempotency_key: "rename-session-denied",
     }), (error: unknown) => error instanceof ApiError && error.status === 403);
+  } finally {
+    f.close();
+  }
+});
+
+test("only the project owner can rename a project and retries are idempotent", () => {
+  let timestamp = new Date("2026-08-25T12:00:00.000Z");
+  const f = fixture({ clock: () => timestamp });
+  try {
+    const project = f.service.createProject(f.owner, {
+      project_id: "project-title", idempotency_key: "project-title-create", title: "Before",
+    });
+    const invitation = f.service.createProjectInvitation(f.owner, project.id, { role: "participant", ttl: "1h" });
+    f.service.claimInvitationForActor(f.member, invitation.invite_token);
+    const beforeUpdatedAt = project.updated_at;
+    timestamp = new Date("2026-08-25T13:00:00.000Z");
+
+    const renamed = f.service.updateProject(f.owner, project.id, {
+      title: "After 🚀", idempotency_key: "project-title-rename-0001",
+    });
+    assert.equal(renamed.title, "After 🚀");
+    assert.equal(renamed.updated_at, timestamp.toISOString());
+    assert.notEqual(renamed.updated_at, beforeUpdatedAt);
+    assert.equal(f.service.updateProject(f.owner, project.id, {
+      title: "After 🚀", idempotency_key: "project-title-rename-0001",
+    }).updated_at, renamed.updated_at);
+    assert.throws(() => f.service.updateProject(f.owner, project.id, {
+      title: "Different", idempotency_key: "project-title-rename-0001",
+    }), (error: unknown) => error instanceof ApiError && error.status === 409);
+    assert.throws(() => f.service.updateProject(f.member, project.id, {
+      title: "Denied", idempotency_key: "project-title-denied-0001",
+    }), (error: unknown) => error instanceof ApiError && error.status === 404);
   } finally {
     f.close();
   }
@@ -819,6 +860,289 @@ test("only the initiating user's runtime can claim and complete an agent request
       "claimed",
       "terminal completion must release the runtime for the next request",
     );
+  } finally {
+    f.close();
+  }
+});
+
+test("DeepSeek Harness claims honor the exact Web-selected runtime and model without changing Codex claims", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "dsh-runtime-routing",
+      idempotency_key: "create-dsh-runtime-routing",
+      mode: "multi",
+      title: "DSH routing",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "dsh-routing-member");
+    const secondDevice = f.database.createDevice(f.member.user_id, "Second DSH", "dsh-routing-device-2");
+    const secondActor = { ...f.member, device_id: secondDevice.device_id };
+    const firstRuntime = f.service.registerRuntime(f.member, {
+      runtime_id: "dsh-routing-runtime-1",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "provider-one",
+      model: "CaseSensitive/Model-X",
+      local_session_id: "dsh-routing-local-1",
+      capture_fidelity: "harness_transcript",
+    });
+    const secondRuntime = f.service.registerRuntime(secondActor, {
+      runtime_id: "dsh-routing-runtime-2",
+      session_id: session.id,
+      device_id: secondDevice.device_id,
+      harness: "deepseek-harness",
+      provider: "provider-two",
+      model: "CaseSensitive/Model-X",
+      local_session_id: "dsh-routing-local-2",
+      capture_fidelity: "harness_transcript",
+    });
+    const request = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-routing-request-1",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use the selected DSH device",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "provider-two",
+          model: "CaseSensitive/Model-X",
+          runtime_id: secondRuntime.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, request.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+    assert.equal(
+      f.service.claimAgentRequest(secondActor, session.id, request.id, secondRuntime.id).runtime_id,
+      secondRuntime.id,
+    );
+
+    const wrongProvider = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-routing-request-wrong-provider",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Do not cross provider bindings",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "provider-two",
+          model: "CaseSensitive/Model-X",
+          runtime_id: firstRuntime.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, wrongProvider.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+
+    const ambiguous = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-routing-request-2",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "An old untargeted DSH request",
+        execution_profile: { harness: "deepseek-harness", model: "CaseSensitive/Model-X" },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, ambiguous.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("Agent request claims stay on the selected harness and exact runtime with legacy Codex compatibility", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "cross-harness-routing",
+      idempotency_key: "create-cross-harness-routing",
+      mode: "multi",
+      title: "Cross-harness routing",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "cross-harness-member");
+    const codex = f.service.registerRuntime(f.member, {
+      runtime_id: "cross-harness-codex",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      local_session_id: "cross-harness-codex-local",
+      capture_fidelity: "harness_transcript",
+    });
+    const dsh = f.service.registerRuntime(f.member, {
+      runtime_id: "cross-harness-dsh",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      local_session_id: "cross-harness-dsh-local",
+      capture_fidelity: "harness_transcript",
+    });
+
+    const codexRequest = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "cross-harness-codex-request",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Run in Codex",
+        execution_profile: {
+          harness: "codex",
+          model: "gpt-5.6-luna",
+          runtime_id: codex.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, codexRequest.id, dsh.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, codexRequest.id, codex.id).runtime_id,
+      codex.id,
+    );
+    f.service.completeAgentRequest(
+      f.member,
+      session.id,
+      codexRequest.id,
+      codex.id,
+      "cross-harness-codex-response",
+      { content: "Codex done" },
+    );
+
+    const dshRequest = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "cross-harness-dsh-request",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Run in DSH",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-v4-flash",
+          runtime_id: dsh.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, dshRequest.id, codex.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, dshRequest.id, dsh.id).runtime_id,
+      dsh.id,
+    );
+    f.service.completeAgentRequest(
+      f.member,
+      session.id,
+      dshRequest.id,
+      dsh.id,
+      "cross-harness-dsh-response",
+      { content: "DSH done" },
+    );
+
+    const legacyRequest = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "cross-harness-legacy-request",
+      type: "agent_request",
+      visibility: "session",
+      payload: { content: "Old clients mean Codex" },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, legacyRequest.id, dsh.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, legacyRequest.id, codex.id).runtime_id,
+      codex.id,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("switching Codex to DSH and back preserves one canonical session with ordered idempotent provenance", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "harness-switch-history",
+      idempotency_key: "create-harness-switch-history",
+      mode: "multi",
+      title: "Harness switch history",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "harness-switch-member");
+    const codex = f.service.registerRuntime(f.member, {
+      runtime_id: "harness-switch-codex",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      local_session_id: "harness-switch-codex-local",
+      capture_fidelity: "harness_transcript",
+    });
+    const dsh = f.service.registerRuntime(f.member, {
+      runtime_id: "harness-switch-dsh",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      local_session_id: "harness-switch-dsh-local",
+      capture_fidelity: "harness_transcript",
+    });
+    const commits = [
+      f.service.commitLocalTurn(f.member, session.id, {
+        local_turn_id: "codex-turn-one",
+        runtime_id: codex.id,
+        based_on_sequence: f.database.requireSession(session.id).next_sequence,
+        occurred_at: "2026-09-06T01:00:00.000Z",
+        request_payload: { content: "Codex one" },
+        response_payload: { content: "Codex answer one" },
+      }),
+      f.service.commitLocalTurn(f.member, session.id, {
+        local_turn_id: "dsh-turn-one",
+        runtime_id: dsh.id,
+        based_on_sequence: f.database.requireSession(session.id).next_sequence,
+        occurred_at: "2026-09-06T01:01:00.000Z",
+        request_payload: { content: "DSH one" },
+        response_payload: { content: "DSH answer one" },
+      }),
+      f.service.commitLocalTurn(f.member, session.id, {
+        local_turn_id: "codex-turn-two",
+        runtime_id: codex.id,
+        based_on_sequence: f.database.requireSession(session.id).next_sequence,
+        occurred_at: "2026-09-06T01:02:00.000Z",
+        request_payload: { content: "Codex two" },
+        response_payload: { content: "Codex answer two" },
+      }),
+    ];
+    assert.deepEqual(
+      f.service.commitLocalTurn(f.member, session.id, {
+        local_turn_id: "dsh-turn-one",
+        runtime_id: dsh.id,
+        based_on_sequence: commits[1]!.head_before_commit,
+        occurred_at: "2026-09-06T01:01:00.000Z",
+        request_payload: { content: "DSH one" },
+        response_payload: { content: "DSH answer one" },
+      }),
+      commits[1],
+    );
+    const events = f.service.replay(f.member, session.id, 0, 100).events;
+    const turnEvents = events.filter((event) => event.runtime_provenance !== null);
+    assert.deepEqual(turnEvents.map((event) => event.sequence), [3, 4, 5, 6, 7, 8]);
+    assert.deepEqual(turnEvents.map((event) => event.runtime_provenance?.harness), [
+      "codex", "codex", "deepseek-harness", "deepseek-harness", "codex", "codex",
+    ]);
+    assert.ok(turnEvents.every((event) => event.session_id === session.id));
+    assert.equal(f.service.listSessions(f.member).filter((candidate) => candidate.id === session.id).length, 1);
   } finally {
     f.close();
   }

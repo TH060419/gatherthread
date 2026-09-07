@@ -1,0 +1,22 @@
+[Unit]
+Description=Back up the GatherThread SQLite database
+After=gatherthread.service
+
+[Service]
+Type=oneshot
+User=gatherthread
+Group=gatherthread
+WorkingDirectory=/opt/gatherthread/current
+ExecStart=/opt/gatherthread/current/scripts/backup-sqlite.sh /var/lib/gatherthread/collaboration.sqlite /var/backups/gatherthread
+ExecStartPost=/usr/bin/find /var/backups/gatherthread -maxdepth 1 -type f -name collaboration-*.db -mtime +14 -delete
+ExecStartPost=/usr/bin/find /var/backups/gatherthread -maxdepth 1 -type f -name collaboration-*.db.sha256 -mtime +14 -delete
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/gatherthread /var/backups/gatherthread
+RestrictRealtime=true
+RestrictSUIDSGID=true
+SystemCallArchitectures=native

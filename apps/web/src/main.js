@@ -1,4 +1,4 @@
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260829-1";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260906-2";
 import {
   canAppend,
   createIdempotencyKey,
@@ -24,7 +24,22 @@ import {
 } from "./domain.js?v=20260829-3";
 import { SessionSync } from "./realtime.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260829-13";
+import { createLocalizer } from "./i18n.js?v=20260906-3";
+import { automaticDeviceName } from "./device-name.js?v=20260830-1";
+import {
+  codexExecutionProfile,
+  DSH_HARNESS,
+  DSH_INSTALL_COMMAND,
+  DSH_PINNED_START_COMMAND,
+  DSH_START_COMMAND,
+  DSH_VERSION_COMMAND,
+  dshExecutionProfile,
+  dshPairingCodeFromHash,
+  dshRuntimeChoices,
+  resolveCodexRuntime,
+  resolveDshRuntime,
+  withoutDshPairingHash,
+} from "./dsh.js?v=20260906-3";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import {
   contextBudgetInputBytes,
@@ -43,9 +58,15 @@ import {
   effectiveContextBudget,
   normalizeCodexProfile,
   normalizeSettings,
+  projectAgentHarness,
   projectCodexProfile,
+  projectDshProfile,
+  projectEnabledHarnesses,
+  withProjectAgentHarness,
   withProjectCodexProfile,
-} from "./settings.js?v=20260829-4";
+  withProjectDshProfile,
+  withProjectEnabledHarnesses,
+} from "./settings.js?v=20260906-4";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -78,6 +99,8 @@ const state = {
   session: null,
   invitations: [],
   snapshotRequests: [],
+  executionRuntimes: [],
+  devices: [],
   sync: sync.snapshot(),
   settings: settingsStore.get(),
 };
@@ -89,7 +112,11 @@ let memberRefreshTimer;
 let memberRefreshInFlight = false;
 let snapshotPollTimer;
 let snapshotPollGeneration = 0;
+let dshRuntimePollTimer;
+let dshRuntimePollGeneration = 0;
+let dshRuntimeLoadInFlight = false;
 let selectedSessionGeneration = 0;
+let pendingDshPairingCode = dshPairingCodeFromHash(location.hash);
 const expandedWorklogs = new Set();
 
 const element = (id) => document.getElementById(id);
@@ -119,10 +146,16 @@ const createProjectDialog = element("create-project-dialog");
 const createProjectForm = element("create-project-form");
 const renameSessionDialog = element("rename-session-dialog");
 const renameSessionForm = element("rename-session-form");
+const renameProjectDialog = element("rename-project-dialog");
+const renameProjectForm = element("rename-project-form");
 const deleteCloudDialog = element("delete-cloud-dialog");
 const deleteCloudForm = element("delete-cloud-form");
 const connectCodexDialog = element("connect-codex-dialog");
 const connectCodexButton = element("connect-codex-button");
+const connectDshDialog = element("connect-dsh-dialog");
+const connectDshButton = element("connect-dsh-button");
+const approveDshPairingDialog = element("approve-dsh-pairing-dialog");
+const approveDshPairingForm = element("approve-dsh-pairing-form");
 const memberPanel = element("member-panel");
 const acceptInvitationForm = element("accept-invitation-form");
 const createInvitationForm = element("create-invitation-form");
@@ -132,16 +165,26 @@ const settingsDialog = element("settings-dialog");
 const settingsForm = element("settings-form");
 const agentModelSelect = element("agent-model-select");
 const agentEffortSelect = element("agent-effort-select");
+const agentHarnessSelect = element("agent-harness-select");
+const agentDshRuntimeSelect = element("agent-dsh-runtime-select");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
 let connectCodexReturnFocus = null;
+let connectDshReturnFocus = null;
 let renameSessionReturnFocus = null;
+let renameProjectReturnFocus = null;
 let deleteCloudReturnFocus = null;
 let pendingCloudDeletion = null;
 let settingsReturnFocus = null;
 let settingsPreview = state.settings;
+let currentDeviceName = "";
+let settingsDeviceLoadGeneration = 0;
 
 applyVisualSettings(state.settings);
+setAutomaticClaimDeviceName({ force: true });
+element("claim-device-name").addEventListener("input", () => {
+  element("claim-device-name").dataset.automatic = "false";
+});
 
 clearSensitiveInputs();
 window.addEventListener("pagehide", () => {
@@ -151,6 +194,7 @@ window.addEventListener("pagehide", () => {
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
+  stopDshRuntimePolling();
   api.clearCredential?.();
   clearCreatedInvitationSecret();
   clearNewDeviceAccessToken();
@@ -160,6 +204,12 @@ window.addEventListener("pageshow", (event) => {
   if (!event.persisted) return;
   resetWorkspaceToAuth();
   void restoreBrowserSession();
+});
+window.addEventListener("hashchange", () => {
+  const code = dshPairingCodeFromHash(location.hash);
+  if (!code) return;
+  pendingDshPairingCode = code;
+  maybeOpenPendingDshPairing();
 });
 
 void restoreBrowserSession();
@@ -183,12 +233,13 @@ loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const generation = ++authenticationGeneration;
   loginError.textContent = "";
-  const token = new FormData(loginForm).get("token")?.toString() ?? "";
+  const data = new FormData(loginForm);
+  const token = data.get("token")?.toString() ?? "";
   const submit = loginForm.querySelector("button[type='submit']");
   submit.disabled = true;
   submit.textContent = "Checking…";
   try {
-    const actor = await api.authenticate(token);
+    const actor = await api.authenticate(token, { rememberDevice: data.get("remember-device") === "on" });
     if (generation !== authenticationGeneration) return;
     state.currentUser = actor;
     loginForm.reset();
@@ -216,12 +267,13 @@ claimInvitationForm.addEventListener("submit", async (event) => {
       inviteToken: data.get("invite-secret")?.toString().trim() ?? "",
       displayName: data.get("display-name")?.toString().trim() ?? "",
       deviceName: data.get("device-name")?.toString().trim() ?? "",
+      rememberDevice: data.get("remember-device") === "on",
     });
     if (generation !== authenticationGeneration) return;
     state.currentUser = result.actor;
     showNewDeviceAccessToken(result.accessToken);
     claimInvitationForm.reset();
-    element("claim-device-name").value = localizer.t("This browser");
+    setAutomaticClaimDeviceName({ force: true });
     await enterWorkspace(result.invitation.projectId);
   } catch (error) {
     errorNode.textContent = error.message ?? "Unable to claim this invitation.";
@@ -341,6 +393,14 @@ element("dialog-cancel-button").addEventListener("click", () => createDialog.clo
 element("new-project-button").addEventListener("click", openCreateProjectDialog);
 element("cancel-create-project-button").addEventListener("click", () => createProjectDialog.close());
 element("dialog-cancel-project-button").addEventListener("click", () => createProjectDialog.close());
+element("rename-project-button").addEventListener("click", openRenameProjectDialog);
+element("cancel-rename-project-button").addEventListener("click", () => renameProjectDialog.close());
+element("dialog-cancel-rename-project-button").addEventListener("click", () => renameProjectDialog.close());
+renameProjectDialog.addEventListener("close", () => {
+  const returnFocus = renameProjectReturnFocus;
+  renameProjectReturnFocus = null;
+  requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
+});
 element("rename-session-button").addEventListener("click", openRenameSessionDialog);
 element("cancel-rename-session-button").addEventListener("click", () => renameSessionDialog.close());
 element("dialog-cancel-rename-session-button").addEventListener("click", () => renameSessionDialog.close());
@@ -370,6 +430,22 @@ connectCodexDialog.addEventListener("close", () => {
 });
 for (const button of connectCodexDialog.querySelectorAll("button[data-copy-command]")) {
   button.addEventListener("click", () => void copyCodexCommand(button.dataset.copyCommand));
+}
+connectDshButton.addEventListener("click", openConnectDshDialog);
+element("close-connect-dsh-button").addEventListener("click", () => connectDshDialog.close());
+element("done-connect-dsh-button").addEventListener("click", () => connectDshDialog.close());
+element("refresh-dsh-runtimes-button").addEventListener("click", () => void refreshDshRuntimes({ announceFailure: true }));
+connectDshDialog.addEventListener("close", () => {
+  const returnFocus = connectDshReturnFocus;
+  connectDshReturnFocus = null;
+  requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
+});
+for (const button of connectDshDialog.querySelectorAll("button[data-copy-dsh-command]")) {
+  button.addEventListener("click", () => void copyDshCommand(button.dataset.copyDshCommand));
+}
+approveDshPairingForm.addEventListener("submit", approvePendingDshPairing);
+for (const id of ["cancel-dsh-pairing-button", "decline-dsh-pairing-button"]) {
+  element(id).addEventListener("click", cancelPendingDshPairing);
 }
 projectSelect.addEventListener("change", () => void selectProject(projectSelect.value));
 
@@ -422,31 +498,65 @@ createProjectForm.addEventListener("submit", async (event) => {
   }
 });
 
+renameProjectForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const projectId = state.project?.id;
+  if (!projectId || state.project?.role !== "owner") return;
+  const errorNode = element("rename-project-error");
+  const submit = renameProjectForm.querySelector("button[type='submit']");
+  const name = new FormData(renameProjectForm).get("name")?.toString() ?? "";
+  errorNode.textContent = "";
+  submit.disabled = true;
+  submit.textContent = "Saving…";
+  try {
+    const renamed = await api.renameProject(projectId, {
+      name,
+      idempotencyKey: createIdempotencyKey("rename-project"),
+    });
+    if (state.project?.id !== projectId) return;
+    state.project = { ...state.project, ...renamed };
+    state.projects = state.projects.map((project) => project.id === projectId ? { ...project, ...renamed } : project);
+    renderProjectSelect();
+    renameProjectDialog.close();
+    announce("Project renamed.");
+  } catch (error) {
+    errorNode.textContent = error.message ?? "Unable to rename the project.";
+    element("rename-project-name").focus();
+  } finally {
+    submit.disabled = false;
+    submit.textContent = "Save name";
+  }
+});
+
 renameSessionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const sessionId = state.session?.id;
   if (!sessionId) return;
   const errorNode = element("rename-session-error");
   const submit = renameSessionForm.querySelector("button[type='submit']");
-  const name = new FormData(renameSessionForm).get("name")?.toString() ?? "";
+  const data = new FormData(renameSessionForm);
+  const name = data.get("name")?.toString() ?? "";
+  const modeField = element("rename-session-mode-field");
+  const mode = modeField.hidden ? undefined : data.get("mode")?.toString();
   errorNode.textContent = "";
   submit.disabled = true;
   submit.textContent = "Saving…";
   try {
-    const renamed = await api.renameSession(sessionId, {
+    const renamed = await api.updateSession(sessionId, {
       name,
-      idempotencyKey: createIdempotencyKey("rename-session"),
+      ...(mode === undefined ? {} : { mode }),
+      idempotencyKey: createIdempotencyKey("session-settings"),
     });
     if (state.session?.id !== sessionId) return;
-    updateSessionName(sessionId, renamed.name);
+    updateSessionMetadata(sessionId, renamed);
     renameSessionDialog.close();
-    announce(`Session renamed to ${renamed.name}.`);
+    announce("Session updated.");
   } catch (error) {
     errorNode.textContent = error.message ?? "Unable to rename the session.";
     element("rename-session-name").focus();
   } finally {
     submit.disabled = false;
-    submit.textContent = "Save name";
+    submit.textContent = "Save changes";
   }
 });
 
@@ -519,6 +629,8 @@ settingsDialog.addEventListener("close", () => {
 });
 agentModelSelect.addEventListener("change", () => updateComposerAgentProfile("model"));
 agentEffortSelect.addEventListener("change", () => updateComposerAgentProfile("effort"));
+agentHarnessSelect.addEventListener("change", updateComposerHarness);
+agentDshRuntimeSelect.addEventListener("change", updateComposerDshRuntime);
 messageInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
   const behavior = state.settings.composer.enterBehavior;
@@ -567,11 +679,14 @@ async function restoreBrowserSession() {
 
 function resetWorkspaceToAuth() {
   if (connectCodexDialog.open) connectCodexDialog.close();
+  if (connectDshDialog.open) connectDshDialog.close();
+  if (approveDshPairingDialog.open) approveDshPairingDialog.close();
   if (renameSessionDialog.open) renameSessionDialog.close();
   if (deleteCloudDialog.open) deleteCloudDialog.close();
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
+  stopDshRuntimePolling();
   selectedSessionGeneration += 1;
   projectSelectionGuard.invalidate();
   api.clearCredential?.();
@@ -583,6 +698,10 @@ function resetWorkspaceToAuth() {
   state.session = null;
   state.invitations = [];
   state.snapshotRequests = [];
+  state.executionRuntimes = [];
+  state.devices = [];
+  currentDeviceName = "";
+  settingsDeviceLoadGeneration += 1;
   expandedWorklogs.clear();
   clearCreatedInvitationSecret();
   clearNewDeviceAccessToken();
@@ -590,6 +709,7 @@ function resetWorkspaceToAuth() {
   workspace.hidden = true;
   authView.hidden = false;
   loginForm.reset();
+  setAutomaticClaimDeviceName({ force: true });
 }
 
 async function enterWorkspace(preferredProjectId) {
@@ -616,6 +736,7 @@ async function enterWorkspace(preferredProjectId) {
     element("new-session-button").hidden = true;
     element("owner-invitations").hidden = true;
   }
+  maybeOpenPendingDshPairing();
 }
 
 async function selectProject(projectId) {
@@ -623,8 +744,10 @@ async function selectProject(projectId) {
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
+  stopDshRuntimePolling();
   selectedSessionGeneration += 1;
   state.session = null;
+  state.executionRuntimes = [];
   clearCreatedInvitationSecret();
   const project = await api.getProject(projectId);
   if (!projectSelectionGuard.isCurrent(selection)) return;
@@ -675,6 +798,7 @@ async function selectSession(sessionId) {
   ]);
   if (generation !== selectedSessionGeneration) return;
   state.session = { ...session, members };
+  state.executionRuntimes = [];
   startMemberRefresh(sessionId);
   location.hash = new URLSearchParams({ project: state.project.id, session: sessionId }).toString();
   emptyState.hidden = true;
@@ -684,6 +808,9 @@ async function selectSession(sessionId) {
   renderMembers();
   renderComposerPermissions();
   renderSessionDeliveryControls();
+  await refreshDshRuntimes({ sessionId, generation });
+  if (generation !== selectedSessionGeneration) return;
+  startDshRuntimePolling();
   downloadCodexButton.disabled = false;
   element("session-title").focus({ preventScroll: true });
   const membership = members.find((member) => member.userId === state.currentUser?.id);
@@ -708,8 +835,16 @@ function renderProjectSelect() {
     projectSelect.append(option);
   }
   projectSelect.disabled = state.projects.length < 2;
-  connectCodexButton.hidden = !state.project;
+  renderProjectAgentButtons();
+  renderDshConnectionStatus();
   element("delete-project-button").hidden = state.project?.role !== "owner";
+  element("rename-project-button").hidden = state.project?.role !== "owner";
+}
+
+function renderProjectAgentButtons(settings = state.settings) {
+  const enabled = state.project ? new Set(projectEnabledHarnesses(settings, state.project.id)) : new Set();
+  connectCodexButton.hidden = !enabled.has("codex");
+  connectDshButton.hidden = !enabled.has(DSH_HARNESS);
 }
 
 function renderProjectPermissions() {
@@ -717,6 +852,7 @@ function renderProjectPermissions() {
   element("new-session-button").hidden = !mayCreate;
   element("empty-create-button").hidden = !mayCreate;
   element("delete-project-button").hidden = state.project?.role !== "owner";
+  element("rename-project-button").hidden = state.project?.role !== "owner";
 }
 
 function startMemberRefresh(sessionId) {
@@ -729,6 +865,85 @@ function stopMemberRefresh() {
   if (memberRefreshTimer !== undefined) clearInterval(memberRefreshTimer);
   memberRefreshTimer = undefined;
   memberRefreshInFlight = false;
+}
+
+function startDshRuntimePolling() {
+  stopDshRuntimePolling();
+  const generation = dshRuntimePollGeneration;
+  const poll = async () => {
+    if (generation !== dshRuntimePollGeneration || !state.session) return;
+    await refreshDshRuntimes();
+    if (generation !== dshRuntimePollGeneration || !state.session) return;
+    dshRuntimePollTimer = setTimeout(poll, mockEnabled ? 350 : 5_000);
+    dshRuntimePollTimer.unref?.();
+  };
+  dshRuntimePollTimer = setTimeout(poll, mockEnabled ? 350 : 5_000);
+  dshRuntimePollTimer.unref?.();
+}
+
+function stopDshRuntimePolling() {
+  dshRuntimePollGeneration += 1;
+  if (dshRuntimePollTimer !== undefined) clearTimeout(dshRuntimePollTimer);
+  dshRuntimePollTimer = undefined;
+  dshRuntimeLoadInFlight = false;
+}
+
+async function refreshDshRuntimes({ sessionId = state.session?.id, generation = selectedSessionGeneration, announceFailure = false } = {}) {
+  if (!sessionId || dshRuntimeLoadInFlight) return;
+  dshRuntimeLoadInFlight = true;
+  try {
+    const [runtimesResult, devicesResult] = await Promise.allSettled([
+      api.listSessionRuntimes(sessionId),
+      api.listDevices(),
+    ]);
+    if (generation !== selectedSessionGeneration || state.session?.id !== sessionId) return;
+    if (runtimesResult.status === "rejected") throw runtimesResult.reason;
+    state.executionRuntimes = runtimesResult.value;
+    state.devices = devicesResult.status === "fulfilled" ? devicesResult.value : [];
+    if (state.project
+      && projectAgentHarness(state.settings, state.project.id) === DSH_HARNESS
+      && projectDshProfile(state.settings, state.project.id) === null) {
+      const resolved = resolveDshRuntime(state.executionRuntimes, state.devices, null);
+      if (resolved.runtime) {
+        state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, resolved.runtime));
+      }
+    }
+    element("connect-dsh-error").textContent = "";
+  } catch (error) {
+    if (generation !== selectedSessionGeneration || state.session?.id !== sessionId) return;
+    state.executionRuntimes = [];
+    if (announceFailure || connectDshDialog.open) {
+      element("connect-dsh-error").textContent = error?.message ?? "Unable to refresh DeepSeek Harness status.";
+    }
+  } finally {
+    dshRuntimeLoadInFlight = false;
+    if (generation === selectedSessionGeneration && state.session?.id === sessionId) {
+      renderAgentProfileControls();
+      renderComposerPermissions();
+      renderDshConnectionStatus();
+      renderDshRuntimeList();
+    }
+  }
+}
+
+function currentDshResolution(settings = state.settings) {
+  const profile = state.project ? projectDshProfile(settings, state.project.id) : null;
+  return resolveDshRuntime(state.executionRuntimes, state.devices, profile);
+}
+
+function currentCodexResolution() {
+  return resolveCodexRuntime(state.executionRuntimes);
+}
+
+function renderDshConnectionStatus() {
+  const choices = dshRuntimeChoices(state.executionRuntimes, state.devices);
+  const online = choices.filter((runtime) => runtime.status === "online");
+  element("connect-dsh-button-status").textContent = online.length
+    ? `${online.length} online`
+    : "Not connected";
+  element("connect-dsh-runtime-status").textContent = online.length
+    ? `${online.length} DeepSeek Harness runtime${online.length === 1 ? " is" : "s are"} online for this session.`
+    : "No DeepSeek Harness runtime is online for this session yet. This page checks automatically.";
 }
 
 async function refreshMembers(sessionId) {
@@ -813,17 +1028,27 @@ function renderSessionHeader() {
 function applySessionMetadataEvents(events) {
   for (const event of events) {
     const metadata = sessionMetadataFromEvent(event);
-    if (metadata?.sessionId) updateSessionName(metadata.sessionId, metadata.name);
+    if (metadata?.sessionId) updateSessionMetadata(metadata.sessionId, metadata);
   }
 }
 
-function updateSessionName(sessionId, name) {
-  state.sessions = state.sessions.map((session) => session.id === sessionId ? { ...session, name } : session);
+function updateSessionMetadata(sessionId, metadata) {
+  const patch = {
+    ...(metadata.name === undefined ? {} : { name: metadata.name }),
+    ...(metadata.mode === undefined ? {} : { mode: metadata.mode }),
+  };
+  state.sessions = state.sessions.map((session) => session.id === sessionId ? { ...session, ...patch } : session);
   if (state.session?.id === sessionId) {
-    state.session = { ...state.session, name };
+    state.session = { ...state.session, ...patch };
     renderSessionHeader();
+    renderComposerPermissions();
+    renderSessionDeliveryControls();
   }
   renderSessionList();
+}
+
+function updateSessionName(sessionId, name) {
+  updateSessionMetadata(sessionId, { name });
 }
 
 function renderMembers() {
@@ -1360,15 +1585,19 @@ async function pollSnapshotRequests(generation) {
 function renderComposerPermissions() {
   const common = { session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase };
   const chat = canAppend({ ...common, kind: "human_chat" });
-  const agent = canAppend({ ...common, kind: "agent_request" });
-  const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
+  const harness = currentProjectHarness();
+  const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
+  const agentAllowed = chat.allowed && resolution.runtime !== null;
+  const agentReason = chat.allowed ? resolution.reason : chat.reason;
   sendChatButton.disabled = !chat.allowed;
-  sendAgentButton.disabled = !agent.allowed;
-  messageInput.disabled = !chat.allowed && !agent.allowed;
+  sendAgentButton.disabled = !agentAllowed;
+  messageInput.disabled = !chat.allowed && !agentAllowed;
   element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
-  element("agent-target-label").textContent = agent.allowed
-    ? runtimeLabel(membership.runtime)
-    : agent.reason;
+  element("agent-target-label").textContent = agentAllowed
+    ? harness === DSH_HARNESS
+      ? `${resolution.runtime.deviceName} · ${resolution.runtime.provider} · ${resolution.runtime.model}`
+      : `${resolution.runtime.harness} · ${resolution.runtime.provider} · ${agentModelSelect.value}`
+    : agentReason;
   renderAgentProfileControls();
 }
 
@@ -1381,7 +1610,7 @@ async function sendMessage(kind) {
   }
   sendError.textContent = "";
   if (kind === "agent_request" && state.settings.composer.confirmAgentRequest
-    && !window.confirm("Start this Agent request with the selected model and reasoning level?")) {
+    && !window.confirm("Start this Agent request with the selected harness and model?")) {
     messageInput.focus();
     return;
   }
@@ -1392,14 +1621,16 @@ async function sendMessage(kind) {
   try {
     const input = { content, idempotencyKey: createIdempotencyKey(kind) };
     if (kind === "human_chat") await api.appendHumanChat(state.session.id, input);
-    else await api.appendAgentRequest(state.session.id, {
-      ...input,
-      executionProfile: {
-        harness: "codex",
-        model: agentModelSelect.value,
-        reasoningEffort: agentEffortSelect.value,
-      },
-    });
+    else {
+      const harness = currentProjectHarness();
+      const executionProfile = harness === DSH_HARNESS
+        ? dshExecutionProfile(currentDshResolution().runtime)
+        : codexExecutionProfile(currentCodexResolution().runtime, {
+          model: agentModelSelect.value,
+          reasoningEffort: agentEffortSelect.value,
+        });
+      await api.appendAgentRequest(state.session.id, { ...input, executionProfile });
+    }
     messageInput.value = "";
     messageInput.focus();
   } catch (error) {
@@ -1428,6 +1659,15 @@ function openCreateProjectDialog() {
   requestAnimationFrame(() => element("project-name").focus());
 }
 
+function openRenameProjectDialog() {
+  if (!state.project || state.project.role !== "owner") return;
+  renameProjectReturnFocus = document.activeElement;
+  element("rename-project-error").textContent = "";
+  element("rename-project-name").value = state.project.name;
+  renameProjectDialog.showModal();
+  requestAnimationFrame(() => element("rename-project-name").select());
+}
+
 function openRenameSessionDialog() {
   const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
   if (!state.session) return;
@@ -1438,6 +1678,13 @@ function openRenameSessionDialog() {
   renameSessionReturnFocus = document.activeElement;
   element("rename-session-error").textContent = "";
   element("rename-session-name").value = state.session.name;
+  const mayChangeMode = state.project?.role === "owner"
+    && state.session.ownerUserId === state.currentUser?.id;
+  const modeField = element("rename-session-mode-field");
+  const modeSelect = element("rename-session-mode");
+  modeField.hidden = !mayChangeMode;
+  modeSelect.disabled = !mayChangeMode;
+  modeSelect.value = state.session.mode;
   renameSessionDialog.showModal();
   requestAnimationFrame(() => element("rename-session-name").select());
 }
@@ -1507,7 +1754,9 @@ async function copyCodexCommand(platform) {
       selection.removeAllRanges();
     }
     status.textContent = "Copied.";
-    announce(`${platform === "posix" ? "Shell" : "PowerShell"} connector command copied.`);
+    announce(platform === "posix" ? "Shell connector command copied."
+      : platform === "powershell" ? "PowerShell connector command copied."
+        : "Plugin install commands copied.");
   } catch {
     const selection = window.getSelection();
     const range = document.createRange();
@@ -1516,6 +1765,149 @@ async function copyCodexCommand(platform) {
     selection.addRange(range);
     status.textContent = "Clipboard access is unavailable. The command is selected for manual copy.";
   }
+}
+
+function openConnectDshDialog() {
+  if (!state.project) return;
+  connectDshReturnFocus = document.activeElement;
+  element("connect-dsh-start-command").textContent = DSH_START_COMMAND;
+  element("connect-dsh-version-command").textContent = DSH_VERSION_COMMAND;
+  element("connect-dsh-pinned-start-command").textContent = DSH_PINNED_START_COMMAND;
+  element("connect-dsh-install-command").textContent = DSH_INSTALL_COMMAND;
+  const configuredServer = api.baseUrl || location.origin;
+  try {
+    element("connect-dsh-server-url").textContent = new URL(configuredServer, location.origin).origin;
+    element("connect-dsh-error").textContent = "";
+  } catch {
+    element("connect-dsh-server-url").textContent = "";
+    element("connect-dsh-error").textContent = "The configured GatherThread server URL is invalid.";
+  }
+  for (const status of [element("copy-dsh-start-status"), element("copy-dsh-install-status")]) status.textContent = "";
+  renderDshConnectionStatus();
+  renderDshRuntimeList();
+  if (!connectDshDialog.open) connectDshDialog.showModal();
+  void refreshDshRuntimes({ announceFailure: true });
+  requestAnimationFrame(() => element("close-connect-dsh-button").focus());
+}
+
+async function copyDshCommand(kind) {
+  const node = element(kind === "install" ? "connect-dsh-install-command" : "connect-dsh-start-command");
+  const status = element(kind === "install" ? "copy-dsh-install-status" : "copy-dsh-start-status");
+  const value = node.textContent;
+  if (!value) return;
+  try {
+    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+    await navigator.clipboard.writeText(value);
+    status.textContent = "Copied.";
+  } catch {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    selection.removeAllRanges();
+    selection.addRange(range);
+    status.textContent = "Clipboard access is unavailable. The command is selected for manual copy.";
+  }
+}
+
+function renderDshRuntimeList() {
+  const list = element("connect-dsh-runtime-list");
+  list.replaceChildren();
+  const seenDevices = new Set();
+  for (const runtime of dshRuntimeChoices(state.executionRuntimes, state.devices)) {
+    if (seenDevices.has(runtime.deviceId)) continue;
+    seenDevices.add(runtime.deviceId);
+    const item = document.createElement("li");
+    item.className = "dsh-runtime-row";
+    const copy = document.createElement("div");
+    const name = document.createElement("strong");
+    const detail = document.createElement("small");
+    name.textContent = runtime.deviceName;
+    detail.textContent = `${runtime.status === "online" ? "Online" : "Offline"} · ${runtime.provider} · ${runtime.model} · last seen ${formatDateTime(runtime.lastSeenAt)}`;
+    copy.append(name, detail);
+    const actions = document.createElement("div");
+    actions.className = "dsh-runtime-actions";
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "text-button";
+    rename.textContent = "Rename";
+    rename.setAttribute("aria-label", `Rename ${runtime.deviceName}`);
+    rename.addEventListener("click", () => void renameDshDevice(runtime));
+    const revoke = document.createElement("button");
+    revoke.type = "button";
+    revoke.className = "text-button danger-text-button";
+    revoke.textContent = "Revoke";
+    revoke.setAttribute("aria-label", `Revoke ${runtime.deviceName}`);
+    revoke.addEventListener("click", () => void revokeDshDevice(runtime));
+    actions.append(rename, revoke);
+    item.append(copy, actions);
+    list.append(item);
+  }
+}
+
+async function renameDshDevice(runtime) {
+  const next = window.prompt(localizer.t("Choose a new name for this DeepSeek Harness device."), runtime.deviceName)?.trim();
+  if (!next || next === runtime.deviceName) return;
+  if (next.length > 120) {
+    element("connect-dsh-error").textContent = "Choose a device name between 1 and 120 characters.";
+    return;
+  }
+  try {
+    await api.renameDevice(runtime.deviceId, next);
+    await refreshDshRuntimes({ announceFailure: true });
+    announce("DeepSeek Harness device renamed.");
+  } catch (error) {
+    element("connect-dsh-error").textContent = error?.message ?? "Unable to rename the DeepSeek Harness device.";
+  }
+}
+
+async function revokeDshDevice(runtime) {
+  if (!window.confirm(localizer.t(`Revoke ${runtime.deviceName}? Its DSH plugin must pair again before accepting requests.`))) return;
+  try {
+    await api.revokeDevice(runtime.deviceId);
+    await refreshDshRuntimes({ announceFailure: true });
+    announce("DeepSeek Harness device access revoked.");
+  } catch (error) {
+    element("connect-dsh-error").textContent = error?.message ?? "Unable to revoke the DeepSeek Harness device.";
+  }
+}
+
+function maybeOpenPendingDshPairing() {
+  if (!state.currentUser || !pendingDshPairingCode || approveDshPairingDialog.open) return;
+  element("approve-dsh-pairing-code").textContent = pendingDshPairingCode;
+  element("approve-dsh-pairing-error").textContent = "";
+  approveDshPairingDialog.showModal();
+  requestAnimationFrame(() => element("confirm-dsh-pairing-button").focus());
+}
+
+async function approvePendingDshPairing(event) {
+  event.preventDefault();
+  if (!pendingDshPairingCode || !state.currentUser) return;
+  const submit = element("confirm-dsh-pairing-button");
+  submit.disabled = true;
+  element("approve-dsh-pairing-error").textContent = "";
+  try {
+    await api.approveDshPairing(pendingDshPairingCode);
+    clearPendingDshPairing();
+    approveDshPairingDialog.close();
+    announce("DeepSeek Harness pairing approved. Waiting for the local plugin to come online.");
+    openConnectDshDialog();
+  } catch (error) {
+    element("approve-dsh-pairing-error").textContent = error?.message ?? "Unable to approve this DeepSeek Harness pairing.";
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+function cancelPendingDshPairing() {
+  clearPendingDshPairing();
+  if (approveDshPairingDialog.open) approveDshPairingDialog.close();
+}
+
+function clearPendingDshPairing() {
+  pendingDshPairingCode = "";
+  element("approve-dsh-pairing-code").textContent = "";
+  const remaining = withoutDshPairingHash(location.hash);
+  history.replaceState(null, "", `${location.pathname}${location.search}${remaining ? `#${remaining}` : ""}`);
 }
 
 function announce(message) {
@@ -1545,11 +1937,16 @@ function applyVisualSettings(settings) {
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
-  const deviceNameInput = element("claim-device-name");
-  if (["This browser", "当前浏览器", "此浏览器"].includes(deviceNameInput.value)) {
-    deviceNameInput.value = localizer.t("This browser");
-  }
+  setAutomaticClaimDeviceName();
   ambientCanvas.apply(normalized);
+}
+
+function setAutomaticClaimDeviceName({ force = false } = {}) {
+  const input = element("claim-device-name");
+  const legacyAutomaticName = ["This browser", "当前浏览器", "此浏览器"].includes(input.value);
+  if (!force && input.dataset.automatic === "false" && !legacyAutomaticName) return;
+  input.value = automaticDeviceName();
+  input.dataset.automatic = "true";
 }
 
 function renderModelOptions(select, selectedModel, settings = settingsPreview) {
@@ -1588,13 +1985,63 @@ function currentProjectProfile(settings = state.settings) {
   return state.project ? projectCodexProfile(settings, state.project.id) : normalizeCodexProfile(undefined);
 }
 
+function currentProjectHarness(settings = state.settings) {
+  return state.project ? projectAgentHarness(settings, state.project.id) : "codex";
+}
+
+function currentProjectEnabledHarnesses(settings = state.settings) {
+  return state.project ? projectEnabledHarnesses(settings, state.project.id) : ["codex"];
+}
+
+function renderDshRuntimeOptions(select, settings = state.settings) {
+  const resolution = currentDshResolution(settings);
+  select.replaceChildren();
+  if (resolution.choices.length === 0) {
+    const option = document.createElement("option");
+    option.value = "";
+    option.textContent = "No connected DSH runtime";
+    select.append(option);
+    select.disabled = true;
+    return;
+  }
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = resolution.runtime ? "Choose a DSH runtime" : resolution.reason;
+  placeholder.selected = resolution.runtime === null;
+  select.append(placeholder);
+  for (const runtime of resolution.choices) {
+    const option = document.createElement("option");
+    option.value = runtime.id;
+    option.textContent = runtime.label;
+    option.disabled = runtime.status !== "online";
+    option.selected = runtime.id === resolution.runtime?.id;
+    select.append(option);
+  }
+  select.disabled = false;
+}
+
 function renderAgentProfileControls() {
+  const harness = currentProjectHarness();
+  const enabledHarnesses = currentProjectEnabledHarnesses();
   const profile = currentProjectProfile();
+  agentHarnessSelect.replaceChildren();
+  for (const enabledHarness of enabledHarnesses) {
+    const option = document.createElement("option");
+    option.value = enabledHarness;
+    option.textContent = enabledHarness === DSH_HARNESS ? "DeepSeek Harness" : "Codex";
+    option.selected = enabledHarness === harness;
+    agentHarnessSelect.append(option);
+  }
+  agentHarnessSelect.value = harness;
   renderModelOptions(agentModelSelect, profile.model, state.settings);
   updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
+  renderDshRuntimeOptions(agentDshRuntimeSelect, state.settings);
   const disabled = !state.project;
+  agentHarnessSelect.disabled = disabled;
   agentModelSelect.disabled = disabled;
   agentEffortSelect.disabled = disabled;
+  element("codex-agent-profile-fields").hidden = harness !== "codex";
+  element("dsh-agent-profile-fields").hidden = harness !== DSH_HARNESS;
 }
 
 function updateComposerAgentProfile(changed) {
@@ -1606,6 +2053,64 @@ function updateComposerAgentProfile(changed) {
   };
   state.settings = settingsStore.set(withProjectCodexProfile(state.settings, state.project.id, requested));
   renderAgentProfileControls();
+}
+
+function updateComposerHarness() {
+  if (!state.project) return;
+  state.settings = settingsStore.set(withProjectAgentHarness(state.settings, state.project.id, agentHarnessSelect.value));
+  if (agentHarnessSelect.value === DSH_HARNESS) {
+    const resolution = currentDshResolution();
+    if (resolution.runtime) {
+      state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, resolution.runtime));
+    }
+  }
+  renderProjectAgentButtons();
+  renderComposerPermissions();
+}
+
+function updateComposerDshRuntime() {
+  if (!state.project || !agentDshRuntimeSelect.value) return;
+  const selected = dshRuntimeChoices(state.executionRuntimes, state.devices)
+    .find((runtime) => runtime.id === agentDshRuntimeSelect.value && runtime.status === "online");
+  if (!selected) {
+    renderComposerPermissions();
+    return;
+  }
+  state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, selected));
+  renderProjectAgentButtons();
+  renderComposerPermissions();
+}
+
+function settingsEnabledHarnesses() {
+  return [
+    ["settings-enabled-codex", "codex"],
+    ["settings-enabled-dsh", DSH_HARNESS],
+  ].filter(([id]) => element(id).checked).map(([, harness]) => harness);
+}
+
+function settingsAgentSummary(harness) {
+  return harness === DSH_HARNESS
+    ? "DeepSeek Harness supplies this project's runtime and handles new Agent requests by default."
+    : "Codex supplies this project's connection command and handles new Agent requests by default.";
+}
+
+function syncSettingsAgentControls({ changedCheckbox } = {}) {
+  const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh")];
+  let enabled = settingsEnabledHarnesses();
+  if (enabled.length === 0) {
+    changedCheckbox.checked = true;
+    enabled = settingsEnabledHarnesses();
+  }
+  for (const control of controls) control.disabled = control.checked && enabled.length === 1;
+  const harnessSelect = element("settings-agent-harness");
+  for (const option of harnessSelect.options) {
+    if (option.value === "codex" || option.value === DSH_HARNESS) option.disabled = !enabled.includes(option.value);
+  }
+  if (!enabled.includes(harnessSelect.value)) harnessSelect.value = enabled[0];
+  const dsh = harnessSelect.value === DSH_HARNESS;
+  element("settings-codex-agent-fields").hidden = dsh;
+  element("settings-dsh-agent-fields").hidden = !dsh;
+  element("settings-agent-summary").textContent = settingsAgentSummary(harnessSelect.value);
 }
 
 function populateSettingsForm(settings) {
@@ -1629,9 +2134,16 @@ function populateSettingsForm(settings) {
   element("settings-auto-scroll").checked = normalized.composer.autoScroll;
   element("settings-notify-agent").checked = normalized.notifications.agentCompleted;
   element("settings-notify-connection").checked = normalized.notifications.connectionLost;
+  const harness = currentProjectHarness(normalized);
+  const enabledHarnesses = new Set(currentProjectEnabledHarnesses(normalized));
+  element("settings-enabled-codex").checked = enabledHarnesses.has("codex");
+  element("settings-enabled-dsh").checked = enabledHarnesses.has(DSH_HARNESS);
+  element("settings-agent-harness").value = harness;
   const profile = currentProjectProfile(normalized);
   renderModelOptions(element("settings-default-model"), profile.model, normalized);
   updateEffortControl(element("settings-default-model"), element("settings-default-effort"), profile.effort, normalized);
+  renderDshRuntimeOptions(element("settings-dsh-runtime"), normalized);
+  syncSettingsAgentControls();
   syncAllNumericPresets();
   renderContextDiagnostic(normalized);
 }
@@ -1673,6 +2185,13 @@ function readSettingsForm(baseSettings = settingsPreview) {
       model: element("settings-default-model").value,
       effort: element("settings-default-effort").value,
     });
+    next = withProjectEnabledHarnesses(next, state.project.id, settingsEnabledHarnesses());
+    next = withProjectAgentHarness(next, state.project.id, element("settings-agent-harness").value);
+    if (element("settings-agent-harness").value === DSH_HARNESS) {
+      const selected = dshRuntimeChoices(state.executionRuntimes, state.devices)
+        .find((runtime) => runtime.id === element("settings-dsh-runtime").value && runtime.status === "online");
+      if (selected) next = withProjectDshProfile(next, state.project.id, selected);
+    }
   }
   return next;
 }
@@ -1682,11 +2201,37 @@ function openSettingsDialog() {
   settingsPreview = normalizeSettings(state.settings);
   populateSettingsForm(settingsPreview);
   applyVisualSettings(settingsPreview);
+  const deviceInput = element("settings-device-name");
+  deviceInput.value = currentDeviceName || automaticDeviceName();
+  deviceInput.disabled = true;
+  element("settings-device-status").textContent = localizer.t("Loading this device…");
   settingsDialog.showModal();
+  void loadCurrentDeviceSettings();
   requestAnimationFrame(() => element("close-settings-button").focus());
 }
 
+async function loadCurrentDeviceSettings() {
+  const generation = ++settingsDeviceLoadGeneration;
+  const input = element("settings-device-name");
+  const status = element("settings-device-status");
+  try {
+    const devices = await api.listDevices();
+    if (generation !== settingsDeviceLoadGeneration || !settingsDialog.open) return;
+    const current = devices.find((device) => device.id === state.currentUser?.device_id);
+    if (!current) throw new Error(localizer.t("This device is unavailable."));
+    currentDeviceName = current.name;
+    input.value = current.name;
+    input.disabled = false;
+    status.textContent = "";
+  } catch (error) {
+    if (generation !== settingsDeviceLoadGeneration || !settingsDialog.open) return;
+    input.disabled = true;
+    status.textContent = error.message ?? localizer.t("Unable to load this device.");
+  }
+}
+
 function cancelSettingsDialog() {
+  settingsDeviceLoadGeneration += 1;
   applyVisualSettings(state.settings);
   settingsPreview = state.settings;
   if (settingsDialog.open) settingsDialog.close();
@@ -1722,6 +2267,7 @@ function handleNumericPresetSelection(target, { focusCustom = false } = {}) {
 }
 
 function handleSettingsControlInput(event) {
+  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-agent-harness"].includes(event.target.id)) return;
   if (handleNumericPresetSelection(event.target)) return;
   if (event.target.classList?.contains("digits-only-input")) {
     const sanitized = digitsOnly(event.target.value);
@@ -1739,6 +2285,16 @@ function handleSettingsControlChange(event) {
   if (event.target.id === "settings-default-model") {
     updateEffortControl(event.target, element("settings-default-effort"), element("settings-default-effort").value, settingsPreview);
   }
+  if (event.target.id === "settings-enabled-codex" || event.target.id === "settings-enabled-dsh") {
+    syncSettingsAgentControls({ changedCheckbox: event.target });
+  }
+  if (event.target.id === "settings-agent-harness") {
+    const selectedCheckbox = event.target.value === DSH_HARNESS
+      ? element("settings-enabled-dsh")
+      : element("settings-enabled-codex");
+    selectedCheckbox.checked = true;
+    syncSettingsAgentControls();
+  }
   if (handleNumericPresetSelection(event.target, { focusCustom: true })) return;
   updateSettingsPreviewFromForm();
 }
@@ -1754,13 +2310,44 @@ async function saveSettings(event) {
     element("settings-context-budget").focus();
     return;
   }
-  settingsPreview = readSettingsForm(settingsPreview);
-  state.settings = settingsStore.set(settingsPreview);
-  if (state.settings.notifications.agentCompleted) await ensureNotificationPermission();
-  applyVisualSettings(state.settings);
-  renderAgentProfileControls();
-  settingsDialog.close();
-  announce("Settings saved.");
+  element("settings-dsh-runtime-error").textContent = "";
+  if (state.project
+    && element("settings-agent-harness").value === DSH_HARNESS
+    && !element("settings-dsh-runtime").value) {
+    element("settings-dsh-runtime-error").textContent = "Connect and choose an online DeepSeek Harness runtime first.";
+    element("settings-dsh-runtime").focus();
+    return;
+  }
+  const deviceInput = element("settings-device-name");
+  const deviceStatus = element("settings-device-status");
+  const nextDeviceName = deviceInput.value.trim();
+  if (!deviceInput.disabled && (!nextDeviceName || nextDeviceName.length > 120)) {
+    deviceStatus.textContent = localizer.t("Choose a device name between 1 and 120 characters.");
+    deviceInput.focus();
+    return;
+  }
+  const submit = event.submitter;
+  if (submit) submit.disabled = true;
+  try {
+    if (!deviceInput.disabled && nextDeviceName !== currentDeviceName) {
+      const updated = await api.renameDevice(state.currentUser.device_id, nextDeviceName);
+      currentDeviceName = updated.name;
+    }
+    settingsPreview = readSettingsForm(settingsPreview);
+    state.settings = settingsStore.set(settingsPreview);
+    if (state.settings.notifications.agentCompleted) await ensureNotificationPermission();
+    applyVisualSettings(state.settings);
+    renderProjectAgentButtons();
+    renderAgentProfileControls();
+    settingsDeviceLoadGeneration += 1;
+    settingsDialog.close();
+    announce(localizer.t("Settings saved."));
+  } catch (error) {
+    deviceStatus.textContent = error.message ?? localizer.t("Unable to rename this device.");
+    if (!deviceInput.disabled) deviceInput.focus();
+  } finally {
+    if (submit) submit.disabled = false;
+  }
 }
 
 async function ensureNotificationPermission() {
@@ -1821,9 +2408,13 @@ function renderContextDiagnostic(settings) {
     label: "configured connector ceiling",
   });
   const approximateTokens = Math.max(4096, Math.floor(result.configuredBytes / 4));
+  const enabledHarnesses = currentProjectEnabledHarnesses(settings);
   input.setAttribute("aria-invalid", "false");
   diagnostic.dataset.state = "valid";
-  diagnostic.textContent = `Configured projection ceiling: ${formatBytes(result.configuredBytes)} (about ${new Intl.NumberFormat().format(approximateTokens)} tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. Reconnect Codex after changing this value. Desktop Hook updates use a separate 7 KiB capsule and continue across turns.`;
+  const connectorGuidance = enabledHarnesses.map((harness) => harness === DSH_HARNESS
+    ? "DeepSeek Harness uses the context limit configured by its GatherThread plugin instead of this browser value. Reconnect the DSH plugin after changing its local limit."
+    : "Reconnect Codex after changing this value. Codex Desktop Hooks use a separate 7 KiB capsule and continue across turns.").join(" ");
+  diagnostic.textContent = `Configured projection ceiling: ${formatBytes(result.configuredBytes)} (about ${new Intl.NumberFormat().format(approximateTokens)} tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. ${connectorGuidance}`;
 }
 
 function formatBytes(bytes) {
@@ -1839,7 +2430,7 @@ function syncPreset(selectId, inputId, values) {
 function syncAllNumericPresets() {
   syncPreset("settings-text-scale-preset", "settings-text-scale", [90, 100, 110, 125]);
   syncPreset("settings-left-width-preset", "settings-left-width", [220, 260, 340]);
-  syncPreset("settings-right-width-preset", "settings-right-width", [260, 290, 380]);
+  syncPreset("settings-right-width-preset", "settings-right-width", [260, 290, 320, 380]);
   syncPreset("settings-composer-height-preset", "settings-composer-height", [220, 280, 380]);
   const factor = element("settings-context-unit").value === "MiB" ? 1024 * 1024 : 1024;
   const bytes = Number(element("settings-context-budget").value) * factor;

@@ -74,8 +74,10 @@ export type RuntimeProvenance = z.infer<typeof RuntimeProvenanceSchema>;
 
 export const AgentExecutionProfileSchema = z.object({
   harness: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+  provider: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
   model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
   reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
+  runtime_id: IdSchema.optional(),
 });
 
 export type AgentExecutionProfile = z.infer<typeof AgentExecutionProfileSchema>;
@@ -146,6 +148,13 @@ export const CreateProjectInputSchema = z.object({
 
 export type CreateProjectInput = z.infer<typeof CreateProjectInputSchema>;
 
+export const UpdateProjectInputSchema = z.object({
+  title: ProjectTitleSchema,
+  idempotency_key: IdempotencyKeySchema,
+});
+
+export type UpdateProjectInput = z.infer<typeof UpdateProjectInputSchema>;
+
 export const ProjectRecordSchema = z.object({
   id: IdSchema,
   owner_user_id: IdSchema,
@@ -206,6 +215,7 @@ export const ClaimInvitationInputSchema = z.object({
   device_id: IdSchema.optional(),
   device_name: z.string().trim().min(1).max(120),
   device_expires_at: z.string().datetime().nullable().optional(),
+  remember_device: z.boolean().default(false),
 });
 
 export type ClaimInvitationInput = z.infer<typeof ClaimInvitationInputSchema>;
@@ -263,6 +273,18 @@ export const DeviceRecordSchema = z.object({
 
 export type DeviceRecord = z.infer<typeof DeviceRecordSchema>;
 
+export const UpdateDeviceInputSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+});
+
+export type UpdateDeviceInput = z.infer<typeof UpdateDeviceInputSchema>;
+
+export const CreateBrowserSessionInputSchema = z.object({
+  remember_device: z.boolean().default(false),
+});
+
+export type CreateBrowserSessionInput = z.infer<typeof CreateBrowserSessionInputSchema>;
+
 export const ClaimDeviceAuthorizationInputSchema = z.object({
   authorization_token: z.string().min(32).max(512),
   device_id: IdSchema.optional(),
@@ -271,6 +293,24 @@ export const ClaimDeviceAuthorizationInputSchema = z.object({
 });
 
 export type ClaimDeviceAuthorizationInput = z.infer<typeof ClaimDeviceAuthorizationInputSchema>;
+
+export const BeginDshPairingInputSchema = z.object({
+  device_name: z.string()
+    .trim()
+    .min(1)
+    .max(120)
+    .regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+});
+
+export type BeginDshPairingInput = z.infer<typeof BeginDshPairingInputSchema>;
+
+export const DshPairingUserCodeSchema = z.string().regex(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/u);
+
+export const ApproveDshPairingInputSchema = z.object({
+  user_code: DshPairingUserCodeSchema,
+});
+
+export type ApproveDshPairingInput = z.infer<typeof ApproveDshPairingInputSchema>;
 
 export const DeviceAuthorizationRecordSchema = z.object({
   id: IdSchema,

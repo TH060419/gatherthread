@@ -10,6 +10,7 @@ const apiPath = fileURLToPath(new URL("../src/api.js", import.meta.url));
 const stylesPath = fileURLToPath(new URL("../src/styles.css", import.meta.url));
 const domainPath = fileURLToPath(new URL("../src/domain.js", import.meta.url));
 const i18nPath = fileURLToPath(new URL("../src/i18n.js", import.meta.url));
+const dshPath = fileURLToPath(new URL("../src/dsh.js", import.meta.url));
 const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.url));
 const brandLightPath = fileURLToPath(new URL("../brand/lockup-color-transparent-light.svg", import.meta.url));
 const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-dark.svg", import.meta.url));
@@ -61,7 +62,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   ]);
   for (const requirement of [
     'class="skip-link"',
-    'class="auth-mark-motion"',
+    'class="auth-mark-motion auth-thread-field"',
+    'class="auth-canonical-extension" aria-hidden="true"',
     '<span class="headline-line">One room,</span>',
     '<span class="headline-line">Many minds.</span>',
     '<nav class="session-rail"',
@@ -82,10 +84,16 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     'id="invitation-list" class="invitation-list" aria-label="Project invitations"',
     'id="project-select"',
     'id="create-project-form"',
+    'id="rename-project-button"',
+    'id="rename-project-dialog"',
+    'id="rename-project-form"',
+    'for="rename-project-name"',
+    'id="rename-project-error" class="form-error" role="alert"',
     'id="rename-session-button"',
     'id="rename-session-dialog"',
     'id="rename-session-form"',
     'for="rename-session-name"',
+    'for="rename-session-mode"',
     'id="rename-session-error" class="form-error" role="alert"',
     'id="download-codex-button"',
     'id="connector-status" class="connector-status" role="status"',
@@ -107,8 +115,10 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     'id="connect-codex-activation"',
     'data-copy-command="posix"',
     'data-copy-command="powershell"',
+    'data-copy-command="marketplace"',
     'id="copy-posix-command-status"',
     'id="copy-powershell-command-status"',
+    'id="copy-marketplace-command-status"',
   ]) {
     assert.match(html, new RegExp(requirement.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
@@ -116,22 +126,30 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.doesNotMatch(html, /Subtle · recommended/);
   assert.equal((html.match(/brand\/lockup-color-transparent-light\.svg/g) ?? []).length, 2);
   assert.equal((html.match(/brand\/lockup-color-transparent-dark\.svg/g) ?? []).length, 2);
-  assert.match(html, /M50 135 H158 C210 135 245 215 298 240/);
-  assert.match(html, /M50 228 H162 C214 228 247 143 298 130/);
-  assert.match(html, /M50 322 H174 C248 322 322 184 404 184 H540/);
-  assert.match(html, /M50 42 H167 C241 42 320 184 404 184 H540/);
+  assert.match(html, /M72 66 C210 62 218 190 356 194 C438 196 442 300 525 314/);
+  assert.match(html, /M38 442 C176 438 225 338 350 336 C430 335 462 324 525 314/);
+  assert.match(html, /M166 560 C254 470 283 434 376 390 C444 358 474 326 525 314/);
+  assert.match(html, /M525 314 C610 314 672 314 760 314/);
+  assert.equal((html.match(/class="auth-thread-traveler"/g) ?? []).length, 7);
+  assert.match(html, /id="settings-button"[^>]*aria-label="Open Settings"[^>]*title="Settings"[^>]*data-tooltip/);
+  assert.match(html, /id="rename-session-button"[\s\S]*?aria-label="Rename session"[\s\S]*?title="Rename"[\s\S]*?<svg/);
+  assert.match(html, /id="delete-session-button"[^>]*aria-label="Delete"[^>]*title="Delete"[^>]*data-tooltip/);
   for (const color of ["#20C1DC", "#2E96F5", "#A766F0", "#F66DB9"]) {
     assert.match(html, new RegExp(color));
   }
   assert.doesNotMatch(html, /#08B9D8|#168AF4|#9A50EE|#F456AE/);
-  assert.doesNotMatch(html, /M50 135 H158 C207 135 245 220 300 241/);
   assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"/);
   assert.match(main, /title\.title = session\.name/);
   assert.match(main, /element\("session-title"\)\.title = session\.name/);
   assert.match(main, /localizer\.t\("Continue"\)/);
-  assert.match(styles, /text-overflow:\s*ellipsis/);
+  assert.match(styles, /\.session-button strong \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
+  assert.match(styles, /\.title-line h1 \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /select:not\(:disabled\):hover/);
   assert.match(styles, /html\[lang="zh-CN"\] \.agent-request-profile select/);
+  assert.match(styles, /\.composer \.agent-request-profile \{[\s\S]*?grid-template-columns:\s*repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(styles, /\.composer \.agent-request-profile select \{[\s\S]*?-webkit-appearance:\s*none;[\s\S]*?appearance:\s*none/);
+  assert.match(main, /const enabledHarnesses = currentProjectEnabledHarnesses\(settings\)/u);
+  assert.match(main, /connectorGuidance = enabledHarnesses\.map/);
   assert.match(styles, /\.composer-layout-resizer[\s\S]*?cursor:\s*row-resize/);
   assert.match(main, /installComposerLayoutResizer\(composerLayoutResizer\)/);
   assert.match(main, /renderMarkdown\(content\)/);
@@ -157,32 +175,97 @@ test("official light and dark lockups include the approved mark and outlined wor
   assert.match(dark, /color="#FFFFFF"/);
 });
 
-test("project Codex connector explains scope, credential prompting, hook trust, and focus restoration", async () => {
-  const [html, main, styles, i18n] = await Promise.all([
+test("project Codex connector presents a concise Alpha install-connect-confirm flow", async () => {
+  const [html, main, domain, styles, i18n] = await Promise.all([
     readFile(htmlPath, "utf8"),
     readFile(mainPath, "utf8"),
+    readFile(domainPath, "utf8"),
     readFile(stylesPath, "utf8"),
     readFile(i18nPath, "utf8"),
   ]);
-  assert.match(html, /root of your local GatherThread repository/i);
-  assert.match(html, /creates or reuses and opens the same-name local Desktop project/i);
-  assert.match(html, /connects every editable session with one Desktop task and one isolated background Agent runtime/i);
-  assert.match(html, /Single-writer synchronization/i);
-  assert.match(html, /Codex Desktop exclusively owns the visible task/i);
-  assert.match(html, /Web Agent requests run in an isolated background projection/i);
+  assert.match(html, /Alpha preview/i);
+  assert.match(html, /Official service is not open yet/i);
+  assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Connect this project<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Confirm in Codex<\/h3>/);
+  assert.match(html, /The terminal keeps this project connected/i);
+  assert.match(html, /Review and enable the GatherThread Hooks/i);
+  assert.match(html, /Keep the terminal open/i);
   assert.doesNotMatch(html, /Move to project|manual Desktop step/i);
   assert.match(html, /device token is requested by a hidden CLI prompt/i);
-  assert.match(html, /open Codex Desktop Settings and enable Hooks/i);
-  assert.match(html, /review the generated <code>\.codex\/hooks\.json<\/code>/i);
-  assert.match(i18n, /Hooks（钩子）/);
+  assert.match(html, /only copies commands/i);
+  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.1 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(domain, /--plugin-hooks/);
+  const pluginCommands = html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "";
+  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
+  assert.match(i18n, /Alpha 预览版/);
+  assert.match(i18n, /"Install once": "仅需安装一次"/);
+  assert.match(i18n, /"Connect this project": "连接当前项目"/);
+  assert.match(i18n, /"Confirm in Codex": "在 Codex 中确认"/);
   assert.doesNotMatch(html, /Codex <code>\/hooks<\/code>/i);
   assert.match(main, /projectCodexConnectionCommands\(\{[\s\S]*?baseUrl: location\.origin[\s\S]*?projectId: state\.project\.id/);
   assert.doesNotMatch(main, /connect-codex-move-project-name|renderCodexDesktopMoveGuide/);
   assert.match(main, /connectCodexDialog\.addEventListener\("close"[\s\S]*?returnFocus\.focus\(\)/);
   assert.match(main, /navigator\.clipboard\?\.writeText[\s\S]*?document\.execCommand\?\.\("copy"\)/);
-  assert.match(styles, /\.codex-connect-dialog[\s\S]*?width: min\(720px/);
+  assert.match(main, /"Plugin install commands copied\."/);
+  assert.match(styles, /\.codex-connect-dialog[\s\S]*?width: min\(760px/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.command-heading[\s\S]*?flex-direction: column/);
   assert.doesNotMatch(main, /searchParams\.(?:set|append)\([^\n]*(?:device|token|credential)/i);
+});
+
+test("DeepSeek Harness is a selectable exact runtime with the same concise three-step guide", async () => {
+  const [html, main, api, dsh, styles, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(apiPath, "utf8"),
+    readFile(dshPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+    readFile(i18nPath, "utf8"),
+  ]);
+  for (const id of [
+    "connect-dsh-button",
+    "connect-dsh-dialog",
+    "connect-dsh-start-command",
+    "connect-dsh-version-command",
+    "connect-dsh-pinned-start-command",
+    "connect-dsh-install-command",
+    "connect-dsh-server-url",
+    "connect-dsh-runtime-list",
+    "approve-dsh-pairing-dialog",
+    "approve-dsh-pairing-form",
+    "approve-dsh-pairing-code",
+    "agent-harness-select",
+    "agent-dsh-runtime-select",
+    "settings-agent-harness",
+    "settings-dsh-runtime",
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(html, /value="deepseek-harness">DeepSeek Harness<\/option>/);
+  assert.match(html, /Alpha preview/i);
+  assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Open DSH<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Pair this server<\/h3>/);
+  assert.match(html, /Official service is not open yet/i);
+  assert.match(html, /The plugin connects outward/i);
+  assert.match(html, /Verified DSH version: 0\.1\.2-rc\.1/);
+  assert.match(html, /current local, LAN, self-hosted, or Tailscale server/i);
+  assert.match(html, /single-use and expires shortly/);
+  assert.match(dsh, /DSH_START_COMMAND = `npx @deepseek-ai\/dsh@\$\{DSH_NPM_VERSION\} web`/);
+  assert.match(dsh, /plugin --profile web add @gatherthread\/dsh-host/);
+  assert.doesNotMatch(dsh, /--dsh-source|(?:https?|dsh):\/\/localhost|deep[-_ ]?link/iu);
+  assert.match(main, /api\.listSessionRuntimes\(sessionId\)/);
+  assert.match(main, /dshExecutionProfile\(currentDshResolution\(\)\.runtime\)/);
+  assert.match(api, /runtime_id: input\.executionProfile\.runtimeId/);
+  assert.match(main, /resolveCodexRuntime\(state\.executionRuntimes\)/);
+  assert.match(main, /codexExecutionProfile\(currentCodexResolution\(\)\.runtime/);
+  assert.doesNotMatch(
+    main.match(/function renderComposerPermissions\(\) \{[\s\S]*?\n\}/u)?.[0] ?? "",
+    /membership\.runtime/u,
+  );
+  assert.match(api, /provider: input\.executionProfile\.provider/);
+  assert.doesNotMatch(main, /fetch\([^\n]*(?:localhost|127\.0\.0\.1)|new WebSocket\([^\n]*(?:localhost|127\.0\.0\.1)/iu);
+  assert.doesNotMatch(`${main}\n${dsh}`, /(?:local|session)Storage[^\n]*(?:pair|token|credential)/iu);
+  assert.match(styles, /\.connection-guide/);
+  assert.match(styles, /\.connection-preview-banner/);
+  assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.dsh-runtime-row/);
+  assert.match(i18n, /不假设公共账户注册系统已经上线/);
+  assert.match(i18n, /长期设备凭据只保存在 DSH 本机凭据库/);
 });
 
 test("read-only Codex downloads remain one-way and poll independent snapshot jobs", async () => {
@@ -237,15 +320,68 @@ test("empty canonical events do not render a visible placeholder message", async
   assert.match(main, /if \(content\) \{/);
 });
 
-test("session rename updates local metadata and applies realtime control events", async () => {
+test("remembered login and current-device naming remain explicit and accessible", async () => {
+  const [html, main, api] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(apiPath, "utf8"),
+  ]);
+  for (const id of [
+    "login-remember-device",
+    "claim-remember-device",
+    "settings-device",
+    "settings-device-name",
+    "settings-device-status",
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /for="login-remember-device"/);
+  assert.match(html, /for="claim-remember-device"/);
+  assert.match(html, /for="settings-device-name"/);
+  assert.match(main, /automaticDeviceName\(\)/);
+  assert.match(main, /api\.renameDevice\(state\.currentUser\.device_id/);
+  assert.match(api, /remember_device: rememberDevice/);
+  assert.doesNotMatch(main, /localStorage.*device/i);
+});
+
+test("session settings update local metadata and apply realtime control events", async () => {
   const [main, api] = await Promise.all([readFile(mainPath, "utf8"), readFile(apiPath, "utf8")]);
-  assert.match(main, /api\.renameSession\(sessionId/);
+  assert.match(main, /api\.updateSession\(sessionId/);
   assert.match(main, /sessionMetadataFromEvent\(event\)/);
   assert.match(main, /state\.sessions = state\.sessions\.map/);
   assert.match(main, /renderSessionHeader\(\)/);
   assert.match(main, /element\("session-access-note"\)\.hidden = session\.mode !== "solo"/);
   assert.match(main, /renderSessionList\(\)/);
   assert.match(api, /method: "PATCH"/);
+});
+
+test("session settings let the project creator change an owned session mode", async () => {
+  const [html, main, api] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(apiPath, "utf8"),
+  ]);
+  assert.match(html, /id="rename-session-mode"[\s\S]*?<option value="solo">Solo<\/option>[\s\S]*?<option value="multi">Multi<\/option>/);
+  assert.match(main, /state\.project\?\.role === "owner"[\s\S]*?state\.session\.ownerUserId === state\.currentUser\?\.id/);
+  assert.match(main, /api\.updateSession\(sessionId/);
+  assert.match(main, /updateSessionMetadata\(sessionId, renamed\)/);
+  assert.match(api, /async updateSession\(sessionId/);
+});
+
+test("project rename is creator-gated and refreshes project metadata in place", async () => {
+  const [html, main, api, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(apiPath, "utf8"),
+    readFile(i18nPath, "utf8"),
+  ]);
+  assert.match(html, /id="rename-project-button"[\s\S]*?aria-controls="rename-project-dialog"/);
+  assert.match(main, /state\.project\?\.role !== "owner"/);
+  assert.match(main, /api\.renameProject\(projectId/);
+  assert.match(main, /state\.projects = state\.projects\.map/);
+  assert.match(main, /renderProjectSelect\(\)/);
+  assert.match(api, /async renameProject\(projectId/);
+  assert.match(i18n, /"Rename project": "重命名项目"/);
 });
 
 test("cloud deletion is explicit, creator-gated, and preserves local work in the confirmation copy", async () => {
@@ -330,4 +466,38 @@ test("custom Codex models explain that access must already be configured", async
   const explanation = "This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.";
   assert.match(html, new RegExp(explanation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(i18n, /这里只登记调用模型名，不配置模型接入。请先自行在 Codex 中配置受支持的模型，再将其名称添加到这里。/);
+});
+
+test("project Agent shortcuts are selectable, contextual, and compact in the fixed session rail", async () => {
+  const [html, main, styles, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+    readFile(i18nPath, "utf8"),
+  ]);
+  for (const id of ["settings-enabled-codex", "settings-enabled-dsh", "settings-agent-summary"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.equal((html.match(/class="icon-button rail-create-button"/g) ?? []).length, 2);
+  assert.match(main, /projectEnabledHarnesses/);
+  assert.match(main, /connectCodexButton\.hidden = !enabled\.has\("codex"\)/);
+  assert.match(main, /connectDshButton\.hidden = !enabled\.has\(DSH_HARNESS\)/);
+  assert.match(main, /const enabledHarnesses = currentProjectEnabledHarnesses\(\);[\s\S]*?agentHarnessSelect\.replaceChildren\(\);/);
+  assert.match(main, /for \(const enabledHarness of enabledHarnesses\)[\s\S]*?agentHarnessSelect\.append\(option\);/);
+  assert.match(main, /DeepSeek Harness supplies this project's runtime and handles new Agent requests by default\./);
+  assert.match(i18n, /当前项目使用 DeepSeek Harness 运行环境，并默认由其处理新的 Agent 请求。/);
+  assert.match(styles, /\.session-list \{[\s\S]*?flex: 1 1 auto;[\s\S]*?overflow-y: auto;/);
+  assert.match(styles, /\.rail-create-button \{[\s\S]*?width: 34px;[\s\S]*?height: 34px;/);
+});
+
+test("the composer uses its accessible divider instead of a scrolling control panel", async () => {
+  const [html, styles, main] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+    readFile(mainPath, "utf8"),
+  ]);
+  assert.match(html, /id="composer-layout-resizer"[\s\S]*?role="separator"[\s\S]*?aria-orientation="horizontal"/);
+  assert.match(styles, /\.composer \{[\s\S]*?grid-template-rows: minmax\(58px, 1fr\)[\s\S]*?overflow: hidden;/);
+  assert.match(styles, /\.composer > textarea \{[\s\S]*?resize: none;/);
+  assert.match(main, /installComposerLayoutResizer\(composerLayoutResizer\)/);
 });

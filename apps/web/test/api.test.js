@@ -56,6 +56,98 @@ test("Agent requests carry the selected model and reasoning profile on the produ
   }
 });
 
+test("DeepSeek Harness requests target one exact runtime without Codex fallback or credentials", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: { event: {
+      id: "e-dsh", session_id: "s1", sequence: 2, idempotency_key: "agent-request-dsh-0001",
+      type: "agent_request", actor_user_id: "u1", actor_display_name: "Alice",
+      created_at: "2026-09-06T00:00:00.000Z", visibility: "session", reply_to_event_id: null,
+      payload: {
+        content: "Inspect this with DSH",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "Local Provider",
+          model: "CaseSensitive/Model-X",
+          runtime_id: "runtime-dsh-1",
+        },
+      },
+    } } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    await api.appendAgentRequest("s1", {
+      content: "Inspect this with DSH",
+      idempotencyKey: "agent-request-dsh-0001",
+      executionProfile: {
+        harness: "deepseek-harness",
+        provider: "Local Provider",
+        model: "CaseSensitive/Model-X",
+        runtimeId: "runtime-dsh-1",
+      },
+    });
+    assert.equal(captured.url, "https://gatherthread.example/v1/sessions/s1/events");
+    assert.equal(captured.options.credentials, "include");
+    assert.equal(captured.options.headers.Authorization, undefined);
+    assert.deepEqual(JSON.parse(captured.options.body).payload.execution_profile, {
+      harness: "deepseek-harness",
+      provider: "Local Provider",
+      model: "CaseSensitive/Model-X",
+      runtime_id: "runtime-dsh-1",
+    });
+    assert.doesNotMatch(captured.options.body, /reasoning|token|authorization/iu);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("DeepSeek Harness discovery, pairing approval, and revocation use Cookie-authenticated server routes", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const responses = [
+    { data: { runtimes: [{
+      id: "runtime-dsh-1", device_id: "device-dsh-1", harness: "deepseek-harness",
+      provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
+      last_seen_at: "2026-09-06T00:00:00.000Z",
+    }] } },
+    { data: { pairing: {
+      pairing_id: "dshp-one-use", user_code: "ABCD-2345", device_name: "Studio DSH",
+      expires_at: "2026-09-06T00:05:00.000Z", status: "approved",
+    } } },
+    undefined,
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    const body = responses.shift();
+    return body === undefined
+      ? new Response(null, { status: 204 })
+      : Response.json(body);
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const runtimes = await api.listSessionRuntimes("session / one");
+    assert.deepEqual(runtimes, [{
+      id: "runtime-dsh-1", deviceId: "device-dsh-1", harness: "deepseek-harness",
+      provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
+      lastSeenAt: "2026-09-06T00:00:00.000Z",
+    }]);
+    assert.equal((await api.approveDshPairing("ABCD-2345")).status, "approved");
+    await api.revokeDevice("device / dsh");
+    assert.deepEqual(requests.map(({ url, options }) => [options.method ?? "GET", url]), [
+      ["GET", "https://gatherthread.example/v1/sessions/session%20%2F%20one/runtimes"],
+      ["POST", "https://gatherthread.example/v1/dsh-pairings/approve"],
+      ["DELETE", "https://gatherthread.example/v1/devices/device%20%2F%20dsh"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[1].options.body), { user_code: "ABCD-2345" });
+    assert.ok(requests.every(({ options }) => options.credentials === "include"));
+    assert.ok(requests.every(({ options }) => options.headers.Authorization === undefined));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("project participants cannot append to solo sessions", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   api.currentUser = { id: "user-maya", username: "Maya Ortiz" };
@@ -81,6 +173,22 @@ test("mock project creation leaves an empty project until the owner creates a se
   assert.deepEqual(sessions, []);
 });
 
+test("mock project rename updates project summaries and is creator-only", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const project = await api.createProject({ name: "Before" });
+  const renamed = await api.renameProject(project.id, {
+    name: "After 🚀",
+    idempotencyKey: "rename-project-0001",
+  });
+  assert.equal(renamed.name, "After 🚀");
+  assert.equal((await api.listProjects()).find((item) => item.id === project.id)?.name, "After 🚀");
+  api.projects.find((item) => item.id === project.id).role = "participant";
+  await assert.rejects(() => api.renameProject(project.id, {
+    name: "Denied",
+    idempotencyKey: "rename-project-denied-0001",
+  }), (error) => error.status === 404);
+});
+
 test("mock session rename updates summaries and publishes metadata without the previous name", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   const project = await api.createProject({ name: "New research" });
@@ -104,6 +212,17 @@ test("mock session rename updates summaries and publishes metadata without the p
   } finally {
     socket.close();
   }
+});
+
+test("mock project creator can switch an owned session between multi and solo", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const updated = await api.updateSession("session-orbit", {
+    name: "Project Orbit",
+    mode: "solo",
+    idempotencyKey: "session-mode-0001",
+  });
+  assert.equal(updated.mode, "solo");
+  assert.equal((await api.listProjectSessions("project-orbit")).find((session) => session.id === "session-orbit")?.mode, "solo");
 });
 
 test("mock project, session, and rename titles reject C0/C1 controls but keep Unicode", async () => {
@@ -146,6 +265,60 @@ test("HTTP session rename uses the existing PATCH contract", async () => {
     assert.deepEqual(JSON.parse(captured.options.body), {
       title: "After",
       idempotency_key: "rename-session-0001",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP session settings update title and mode through one PATCH", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: {
+      session: {
+        id: "s1", project_id: "p1", title: "After", mode: "solo", state: "active",
+        updated_at: "2026-08-25T10:00:00.000Z",
+      },
+      event: { id: "e1" },
+    } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const updated = await api.updateSession("s1", {
+      name: "After", mode: "solo", idempotencyKey: "session-settings-0001",
+    });
+    assert.equal(updated.mode, "solo");
+    assert.equal(captured.options.method, "PATCH");
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      title: "After",
+      mode: "solo",
+      idempotency_key: "session-settings-0001",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("HTTP project rename uses the project PATCH contract", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return Response.json({ data: { project: {
+      id: "p1", title: "After", state: "active", updated_at: "2026-08-25T10:00:00.000Z",
+    } } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const renamed = await api.renameProject("p1", { name: "After", idempotencyKey: "rename-project-0001" });
+    assert.equal(renamed.name, "After");
+    assert.equal(captured.url, "https://gatherthread.example/v1/projects/p1");
+    assert.equal(captured.options.method, "PATCH");
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      title: "After",
+      idempotency_key: "rename-project-0001",
     });
   } finally {
     globalThis.fetch = originalFetch;
@@ -434,7 +607,29 @@ test("new-user invitation claim requests a browser session without retaining the
       invite_token: "one-use-invitation-secret-that-is-long",
       display_name: "New User",
       device_name: "Work laptop",
+      remember_device: false,
     });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("browser login sends the remember-device choice without retaining the bearer", async () => {
+  const originalFetch = globalThis.fetch;
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return new Response(JSON.stringify({ data: {
+      actor: { id: "u1", username: "Alice", device_id: "d1" },
+      expires_at: "2026-09-29T00:00:00.000Z",
+    } }), { status: 201, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    await api.authenticate("device-token", { rememberDevice: true });
+    assert.deepEqual(JSON.parse(captured.options.body), { remember_device: true });
+    assert.equal(captured.options.headers.Authorization, "Bearer device-token");
+    assert.equal(api.token, "");
   } finally {
     globalThis.fetch = originalFetch;
   }

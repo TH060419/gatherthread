@@ -1,0 +1,69 @@
+{
+  "name": "@gatherthread/dsh-host",
+  "version": "0.1.0-alpha.1",
+  "description": "Opt-in GatherThread integration for the DeepSeek Harness Web profile",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TH060419/gatherthread.git",
+    "directory": "packages/dsh-host"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "type": "module",
+  "main": "dist/bundle/native-plugin.js",
+  "types": "types/native-plugin.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/native-plugin.d.ts",
+      "default": "./dist/bundle/native-plugin.js"
+    },
+    "./native-plugin": {
+      "types": "./types/native-plugin.d.ts",
+      "default": "./dist/bundle/native-plugin.js"
+    },
+    "./plugin": {
+      "types": "./dist/src/plugin.d.ts",
+      "default": "./dist/bundle/plugin.js"
+    },
+    "./client": {
+      "default": "./client/client.js"
+    },
+    "./cordis.patch.yml": {
+      "default": "./cordis.patch.yml"
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "@deepseek-ai/dsh-client-connection",
+        "@deepseek-ai/dsh-client-ui-settings"
+      ],
+      "platform": "web"
+    }
+  },
+  "files": [
+    "LICENSE",
+    "client/client.js",
+    "cordis.patch.yml",
+    "bundle/manifest.json",
+    "dist/bundle/*.js",
+    "dist/src/plugin.d.ts",
+    "types/*.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -b && node ../../scripts/build-dsh-plugin.mjs",
+    "prepack": "npm run build",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "test:real-host": "npm run build && node ../../scripts/test-dsh-host-real.mjs"
+  }
+}

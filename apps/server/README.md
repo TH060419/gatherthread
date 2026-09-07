@@ -10,7 +10,7 @@ npm run build
 GATHERTHREAD_DATABASE_PATH=./data/collaboration.sqlite GATHERTHREAD_SERVER_PORT=8787 npm start
 ```
 
-The default bind address is `127.0.0.1`. Set `HOST` explicitly to expose the service beyond the local machine.
+The default bind address is `127.0.0.1`. Configure only the documented `GATHERTHREAD_*` variables; generic `HOST` is intentionally ignored. Keep the application on loopback and expose an approved Caddy or Tailscale HTTPS edge instead.
 
 ## Authentication
 
@@ -24,15 +24,18 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/health` | Health and active SQLite journal mode |
+| `GET` | `/health/live` | Unauthenticated process liveness only |
+| `GET` | `/health` or `/health/ready` | Unauthenticated SQLite WAL, foreign-key, and write readiness |
 | `POST` | `/v1/bootstrap` | One-time first identity and device token |
 | `POST` | `/v1/browser-sessions` | Exchange a device credential for an HttpOnly browser session |
+| `PATCH` | `/v1/devices/:device_id` | Rename one of the authenticated user's devices |
 | `POST/GET` | `/v1/device-authorizations` | Create or list delegated device authorizations |
 | `POST` | `/v1/device-authorizations/claim` | Claim a delegated authorization on a new device |
 | `DELETE` | `/v1/devices/:device_id` | Revoke an owned device token and runtimes |
 | `GET` | `/v1/me` | Return the authenticated user and device identity |
 | `POST/GET` | `/v1/projects` | Create an empty project or list projects visible to the actor |
 | `GET` | `/v1/projects/:project_id` | Read one visible project and the actor's role |
+| `PATCH` | `/v1/projects/:project_id` | Owner-only idempotent project title update |
 | `POST/GET` | `/v1/projects/:project_id/sessions` | Owner creates solo/multi; participant creates personal solo; members list sessions |
 | `GET` | `/v1/projects/:project_id/members` | List project members |
 | `PUT/DELETE` | `/v1/projects/:project_id/members/:user_id` | Owner-change or remove another member |
@@ -79,7 +82,7 @@ The server derives actor identity from the credential and always assigns event I
 
 Project membership is the broad ACL boundary. A participant can write `multi`; a viewer reads all project sessions. Owners and participants may create personal `solo`, and the persisted `owner_user_id` identifies its immutable creator: only that creator can write or rename the Solo while retaining a non-viewer project role. Even the project owner reads another member's Solo. The project owner alone creates `multi` and can change or remove every other member.
 
-Project creation inserts only the project and its owner membership, so a new project's `session_count` is `0`. An owner or participant explicitly creates an eligible first session; existing sessions named `General` are preserved and no migration backfills one. Project creation, session creation, and authorized `PATCH /v1/sessions/:session_id` share a trimmed 1–200 character, control-character-free `title` policy; invalid title mutations return `422 validation_error`. A title-only change emits a metadata-only `session_state_change` event with `{ "action": "renamed", "title": "..." }`, allowing subscribed clients to refresh their title and session list without exposing the previous name or conversation content.
+Project creation inserts only the project and its owner membership, so a new project's `session_count` is `0`. An owner or participant explicitly creates an eligible first session; existing sessions named `General` are preserved and no migration backfills one. Project creation, session creation, owner-only `PATCH /v1/projects/:project_id`, and authorized `PATCH /v1/sessions/:session_id` share a trimmed 1–200 character, control-character-free `title` policy; invalid title mutations return `422 validation_error`. A session title or mode change emits a metadata-only `session_state_change` event, allowing subscribed clients to refresh session metadata without exposing previous names or conversation content. Project title changes are owner-only and idempotent; they update project metadata without renaming local harness workspaces.
 
 ## WebSocket contract
 
@@ -95,4 +98,4 @@ Set `GATHERTHREAD_ALLOWED_ORIGINS` to a comma-separated exact Origin allowlist w
 
 ## Security and first-release scope
 
-Projects are private and owner-managed. Solo writes are creator-only; multi writes allow owners and participants; viewers are read-only. New sessions default to hard limits of 512 per creator, 2,048 per project, and 8,192 per deployment; exact idempotent retries still return the original session at the limit. Project invitations are single-use, peppered, and expire after one hour, 24 hours, or seven days. Payloads redact common credentials and default-private thinking/system/developer fields before persistence. A non-owner member reading another user's activity receives public attribution rather than local device, runtime, or native-session identifiers. Snapshot jobs are charged at least 1 KiB each, completion data is bounded to 8 KiB, cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment, and unfinished jobs default to 64/256/4096 respectively. The first release still lacks multi-process fan-out, automatic retention jobs, attachment blob storage, and public-Internet deployment support. Use the documented loopback plus private Tailscale Serve topology.
+Projects are private and owner-managed. Solo writes are creator-only; multi writes allow owners and participants; viewers are read-only. New sessions default to hard limits of 512 per creator, 2,048 per project, and 8,192 per deployment; exact idempotent retries still return the original session at the limit. Project invitations are single-use, peppered, and expire after one hour, 24 hours, or seven days. Payloads redact common credentials and default-private thinking/system/developer fields before persistence. A non-owner member reading another user's activity receives public attribution rather than local device, runtime, or native-session identifiers. Snapshot jobs are charged at least 1 KiB each, completion data is bounded to 8 KiB, cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment, and unfinished jobs default to 64/256/4096 respectively. The beta still lacks multi-process fan-out, automatic retention jobs, attachment blob storage, and open registration. Use a documented connection profile; public access is supported only through the invitation-only Alibaba Cloud ECS profile with the application retained on loopback.

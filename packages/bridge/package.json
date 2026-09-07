@@ -1,6 +1,6 @@
 {
   "name": "@gatherthread/bridge",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "license": "Apache-2.0",
   "private": true,
   "type": "module",
@@ -8,7 +8,7 @@
   "types": "dist/src/index.d.ts",
   "bin": {
     "gatherthread-bridge": "dist/src/cli.js",
-    "gatherthread-codex": "dist/src/codex-connect.js",
+    "gatherthread-codex": "dist/src/codex-connect-bin.js",
     "gatherthread-codex-hook": "dist/src/codex-hook.js"
   },
   "exports": {

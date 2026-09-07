@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "gatherthread": {
+      "command": "node",
+      "args": [
+        "${PLUGIN_ROOT}/scripts/mcp-launcher.mjs"
+      ]
+    }
+  }
+}

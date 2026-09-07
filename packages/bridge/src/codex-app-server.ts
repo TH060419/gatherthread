@@ -52,6 +52,7 @@ export interface CodexThreadTurn {
 export interface CodexThreadReadResult {
   id: string;
   name: string | null;
+  projectId: string | null;
   status: string;
   turns: CodexThreadTurn[];
 }
@@ -81,9 +82,13 @@ interface CodexAppServerState {
   estimatedContextTokens: number;
   contextUsageSource: "fallback_estimate" | "app_server";
   cloudCursor: number;
-  /** Last canonical sequence fully delivered to the Desktop Agent through a completed Hook turn. */
+  /** Last canonical sequence delivered through native history or a completed trusted Hook turn. */
   desktopDeliveryCursor: number;
+  /** Last canonical sequence persisted into the visible Desktop thread's native model history. */
+  desktopProjectionCursor: number;
   desktopRelayCheckpoint?: DesktopRelayCheckpoint;
+  /** Write-ahead checkpoint for recovering a possibly acknowledged native item injection. */
+  desktopProjectionJournal?: ProjectionJournalEntry;
   projectionGeneration: number;
   compactionGeneration: number;
   coveredThroughSequence: number;
@@ -198,11 +203,13 @@ class CodexTurnTerminatedError extends Error {
 
 class CodexAppServerRequestError extends Error {
   readonly detail: string;
+  readonly code: unknown;
 
-  constructor(detail: string) {
+  constructor(detail: string, code?: unknown) {
     super(`Codex App Server request failed: ${detail}`);
     this.name = "CodexAppServerRequestError";
     this.detail = detail;
+    this.code = code;
   }
 }
 
@@ -243,6 +250,7 @@ export interface CodexAppServerClientOptions {
   env?: NodeJS.ProcessEnv;
   signal?: AbortSignal;
   requestTimeoutMs?: number;
+  threadStartTimeoutMs?: number;
   turnTimeoutMs?: number;
   maxMessageBytes?: number;
 }
@@ -266,9 +274,12 @@ export interface CodexAppServerExecutorOptions {
   revealThread?: (threadId: string) => Promise<boolean>;
   /**
    * Restrict this executor to the Desktop-owned projection and trusted hooks.
-   * It must never resume, read, inject into, or execute on that native thread.
+   * It may take a short App Server lease to append canonical history while the
+   * thread is idle, but must never execute a turn or contend with an active one.
    */
   desktopHookOnly?: boolean;
+  /** Bound the best-effort visible-thread lease without delaying Web execution polling. */
+  desktopNativeResumeTimeoutMs?: number;
   threadSource?: "vscode" | "exec";
   gatherThreadSessionId?: string;
 }
@@ -295,6 +306,7 @@ export interface CodexProjectHarnessOptions {
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+const DEFAULT_THREAD_START_TIMEOUT_MS = 60_000;
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1_000;
 const DEFAULT_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_PROMPT_BYTES = 8 * 1024 * 1024;
@@ -302,6 +314,7 @@ const DEFAULT_MAX_INJECTION_ITEM_BYTES = 64 * 1024;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const MIN_CONTEXT_WINDOW_TOKENS = 4_096;
 const DEFAULT_CONTEXT_HIGH_WATERMARK = 0.8;
+const DEFAULT_DESKTOP_NATIVE_RESUME_TIMEOUT_MS = 3_000;
 const ACTIVE_STATE_WRITERS = new Set<string>();
 const DEFAULT_MAX_TOOL_OUTPUT_BYTES = 32 * 1024;
 const MAX_LOCAL_TURN_UPLOAD_BYTES = 180 * 1024;
@@ -318,7 +331,7 @@ const DESKTOP_RELAY_VISIBLE_ITEMS = 3;
 /** Local stdio JSON-RPC client for Codex App Server. */
 export class CodexAppServerClient {
   readonly #options: Required<Pick<CodexAppServerClientOptions,
-  "requestTimeoutMs" | "turnTimeoutMs" | "maxMessageBytes">> & CodexAppServerClientOptions;
+  "requestTimeoutMs" | "threadStartTimeoutMs" | "turnTimeoutMs" | "maxMessageBytes">> & CodexAppServerClientOptions;
   readonly #pending = new Map<number, PendingRequest>();
   readonly #notifications = new Set<(notification: JsonRpcNotification) => void>();
   readonly #threadTokenUsage = new Map<string, CodexThreadTokenUsage>();
@@ -333,6 +346,7 @@ export class CodexAppServerClient {
   #closePromise: Promise<void> | undefined;
   #disposePromise: Promise<void> | undefined;
   #disposed = false;
+  #processGeneration = 0;
 
   constructor(options: CodexAppServerClientOptions) {
     if (!options.command.trim()) throw new Error("Codex command must be non-empty");
@@ -340,6 +354,7 @@ export class CodexAppServerClient {
       ...options,
       env: withoutGatherThreadCredentials(options.env ?? process.env),
       requestTimeoutMs: options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      threadStartTimeoutMs: options.threadStartTimeoutMs ?? DEFAULT_THREAD_START_TIMEOUT_MS,
       turnTimeoutMs: options.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS,
       maxMessageBytes: options.maxMessageBytes ?? DEFAULT_MAX_MESSAGE_BYTES,
     };
@@ -347,6 +362,10 @@ export class CodexAppServerClient {
       this.#fail(new Error("Codex App Server was aborted"));
     };
     if (this.#abortListener) options.signal?.addEventListener("abort", this.#abortListener, { once: true });
+  }
+
+  get processGeneration(): number {
+    return this.#processGeneration;
   }
 
   async start(): Promise<void> {
@@ -364,6 +383,7 @@ export class CodexAppServerClient {
     model: string;
     sandbox: CodexSandboxMode;
     threadSource?: "vscode" | "exec";
+    projectId?: string;
   }): Promise<string> {
     const result = await this.request("thread/start", {
       cwd: input.cwd,
@@ -386,6 +406,7 @@ export class CodexAppServerClient {
       // rich-client-created thread in the desktop's default task list; the
       // serviceName and explicit thread name preserve GatherThread attribution.
       threadSource: input.threadSource ?? "vscode",
+      ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
     });
     const threadId = objectString(objectValue(result, "thread"), "id");
     if (!threadId) throw new Error("Codex App Server thread/start omitted the thread id");
@@ -397,6 +418,7 @@ export class CodexAppServerClient {
     cwd: string;
     model: string;
     sandbox: CodexSandboxMode;
+    timeoutMs?: number;
   }): Promise<void> {
     const result = await this.request("thread/resume", {
       threadId: input.threadId,
@@ -404,13 +426,55 @@ export class CodexAppServerClient {
       model: input.model,
       sandbox: input.sandbox,
       approvalPolicy: "never",
-    });
+    }, input.timeoutMs);
     const resumedId = objectString(objectValue(result, "thread"), "id");
     if (resumedId !== input.threadId) throw new Error("Codex App Server resumed an unexpected thread");
   }
 
   async setThreadName(threadId: string, name: string): Promise<void> {
     await this.request("thread/name/set", { threadId, name });
+  }
+
+  async findProjectIdForRoot(rootPath: string): Promise<string | undefined> {
+    const expectedRoot = path.resolve(rootPath);
+    let cursor: string | undefined;
+    try {
+      for (let page = 0; page < 10_000; page += 1) {
+        const result = await this.request("project/list", {
+          limit: 200,
+          ...(cursor === undefined ? {} : { cursor }),
+        });
+        const projects = objectArray(result, "data") ?? [];
+        for (const project of projects) {
+          const projectId = objectString(project, "id");
+          const roots = objectArray(project, "roots") ?? [];
+          if (projectId && roots.some((root) => {
+            const candidate = objectString(root, "path");
+            return candidate !== undefined && path.resolve(candidate) === expectedRoot;
+          })) return projectId;
+        }
+        const nextCursor = objectString(result, "nextCursor");
+        if (!nextCursor) return undefined;
+        if (nextCursor === cursor) throw new Error("Codex project/list returned a repeated cursor");
+        cursor = nextCursor;
+      }
+      throw new Error("Codex project/list exceeded its pagination safety limit");
+    } catch (error) {
+      // project/list and projectId metadata are experimental in older App
+      // Server releases. Preserve the previous cwd-based behavior there.
+      if (isUnsupportedNativeProjectionError(error)) return undefined;
+      throw error;
+    }
+  }
+
+  async setThreadProject(threadId: string, projectId: string): Promise<boolean> {
+    try {
+      await this.request("thread/metadata/update", { threadId, projectId });
+      return true;
+    } catch (error) {
+      if (isUnsupportedNativeProjectionError(error)) return false;
+      throw error;
+    }
   }
 
   async runTurn(input: {
@@ -512,6 +576,29 @@ export class CodexAppServerClient {
     await this.request("thread/inject_items", { threadId, items });
   }
 
+  async listThreadItemIds(threadId: string): Promise<Set<string>> {
+    const ids = new Set<string>();
+    let cursor: string | undefined;
+    for (let page = 0; page < 10_000; page += 1) {
+      const result = await this.request("thread/items/list", {
+        threadId,
+        limit: 500,
+        sortDirection: "asc",
+        ...(cursor === undefined ? {} : { cursor }),
+      });
+      const entries = objectArray(result, "data") ?? [];
+      for (const entry of entries) {
+        const id = objectString(objectValue(entry, "item"), "id");
+        if (id) ids.add(id);
+      }
+      const nextCursor = objectString(result, "nextCursor");
+      if (!nextCursor) return ids;
+      if (nextCursor === cursor) throw new Error("Codex thread/items/list returned a repeated cursor");
+      cursor = nextCursor;
+    }
+    throw new Error("Codex thread/items/list exceeded its pagination safety limit");
+  }
+
   getThreadTokenUsage(threadId: string): CodexThreadTokenUsage | undefined {
     return this.#threadTokenUsage.get(threadId);
   }
@@ -526,6 +613,9 @@ export class CodexAppServerClient {
     return {
       id,
       name: thread && (typeof thread.name === "string" || thread.name === null) ? thread.name : null,
+      projectId: thread && (typeof thread.projectId === "string" || thread.projectId === null)
+        ? thread.projectId
+        : null,
       status: status ?? "unknown",
       turns: turns.flatMap((turn) => parseThreadTurn(turn)),
     };
@@ -580,7 +670,7 @@ export class CodexAppServerClient {
     }
   }
 
-  async request(method: string, params: unknown): Promise<unknown> {
+  async request(method: string, params: unknown, timeoutOverrideMs?: number): Promise<unknown> {
     if (this.#disposed) throw new Error("Codex App Server client is disposed");
     if (method !== "initialize") await this.start();
     if (this.#failure) throw this.#failure;
@@ -588,10 +678,22 @@ export class CodexAppServerClient {
     if (!child?.stdin.writable) throw new Error("Codex App Server is not available");
     const id = this.#nextRequestId++;
     return new Promise((resolve, reject) => {
+      const timeoutMs = timeoutOverrideMs ?? (method === "thread/start"
+        ? this.#options.threadStartTimeoutMs
+        : this.#options.requestTimeoutMs);
       const timer = setTimeout(() => {
-        this.#pending.delete(id);
-        reject(new Error(`Codex App Server ${method} request timed out`));
-      }, this.#options.requestTimeoutMs);
+        const pending = this.#pending.get(id);
+        if (!pending) return;
+        const timeout = new Error(`Codex App Server ${method} request timed out`);
+        // A timed-out stdio request has an indeterminate server outcome. The
+        // App Server may still be blocked on that operation, so reusing this
+        // process can turn a transient timeout into an endless retry loop (and
+        // can duplicate thread/start after a late acknowledgement). Fail every
+        // in-flight request, terminate this generation, and let the next call
+        // wait for close before spawning a clean App Server process.
+        this.#fail(timeout);
+        void this.close().catch(() => undefined);
+      }, timeoutMs);
       timer.unref();
       this.#pending.set(id, { resolve, reject, timer });
       const message = `${JSON.stringify({ id, method, params })}\n`;
@@ -671,6 +773,7 @@ export class CodexAppServerClient {
     if (this.#options.signal?.aborted) throw new Error("Codex App Server was aborted");
     this.#stdoutBuffer = Buffer.alloc(0);
     this.#stderr = "";
+    this.#processGeneration += 1;
     const child = spawn(this.#options.command, [
       ...(this.#options.commandArgs ?? []),
       "app-server",
@@ -740,7 +843,7 @@ export class CodexAppServerClient {
       clearTimeout(pending.timer);
       if (response.error) {
         const detail = typeof response.error.message === "string" ? safeText(response.error.message) : "unknown error";
-        pending.reject(new CodexAppServerRequestError(detail));
+        pending.reject(new CodexAppServerRequestError(detail, response.error.code));
       } else {
         pending.resolve(response.result);
       }
@@ -786,6 +889,10 @@ export class CodexAppServerClient {
   #fail(error: Error): void {
     if (this.#failure) return;
     this.#failure = error;
+    // Any thread lease belongs to this exact App Server process. Incrementing
+    // immediately makes every executor sharing this client stop treating its
+    // cached exec thread id as loaded before the replacement process starts.
+    this.#processGeneration += 1;
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
@@ -819,11 +926,14 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   readonly #shareToolEvents: boolean;
   readonly #revealThread: ((threadId: string) => Promise<boolean>) | undefined;
   readonly #desktopHookOnly: boolean;
+  readonly #desktopNativeResumeTimeoutMs: number;
   readonly #threadSource: "vscode" | "exec";
   readonly #gatherThreadSessionId: string | undefined;
   #localPublishingActive: boolean;
   #revealedThreadId: string | undefined;
   #loadedExecThreadId: string | undefined;
+  #loadedExecProcessGeneration: number | undefined;
+  #desktopNativeProjectionUnavailable = false;
 
   constructor(options: CodexAppServerExecutorOptions) {
     if (!options.statePath.trim()) throw new Error("Codex session state path must be non-empty");
@@ -860,6 +970,11 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     this.#shareToolEvents = options.shareToolEvents !== false;
     this.#revealThread = options.revealThread;
     this.#desktopHookOnly = options.desktopHookOnly === true;
+    this.#desktopNativeResumeTimeoutMs = options.desktopNativeResumeTimeoutMs
+      ?? DEFAULT_DESKTOP_NATIVE_RESUME_TIMEOUT_MS;
+    if (!Number.isSafeInteger(this.#desktopNativeResumeTimeoutMs) || this.#desktopNativeResumeTimeoutMs < 100) {
+      throw new Error("Codex Desktop native resume timeout must be an integer of at least 100 milliseconds");
+    }
     this.#threadSource = options.threadSource ?? "vscode";
     this.#gatherThreadSessionId = options.gatherThreadSessionId;
   }
@@ -889,8 +1004,47 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   }
 
   projectCanonicalEvents(events: readonly CanonicalEvent[], runtime: RegisteredRuntime): Promise<void> {
-    if (this.#desktopHookOnly) return Promise.reject(new Error("Desktop-owned Codex projections receive canonical context only through trusted hooks"));
-    return this.#withStateWriter(() => this.#projectCanonicalEvents(events, runtime));
+    return this.#withStateWriter(() => this.#desktopHookOnly
+      ? this.#projectDesktopCanonicalEvents(events, runtime)
+      : this.#projectCanonicalEvents(events, runtime));
+  }
+
+  synchronizeCanonicalHistory(api: CollaborationApi, runtime: RegisteredRuntime): Promise<void> {
+    if (!this.#desktopHookOnly || this.#desktopNativeProjectionUnavailable) return Promise.resolve();
+    return this.#withStateWriter(async () => {
+      try {
+        const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+        let state = await this.#loadState(runtime.sessionId, workspacePath);
+        if (!state) return;
+        for (;;) {
+          const page = await readCanonicalRelayPage(api, runtime.sessionId, state.desktopProjectionCursor);
+          const previousCursor = state.desktopProjectionCursor;
+          state = await this.#projectDesktopCanonicalEventsLocked(
+            state,
+            page.events,
+            runtime,
+            page.coveredThroughSequence,
+          );
+          if (!page.hasMore || state.desktopProjectionCursor <= previousCursor) return;
+        }
+      } catch (error) {
+        if (error instanceof CodexThreadActiveError || isActiveWriterError(error)) return;
+        if (isRequestTimeoutError(error, "thread/resume")) {
+          // Native projection is additive; trusted Hooks remain authoritative.
+          // A stuck Desktop lease must not delay every connector poll (and in
+          // turn every queued Web Agent request) until the connector restarts.
+          this.#desktopNativeProjectionUnavailable = true;
+          return;
+        }
+        if (isUnsupportedNativeProjectionError(error)) {
+          // Older Codex App Server builds retain trusted Hook delivery. Retry
+          // native projection after the connector restarts on an upgraded CLI.
+          this.#desktopNativeProjectionUnavailable = true;
+          return;
+        }
+        throw error;
+      }
+    });
   }
 
   async prepareCanonicalProjection(runtime: RegisteredRuntime): Promise<number> {
@@ -911,7 +1065,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         return { cursor: 0, threadId, hasNativeTurns: false };
       }
       let replacedExternallyClaimedProjection = false;
-      if (this.#threadSource === "exec" && this.#loadedExecThreadId !== state.threadId) {
+      if (this.#threadSource === "exec" && !this.#ownsLoadedExecThread(state.threadId)) {
         state = await this.#replaceExternallyClaimedExecutionProjection(state);
         replacedExternallyClaimedProjection = true;
       } else if (this.#threadSource !== "exec") {
@@ -970,19 +1124,24 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     await this.#client.unsubscribeThread(threadId);
   }
 
-  async #startManagedThread(workspacePath: string): Promise<string> {
+  async #startManagedThread(workspacePath: string, projectId?: string): Promise<string> {
     const threadId = await this.#client.startThread({
       cwd: workspacePath,
       model: this.#model,
       sandbox: this.#sandbox,
       threadSource: this.#threadSource,
+      ...(projectId === undefined ? {} : { projectId }),
     });
-    if (this.#threadSource === "exec") this.#loadedExecThreadId = threadId;
+    if (this.#threadSource === "exec") {
+      this.#loadedExecThreadId = threadId;
+      this.#loadedExecProcessGeneration = this.#client.processGeneration;
+    }
     return threadId;
   }
 
   async #startVerifiedDesktopThread(workspacePath: string): Promise<string> {
-    const threadId = await this.#startManagedThread(workspacePath);
+    const projectId = await this.#findDesktopProjectId(workspacePath);
+    const threadId = await this.#startManagedThread(workspacePath, projectId);
     try {
       await this.#setManagedThreadName(threadId, this.#threadName);
       await this.#unsubscribeManagedThread(threadId);
@@ -994,7 +1153,10 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       // server and use the read-only API as a cross-process persistence barrier
       // before committing GatherThread state or Hook authorization.
       await this.#client.close();
-      await this.#client.readThread(threadId);
+      const verified = await this.#client.readThread(threadId);
+      if (projectId !== undefined && verified.projectId !== projectId) {
+        throw new Error("Codex App Server did not persist the Desktop project assignment");
+      }
       return threadId;
     } catch (error) {
       // The candidate has not been committed and cannot have received a user
@@ -1004,6 +1166,31 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       throw new CodexThreadMissingError(
         error,
         `new Desktop thread ${threadId} was not persisted across App Server restart`,
+      );
+    }
+  }
+
+  async #findDesktopProjectId(workspacePath: string): Promise<string | undefined> {
+    if (this.#threadSource !== "vscode") return undefined;
+    // Some narrow test adapters and old embedders predate project/list. The
+    // production client always provides this method and handles -32601 as a
+    // version-compatible cwd-based fallback.
+    const findProjectId = (this.#client as Partial<CodexAppServerClient>).findProjectIdForRoot;
+    if (typeof findProjectId !== "function") return undefined;
+    return findProjectId.call(this.#client, workspacePath);
+  }
+
+  async #ensureDesktopProjectBinding(threadId: string, workspacePath: string): Promise<void> {
+    const projectId = await this.#findDesktopProjectId(workspacePath);
+    if (projectId === undefined) return;
+    const setThreadProject = (this.#client as Partial<CodexAppServerClient>).setThreadProject;
+    if (typeof setThreadProject !== "function" || !await setThreadProject.call(this.#client, threadId, projectId)) return;
+    await this.#client.close();
+    const verified = await this.#client.readThread(threadId);
+    if (verified.projectId !== projectId) {
+      throw new CodexThreadMissingError(
+        new Error("Codex App Server did not persist the Desktop project assignment"),
+        `Desktop thread ${threadId} is not assigned to project ${projectId}`,
       );
     }
   }
@@ -1112,6 +1299,12 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         await this.#saveState(state, false);
       } else if (!this.#desktopHookOnly) {
         await this.#assertThreadNotActive(state.threadId);
+      }
+      if (this.#desktopHookOnly) {
+        // Repair bindings created before Codex exposed explicit project
+        // metadata. Do this before authorizing Hooks or reporting the session
+        // as connected so an empty task is discoverable in the chosen project.
+        await this.#ensureDesktopProjectBinding(state.threadId, workspacePath);
       }
       await updateCodexHookRegistry({
         registryPath: this.#hookRegistryPath,
@@ -1235,6 +1428,141 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     });
   }
 
+  async #projectDesktopCanonicalEvents(
+    events: readonly CanonicalEvent[],
+    runtime: RegisteredRuntime,
+  ): Promise<void> {
+    const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+    const state = await this.#loadState(runtime.sessionId, workspacePath);
+    if (!state) return;
+    await this.#projectDesktopCanonicalEventsLocked(state, events, runtime);
+  }
+
+  async #projectDesktopCanonicalEventsLocked(
+    initialState: CodexAppServerState,
+    events: readonly CanonicalEvent[],
+    runtime: RegisteredRuntime,
+    coveredThroughSequence?: number,
+  ): Promise<CodexAppServerState> {
+    let state = initialState;
+    const ordered = [...events].sort((left, right) => left.sequence - right.sequence);
+    for (const event of ordered) {
+      if (event.sessionId !== runtime.sessionId) {
+        throw new Error("Desktop canonical projection received an event for a different session");
+      }
+    }
+    const acknowledged = acknowledgedLocalEventIds(state);
+    const pending = ordered.filter((event) => event.sequence > state.desktopProjectionCursor);
+    if (state.desktopProjectionJournal
+      && !pending.some((event) => event.id === state.desktopProjectionJournal?.eventId)) {
+      throw new Error("Desktop native projection journal event is absent from the canonical replay page");
+    }
+    const injectable = pending.filter((event) => !acknowledged.has(event.id));
+    if (injectable.length === 0) {
+      state.desktopProjectionCursor = Math.max(
+        state.desktopProjectionCursor,
+        pending.at(-1)?.sequence ?? 0,
+        coveredThroughSequence ?? 0,
+      );
+      state.desktopDeliveryCursor = Math.max(state.desktopDeliveryCursor, state.desktopProjectionCursor);
+      if (state.desktopRelayCheckpoint && state.desktopRelayCheckpoint.sequence <= state.desktopProjectionCursor) {
+        delete state.desktopRelayCheckpoint;
+      }
+      await this.#saveState(state, false);
+      return state;
+    }
+    if (Object.keys(state.hookDrafts).length > 0) throw new CodexThreadActiveError();
+
+    let resumed = false;
+    try {
+      try {
+        await this.#assertThreadNotActive(state.threadId);
+        await this.#client.resumeThread({
+          threadId: state.threadId,
+          cwd: state.workspacePath,
+          model: this.#model,
+          sandbox: this.#sandbox,
+          timeoutMs: this.#desktopNativeResumeTimeoutMs,
+        });
+        resumed = true;
+        // Re-check after acquiring the App Server subscription. A local prompt
+        // can start after the first read but before thread/resume rejoins it.
+        // The 0.151 protocol intentionally permits rejoining a running thread,
+        // so a successful resume alone is not proof that injection is safe.
+        await this.#assertThreadNotActive(state.threadId);
+      } catch (error) {
+        if (isActiveWriterError(error)) throw new CodexThreadActiveError();
+        throw error;
+      }
+
+      const recoveredItemIds = state.desktopProjectionJournal
+        ? await this.#client.listThreadItemIds(state.threadId)
+        : undefined;
+      for (const event of pending) {
+        if (event.sequence <= state.desktopProjectionCursor) continue;
+        if (acknowledged.has(event.id)) {
+          state.desktopProjectionCursor = event.sequence;
+          state.desktopDeliveryCursor = Math.max(state.desktopDeliveryCursor, event.sequence);
+          state.sidecar.push(sidecarEntry(event, 0, projectionRole(event), "local_turn"));
+          await this.#saveState(state, false);
+          continue;
+        }
+        const rendered = renderProjectionEvent(event);
+        const chunks = splitUtf8(rendered.text, this.#safeInjectionChunkBytes(state));
+        const journal = state.desktopProjectionJournal;
+        if (journal && (journal.eventId !== event.id
+          || journal.sequence !== event.sequence
+          || journal.totalChunks !== chunks.length)) {
+          throw new Error("Desktop native projection journal no longer matches canonical history");
+        }
+        if (!journal) {
+          state.desktopProjectionJournal = {
+            eventId: event.id,
+            sequence: event.sequence,
+            nextChunk: 0,
+            totalChunks: chunks.length,
+          };
+          await this.#saveState(state, false);
+        }
+        const startChunk = state.desktopProjectionJournal?.nextChunk ?? 0;
+        for (let index = startChunk; index < chunks.length; index += 1) {
+          const injectionText = chunkLabel(chunks[index] as string, index, chunks.length);
+          const itemId = desktopProjectionItemId(event, index);
+          if (!recoveredItemIds?.has(itemId)) {
+            await this.#client.injectItems(state.threadId, [responseMessage(rendered.role, injectionText, itemId)]);
+          }
+          const observed = this.#client.getThreadTokenUsage(state.threadId);
+          if (observed) {
+            state.contextWindowTokens = observed.modelContextWindow;
+            state.estimatedContextTokens = observed.totalTokens;
+            state.contextUsageSource = "app_server";
+          } else {
+            state.estimatedContextTokens += estimateTokens(injectionText);
+          }
+          if (state.desktopProjectionJournal) state.desktopProjectionJournal.nextChunk = index + 1;
+          await this.#saveState(state, false);
+        }
+        state.desktopProjectionCursor = event.sequence;
+        state.desktopDeliveryCursor = Math.max(state.desktopDeliveryCursor, event.sequence);
+        state.sidecar.push(sidecarEntry(event, chunks.length, rendered.role, "injected"));
+        delete state.desktopProjectionJournal;
+        if (state.desktopRelayCheckpoint && state.desktopRelayCheckpoint.sequence <= event.sequence) {
+          delete state.desktopRelayCheckpoint;
+        }
+        await this.#saveState(state, false);
+      }
+      state.desktopProjectionCursor = Math.max(state.desktopProjectionCursor, coveredThroughSequence ?? 0);
+      state.desktopDeliveryCursor = Math.max(state.desktopDeliveryCursor, state.desktopProjectionCursor);
+      if (state.desktopRelayCheckpoint && state.desktopRelayCheckpoint.sequence <= state.desktopProjectionCursor) {
+        delete state.desktopRelayCheckpoint;
+      }
+      await this.#saveState(state, false);
+      return state;
+    } finally {
+      if (resumed) await this.#unsubscribeManagedThread(state.threadId);
+    }
+  }
+
   async #projectCanonicalEvents(events: readonly CanonicalEvent[], runtime: RegisteredRuntime): Promise<void> {
     if (runtime.purpose === "snapshot_connector") throw new Error("Snapshot connector runtimes cannot follow live canonical events");
     const workspacePath = await validateCodexWorkspace(this.#workspacePath);
@@ -1243,7 +1571,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       if (Object.keys(state.hookDrafts).length > 0) {
         throw new Error("Codex desktop turn is active; canonical projection is queued until its Stop hook completes");
       }
-      if (this.#threadSource === "exec" && this.#loadedExecThreadId !== state.threadId) {
+      if (this.#threadSource === "exec" && !this.#ownsLoadedExecThread(state.threadId)) {
         state = await this.#replaceExternallyClaimedExecutionProjection(state);
       } else if (this.#threadSource !== "exec") try {
         await this.#assertThreadNotActive(state.threadId);
@@ -1279,7 +1607,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       if (Object.keys(state.hookDrafts).length > 0) {
         throw new Error("Codex desktop turn is active; Web agent execution is queued until its Stop hook completes");
       }
-      if (this.#threadSource === "exec" && this.#loadedExecThreadId !== state.threadId) {
+      if (this.#threadSource === "exec" && !this.#ownsLoadedExecThread(state.threadId)) {
         state = await this.#replaceExternallyClaimedExecutionProjection(state);
         rebuildingExternallyClaimedProjection = true;
       } else if (this.#threadSource !== "exec") try {
@@ -1626,7 +1954,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       version: 3, transport: "app-server", gatherThreadSessionId: sessionId, workspacePath,
       threadId, threadName: this.#threadName, desktopProjectGeneration: 0, model: this.#model,
       contextWindowTokens: this.#contextWindowTokens, estimatedContextTokens: 0, contextUsageSource: "fallback_estimate",
-      cloudCursor: 0, desktopDeliveryCursor: 0, projectionGeneration: 1, compactionGeneration: 0,
+      cloudCursor: 0, desktopDeliveryCursor: 0, desktopProjectionCursor: 0,
+      projectionGeneration: 1, compactionGeneration: 0,
       coveredThroughSequence: 0, lastInjectedSequence: 0, sidecar: [],
       connectorClientMessageIds: [], connectorTurnIds: [], localTurnBindings: {}, pendingLocalTurns: [], hookDrafts: {}, executionJournal: {},
     };
@@ -1768,14 +2097,14 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   }
 
   async #assertThreadNotActive(threadId: string): Promise<void> {
-    if (this.#threadSource === "exec" && this.#loadedExecThreadId === threadId) return;
+    if (this.#ownsLoadedExecThread(threadId)) return;
     let thread: CodexThreadReadResult;
     try {
       thread = await this.#client.readThread(threadId);
     } catch (error) {
       throw new CodexThreadMissingError(
         error,
-        `source=${this.#threadSource}, thread=${threadId}, owned=${this.#loadedExecThreadId === threadId}`,
+        `source=${this.#threadSource}, thread=${threadId}, owned=${this.#ownsLoadedExecThread(threadId)}`,
       );
     }
     if (thread.status === "active") {
@@ -1784,6 +2113,12 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     if (thread.status !== "idle" && thread.status !== "notLoaded") {
       throw new Error(`Managed Codex thread status ${safeText(thread.status)} requires repair or an explicit binding reset`);
     }
+  }
+
+  #ownsLoadedExecThread(threadId: string): boolean {
+    return this.#threadSource === "exec"
+      && this.#loadedExecThreadId === threadId
+      && this.#loadedExecProcessGeneration === this.#client.processGeneration;
   }
 
   async #replaceExternallyClaimedExecutionProjection(
@@ -1974,7 +2309,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     // appServer thread is intentional: an exec-source thread remains hidden
     // from interactive desktop listings even if it is resumed or renamed.
     if (isObject(parsed) && parsed.version === 1) return undefined;
-    if (isLegacyCodexAppServerState(parsed)) parsed = migrateLegacyState(parsed, this.#model, this.#contextWindowTokens);
+    if (isLegacyCodexAppServerState(parsed)) {
+      parsed = migrateLegacyState(parsed, this.#model, this.#contextWindowTokens, this.#desktopHookOnly);
+    }
     if (isObject(parsed) && parsed.version === 3) {
       const desktopProjectMigration = normalizeDesktopProjectMigration(parsed.desktopProjectMigration, parsed.threadId);
       parsed = {
@@ -1986,6 +2323,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         ...(parsed.contextUsageSource === undefined ? { contextUsageSource: "fallback_estimate" } : {}),
         ...(parsed.desktopDeliveryCursor === undefined
           ? { desktopDeliveryCursor: this.#desktopHookOnly ? 0 : parsed.cloudCursor }
+          : {}),
+        ...(parsed.desktopProjectionCursor === undefined
+          ? { desktopProjectionCursor: this.#desktopHookOnly ? 0 : parsed.lastInjectedSequence }
           : {}),
       };
     }
@@ -2023,7 +2363,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       throw new Error("Codex App Server session state could not be read", { cause: error });
     }
     if (isObject(parsed) && parsed.version === 1) return undefined;
-    if (isLegacyCodexAppServerState(parsed)) parsed = migrateLegacyState(parsed, this.#model, this.#contextWindowTokens);
+    if (isLegacyCodexAppServerState(parsed)) {
+      parsed = migrateLegacyState(parsed, this.#model, this.#contextWindowTokens, this.#desktopHookOnly);
+    }
     if (isObject(parsed) && parsed.version === 3) {
       const desktopProjectMigration = normalizeDesktopProjectMigration(parsed.desktopProjectMigration, parsed.threadId);
       parsed = {
@@ -2035,6 +2377,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         ...(parsed.contextUsageSource === undefined ? { contextUsageSource: "fallback_estimate" } : {}),
         ...(parsed.desktopDeliveryCursor === undefined
           ? { desktopDeliveryCursor: this.#desktopHookOnly ? 0 : parsed.cloudCursor }
+          : {}),
+        ...(parsed.desktopProjectionCursor === undefined
+          ? { desktopProjectionCursor: this.#desktopHookOnly ? 0 : parsed.lastInjectedSequence }
           : {}),
       };
     }
@@ -2123,6 +2468,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
         "snapshot_projection",
         "hook_relay",
         "single_writer_dual_projection",
+        "native_history_projection_best_effort",
       ],
     };
   }
@@ -2205,7 +2551,13 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
       ...(desktop === undefined
         ? {}
         : {
-          synchronize: ({ api, runtime }: { api: CollaborationApi; runtime: RegisteredRuntime }) => desktop.synchronizeLocalTurns(api, runtime),
+          // Keep the outbox commit and additive visible-history relay as two
+          // explicit phases. The connector must execute pending Web requests
+          // between them so a contended Desktop task cannot delay the Agent.
+          synchronizeLocalTurns: ({ api, runtime }: { api: CollaborationApi; runtime: RegisteredRuntime }) =>
+            desktop.synchronizeLocalTurns(api, runtime),
+          synchronizeCanonicalHistory: ({ api, runtime }: { api: CollaborationApi; runtime: RegisteredRuntime }) =>
+            desktop.synchronizeCanonicalHistory(api, runtime),
           activateLocalPublishing: () => desktop.activateLocalPublishing(),
           deactivateLocalPublishing: (reason: ProjectHarnessDeactivationReason) => desktop.deactivateLocalPublishing(reason),
           relayLocalHarnessEvent: (eventInput: {
@@ -2401,7 +2753,10 @@ async function scrubCodexExecutionStates(
     const statePath = path.join(stateRoot, entry.name);
     const release = await acquireProjectionFileLock(statePath);
     try {
-      const parsed = JSON.parse(await readFile(statePath, "utf8")) as unknown;
+      let parsed = JSON.parse(await readFile(statePath, "utf8")) as unknown;
+      if (isObject(parsed) && parsed.version === 3 && parsed.desktopProjectionCursor === undefined) {
+        parsed = { ...parsed, desktopProjectionCursor: 0 };
+      }
       if (!isCodexAppServerState(parsed) || parsed.workspacePath !== workspacePath) continue;
       if (retainSessionIds.has(parsed.gatherThreadSessionId)) {
         retainedThreads[parsed.threadId] = "execution";
@@ -2442,6 +2797,8 @@ function isCodexAppServerState(value: unknown): value is CodexAppServerState {
     && Number.isSafeInteger(value.cloudCursor)
     && Number.isSafeInteger(value.desktopDeliveryCursor)
     && Number(value.desktopDeliveryCursor) >= 0
+    && Number.isSafeInteger(value.desktopProjectionCursor)
+    && Number(value.desktopProjectionCursor) >= 0
     && (value.desktopRelayCheckpoint === undefined || (isDesktopRelayCheckpoint(value.desktopRelayCheckpoint)
       && value.desktopRelayCheckpoint.sequence > Number(value.desktopDeliveryCursor)))
     && Number.isSafeInteger(value.projectionGeneration)
@@ -2457,6 +2814,7 @@ function isCodexAppServerState(value: unknown): value is CodexAppServerState {
     && isHookDrafts(value.hookDrafts)
     && isExecutionJournal(value.executionJournal)
     && (value.projectionJournal === undefined || isProjectionJournal(value.projectionJournal))
+    && (value.desktopProjectionJournal === undefined || isProjectionJournal(value.desktopProjectionJournal))
     && (value.desktopProjectMigration === undefined || isDesktopProjectMigration(value.desktopProjectMigration));
 }
 
@@ -2600,6 +2958,7 @@ function migrateLegacyState(
   legacy: LegacyCodexAppServerState,
   model: string,
   contextWindowTokens: number,
+  desktopHookOnly: boolean,
 ): CodexAppServerState {
   return {
     ...legacy,
@@ -2611,6 +2970,7 @@ function migrateLegacyState(
     contextUsageSource: "fallback_estimate",
     cloudCursor: legacy.coveredThroughSequence,
     desktopDeliveryCursor: legacy.coveredThroughSequence,
+    desktopProjectionCursor: desktopHookOnly ? 0 : legacy.coveredThroughSequence,
     projectionGeneration: 1,
     compactionGeneration: 0,
     lastInjectedSequence: legacy.coveredThroughSequence,
@@ -2732,12 +3092,20 @@ function objectOptionalString(value: unknown, key: string): string | undefined {
   return isObject(value) && typeof value[key] === "string" ? value[key] : undefined;
 }
 
-function responseMessage(role: "user" | "assistant", text: string): Record<string, unknown> {
+function responseMessage(role: "user" | "assistant", text: string, id?: string): Record<string, unknown> {
   return {
     type: "message",
+    ...(id === undefined ? {} : { id }),
     role,
     content: [{ type: role === "user" ? "input_text" : "output_text", text }],
   };
+}
+
+function desktopProjectionItemId(event: CanonicalEvent, chunkIndex: number): string {
+  const digest = createHash("sha256")
+    .update(`${event.sessionId}\0${event.id}\0${event.sequence}\0${chunkIndex}`)
+    .digest("hex");
+  return `msg_gatherthread_${digest.slice(0, 40)}`;
 }
 
 export function splitUtf8(value: string, maxBytes: number): string[] {
@@ -3176,6 +3544,32 @@ function isActiveWriterError(error: unknown): boolean {
     if (current instanceof CodexAppServerRequestError
       && /already has an active writer/i.test(current.detail)) return true;
     if (current instanceof CodexThreadActiveError) return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}
+
+function isUnsupportedNativeProjectionError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof CodexAppServerRequestError
+      && (current.code === -32601 || /method not found|unknown method/i.test(current.detail))) {
+      return true;
+    }
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}
+
+function isRequestTimeoutError(error: unknown, method: string): boolean {
+  const expected = `Codex App Server ${method} request timed out`;
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    if (current instanceof Error && current.message.includes(expected)) return true;
     current = current instanceof Error ? current.cause : undefined;
   }
   return false;

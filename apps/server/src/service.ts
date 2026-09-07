@@ -53,6 +53,11 @@ export class CollaborationService {
     return this.database.deleteProject(actor, projectId);
   }
 
+  updateProject(actor: Actor, projectId: string, input: Parameters<CollaborationDatabase["updateProject"]>[2]) {
+    this.database.assertActiveDevice(actor);
+    return this.database.updateProject(actor, projectId, input);
+  }
+
   getProject(actor: Actor, projectId: string) {
     const role = this.requireProjectMembership(actor, projectId);
     return { project: this.database.requireProject(projectId), role };
@@ -143,6 +148,21 @@ export class CollaborationService {
     });
   }
 
+  listOwnExecutionRuntimes(actor: Actor, sessionId: string) {
+    this.requireMembership(actor, sessionId);
+    return this.database.listSessionRuntimesForUser(sessionId, actor.user_id)
+      .filter((runtime) => runtime.purpose === "execution")
+      .map((runtime) => ({
+        id: runtime.id,
+        device_id: runtime.device_id,
+        harness: runtime.harness,
+        provider: runtime.provider,
+        model: runtime.model,
+        status: runtime.status,
+        last_seen_at: runtime.last_seen_at,
+      }));
+  }
+
   createInvitation(
     actor: Actor,
     sessionId: string,
@@ -206,6 +226,10 @@ export class CollaborationService {
   listDevices(actor: Actor) {
     this.database.assertActiveDevice(actor);
     return this.database.listDevices(actor);
+  }
+
+  updateDeviceName(actor: Actor, deviceId: string, name: string) {
+    return this.database.updateDeviceName(actor, deviceId, name);
   }
 
   rotateDeviceToken(actor: Actor, deviceId: string, expiresAt?: string | null) {

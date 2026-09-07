@@ -2,7 +2,7 @@
 
 ## Release state
 
-This guide covers the executable single-process alpha. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. The supported remote path is a loopback owner host behind private Tailscale Serve, not public ingress.
+This guide covers the executable single-process `0.1.0-alpha.1` preview candidate. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. Supported edges are local-only loopback, private LAN HTTPS, private Tailscale Serve, and the not-yet-open invitation-only Alibaba Cloud ECS profile. The application remains on loopback in every mode.
 
 ## Private-by-default startup
 
@@ -12,7 +12,7 @@ Copy `.env.example` to the ignored `.env` and restrict it to the host account. A
 
 Production preflight must fail if any of these are absent or unsafe:
 
-- `NODE_ENV=production` with `GATHERTHREAD_SERVER_HOST` restricted to loopback behind Tailscale Serve HTTPS.
+- `NODE_ENV=production` with `GATHERTHREAD_SERVER_HOST` restricted to loopback behind an approved HTTPS edge.
 - A cryptographically random `GATHERTHREAD_AUTH_TOKEN_PEPPER` of at least 32 bytes.
 - An exact HTTPS `GATHERTHREAD_PUBLIC_BASE_URL`, explicit origin allowlist, and `GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true`.
 - Private session default and public sessions disabled.
@@ -20,7 +20,7 @@ Production preflight must fail if any of these are absent or unsafe:
 - Request, event, replay-page, attachment, and WebSocket queue limits.
 - A tested backup plus a restore drill completed for the release schema.
 
-The browser uses a server-side session after login. A device bearer is present in JavaScript only for the single exchange request, then cleared; it is never written to Web Storage. The opaque browser credential is a non-persistent `HttpOnly; SameSite=Strict; Path=/` Cookie backed by a peppered digest and a 24-hour absolute database expiry. A normal refresh restores the session. Closing the browser session is intended to discard the Cookie, while logout revokes it immediately; device revocation or device-token rotation revokes all browser sessions for that device. Production HTTPS adds `Secure` and `__Host-`. Keep the exact public origin allowlisted because Cookie-authenticated writes fail without it. This improvement does not authorize public Internet ingress; the private Tailscale Serve boundary remains mandatory for the alpha.
+The browser uses a server-side session after login. A device bearer is present in JavaScript only for the single exchange request, then cleared; it is never written to Web Storage. By default, the opaque browser credential is a non-persistent `HttpOnly; SameSite=Strict; Path=/` Cookie backed by a peppered digest and a 24-hour absolute database expiry. Choosing **Remember this device** makes the Cookie persistent and extends the database expiry to 30 days. A normal refresh restores either session. Closing the browser discards only the non-persistent Cookie, while logout revokes either session immediately; device revocation or device-token rotation revokes all browser sessions for that device. Production HTTPS adds `Secure` and `__Host-`. Keep the exact public origin allowlisted because Cookie-authenticated writes fail without it. This improvement does not authorize public Internet ingress; use only the documented server, private LAN, or tailnet boundary.
 
 The default event limits are 256 KiB per event, 256 MiB per attributed user, 512 MiB per session, and 2 GiB for the deployment. They are logical event charges, not a guarantee of the SQLite/WAL file size. A quota breach returns `storage_quota_exceeded` without allocating a sequence or deleting history. Keep independent free-disk monitoring and raise a limit only with a verified backup and capacity plan.
 
@@ -28,15 +28,15 @@ Session metadata is separately capped at 512 creator-owned sessions per user, 2,
 
 ## Health and deployment gates
 
-The server should expose separate liveness and readiness checks. Liveness proves only that the process loop runs. Readiness must execute a bounded database query, confirm migrations are current, confirm the database is writable, and report unavailable while shutting down. Neither endpoint should expose paths, versions, credentials, member counts, or event content.
+The server exposes unauthenticated `GET /health/live` and `GET /health/ready`; `GET /health` remains a readiness-compatible alias. Liveness proves only that the request loop runs. Readiness executes a bounded SQLite read, confirms WAL and foreign keys, and acquires then rolls back an immediate write transaction. Startup applies schema migrations before the listener opens. None of these endpoints exposes paths, versions, credentials, member counts, or event content.
 
 A release sequence should:
 
-1. Run `npm run verify` and all application unit and integration tests.
+1. Run `npm run release:verify`, which includes the full test, dependency, license, branding, secret, vulnerability, and release-metadata checks.
 2. Review dependency and attribution changes, then commit the lockfile.
 3. Create and verify an online backup.
 4. Stop accepting new connections and drain active writes and runtime claims.
-5. Apply forward-only migrations with a documented rollback or restore decision.
+5. Apply forward-only migrations with a documented rollback or restore decision. The Alibaba profile activates a versioned release through `/opt/gatherthread/current` rather than overwriting old code.
 6. Start the new version, wait for readiness, and run the integrated E2E driver.
 7. Verify two-client replay and runtime claim completion before restoring traffic.
 

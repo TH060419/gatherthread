@@ -14,6 +14,7 @@ import type {
   RegisteredRuntime,
   RuntimeProvenance,
   RuntimeRegistration,
+  SessionMemberSummary,
   SessionSummary,
   SnapshotRequestStatus,
   SnapshotRequestSummary,
@@ -83,13 +84,21 @@ export class HttpCollaborationClient implements CollaborationApi {
     return sessions.map(fromWireSession);
   }
 
+  async listSessionMembers(sessionId: string): Promise<SessionMemberSummary[]> {
+    const body = await this.#request(`/sessions/${encodeURIComponent(sessionId)}/members`);
+    const members = isObject(body) && Array.isArray(body.members) ? body.members : body;
+    if (!Array.isArray(members)) throw new Error("Collaboration API returned an invalid member list");
+    return members.map(fromWireSessionMember);
+  }
+
   async createSession(
     projectId: string,
-    input: { title: string; mode: "solo" | "multi"; idempotencyKey: string },
+    input: { sessionId?: string; title: string; mode: "solo" | "multi"; idempotencyKey: string },
   ): Promise<SessionSummary> {
     const body = requiredObject(await this.#request(`/projects/${encodeURIComponent(projectId)}/sessions`, {
       method: "POST",
       body: JSON.stringify({
+        ...(input.sessionId === undefined ? {} : { session_id: input.sessionId }),
         title: input.title,
         mode: input.mode,
         idempotency_key: input.idempotencyKey,
@@ -448,6 +457,26 @@ function fromWireProject(value: unknown): ProjectSummary {
     role: requiredString(input.role, "project.role") as ProjectSummary["role"],
     state: requiredString(input.state, "project.state") as ProjectSummary["state"],
     sessionCount: requiredNumber(input.session_count, "project.session_count"),
+  };
+}
+
+function fromWireSessionMember(value: unknown): SessionMemberSummary {
+  const input = requiredObject(value);
+  let runtime: SessionMemberSummary["runtime"] = null;
+  if (input.runtime !== null && input.runtime !== undefined) {
+    const wireRuntime = requiredObject(input.runtime);
+    runtime = {
+      purpose: wireRuntime.purpose === "snapshot_connector" ? "snapshot_connector" : "execution",
+      harness: requiredString(wireRuntime.harness, "member.runtime.harness"),
+      provider: requiredString(wireRuntime.provider, "member.runtime.provider"),
+      model: requiredString(wireRuntime.model, "member.runtime.model"),
+      status: wireRuntime.status === "online" ? "online" : "offline",
+    };
+  }
+  return {
+    displayName: requiredString(input.display_name, "member.display_name"),
+    role: requiredString(input.role, "member.role") as SessionMemberSummary["role"],
+    runtime,
   };
 }
 

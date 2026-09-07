@@ -1,8 +1,10 @@
 # Collaboration MCP service
 
-This package exposes stateless MCP JSON-RPC tools and resources over an injected authenticated collaboration API client.
+This package exposes MCP JSON-RPC tools and resources over an injected collaboration API client. Its profiles deliberately separate model-facing collaboration tools from connector runtime controls.
 
-Tools:
+The default `user` profile lists projects and sessions, reads history, appends a reviewed chat or Agent request, and returns sanitized connector status. It never exposes runtime registration, request claim/complete, or snapshot upload. The `runtime` profile exposes only those four internal tools and must not be configured as a normal Codex model server.
+
+User tools:
 
 - `collaboration_list_projects`
 - `collaboration_list_project_sessions`
@@ -10,6 +12,10 @@ Tools:
 - `collaboration_read_history`
 - `collaboration_append_chat`
 - `collaboration_request_agent`
+- `collaboration_get_connection_status`
+
+Internal runtime tools, unavailable in the user profile:
+
 - `collaboration_register_runtime`
 - `collaboration_claim_agent_request`
 - `collaboration_complete_agent_request`
@@ -25,12 +31,16 @@ The handler is intentionally stateless and POST-only. It does not implement serv
 
 ## Local stdio executable
 
-Build the workspace and configure an MCP host to launch `gatherthread-mcp` (or `npm --workspace packages/mcp start`) with `GATHERTHREAD_API_URL` and `GATHERTHREAD_TOKEN` in its environment. The executable accepts no credential arguments and writes no logs to stdout; stdout is reserved for newline-delimited MCP JSON-RPC responses. `GATHERTHREAD_API_URL` must be HTTPS except for a loopback host and cannot contain URL credentials.
+The packaged Codex plugin launches fixed `@gatherthread/codex-connect@0.1.0-alpha.1 mcp`. Its default `connector` transport derives a private endpoint from the current workspace and reads a per-run capability from current-user-only connector state. The connector retains the server token; it is never passed to the MCP process. This is the ordinary Desktop path because Finder-launched applications do not reliably inherit terminal credential variables.
+
+For repository development, build the workspace and launch `gatherthread-mcp` or `npm --workspace packages/mcp start` while the connector is running for the current directory. `GATHERTHREAD_MCP_TRANSPORT=server-env` switches to direct HTTP only for developer preview and then requires `GATHERTHREAD_API_URL` and `GATHERTHREAD_TOKEN`. The executable accepts no credential arguments and writes no logs to stdout; stdout is reserved for newline-delimited MCP JSON-RPC responses. A future public remote Streamable HTTP endpoint requires OAuth 2.1/PKCE and is not implemented here.
 
 Optional environment:
 
 - `GATHERTHREAD_REQUEST_TIMEOUT_MS`: upstream HTTP timeout
 - `GATHERTHREAD_MCP_MAX_MESSAGE_BYTES`: maximum stdio JSON-RPC line size
+- `GATHERTHREAD_MCP_TOOL_PROFILE`: `user` by default or internal `runtime`
+- `GATHERTHREAD_MCP_TRANSPORT`: `connector` by default for users or developer-preview `server-env`
 - `GATHERTHREAD_ALLOW_PROVIDER_REQUEST_CAPTURE`: `true` only when an authorized hook/proxy provides exact provider requests
 
-Each stdio line is one JSON-RPC request or batch. Notifications produce no response. `SIGINT` and `SIGTERM` stop input processing and abort in-flight GatherThread HTTP calls. Authentication and identity still come from the GatherThread bearer token and server-side authorization; tool arguments cannot override them.
+Each stdio line is one JSON-RPC request or batch. Notifications produce no response. `SIGINT` and `SIGTERM` stop input processing and abort in-flight calls. Authentication and identity come from the running connector or, in developer preview, the GatherThread bearer token and server-side authorization; tool arguments cannot override them.

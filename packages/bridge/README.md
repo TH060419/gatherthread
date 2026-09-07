@@ -2,15 +2,15 @@
 
 `LocalBridge` registers one session-scoped local runtime, keeps independent server and transcript cursors, imports authorized Codex or Claude Code transcripts, projects canonical history, and claims/completes eligible agent requests.
 
-For Codex, prefer the built-in connector. Copy the operating-system-specific command from the project's **Connect Codex** dialog. It binds one GatherThread project to a safe same-name local workspace and discovers eligible sessions automatically. Each writable session has a Desktop-owned task plus a separate `exec`-source background projection.
+For Codex, prefer the standalone connector. Copy the fixed-version operating-system-specific command from the project's **Connect Codex** dialog. It needs no repository checkout, binds one GatherThread project to a safe same-name local workspace, and discovers eligible sessions automatically. Each writable session has a Desktop-owned task plus a separate `exec`-source background projection.
 
 ```bash
-npm run codex:connect -- \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.1 \
   --url https://your-host.your-tailnet.ts.net \
   --project PROJECT_ID \
   --create-workspace \
   --model gpt-5.6-sol \
-  --install-hooks
+  --plugin-hooks
 ```
 
 `--create-workspace` creates or exactly reuses `~/GatherThread Projects/<safe project name>` using a private credential-free binding marker, then opens that verified directory in Codex Desktop once. A failed or timed-out Desktop reveal is non-fatal and prints the directory for manual opening. Use `--workspace "/absolute/path"` instead when deliberately binding an existing source checkout. The token is always requested through hidden terminal input and is never copied from the Web page.
@@ -50,13 +50,13 @@ Context snapshots require an explicit fidelity. Reconstructed canonical history 
 
 Agent completion follows the server's single-response contract: after a successful claim the bridge appends one lifecycle `agent_progress` marker, then redacts and appends any public Codex `commentary` items as further ordered progress. Tool events are appended idempotently before the claim is completed as one canonical `agent_response`. Progress upload is supplementary and fail-soft so it cannot strand a claimed request; reasoning items are never published. The alpha does not yet implement claim abandonment or lease expiry. If a bridge crashes after claiming, that request remains stuck and the session owner must submit a replacement request.
 
-## Codex project hooks
+## Codex plugin and project hooks
 
-Pass `--install-hooks` to merge the GatherThread `UserPromptSubmit` and `Stop` command hooks into `<workspace>/.codex/hooks.json`. These reviewed and trusted hooks are required for publishing turns typed directly in Codex desktop; without them, Web-triggered execution, canonical projection, and read-only snapshots still work while direct desktop turns remain local. Installation is explicit because Codex requires a project trust review; inspect and approve the exact definition with `/hooks`. The hook command contains only private local socket/spool/registry paths, never the GatherThread token.
+The **共序 / GatherThread** plugin exposes only ordinary collaboration tools through private local API relays. It does not receive the device token, and the internal runtime register/claim/complete/snapshot tools remain isolated. Each connector writes a leased, non-secret instance/endpoint/project registration and keeps its random capability separate. Plugin MCP discovery collapses overlapping crash/restart registrations for the same endpoint to the newest lease, aggregates all distinct active project connectors even when launched inside one workspace, routes a unique project or session to its owning connector, and fails closed on duplicate IDs or an offline target. Pass `--plugin-hooks` for the preferred full mode, then inspect and trust the plugin's `UserPromptSubmit` and `Stop` definitions with `/hooks`. The built-in script forwards directly to the connector without running `npx`. It resolves a subdirectory Hook `cwd` through the connector's authoritative root registry and rejects paths outside that workspace.
 
-With `--install-hooks`, the running connector owns a private Unix socket relay on POSIX or a stable project-mapping named pipe on Windows. `UserPromptSubmit` records an outbox draft and supplies a bounded canonical delta. `Stop` supplies the final response, which is made publishable without opening the Desktop-owned task. Current public Stop payloads omit structured tools, so Desktop-originated tool events are omitted. Offline allowlisted events use a bounded private spool.
+`--install-hooks` remains the explicit project-file compatibility path and cannot be combined with `--plugin-hooks`. With either option, the running connector owns a private Unix socket relay on POSIX or a project-mapping named pipe on Windows. `UserPromptSubmit` records an outbox draft and supplies a bounded canonical delta. `Stop` supplies the final response, which is made publishable without opening the Desktop-owned task. Current public Stop payloads omit structured tools, so Desktop-originated tool events are omitted. The project-Hook compatibility forwarder can use a bounded private offline spool; the plugin Hook requires the connector to remain online and fails open without spooling. A private registry and relay envelope authorize only the selected Hook source, so a retained project config is inert in plugin mode and only project mode drains its spool. Hooks cannot wake an idle Codex task or start a new turn.
 
-After a successful authoritative ACL refresh, any session that became read-only, archived, or inaccessible is removed from the managed execution map and hook registry, and its unpublished draft/outbox state is made permanently local-only. The native transcript is retained. Restoring write access does not retroactively upload work from that interval. Transient refresh failures preserve existing authorized bindings, and normal connector shutdown preserves the allowlist for offline capture; an explicit project `403`/`404` clears all execution bindings and stale spool entries.
+After a successful authoritative ACL refresh, any session that became read-only, archived, or inaccessible is removed from the managed execution map and hook registry, and its unpublished draft/outbox state is made permanently local-only. The native transcript is retained. Restoring write access does not retroactively upload work from that interval. Transient refresh failures preserve existing authorized bindings. Normal shutdown preserves the allowlist only so the explicit project-Hook compatibility path can capture offline; plugin Hooks cannot. An explicit project `403`/`404` clears all execution bindings and stale compatibility spool entries.
 
 Desktop and Web turns may run independently because they use separate native writers. The server's canonical sequence orders the accepted results. See [ADR-0013](../../docs/adr/0013-single-writer-dual-codex-projections.md).
 

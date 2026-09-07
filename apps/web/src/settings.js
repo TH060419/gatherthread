@@ -1,4 +1,4 @@
-export const SETTINGS_VERSION = 3;
+export const SETTINGS_VERSION = 7;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -28,6 +28,10 @@ export const CURRENT_CODEX_DESKTOP_RELAY_CAP_BYTES = 7 * 1024;
 
 const MODEL_ID_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,120}$/u;
 const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+const DEVICE_ID_PATTERN = PROJECT_ID_PATTERN;
+const DSH_PROVIDER_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,80}$/u;
+const DSH_MODEL_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,160}$/u;
+export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness"]);
 
 export const DEFAULT_SETTINGS = deepFreeze({
   version: SETTINGS_VERSION,
@@ -36,15 +40,15 @@ export const DEFAULT_SETTINGS = deepFreeze({
   },
   appearance: {
     theme: "system",
-    textScalePercent: 100,
+    textScalePercent: 90,
     density: "comfortable",
     motion: "system",
     ambientCanvas: "pronounced",
     highContrast: true,
   },
   layout: {
-    leftRailPixels: 260,
-    rightPanelPixels: 290,
+    leftRailPixels: 340,
+    rightPanelPixels: 320,
     composerPixels: 280,
   },
   sync: {
@@ -62,6 +66,7 @@ export const DEFAULT_SETTINGS = deepFreeze({
   },
   agents: {
     activeHarness: "codex",
+    enabledHarnesses: ["codex"],
     customCodexModels: [],
     projectProfiles: {},
   },
@@ -80,15 +85,22 @@ export function normalizeSettings(input) {
     .filter((model) => MODEL_ID_PATTERN.test(model))
     .slice(0, 40);
   const availableModels = new Set([...CODEX_MODELS.map((model) => model.id), ...customCodexModels]);
+  const activeHarness = oneOf(agents.activeHarness, AGENT_HARNESSES, DEFAULT_SETTINGS.agents.activeHarness);
+  const enabledHarnesses = normalizeEnabledHarnesses(agents.enabledHarnesses, activeHarness);
   const projectProfiles = {};
   if (isObject(agents.projectProfiles)) {
     for (const [projectId, profile] of Object.entries(agents.projectProfiles)) {
       if (!PROJECT_ID_PATTERN.test(projectId) || !isObject(profile)) continue;
-      const model = availableModels.has(profile.model) ? profile.model : DEFAULT_SETTINGS.agents.projectProfiles.model;
-      projectProfiles[projectId] = normalizeCodexProfile({
-        model: model ?? "gpt-5.6-sol",
-        effort: profile.effort,
-      }, customCodexModels);
+      const legacyCodex = isObject(profile.codex) ? profile.codex : profile;
+      const model = availableModels.has(legacyCodex.model) ? legacyCodex.model : "gpt-5.6-sol";
+      const harness = oneOf(profile.harness, AGENT_HARNESSES, activeHarness);
+      const enabledHarnesses = normalizeEnabledHarnesses(profile.enabledHarnesses, harness);
+      projectProfiles[projectId] = {
+        harness,
+        enabledHarnesses,
+        codex: normalizeCodexProfile({ model, effort: legacyCodex.effort }, customCodexModels),
+        dsh: normalizeDshProfile(profile.dsh),
+      };
     }
   }
   return {
@@ -128,7 +140,8 @@ export function normalizeSettings(input) {
       connectionLost: notifications.connectionLost !== false,
     },
     agents: {
-      activeHarness: "codex",
+      activeHarness,
+      enabledHarnesses,
       customCodexModels,
       projectProfiles,
     },
@@ -147,7 +160,7 @@ export function normalizeCodexProfile(profile, customModels = []) {
 
 export function projectCodexProfile(settings, projectId) {
   const normalized = normalizeSettings(settings);
-  return normalizeCodexProfile(normalized.agents.projectProfiles[projectId], normalized.agents.customCodexModels);
+  return normalizeCodexProfile(normalized.agents.projectProfiles[projectId]?.codex, normalized.agents.customCodexModels);
 }
 
 export function withProjectCodexProfile(settings, projectId, profile) {
@@ -159,7 +172,102 @@ export function withProjectCodexProfile(settings, projectId, profile) {
       ...normalized.agents,
       projectProfiles: {
         ...normalized.agents.projectProfiles,
-        [projectId]: normalizeCodexProfile(profile, normalized.agents.customCodexModels),
+        [projectId]: {
+          ...(normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized)),
+          codex: normalizeCodexProfile(profile, normalized.agents.customCodexModels),
+        },
+      },
+    },
+  });
+}
+
+export function projectAgentHarness(settings, projectId) {
+  const normalized = normalizeSettings(settings);
+  return normalized.agents.projectProfiles[projectId]?.harness ?? normalized.agents.activeHarness;
+}
+
+export function projectEnabledHarnesses(settings, projectId) {
+  const normalized = normalizeSettings(settings);
+  const profile = normalized.agents.projectProfiles[projectId];
+  return [...(profile?.enabledHarnesses ?? normalized.agents.enabledHarnesses)];
+}
+
+export function withProjectEnabledHarnesses(settings, projectId, harnesses) {
+  if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
+  const normalized = normalizeSettings(settings);
+  const selected = uniqueStrings(harnesses).filter((harness) => AGENT_HARNESSES.includes(harness));
+  if (selected.length === 0) throw new Error("Keep at least one Agent connection shortcut enabled.");
+  const current = normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized);
+  const harness = selected.includes(current.harness) ? current.harness : selected[0];
+  return normalizeSettings({
+    ...normalized,
+    agents: {
+      ...normalized.agents,
+      activeHarness: harness,
+      enabledHarnesses: selected,
+      projectProfiles: {
+        ...normalized.agents.projectProfiles,
+        [projectId]: {
+          ...current,
+          harness,
+          enabledHarnesses: selected,
+        },
+      },
+    },
+  });
+}
+
+export function withProjectAgentHarness(settings, projectId, harness) {
+  if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
+  const normalized = normalizeSettings(settings);
+  const selected = oneOf(harness, AGENT_HARNESSES, undefined);
+  if (selected === undefined) throw new Error("Choose a supported Agent harness.");
+  const current = normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized);
+  const enabledHarnesses = [...new Set([...normalized.agents.enabledHarnesses, selected])];
+  return normalizeSettings({
+    ...normalized,
+    agents: {
+      ...normalized.agents,
+      activeHarness: selected,
+      enabledHarnesses,
+      projectProfiles: {
+        ...normalized.agents.projectProfiles,
+        [projectId]: {
+          ...current,
+          harness: selected,
+          enabledHarnesses: [...new Set([...current.enabledHarnesses, selected])],
+        },
+      },
+    },
+  });
+}
+
+export function projectDshProfile(settings, projectId) {
+  const normalized = normalizeSettings(settings);
+  return normalized.agents.projectProfiles[projectId]?.dsh ?? null;
+}
+
+export function withProjectDshProfile(settings, projectId, profile) {
+  if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
+  const normalized = normalizeSettings(settings);
+  const dsh = normalizeDshProfile(profile);
+  if (dsh === null) throw new Error("Choose a connected DeepSeek Harness runtime.");
+  const current = normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized);
+  const enabledHarnesses = [...new Set([...normalized.agents.enabledHarnesses, "deepseek-harness"])];
+  return normalizeSettings({
+    ...normalized,
+    agents: {
+      ...normalized.agents,
+      activeHarness: "deepseek-harness",
+      enabledHarnesses,
+      projectProfiles: {
+        ...normalized.agents.projectProfiles,
+        [projectId]: {
+          ...current,
+          harness: "deepseek-harness",
+          enabledHarnesses: [...new Set([...current.enabledHarnesses, "deepseek-harness"])],
+          dsh,
+        },
       },
     },
   });
@@ -236,15 +344,61 @@ export function createSettingsStore(storage = globalThis.localStorage) {
 
 function migrateStoredSettings(input) {
   if (!isObject(input) || Number(input.version) >= SETTINGS_VERSION) return input;
+  const previousVersion = Number(input.version);
   const appearance = isObject(input.appearance) ? input.appearance : {};
+  const layout = isObject(input.layout) ? input.layout : {};
+  const agents = isObject(input.agents) ? input.agents : {};
+  const legacyProjectProfiles = isObject(agents.projectProfiles) ? Object.values(agents.projectProfiles) : [];
+  const inheritedEnabledHarnesses = normalizeEnabledHarnesses([
+    ...uniqueStrings(agents.enabledHarnesses),
+    ...legacyProjectProfiles.flatMap((profile) => isObject(profile) ? uniqueStrings(profile.enabledHarnesses) : []),
+  ], oneOf(agents.activeHarness, AGENT_HARNESSES, DEFAULT_SETTINGS.agents.activeHarness));
   return {
     ...input,
     appearance: {
       ...appearance,
-      ambientCanvas: "pronounced",
-      highContrast: true,
+      textScalePercent: previousVersion < 6 && (appearance.textScalePercent == null || appearance.textScalePercent === 100)
+        ? DEFAULT_SETTINGS.appearance.textScalePercent
+        : appearance.textScalePercent,
+      ambientCanvas: previousVersion < 3 ? "pronounced" : appearance.ambientCanvas,
+      highContrast: previousVersion < 3 ? true : appearance.highContrast,
+    },
+    layout: {
+      ...layout,
+      leftRailPixels: layout.leftRailPixels == null || layout.leftRailPixels === 260 ? DEFAULT_SETTINGS.layout.leftRailPixels : layout.leftRailPixels,
+      rightPanelPixels: layout.rightPanelPixels == null || layout.rightPanelPixels === 290 ? DEFAULT_SETTINGS.layout.rightPanelPixels : layout.rightPanelPixels,
+    },
+    agents: {
+      ...agents,
+      enabledHarnesses: previousVersion < 7 ? inheritedEnabledHarnesses : agents.enabledHarnesses,
     },
   };
+}
+
+function normalizeDshProfile(profile) {
+  if (!isObject(profile)) return null;
+  const deviceId = typeof profile.deviceId === "string" ? profile.deviceId.trim() : "";
+  const provider = typeof profile.provider === "string" ? profile.provider.trim() : "";
+  const model = typeof profile.model === "string" ? profile.model.trim() : "";
+  if (!DEVICE_ID_PATTERN.test(deviceId) || !DSH_PROVIDER_PATTERN.test(provider) || !DSH_MODEL_PATTERN.test(model)) {
+    return null;
+  }
+  return { deviceId, provider, model };
+}
+
+function defaultProjectAgentProfile(settings) {
+  return {
+    harness: settings.agents.activeHarness,
+    enabledHarnesses: [...settings.agents.enabledHarnesses],
+    codex: normalizeCodexProfile(undefined, settings.agents.customCodexModels),
+    dsh: null,
+  };
+}
+
+function normalizeEnabledHarnesses(harnesses, fallbackHarness) {
+  const selected = uniqueStrings(harnesses).filter((harness) => AGENT_HARNESSES.includes(harness));
+  if (selected.length === 0) return [fallbackHarness];
+  return selected.includes(fallbackHarness) ? selected : [...selected, fallbackHarness];
 }
 
 function oneOf(value, allowed, fallback) {

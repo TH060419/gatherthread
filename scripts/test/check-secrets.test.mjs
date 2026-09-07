@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,37 @@ test("secret scan ignores private Git-ignored env files but scans every Git-visi
     const trackedEnv = scan(directory);
     assert.equal(trackedEnv.status, 1);
     assert.match(trackedEnv.stderr, /\.env:1: possible environment secret/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("secret scan checks a source archive without requiring Git metadata", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "gatherthread-secret-archive-"));
+  try {
+    await writeFile(join(directory, "safe.txt"), "safe archive fixture\n");
+    await mkdir(join(directory, "node_modules"));
+    await writeFile(join(directory, "node_modules", "ignored.txt"), `SERVICE_ACCESS_TOKEN=${"a".repeat(24)}\n`);
+
+    const safe = scan(directory);
+    assert.equal(safe.status, 0, safe.stderr);
+    assert.match(safe.stdout, /Secret pattern check passed/);
+
+    await mkdir(join(directory, "nested"));
+    await writeFile(join(directory, "nested", "leak.env"), `SERVICE_ACCESS_TOKEN=${"b".repeat(24)}\n`);
+    const leaked = scan(directory);
+    assert.equal(leaked.status, 1);
+    assert.match(leaked.stderr, /nested\/leak\.env:1: possible environment secret/);
+
+    await rm(join(directory, "nested", "leak.env"));
+    await writeFile(join(directory, "nested", "binary-looking.ts"), Buffer.from([
+      ...Buffer.from("const value = ", "utf8"),
+      0,
+      ...Buffer.from(";\n", "utf8"),
+    ]));
+    const controlByte = scan(directory);
+    assert.equal(controlByte.status, 1);
+    assert.match(controlByte.stderr, /nested\/binary-looking\.ts: unexpected control byte in text source/);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

@@ -19,15 +19,14 @@ Do not expose port 8787 through a router, firewall, Tailscale Funnel, or a publi
 
 ## Install and configure
 
-Install the pinned dependencies and create a private environment file for production settings:
+Install the pinned dependencies, then generate the Tailscale profile with the exact HTTPS origin shown by your tailnet:
 
 ```bash
 npm ci
-cp .env.example .env
-chmod 600 .env
+npm run connection:tailscale -- --url https://your-host.your-tailnet.ts.net
 ```
 
-Edit `.env` and set at least the deployment settings below. Leave the Pepper blank to let `owner-host:init` generate it securely, or inject an existing stable value from a secret manager:
+The profile command creates or updates a mode-`0600` `.env`, preserves the database path and any existing Pepper, keeps the application on loopback, and sets the exact HTTPS origin. Review at least these resulting settings:
 
 ```dotenv
 NODE_ENV=production
@@ -48,6 +47,8 @@ GATHERTHREAD_MAX_USER_SESSIONS=512
 GATHERTHREAD_MAX_PROJECT_SESSIONS=2048
 GATHERTHREAD_MAX_TOTAL_SESSIONS=8192
 ```
+
+If this is a new deployment, the Pepper may remain blank until `owner-host:init` generates it securely. If it is an existing deployment, keep its current value. Never commit `.env`.
 
 Generate the pepper with a cryptographic password generator, store it in a password manager, and paste it into `.env`. Never commit it. Losing or changing the pepper invalidates every device credential, so back it up separately from the database.
 
