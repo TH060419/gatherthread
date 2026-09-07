@@ -19,7 +19,7 @@ The package does not install a DSH runtime dependency.
 After `@gatherthread/dsh-host` is published, the ordinary three-step path is:
 
 ```text
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.1
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.2
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
 ```

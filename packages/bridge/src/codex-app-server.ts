@@ -2648,16 +2648,18 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
       try {
         const history = await readCanonicalThrough(api, job.sessionId, job.throughSequence);
         const session = input.sessions.find((candidate) => candidate.id === job.sessionId);
+        if (!session) throw new Error("Snapshot session is no longer visible");
+        const snapshotThreadName = managedCodexThreadName(
+          session,
+          `GatherThread snapshot · through ${job.throughSequence}`,
+        );
         const client = this.#createClient();
         try {
           const executor = new CodexAppServerExecutor({
             client,
             workspacePath: this.#options.workspacePath,
             statePath: path.join(this.#options.stateRoot, "snapshots", `${codexSessionKey(job.id)}.json`),
-            threadName: managedCodexThreadName(
-              session as SessionSummary,
-              `GatherThread snapshot · through ${job.throughSequence}`,
-            ),
+            threadName: snapshotThreadName,
             model: this.#options.model,
             ...(this.#options.hookRegistryPath === undefined ? {} : {
               hookRegistryPath: this.#options.hookRegistryPath,
@@ -2677,7 +2679,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
           );
           await api.completeSnapshotRequest(job.id, runtime.id, {
             thread_id: projection.threadId,
-            thread_name: [session?.name ?? job.sessionId, "GatherThread snapshot", `through ${job.throughSequence}`].join(" · "),
+            thread_name: snapshotThreadName,
             through_sequence: job.throughSequence,
             projection_generation: projection.projectionGeneration,
             compaction_generation: projection.compactionGeneration,

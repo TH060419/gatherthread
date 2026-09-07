@@ -2,7 +2,7 @@
 
 The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
 
-> Alpha preview: `0.1.0-alpha.1` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
+> Alpha preview: `0.1.0-alpha.2` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
 
 ## Normal three-step setup
 
@@ -17,7 +17,7 @@ npm install --global pnpm@10
 Then add the fixed GatherThread plugin to the DSH Web profile:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.1
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.2
 ```
 
 ### 2. Open DSH
@@ -40,7 +40,7 @@ From a private source checkout:
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.1.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.2.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 

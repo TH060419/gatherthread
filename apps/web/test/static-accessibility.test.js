@@ -192,10 +192,10 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.doesNotMatch(html, /Move to project|manual Desktop step/i);
   assert.match(html, /device token is requested by a hidden CLI prompt/i);
   assert.match(html, /only copies commands/i);
-  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.1 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.2 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
   assert.match(domain, /--plugin-hooks/);
   const pluginCommands = html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "";
-  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.2 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Alpha 预览版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);

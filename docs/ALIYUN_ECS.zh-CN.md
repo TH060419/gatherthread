@@ -1,6 +1,6 @@
-# 阿里云 ECS 部署：0.1.0-alpha.1 预览版
+# 阿里云 ECS 部署：0.1.0-alpha.2 预览版
 
-本方案用于为私有 `0.1.0-alpha.1` 预览版提前准备服务器部署；共序官方服务目前尚未开放。应用始终只监听 `127.0.0.1:8787`，Caddy 独占公网 80/443 并自动管理 HTTPS；阿里云安全组不得开放 8787。当前版本没有匿名注册，首位创建者必须在服务器本机创建，后续用户通过一次性项目邀请加入。
+本方案用于为私有 `0.1.0-alpha.2` 预览版提前准备服务器部署；共序官方服务目前尚未开放。应用始终只监听 `127.0.0.1:8787`，Caddy 独占公网 80/443 并自动管理 HTTPS；阿里云安全组不得开放 8787。当前版本没有匿名注册，首位创建者必须在服务器本机创建，后续用户通过一次性项目邀请加入。
 
 ## 1. 上线前条件
 
@@ -8,19 +8,19 @@
 - 已实名认证的域名，A 记录指向 ECS 公网 IP。
 - 使用中国内地节点时，先完成 ICP 备案再对外开通网站。阿里云官方说明：中国内地服务器必须在实际接入商完成备案，域名指向内地服务器即受此要求约束，与端口或用途无关。以[阿里云备案流程](https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/icp-filing-application-overview)和主体所在地管局的最新要求为准。
 - ECS 安全组：TCP 22 仅允许管理员固定 IP；TCP 80、443 面向预期用户；不添加 8787 入方向规则。参见[阿里云 ECS 安全组说明](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups)。
-- 本地已经得到通过 `npm run release:verify` 的 `v0.1.0-alpha.1` 预览候选提交或归档。
+- 本地已经得到通过 `npm run release:verify` 的 `v0.1.0-alpha.2` 预览候选提交或归档。
 
 备案审核完成之前，可以完成系统安装和回环健康检查，但不要把域名解析到服务器，也不要开放公网 Web 入口。
 
 ## 2. 上传候选版本
 
-把候选归档上传为 `/tmp/gatherthread-0.1.0-alpha.1.tar.gz`，然后在 ECS 上执行：
+把候选归档上传为 `/tmp/gatherthread-0.1.0-alpha.2.tar.gz`，然后在 ECS 上执行：
 
 ```sh
-sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-alpha.1
-sudo tar -xzf /tmp/gatherthread-0.1.0-alpha.1.tar.gz \
-  -C /opt/gatherthread/releases/0.1.0-alpha.1 --strip-components=1
-cd /opt/gatherthread/releases/0.1.0-alpha.1
+sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-alpha.2
+sudo tar -xzf /tmp/gatherthread-0.1.0-alpha.2.tar.gz \
+  -C /opt/gatherthread/releases/0.1.0-alpha.2 --strip-components=1
+cd /opt/gatherthread/releases/0.1.0-alpha.2
 ```
 
 也可以在发布 Git 标签后，把该标签直接克隆到同一路径。目录必须准确，因为部署脚本会拒绝从临时工作树或未标明候选版本的源码启动。

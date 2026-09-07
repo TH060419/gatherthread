@@ -12,7 +12,7 @@ Cloud sessions and local Agent conversations are the same collaboration stream b
 
 ## Decision
 
-A newly materialized visible Codex task receives the initial name `<cloud session title> · GatherThread`. The project name is omitted. Its implementation-private background projection receives `<cloud session title> · GatherThread background`. An adopted pre-existing local task keeps its existing title.
+A newly materialized visible Codex task receives the initial name `<cloud session title> · MULTI|SOLO · GatherThread`. The project name is omitted. Its implementation-private background projection and immutable snapshots receive the same uppercase cloud session-type label. The label suffix is preserved when a long cloud title is truncated to the Codex limit. An adopted pre-existing local task keeps its existing title.
 
 After the binding exists, cloud and local titles are independent. GatherThread does not push later cloud renames into the local task and does not upload later local renames to the cloud. The cloud permission rule remains authoritative: a Personal Solo may be renamed only by its Solo Creator while they retain a non-viewer project role, and a Multi may be renamed only by the Project Owner.
 

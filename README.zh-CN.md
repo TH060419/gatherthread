@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/badge/release-0.1.0--alpha.1-0f766e.svg)](docs/releases/0.1.0-alpha.1.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.1.0--alpha.1-0f766e.svg)](docs/releases/0.1.0-alpha.2.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **一个空间，汇聚众智。**
 
@@ -96,13 +96,13 @@ npm run owner-host
 插件只需安装一次：
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.2 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
 连接器会在终端隐藏提示中读取设备 token，创建或复用本地项目，打开 Codex Desktop，并自动发现后续会话。可编辑的 GatherThread 会话会成为 Codex 任务；网页 Agent 请求在隔离的后台投影中运行，经信任的 Hooks 则把 Desktop 直接回合写回同一份规范历史。本地新任务只有在首个回合成功完成后才会创建个人 Solo，访者任务始终留在本地。部分 Codex 版本会把注入历史持久写入模型上下文，但不一定立即把每条导入内容重绘成可见气泡。
 
-固定 Alpha 命令与 private 仓库测试方式见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。npm 包和 `v0.1.0-alpha.1` 引用发布后才能直接使用 registry 命令；发布前，有 private 仓库权限的协作者使用同一指南中的源码路径。
+固定 Alpha 命令与 private 仓库测试方式见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。npm 包和 `v0.1.0-alpha.2` 引用发布后才能直接使用 registry 命令；发布前，有 private 仓库权限的协作者使用同一指南中的源码路径。
 
 ## 接入 DeepSeek Harness
 
@@ -120,11 +120,11 @@ DeepSeek Harness 也使用同样清晰的三步流程：
 
 首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、按用户/项目/部署限制会话数量、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。新邀请用户的设备 Token 只展示一次，必须在关闭提示前妥善保存。
 
-`0.1.0-alpha.1` 尚未开放共序官方服务和公共 Beta。本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用；[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)已经为下一阶段部署准备好，但不代表服务器已上线。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
+`0.1.0-alpha.2` 尚未开放共序官方服务和公共 Beta。本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用；[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)已经为下一阶段部署准备好，但不代表服务器已上线。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
 
 尚未实现：主机自动故障转移、多进程 WebSocket fan-out、无人处理的 Agent 请求领取恢复、Agent token 级流式显示、附件对象存储、保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。
 
-更多信息请参阅 [`0.1.0-alpha.1` 说明](docs/releases/0.1.0-alpha.1.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
+更多信息请参阅 [`0.1.0-alpha.2` 说明](docs/releases/0.1.0-alpha.2.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
 
 ## 许可证
 

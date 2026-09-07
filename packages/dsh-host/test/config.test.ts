@@ -80,7 +80,7 @@ test("project binding is explicit while legacy configurations remain single-sess
   });
   assert.equal(project.enabled, true);
   if (!project.enabled || project.bindingMode !== "project") throw new Error("unreachable");
-  assert.equal(project.stateRoot, "/state/gatherthread-dsh-project");
+  assert.equal(project.stateRoot, path.resolve("/state/gatherthread-dsh-project"));
   assert.equal(project.maxConcurrentSessions, 3);
   assert.equal(project.retryBaseMs, 250);
   assert.equal(project.retryMaxMs, 4_000);

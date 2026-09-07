@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/badge/release-0.1.0--alpha.1-0f766e.svg)](docs/releases/0.1.0-alpha.1.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.1.0--alpha.1-0f766e.svg)](docs/releases/0.1.0-alpha.2.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **One room, many minds.**
 
@@ -96,13 +96,13 @@ The Web dialog uses one short, three-step flow:
 One-time plugin install:
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.2 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
 The connector asks for the device token in a hidden terminal prompt, creates or reuses the local project, opens Codex Desktop, and discovers later sessions automatically. Editable GatherThread sessions become Codex tasks; Web Agent requests run in an isolated background projection, while trusted Hooks return direct Desktop turns to the same canonical history. A new local task creates a personal Solo only after its first completed turn; viewer tasks remain local. Some Codex builds may persist injected history for model context without immediately redrawing every imported item as a visible Desktop bubble.
 
-The fixed Alpha commands are documented in the [Codex connection guide](docs/CODEX_CONNECT.md). Registry commands become usable only after the packages and `v0.1.0-alpha.1` ref are published. Before that, collaborators with private repository access use the source-checkout path in the same guide.
+The fixed Alpha commands are documented in the [Codex connection guide](docs/CODEX_CONNECT.md). Registry commands become usable only after the packages and `v0.1.0-alpha.2` ref are published. Before that, collaborators with private repository access use the source-checkout path in the same guide.
 
 ## Connect DeepSeek Harness
 
@@ -120,11 +120,11 @@ The official GatherThread service button is present but disabled in this Alpha. 
 
 The first release includes peppered device credentials, HMAC-protected and revocable browser sessions, strict Cookie-write Origin checks, single-use invitations and device authorization, device-bound runtime provenance, immediate session/socket/authorization invalidation on device or membership revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, per-user/project/deployment session-count limits, event and snapshot-job storage quotas, reconnect replay, and SQLite backup/restore scripts. A newly invited user sees the new device credential once and must save it before dismissing the dialog.
 
-The hosted GatherThread service and public Beta are not open in `0.1.0-alpha.1`. Local-only, private LAN HTTPS, and private Tailscale Serve are available. The [Alibaba Cloud ECS profile](docs/ALIYUN_ECS.md) is deployment-ready documentation for the next stage, not a claim that the service is online. Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic.
+The hosted GatherThread service and public Beta are not open in `0.1.0-alpha.2`. Local-only, private LAN HTTPS, and private Tailscale Serve are available. The [Alibaba Cloud ECS profile](docs/ALIYUN_ECS.md) is deployment-ready documentation for the next stage, not a claim that the service is online. Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic.
 
 Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, token-by-token agent streaming, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers. Current progress delivery is item-level public commentary rather than token streaming.
 
-See the [`0.1.0-alpha.1` notes](docs/releases/0.1.0-alpha.1.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [connection modes](docs/CONNECTION_MODES.md), [Codex guide](docs/CODEX_CONNECT.md), [DSH guide](docs/DSH_CONNECT.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), and [operations](docs/OPERATIONS.md).
+See the [`0.1.0-alpha.2` notes](docs/releases/0.1.0-alpha.2.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [connection modes](docs/CONNECTION_MODES.md), [Codex guide](docs/CODEX_CONNECT.md), [DSH guide](docs/DSH_CONNECT.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), and [operations](docs/OPERATIONS.md).
 
 ## License
 

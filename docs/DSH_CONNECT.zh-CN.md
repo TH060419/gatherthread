@@ -2,7 +2,7 @@
 
 共序 DSH 插件运行在 DeepSeek Harness 的 Web profile 中，并由 DSH 主动连接到选定的共序服务器。网页不会探测 `localhost`，也不会尝试启动本地进程。
 
-> Alpha 预览版：`0.1.0-alpha.1` 已为 private 仓库测试准备。“共序官方服务”入口已经保留但暂时禁用，请使用本机、局域网、自托管或 Tailscale 服务器。
+> Alpha 预览版：`0.1.0-alpha.2` 已为 private 仓库测试准备。“共序官方服务”入口已经保留但暂时禁用，请使用本机、局域网、自托管或 Tailscale 服务器。
 
 ## 正常连接只需三步
 
@@ -17,7 +17,7 @@ npm install --global pnpm@10
 再把固定版本的共序插件加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.1
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.2
 ```
 
 ### 2. 打开 DSH
@@ -40,7 +40,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.1.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.2.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 

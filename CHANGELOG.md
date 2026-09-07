@@ -2,6 +2,24 @@
 
 All notable changes to GatherThread are documented here. The project follows Semantic Versioning while pre-release APIs may still change.
 
+## [0.1.0-alpha.2] - 2026-09-08
+
+### Changed
+
+- Label newly managed Codex Desktop, background, and immutable snapshot conversations with their initial uppercase `MULTI` or `SOLO` session type while preserving the suffix under Codex title truncation.
+- Keep snapshot completion metadata identical to the actual native Codex title.
+- Advance all fixed-version Codex connector, DeepSeek Harness plugin, Web onboarding, private deployment, and release-verification references to `0.1.0-alpha.2` without replacing the immutable `alpha.1` artifacts.
+
+### Fixed
+
+- Make the Codex plugin Hook relay compare Windows workspace paths case-insensitively, matching the platform's connector registry identity.
+- Make DSH path contract tests platform-aware so the Windows release gate validates native paths rather than POSIX-only fixture strings.
+
+### Known limitations
+
+- The hosted GatherThread service and public Beta remain closed; this Alpha supports local, private LAN HTTPS, private Tailscale, and operator-managed self-hosting.
+- Existing local Agent task titles remain independently editable and are not overwritten when a cloud session is later renamed or changes mode.
+
 ## [0.1.0-alpha.1] - 2026-09-07
 
 ### Added
@@ -30,4 +48,5 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - Alibaba Cloud deployment is intended for a small, invitation-only beta and requires operator-managed domain, filing, security-group, monitoring, and restore checks.
 - Public npm scope ownership, public plugin-directory distribution, and remote OAuth 2.1/PKCE MCP remain release follow-ups.
 
+[0.1.0-alpha.2]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.1

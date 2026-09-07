@@ -2,14 +2,14 @@
 
 GatherThread keeps one selected cloud project connected to Codex Desktop through a small local connector. The browser never launches Codex and never places a credential in a copied command.
 
-> Alpha preview: `0.1.0-alpha.1` is prepared for private repository testing. The npm package and fixed Git ref commands work after they are published. Until then, use the source-checkout path below.
+> Alpha preview: `0.1.0-alpha.2` is prepared for private repository testing. The npm package and fixed Git ref commands work after they are published. Until then, use the source-checkout path below.
 
 ## Normal three-step setup
 
 ### 1. Install the Codex plugin once
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.2 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -20,7 +20,7 @@ Restart Codex Desktop. Open Settings, review the **共序 / GatherThread** MCP s
 Open that project in GatherThread, select **Connect Codex**, and copy the command shown for your operating system. It has this shape:
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.1 \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.2 \
   --url 'https://your-gatherthread-server.example' \
   --project 'PROJECT_ID' \
   --create-workspace \
@@ -49,7 +49,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-Use the server URL and project ID displayed by the local Web app. The fixed plugin commands above become available when the private `v0.1.0-alpha.1` ref exists. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
+Use the server URL and project ID displayed by the local Web app. The fixed plugin commands above become available when the private `v0.1.0-alpha.2` ref exists. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
 
 ## What synchronizes
 

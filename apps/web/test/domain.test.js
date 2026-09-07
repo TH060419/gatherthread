@@ -32,11 +32,11 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
   });
   assert.equal(
     commands.posix,
-    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.1 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks",
+    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.2 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks",
   );
   assert.equal(
     commands.powershell,
-    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.1 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks",
+    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.2 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks",
   );
   for (const command of Object.values(commands)) {
     assert.match(command, /--url 'https:\/\/gatherthread\.example\/v1'/);

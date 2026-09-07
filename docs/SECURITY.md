@@ -4,7 +4,7 @@
 
 This document defines the first-release security boundary for the collaboration server, browser client, MCP surface, local bridge, transcript adapters, and operational tooling.
 
-The repository contains an executable single-process `0.1.0-alpha.1` server and owner-host tooling. Automated checks cover core contracts, but passing `npm run release:verify` does not certify a host, network policy, operating system, filing status, backup location, or Internet-facing deployment. Public ingress is prepared only through the documented invitation-only Alibaba Cloud ECS profile and still requires operator preflight and monitoring; no official hosted service is open in this Alpha.
+The repository contains an executable single-process `0.1.0-alpha.2` server and owner-host tooling. Automated checks cover core contracts, but passing `npm run release:verify` does not certify a host, network policy, operating system, filing status, backup location, or Internet-facing deployment. Public ingress is prepared only through the documented invitation-only Alibaba Cloud ECS profile and still requires operator preflight and monitoring; no official hosted service is open in this Alpha.
 
 ## Assets and trust boundaries
 

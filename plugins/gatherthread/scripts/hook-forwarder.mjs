@@ -30,14 +30,16 @@ try {
 async function findRelay(eventCwd) {
   let candidate = await realpath(path.resolve(eventCwd));
   while (true) {
+    const comparableCandidate = platformComparablePath(candidate);
     const id = createHash("sha256")
-      .update(process.platform === "win32" ? candidate.toLowerCase() : candidate)
+      .update(comparableCandidate)
       .digest("hex")
       .slice(0, 24);
     const stateRoot = path.join(homedir(), ".gatherthread", "codex", "hooks", id);
     try {
       const registry = JSON.parse(await readFile(path.join(stateRoot, "hook-registry.json"), "utf8"));
-      if (path.resolve(registry.workspacePath) === candidate && registry.hookSource === "plugin") {
+      if (platformComparablePath(registry.workspacePath) === comparableCandidate
+        && registry.hookSource === "plugin") {
         return process.platform === "win32"
           ? `\\\\.\\pipe\\gatherthread-${id}-hook-relay`
           : path.join(stateRoot, "hook-relay.sock");
@@ -49,6 +51,11 @@ async function findRelay(eventCwd) {
     if (parent === candidate) throw new Error("no connector registry for hook cwd");
     candidate = parent;
   }
+}
+
+function platformComparablePath(value) {
+  const resolved = path.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
 
 function readInput() {

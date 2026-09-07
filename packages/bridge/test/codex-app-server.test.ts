@@ -1098,7 +1098,10 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
     commandArgs: [fakeCodex],
     cwd: directory,
     env: { ...process.env, CAPTURE: capturePath, GENERATION: generationPath },
-    requestTimeoutMs: 1_000,
+    // This test targets lease invalidation after a deliberate thread/start
+    // timeout. Give process initialization enough headroom when the full test
+    // suite is concurrently spawning many child processes.
+    requestTimeoutMs: 5_000,
     threadStartTimeoutMs: 250,
   });
   t.after(() => client.dispose());
@@ -2726,6 +2729,10 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   assert.equal(failedSnapshots, 1);
   assert.equal(getEventListeners(workerAbort.signal, "abort").length, 0, "a failed snapshot completion must also dispose its client listener");
   assert.equal((completedResult as { through_sequence?: number }).through_sequence, 3);
+  assert.equal(
+    (completedResult as { thread_name?: string }).thread_name,
+    "Hidden · MULTI · GatherThread snapshot · through 3",
+  );
   const workerState = JSON.parse(await readFile(
     path.join(workerStateRoot, "snapshots", `${codexSessionKey("snapshot-job-hidden")}.json`),
     "utf8",
