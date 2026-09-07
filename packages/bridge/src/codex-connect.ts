@@ -8,7 +8,7 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { redactText } from "@gatherthread/adapters";
 import { LocalBridge } from "./bridge.js";
-import { CodexProjectHarness, codexSessionKey } from "./codex-app-server.js";
+import { CodexProjectHarness, codexSessionKey, managedCodexThreadName } from "./codex-app-server.js";
 import {
   CodexHookRelayServer,
   drainCodexHookSpool,
@@ -606,13 +606,9 @@ export interface ManagedSession {
   relayLocalHarnessEvent?: ProjectHarnessSessionBinding["relayLocalHarnessEvent"];
 }
 
-function managedThreadName(sessionName: string): string {
-  return [sessionName, "GatherThread"].join(" · ").slice(0, 240);
-}
-
 export function formatConnectedCodexSessionOutput(_projectName: string, session: SessionSummary): string {
   const sessionName = session.name ?? session.id;
-  return `Connected session: ${sessionName} [${session.mode}] as ${terminalQuoted(managedThreadName(sessionName))}\n`;
+  return `Connected session: ${sessionName} [${session.mode}] as ${terminalQuoted(managedCodexThreadName(session))}\n`;
 }
 
 function terminalQuoted(value: string): string {

@@ -2732,6 +2732,7 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   ));
   assert.equal(workerState.lastInjectedSequence, 1);
   assert.equal(workerState.coveredThroughSequence, 3);
+  assert.equal(workerState.threadName, "Hidden · MULTI · GatherThread snapshot · through 3");
 });
 
 test("reconciliation rebuilds off to the side before atomically switching and archiving the fork", async (t) => {
