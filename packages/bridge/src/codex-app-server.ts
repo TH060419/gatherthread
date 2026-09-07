@@ -36,6 +36,17 @@ interface JsonRpcResponse {
   error?: { code?: unknown; message?: unknown; data?: unknown };
 }
 
+const CODEX_THREAD_NAME_MAX_LENGTH = 240;
+
+export function managedCodexThreadName(
+  session: Pick<SessionSummary, "id" | "name" | "mode">,
+  marker = "GatherThread",
+): string {
+  const sessionName = session.name ?? session.id;
+  const suffix = ` · ${session.mode.toUpperCase()} · ${marker}`;
+  return `${sessionName.slice(0, Math.max(0, CODEX_THREAD_NAME_MAX_LENGTH - suffix.length))}${suffix}`;
+}
+
 interface JsonRpcNotification {
   method: string;
   params?: unknown;
@@ -2503,9 +2514,8 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
     sessionKey: string;
     statePath: string;
   }): ProjectHarnessSessionBinding {
-    const sessionName = input.session.name ?? input.session.id;
-    const threadName = [sessionName, "GatherThread"].join(" · ");
-    const executionThreadName = [sessionName, "GatherThread background"].join(" · ");
+    const threadName = managedCodexThreadName(input.session);
+    const executionThreadName = managedCodexThreadName(input.session, "GatherThread background");
     const executor = new CodexAppServerExecutor({
       client: this.#projectBackgroundClient(),
       workspacePath: this.#options.workspacePath,
@@ -2644,7 +2654,10 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
             client,
             workspacePath: this.#options.workspacePath,
             statePath: path.join(this.#options.stateRoot, "snapshots", `${codexSessionKey(job.id)}.json`),
-            threadName: [session?.name ?? job.sessionId, "GatherThread snapshot", `through ${job.throughSequence}`].join(" · "),
+            threadName: managedCodexThreadName(
+              session as SessionSummary,
+              `GatherThread snapshot · through ${job.throughSequence}`,
+            ),
             model: this.#options.model,
             ...(this.#options.hookRegistryPath === undefined ? {} : {
               hookRegistryPath: this.#options.hookRegistryPath,

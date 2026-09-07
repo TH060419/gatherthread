@@ -29,6 +29,7 @@ import {
   runManagedSessionCycle,
   runProjectConnector,
 } from "../src/codex-connect.js";
+import { managedCodexThreadName } from "../src/codex-app-server.js";
 import type { HttpCollaborationClient } from "../src/http-client.js";
 import { CollaborationHttpError } from "../src/http-client.js";
 import type { ProjectHarnessAdapter, SessionSummary } from "../src/index.js";
@@ -651,9 +652,17 @@ test("connected session output gives the exact managed Desktop task without manu
     ...session("owner", "multi"),
     name: "Shared analysis",
   });
-  assert.match(output, /^Connected session: Shared analysis \[multi\] as "Shared analysis · GatherThread"$/m);
+  assert.match(output, /^Connected session: Shared analysis \[multi\] as "Shared analysis · MULTI · GatherThread"$/m);
   assert.doesNotMatch(output, /Move to project|manual grouping/i);
   assert.doesNotMatch(output, /gta_|GATHERTHREAD_TOKEN|\/Users\/|\\Users\\/);
+});
+
+test("managed local conversation names retain an uppercase session type suffix", () => {
+  assert.equal(managedCodexThreadName({ id: "solo-1", name: "Personal notes", mode: "solo" }),
+    "Personal notes · SOLO · GatherThread");
+  const longName = managedCodexThreadName({ id: "multi-1", name: "x".repeat(300), mode: "multi" });
+  assert.equal(longName.length, 240);
+  assert.match(longName, / · MULTI · GatherThread$/);
 });
 
 test("explicit workspace skips Desktop reveal and reveal failures or timeouts remain fail-soft", async () => {
