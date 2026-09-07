@@ -12,7 +12,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Fixed
 
-- Make the Codex plugin Hook relay compare Windows workspace paths case-insensitively, matching the platform's connector registry identity.
+- Make the Codex plugin Hook relay preserve the connector's lexical workspace key before trying a canonical fallback and compare Windows paths case-insensitively.
 - Make DSH path contract tests platform-aware so the Windows release gate validates native paths rather than POSIX-only fixture strings.
 
 ### Known limitations

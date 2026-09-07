@@ -28,7 +28,24 @@ try {
 }
 
 async function findRelay(eventCwd) {
-  let candidate = await realpath(path.resolve(eventCwd));
+  const lexicalCandidate = path.resolve(eventCwd);
+  const lexicalRelay = await findRelayFromCandidate(lexicalCandidate);
+  if (lexicalRelay) return lexicalRelay;
+
+  // The connector registry is keyed by the lexical workspace path supplied at
+  // setup time. A canonical fallback still supports events reported through a
+  // resolved symlink, while keeping Windows realpath aliases from changing the
+  // primary registry key.
+  const canonicalCandidate = await realpath(lexicalCandidate);
+  if (platformComparablePath(canonicalCandidate) !== platformComparablePath(lexicalCandidate)) {
+    const canonicalRelay = await findRelayFromCandidate(canonicalCandidate);
+    if (canonicalRelay) return canonicalRelay;
+  }
+  throw new Error("no connector registry for hook cwd");
+}
+
+async function findRelayFromCandidate(initialCandidate) {
+  let candidate = initialCandidate;
   while (true) {
     const comparableCandidate = platformComparablePath(candidate);
     const id = createHash("sha256")
@@ -48,7 +65,7 @@ async function findRelay(eventCwd) {
       // Continue toward the filesystem root; only a connector registry is authoritative.
     }
     const parent = path.dirname(candidate);
-    if (parent === candidate) throw new Error("no connector registry for hook cwd");
+    if (parent === candidate) return undefined;
     candidate = parent;
   }
 }
