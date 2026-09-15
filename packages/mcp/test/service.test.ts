@@ -64,9 +64,13 @@ test("user MCP exposes collaboration tools but no internal runtime controls", as
     "collaboration_append_chat",
     "collaboration_request_agent",
     "collaboration_get_connection_status",
+    "collaboration_get_local_sync_status",
+    "collaboration_set_local_auto_upload",
+    "collaboration_upload_local_turns",
+    "collaboration_import_codex_history",
   ]);
   const readOnlyNames = names.filter((name: string) =>
-    name !== "collaboration_append_chat" && name !== "collaboration_request_agent",
+    !["collaboration_append_chat", "collaboration_request_agent", "collaboration_set_local_auto_upload", "collaboration_upload_local_turns", "collaboration_import_codex_history"].includes(name),
   );
   for (const name of readOnlyNames) {
     assert.deepEqual(listedTools.find((item: any) => item.name === name).annotations, {
@@ -76,7 +80,7 @@ test("user MCP exposes collaboration tools but no internal runtime controls", as
       openWorldHint: true,
     });
   }
-  for (const name of ["collaboration_append_chat", "collaboration_request_agent"]) {
+  for (const name of ["collaboration_append_chat", "collaboration_request_agent", "collaboration_set_local_auto_upload", "collaboration_upload_local_turns", "collaboration_import_codex_history"]) {
     assert.deepEqual(listedTools.find((item: any) => item.name === name).annotations, {
       readOnlyHint: false,
       destructiveHint: false,
@@ -170,6 +174,41 @@ test("chat and agent request tools append distinct canonical events and redact s
   }
   assert.deepEqual(api.appended.map((item) => item.type), ["human_chat", "agent_request"]);
   assert.ok(api.appended.every((item) => (item.payload as any).text === "token=[REDACTED]"));
+});
+
+test("user MCP exposes explicit per-conversation automatic and manual local upload controls", async () => {
+  const calls: string[] = [];
+  const localSync = {
+    async getLocalSyncStatus(sessionId: string) {
+      calls.push(`status:${sessionId}`);
+      return { sessionId, localSessionId: "thread-1", automaticUpload: true, pendingLocalTurns: 0, uploadableLocalTurns: 1 };
+    },
+    async setLocalAutoUpload(sessionId: string, enabled: boolean) {
+      calls.push(`auto:${sessionId}:${enabled}`);
+      return { sessionId, localSessionId: "thread-1", automaticUpload: enabled, pendingLocalTurns: 0, uploadableLocalTurns: 1 };
+    },
+    async uploadLocalTurns(sessionId: string) {
+      calls.push(`upload:${sessionId}`);
+      return { sessionId, localSessionId: "thread-1", automaticUpload: false, pendingLocalTurns: 0, uploadableLocalTurns: 0, discoveredLocalTurns: 1, uploadedLocalTurns: 1 };
+    },
+    async importVisibleHistorySnapshot(sessionId: string) {
+      calls.push(`history:${sessionId}`);
+      return { status: "imported" as const, threadId: "thread-2", throughSequence: 2, compacted: false };
+    },
+  };
+  const service = new CollaborationMcpService({ api: new FakeApi(), localSync });
+  for (const [name, argumentsValue] of [
+    ["collaboration_get_local_sync_status", { session_id: "s1" }],
+    ["collaboration_set_local_auto_upload", { session_id: "s1", enabled: false }],
+    ["collaboration_upload_local_turns", { session_id: "s1" }],
+    ["collaboration_import_codex_history", { session_id: "s1" }],
+  ] as const) {
+    const response = await service.handle({
+      jsonrpc: "2.0", id: name, method: "tools/call", params: { name, arguments: argumentsValue },
+    });
+    assert.ok(response && "result" in response);
+  }
+  assert.deepEqual(calls, ["status:s1", "auto:s1:false", "upload:s1", "history:s1"]);
 });
 
 test("provider request fidelity is rejected unless exact capture is explicitly authorized", async () => {

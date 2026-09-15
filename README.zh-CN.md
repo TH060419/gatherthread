@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/badge/release-0.1.0--alpha.1-0f766e.svg)](docs/releases/0.1.0-alpha.2.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.1.0--alpha.5-0f766e.svg)](docs/releases/0.1.0-alpha.5.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **一个空间，汇聚众智。**
 
@@ -95,14 +95,16 @@ npm run owner-host
 
 插件只需安装一次：
 
+如果 `codex --version` 不可用或终端提示 `codex: command not found`，请先运行 `npm install -g @openai/codex` 安装或更新官方 Codex CLI。重新打开终端，确认 `codex plugin --help` 可用后再继续。
+
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.2 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
-连接器会在终端隐藏提示中读取设备 token，创建或复用本地项目，打开 Codex Desktop，并自动发现后续会话。可编辑的 GatherThread 会话会成为 Codex 任务；网页 Agent 请求在隔离的后台投影中运行，经信任的 Hooks 则把 Desktop 直接回合写回同一份规范历史。本地新任务只有在首个回合成功完成后才会创建个人 Solo，访者任务始终留在本地。部分 Codex 版本会把注入历史持久写入模型上下文，但不一定立即把每条导入内容重绘成可见气泡。
+连接器会在终端隐藏提示中读取设备 token，创建或复用本地项目，打开 Codex Desktop，并自动发现后续会话。可编辑的 GatherThread 会话会成为 Codex 任务；网页 Agent 请求在隔离的后台投影中运行，经信任的 Hooks 则把 Desktop 直接回合写回同一份规范历史。工作页为当前对话提供“本地回合自动上传至云端”开关和“立即从本地上传至云端”保底操作，Codex 插件也提供相同控制；Hook 漏记或失效时可扫描并补传已完成回合，且不会擅自重新开启自动上传。默认在每个会话首次于本地建立时导入一次经过验证、可直接阅读的原生历史快照；设置中可以关闭这次初始导入。“导入 Codex 历史”每次都会创建一个经过验证的新本地任务，长历史会按配置的上下文上限自动压缩，后续 Hook 和上下文投递会切换到新任务。GatherThread 不覆盖或归档旧任务，请用户检查后自行归档。无论是否启用初次导入或执行手动导入，实时上下文注入都继续独立运行。本地新任务只有在首个回合成功完成后才会创建个人 Solo，访者任务始终留在本地。
 
-固定 Alpha 命令与 private 仓库测试方式见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。npm 包和 `v0.1.0-alpha.2` 引用发布后才能直接使用 registry 命令；发布前，有 private 仓库权限的协作者使用同一指南中的源码路径。
+固定 Alpha 命令与 private 仓库测试方式见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。npm 包和 `v0.1.0-alpha.5` 引用发布后才能直接使用 registry 命令；发布前，有 private 仓库权限的协作者使用同一指南中的源码路径。
 
 ## 接入 DeepSeek Harness
 
@@ -112,7 +114,7 @@ DeepSeek Harness 也使用同样清晰的三步流程：
 2. 启动 `@deepseek-ai/dsh@0.1.2-rc.1 web` 并保持运行。
 3. 打开 **Settings → GatherThread / 共序**，输入当前服务器地址，并在已经登录的 GatherThread 浏览器中批准一次性配对码。
 
-一次明确配对会连接该身份可见的全部活跃项目，并继续发现后续新增权限。可写的 GatherThread 会话会成为可编辑的 DSH 原生会话；完成的 DSH 回合只上传一次，服务器规范历史按顺序投影回来。在 DSH 新会话中完成首个成功回合会创建本人所有的云端 Solo；空会话、失败回合和访者会话继续留在本地。Agent 请求只交给用户明确选择的 runtime，不会回退到 Codex。
+一次明确配对会连接该身份可见的全部活跃项目，并继续发现后续新增权限。可写的 GatherThread 会话会成为可编辑的 DSH 原生会话；完成的 DSH 回合只上传一次，服务器规范历史按顺序投影回来。DSH 设置页会为每个已连接对话提供“自动上传”开关和“手动上传”。在 DSH 新会话中完成首个成功回合会创建本人所有的云端 Solo；空会话、失败回合和访者会话继续留在本地。Agent 请求只交给用户明确选择的 runtime，不会回退到 Codex。
 
 本 Alpha 已保留“共序官方服务”入口，但按钮处于禁用状态。本机、局域网、自托管和 Tailscale 地址现在即可使用。完整的已发布包与 private 仓库测试路径见[DSH 接入指南](docs/DSH_CONNECT.zh-CN.md)。
 
@@ -120,11 +122,17 @@ DeepSeek Harness 也使用同样清晰的三步流程：
 
 首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、按用户/项目/部署限制会话数量、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。新邀请用户的设备 Token 只展示一次，必须在关闭提示前妥善保存。
 
-`0.1.0-alpha.2` 尚未开放共序官方服务和公共 Beta。本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用；[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)已经为下一阶段部署准备好，但不代表服务器已上线。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
+`0.1.0-alpha.5` 尚未开放共序官方服务和公共 Beta。本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用；[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)已经为下一阶段部署准备好，但不代表服务器已上线。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
 
 尚未实现：主机自动故障转移、多进程 WebSocket fan-out、无人处理的 Agent 请求领取恢复、Agent token 级流式显示、附件对象存储、保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。
 
-更多信息请参阅 [`0.1.0-alpha.2` 说明](docs/releases/0.1.0-alpha.2.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
+更多信息请参阅 [`0.1.0-alpha.5` 说明](docs/releases/0.1.0-alpha.5.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
+
+## 参与开发与版本治理
+
+开发者和用于开发的 Agent 应先阅读 [`AGENTS.md`](AGENTS.md) 与 [`CONTRIBUTING.md`](CONTRIBUTING.md)；公开及内部接口边界统一记录在 [`docs/INTERFACE_CONTRACTS.md`](docs/INTERFACE_CONTRACTS.md)。
+
+每个版本更新都必须通过 Pull Request，由项目主要负责人及指定发布维护者（目前为 `@TH060419`）审核后才能合并和发布。未经负责人对该次操作的明确授权，开发者与 Agent 不得发布 npm 包、创建或移动版本标签、创建 GitHub Release、部署服务器或删除其他贡献者的分支。`CODEOWNERS` 会自动请求负责人审核；要在 GitHub 上强制执行，还需由仓库管理员按开发规范开启 `main` 分支保护。
 
 ## 许可证
 

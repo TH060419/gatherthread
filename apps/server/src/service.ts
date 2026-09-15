@@ -7,6 +7,7 @@ import type {
   MembershipRole,
   ReplayResponse,
   SnapshotFailure,
+  SnapshotRequestKind,
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { CollaborationDatabase, type Actor, type RuntimeRecord, type SessionRecord } from "./database.js";
@@ -379,8 +380,8 @@ export class CollaborationService {
     return result;
   }
 
-  createSnapshotRequest(actor: Actor, sessionId: string) {
-    return this.database.createSnapshotRequest(actor, sessionId);
+  createSnapshotRequest(actor: Actor, sessionId: string, kind?: SnapshotRequestKind, targetRuntimeId?: string) {
+    return this.database.createSnapshotRequest(actor, sessionId, kind, targetRuntimeId);
   }
 
   getSnapshotRequest(actor: Actor, requestId: string) {

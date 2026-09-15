@@ -1,6 +1,6 @@
-# Alibaba Cloud ECS deployment: 0.1.0-alpha.2 preview
+# Alibaba Cloud ECS deployment: 0.1.0-alpha.5 preview
 
-This profile prepares the private `0.1.0-alpha.2` preview for later server deployment. The official GatherThread service is not open yet. The application always listens on `127.0.0.1:8787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 8787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host and invite every later user with a single-use project invitation.
+This profile prepares the private `0.1.0-alpha.5` preview for later server deployment. The official GatherThread service is not open yet. The application always listens on `127.0.0.1:8787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 8787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host and invite every later user with a single-use project invitation.
 
 ## 1. Prerequisites
 
@@ -8,19 +8,19 @@ This profile prepares the private `0.1.0-alpha.2` preview for later server deplo
 - A verified domain with an A record for the ECS public IP.
 - Complete the required ICP filing before opening a Web service on a mainland-China instance. Alibaba Cloud states that a domain pointing to a mainland server must be filed through the actual access provider regardless of port or use; follow the current [Alibaba Cloud filing guide](https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/icp-filing-application-overview) and the rules for the filing owner's province.
 - Security-group ingress: TCP 22 from fixed administrator addresses only, TCP 80/443 for intended users, and no rule for 8787. See the [Alibaba Cloud ECS security-group guide](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups).
-- A local `v0.1.0-alpha.2` preview commit or archive that has passed `npm run release:verify`.
+- A local `v0.1.0-alpha.5` preview commit or archive that has passed `npm run release:verify`.
 
 Before filing approval, system installation and loopback checks may be prepared, but do not point the domain at the instance or open public Web ingress.
 
 ## 2. Upload the candidate
 
-Upload the candidate archive as `/tmp/gatherthread-0.1.0-alpha.2.tar.gz`, then run on the ECS host:
+Upload the candidate archive as `/tmp/gatherthread-0.1.0-alpha.5.tar.gz`, then run on the ECS host:
 
 ```sh
-sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-alpha.2
-sudo tar -xzf /tmp/gatherthread-0.1.0-alpha.2.tar.gz \
-  -C /opt/gatherthread/releases/0.1.0-alpha.2 --strip-components=1
-cd /opt/gatherthread/releases/0.1.0-alpha.2
+sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-alpha.5
+sudo tar -xzf /tmp/gatherthread-0.1.0-alpha.5.tar.gz \
+  -C /opt/gatherthread/releases/0.1.0-alpha.5 --strip-components=1
+cd /opt/gatherthread/releases/0.1.0-alpha.5
 ```
 
 After a Git tag exists, the exact tag may instead be cloned into the same path. The installer deliberately rejects temporary source paths and mismatched release metadata.

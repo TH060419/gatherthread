@@ -86,6 +86,10 @@ test("dsh.client bundle registers the official settings Slot without credential 
   assert.doesNotMatch(loaded.source, /\/Users\/|[A-Za-z]:\\\\/);
   assert.doesNotMatch(loaded.source, /#[0-9a-f]{3,8}\b/iu, "Client surfaces must not hard-code light-theme colors");
   assert.match(loaded.source, /已验证兼容：[\s\S]*state\.compatibility\.version/);
+  assert.match(loaded.source, /"自动上传"/u);
+  assert.match(loaded.source, /"sync\/set-auto-upload"/u);
+  assert.match(loaded.source, /"sync\/upload"/u);
+  assert.match(loaded.source, /手动上传/u);
 });
 
 test("Client primary actions keep a visible system foreground in light, dark, and Safari themes", async () => {

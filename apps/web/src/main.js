@@ -118,6 +118,14 @@ let dshRuntimeLoadInFlight = false;
 let selectedSessionGeneration = 0;
 let pendingDshPairingCode = dshPairingCodeFromHash(location.hash);
 const expandedWorklogs = new Set();
+const localSyncStatusRequestsInFlight = new Set();
+const LOCAL_SYNC_REQUEST_KINDS = new Set([
+  "local_sync_status",
+  "local_auto_upload_enable",
+  "local_auto_upload_disable",
+  "local_turn_upload",
+]);
+let selectedCodexLocalRuntimeId = "";
 
 const element = (id) => document.getElementById(id);
 const authView = element("auth-view");
@@ -139,7 +147,14 @@ const sendError = element("send-error");
 const composer = element("composer");
 const composerLayoutResizer = element("composer-layout-resizer");
 const downloadCodexButton = element("download-codex-button");
+const importVisibleHistoryButton = element("import-visible-history-button");
 const snapshotRequestList = element("snapshot-request-list");
+const codexLocalSyncControls = element("codex-local-sync-controls");
+const codexLocalRuntimeField = element("codex-local-runtime-field");
+const codexLocalRuntimeSelect = element("codex-local-runtime-select");
+const codexAutoUploadToggle = element("codex-auto-upload-toggle");
+const uploadLocalTurnsButton = element("upload-local-turns-button");
+const codexLocalSyncStatus = element("codex-local-sync-status");
 const createDialog = element("create-session-dialog");
 const createForm = element("create-session-form");
 const createProjectDialog = element("create-project-dialog");
@@ -157,6 +172,10 @@ const connectDshButton = element("connect-dsh-button");
 const approveDshPairingDialog = element("approve-dsh-pairing-dialog");
 const approveDshPairingForm = element("approve-dsh-pairing-form");
 const memberPanel = element("member-panel");
+const toggleSessionRailButton = element("toggle-session-rail-button");
+const toggleMemberPanelButton = element("mobile-members-button");
+const sessionContextDetails = element("session-context-details");
+const compactWorkspaceQuery = window.matchMedia("(max-width: 1160px)");
 const acceptInvitationForm = element("accept-invitation-form");
 const createInvitationForm = element("create-invitation-form");
 const invitationList = element("invitation-list");
@@ -642,24 +661,83 @@ installLayoutResizer(element("left-layout-resizer"), "left");
 installLayoutResizer(element("right-layout-resizer"), "right");
 installComposerLayoutResizer(composerLayoutResizer);
 downloadCodexButton.addEventListener("click", () => void createSnapshotDownload());
+importVisibleHistoryButton.addEventListener("click", () => void createVisibleHistoryImport());
+codexLocalRuntimeSelect.addEventListener("change", () => {
+  selectedCodexLocalRuntimeId = codexLocalRuntimeSelect.value;
+  renderCodexLocalSyncControls();
+  void ensureCodexLocalSyncStatus();
+});
+codexAutoUploadToggle.addEventListener("change", () => {
+  void queueCodexLocalSyncAction(codexAutoUploadToggle.checked
+    ? "local_auto_upload_enable"
+    : "local_auto_upload_disable");
+});
+uploadLocalTurnsButton.addEventListener("click", () => void queueCodexLocalSyncAction("local_turn_upload"));
 snapshotRequestList.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action='retry-snapshot']");
   if (button) void createSnapshotDownload();
 });
 element("retry-sync-button").addEventListener("click", () => sync.retry());
 
-element("mobile-members-button").addEventListener("click", () => {
-  memberPanel.classList.add("member-panel-open");
-  element("mobile-members-button").setAttribute("aria-expanded", "true");
-  element("close-members-button").focus();
-});
+toggleSessionRailButton.addEventListener("click", toggleSessionRail);
+toggleMemberPanelButton.addEventListener("click", toggleMemberPanel);
+sessionContextDetails.addEventListener("toggle", updateSessionContextDisclosure);
+const handleWorkspaceBreakpointChange = () => {
+  memberPanel.classList.remove("member-panel-open");
+  updateSidebarControls();
+};
+if (typeof compactWorkspaceQuery.addEventListener === "function") {
+  compactWorkspaceQuery.addEventListener("change", handleWorkspaceBreakpointChange);
+} else {
+  compactWorkspaceQuery.addListener(handleWorkspaceBreakpointChange);
+}
 
 element("close-members-button").addEventListener("click", closeMembersPanel);
 
 function closeMembersPanel() {
   memberPanel.classList.remove("member-panel-open");
-  element("mobile-members-button").setAttribute("aria-expanded", "false");
-  element("mobile-members-button").focus();
+  updateSidebarControls();
+  toggleMemberPanelButton.focus();
+}
+
+function toggleSessionRail() {
+  workspace.dataset.leftRailCollapsed = String(workspace.dataset.leftRailCollapsed !== "true");
+  updateSidebarControls();
+}
+
+function toggleMemberPanel() {
+  if (compactWorkspaceQuery.matches) {
+    memberPanel.classList.toggle("member-panel-open");
+  } else {
+    workspace.dataset.rightPanelCollapsed = String(workspace.dataset.rightPanelCollapsed !== "true");
+    memberPanel.classList.remove("member-panel-open");
+  }
+  updateSidebarControls();
+}
+
+function updateSidebarControls() {
+  const sessionRailExpanded = workspace.dataset.leftRailCollapsed !== "true";
+  const memberPanelExpanded = compactWorkspaceQuery.matches
+    ? memberPanel.classList.contains("member-panel-open")
+    : workspace.dataset.rightPanelCollapsed !== "true";
+  updateIconDisclosure(toggleSessionRailButton, sessionRailExpanded, "Collapse session sidebar", "Expand session sidebar");
+  updateIconDisclosure(toggleMemberPanelButton, memberPanelExpanded, "Collapse member sidebar", "Expand member sidebar");
+}
+
+function updateIconDisclosure(button, expanded, collapseLabel, expandLabel) {
+  const label = localizer.t(expanded ? collapseLabel : expandLabel);
+  button.setAttribute("aria-expanded", String(expanded));
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+
+function updateSessionContextDisclosure() {
+  const summary = sessionContextDetails.querySelector("summary");
+  const expanded = sessionContextDetails.open;
+  const label = localizer.t(expanded ? "Hide session status details" : "Show session status details");
+  summary.setAttribute("aria-expanded", String(expanded));
+  summary.setAttribute("aria-label", label);
+  summary.title = label;
 }
 
 async function restoreBrowserSession() {
@@ -700,12 +778,15 @@ function resetWorkspaceToAuth() {
   state.snapshotRequests = [];
   state.executionRuntimes = [];
   state.devices = [];
+  selectedCodexLocalRuntimeId = "";
+  localSyncStatusRequestsInFlight.clear();
   currentDeviceName = "";
   settingsDeviceLoadGeneration += 1;
   expandedWorklogs.clear();
   clearCreatedInvitationSecret();
   clearNewDeviceAccessToken();
   clearSensitiveInputs();
+  renderWorkspaceContext();
   workspace.hidden = true;
   authView.hidden = false;
   loginForm.reset();
@@ -788,8 +869,11 @@ async function selectSession(sessionId) {
   element("accept-invite-error").textContent = "";
   clearCreatedInvitationSecret();
   closeMembersPanelWithoutFocus();
+  sessionContextDetails.open = false;
+  updateSessionContextDisclosure();
   stopSnapshotPolling();
   state.snapshotRequests = [];
+  selectedCodexLocalRuntimeId = "";
   renderSnapshotRequests();
   downloadCodexButton.disabled = true;
   const [session, members] = await Promise.all([
@@ -813,15 +897,7 @@ async function selectSession(sessionId) {
   startDshRuntimePolling();
   downloadCodexButton.disabled = false;
   element("session-title").focus({ preventScroll: true });
-  const membership = members.find((member) => member.userId === state.currentUser?.id);
-  if (sessionDeliveryMode({
-    role: membership?.role ?? session.role,
-    mode: session.mode,
-    ownerUserId: session.ownerUserId,
-    currentUserId: state.currentUser?.id,
-  }) === "snapshot") {
-    void restoreSnapshotRequests(sessionId, generation);
-  }
+  void restoreSnapshotRequests(sessionId, generation);
   await sync.connect(sessionId);
 }
 
@@ -839,6 +915,7 @@ function renderProjectSelect() {
   renderDshConnectionStatus();
   element("delete-project-button").hidden = state.project?.role !== "owner";
   element("rename-project-button").hidden = state.project?.role !== "owner";
+  renderWorkspaceContext();
 }
 
 function renderProjectAgentButtons(settings = state.settings) {
@@ -922,6 +999,8 @@ async function refreshDshRuntimes({ sessionId = state.session?.id, generation = 
       renderComposerPermissions();
       renderDshConnectionStatus();
       renderDshRuntimeList();
+      renderCodexLocalSyncControls();
+      void ensureCodexLocalSyncStatus();
     }
   }
 }
@@ -1023,6 +1102,19 @@ function renderSessionHeader() {
   element("delete-session-button").hidden = !mayDelete;
   element("session-subtitle").textContent = `${session.description} · You are ${membership?.role ?? "viewer"}`;
   element("session-access-note").hidden = session.mode !== "solo";
+  renderWorkspaceContext();
+}
+
+function renderWorkspaceContext() {
+  const context = element("topbar-session-context");
+  const projectName = element("topbar-project-name");
+  const sessionName = element("topbar-session-name");
+  const separator = context.querySelector(".topbar-context-separator");
+  context.hidden = !state.project;
+  projectName.textContent = state.project?.name ?? "";
+  sessionName.textContent = state.session?.name ?? "";
+  sessionName.hidden = !state.session;
+  separator.hidden = !state.session;
 }
 
 function applySessionMetadataEvents(events) {
@@ -1464,9 +1556,14 @@ function renderSessionDeliveryControls() {
     }[connector.status];
     const node = element("connector-status");
     node.dataset.state = connector.status;
-    element("connector-status-label").textContent = connector.label;
-    element("connector-status-detail").textContent = detail;
+    element("connector-status-label").textContent = localizer.t(connector.label);
+    element("connector-status-detail").textContent = localizer.t(detail);
+    element("visible-history-controls").hidden = !currentProjectEnabledHarnesses().includes("codex");
+    renderVisibleHistoryImportStatus();
+    renderCodexLocalSyncControls();
   } else {
+    element("visible-history-controls").hidden = true;
+    codexLocalSyncControls.hidden = true;
     const connectorOnline = hasOnlineSnapshotConnector(state.session?.members);
     element("snapshot-connector-hint").textContent = connectorOnline
       ? "A local snapshot connector is online. Each request still creates a separate frozen task."
@@ -1487,6 +1584,8 @@ async function restoreSnapshotRequests(sessionId, generation) {
     ];
     errorNode.textContent = "";
     renderSnapshotRequests();
+    renderCodexLocalSyncControls();
+    void ensureCodexLocalSyncStatus();
     const activeStatuses = new Set(["queued", "claimed", "importing", "compacting"]);
     if (requests.some((request) => activeStatuses.has(request.status))) startSnapshotPolling();
   } catch (error) {
@@ -1503,7 +1602,7 @@ async function createSnapshotDownload() {
   downloadCodexButton.disabled = true;
   downloadCodexButton.setAttribute("aria-busy", "true");
   try {
-    const request = await api.createSnapshotRequest(state.session.id);
+    const request = await api.createSnapshotRequest(state.session.id, "immutable");
     if (state.session?.id !== sessionId) return;
     state.snapshotRequests = [request, ...state.snapshotRequests];
     renderSnapshotRequests();
@@ -1517,10 +1616,192 @@ async function createSnapshotDownload() {
   }
 }
 
+async function createVisibleHistoryImport() {
+  if (!state.session || importVisibleHistoryButton.disabled) return;
+  const sessionId = state.session.id;
+  const statusNode = element("visible-history-import-status");
+  statusNode.textContent = "";
+  importVisibleHistoryButton.disabled = true;
+  importVisibleHistoryButton.setAttribute("aria-busy", "true");
+  try {
+    const request = await api.createSnapshotRequest(sessionId, "visible_history_replace");
+    if (state.session?.id !== sessionId) return;
+    state.snapshotRequests = [request, ...state.snapshotRequests];
+    renderVisibleHistoryImportStatus();
+    announce(`Visible Codex history import queued through sequence ${request.throughSequence}.`);
+    startSnapshotPolling();
+  } catch (error) {
+    statusNode.textContent = error.message ?? localizer.t("Unable to queue visible Codex history import.");
+  } finally {
+    importVisibleHistoryButton.disabled = false;
+    importVisibleHistoryButton.removeAttribute("aria-busy");
+  }
+}
+
+function renderVisibleHistoryImportStatus() {
+  const request = state.snapshotRequests.find((candidate) => candidate.kind === "visible_history_replace");
+  const statusNode = element("visible-history-import-status");
+  if (!request) {
+    statusNode.textContent = localizer.t("Manual import creates a new local Codex task and never overwrites or archives the old task. After confirming the new task works, archive the old task yourself. Realtime context injection is unaffected.");
+    return;
+  }
+  const labels = {
+    queued: localizer.t("Queued until Codex reconnects."),
+    claimed: localizer.t("Preparing history…"),
+    importing: localizer.t("Importing history…"),
+    compacting: localizer.t("Compacting history…"),
+    completed: request.result?.previous_task_retained
+      ? `${request.localTaskName
+        ? `${localizer.t("Imported as")} ${request.localTaskName}.`
+        : localizer.t("History imported as a new Codex task.")} ${localizer.t("The previous task is retained. After confirming the new task works, archive the previous task yourself. Realtime context injection is unaffected.")}`
+      : request.localTaskName
+        ? `${localizer.t("Imported as")} ${request.localTaskName}. ${localizer.t("Realtime context injection stays active.")}`
+        : `${localizer.t("History imported.")} ${localizer.t("Realtime context injection stays active.")}`,
+    failed: visibleHistoryImportFailureMessage(request.failureMessage),
+  };
+  statusNode.textContent = labels[request.status] ?? "";
+}
+
+function visibleHistoryImportFailureMessage(message) {
+  return message || localizer.t("History import failed.");
+}
+
+function onlineCodexLocalRuntimes() {
+  return state.executionRuntimes.filter((runtime) =>
+    isExecutionRuntime(runtime) && String(runtime.harness).toLowerCase() === "codex",
+  );
+}
+
+function codexLocalRuntimeLabel(runtime) {
+  const deviceName = state.devices.find((device) => device.id === runtime.deviceId)?.name?.trim();
+  const base = deviceName || localizer.t("Codex device");
+  return runtime.model ? `${base} · ${runtime.model}` : base;
+}
+
+function codexLocalSyncRequests(runtimeId) {
+  return state.snapshotRequests.filter((request) =>
+    LOCAL_SYNC_REQUEST_KINDS.has(request.kind) && request.targetRuntimeId === runtimeId,
+  );
+}
+
+function renderCodexLocalSyncControls() {
+  const available = Boolean(state.session)
+    && !composer.hidden
+    && currentProjectEnabledHarnesses().includes("codex");
+  codexLocalSyncControls.hidden = !available;
+  if (!available) return;
+
+  const runtimes = onlineCodexLocalRuntimes();
+  if (!runtimes.some((runtime) => runtime.id === selectedCodexLocalRuntimeId)) {
+    selectedCodexLocalRuntimeId = runtimes[0]?.id ?? "";
+  }
+  codexLocalRuntimeSelect.replaceChildren();
+  for (const runtime of runtimes) {
+    const option = document.createElement("option");
+    option.value = runtime.id;
+    option.textContent = codexLocalRuntimeLabel(runtime);
+    option.selected = runtime.id === selectedCodexLocalRuntimeId;
+    codexLocalRuntimeSelect.append(option);
+  }
+  codexLocalRuntimeField.hidden = runtimes.length < 2;
+  codexLocalRuntimeSelect.disabled = runtimes.length < 2;
+
+  if (!selectedCodexLocalRuntimeId) {
+    codexAutoUploadToggle.checked = false;
+    codexAutoUploadToggle.disabled = true;
+    uploadLocalTurnsButton.disabled = true;
+    codexLocalSyncStatus.textContent = localizer.t("No online Codex device is available.");
+    return;
+  }
+
+  const requests = codexLocalSyncRequests(selectedCodexLocalRuntimeId);
+  const latest = requests[0];
+  const completed = requests.find((request) => request.status === "completed" && request.result);
+  const active = latest && new Set(["queued", "claimed", "importing", "compacting"]).has(latest.status);
+  const automaticUpload = latest?.kind === "local_auto_upload_enable" && active
+    ? true
+    : latest?.kind === "local_auto_upload_disable" && active
+      ? false
+      : Boolean(completed?.result?.automatic_upload);
+  codexAutoUploadToggle.checked = automaticUpload;
+  codexAutoUploadToggle.disabled = Boolean(active) || !completed;
+  uploadLocalTurnsButton.disabled = Boolean(active) || !completed;
+
+  if (!latest || active) {
+    codexLocalSyncStatus.textContent = localizer.t("Reading local-to-cloud upload status…");
+    return;
+  }
+  if (latest.status === "failed") {
+    codexLocalSyncStatus.textContent = latest.failureMessage || localizer.t("Unable to read local-to-cloud upload status.");
+    return;
+  }
+  const result = latest.result ?? completed?.result ?? {};
+  if (latest.kind === "local_auto_upload_enable" || latest.kind === "local_auto_upload_disable") {
+    codexLocalSyncStatus.textContent = localizer.t("Local-to-cloud automatic upload setting updated.");
+    return;
+  }
+  if (latest.kind === "local_turn_upload") {
+    const uploaded = Number(result.uploaded_local_turns ?? 0);
+    codexLocalSyncStatus.textContent = uploaded > 0
+      ? `${uploaded} ${localizer.t("local turns uploaded to cloud.")}`
+      : localizer.t("No completed local turns need uploading to cloud.");
+    return;
+  }
+  const pending = Number(result.pending_local_turns ?? result.uploadable_local_turns ?? 0);
+  codexLocalSyncStatus.textContent = pending > 0
+    ? `${pending} ${localizer.t(pending === 1 ? "local turn awaiting cloud upload" : "local turns awaiting cloud upload")}.`
+    : localizer.t("No completed local turns need uploading to cloud.");
+}
+
+async function ensureCodexLocalSyncStatus() {
+  const sessionId = state.session?.id;
+  const runtimeId = selectedCodexLocalRuntimeId;
+  if (!sessionId || codexLocalSyncControls.hidden || !runtimeId) return;
+  if (codexLocalSyncRequests(runtimeId).length > 0) return;
+  const key = `${sessionId}:${runtimeId}`;
+  if (localSyncStatusRequestsInFlight.has(key)) return;
+  localSyncStatusRequestsInFlight.add(key);
+  try {
+    const request = await api.createSnapshotRequest(sessionId, "local_sync_status", runtimeId);
+    if (state.session?.id !== sessionId) return;
+    state.snapshotRequests = [request, ...state.snapshotRequests];
+    renderCodexLocalSyncControls();
+    startSnapshotPolling();
+  } catch (error) {
+    if (state.session?.id === sessionId) {
+      codexLocalSyncStatus.textContent = error?.message ?? localizer.t("Unable to read local-to-cloud upload status.");
+    }
+  } finally {
+    localSyncStatusRequestsInFlight.delete(key);
+  }
+}
+
+async function queueCodexLocalSyncAction(kind) {
+  const sessionId = state.session?.id;
+  const runtimeId = selectedCodexLocalRuntimeId;
+  if (!sessionId || !runtimeId || !LOCAL_SYNC_REQUEST_KINDS.has(kind) || kind === "local_sync_status") return;
+  codexAutoUploadToggle.disabled = true;
+  uploadLocalTurnsButton.disabled = true;
+  codexLocalSyncStatus.textContent = localizer.t("Reading local-to-cloud upload status…");
+  try {
+    const request = await api.createSnapshotRequest(sessionId, kind, runtimeId);
+    if (state.session?.id !== sessionId || selectedCodexLocalRuntimeId !== runtimeId) return;
+    state.snapshotRequests = [request, ...state.snapshotRequests];
+    renderCodexLocalSyncControls();
+    startSnapshotPolling();
+  } catch (error) {
+    if (state.session?.id === sessionId && selectedCodexLocalRuntimeId === runtimeId) {
+      renderCodexLocalSyncControls();
+      codexLocalSyncStatus.textContent = error?.message ?? localizer.t("Unable to update local-to-cloud upload settings.");
+    }
+  }
+}
+
 function renderSnapshotRequests() {
   snapshotRequestList.replaceChildren();
-  element("snapshot-request-empty").hidden = state.snapshotRequests.length > 0;
-  for (const request of state.snapshotRequests) {
+  const immutableRequests = state.snapshotRequests.filter((request) => request.kind === "immutable");
+  element("snapshot-request-empty").hidden = immutableRequests.length > 0;
+  for (const request of immutableRequests) {
     const view = snapshotStatusView(request);
     const item = document.createElement("li");
     const copy = document.createElement("div");
@@ -1571,6 +1852,8 @@ async function pollSnapshotRequests(generation) {
   }
   state.snapshotRequests = state.snapshotRequests.map((request) => updates.get(request.id) ?? request);
   renderSnapshotRequests();
+  renderVisibleHistoryImportStatus();
+  renderCodexLocalSyncControls();
   if (settled.some((result) => result.status === "rejected")) {
     element("snapshot-request-error").textContent = "Snapshot status is temporarily unavailable. Polling will retry.";
   } else {
@@ -1722,6 +2005,7 @@ function openConnectCodexDialog() {
       projectId: state.project.id,
       model: currentProjectProfile().model,
       contextWindowTokens: contextBudgetToTokenCeiling(state.settings),
+      visibleHistorySync: state.settings.sync.visibleHistorySync,
     });
     element("connect-codex-project-name").textContent = state.project.name;
     element("connect-codex-posix-command").textContent = commands.posix;
@@ -1919,7 +2203,7 @@ function announce(message) {
 
 function closeMembersPanelWithoutFocus() {
   memberPanel.classList.remove("member-panel-open");
-  element("mobile-members-button").setAttribute("aria-expanded", "false");
+  updateSidebarControls();
 }
 
 function applyVisualSettings(settings) {
@@ -1937,6 +2221,8 @@ function applyVisualSettings(settings) {
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  updateSidebarControls();
+  updateSessionContextDisclosure();
   setAutomaticClaimDeviceName();
   ambientCanvas.apply(normalized);
 }
@@ -2126,6 +2412,7 @@ function populateSettingsForm(settings) {
   element("settings-right-width").value = String(normalized.layout.rightPanelPixels);
   element("settings-composer-height").value = String(normalized.layout.composerPixels);
   element("settings-sync-mode").value = normalized.sync.mode;
+  element("settings-visible-history-sync").value = normalized.sync.visibleHistorySync;
   const useMiB = normalized.sync.contextBudgetBytes >= 1024 * 1024 && normalized.sync.contextBudgetBytes % (1024 * 1024) === 0;
   element("settings-context-unit").value = useMiB ? "MiB" : "KiB";
   element("settings-context-budget").value = String(normalized.sync.contextBudgetBytes / (useMiB ? 1024 * 1024 : 1024));
@@ -2169,6 +2456,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
     sync: {
       mode: element("settings-sync-mode").value,
       contextBudgetBytes: Math.round(Number(element("settings-context-budget").value) * contextFactor),
+      visibleHistorySync: element("settings-visible-history-sync").value,
     },
     composer: {
       enterBehavior: element("settings-enter-behavior").value,
@@ -2339,6 +2627,10 @@ async function saveSettings(event) {
     applyVisualSettings(state.settings);
     renderProjectAgentButtons();
     renderAgentProfileControls();
+    if (state.session) {
+      renderSessionDeliveryControls();
+      void ensureCodexLocalSyncStatus();
+    }
     settingsDeviceLoadGeneration += 1;
     settingsDialog.close();
     announce(localizer.t("Settings saved."));

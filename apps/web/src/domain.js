@@ -4,16 +4,18 @@ export const INVITATION_ROLES = Object.freeze(["participant", "viewer"]);
 export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
 export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
-export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.2";
+export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.5";
 
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 const DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS = 128_000;
+const DEFAULT_VISIBLE_HISTORY_SYNC = "first-connect";
 
 export function projectCodexConnectionCommands({
   baseUrl,
   projectId,
   model = DEFAULT_CODEX_MODEL,
   contextWindowTokens = DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS,
+  visibleHistorySync = DEFAULT_VISIBLE_HISTORY_SYNC,
 }) {
   if (typeof baseUrl !== "string" || baseUrl.length === 0 || /[\u0000-\u001f\u007f]/.test(baseUrl)) {
     throw new Error("A valid GatherThread server URL is required.");
@@ -42,6 +44,9 @@ export function projectCodexConnectionCommands({
   if (!Number.isSafeInteger(contextWindowTokens) || contextWindowTokens < 4_096 || contextWindowTokens > 2_000_000) {
     throw new Error("The Codex context window is not safe for a connector command.");
   }
+  if (!["first-connect", "never"].includes(visibleHistorySync)) {
+    throw new Error("The Codex visible history sync mode is not safe for a connector command.");
+  }
   const normalizedBaseUrl = parsed.toString().replace(/\/$/, "");
   const posixQuote = (value) => `'${value.replaceAll("'", `'"'"'`)}'`;
   const powerShellQuote = (value) => `'${value.replaceAll("'", "''")}'`;
@@ -58,6 +63,7 @@ export function projectCodexConnectionCommands({
       "--project", posixQuote(projectId),
       "--create-workspace",
       "--plugin-hooks",
+      "--visible-history-sync", visibleHistorySync,
       ...optionalArguments(posixQuote),
     ].join(" "),
     powershell: [
@@ -66,6 +72,7 @@ export function projectCodexConnectionCommands({
       "--project", powerShellQuote(projectId),
       "--create-workspace",
       "--plugin-hooks",
+      "--visible-history-sync", visibleHistorySync,
       ...optionalArguments(powerShellQuote),
     ].join(" "),
   });
@@ -121,13 +128,20 @@ export function normalizeSnapshotRequest(payload) {
     result?.threadId,
     result?.thread_id,
   ].find((value) => typeof value === "string" && value.length > 0) ?? "";
+  const kind = ["immutable", "visible_history_replace", "local_sync_status", "local_auto_upload_enable",
+    "local_auto_upload_disable", "local_turn_upload"].includes(request.kind)
+    ? request.kind
+    : "immutable";
   return {
     id: request.id,
     sessionId: request.session_id ?? request.sessionId ?? null,
+    kind,
+    targetRuntimeId: request.target_runtime_id ?? request.targetRuntimeId ?? null,
     throughSequence: Number(request.through_sequence ?? request.throughSequence ?? 0),
     status,
     createdAt: request.created_at ?? request.createdAt ?? new Date().toISOString(),
     localTaskName,
+    result,
     failureMessage: typeof failure === "string" ? failure : failure?.message ?? "",
   };
 }

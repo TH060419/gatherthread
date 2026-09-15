@@ -207,7 +207,7 @@ export type ConnectorOutboxOperation =
   };
 
 export interface ConnectorState {
-  version: 2;
+  version: 3;
   binding: {
     projectId: string;
     sessionId: string;
@@ -217,6 +217,7 @@ export interface ConnectorState {
   /** Canonical sequence durably materialized in the native DSH Session. */
   projectionCursor: number;
   publishedDshSequence: number;
+  automaticUpload: boolean;
   activeRequest?: ConnectorActiveRequest;
   outbox: ConnectorOutboxOperation[];
 }

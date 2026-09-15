@@ -33,7 +33,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 7);
+  assert.equal(normalized.version, 10);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -127,7 +127,7 @@ test("legacy flat Codex project profiles migrate without changing their model or
       },
     },
   });
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 10);
   assert.equal(projectAgentHarness(migrated, "project-alpha"), "codex");
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex"]);
   assert.deepEqual(projectCodexProfile(migrated, "project-alpha"), { model: "Legacy/Model", effort: "high" });
@@ -153,7 +153,7 @@ test("version 6 connection shortcuts become the default for newly opened project
     setItem: () => {},
     removeItem: () => {},
   }).get();
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 10);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
 });
@@ -168,6 +168,16 @@ test("context budget keeps a precise configured value while reporting connector 
   assert.equal(normalizeSettings({ sync: { contextBudgetBytes: 1 } }).sync.contextBudgetBytes, CONTEXT_BUDGET_MIN_BYTES);
   assert.equal(contextBudgetToTokenCeiling(settings), 194_444);
   assert.equal(contextBudgetToTokenCeiling({ sync: { contextBudgetBytes: CONTEXT_BUDGET_MIN_BYTES } }), 4_096);
+});
+
+test("visible Codex history keeps only first-import and disabled modes", () => {
+  assert.equal(normalizeSettings({}).sync.visibleHistorySync, "first-connect");
+  for (const visibleHistorySync of ["first-connect", "never"]) {
+    assert.equal(normalizeSettings({ sync: { visibleHistorySync } }).sync.visibleHistorySync, visibleHistorySync);
+  }
+  assert.equal(normalizeSettings({ version: 9, sync: { visibleHistorySync: "every-connect" } }).sync.visibleHistorySync, "first-connect");
+  assert.equal(normalizeSettings({ version: 9, sync: { visibleHistorySync: "every-update" } }).sync.visibleHistorySync, "first-connect");
+  assert.equal(normalizeSettings({ sync: { visibleHistorySync: "sometimes" } }).sync.visibleHistorySync, "first-connect");
 });
 
 test("settings storage is versioned, credential-free, and fails closed to defaults", () => {
@@ -197,7 +207,7 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 7);
+  assert.equal(migrated.version, 10);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");

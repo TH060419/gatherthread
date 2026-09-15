@@ -16,6 +16,7 @@ import {
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
   CompleteSnapshotRequestInputSchema,
+  CreateSnapshotRequestInputSchema,
   CreateBrowserSessionInputSchema,
   CreateInvitationInputSchema,
   CreateIdentityInputSchema,
@@ -853,8 +854,10 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && parts[3] === "snapshot-requests" && parts.length === 4 && request.method === "POST") {
-        z.object({}).parse(await readAuthenticatedJson());
-        sendJson(response, 201, { data: { snapshot_request: service.createSnapshotRequest(actor, sessionId) } });
+        const input = CreateSnapshotRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: { snapshot_request: service.createSnapshotRequest(
+          actor, sessionId, input.kind, input.target_runtime_id,
+        ) } });
         return;
       }
 

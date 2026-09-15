@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release_version="0.1.0-alpha.2"
+release_version="0.1.0-alpha.5"
 domain="${1:-}"
 [[ "$domain" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || {
   printf '%s\n' "Usage: sudo deploy/aliyun-ecs/preflight.sh gatherthread.example.com" >&2

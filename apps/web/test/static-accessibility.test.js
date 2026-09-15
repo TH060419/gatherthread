@@ -66,7 +66,7 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     'class="auth-canonical-extension" aria-hidden="true"',
     '<span class="headline-line">One room,</span>',
     '<span class="headline-line">Many minds.</span>',
-    '<nav class="session-rail"',
+    '<nav id="session-rail" class="session-rail"',
     'id="main-content"',
     '<aside id="member-panel"',
     'aria-live="polite"',
@@ -96,7 +96,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     'for="rename-session-mode"',
     'id="rename-session-error" class="form-error" role="alert"',
     'id="download-codex-button"',
-    'id="connector-status" class="connector-status" role="status"',
+    'id="connector-status" class="connector-status"',
+    'id="import-visible-history-button"',
     'id="snapshot-request-error" class="form-error" role="alert"',
     'id="snapshot-request-list" class="snapshot-request-list" aria-label="Codex snapshot downloads"',
     'id="connect-codex-button"',
@@ -192,14 +193,18 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.doesNotMatch(html, /Move to project|manual Desktop step/i);
   assert.match(html, /device token is requested by a hidden CLI prompt/i);
   assert.match(html, /only copies commands/i);
-  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.2 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(html, /codex: command not found/);
+  assert.match(html, /npm install -g @openai\/codex/);
+  assert.match(html, /codex plugin --help/);
+  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.5 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
   assert.match(domain, /--plugin-hooks/);
   const pluginCommands = (html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "")
     .replace(/\r\n?/gu, "\n");
-  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.2 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Alpha 预览版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);
+  assert.match(i18n, /如果终端提示.*codex: command not found.*npm install -g @openai\/codex.*codex plugin --help/);
   assert.match(i18n, /"Connect this project": "连接当前项目"/);
   assert.match(i18n, /"Confirm in Codex": "在 Codex 中确认"/);
   assert.doesNotMatch(html, /Codex <code>\/hooks<\/code>/i);
@@ -209,6 +214,7 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(main, /navigator\.clipboard\?\.writeText[\s\S]*?document\.execCommand\?\.\("copy"\)/);
   assert.match(main, /"Plugin install commands copied\."/);
   assert.match(styles, /\.codex-connect-dialog[\s\S]*?width: min\(760px/);
+  assert.match(styles, /\.codex-cli-recovery-hint[\s\S]*?margin: 10px 0 12px 35px/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.command-heading[\s\S]*?flex-direction: column/);
   assert.doesNotMatch(main, /searchParams\.(?:set|append)\([^\n]*(?:device|token|credential)/i);
 });
@@ -278,7 +284,7 @@ test("read-only Codex downloads remain one-way and poll independent snapshot job
   assert.match(html, /frozen, read-only copy/i);
   assert.match(html, /never writes back/i);
   assert.match(main, /sessionDeliveryMode\([\s\S]*?downloadCodexButton\.hidden = isLive[\s\S]*?composer\.hidden = !isLive/);
-  assert.match(main, /api\.createSnapshotRequest\(state\.session\.id\)/);
+  assert.match(main, /api\.createSnapshotRequest\(state\.session\.id, "immutable"\)/);
   assert.match(main, /api\.getSnapshotRequest\(request\.id\)/);
   assert.match(main, /snapshotStatusView\(request\)/);
   assert.match(main, /data-action", "retry-snapshot"/);
@@ -467,6 +473,63 @@ test("custom Codex models explain that access must already be configured", async
   const explanation = "This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.";
   assert.match(html, new RegExp(explanation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(i18n, /这里只登记调用模型名，不配置模型接入。请先自行在 Codex 中配置受支持的模型，再将其名称添加到这里。/);
+});
+
+test("Codex visible-history import exposes first-session and disabled choices", async () => {
+  const [html, main, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(i18nPath, "utf8"),
+  ]);
+  assert.match(html, /id="settings-visible-history-sync"/);
+  assert.match(html, /option value="first-connect" selected/);
+  assert.doesNotMatch(html, /option value="every-update"/);
+  assert.match(html, /option value="never"/);
+  assert.match(i18n, /每个会话首次在本地建立时导入一次/);
+  assert.match(i18n, /手动导入会新建任务，请自行归档旧任务；实时上下文注入始终保持启用/);
+  assert.match(i18n, /手动导入会创建新的 Codex 本地任务，不会覆盖或归档旧任务。确认新任务可用后，请自行归档旧任务。实时上下文注入不受影响/);
+  assert.match(html, /id="import-visible-history-button"/);
+  assert.match(main, /createSnapshotRequest\(sessionId, "visible_history_replace"\)/);
+  assert.match(main, /request\.result\?\.previous_task_retained/);
+  for (const id of ["codex-local-sync-controls", "codex-local-runtime-select", "codex-auto-upload-toggle", "upload-local-turns-button"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(html, /Auto-upload local turns to cloud/);
+  assert.match(html, /Upload local turns to cloud now/);
+  assert.match(i18n, /本地回合自动上传至云端/);
+  assert.match(i18n, /立即从本地上传至云端/);
+  assert.match(main, /"local_sync_status"/);
+  assert.match(main, /"local_auto_upload_enable"/);
+  assert.match(main, /"local_auto_upload_disable"/);
+  assert.match(main, /"local_turn_upload"/);
+});
+
+test("workspace rails and dense session context use accessible icon disclosures", async () => {
+  const [html, main, styles, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8"), readFile(i18nPath, "utf8"),
+  ]);
+  assert.match(html, /id="toggle-session-rail-button"[^>]*aria-controls="session-rail"[^>]*aria-expanded="true"[^>]*data-tooltip[\s\S]*?<svg/);
+  assert.match(html, /id="mobile-members-button"[^>]*aria-controls="member-panel"[^>]*aria-expanded="true"[^>]*data-tooltip[\s\S]*?<svg/);
+  assert.match(html, /class="account-cluster"[\s\S]*?id="logout-button"[\s\S]*?id="mobile-members-button"[\s\S]*?<\/div>/);
+  assert.match(html, /id="topbar-session-context"[^>]*hidden[\s\S]*?id="topbar-project-name"[\s\S]*?id="topbar-session-name"/);
+  assert.match(html, /id="session-context-details"[\s\S]*?<summary[^>]*aria-label="Show session status details"[^>]*aria-controls="session-context-panel"[^>]*aria-expanded="false"[\s\S]*?id="session-context-panel"[^>]*aria-label="Session status details"/);
+  assert.match(html, /class="session-context-panel-heading"[\s\S]*?Session status details[\s\S]*?Codex history[\s\S]*?Local turns to cloud/);
+  assert.match(main, /workspace\.dataset\.leftRailCollapsed/);
+  assert.match(main, /workspace\.dataset\.rightPanelCollapsed/);
+  assert.match(main, /memberPanel\.classList\.toggle\("member-panel-open"/);
+  assert.match(main, /function renderWorkspaceContext\(\)/);
+  assert.match(main, /sessionContextDetails\.open = false;[\s\S]*?updateSessionContextDisclosure\(\)/);
+  assert.match(styles, /\.workspace\[data-left-rail-collapsed="true"\][\s\S]*?\.session-rail/);
+  assert.match(styles, /\.workspace\[data-right-panel-collapsed="true"\][\s\S]*?\.member-panel/);
+  assert.match(styles, /\.session-context-panel[\s\S]*?position:\s*absolute/);
+  assert.match(i18n, /展开会话侧栏/);
+  assert.match(i18n, /收起成员侧栏/);
+  assert.match(i18n, /会话状态详情/);
+});
+
+test("Codex-only history and upload controls follow the saved project Agent selection", async () => {
+  const main = await readFile(mainPath, "utf8");
+  assert.match(main, /element\("visible-history-controls"\)\.hidden = !currentProjectEnabledHarnesses\(\)\.includes\("codex"\)/);
+  assert.match(main, /const available = Boolean\(state\.session\)[\s\S]*?currentProjectEnabledHarnesses\(\)\.includes\("codex"\)/);
+  assert.match(main, /state\.settings = settingsStore\.set\(settingsPreview\);[\s\S]*?renderSessionDeliveryControls\(\);[\s\S]*?ensureCodexLocalSyncStatus\(\)/);
 });
 
 test("project Agent shortcuts are selectable, contextual, and compact in the fixed session rail", async () => {

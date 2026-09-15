@@ -2,7 +2,7 @@
 
 共序 DSH 插件运行在 DeepSeek Harness 的 Web profile 中，并由 DSH 主动连接到选定的共序服务器。网页不会探测 `localhost`，也不会尝试启动本地进程。
 
-> Alpha 预览版：`0.1.0-alpha.2` 已为 private 仓库测试准备。“共序官方服务”入口已经保留但暂时禁用，请使用本机、局域网、自托管或 Tailscale 服务器。
+> Alpha 预览版：`0.1.0-alpha.5` 已为 private 仓库测试准备。“共序官方服务”入口已经保留但暂时禁用，请使用本机、局域网、自托管或 Tailscale 服务器。
 
 ## 正常连接只需三步
 
@@ -17,7 +17,7 @@ npm install --global pnpm@10
 再把固定版本的共序插件加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.2
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.5
 ```
 
 ### 2. 打开 DSH
@@ -40,7 +40,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.2.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.5.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -51,6 +51,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 - 一次配对会连接当前身份可见的全部活跃项目，并继续发现之后新增的权限。
 - 可写的共序会话会成为可编辑的 DSH 原生会话。
 - 云端规范历史会投影到 DSH；本地完成的回合通过持久 outbox 只上传一次。
+- 在 **设置 → GatherThread / 共序** 中，每个已连接对话都有独立的“自动上传”开关与“手动上传”。关闭后，新完成的本地回合会继续留在本地，直到用户显式补传；手动上传不会改变开关。
 - DSH 新会话只有在首个成功的人类/助手回合完成后，才创建一个由本人创建的云端 Solo。
 - 空会话、失败回合和访者会话始终留在本地。
 - 网页 Agent 请求只交给明确选择的 DSH 设备、Provider 和模型，不会静默回退到 Codex。

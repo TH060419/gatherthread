@@ -19,7 +19,7 @@ The package does not install a DSH runtime dependency.
 After `@gatherthread/dsh-host` is published, the ordinary three-step path is:
 
 ```text
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.2
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.5
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
 ```
@@ -159,3 +159,10 @@ same runtime advance the projection cursor but are not appended back to DSH,
 while events written through another harness are imported normally. V1
 connector state deliberately restarts only the native projection cursor at zero
 once so history that the earlier poller observed but discarded is backfilled.
+
+Automatic upload is stored independently for every bound DSH conversation and
+defaults on. In **Settings -> GatherThread / 共序**, the user can switch it off
+without stopping cloud-to-local projection, or choose **Manual upload** to scan
+and send completed eligible local turns. The manual action is also the recovery
+path after a missed native event or transport interruption, uses the existing
+durable idempotent outbox, and never silently re-enables automatic upload.
