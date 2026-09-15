@@ -16,6 +16,7 @@ import type {
   RuntimeRegistration,
   SessionMemberSummary,
   SessionSummary,
+  SnapshotRequestKind,
   SnapshotRequestStatus,
   SnapshotRequestSummary,
 } from "./types.js";
@@ -258,10 +259,14 @@ export class HttpCollaborationClient implements CollaborationApi {
     return fromWireSnapshotRequest(body.snapshot_request ?? body);
   }
 
-  async createSnapshotRequest(sessionId: string): Promise<SnapshotRequestSummary> {
+  async createSnapshotRequest(
+    sessionId: string,
+    kind: SnapshotRequestKind = "immutable",
+    targetRuntimeId?: string,
+  ): Promise<SnapshotRequestSummary> {
     const body = requiredObject(await this.#request(`/sessions/${encodeURIComponent(sessionId)}/snapshot-requests`, {
       method: "POST",
-      body: "{}",
+      body: JSON.stringify({ kind, ...(targetRuntimeId === undefined ? {} : { target_runtime_id: targetRuntimeId }) }),
     }));
     return fromWireSnapshotRequest(body.snapshot_request ?? body);
   }
@@ -417,9 +422,16 @@ function fromWireSnapshotRequest(value: unknown): SnapshotRequestSummary {
       }
     : undefined;
   const createdAt = optionalWireString(input.created_at) ?? optionalWireString(input.requested_at);
+  const kind = requiredString(input.kind, "snapshot_request.kind") as SnapshotRequestKind;
+  if (!["immutable", "visible_history_replace", "local_sync_status", "local_auto_upload_enable",
+    "local_auto_upload_disable", "local_turn_upload"].includes(kind)) {
+    throw new Error("Collaboration API returned an invalid snapshot request kind");
+  }
   return {
     id: requiredString(input.id, "snapshot_request.id"),
     sessionId: requiredString(input.session_id, "snapshot_request.session_id"),
+    kind,
+    ...(typeof input.target_runtime_id === "string" ? { targetRuntimeId: input.target_runtime_id } : {}),
     throughSequence: requiredNumber(input.through_sequence, "snapshot_request.through_sequence"),
     status,
     ...(createdAt === undefined ? {} : { createdAt }),

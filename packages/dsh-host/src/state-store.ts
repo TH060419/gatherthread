@@ -124,6 +124,7 @@ export class FileConnectorStateStore implements ConnectorStateStore {
 export function validateConnectorState(value: unknown): ConnectorState {
   const state = requiredObject(value, "state");
   const legacy = state.version === 1;
+  const legacyUploadPolicy = state.version === 1 || state.version === 2;
   exactKeys(
     state,
     new Set([
@@ -132,12 +133,15 @@ export function validateConnectorState(value: unknown): ConnectorState {
       "serverCursor",
       ...(legacy ? [] : ["projectionCursor"]),
       "publishedDshSequence",
+      ...(legacyUploadPolicy ? [] : ["automaticUpload"]),
       "activeRequest",
       "outbox",
     ]),
     "state",
   );
-  if (!legacy && state.version !== 2) throw new Error("Unsupported DSH connector state version");
+  if (state.version !== 1 && state.version !== 2 && state.version !== 3) {
+    throw new Error("Unsupported DSH connector state version");
+  }
   const binding = requiredObject(state.binding, "state.binding");
   exactKeys(binding, new Set(["projectId", "sessionId", "dshSessionId"]), "state.binding");
   const serverCursor = nonNegativeInteger(state.serverCursor, "state.serverCursor");
@@ -157,7 +161,7 @@ export function validateConnectorState(value: unknown): ConnectorState {
   if (!Array.isArray(state.outbox)) throw new Error("state.outbox must be an array");
   const outbox = state.outbox.map(parseOutboxOperation);
   const validated: ConnectorState = {
-    version: 2,
+    version: 3,
     binding: {
       projectId: safeString(binding.projectId, "state.binding.projectId", 128),
       sessionId: safeString(binding.sessionId, "state.binding.sessionId", 128),
@@ -166,6 +170,9 @@ export function validateConnectorState(value: unknown): ConnectorState {
     serverCursor,
     projectionCursor,
     publishedDshSequence,
+    automaticUpload: legacyUploadPolicy
+      ? true
+      : requiredBoolean(state.automaticUpload, "state.automaticUpload"),
     ...(activeRequest === undefined ? {} : { activeRequest }),
     outbox,
   };
@@ -375,6 +382,11 @@ function nonNegativeInteger(value: unknown, label: string): number {
     throw new Error(`${label} must be a non-negative integer`);
   }
   return Number(value);
+}
+
+function requiredBoolean(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${label} must be a boolean`);
+  return value;
 }
 
 function positiveInteger(value: unknown, label: string): number {

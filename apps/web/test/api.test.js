@@ -376,6 +376,7 @@ test("snapshot API creates independent frozen jobs and polls one record", async 
     through_sequence: 17,
     status: "pending",
     claimed_by_runtime_id: null,
+    target_runtime_id: null,
     created_at: "2026-08-25T10:00:00.000Z",
     claimed_at: null,
     completed_at: null,
@@ -386,6 +387,7 @@ test("snapshot API creates independent frozen jobs and polls one record", async 
   const responses = [
     { data: { snapshot_request: record } },
     { data: { snapshot_request: { ...record, id: "snapshot-2" } } },
+    { data: { snapshot_request: { ...record, id: "snapshot-3", kind: "local_sync_status", target_runtime_id: "runtime-1" } } },
     { data: { snapshot_request: { ...record, status: "completed", result: { thread_id: "local-codex-task" } } } },
   ];
   globalThis.fetch = async (url, options = {}) => {
@@ -395,15 +397,18 @@ test("snapshot API creates independent frozen jobs and polls one record", async 
   try {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
     assert.equal((await api.createSnapshotRequest("s1")).throughSequence, 17);
-    assert.equal((await api.createSnapshotRequest("s1")).id, "snapshot-2");
+    assert.equal((await api.createSnapshotRequest("s1", "visible_history_replace")).id, "snapshot-2");
+    assert.equal((await api.createSnapshotRequest("s1", "local_sync_status", "runtime-1")).targetRuntimeId, "runtime-1");
     assert.equal((await api.getSnapshotRequest("snapshot-1")).localTaskName, "local-codex-task");
     assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
       ["POST", "https://gatherthread.example/v1/sessions/s1/snapshot-requests"],
       ["POST", "https://gatherthread.example/v1/sessions/s1/snapshot-requests"],
+      ["POST", "https://gatherthread.example/v1/sessions/s1/snapshot-requests"],
       ["GET", "https://gatherthread.example/v1/snapshot-requests/snapshot-1"],
     ]);
-    assert.deepEqual(JSON.parse(requests[0].options.body), {});
-    assert.deepEqual(JSON.parse(requests[1].options.body), {});
+    assert.deepEqual(JSON.parse(requests[0].options.body), { kind: "immutable" });
+    assert.deepEqual(JSON.parse(requests[1].options.body), { kind: "visible_history_replace" });
+    assert.deepEqual(JSON.parse(requests[2].options.body), { kind: "local_sync_status", target_runtime_id: "runtime-1" });
   } finally {
     globalThis.fetch = originalFetch;
   }

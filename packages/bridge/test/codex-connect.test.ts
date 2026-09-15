@@ -13,6 +13,7 @@ import {
   ConnectorRetryReporter,
   createPersonalSoloForLocalPrompt,
   parseCodexConnectArgs,
+  processLocalSyncControlJobs,
   formatConnectedCodexSessionOutput,
   formatCodexDesktopRevealWarning,
   initializeProjectSession,
@@ -205,6 +206,7 @@ test("Codex connector accepts a private HTTPS origin and applies safe defaults",
   assert.equal(parsed.apiUrl, "https://host.tailnet.ts.net/v1");
   assert.equal(parsed.model, "gpt-5.6-sol");
   assert.equal(parsed.contextWindowTokens, 128_000);
+  assert.equal(parsed.visibleHistorySync, "first-connect");
   assert.equal(parsed.sandbox, "workspace-write");
   assert.equal(parsed.shareToolEvents, true);
   assert.equal(parsed.projectId, "project-alpha");
@@ -212,6 +214,29 @@ test("Codex connector accepts a private HTTPS origin and applies safe defaults",
   assert.equal(parsed.installHooks, false);
   assert.equal(parsed.pluginHooks, false);
   assert.equal(parsed.preflightOnly, false);
+});
+
+test("Codex connector accepts first-import controls and safely downgrades legacy hot-sync values", () => {
+  for (const visibleHistorySync of ["first-connect", "never"] as const) {
+    const parsed = parseCodexConnectArgs([
+      "--url", "https://host.tailnet.ts.net",
+      "--visible-history-sync", visibleHistorySync,
+    ]);
+    assert.notEqual(parsed, "help");
+    if (parsed !== "help") assert.equal(parsed.visibleHistorySync, visibleHistorySync);
+  }
+  for (const legacyValue of ["every-connect", "every-update"]) {
+    const legacy = parseCodexConnectArgs([
+      "--url", "https://host.tailnet.ts.net",
+      "--visible-history-sync", legacyValue,
+    ]);
+    assert.notEqual(legacy, "help");
+    if (legacy !== "help") assert.equal(legacy.visibleHistorySync, "first-connect");
+  }
+  assert.throws(() => parseCodexConnectArgs([
+    "--url", "https://host.tailnet.ts.net",
+    "--visible-history-sync", "sometimes",
+  ]), /first-connect or never/);
 });
 
 test("Codex connector parses project workspace creation without accepting an ambiguous workspace", () => {
@@ -456,6 +481,96 @@ test("managed session cycle commits local Hooks before Web execution and defers 
   await assert.rejects(runManagedSessionCycle(localFailure, {} as CollaborationApi), /local commit uncertain/);
   assert.equal(order.filter((step) => step === "web-agent").length, 1,
     "a local-turn commit error must not be swallowed or overtaken by another Web execution");
+});
+
+test("managed session cycle leaves visible history unchanged after cloud cursor updates", async () => {
+  const imported: number[] = [];
+  const current = {
+    bridge: {
+      runtime: {
+        id: "runtime-update-import",
+        runtimeId: "runtime-update-import",
+        userId: "user-1",
+        sessionId: "session-1",
+        deviceId: "device-1",
+        harness: "codex",
+        provider: "openai",
+        model: "gpt-test",
+        localSessionId: "desktop-update-import",
+        captureFidelity: "harness_transcript",
+      },
+      processPendingAgentRequests: async () => undefined,
+    },
+    executor: {},
+    lastHeartbeatAt: 0,
+    synchronizeCanonicalHistory: async () => undefined,
+    importVisibleHistorySnapshot: async ({ throughSequence }: { throughSequence: number }) => {
+      imported.push(throughSequence);
+      return { status: "imported" as const, throughSequence };
+    },
+  } as unknown as Parameters<typeof runManagedSessionCycle>[0];
+
+  await runManagedSessionCycle(current, {} as CollaborationApi);
+  await runManagedSessionCycle(current, {} as CollaborationApi);
+  await runManagedSessionCycle(current, {} as CollaborationApi);
+
+  assert.deepEqual(imported, []);
+});
+
+test("web local-sync controls are claimed only by their targeted managed Codex runtime", async () => {
+  const runtime = {
+    id: "runtime-local-control",
+    runtimeId: "runtime-local-control",
+    userId: "user-1",
+    sessionId: "session-1",
+    deviceId: "device-1",
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-test",
+    localSessionId: "local-1",
+    captureFidelity: "harness_transcript",
+  } as const;
+  const job = {
+    id: "job-1",
+    sessionId: "session-1",
+    kind: "local_auto_upload_disable" as const,
+    targetRuntimeId: runtime.id,
+    throughSequence: 3,
+    status: "pending" as const,
+  };
+  const completed: unknown[] = [];
+  const api = {
+    listSnapshotRequests: async (status: string) => status === "pending" ? [job] : [],
+    claimSnapshotRequest: async () => ({ ...job, status: "claimed" as const }),
+    completeSnapshotRequest: async (_id: string, _runtimeId: string, result: unknown) => {
+      completed.push(result);
+      return { ...job, status: "completed" as const, result };
+    },
+    failSnapshotRequest: async () => { throw new Error("must not fail"); },
+  } as unknown as HttpCollaborationClient;
+  const managed = new Map([["session-1", {
+    bridge: { runtime },
+    executor: {},
+    lastHeartbeatAt: 0,
+    setLocalAutoUpload: async (enabled: boolean) => ({
+      sessionId: "session-1",
+      localSessionId: "local-1",
+      automaticUpload: enabled,
+      pendingLocalTurns: 1,
+      uploadableLocalTurns: 2,
+    }),
+  }]]) as unknown as ReadonlyMap<string, Parameters<typeof runManagedSessionCycle>[0]>;
+
+  await processLocalSyncControlJobs({ api, managed });
+
+  assert.deepEqual(completed, [{
+    kind: "local_auto_upload_disable",
+    session_id: "session-1",
+    local_session_id: "local-1",
+    automatic_upload: false,
+    pending_local_turns: 1,
+    uploadable_local_turns: 2,
+  }]);
 });
 
 test("Codex hook relay paths are stable, platform-correct, and credential-free", () => {
@@ -751,6 +866,32 @@ test("new binding materializes through the authoritative cursor before one-time 
   ]);
 });
 
+test("session initialization imports visible history after canonical materialization and before publishing", async () => {
+  const stateRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-visible-history-order-"));
+  const order: string[] = [];
+  const history = [canonicalEvent(1), canonicalEvent(2)];
+  const api = projectApi(history, order);
+  const harness = projectHarness({
+    order,
+    project(events) { order.push(`project:${events[0]?.sequence ?? 0}`); },
+    importVisibleHistory(input) {
+      order.push(`visible:${input.throughSequence}:${input.automatic}`);
+    },
+    activate() { order.push("activate"); },
+  });
+  await initializeProjectSession({
+    api,
+    actorDeviceId: "device-1",
+    stateRoot,
+    harness,
+    session: { ...session("owner", "multi"), latestSequence: 2 },
+  });
+  assert.deepEqual(order, [
+    "create", "deactivate:initializing", "register", "project:1", "project:2",
+    "visible:2:true", "activate",
+  ]);
+});
+
 test("initialization prepares an empty native conversation and rewinds a stale bridge cursor to native coverage", async () => {
   const stateRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-native-prepare-"));
   const sessionKey = codexSessionKey("session-1");
@@ -1040,6 +1181,7 @@ function projectHarness(input: {
   activate(): void;
   deactivate?(): void;
   prepare?(): number;
+  importVisibleHistory?(input: { throughSequence: number; automatic: boolean }): void;
 }): ProjectHarnessAdapter {
   return {
     descriptor: {
@@ -1064,6 +1206,15 @@ function projectHarness(input: {
           input.order.push(`deactivate:${reason}`);
           input.deactivate?.();
         },
+        ...(input.importVisibleHistory === undefined ? {} : {
+          importVisibleHistorySnapshot: async (visibleInput: {
+            throughSequence: number;
+            automatic: boolean;
+          }) => {
+            input.importVisibleHistory?.(visibleInput);
+            return { status: "imported" as const, throughSequence: visibleInput.throughSequence };
+          },
+        }),
       };
     },
     close: async () => undefined,

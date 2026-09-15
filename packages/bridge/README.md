@@ -5,7 +5,7 @@
 For Codex, prefer the standalone connector. Copy the fixed-version operating-system-specific command from the project's **Connect Codex** dialog. It needs no repository checkout, binds one GatherThread project to a safe same-name local workspace, and discovers eligible sessions automatically. Each writable session has a Desktop-owned task plus a separate `exec`-source background projection.
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.2 \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 \
   --url https://your-host.your-tailnet.ts.net \
   --project PROJECT_ID \
   --create-workspace \
@@ -61,6 +61,8 @@ After a successful authoritative ACL refresh, any session that became read-only,
 Desktop and Web turns may run independently because they use separate native writers. The server's canonical sequence orders the accepted results. See [ADR-0013](../../docs/adr/0013-single-writer-dual-codex-projections.md).
 
 Snapshot jobs use an exact-session runtime with `purpose: "snapshot_connector"`, a fresh independent thread, and canonical history frozen through `through_sequence`. The completion result includes `thread_id`, `thread_name`, sequence/model/projection metadata, and `immutable: true`. Snapshot runtimes never claim agent requests or publish local turns, and completed snapshot threads are never polled again.
+
+A requester-private `visible_history_replace` request imports the writable session's canonical history as a new Desktop-facing Codex task. The wire kind keeps its Alpha name for compatibility, but the operation never overwrites or retires an existing task. It imports native external history, verifies a complete idle turn and project assignment, compacts oversized history, then atomically switches the durable binding and Hook allowlist. The previous task remains untouched for the user to archive. Automatic import defaults to `first-connect` and runs only when a session has no verified visible-history snapshot; `never` disables it. Every explicit manual request creates a new task. Visible-history import never disables or substitutes the independent realtime canonical context projection.
 
 ## Generic local worker executable
 

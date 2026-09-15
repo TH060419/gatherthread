@@ -17,6 +17,12 @@ import type {
   SessionMemberSummary,
   SessionSummary,
 } from "./types.js";
+import type {
+  LocalConversationSyncControl,
+  LocalConversationSyncStatus,
+  LocalConversationUploadResult,
+  VisibleHistorySnapshotResult,
+} from "./project-harness.js";
 
 interface RelayRequest {
   id: string;
@@ -55,6 +61,10 @@ const USER_METHODS = new Set([
   "listSessionMembers",
   "readEvents",
   "appendEvent",
+  "getLocalSyncStatus",
+  "setLocalAutoUpload",
+  "uploadLocalTurns",
+  "importVisibleHistorySnapshot",
 ]);
 
 export function resolveWorkspaceConnectorApiPath(
@@ -77,6 +87,7 @@ export class LocalConnectorApiRelayServer {
   readonly #platform: NodeJS.Platform;
   readonly #homeDirectory: string;
   readonly #projectId: string;
+  readonly #localSync: LocalConversationSyncControl | undefined;
   readonly #instanceId = randomUUID();
   readonly #capabilityPath: string;
   readonly #registrationPath: string;
@@ -90,11 +101,13 @@ export class LocalConnectorApiRelayServer {
     projectId: string;
     platform?: NodeJS.Platform;
     homeDirectory?: string;
+    localSync?: LocalConversationSyncControl;
   }) {
     if (!PROJECT_ID_PATTERN.test(options.projectId)) throw new Error("Invalid local connector project route");
     this.#endpoint = options.endpoint;
     this.#api = options.api;
     this.#projectId = options.projectId;
+    this.#localSync = options.localSync;
     this.#platform = options.platform ?? process.platform;
     this.#homeDirectory = options.homeDirectory ?? homedir();
     this.#capabilityPath = capabilityPathForEndpoint(this.#endpoint, this.#platform, this.#homeDirectory);
@@ -255,6 +268,27 @@ export class LocalConnectorApiRelayServer {
       }
       return this.#api.appendEvent(sessionId, event);
     }
+    if (method === "getLocalSyncStatus") {
+      requireParameterCount(params, 1);
+      if (!this.#localSync) throw new Error("Local conversation sync controls are unavailable");
+      return this.#localSync.getLocalSyncStatus(sessionId);
+    }
+    if (method === "setLocalAutoUpload") {
+      requireParameterCount(params, 2);
+      if (typeof params[1] !== "boolean") throw new Error("Automatic upload must be true or false");
+      if (!this.#localSync) throw new Error("Local conversation sync controls are unavailable");
+      return this.#localSync.setLocalAutoUpload(sessionId, params[1]);
+    }
+    if (method === "uploadLocalTurns") {
+      requireParameterCount(params, 1);
+      if (!this.#localSync) throw new Error("Local conversation sync controls are unavailable");
+      return this.#localSync.uploadLocalTurns(sessionId);
+    }
+    if (method === "importVisibleHistorySnapshot") {
+      requireParameterCount(params, 1);
+      if (!this.#localSync) throw new Error("Local conversation sync controls are unavailable");
+      return this.#localSync.importVisibleHistorySnapshot(sessionId);
+    }
     throw new Error("Local method is not available");
   }
 }
@@ -317,6 +351,26 @@ export class LocalConnectorCollaborationClient implements CollaborationApi {
 
   async appendEvent(sessionId: string, event: AppendEventInput): Promise<CanonicalEvent> {
     return this.#callConnection(await this.#sessionRoute(sessionId), "appendEvent", [sessionId, event]);
+  }
+
+  async getLocalSyncStatus(sessionId: string): Promise<LocalConversationSyncStatus> {
+    return this.#callConnection(await this.#sessionRoute(sessionId), "getLocalSyncStatus", [sessionId]);
+  }
+
+  async setLocalAutoUpload(sessionId: string, enabled: boolean): Promise<LocalConversationSyncStatus> {
+    return this.#callConnection(await this.#sessionRoute(sessionId), "setLocalAutoUpload", [sessionId, enabled]);
+  }
+
+  async uploadLocalTurns(sessionId: string): Promise<LocalConversationUploadResult> {
+    return this.#callConnection(await this.#sessionRoute(sessionId), "uploadLocalTurns", [sessionId]);
+  }
+
+  async importVisibleHistorySnapshot(sessionId: string): Promise<VisibleHistorySnapshotResult> {
+    return this.#callConnection<VisibleHistorySnapshotResult>(
+      await this.#sessionRoute(sessionId),
+      "importVisibleHistorySnapshot",
+      [sessionId],
+    );
   }
 
   registerRuntime(_runtime: RuntimeRegistration): Promise<RegisteredRuntime> {

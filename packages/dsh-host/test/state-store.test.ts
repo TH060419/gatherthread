@@ -20,7 +20,7 @@ import {
 import type { ConnectorState } from "../src/types.js";
 
 const state: ConnectorState = {
-  version: 2,
+  version: 3,
   binding: {
     projectId: "project-1",
     sessionId: "session-1",
@@ -29,6 +29,7 @@ const state: ConnectorState = {
   serverCursor: 8,
   projectionCursor: 8,
   publishedDshSequence: 34,
+  automaticUpload: true,
   activeRequest: {
     requestId: "request-1",
     requestSequence: 9,
@@ -63,10 +64,18 @@ test("legacy state resets only its native projection cursor for safe history bac
     version: 1,
   };
   delete (legacy as { projectionCursor?: number }).projectionCursor;
+  delete (legacy as { automaticUpload?: boolean }).automaticUpload;
   assert.deepEqual(validateConnectorState(legacy), {
     ...state,
+    version: 3,
     projectionCursor: 0,
   });
+});
+
+test("version two state migrates to automatic upload enabled", () => {
+  const legacy = { ...state, version: 2 } as Record<string, unknown>;
+  delete legacy.automaticUpload;
+  assert.equal(validateConnectorState(legacy).automaticUpload, true);
 });
 
 test("file state uses an atomic private artifact and restores exactly", async () => {

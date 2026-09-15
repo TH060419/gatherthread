@@ -1,6 +1,8 @@
 import {
   ensureProjectWorkspace,
   type ProjectSummary,
+  type LocalConversationSyncStatus,
+  type LocalConversationUploadResult,
 } from "@gatherthread/bridge";
 import path from "node:path";
 import { createHttpDshCollaborationApi } from "./collaboration-api.js";
@@ -68,6 +70,8 @@ const RPC_ENDPOINTS = new Set([
   "catalog/get",
   "connection/configure",
   "connection/disconnect",
+  "sync/set-auto-upload",
+  "sync/upload",
 ]);
 const MAX_CATALOG_PROVIDERS = 64;
 const MAX_CATALOG_MODELS = 256;
@@ -97,6 +101,13 @@ export interface DshNativePublicState {
   readonly bindings?: readonly DshNativeBinding[];
   readonly pairing?: DshNativePairingView;
   readonly recoverableError?: "pairing_failed" | "connection_failed";
+  readonly localSync?: readonly DshNativeLocalSyncStatus[];
+}
+
+export interface DshNativeLocalSyncStatus extends LocalConversationSyncStatus {
+  readonly projectId: string;
+  readonly projectName: string;
+  readonly title: string;
 }
 
 export interface DshNativeCatalog {
@@ -111,6 +122,9 @@ export interface DshNativeCatalog {
 
 interface NativeOwner {
   stop(): Promise<void>;
+  localSyncStatuses?(): LocalConversationSyncStatus[];
+  setLocalAutoUpload?(sessionId: string, enabled: boolean): Promise<LocalConversationSyncStatus>;
+  uploadLocalTurns?(sessionId: string): Promise<LocalConversationUploadResult>;
 }
 
 interface NativeLlmLike {
@@ -251,6 +265,7 @@ export class DshNativeHostController {
           route: { ...this.#grant.route },
           projectCount: this.#projects.size,
           bindings: this.#currentBindings(this.#grant.route).slice(0, 100),
+          localSync: this.#currentLocalSync().slice(0, 100),
         }),
       }),
       ...(this.#pairing === undefined ? {} : {
@@ -435,6 +450,31 @@ export class DshNativeHostController {
     return this.publicState();
   }
 
+  async setLocalAutoUpload(inputValue: unknown): Promise<DshNativePublicState> {
+    this.#assertAvailable();
+    const input = exactInput(inputValue, new Set(["projectId", "sessionId", "enabled"]));
+    const projectId = safeInputIdentifier(input.projectId, "projectId");
+    const sessionId = safeInputIdentifier(input.sessionId, "sessionId");
+    if (typeof input.enabled !== "boolean") throw new Error("enabled must be true or false");
+    const owner = this.#owners.get(projectId);
+    if (!owner) throw new Error("The selected GatherThread Project is not active");
+    if (!owner.setLocalAutoUpload) throw new Error("This DSH Project does not expose upload controls");
+    await owner.setLocalAutoUpload(sessionId, input.enabled);
+    return this.publicState();
+  }
+
+  async uploadLocalTurns(inputValue: unknown): Promise<DshNativePublicState> {
+    this.#assertAvailable();
+    const input = exactInput(inputValue, new Set(["projectId", "sessionId"]));
+    const projectId = safeInputIdentifier(input.projectId, "projectId");
+    const sessionId = safeInputIdentifier(input.sessionId, "sessionId");
+    const owner = this.#owners.get(projectId);
+    if (!owner) throw new Error("The selected GatherThread Project is not active");
+    if (!owner.uploadLocalTurns) throw new Error("This DSH Project does not expose manual upload");
+    await owner.uploadLocalTurns(sessionId);
+    return this.publicState();
+  }
+
   dispose(): Promise<void> {
     this.#disposePromise ??= (async () => {
       this.#disposed = true;
@@ -597,6 +637,22 @@ export class DshNativeHostController {
         || left.projectId.localeCompare(right.projectId));
   }
 
+  #currentLocalSync(): DshNativeLocalSyncStatus[] {
+    const titles = new Map(this.#options.status.snapshot().sessions.map((session) => [session.sessionId, session.title]));
+    return [...this.#owners.entries()].flatMap(([projectId, owner]) => {
+      const project = this.#projects.get(projectId);
+      if (!project) return [];
+      return (owner.localSyncStatuses?.() ?? []).map((sync) => ({
+        ...sync,
+        projectId,
+        projectName: boundedPublicText(project.name, "project name", 160),
+        title: titles.get(sync.sessionId) ?? sync.sessionId,
+      }));
+    }).sort((left, right) => left.projectName.localeCompare(right.projectName)
+      || left.title.localeCompare(right.title)
+      || left.sessionId.localeCompare(right.sessionId));
+  }
+
   #updateProjectStatus(projectId: string, update: DshProjectManagerStatusUpdate): void {
     if (!this.#projects.has(projectId) || this.#disposed) return;
     this.#projectStatuses.set(projectId, update);
@@ -732,6 +788,10 @@ export function registerNativeDshRpc(
         case "connection/disconnect":
           exactInput(payload, new Set());
           return rpcSuccess(await controller.disconnect());
+        case "sync/set-auto-upload":
+          return rpcSuccess(await controller.setLocalAutoUpload(payload));
+        case "sync/upload":
+          return rpcSuccess(await controller.uploadLocalTurns(payload));
         default:
           return rpcFailure("gatherthread/not-found", "GatherThread DSH action is unavailable");
       }
@@ -838,6 +898,9 @@ async function createProductionOwner(options: {
   }
   let stopPromise: Promise<void> | undefined;
   return {
+    localSyncStatuses: () => manager.localSyncStatuses(),
+    setLocalAutoUpload: (sessionId, enabled) => manager.setLocalAutoUpload(sessionId, enabled),
+    uploadLocalTurns: (sessionId) => manager.uploadLocalTurns(sessionId),
     stop() {
       stopPromise ??= (async () => {
         options.signal.removeEventListener("abort", abortFromRoot);
@@ -910,6 +973,9 @@ function createNativeManagedConnector(options: {
   return {
     get stopped() { return connector.stopped; },
     async start() { await connector.start(); },
+    localSyncStatus: () => connector.localSyncStatus(),
+    setLocalAutoUpload: (enabled) => connector.setLocalAutoUpload(enabled),
+    uploadLocalTurns: () => connector.uploadLocalTurns(),
     stop() {
       stopPromise ??= (async () => {
         options.rootSignal.removeEventListener("abort", abortFromRoot);

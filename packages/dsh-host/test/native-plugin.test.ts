@@ -171,6 +171,99 @@ test("native controller pairs, configures one project owner, and resumes it afte
   assert.equal(ownerStops.length, 2);
 });
 
+test("native settings RPC controls automatic and manual upload for one DSH conversation", async () => {
+  const routedGrant: DshNativeGrant = {
+    ...unboundGrant,
+    route: { provider: "deepseek-official", model: "deepseek-chat" },
+  };
+  const credentials = credentialsFixture(routedGrant);
+  const publicStatus = status();
+  publicStatus.upsertSession({
+    sessionId: "session-1",
+    title: "Local conversation",
+    state: "idle",
+  });
+  let automaticUpload = true;
+  let uploadCalls = 0;
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined;
+  const context = {
+    credentials: credentials.service,
+    connection: { rpc: { handle(channel: string, value: typeof handler) {
+      assert.equal(channel, "/gatherthread");
+      handler = value;
+      return async () => undefined;
+    } } },
+  };
+  const syncStatus = () => ({
+    sessionId: "session-1",
+    localSessionId: "dsh-session-1",
+    automaticUpload,
+    pendingLocalTurns: automaticUpload ? 0 : 1,
+    uploadableLocalTurns: automaticUpload ? 0 : 1,
+  });
+  const controller = new DshNativeHostController({
+    context,
+    status: publicStatus,
+    workspacePath: "/readonly/workspace",
+    listProjects: async () => [{
+      id: "project-1",
+      name: "Project One",
+      role: "owner",
+      state: "active",
+      sessionCount: 1,
+    }],
+    resolveWorkspace: async () => "/readonly/workspace",
+    createOwner: async () => ({
+      localSyncStatuses: () => [syncStatus()],
+      async setLocalAutoUpload(sessionId: string, enabled: boolean) {
+        assert.equal(sessionId, "session-1");
+        automaticUpload = enabled;
+        return syncStatus();
+      },
+      async uploadLocalTurns(sessionId: string) {
+        assert.equal(sessionId, "session-1");
+        uploadCalls += 1;
+        return { ...syncStatus(), discoveredLocalTurns: 1, uploadedLocalTurns: 1 };
+      },
+      async stop() {},
+    }),
+  });
+  await controller.start();
+  const disposeRpc = registerNativeDshRpc(context, controller);
+  const signal = new AbortController().signal;
+
+  const initial = await handler?.("status/get", {}, signal) as {
+    ok: boolean;
+    value?: { localSync?: Array<{ title: string; automaticUpload: boolean }> };
+  };
+  assert.equal(initial.ok, true);
+  assert.deepEqual(initial.value?.localSync, [{
+    ...syncStatus(),
+    projectId: "project-1",
+    projectName: "Project One",
+    title: "session-1",
+  }]);
+
+  const disabled = await handler?.("sync/set-auto-upload", {
+    projectId: "project-1",
+    sessionId: "session-1",
+    enabled: false,
+  }, signal) as { ok: boolean; value?: { localSync?: Array<{ automaticUpload: boolean }> } };
+  assert.equal(disabled.ok, true);
+  assert.equal(disabled.value?.localSync?.[0]?.automaticUpload, false);
+
+  const uploaded = await handler?.("sync/upload", {
+    projectId: "project-1",
+    sessionId: "session-1",
+  }, signal) as { ok: boolean };
+  assert.equal(uploaded.ok, true);
+  assert.equal(uploadCalls, 1);
+  assert.equal(automaticUpload, false, "manual recovery must not change the automatic-upload preference");
+
+  await disposeRpc();
+  await controller.dispose();
+});
+
 test("one paired route reconciles every active accessible project and isolates project failure", async () => {
   const credentials = credentialsFixture(unboundGrant);
   let projects: Array<{

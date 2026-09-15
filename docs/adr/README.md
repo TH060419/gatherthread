@@ -23,3 +23,5 @@ Architecture Decision Records document significant technical choices, their rati
 | [0017](0017-private-connection-profiles.md) | Support local, private LAN, and tailnet connection profiles | accepted | 2026-08-30 |
 | [0018](0018-unified-codex-plugin-and-connector.md) | Pair a Codex plugin with the persistent npm connector | accepted | 2026-09-06 |
 | [0019](0019-native-history-projection-across-harness-switches.md) | Project canonical history into native sessions across harness switches | accepted | 2026-09-06 |
+| [0020](0020-per-conversation-upload-consent-and-manual-recovery.md) | Add per-conversation upload consent and manual recovery | accepted | 2026-09-15 |
+| [0021](0021-import-visible-codex-history-as-a-new-task.md) | Import visible Codex history as a new task | accepted | 2026-09-16 |

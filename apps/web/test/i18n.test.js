@@ -81,6 +81,14 @@ test("dynamic collaboration labels translate without touching unknown user text"
     "参与者可编辑 Multi；访者在所有位置均为只读。",
   );
   assert.equal(translateUiText("Contiguous through sequence #42", "zh-CN"), "连续历史已到 sequence #42");
+  assert.equal(translateUiText("Session status details", "zh-CN"), "会话状态详情");
+  assert.equal(translateUiText("Show session status details", "zh-CN"), "展开会话状态详情");
+  assert.equal(translateUiText("Offline · 3 pending", "zh-CN"), "离线 · 3 项待同步");
+  assert.equal(translateUiText("3 local changes are waiting to reconcile.", "zh-CN"), "3 项本地更改正在等待协调。");
+  assert.equal(
+    translateUiText("Manual import creates a new local Codex task and never overwrites or archives the old task. After confirming the new task works, archive the old task yourself. Realtime context injection is unaffected.", "zh-CN"),
+    "手动导入会创建新的 Codex 本地任务，不会覆盖或归档旧任务。确认新任务可用后，请自行归档旧任务。实时上下文注入不受影响。",
+  );
   assert.equal(translateUiText("2 online", "zh-CN"), "2 个在线");
   assert.equal(
     translateUiText("2 DeepSeek Harness runtimes are online for this session.", "zh-CN"),

@@ -63,7 +63,26 @@ test("local user API relay uses a private ephemeral capability and refuses a sec
   await symlink(workspacePath, linkedWorkspacePath, "dir");
   const endpoint = resolveWorkspaceConnectorApiPath(await realpath(workspacePath), homeDirectory);
   const api = new FakeApi();
-  const first = new LocalConnectorApiRelayServer({ endpoint, api, projectId: "p1", homeDirectory });
+  const localSyncCalls: string[] = [];
+  const localSync = {
+    async getLocalSyncStatus(sessionId: string) {
+      localSyncCalls.push(`status:${sessionId}`);
+      return { sessionId, localSessionId: "thread-1", automaticUpload: true, pendingLocalTurns: 0, uploadableLocalTurns: 1 };
+    },
+    async setLocalAutoUpload(sessionId: string, enabled: boolean) {
+      localSyncCalls.push(`auto:${sessionId}:${enabled}`);
+      return { sessionId, localSessionId: "thread-1", automaticUpload: enabled, pendingLocalTurns: 0, uploadableLocalTurns: 1 };
+    },
+    async uploadLocalTurns(sessionId: string) {
+      localSyncCalls.push(`upload:${sessionId}`);
+      return { sessionId, localSessionId: "thread-1", automaticUpload: false, pendingLocalTurns: 0, uploadableLocalTurns: 0, discoveredLocalTurns: 1, uploadedLocalTurns: 1 };
+    },
+    async importVisibleHistorySnapshot(sessionId: string) {
+      localSyncCalls.push(`history:${sessionId}`);
+      return { status: "imported" as const, threadId: "thread-2", throughSequence: 4, compacted: false };
+    },
+  };
+  const first = new LocalConnectorApiRelayServer({ endpoint, api, projectId: "p1", homeDirectory, localSync });
   try {
     await first.start();
   } catch (error) {
@@ -107,6 +126,11 @@ test("local user API relay uses a private ephemeral capability and refuses a sec
     type: "human_chat", idempotencyKey: "local-relay-chat", payload: { text: "hello" },
   });
   assert.equal(api.appended.length, 1);
+  assert.equal((await client.getLocalSyncStatus("s1")).uploadableLocalTurns, 1);
+  assert.equal((await client.setLocalAutoUpload("s1", false)).automaticUpload, false);
+  assert.equal((await client.uploadLocalTurns("s1")).uploadedLocalTurns, 1);
+  assert.equal((await client.importVisibleHistorySnapshot("s1")).threadId, "thread-2");
+  assert.deepEqual(localSyncCalls, ["status:s1", "auto:s1:false", "upload:s1", "history:s1"]);
 
   const second = new LocalConnectorApiRelayServer({ endpoint, api, projectId: "p1", homeDirectory });
   await assert.rejects(second.start(), /already active/);

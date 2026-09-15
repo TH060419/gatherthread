@@ -31,6 +31,9 @@ import type {
   ProjectHarnessAdapter,
   ProjectHarnessDeactivationReason,
   ProjectHarnessSessionBinding,
+  LocalConversationSyncControl,
+  LocalConversationSyncStatus,
+  LocalConversationUploadResult,
 } from "./project-harness.js";
 import {
   reconcileProjectSessionPermissions,
@@ -50,6 +53,7 @@ interface CodexConnectOptions {
   workspacePath: string;
   model: string;
   contextWindowTokens: number;
+  visibleHistorySync: CodexVisibleHistorySyncMode;
   projectId?: string;
   createWorkspace: boolean;
   sandbox: CodexSandboxMode;
@@ -60,6 +64,8 @@ interface CodexConnectOptions {
   pluginHooks: boolean;
   preflightOnly: boolean;
 }
+
+export type CodexVisibleHistorySyncMode = "first-connect" | "never";
 
 export type CodexDesktopRevealResult =
   | { status: "skipped" }
@@ -95,7 +101,7 @@ const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const HELP = `GatherThread Codex connector
 
 Usage:
-  npx --yes @gatherthread/codex-connect@0.1.0-alpha.2 --url <GatherThread URL> [options]
+  npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url <GatherThread URL> [options]
 
 Repository development / compatibility entry:
   npm run codex:connect -- --url <GatherThread URL> [options]
@@ -106,6 +112,8 @@ Options:
   --model <model>          Codex model (default: gpt-5.6-sol)
   --context-window-tokens <n>
                            Context ceiling used for safe projection and compaction (default: 128000)
+  --visible-history-sync <mode>
+                           first-connect or never (default: first-connect)
   --project <id>           Project ID; otherwise choose from your writable projects
   --create-workspace       Create/reuse ~/GatherThread Projects/<project name>
   --sandbox <mode>         workspace-write or read-only (default: workspace-write)
@@ -174,10 +182,12 @@ export async function runCodexConnectCli(
   const stop = () => shutdown.abort(new Error("Codex connector shutdown requested"));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
+  const localSync = new CodexLocalSyncRegistry(api);
   const userApiRelay = new LocalConnectorApiRelayServer({
     endpoint: resolveWorkspaceConnectorApiPath(workspacePath),
     api,
     projectId: selected.id,
+    localSync,
   });
   try {
     await userApiRelay.start();
@@ -247,6 +257,7 @@ export async function runCodexConnectCli(
         }
         return revealed.status === "launched";
       },
+      visibleHistorySync: parsed.visibleHistorySync,
     });
     try {
       const preflight = await harness.preflight();
@@ -290,6 +301,7 @@ export async function runCodexConnectCli(
         hookRegistryPath,
         hookWorkspacePath: preflight.workspacePath,
         hookMode,
+        localSync,
       });
     } finally {
       await harness.close();
@@ -470,6 +482,7 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   let workspacePath = process.cwd();
   let model = "gpt-5.6-sol";
   let contextWindowTokens = 128_000;
+  let visibleHistorySync: CodexVisibleHistorySyncMode = "first-connect";
   let projectId: string | undefined;
   let sandbox: CodexSandboxMode = "workspace-write";
   let codexCommand = "codex";
@@ -517,6 +530,17 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
     }
     else if (argument === "--model") model = value;
     else if (argument === "--context-window-tokens") contextWindowTokens = Number(value);
+    else if (argument === "--visible-history-sync") {
+      if (value === "every-connect" || value === "every-update") {
+        // Alpha compatibility: hot replacement is not supported by Codex's
+        // single-writer task store. Preserve the safe first-import behavior.
+        visibleHistorySync = "first-connect";
+      } else if (value === "first-connect" || value === "never") {
+        visibleHistorySync = value;
+      } else {
+        throw new Error("--visible-history-sync must be first-connect or never");
+      }
+    }
     else if (argument === "--project") projectId = value;
     else if (argument === "--codex-command") codexCommand = value;
     else if (argument === "--sandbox") {
@@ -552,6 +576,7 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
     workspacePath: path.resolve(workspacePath),
     model,
     contextWindowTokens,
+    visibleHistorySync,
     ...(projectId === undefined ? {} : { projectId }),
     createWorkspace,
     sandbox,
@@ -600,10 +625,80 @@ export interface ManagedSession {
   executor: HarnessExecutor;
   lastHeartbeatAt: number;
   synchronizeLocalTurns?: ProjectHarnessSessionBinding["synchronizeLocalTurns"];
+  getLocalSyncStatus?: ProjectHarnessSessionBinding["getLocalSyncStatus"];
+  setLocalAutoUpload?: ProjectHarnessSessionBinding["setLocalAutoUpload"];
+  uploadLocalTurns?: ProjectHarnessSessionBinding["uploadLocalTurns"];
+  importVisibleHistorySnapshot?: ProjectHarnessSessionBinding["importVisibleHistorySnapshot"];
   synchronizeCanonicalHistory?: ProjectHarnessSessionBinding["synchronizeCanonicalHistory"];
   activateLocalPublishing?: ProjectHarnessSessionBinding["activateLocalPublishing"];
   deactivateLocalPublishing?: ProjectHarnessSessionBinding["deactivateLocalPublishing"];
   relayLocalHarnessEvent?: ProjectHarnessSessionBinding["relayLocalHarnessEvent"];
+}
+
+export class CodexLocalSyncRegistry implements LocalConversationSyncControl {
+  readonly #api: CollaborationApi;
+  readonly #sessions = new Map<string, ManagedSession>();
+
+  constructor(api: CollaborationApi) {
+    this.#api = api;
+  }
+
+  attach(sessionId: string, session: ManagedSession): void {
+    this.#sessions.set(sessionId, session);
+  }
+
+  retain(sessionIds: ReadonlySet<string>): void {
+    for (const sessionId of this.#sessions.keys()) {
+      if (!sessionIds.has(sessionId)) this.#sessions.delete(sessionId);
+    }
+  }
+
+  clear(): void {
+    this.#sessions.clear();
+  }
+
+  async getLocalSyncStatus(sessionId: string): Promise<LocalConversationSyncStatus> {
+    const session = this.#requireSession(sessionId);
+    if (!session.getLocalSyncStatus) throw new Error("This Codex session does not support local upload controls");
+    return session.getLocalSyncStatus();
+  }
+
+  async setLocalAutoUpload(sessionId: string, enabled: boolean): Promise<LocalConversationSyncStatus> {
+    const session = this.#requireSession(sessionId);
+    if (!session.setLocalAutoUpload) throw new Error("This Codex session does not support local upload controls");
+    return session.setLocalAutoUpload(enabled);
+  }
+
+  async uploadLocalTurns(sessionId: string): Promise<LocalConversationUploadResult> {
+    const session = this.#requireSession(sessionId);
+    const runtime = session.bridge.runtime;
+    if (!runtime || !session.uploadLocalTurns) {
+      throw new Error("This Codex session is not ready for manual local upload");
+    }
+    return session.uploadLocalTurns({ api: this.#api, runtime });
+  }
+
+  async importVisibleHistorySnapshot(sessionId: string): Promise<import("./project-harness.js").VisibleHistorySnapshotResult> {
+    const session = this.#requireSession(sessionId);
+    if (!session.importVisibleHistorySnapshot) {
+      throw new Error("This Codex session does not support visible history import");
+    }
+    const summary = (await this.#api.listSessions()).find((candidate) => candidate.id === sessionId);
+    if (!summary || !Number.isSafeInteger(summary.latestSequence)) {
+      throw new Error("The authoritative session cursor is unavailable for visible history import");
+    }
+    return session.importVisibleHistorySnapshot({
+      api: this.#api,
+      throughSequence: summary.latestSequence as number,
+      automatic: false,
+    });
+  }
+
+  #requireSession(sessionId: string): ManagedSession {
+    const session = this.#sessions.get(sessionId);
+    if (!session) throw new Error("No active local Codex conversation is bound to this session");
+    return session;
+  }
 }
 
 export function formatConnectedCodexSessionOutput(_projectName: string, session: SessionSummary): string {
@@ -661,6 +756,19 @@ export async function initializeProjectSession(options: {
   });
   await bridge.connect();
   await bridge.materializeAuthoritativeHistory(binding.executor, authoritativeCursor);
+  if (binding.importVisibleHistorySnapshot) {
+    try {
+      await binding.importVisibleHistorySnapshot({
+        api: options.api,
+        throughSequence: authoritativeCursor,
+        automatic: true,
+      });
+    } catch (error) {
+      process.stderr.write(`gatherthread-codex: visible history snapshot import was skipped (${redactText(
+        error instanceof Error ? error.message : "unknown error",
+      )}); realtime context injection remains active\n`);
+    }
+  }
   try {
     await binding.activateLocalPublishing?.();
   } catch (activationError) {
@@ -678,6 +786,12 @@ export async function initializeProjectSession(options: {
     executor: binding.executor,
     lastHeartbeatAt: Date.now(),
     ...(binding.synchronizeLocalTurns === undefined ? {} : { synchronizeLocalTurns: binding.synchronizeLocalTurns }),
+    ...(binding.getLocalSyncStatus === undefined ? {} : { getLocalSyncStatus: binding.getLocalSyncStatus }),
+    ...(binding.setLocalAutoUpload === undefined ? {} : { setLocalAutoUpload: binding.setLocalAutoUpload }),
+    ...(binding.uploadLocalTurns === undefined ? {} : { uploadLocalTurns: binding.uploadLocalTurns }),
+    ...(binding.importVisibleHistorySnapshot === undefined
+      ? {}
+      : { importVisibleHistorySnapshot: binding.importVisibleHistorySnapshot }),
     ...(binding.synchronizeCanonicalHistory === undefined
       ? {}
       : { synchronizeCanonicalHistory: binding.synchronizeCanonicalHistory }),
@@ -774,6 +888,7 @@ export async function runProjectConnector(options: {
   hookRegistryPath: string;
   hookWorkspacePath: string;
   hookMode: "disabled" | CodexHookSource;
+  localSync?: CodexLocalSyncRegistry;
   hookRelay?: Pick<CodexHookRelayServer, "start" | "close">;
 }): Promise<void> {
   const hooksEnabled = options.hookMode !== "disabled";
@@ -819,6 +934,7 @@ export async function runProjectConnector(options: {
           adoptLocalConversationId: event.session_id,
         });
         managed.set(session.id, current);
+        options.localSync?.attach(session.id, current);
         process.stdout.write(`${formatConnectedCodexSessionOutput(options.project.name, session).trimEnd()} (personal solo created from local task)\n`);
         return current;
       } finally {
@@ -925,6 +1041,7 @@ export async function runProjectConnector(options: {
           managed.delete(sessionId);
           await current.deactivateLocalPublishing?.("project_inaccessible").catch(() => undefined);
         }
+        options.localSync?.clear();
         await options.harness.deactivateExecutionBindings?.().catch(() => undefined);
         if (projectHookSpoolEnabled) {
           await drainCodexHookSpool(options.hookSpoolPath, async () => undefined).catch(() => undefined);
@@ -933,6 +1050,7 @@ export async function runProjectConnector(options: {
       } else {
         retryReporter.retrying("project refresh", refresh.error);
       }
+      options.localSync?.retain(new Set(managed.keys()));
       nextRefreshAt = now + 5_000;
     }
 
@@ -950,6 +1068,7 @@ export async function runProjectConnector(options: {
             session,
           });
           managed.set(session.id, current);
+          options.localSync?.attach(session.id, current);
           process.stdout.write(formatConnectedCodexSessionOutput(options.project.name, session));
         }
         if (Date.now() - current.lastHeartbeatAt >= 10_000) {
@@ -966,6 +1085,13 @@ export async function runProjectConnector(options: {
     }
     if (options.harness.processSnapshotJobs && Date.now() >= nextSnapshotPollAt) {
       try {
+        await processLocalSyncControlJobs({ api: options.api, managed });
+        await processVisibleHistorySnapshotJobs({
+          api: options.api,
+          actorDeviceId: options.actorDeviceId,
+          visibleSessions,
+          managed,
+        });
         await options.harness.processSnapshotJobs({
           api: options.api,
           actorDeviceId: options.actorDeviceId,
@@ -991,7 +1117,146 @@ export async function runProjectConnector(options: {
     await waitForConnectorPoll(1_000, options.signal);
   }
   } finally {
+    options.localSync?.clear();
     await relay?.close();
+  }
+}
+
+const LOCAL_SYNC_REQUEST_KINDS = new Set([
+  "local_sync_status",
+  "local_auto_upload_enable",
+  "local_auto_upload_disable",
+  "local_turn_upload",
+]);
+
+export async function processLocalSyncControlJobs(input: {
+  api: HttpCollaborationClient;
+  managed: ReadonlyMap<string, ManagedSession>;
+}): Promise<void> {
+  const { api } = input;
+  if (!api.listSnapshotRequests || !api.claimSnapshotRequest
+    || !api.completeSnapshotRequest || !api.failSnapshotRequest) return;
+  const jobs = [
+    ...(await api.listSnapshotRequests("pending", 40)),
+    ...(await api.listSnapshotRequests("claimed", 40)),
+  ].filter((job, index, all) =>
+    LOCAL_SYNC_REQUEST_KINDS.has(job.kind)
+    && all.findIndex((candidate) => candidate.id === job.id) === index,
+  );
+  for (const job of jobs) {
+    const current = input.managed.get(job.sessionId);
+    const runtime = current?.bridge.runtime;
+    if (!current || !runtime || job.targetRuntimeId !== runtime.id) continue;
+    let claimed;
+    try {
+      claimed = await api.claimSnapshotRequest(job.id, runtime.id);
+    } catch {
+      continue;
+    }
+    if (claimed.status !== "claimed") continue;
+    try {
+      let status;
+      let uploadCounts: { discovered_local_turns?: number; uploaded_local_turns?: number } = {};
+      if (claimed.kind === "local_sync_status") {
+        if (!current.getLocalSyncStatus) throw new Error("Local Codex upload controls are unavailable");
+        status = await current.getLocalSyncStatus();
+      } else if (claimed.kind === "local_auto_upload_enable" || claimed.kind === "local_auto_upload_disable") {
+        if (!current.setLocalAutoUpload) throw new Error("Local Codex upload controls are unavailable");
+        status = await current.setLocalAutoUpload(claimed.kind === "local_auto_upload_enable");
+      } else {
+        if (!current.uploadLocalTurns) throw new Error("Manual local Codex upload is unavailable");
+        const upload = await current.uploadLocalTurns({ api, runtime });
+        status = upload;
+        uploadCounts = {
+          discovered_local_turns: upload.discoveredLocalTurns,
+          uploaded_local_turns: upload.uploadedLocalTurns,
+        };
+      }
+      await api.completeSnapshotRequest(job.id, runtime.id, {
+        kind: claimed.kind,
+        session_id: status.sessionId,
+        local_session_id: status.localSessionId,
+        automatic_upload: status.automaticUpload,
+        pending_local_turns: status.pendingLocalTurns,
+        uploadable_local_turns: status.uploadableLocalTurns,
+        ...uploadCounts,
+      });
+    } catch (error) {
+      await api.failSnapshotRequest(job.id, runtime.id, {
+        code: "codex_local_sync_control_failed",
+        message: redactText(error instanceof Error ? error.message : "Local Codex sync control failed"),
+      });
+    }
+  }
+}
+
+async function processVisibleHistorySnapshotJobs(input: {
+  api: HttpCollaborationClient;
+  actorDeviceId: string;
+  visibleSessions: readonly SessionSummary[];
+  managed: ReadonlyMap<string, ManagedSession>;
+}): Promise<void> {
+  const { api } = input;
+  if (!api.listSnapshotRequests || !api.claimSnapshotRequest
+    || !api.completeSnapshotRequest || !api.failSnapshotRequest) return;
+  const visibleSessionIds = new Set(input.visibleSessions.map((session) => session.id));
+  const jobs = [
+    ...(await api.listSnapshotRequests("pending", 20)),
+    ...(await api.listSnapshotRequests("claimed", 20)),
+  ].filter((job, index, all) =>
+    job.kind === "visible_history_replace"
+    && visibleSessionIds.has(job.sessionId)
+    && all.findIndex((candidate) => candidate.id === job.id) === index,
+  );
+  for (const job of jobs) {
+    const current = input.managed.get(job.sessionId);
+    if (!current?.importVisibleHistorySnapshot) continue;
+    const runtime = await api.registerRuntime({
+      runtimeId: `visible-history-${codexSessionKey(job.id)}`,
+      sessionId: job.sessionId,
+      deviceId: input.actorDeviceId,
+      harness: "codex",
+      provider: "openai",
+      model: "visible-history-import",
+      localSessionId: `gatherthread-codex:visible-history:${job.id}`,
+      captureFidelity: "canonical_history",
+      capabilities: ["visible_history_replace", "verified_switch", "automatic_compaction"],
+      purpose: "snapshot_connector",
+    });
+    let claimed;
+    try {
+      claimed = await api.claimSnapshotRequest(job.id, runtime.id);
+    } catch {
+      continue;
+    }
+    if (claimed.status !== "claimed") continue;
+    try {
+      const result = await current.importVisibleHistorySnapshot({
+        api,
+        throughSequence: claimed.throughSequence,
+        automatic: false,
+      });
+      await api.completeSnapshotRequest(job.id, runtime.id, {
+        kind: "visible_history_replace",
+        status: result.status,
+        thread_id: result.threadId ?? null,
+        thread_name: result.threadName ?? managedCodexThreadName(
+          input.visibleSessions.find((session) => session.id === job.sessionId) ?? {
+            id: job.sessionId,
+            mode: "multi",
+          },
+        ),
+        previous_thread_id: result.previousThreadId ?? null,
+        previous_task_retained: result.previousTaskRetained === true,
+        through_sequence: result.throughSequence,
+        compacted: result.compacted ?? false,
+      });
+    } catch (error) {
+      await api.failSnapshotRequest(job.id, runtime.id, {
+        code: "codex_visible_history_import_failed",
+        message: redactText(error instanceof Error ? error.message : "Visible history import failed"),
+      });
+    }
   }
 }
 

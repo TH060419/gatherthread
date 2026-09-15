@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
-const VERSION = "0.1.0-alpha.2";
+const VERSION = "0.1.0-alpha.5";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const output = path.join(root, "release-artifacts", "npm");
 const manifest = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));

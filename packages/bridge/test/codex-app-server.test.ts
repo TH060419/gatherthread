@@ -10,6 +10,7 @@ import {
   CodexAppServerExecutor,
   CodexProjectHarness,
   HarnessExecutionTerminatedError,
+  buildVisibleHistoryImport,
   codexSessionKey,
   discoverCompletedLocalTurns,
   splitUtf8,
@@ -17,6 +18,239 @@ import {
   type CollaborationApi,
   type RegisteredRuntime,
 } from "../src/index.js";
+
+test("visible-history import is deterministic, creates an empty-session marker, and compacts to its budget", () => {
+  const empty = buildVisibleHistoryImport([], 1, 4_096);
+  assert.equal(empty.messages.length, 2);
+  assert.match(empty.messages[0]?.text ?? "", /empty shared session/i);
+  assert.equal(empty.compacted, false);
+
+  const events = Array.from({ length: 80 }, (_, index) => canonical(
+    index + 1,
+    index % 2 === 0 ? "human_chat" : "agent_response",
+    { text: `${index}: ${"history ".repeat(120)}` },
+    "user-2",
+  ));
+  const first = buildVisibleHistoryImport(events, 80, 4_096);
+  const second = buildVisibleHistoryImport(events, 80, 4_096);
+  assert.equal(first.digest, second.digest);
+  assert.equal(first.compacted, true);
+  assert.ok(first.estimatedTokens < Math.floor(4_096 * 0.8));
+  assert.match(first.messages[0]?.text ?? "", /compacted/i);
+  assert.match(first.messages.at(-1)?.text ?? "", /79:/);
+});
+
+test("visible-history import gives a metadata-only new session a local user marker", () => {
+  const imported = buildVisibleHistoryImport([
+    canonical(1, "session_state_change", { action: "created", mode: "multi", title: "New session" }),
+  ], 1, 4_096);
+
+  assert.equal(imported.messages[0]?.role, "user");
+  assert.match(imported.messages[0]?.text ?? "", /local-only marker/i);
+  assert.match(imported.messages[0]?.text ?? "", /never uploaded to GatherThread/i);
+  assert.equal(imported.messages.some((message) => /Session State Change/.test(message.text)), true);
+});
+
+test("visible-history manual import switches to a verified new task and leaves the previous task untouched", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-visible-history-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "state.json");
+  const hookRegistryPath = path.join(directory, "hook-registry.json");
+  const state = projectionState(workspacePath) as Record<string, unknown>;
+  state.visibleHistorySnapshot = {
+    digest: "a".repeat(64), threadId: "old-thread", throughSequence: 2,
+    importedAt: "2026-08-25T12:00:00.000Z", compacted: false,
+  };
+  await writeFile(statePath, JSON.stringify(state));
+  await writeFile(hookRegistryPath, JSON.stringify({
+    version: 1,
+    workspacePath,
+    threads: { "old-thread": "execution" },
+  }), { mode: 0o600 });
+  const calls: string[] = [];
+  const fakeClient = {
+    readThread: async (threadId: string) => {
+      calls.push(`read:${threadId}`);
+      return {
+        id: threadId,
+        name: null,
+        projectId: "project-1",
+        status: "idle",
+        turns: threadId === "candidate-thread" ? [completedTurn("external-import-turn-1", null, "visible", "history")] : [],
+      };
+    },
+    resumeThread: async (input: { threadId: string }) => { calls.push(`resume:${input.threadId}`); },
+    setThreadName: async (threadId: string) => { calls.push(`name:${threadId}`); },
+    findProjectIdForRoot: async () => "project-1",
+    setThreadProject: async () => true,
+    compactThread: async (threadId: string) => { calls.push(`compact:${threadId}`); },
+    deleteThread: async (threadId: string) => { calls.push(`delete:${threadId}`); },
+    archiveThread: async (threadId: string) => { calls.push(`archive:${threadId}`); },
+    unsubscribeThread: async () => undefined,
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  let imported = 0;
+  const executor = new CodexAppServerExecutor({
+    client: fakeClient,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread · visible",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+    hookRegistryPath,
+    visibleHistoryImporter: async () => {
+      imported += 1;
+      calls.push("import:candidate-thread");
+      return { threadId: "candidate-thread" };
+    },
+  });
+  const events = [canonical(1, "human_chat", { text: "hello" }), canonical(2, "agent_response", { text: "world" })];
+  const importedResult = await executor.importVisibleHistorySnapshot(events, 2);
+  assert.equal(importedResult.status, "imported");
+  assert.equal(importedResult.previousThreadId, "old-thread");
+  assert.equal(importedResult.previousTaskRetained, true);
+  assert.match(importedResult.threadName ?? "", /history #2$/);
+  assert.equal(imported, 1);
+  assert.equal(calls.includes("resume:old-thread"), false);
+  assert.equal(calls.includes("delete:old-thread"), false);
+  assert.equal(calls.includes("archive:old-thread"), false);
+  const stored = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(stored.threadId, "candidate-thread");
+  assert.equal(stored.desktopProjectionCursor, 2);
+  assert.deepEqual(stored.connectorTurnIds, ["external-import-turn-1"]);
+  assert.deepEqual(JSON.parse(await readFile(hookRegistryPath, "utf8")).threads, {
+    "candidate-thread": "execution",
+  });
+
+  const unchanged = await executor.importVisibleHistorySnapshot(events, 2, { onlyIfMissing: true });
+  assert.equal(unchanged.status, "unchanged");
+  assert.equal(imported, 1);
+  const firstConnectionOnly = await executor.importVisibleHistorySnapshot([
+    ...events,
+    canonical(3, "human_chat", { text: "newer cloud event" }),
+  ], 3, { onlyIfMissing: true });
+  assert.equal(firstConnectionOnly.status, "unchanged");
+  assert.equal(firstConnectionOnly.throughSequence, 2);
+  assert.equal(imported, 1);
+});
+
+test("manual visible-history import creates a new task without taking the Desktop-held writer", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-visible-history-writer-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "state.json");
+  const hookRegistryPath = path.join(directory, "hook-registry.json");
+  const state = projectionState(workspacePath) as Record<string, unknown>;
+  state.visibleHistorySnapshot = {
+    digest: "a".repeat(64), threadId: "old-thread", throughSequence: 1,
+    importedAt: "2026-08-25T12:00:00.000Z", compacted: false,
+  };
+  await writeFile(statePath, JSON.stringify(state));
+  await writeFile(hookRegistryPath, JSON.stringify({
+    version: 1,
+    workspacePath,
+    threads: { "old-thread": "execution" },
+  }), { mode: 0o600 });
+  let imports = 0;
+  let oldTaskMutations = 0;
+  const fakeClient = {
+    readThread: async (threadId: string) => ({
+      id: threadId,
+      name: null,
+      projectId: "project-1",
+      status: "idle",
+      turns: threadId === "candidate-thread"
+        ? [completedTurn("external-import-turn-1", null, "visible", "history")]
+        : [],
+    }),
+    resumeThread: async () => {
+      oldTaskMutations += 1;
+      throw new Error("thread old-thread already has an active writer");
+    },
+    setThreadName: async () => undefined,
+    findProjectIdForRoot: async () => "project-1",
+    setThreadProject: async () => true,
+    compactThread: async () => undefined,
+    deleteThread: async () => {
+      oldTaskMutations += 1;
+      throw new Error("thread old-thread already has an active writer");
+    },
+    archiveThread: async () => {
+      oldTaskMutations += 1;
+      throw new Error("thread old-thread already has an active writer");
+    },
+    unsubscribeThread: async () => undefined,
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client: fakeClient,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread · visible",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+    hookRegistryPath,
+    visibleHistoryImporter: async () => {
+      imports += 1;
+      return { threadId: "candidate-thread" };
+    },
+  });
+
+  const result = await executor.importVisibleHistorySnapshot([
+    canonical(2, "human_chat", { text: "new cloud event" }),
+  ], 2);
+  assert.equal(result.status, "imported");
+  assert.equal(imports, 1);
+  assert.equal(oldTaskMutations, 0, "manual import must leave the previous task for the user to archive");
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).threadId, "candidate-thread");
+  assert.deepEqual(JSON.parse(await readFile(hookRegistryPath, "utf8")).threads, {
+    "candidate-thread": "execution",
+  });
+});
+
+test("first-connect import drops obsolete replacement cleanup state without touching either task", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-visible-history-cleanup-pending-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "state.json");
+  const events = [canonical(1, "human_chat", { text: "hello" })];
+  const history = buildVisibleHistoryImport(events, 1, 65_536);
+  const state = projectionState(workspacePath) as Record<string, unknown>;
+  state.threadId = "current-thread";
+  state.visibleHistorySnapshot = {
+    digest: history.digest,
+    threadId: "current-thread",
+    throughSequence: 1,
+    importedAt: "2026-08-25T12:00:00.000Z",
+    compacted: false,
+    replacedThreadId: "old-thread",
+  };
+  await writeFile(statePath, JSON.stringify(state));
+  let imports = 0;
+  const fakeClient = { close: async () => undefined } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client: fakeClient,
+    workspacePath,
+    statePath,
+    threadName: "GatherThread · visible",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+    visibleHistoryImporter: async () => {
+      imports += 1;
+      return { threadId: "another-thread" };
+    },
+  });
+
+  const result = await executor.importVisibleHistorySnapshot(events, 1, { onlyIfMissing: true });
+  assert.equal(result.status, "unchanged");
+  assert.equal(result.threadId, "current-thread");
+  assert.equal(imports, 0);
+  assert.equal(
+    JSON.parse(await readFile(statePath, "utf8")).visibleHistorySnapshot.replacedThreadId,
+    undefined,
+  );
+});
 
 test("local turn discovery uses persisted client ids and stable turn ids", () => {
   const state = {
@@ -66,6 +300,70 @@ test("local Codex tool items become canonical local-turn tool pairs", () => {
     arguments: { command: "npm test" },
   });
   assert.equal((discovered[0]?.toolEvents[1]?.payload as { is_error?: boolean }).is_error, false);
+});
+
+test("manual Codex upload discovers a completed Desktop turn even when no Hook draft exists", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-manual-upload-"));
+  const workspacePath = await realpath(directory);
+  const statePath = path.join(directory, "desktop-state.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  const client = {
+    readThread: async (threadId: string) => ({
+      id: threadId,
+      name: "Manual recovery",
+      projectId: null,
+      status: "idle",
+      turns: [completedTurn("missed-hook-turn", "desktop-client-manual", "MANUAL_REQUEST", "MANUAL_RESPONSE")],
+    }),
+    close: async () => undefined,
+  } as unknown as CodexAppServerClient;
+  const executor = new CodexAppServerExecutor({
+    client,
+    workspacePath,
+    statePath,
+    threadName: "Manual recovery",
+    model: "gpt-test",
+    desktopHookOnly: true,
+    gatherThreadSessionId: "session-1",
+  });
+  const runtime = registeredRuntime("manual-recovery");
+  const committed: Array<{ basedOnSequence: number; requestPayload: unknown; responsePayload: unknown }> = [];
+  const api = {
+    readEvents: async () => ({ events: [], nextSequence: 2, hasMore: false }),
+    commitLocalTurn: async (_sessionId: string, input: any) => {
+      committed.push(input);
+      return {
+        localTurnId: input.localTurnId,
+        runtimeId: runtime.id,
+        headBeforeCommit: 2,
+        reconciliationRequired: false,
+        requestEvent: canonical(3, "agent_request", input.requestPayload),
+        responseEvent: canonical(4, "agent_response", input.responsePayload),
+        toolEvents: [],
+      };
+    },
+  } as unknown as CollaborationApi;
+
+  const disabled = await executor.setLocalAutoUpload(false);
+  assert.equal(disabled.automaticUpload, false);
+  assert.equal(disabled.uploadableLocalTurns, 1);
+  await executor.handleHookEvent(api, runtime, {
+    hook_event_name: "UserPromptSubmit", session_id: "old-thread", turn_id: "hook-captured-turn",
+    cwd: workspacePath, model: "gpt-test", prompt: "HOOK_REQUEST",
+  });
+  await executor.handleHookEvent(api, runtime, {
+    hook_event_name: "Stop", session_id: "old-thread", turn_id: "hook-captured-turn",
+    cwd: workspacePath, model: "gpt-test", stop_hook_active: false, last_assistant_message: "HOOK_RESPONSE",
+  });
+  await executor.synchronizeLocalTurns(api, runtime);
+  assert.equal(committed.length, 0, "a trusted Hook must not bypass the disabled automatic-upload preference");
+  const result = await executor.uploadLocalTurns(api, runtime);
+  assert.equal(result.discoveredLocalTurns, 1);
+  assert.equal(result.uploadedLocalTurns, 2, "manual recovery uploads both Hook-captured and Hook-missed turns");
+  assert.equal(result.automaticUpload, false);
+  const manual = committed.find((input) => (input.requestPayload as any)?.text === "MANUAL_REQUEST");
+  assert.equal(manual?.basedOnSequence, 0, "a Hook-missed turn must use a conservative unknown base");
+  assert.deepEqual(manual?.responsePayload, { text: "MANUAL_RESPONSE" });
 });
 
 test("a first local prompt can adopt its Desktop task without opening a competing writer", async (t) => {

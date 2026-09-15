@@ -2,7 +2,7 @@
 
 The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
 
-> Alpha preview: `0.1.0-alpha.2` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
+> Alpha preview: `0.1.0-alpha.5` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
 
 ## Normal three-step setup
 
@@ -17,7 +17,7 @@ npm install --global pnpm@10
 Then add the fixed GatherThread plugin to the DSH Web profile:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.2
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.5
 ```
 
 ### 2. Open DSH
@@ -40,7 +40,7 @@ From a private source checkout:
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.2.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.5.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -51,6 +51,7 @@ Do not add `--offline` unless the complete dependency metadata is already cached
 - One pairing connects every active project visible to that GatherThread identity and discovers later permissions.
 - Writable GatherThread sessions appear as editable native DSH conversations.
 - Canonical cloud history is projected into DSH; completed local turns upload once through a durable outbox.
+- In **Settings → GatherThread / 共序**, every connected conversation has its own **Automatic upload** switch and **Manual upload** action. Turning automation off keeps subsequent local turns private until the user uploads them; manual upload does not change the switch.
 - A new DSH conversation creates a creator-owned cloud Solo only after its first successful human/assistant turn.
 - Empty conversations, failed turns, and viewer conversations remain local-only.
 - Web Agent requests target the exact selected DSH device/provider/model and never silently fall back to Codex.

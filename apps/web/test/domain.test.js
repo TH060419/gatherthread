@@ -32,11 +32,11 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
   });
   assert.equal(
     commands.posix,
-    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.2 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks",
+    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
   );
   assert.equal(
     commands.powershell,
-    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.2 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks",
+    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
   );
   for (const command of Object.values(commands)) {
     assert.match(command, /--url 'https:\/\/gatherthread\.example\/v1'/);
@@ -46,6 +46,21 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
     assert.doesNotMatch(command, /--model|--context-window-tokens|--install-hooks/);
     assert.doesNotMatch(command, /access[-_ ]?token|Bearer|cookie|password/i);
   }
+
+  for (const visibleHistorySync of ["first-connect", "never"]) {
+    const selected = projectCodexConnectionCommands({
+      baseUrl: "https://gatherthread.example",
+      projectId: "project-alpha",
+      visibleHistorySync,
+    });
+    assert.match(selected.posix, new RegExp(`--visible-history-sync ${visibleHistorySync}`));
+    assert.match(selected.powershell, new RegExp(`--visible-history-sync ${visibleHistorySync}`));
+  }
+  assert.throws(() => projectCodexConnectionCommands({
+    baseUrl: "https://gatherthread.example",
+    projectId: "project-alpha",
+    visibleHistorySync: "sometimes",
+  }), /visible history sync mode is not safe/);
   assert.throws(() => projectCodexConnectionCommands({
     baseUrl: "https://user:secret@gatherthread.example",
     projectId: "project-alpha",

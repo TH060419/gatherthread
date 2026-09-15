@@ -20,12 +20,54 @@ export interface ProjectHarnessPreflight {
   workspacePath: string;
 }
 
+export interface LocalConversationSyncStatus {
+  sessionId: string;
+  localSessionId: string;
+  automaticUpload: boolean;
+  pendingLocalTurns: number;
+  uploadableLocalTurns: number;
+}
+
+export interface LocalConversationUploadResult extends LocalConversationSyncStatus {
+  discoveredLocalTurns: number;
+  uploadedLocalTurns: number;
+}
+
+export interface VisibleHistorySnapshotResult {
+  status: "imported" | "unchanged" | "disabled";
+  threadId?: string;
+  threadName?: string;
+  previousThreadId?: string;
+  previousTaskRetained?: boolean;
+  throughSequence: number;
+  compacted?: boolean;
+}
+
+export interface LocalConversationSyncControl {
+  getLocalSyncStatus(sessionId: string): Promise<LocalConversationSyncStatus>;
+  setLocalAutoUpload(sessionId: string, enabled: boolean): Promise<LocalConversationSyncStatus>;
+  uploadLocalTurns(sessionId: string): Promise<LocalConversationUploadResult>;
+  importVisibleHistorySnapshot(sessionId: string): Promise<VisibleHistorySnapshotResult>;
+}
+
 export interface ProjectHarnessSessionBinding {
   executor: HarnessExecutor;
   localSessionId: string;
   adoptLocalConversation?: (localConversationId: string) => Promise<void>;
-  /** Safety-critical local Hook outbox commit; runs before Web Agent execution. */
+  /** Capture/flush local turns before Web execution; the persisted upload preference remains authoritative. */
   synchronizeLocalTurns?: (input: { api: CollaborationApi; runtime: RegisteredRuntime }) => Promise<void>;
+  getLocalSyncStatus?: () => Promise<LocalConversationSyncStatus>;
+  setLocalAutoUpload?: (enabled: boolean) => Promise<LocalConversationSyncStatus>;
+  uploadLocalTurns?: (input: {
+    api: CollaborationApi;
+    runtime: RegisteredRuntime;
+  }) => Promise<LocalConversationUploadResult>;
+  /** Import a verified native history snapshot as a new Desktop-visible task. */
+  importVisibleHistorySnapshot?: (input: {
+    api: CollaborationApi;
+    throughSequence: number;
+    automatic: boolean;
+  }) => Promise<VisibleHistorySnapshotResult>;
   /** Best-effort visible native-history catch-up; runs after Web Agent execution. */
   synchronizeCanonicalHistory?: (input: { api: CollaborationApi; runtime: RegisteredRuntime }) => Promise<void>;
   activateLocalPublishing?: () => Promise<void>;

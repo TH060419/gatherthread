@@ -279,10 +279,10 @@ export class HttpCollaborationApi {
     }));
   }
 
-  async createSnapshotRequest(sessionId) {
+  async createSnapshotRequest(sessionId, kind = "immutable", targetRuntimeId) {
     const result = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/snapshot-requests`, {
       method: "POST",
-      body: JSON.stringify({}),
+      body: JSON.stringify({ kind, ...(targetRuntimeId ? { target_runtime_id: targetRuntimeId } : {}) }),
     });
     return normalizeSnapshotRequest(result);
   }
@@ -536,6 +536,7 @@ export class MockCollaborationApi {
     this.projectMutations = new Map();
     this.invitations = new Map();
     this.snapshotRequests = new Map();
+    this.localAutomaticUpload = new Map();
     this.credential = "";
     this.deviceName = "Safari · macOS";
     this.dshDeviceName = "DeepSeek Harness · macOS";
@@ -891,13 +892,15 @@ export class MockCollaborationApi {
     ];
   }
 
-  async createSnapshotRequest(sessionId) {
+  async createSnapshotRequest(sessionId, kind = "immutable", targetRuntimeId) {
     await this.#wait();
     const session = this.#findSession(sessionId);
     const id = `snapshot-${createIdempotencyKey("mock").split(":").at(-1)}`;
     const request = {
       id,
       sessionId,
+      kind,
+      targetRuntimeId: targetRuntimeId ?? null,
       throughSequence: this.events.get(sessionId)?.at(-1)?.sequence ?? 0,
       status: "queued",
       createdAt: new Date().toISOString(),
@@ -915,8 +918,40 @@ export class MockCollaborationApi {
     const request = this.snapshotRequests.get(requestId);
     if (!request) throw new ApiError("Snapshot request not found.", { status: 404, code: "not_found" });
     request.pollCount += 1;
-    request.status = ["claimed", "importing", "compacting", "completed"][Math.min(request.pollCount - 1, 3)];
-    if (request.status === "completed") request.localTaskName = `GatherThread · ${request.sessionName}`;
+    const localControl = new Set([
+      "local_sync_status",
+      "local_auto_upload_enable",
+      "local_auto_upload_disable",
+      "local_turn_upload",
+    ]).has(request.kind);
+    request.status = localControl
+      ? ["claimed", "completed"][Math.min(request.pollCount - 1, 1)]
+      : ["claimed", "importing", "compacting", "completed"][Math.min(request.pollCount - 1, 3)];
+    if (request.status === "completed" && localControl) {
+      const key = `${request.sessionId}:${request.targetRuntimeId}`;
+      if (request.kind === "local_auto_upload_enable") this.localAutomaticUpload.set(key, true);
+      if (request.kind === "local_auto_upload_disable") this.localAutomaticUpload.set(key, false);
+      const automaticUpload = this.localAutomaticUpload.get(key) ?? true;
+      request.result = {
+        kind: request.kind,
+        session_id: request.sessionId,
+        local_session_id: `mock-codex:${request.sessionId}`,
+        automatic_upload: automaticUpload,
+        pending_local_turns: 0,
+        uploadable_local_turns: 0,
+        ...(request.kind === "local_turn_upload"
+          ? { discovered_local_turns: 0, uploaded_local_turns: 0 }
+          : {}),
+      };
+    } else if (request.status === "completed") {
+      request.localTaskName = `GatherThread · ${request.sessionName} · history #${request.throughSequence}`;
+      if (request.kind === "visible_history_replace") {
+        request.result = {
+          thread_name: request.localTaskName,
+          previous_task_retained: true,
+        };
+      }
+    }
     return structuredClone(request);
   }
 
