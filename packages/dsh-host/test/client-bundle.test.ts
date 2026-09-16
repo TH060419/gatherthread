@@ -92,6 +92,25 @@ test("dsh.client bundle registers the official settings Slot without credential 
   assert.match(loaded.source, /手动上传/u);
 });
 
+test("Client explains that a paired connection is inactive until a DSH model is selected", async () => {
+  const loaded = await loadClient();
+  // Reaching the route-less branch means authorization is already "paired":
+  // "unpaired" and "pairing" are handled by earlier branches. The grant exists
+  // but no runtime is registered yet, so the GatherThread workspace cannot
+  // discover this DSH. The panel must say so instead of reporting a bare
+  // stopped connection, which is indistinguishable from a fresh install.
+  assert.match(
+    loaded.source,
+    /尚未选择 DSH Provider 与 Model/u,
+    "a paired-but-unrouted connection must explain that a model selection is still required",
+  );
+  assert.match(
+    loaded.source,
+    /配对完成后/u,
+    "the notice must state that pairing itself already succeeded",
+  );
+});
+
 test("Client primary actions keep a visible system foreground in light, dark, and Safari themes", async () => {
   const loaded = await loadClient();
   assert.match(

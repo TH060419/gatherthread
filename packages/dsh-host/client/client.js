@@ -302,6 +302,13 @@ function renderNativeControls(input) {
     const models = selectedProvider?.models ?? [];
     controls.push(
       connectionSummary(state),
+      // Reaching this branch means authorization is already "paired": the
+      // "unpaired" and "pairing" states are handled by earlier branches. The
+      // browser approval succeeded, but without a provider and model no runtime
+      // is registered, so a bare stopped connection is indistinguishable from a
+      // fresh install. State the remaining step explicitly.
+      React.createElement("p", { key: "select-model-notice", style: styles.notice },
+        "配对完成后，尚未选择 DSH Provider 与 Model。完成选择并点击下方按钮后，本机 DSH 运行时才会注册到 GatherThread；在此之前，GatherThread 网页无法发现这台 DSH。"),
       input.catalog === undefined
         ? React.createElement("button", {
           key: "load-catalog",
