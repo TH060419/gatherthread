@@ -266,7 +266,15 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         && options.sessionTitle !== undefined && options.workspaceTitle !== undefined) {
         try {
           await sessionTitle.rename(openedHandle.agent.session, options.sessionTitle);
-          ensureNativeSessionListVisibility(openedHandle.agent.session);
+          // No synthetic `turn/start` is written to make this Session listable.
+          // The DSH agent loop numbers turns from an in-memory counter that
+          // starts at zero and is never restored from the Session log
+          // (`const turn = phase.turn + 1;` in dsh-agent-loop), so a turn
+          // written here is invisible to it and the loop's first real turn
+          // reuses the same number. The turn-outline fold then discards that
+          // second turn (`turn <= last.turn` returns the state unchanged) along
+          // with every message inside it. A Session becomes listable through
+          // its first real turn instead.
           await sessions.flush(openedHandle.agent.session);
           const workspace = await workspaceRegistry.create(options.workspacePath, options.workspaceTitle);
           if (workspace === null || typeof workspace !== "object"
@@ -434,21 +442,6 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     },
     dispose,
   };
-}
-
-/**
- * DSH intentionally hides every non-current Session whose list projection has
- * never observed a turn/start. GatherThread can attach an existing canonical
- * Session before its first local DSH prompt, so establish the same balanced,
- * content-free turn that DSH's own Agent loop emits when it has no messages.
- * This makes the Session discoverable without invoking a model or fabricating
- * an assistant response, and is idempotent across reloads.
- */
-function ensureNativeSessionListVisibility(session: DshSessionLike): void {
-  const events = session.snapshotEvents(0);
-  if (events.some((event) => asSessionEvent(event)?.type === "turn/start")) return;
-  session.append("turn/start", { turn: 1 });
-  session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
 }
 
 /** Register a Project workspace even when it has no locally writable Sessions. */

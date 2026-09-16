@@ -410,11 +410,11 @@ test("native workspace integration names and persists a Session before attaching
   });
   assert.equal(await facade.open(), "created");
   assert.deepEqual(f.calls.order, ["rename", "flush", "workspace:create", "workspace:attach"]);
-  assert.deepEqual(f.events.map((event) => event.type), ["turn/start", "turn/end"]);
+  assert.deepEqual(f.events, [], "opening a Session writes no synthetic turn");
   await facade.dispose();
 });
 
-test("native workspace integration does not duplicate its list-visibility turn", async () => {
+test("native workspace integration leaves existing Session turns untouched on resume", async () => {
   const f = fixture(true);
   f.events.push(
     { type: "turn/start", seq: 0, time: 1_700_000_000_000, data: { turn: 1 } },
@@ -431,6 +431,33 @@ test("native workspace integration does not duplicate its list-visibility turn",
   });
   assert.equal(await facade.open(), "resumed");
   assert.deepEqual(f.events.map((event) => event.type), ["turn/start", "turn/end"]);
+  await facade.dispose();
+});
+
+test("Open must not occupy the turn number the DSH agent loop will use for its first turn", async () => {
+  const f = fixture(false);
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  assert.equal(await facade.open(), "created");
+  // The DSH agent loop numbers turns from an in-memory counter that starts at
+  // zero and is never restored from the Session log:
+  //   const turn = phase.turn + 1;  // @deepseek-ai/dsh-agent-loop
+  // A synthetic `turn/start { turn: 1 }` written here is invisible to that
+  // counter, so the loop's first real turn reuses turn 1. The turn-outline
+  // fold then discards the second turn (`turn <= last.turn` returns the state
+  // unchanged) and every message inside it never reaches the conversation.
+  assert.equal(
+    f.events.some((event) => event.type === "turn/start"),
+    false,
+    "opening a Session must not write a synthetic turn that the agent loop will collide with",
+  );
   await facade.dispose();
 });
 
