@@ -161,6 +161,70 @@ textarea:focus-visible,
   border: 0;
 }
 
+.attention-notice {
+  position: fixed;
+  z-index: 100;
+  top: 18px;
+  right: 18px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: min(420px, calc(100vw - 36px));
+  padding: 12px 12px 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--amber) 30%, var(--line));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--paper-raised) 92%, transparent);
+  color: var(--ink);
+  box-shadow: var(--shadow-card-hover);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+}
+
+.attention-notice .status-dot {
+  background: var(--amber);
+}
+
+.attention-notice-dismiss {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+
+.attention-notice-dismiss:hover {
+  background: var(--paper-muted);
+  color: var(--ink);
+}
+
+@media (max-width: 560px) {
+  .attention-notice {
+    top: 10px;
+    right: 10px;
+    width: calc(100vw - 20px);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .attention-notice {
+    background: var(--paper-raised);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+}
+
+@media (forced-colors: active) {
+  .attention-notice {
+    border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+}
+
 .eyebrow {
   margin: 0 0 8px;
   color: var(--teal);

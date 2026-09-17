@@ -22,11 +22,11 @@ test("development configuration uses a loopback-only, same-origin baseline", () 
 
   assert.equal(config.environment, "development");
   assert.equal(config.host, "127.0.0.1");
-  assert.equal(config.port, 8787);
+  assert.equal(config.port, 18787);
   assert.equal(config.databasePath, resolve("/srv/gatherthread", ".local/collaboration.sqlite"));
   assert.equal(config.staticDirectory, resolve("/srv/gatherthread", "apps/web/dist"));
-  assert.equal(config.publicBaseUrl, "http://127.0.0.1:8787");
-  assert.deepEqual(config.allowedOrigins, ["http://127.0.0.1:8787"]);
+  assert.equal(config.publicBaseUrl, "http://127.0.0.1:18787");
+  assert.deepEqual(config.allowedOrigins, ["http://127.0.0.1:18787"]);
   assert.equal(config.allowHttpBootstrap, false);
   assert.equal(config.secureTransport, false);
   assert.equal(config.maxEventBytes, 262_144);

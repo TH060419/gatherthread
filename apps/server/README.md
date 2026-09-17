@@ -7,7 +7,7 @@ The first-release server is a Node 24 ESM service built with TypeScript, Node's 
 ```sh
 npm install --package-lock=false
 npm run build
-GATHERTHREAD_DATABASE_PATH=./data/collaboration.sqlite GATHERTHREAD_SERVER_PORT=8787 npm start
+GATHERTHREAD_DATABASE_PATH=./data/collaboration.sqlite GATHERTHREAD_SERVER_PORT=18787 npm start
 ```
 
 The default bind address is `127.0.0.1`. Configure only the documented `GATHERTHREAD_*` variables; generic `HOST` is intentionally ignored. Keep the application on loopback and expose an approved Caddy or Tailscale HTTPS edge instead.

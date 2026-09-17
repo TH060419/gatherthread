@@ -57,7 +57,7 @@ cd gatherthread
 npm install
 npm run build
 npm run codex:connect -- \
-  --url 'http://127.0.0.1:8787' \
+  --url 'http://127.0.0.1:18787' \
   --project 'PROJECT_ID' \
   --create-workspace \
   --plugin-hooks

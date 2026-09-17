@@ -125,7 +125,7 @@ export function loadServerConfig(
   const environment = environmentResult.data;
   const isProduction = environment === "production";
   const host = parseLoopbackHost(env.GATHERTHREAD_SERVER_HOST);
-  const port = parsePort("GATHERTHREAD_SERVER_PORT", env.GATHERTHREAD_SERVER_PORT, 8787);
+  const port = parsePort("GATHERTHREAD_SERVER_PORT", env.GATHERTHREAD_SERVER_PORT, 18787);
   const databasePath = resolvePath(env.GATHERTHREAD_DATABASE_PATH, ".local/collaboration.sqlite", cwd);
   const staticDirectory = resolvePath(env.GATHERTHREAD_STATIC_DIRECTORY, "apps/web/dist", cwd);
   const configuredPublicBaseUrl = env.GATHERTHREAD_PUBLIC_BASE_URL?.trim();

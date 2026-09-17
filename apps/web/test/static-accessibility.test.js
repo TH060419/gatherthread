@@ -104,6 +104,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     '<span>Connect Codex</span>',
     'id="settings-button"',
     'id="settings-dialog"',
+    'id="attention-notice" class="attention-notice" role="status" aria-live="assertive" aria-atomic="true" hidden',
+    'id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification"',
     'id="settings-locale"',
     'id="settings-ambient-canvas"',
     'id="settings-composer-height"',
@@ -329,6 +331,20 @@ test("pending agent feedback is announced and respects reduced-motion preference
   assert.match(main, /setAttribute\("aria-live", "polite"\)/);
   assert.match(styles, /@keyframes agent-thinking-pulse/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
+});
+
+test("connection interruption notifications are edge-triggered and permission-aware", async () => {
+  const [html, main, styles] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+  ]);
+  assert.match(html, /id="attention-notice" class="attention-notice" role="status" aria-live="assertive"/);
+  assert.match(main, /advanceConnectionNotice\([\s\S]*state\.settings\.notifications\.connectionLost/);
+  assert.match(main, /if \(connectionTransition\.notify\) notifyConnectionLost\(\)/);
+  assert.match(main, /notificationPermissionNeeded\(nextSettings\.notifications\)/);
+  assert.match(main, /Notification\.permission !== "granted"/);
+  assert.match(styles, /\.attention-notice\s*\{[\s\S]*position: fixed/);
 });
 
 test("empty canonical events do not render a visible placeholder message", async () => {

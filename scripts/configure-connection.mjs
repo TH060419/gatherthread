@@ -168,7 +168,7 @@ export async function configureConnectionEnvironment({
 } = {}) {
   if (!MODES.has(mode)) throw new Error("mode must be local, lan, or tailscale");
   const { envPath, contents } = await readEnvironmentSource(cwd);
-  const rawPort = configuredValue(contents, "GATHERTHREAD_SERVER_PORT")?.trim() || "8787";
+  const rawPort = configuredValue(contents, "GATHERTHREAD_SERVER_PORT")?.trim() || "18787";
   if (!/^\d+$/.test(rawPort) || Number(rawPort) < 1 || Number(rawPort) > 65_535) {
     throw new Error("GATHERTHREAD_SERVER_PORT must be an integer from 1 to 65535 before configuring a connection");
   }

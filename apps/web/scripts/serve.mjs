@@ -37,7 +37,7 @@ export function loadWebServerConfig(env = process.env) {
   const port = Number(rawPort);
   if (port < 1 || port > 65_535) throw new Error("GATHERTHREAD_WEB_PORT must be an integer from 1 to 65535");
 
-  const upstream = new URL(env.GATHERTHREAD_WEB_API_ORIGIN?.trim() || "http://127.0.0.1:8787");
+  const upstream = new URL(env.GATHERTHREAD_WEB_API_ORIGIN?.trim() || "http://127.0.0.1:18787");
   if (upstream.protocol !== "http:" || !LOOPBACK_HOSTS.has(upstream.hostname) || upstream.username || upstream.password) {
     throw new Error("GATHERTHREAD_WEB_API_ORIGIN must be an unauthenticated loopback HTTP origin");
   }
