@@ -214,21 +214,26 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
   }, { global: true }));
 
   /**
-   * Adopt one acquired Agent handle, releasing it when this open can no longer
-   * proceed. Every acquisition path must pass through here — including the
-   * post-marker rebuild: a handle assigned after disposal would otherwise never
-   * be released, because the facade only owns whatever `handle` already holds.
+   * Acquire one Agent, publish it into the lifecycle slot, and reject it when
+   * this open can no longer proceed.
+   *
+   * Publication is the statement immediately after the acquire await and runs
+   * before any further yield, so acceptance and publication are one
+   * lifecycle-owned step: a queued `dispose()` can never observe an empty slot
+   * while an accepted Agent is still unpublished, and a rejected Agent is
+   * always released through that same slot.
    */
-  const adoptHandle = async (acquired: DshAgentHandleLike): Promise<DshAgentHandleLike> => {
+  const adoptHandle = async (acquire: () => Promise<DshAgentHandleLike>): Promise<void> => {
+    const acquired = await acquire();
+    handle = acquired;
     if (disposed || lifecycleAbort.signal.aborted) {
-      await acquired.dispose();
+      await releaseHandle();
       throw new Error("DSH host facade was disposed during open");
     }
     if (acquired.agent.session.id !== options.sessionId) {
-      await acquired.dispose();
+      await releaseHandle();
       throw new Error("DSH Host returned an agent for an unexpected Session identity");
     }
-    return acquired;
   };
 
   /**
@@ -265,25 +270,23 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
       // marker flush and workspace setup — and a handle kept only local would
       // survive a disposal that had no way to reach it.
       try {
-        handle = await adoptHandle(
-          liveAgent !== undefined
-            ? { agent: liveAgent, dispose: async () => undefined }
-            : stored
-            ? await agents.resume({
-              resumeSessionId: options.sessionId,
-              agentOptions: { provider: options.provider, model: options.model },
-              signal: lifecycleAbort.signal,
-            })
-            : await agents.create({
-              sessionId: options.sessionId,
-              meta: {
-                cwd: options.workspacePath,
-                ...(options.agentPreset === undefined ? {} : { agentPreset: options.agentPreset }),
-              },
-              agentOptions: { provider: options.provider, model: options.model },
-              signal: lifecycleAbort.signal,
-            }),
-        );
+        await adoptHandle(() => (liveAgent !== undefined
+          ? Promise.resolve({ agent: liveAgent, dispose: async () => undefined })
+          : stored
+          ? agents.resume({
+            resumeSessionId: options.sessionId,
+            agentOptions: { provider: options.provider, model: options.model },
+            signal: lifecycleAbort.signal,
+          })
+          : agents.create({
+            sessionId: options.sessionId,
+            meta: {
+              cwd: options.workspacePath,
+              ...(options.agentPreset === undefined ? {} : { agentPreset: options.agentPreset }),
+            },
+            agentOptions: { provider: options.provider, model: options.model },
+            signal: lifecycleAbort.signal,
+          })));
       } catch (error) {
         throwIfDisposed(disposed, lifecycleAbort.signal, "open");
         throw error;
@@ -308,7 +311,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
             // log the marker was just committed to; the loop then starts after
             // turn 1 and DSH's consecutive-turn invariant holds.
             await releaseHandle();
-            handle = await adoptHandle(await agents.resume({
+            await adoptHandle(() => agents.resume({
               resumeSessionId: options.sessionId,
               agentOptions: { provider: options.provider, model: options.model },
               signal: lifecycleAbort.signal,
@@ -322,6 +325,10 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
           }
           throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           await workspace.attachSession(options.sessionId);
+          // Every awaited workspace mutation rechecks disposal: attaching or
+          // detaching after teardown would mutate a workspace this facade no
+          // longer has a live Agent for.
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           if (options.supersededSessionId !== undefined
             && options.supersededSessionId !== options.sessionId
             && workspace.sessionIds.includes(options.supersededSessionId)) {
@@ -329,6 +336,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
               throw new Error("Pinned DSH Workspace detachSession API is unavailable or incompatible");
             }
             await workspace.detachSession(options.supersededSessionId);
+            throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           }
         } catch (error) {
           // `releaseHandle` clears the slot before releasing, and `adoptHandle`
@@ -338,6 +346,9 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
           throw error;
         }
       }
+      // A disposal anywhere up to here must surface as a rejected open rather
+      // than a facade that reports success after teardown.
+      throwIfDisposed(disposed, lifecycleAbort.signal, "open");
       return mode;
     })();
     return openPromise;
