@@ -770,8 +770,10 @@ async function main() {
     const credentialText = await readFile(credentialPath, "utf8");
     // Windows synthesises a fixed 0o666 for every file, so the mode is only
     // meaningful where the filesystem stores one. Content and containment are
-    // asserted on every platform.
-    if (process.platform !== "win32") {
+    // asserted on every platform, and the reported result says which of the two
+    // this run actually checked.
+    const credentialModeVerified = process.platform !== "win32";
+    if (credentialModeVerified) {
       assert.equal((await lstat(credentialPath)).mode & 0o777, 0o600);
     }
     assert.match(credentialText, /gatherthread-dsh-host\/default/u);
@@ -823,7 +825,12 @@ async function main() {
       lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "writable-native-session", "native-cloud-adoption", "web-request", "progress", "final", "reload", "disconnect", "remove"],
       realDshHome: false,
       networkDownloads: false,
-      credentialStore: { official: true, mode: "0600", clearedBeforeRemove: true },
+      credentialStore: {
+        official: true,
+        mode: credentialModeVerified ? "0600" : null,
+        modeVerified: credentialModeVerified,
+        clearedBeforeRemove: true,
+      },
     })}\n`);
   } finally {
     await browser?.close().catch(() => undefined);
