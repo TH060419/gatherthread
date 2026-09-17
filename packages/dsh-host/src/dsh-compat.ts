@@ -231,6 +231,17 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     return acquired;
   };
 
+  /**
+   * Release the Agent this facade currently owns. The slot is cleared
+   * synchronously before the release awaits, so a concurrent `dispose()` or a
+   * failing `open()` can never release the same handle twice.
+   */
+  const releaseHandle = async (): Promise<void> => {
+    const owned = handle;
+    handle = undefined;
+    await owned?.dispose();
+  };
+
   const open = (): Promise<"created" | "resumed"> => {
     if (disposed) return Promise.reject(new Error("DSH host facade is disposed"));
     if (openPromise !== undefined) return openPromise;
@@ -249,9 +260,12 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         : true;
       throwIfDisposed(disposed, lifecycleAbort.signal, "open");
       const mode = stored ? "resumed" : "created";
-      let openedHandle: DshAgentHandleLike | undefined;
+      // Publish each accepted Agent into `handle` as soon as it is adopted, so
+      // `dispose()` can always release it. Everything after this point awaits —
+      // marker flush and workspace setup — and a handle kept only local would
+      // survive a disposal that had no way to reach it.
       try {
-        openedHandle = await adoptHandle(
+        handle = await adoptHandle(
           liveAgent !== undefined
             ? { agent: liveAgent, dispose: async () => undefined }
             : stored
@@ -277,34 +291,36 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
       if (sessionTitle !== undefined && workspaceRegistry !== undefined
         && options.sessionTitle !== undefined && options.workspaceTitle !== undefined) {
         try {
-          await sessionTitle.rename(openedHandle.agent.session, options.sessionTitle);
+          const session = requireAgent(handle).session;
+          await sessionTitle.rename(session, options.sessionTitle);
           // Only mark a Session whose Agent this open owns. A marker is safe only
           // when the Agent is rebuilt afterwards, and the facade may neither
           // dispose nor resume an Agent the DSH UI owns; a borrowed live Agent
           // captured its starting turn before any marker, so marking its Session
           // would put that loop back on turn 1.
           const markerWritten = liveAgent === undefined
-            && ensureNativeSessionListVisibility(openedHandle.agent.session);
-          await sessions.flush(openedHandle.agent.session);
+            && ensureNativeSessionListVisibility(session);
+          await sessions.flush(session);
           if (markerWritten) {
             // The Agent captured its starting turn from the turnBoundary
             // projection before the marker existed, so its loop would number the
             // first real turn 1 and collide with the marker. Rebuild it from the
             // log the marker was just committed to; the loop then starts after
             // turn 1 and DSH's consecutive-turn invariant holds.
-            await openedHandle.dispose();
-            openedHandle = undefined;
-            openedHandle = await adoptHandle(await agents.resume({
+            await releaseHandle();
+            handle = await adoptHandle(await agents.resume({
               resumeSessionId: options.sessionId,
               agentOptions: { provider: options.provider, model: options.model },
               signal: lifecycleAbort.signal,
             }));
           }
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           const workspace = await workspaceRegistry.create(options.workspacePath, options.workspaceTitle);
           if (workspace === null || typeof workspace !== "object"
             || typeof workspace.attachSession !== "function") {
             throw new Error("Pinned DSH workspace registry returned an incompatible Workspace");
           }
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           await workspace.attachSession(options.sessionId);
           if (options.supersededSessionId !== undefined
             && options.supersededSessionId !== options.sessionId
@@ -315,17 +331,13 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
             await workspace.detachSession(options.supersededSessionId);
           }
         } catch (error) {
-          // `openedHandle` is cleared before a rebuild, and `adoptHandle`
+          // `releaseHandle` clears the slot before releasing, and `adoptHandle`
           // releases a replacement it refuses, so this never double-releases.
-          await openedHandle?.dispose();
+          await releaseHandle();
           throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           throw error;
         }
       }
-      if (openedHandle === undefined) {
-        throw new Error("DSH host facade open completed without an Agent handle");
-      }
-      handle = openedHandle;
       return mode;
     })();
     return openPromise;
@@ -434,18 +446,16 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
   };
 
   const dispose = (): Promise<void> => {
-    disposePromise ??= (async () => {
-      disposed = true;
-      lifecycleAbort.abort(new Error("DSH host facade disposed"));
-      eventSubscribers.clear();
-      statusSubscribers.clear();
-      for (const stop of listenerDisposers.splice(0)) stop();
-      try {
-        await handle?.dispose();
-      } finally {
-        handle = undefined;
-      }
-    })();
+    if (disposePromise !== undefined) return disposePromise;
+    disposed = true;
+    lifecycleAbort.abort(new Error("DSH host facade disposed"));
+    eventSubscribers.clear();
+    statusSubscribers.clear();
+    for (const stop of listenerDisposers.splice(0)) stop();
+    // Take ownership the moment disposal starts. `open()` may still be awaiting
+    // workspace setup, so whatever it has already accepted must be reachable
+    // through this slot by the time `disposed` is observable.
+    disposePromise = releaseHandle();
     return disposePromise;
   };
 

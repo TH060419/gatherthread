@@ -23,6 +23,8 @@ function fixture(
     persistenceReadApi?: "inspect" | "readFrom" | "handle";
     /** Gates only the post-marker rebuild, so a test can dispose mid-rebuild. */
     rebuildGate?: Promise<void>;
+    /** Gates workspace creation, so a test can dispose during workspace setup. */
+    workspaceGate?: Promise<void>;
   } = {},
 ) {
   const listeners = new Map<string, Set<Listener>>();
@@ -266,6 +268,7 @@ function fixture(
         assert.equal(workspacePath, "/readonly/workspace");
         assert.equal(title, "Project One");
         calls.order.push("workspace:create");
+        if (fixtureOptions.workspaceGate !== undefined) await fixtureOptions.workspaceGate;
         return {
           path: workspacePath,
           sessionIds: fixtureOptions.workspaceSnapshots ? [...workspaceSessionIds] : workspaceSessionIds,
@@ -549,6 +552,47 @@ test("Open releases a rebuilt Agent when the facade is disposed during the rebui
     f.calls.dispose,
     2,
     "the original Agent and the replacement acquired after disposal are both released",
+  );
+});
+
+test("Open releases the accepted Agent when the facade is disposed during workspace setup", async () => {
+  // The Agent is accepted as soon as adoptHandle resolves, but the marker flush
+  // and workspace setup await afterwards. Disposal during those awaits must
+  // still release it, and must stop the remaining workspace mutation.
+  const workspaceGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", workspaceGate: workspaceGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const settled = facade.open().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await f.openStarted;
+  await bounded((async () => {
+    while (!f.calls.order.includes("workspace:create")) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  })(), 2_000);
+  await facade.dispose();
+  workspaceGate.resolve();
+  const outcome = await settled;
+  assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
+  assert.equal(
+    f.calls.dispose,
+    2,
+    "the pre-marker Agent (rebuilt) and the accepted Agent are both released",
+  );
+  assert.equal(
+    f.calls.order.includes("workspace:attach"),
+    false,
+    "workspace mutation must stop once the facade is disposed",
   );
 });
 
