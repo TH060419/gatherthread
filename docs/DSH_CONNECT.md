@@ -32,6 +32,10 @@ Keep DSH running. Open **Settings → GatherThread / 共序**.
 
 Paste the GatherThread server address, choose **Sign in and pair**, and compare the short code. Approve the same code in the GatherThread browser that is already signed in. The code is single-use and expires shortly.
 
+### 4. Select a DSH provider and model
+
+Approving the short code completes pairing, but pairing alone registers nothing. Back in **Settings → GatherThread / 共序**, choose a provider and a model, then confirm to connect every project this identity can access. No GatherThread runtime exists for this device until that step, so the GatherThread Web workspace cannot find this DSH yet, and the panel still reports a stopped connection. Only an explicitly selected provider and model is ever used; nothing falls back to Codex.
+
 ## Private-repository test before npm publication
 
 From a private source checkout:
