@@ -38,12 +38,14 @@ test("Hook discovery admits only unknown project tasks and excludes connector-ow
     add: {
       "background-task": "background_execution",
       "snapshot-task": "snapshot_connector",
+      "retired-task": "local_only",
     },
   });
   assert.equal(await isAllowedCodexHookEvent(registryPath, event), true);
   assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, cwd: "/workspace/subdirectory" }), true);
   assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, session_id: "background-task" }), false);
   assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, session_id: "snapshot-task" }), false);
+  assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, session_id: "retired-task" }), false);
   assert.equal(await isAllowedCodexHookEvent(registryPath, { ...event, cwd: "/other" }), false);
   await updateCodexHookRegistry({ registryPath, workspacePath: "/workspace", discoverUnregistered: false });
   assert.equal(await isAllowedCodexHookEvent(registryPath, event), false);
@@ -669,16 +671,19 @@ test("Codex hook spool reclaims a lock only after its owner process is dead", as
   assert.deepEqual((await readCodexHookSpool(spoolPath)).map((event) => event.hook_event_name === "UserPromptSubmit" ? event.prompt : ""), ["recovered"]);
 });
 
-test("unmanaged and snapshot Codex tasks are neither relayed nor spooled", async () => {
+test("unmanaged, snapshot, and local-only Codex tasks are neither relayed nor spooled", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-hook-private-"));
   const registryPath = path.join(directory, "registry.json");
   const spoolPath = path.join(directory, "offline.jsonl");
   await updateCodexHookRegistry({
     registryPath,
     workspacePath: "/workspace",
-    add: { "snapshot-thread": "snapshot_connector" },
+    add: {
+      "snapshot-thread": "snapshot_connector",
+      "retired-thread": "local_only",
+    },
   });
-  for (const sessionId of ["unrelated-thread", "snapshot-thread"]) {
+  for (const sessionId of ["unrelated-thread", "snapshot-thread", "retired-thread"]) {
     const input = new PassThrough();
     const output = new PassThrough();
     let rendered = "";

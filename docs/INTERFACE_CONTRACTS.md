@@ -105,7 +105,7 @@ An `agent_request` names an exact harness/model profile and eligible runtime. Th
 Snapshot requests are requester-private control-plane records with frozen `through_sequence` values and bounded result metadata.
 
 - `snapshot_connector` jobs create immutable read-only local snapshots and cannot claim Agent requests or publish local turns.
-- Each manual Codex history import creates and verifies a new writable local task. The `visible_history_replace` operation retains its Alpha wire name for compatibility, switches the binding and Hook allowlist after verification, and leaves the previous task untouched for the user to archive.
+- Each manual Codex history import creates and verifies a new writable local task. The `visible_history_replace` operation retains its Alpha wire name for compatibility, switches the binding and Hook allowlist after verification, and leaves the previous task untouched for the user to archive. The private registry marks that previous task `local_only`, so its later prompts cannot enter first-prompt discovery or create cloud state.
 - Empty-session visibility markers and compact summaries are local-only. Realtime context injection remains independent from snapshot/import policy.
 - New snapshot kinds or changed claim authority require protocol, ACL, quota, bridge, integration, and security tests.
 

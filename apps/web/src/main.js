@@ -41,6 +41,7 @@ import {
   withoutDshPairingHash,
 } from "./dsh.js?v=20260906-3";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
+import { captureTimelineScroll, settleTimelineScroll } from "./timeline-scroll.js?v=20260917-1";
 import {
   contextBudgetInputBytes,
   digitsOnly,
@@ -238,7 +239,7 @@ sync.subscribe((snapshot) => {
   applySessionMetadataEvents(snapshot.events.slice(previousCount));
   state.sync = snapshot;
   renderSyncState();
-  renderTimeline();
+  renderTimeline({ followNewEvents: snapshot.events.length > previousCount });
   renderComposerPermissions();
   renderSessionDeliveryControls();
   if (snapshot.phase === "live" && snapshot.events.length > previousCount && previousCount > 0) {
@@ -1389,8 +1390,11 @@ function renderSyncState() {
     : title;
 }
 
-function renderTimeline() {
-  const wasNearBottom = timelineRegion.scrollHeight - timelineRegion.scrollTop - timelineRegion.clientHeight < 180;
+function renderTimeline({ followNewEvents = false } = {}) {
+  const scrollSnapshot = captureTimelineScroll(timelineRegion, {
+    automatic: state.settings.composer.autoScroll,
+    followNewEvents,
+  });
   timeline.replaceChildren();
   const events = state.sync.events.filter(isTimelineEventVisible);
   const progressByRequest = new Map();
@@ -1470,9 +1474,10 @@ function renderTimeline() {
     timeline.append(item);
   }
 
-  if (state.settings.composer.autoScroll && events.length && wasNearBottom) {
-    requestAnimationFrame(() => timelineRegion.scrollTo({ top: timelineRegion.scrollHeight, behavior: "smooth" }));
-  }
+  settleTimelineScroll(timelineRegion, {
+    ...scrollSnapshot,
+    follow: scrollSnapshot.follow && events.length > 0,
+  });
 }
 
 function renderProgressDisclosure(progressEvents, live) {

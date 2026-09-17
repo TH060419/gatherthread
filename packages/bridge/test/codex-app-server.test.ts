@@ -117,9 +117,11 @@ test("visible-history manual import switches to a verified new task and leaves t
   assert.equal(calls.includes("archive:old-thread"), false);
   const stored = JSON.parse(await readFile(statePath, "utf8"));
   assert.equal(stored.threadId, "candidate-thread");
+  assert.deepEqual(stored.localOnlyThreadIds, ["old-thread"]);
   assert.equal(stored.desktopProjectionCursor, 2);
   assert.deepEqual(stored.connectorTurnIds, ["external-import-turn-1"]);
   assert.deepEqual(JSON.parse(await readFile(hookRegistryPath, "utf8")).threads, {
+    "old-thread": "local_only",
     "candidate-thread": "execution",
   });
 
@@ -191,6 +193,7 @@ test("manual visible-history import creates a new task without taking the Deskto
     desktopHookOnly: true,
     gatherThreadSessionId: "session-1",
     hookRegistryPath,
+    localPublishingInitiallyActive: false,
     visibleHistoryImporter: async () => {
       imports += 1;
       return { threadId: "candidate-thread" };
@@ -205,6 +208,13 @@ test("manual visible-history import creates a new task without taking the Deskto
   assert.equal(oldTaskMutations, 0, "manual import must leave the previous task for the user to archive");
   assert.equal(JSON.parse(await readFile(statePath, "utf8")).threadId, "candidate-thread");
   assert.deepEqual(JSON.parse(await readFile(hookRegistryPath, "utf8")).threads, {
+    "old-thread": "local_only",
+    "candidate-thread": "local_only",
+  });
+  await writeFile(hookRegistryPath, JSON.stringify({ version: 1, workspacePath, threads: {} }), { mode: 0o600 });
+  await executor.activateLocalPublishing();
+  assert.deepEqual(JSON.parse(await readFile(hookRegistryPath, "utf8")).threads, {
+    "old-thread": "local_only",
     "candidate-thread": "execution",
   });
 });
@@ -213,6 +223,7 @@ test("first-connect import drops obsolete replacement cleanup state without touc
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-visible-history-cleanup-pending-"));
   const workspacePath = await realpath(directory);
   const statePath = path.join(directory, "state.json");
+  const hookRegistryPath = path.join(directory, "hook-registry.json");
   const events = [canonical(1, "human_chat", { text: "hello" })];
   const history = buildVisibleHistoryImport(events, 1, 65_536);
   const state = projectionState(workspacePath) as Record<string, unknown>;
@@ -236,6 +247,7 @@ test("first-connect import drops obsolete replacement cleanup state without touc
     model: "gpt-test",
     desktopHookOnly: true,
     gatherThreadSessionId: "session-1",
+    hookRegistryPath,
     visibleHistoryImporter: async () => {
       imports += 1;
       return { threadId: "another-thread" };
@@ -246,10 +258,12 @@ test("first-connect import drops obsolete replacement cleanup state without touc
   assert.equal(result.status, "unchanged");
   assert.equal(result.threadId, "current-thread");
   assert.equal(imports, 0);
-  assert.equal(
-    JSON.parse(await readFile(statePath, "utf8")).visibleHistorySnapshot.replacedThreadId,
-    undefined,
-  );
+  const stored = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(stored.visibleHistorySnapshot.replacedThreadId, undefined);
+  assert.deepEqual(stored.localOnlyThreadIds, ["old-thread"]);
+  assert.deepEqual(JSON.parse(await readFile(hookRegistryPath, "utf8")).threads, {
+    "old-thread": "local_only",
+  });
 });
 
 test("local turn discovery uses persisted client ids and stable turn ids", () => {
@@ -1657,10 +1671,11 @@ test("legacy post-switch migration keeps both threads while retiring the inactiv
   assert.equal(calls.filter((call) => call.method === "thread/start").length, 0);
   assert.equal(calls.filter((call) => call.method === "thread/archive").length, 0);
   const registry = JSON.parse(await readFile(registryPath, "utf8"));
-  assert.equal(registry.threads["pre-reveal-thread"], undefined);
+  assert.equal(registry.threads["pre-reveal-thread"], "local_only");
   assert.equal(registry.threads["post-reveal-thread"], "execution");
   const state = JSON.parse(await readFile(statePath, "utf8"));
   assert.equal(state.threadId, "post-reveal-thread");
+  assert.deepEqual(state.localOnlyThreadIds, ["pre-reveal-thread"]);
   assert.equal(state.desktopProjectMigration, undefined);
 });
 
@@ -1712,9 +1727,10 @@ test("legacy pre-switch migration keeps the original binding and does not restar
   assert.equal(calls.filter((call) => call.method === "thread/archive").length, 0);
   const registry = JSON.parse(await readFile(registryPath, "utf8"));
   assert.equal(registry.threads["original-thread"], "execution");
-  assert.equal(registry.threads["unused-candidate-thread"], undefined);
+  assert.equal(registry.threads["unused-candidate-thread"], "local_only");
   const state = JSON.parse(await readFile(statePath, "utf8"));
   assert.equal(state.threadId, "original-thread");
+  assert.deepEqual(state.localOnlyThreadIds, ["unused-candidate-thread"]);
   assert.equal(state.desktopProjectMigration, undefined);
 });
 
@@ -2049,7 +2065,10 @@ test("permission downgrade revokes hooks and makes uncommitted local turns perma
   assert.deepEqual(state.pendingLocalTurns, []);
   assert.deepEqual(state.hookDrafts, {});
   assert.deepEqual(Object.keys(state.localTurnBindings), ["codex:acked"]);
-  assert.deepEqual(registry.threads, { "snapshot-thread": "snapshot_connector" });
+  assert.deepEqual(registry.threads, {
+    "old-thread": "local_only",
+    "snapshot-thread": "snapshot_connector",
+  });
 
   await executor.activateLocalPublishing();
   registry = JSON.parse(await readFile(registryPath, "utf8"));
@@ -2106,7 +2125,7 @@ test("managed session rename updates the native Codex thread and durable state",
   assert.equal(JSON.parse(await readFile(statePath, "utf8")).threadName, "GatherThread · Project · Renamed");
 });
 
-test("suspended project binding materializes without entering the hook allowlist until explicit activation", async () => {
+test("suspended project binding stays known-local without entering the hook allowlist until explicit activation", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-suspended-binding-"));
   const workspacePath = await realpath(directory);
   const statePath = path.join(directory, "binding-session.json");
@@ -2131,10 +2150,11 @@ test("suspended project binding materializes without entering the hook allowlist
     hookRegistryPath: registryPath,
     localPublishingInitiallyActive: false,
   });
+  await executor.deactivateLocalPublishing("initializing");
   await executor.projectCanonicalEvents([
     canonical(3, "human_chat", { text: "materialize before activation" }),
   ], registeredRuntime("old-thread"));
-  assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, {});
+  assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, { "old-thread": "local_only" });
   await executor.activateLocalPublishing();
   assert.deepEqual(JSON.parse(await readFile(registryPath, "utf8")).threads, { "old-thread": "execution" });
 });

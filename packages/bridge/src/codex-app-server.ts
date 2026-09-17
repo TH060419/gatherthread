@@ -120,6 +120,8 @@ interface CodexAppServerState {
   rebuild?: RebuildProjection;
   desktopProjectMigration?: DesktopProjectMigration;
   visibleHistorySnapshot?: VisibleHistorySnapshotState;
+  /** Native tasks retired by visible-history replacement; never rediscover them as new cloud Solos. */
+  localOnlyThreadIds?: string[];
 }
 
 interface VisibleHistorySnapshotState {
@@ -1306,14 +1308,15 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   async #retireUnsupportedDesktopProjectMigration(state: CodexAppServerState): Promise<CodexAppServerState> {
     const migration = state.desktopProjectMigration;
     if (!migration) return state;
+    const inactiveThreadIds = [migration.oldThreadId, migration.candidateThreadId]
+      .filter((threadId) => threadId !== state.threadId);
+    state.localOnlyThreadIds = mergeLocalOnlyThreadIds(state.localOnlyThreadIds, inactiveThreadIds, state.threadId);
     if (this.#hookRegistryPath) {
-      const inactiveThreadIds = [migration.oldThreadId, migration.candidateThreadId]
-        .filter((threadId) => threadId !== state.threadId);
       if (inactiveThreadIds.length > 0) {
         await updateCodexHookRegistry({
           registryPath: this.#hookRegistryPath,
           workspacePath: state.workspacePath,
-          remove: inactiveThreadIds,
+          add: Object.fromEntries(inactiveThreadIds.map((threadId) => [threadId, "local_only" as const])),
         });
       }
     }
@@ -1413,6 +1416,19 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         // Older alpha builds tried to delete or archive the previous task.
         // Current imports intentionally leave it visible for the user to
         // review and archive, so the stale cleanup marker has no work left.
+        const replacedThreadId = previous.visibleHistorySnapshot.replacedThreadId;
+        previous.localOnlyThreadIds = mergeLocalOnlyThreadIds(
+          previous.localOnlyThreadIds,
+          [replacedThreadId],
+          previous.threadId,
+        );
+        if (this.#hookRegistryPath && replacedThreadId !== previous.threadId) {
+          await updateCodexHookRegistry({
+            registryPath: this.#hookRegistryPath,
+            workspacePath,
+            add: { [replacedThreadId]: "local_only" },
+          });
+        }
         delete previous.visibleHistorySnapshot.replacedThreadId;
         await this.#saveState(previous, false);
       }
@@ -1487,6 +1503,11 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           importedAt: new Date().toISOString(),
           compacted,
         };
+        next.localOnlyThreadIds = mergeLocalOnlyThreadIds(
+          previous?.localOnlyThreadIds,
+          previousThreadId && previousThreadId !== candidateThreadId ? [previousThreadId] : [],
+          candidateThreadId,
+        );
         delete next.desktopProjectionJournal;
         delete next.projectionJournal;
         delete next.rebuild;
@@ -1496,12 +1517,12 @@ export class CodexAppServerExecutor implements HarnessExecutor {
             await updateCodexHookRegistry({
               registryPath: this.#hookRegistryPath,
               workspacePath,
-              ...(previousThreadId && previousThreadId !== candidateThreadId
-                ? { remove: [previousThreadId] }
-                : {}),
-              ...(this.#localPublishingActive
-                ? { add: { [candidateThreadId]: this.#hookThreadPurpose } }
-                : {}),
+              add: {
+                ...localOnlyHookEntries(next),
+                [candidateThreadId]: this.#localPublishingActive
+                  ? this.#hookThreadPurpose
+                  : "local_only",
+              },
             });
           }
         } catch (registryError) {
@@ -1568,7 +1589,10 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       await updateCodexHookRegistry({
         registryPath: this.#hookRegistryPath,
         workspacePath,
-        add: { [state.threadId]: "execution" },
+        add: {
+          ...localOnlyHookEntries(state),
+          [state.threadId]: "execution",
+        },
       });
       this.#localPublishingActive = true;
       revealThreadId = state.threadId;
@@ -1590,7 +1614,10 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         await updateCodexHookRegistry({
           registryPath: this.#hookRegistryPath,
           workspacePath,
-          remove: [state.threadId],
+          add: {
+            ...localOnlyHookEntries(state),
+            [state.threadId]: "local_only",
+          },
         });
       }
     });
@@ -2300,7 +2327,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       projectionGeneration: 1, compactionGeneration: 0,
       coveredThroughSequence: 0, lastInjectedSequence: 0, sidecar: [],
       connectorClientMessageIds: [], connectorTurnIds: [], localTurnBindings: {}, pendingLocalTurns: [], automaticUpload: true,
-      hookDrafts: {}, executionJournal: {},
+      hookDrafts: {}, executionJournal: {}, localOnlyThreadIds: [],
     };
   }
 
@@ -2664,6 +2691,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         ...(parsed.hookDrafts === undefined ? { hookDrafts: {} } : {}),
         ...(parsed.executionJournal === undefined ? { executionJournal: {} } : {}),
         ...(parsed.automaticUpload === undefined ? { automaticUpload: true } : {}),
+        ...(parsed.localOnlyThreadIds === undefined ? { localOnlyThreadIds: [] } : {}),
         ...(parsed.contextUsageSource === undefined ? { contextUsageSource: "fallback_estimate" } : {}),
         ...(parsed.desktopDeliveryCursor === undefined
           ? { desktopDeliveryCursor: this.#desktopHookOnly ? 0 : parsed.cloudCursor }
@@ -3169,6 +3197,27 @@ function clearUncommittedLocalPublishingState(state: CodexAppServerState): void 
   );
 }
 
+function mergeLocalOnlyThreadIds(
+  existing: readonly string[] | undefined,
+  additions: readonly string[],
+  activeThreadId: string,
+): string[] {
+  const merged = new Set(existing ?? []);
+  for (const threadId of additions) {
+    if (threadId !== activeThreadId) merged.add(threadId);
+  }
+  merged.delete(activeThreadId);
+  return [...merged];
+}
+
+function localOnlyHookEntries(state: CodexAppServerState): Record<string, "local_only"> {
+  return Object.fromEntries(
+    (state.localOnlyThreadIds ?? [])
+      .filter((threadId) => threadId !== state.threadId)
+      .map((threadId) => [threadId, "local_only" as const]),
+  );
+}
+
 function validateObservedCodexModel(model: string): void {
   if (!model.trim() || model.length > 160 || model.startsWith("-") || /[\u0000-\u001f\u007f-\u009f]/u.test(model)) {
     throw new Error("Codex hook model must be a valid bounded model identifier");
@@ -3186,8 +3235,8 @@ async function scrubCodexExecutionStates(
   workspacePath: string,
   retainSessionIds: ReadonlySet<string>,
   preserveSessionIds: ReadonlySet<string>,
-): Promise<Record<string, "execution">> {
-  const retainedThreads: Record<string, "execution"> = {};
+): Promise<Record<string, "execution" | "local_only">> {
+  const retainedThreads: Record<string, "execution" | "local_only"> = {};
   const entries = await readdir(stateRoot, { withFileTypes: true }).catch((error: unknown) => {
     if (isNodeError(error) && error.code === "ENOENT") return [];
     throw error;
@@ -3202,6 +3251,7 @@ async function scrubCodexExecutionStates(
         parsed = { ...parsed, desktopProjectionCursor: 0 };
       }
       if (!isCodexAppServerState(parsed) || parsed.workspacePath !== workspacePath) continue;
+      Object.assign(retainedThreads, localOnlyHookEntries(parsed));
       if (retainSessionIds.has(parsed.gatherThreadSessionId)) {
         retainedThreads[parsed.threadId] = "execution";
         continue;
@@ -3258,6 +3308,11 @@ function isCodexAppServerState(value: unknown): value is CodexAppServerState {
     && typeof value.automaticUpload === "boolean"
     && isHookDrafts(value.hookDrafts)
     && isExecutionJournal(value.executionJournal)
+    && (value.localOnlyThreadIds === undefined || (Array.isArray(value.localOnlyThreadIds)
+      && value.localOnlyThreadIds.length <= 4_096
+      && new Set(value.localOnlyThreadIds).size === value.localOnlyThreadIds.length
+      && value.localOnlyThreadIds.every((threadId) => typeof threadId === "string"
+        && threadId.length > 0 && threadId.length <= 512)))
     && (value.projectionJournal === undefined || isProjectionJournal(value.projectionJournal))
     && (value.desktopProjectionJournal === undefined || isProjectionJournal(value.desktopProjectionJournal))
     && (value.desktopProjectMigration === undefined || isDesktopProjectMigration(value.desktopProjectMigration))
