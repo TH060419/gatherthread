@@ -82,21 +82,36 @@ function runProcess(command, args, options) {
  *
  * `spawn("npm", ...)` fails with ENOENT on Windows, where npm is only reachable
  * as `npm.cmd`, and Node no longer resolves `.cmd`/`.bat` shims for a
- * `shell: false` spawn. Prefer the CLI path npm exports to its own lifecycle
- * scripts, then ComSpec, then plain `npm` elsewhere — the same resolution the
- * owner-host scripts already use.
+ * `shell: false` spawn. Resolution order, all argument-preserving except the
+ * last: the CLI path npm exports to its own lifecycle scripts, the CLI entry
+ * shipped beside the running Node, then a ComSpec shim.
  */
-function runNpm(args, options = { cwd: ROOT, env: process.env }) {
+async function runNpm(args, options = { cwd: ROOT, env: process.env }) {
   const npmCli = process.env.npm_execpath?.trim();
   if (npmCli) return runProcess(process.execPath, [npmCli, ...args], options);
   if (process.platform === "win32") {
-    return runProcess(
+    // Prefer the CLI entry the Windows Node installer ships beside the running
+    // binary. Launching it through `process.execPath` keeps every argument
+    // intact, where a `cmd /c` string would be re-parsed by the shell.
+    const bundled = path.join(
+      path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js",
+    );
+    try {
+      await access(bundled);
+      return await runProcess(process.execPath, [bundled, ...args], options);
+    } catch {
+      // Fall through to the shell shim.
+    }
+    // Last resort. cmd.exe re-parses this string, so an argument carrying spaces
+    // or metacharacters can be reinterpreted; a normal npm lifecycle run sets
+    // `npm_execpath`, and a standard Windows install takes the branch above.
+    return await runProcess(
       process.env.ComSpec ?? "cmd.exe",
       ["/d", "/s", "/c", `npm ${args.join(" ")}`],
       options,
     );
   }
-  return runProcess("npm", args, options);
+  return await runProcess("npm", args, options);
 }
 
 async function npmCacheRoot() {
