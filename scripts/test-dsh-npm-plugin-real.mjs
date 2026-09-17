@@ -82,9 +82,10 @@ function runProcess(command, args, options) {
  *
  * `spawn("npm", ...)` fails with ENOENT on Windows, where npm is only reachable
  * as `npm.cmd`, and Node no longer resolves `.cmd`/`.bat` shims for a
- * `shell: false` spawn. Resolution order, all argument-preserving except the
- * last: the CLI path npm exports to its own lifecycle scripts, the CLI entry
- * shipped beside the running Node, then a ComSpec shim.
+ * `shell: false` spawn. Resolve an argument-preserving CLI entry instead: the
+ * path npm exports to its own lifecycle scripts, then the one shipped beside the
+ * running Node. If neither exists the gate refuses rather than falling back to a
+ * shell that would reparse the arguments.
  */
 async function runNpm(args, options = { cwd: ROOT, env: process.env }) {
   const npmCli = process.env.npm_execpath?.trim();
@@ -102,13 +103,14 @@ async function runNpm(args, options = { cwd: ROOT, env: process.env }) {
     } catch {
       // Fall through to the shell shim.
     }
-    // Last resort. cmd.exe re-parses this string, so an argument carrying spaces
-    // or metacharacters can be reinterpreted; a normal npm lifecycle run sets
-    // `npm_execpath`, and a standard Windows install takes the branch above.
-    return await runProcess(
-      process.env.ComSpec ?? "cmd.exe",
-      ["/d", "/s", "/c", `npm ${args.join(" ")}`],
-      options,
+    // Refuse rather than shell-reparse. A `cmd /c` command line would
+    // reinterpret any argument carrying spaces or metacharacters, and silently
+    // running something other than what this gate asked for is worse than
+    // stopping with something the operator can act on.
+    throw new Error(
+      "Unable to locate the npm CLI without a shell on Windows. "
+      + "Run this gate through an npm script (which sets npm_execpath), or install "
+      + "Node with its bundled npm.",
     );
   }
   return await runProcess("npm", args, options);
