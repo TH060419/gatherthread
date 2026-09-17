@@ -296,6 +296,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         try {
           const session = requireAgent(handle).session;
           await sessionTitle.rename(session, options.sessionTitle);
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           // Only mark a Session whose Agent this open owns. A marker is safe only
           // when the Agent is rebuilt afterwards, and the facade may neither
           // dispose nor resume an Agent the DSH UI owns; a borrowed live Agent
@@ -304,6 +305,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
           const markerWritten = liveAgent === undefined
             && ensureNativeSessionListVisibility(session);
           await sessions.flush(session);
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           if (markerWritten) {
             // The Agent captured its starting turn from the turnBoundary
             // projection before the marker existed, so its loop would number the
@@ -311,6 +313,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
             // log the marker was just committed to; the loop then starts after
             // turn 1 and DSH's consecutive-turn invariant holds.
             await releaseHandle();
+            throwIfDisposed(disposed, lifecycleAbort.signal, "open");
             await adoptHandle(() => agents.resume({
               resumeSessionId: options.sessionId,
               agentOptions: { provider: options.provider, model: options.model },
@@ -463,10 +466,29 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     eventSubscribers.clear();
     statusSubscribers.clear();
     for (const stop of listenerDisposers.splice(0)) stop();
-    // Take ownership the moment disposal starts. `open()` may still be awaiting
-    // workspace setup, so whatever it has already accepted must be reachable
-    // through this slot by the time `disposed` is observable.
-    disposePromise = releaseHandle();
+    // Take ownership the moment disposal starts, then remain a teardown barrier
+    // until an in-flight open has observed cancellation and released anything it
+    // acquired late. A final release closes the narrow case where acquisition
+    // settles after the first slot drain.
+    disposePromise = (async () => {
+      let releaseError: unknown;
+      try {
+        await releaseHandle();
+      } catch (error) {
+        releaseError = error;
+      }
+      try {
+        await openPromise;
+      } catch {
+        // Disposal intentionally makes an in-flight open reject.
+      }
+      try {
+        await releaseHandle();
+      } catch (error) {
+        releaseError ??= error;
+      }
+      if (releaseError !== undefined) throw releaseError;
+    })();
     return disposePromise;
   };
 

@@ -27,6 +27,10 @@ function fixture(
     workspaceGate?: Promise<void>;
     /** Gates Session attachment, so a test can dispose during that mutation. */
     attachGate?: Promise<void>;
+    /** Gates Session title persistence, so a test can dispose during rename. */
+    renameGate?: Promise<void>;
+    /** Gates Session flushing, so a test can dispose before a rebuild. */
+    flushGate?: Promise<void>;
   } = {},
 ) {
   const listeners = new Map<string, Set<Listener>>();
@@ -255,6 +259,7 @@ function fixture(
         assert.equal(candidate, session);
         calls.flush += 1;
         calls.order.push("flush");
+        if (fixtureOptions.flushGate !== undefined) await fixtureOptions.flushGate;
       },
     },
     sessionTitle: {
@@ -263,6 +268,7 @@ function fixture(
         assert.equal(candidate, session);
         assert.equal(title, "Canonical Session Title");
         calls.order.push("rename");
+        if (fixtureOptions.renameGate !== undefined) await fixtureOptions.renameGate;
       },
     },
     workspaceRegistry: {
@@ -546,8 +552,10 @@ test("Open releases a rebuilt Agent when the facade is disposed during the rebui
     while (f.calls.resume + f.calls.create < 2) await new Promise((resolve) => setImmediate(resolve));
   })(), 2_000);
   // The original Agent is released and the replacement is still being acquired.
-  await facade.dispose();
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for the in-flight Agent rebuild");
   rebuildGate.resolve();
+  await disposing;
   const outcome = await settled;
   assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
   assert.match(outcome.message, /disposed during open/u);
@@ -583,8 +591,10 @@ test("Open releases the accepted Agent when the facade is disposed during worksp
       await new Promise((resolve) => setImmediate(resolve));
     }
   })(), 2_000);
-  await facade.dispose();
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for in-flight workspace setup");
   workspaceGate.resolve();
+  await disposing;
   const outcome = await settled;
   assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
   assert.equal(
@@ -622,8 +632,10 @@ test("Open rejects and stops mutating when the facade is disposed during Session
       await new Promise((resolve) => setImmediate(resolve));
     }
   })(), 2_000);
-  await facade.dispose();
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for in-flight Session attachment");
   attachGate.resolve();
+  await disposing;
   const outcome = await settled;
   assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
   assert.equal(f.calls.dispose, 2, "the pre-marker Agent and the accepted Agent are released");
@@ -651,11 +663,63 @@ test("Open releases an Agent acquired while the facade is being disposed", async
     (error: unknown) => error,
   );
   await f.openStarted;
-  await facade.dispose();
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for an in-flight Agent acquisition");
   openGate.resolve();
+  await disposing;
   const outcome = await settled;
   assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
   assert.equal(f.calls.dispose, 1, "the acquired Agent is released rather than published");
+});
+
+test("Open does not write a visibility marker after disposal during Session rename", async () => {
+  const renameGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", renameGate: renameGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const opening = facade.open();
+  await bounded((async () => {
+    while (!f.calls.order.includes("rename")) await new Promise((resolve) => setImmediate(resolve));
+  })(), 2_000);
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for in-flight Session rename");
+  renameGate.resolve();
+  await disposing;
+  await assert.rejects(opening, /disposed during open/u);
+  assert.deepEqual(f.events, [], "teardown must prevent a late visibility marker");
+  assert.equal(f.calls.flush, 0, "teardown must prevent a late Session flush");
+  assert.equal(f.calls.resume, 0, "teardown must prevent a late Agent rebuild");
+});
+
+test("Open does not rebuild an Agent after disposal during Session flush", async () => {
+  const flushGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", flushGate: flushGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const opening = facade.open();
+  await bounded((async () => {
+    while (!f.calls.order.includes("flush")) await new Promise((resolve) => setImmediate(resolve));
+  })(), 2_000);
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for the in-flight Session flush");
+  flushGate.resolve();
+  await disposing;
+  await assert.rejects(opening, /disposed during open/u);
+  assert.equal(f.calls.resume, 0, "teardown must prevent a post-flush Agent rebuild");
 });
 
 test("Host facade appends canonical history through the native model-visible surface and deduplicates by id", async () => {
@@ -1001,10 +1065,12 @@ test("Host facade aborts delayed create and resume without retaining a late hand
     assert.equal(f.calls.openSignals.length, 1);
     assert.equal(f.calls.openSignals[0]?.aborted, false);
 
-    await bounded(facade.dispose(), 500);
+    const disposing = facade.dispose();
+    await assertPending(disposing, "dispose must wait for delayed Agent acquisition");
     assert.equal(f.calls.openSignals[0]?.aborted, true);
     gate.resolve();
 
+    await bounded(disposing, 500);
     await assert.rejects(bounded(opening, 500), /disposed during open/);
     assert.equal(f.calls.dispose, 1);
     assert.throws(() => facade.currentSequence(), /Agent is not open/);
@@ -1063,6 +1129,16 @@ async function bounded<T>(value: Promise<T>, milliseconds: number): Promise<T> {
       setTimeout(() => reject(new Error("DSH facade operation exceeded its time bound")), milliseconds).unref?.();
     }),
   ]);
+}
+
+async function assertPending(value: Promise<unknown>, message: string): Promise<void> {
+  let settled = false;
+  void value.then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, message);
 }
 
 function deferred<T>() {
