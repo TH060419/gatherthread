@@ -31,7 +31,7 @@ test("DSH fallback commands use the official npm workflow without credentials or
   assert.equal(DSH_START_COMMAND, "npx @deepseek-ai/dsh@0.1.2-rc.1 web");
   assert.equal(DSH_VERSION_COMMAND, "npx @deepseek-ai/dsh --version");
   assert.equal(DSH_PINNED_START_COMMAND, "npx @deepseek-ai/dsh@0.1.2-rc.1 web");
-  assert.match(DSH_INSTALL_COMMAND, /^npx @deepseek-ai\/dsh@0\.1\.2-rc\.1 plugin --profile web add @gatherthread\/dsh-host@0\.1\.0-alpha\.1$/u);
+  assert.match(DSH_INSTALL_COMMAND, /^npx @deepseek-ai\/dsh@0\.1\.2-rc\.1 plugin --profile web add @gatherthread\/dsh-host@0\.1\.0-alpha\.5$/u);
   assert.doesNotMatch(`${DSH_START_COMMAND}\n${DSH_VERSION_COMMAND}\n${DSH_PINNED_START_COMMAND}\n${DSH_INSTALL_COMMAND}`, /token|credential|--dsh-source|localhost/iu);
 });
 

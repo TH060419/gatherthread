@@ -63,12 +63,16 @@ export interface CommitLocalTurnResult {
 }
 
 export type SnapshotRequestStatus = "pending" | "claimed" | "completed" | "failed";
+export type SnapshotRequestKind = "immutable" | "visible_history_replace"
+  | "local_sync_status" | "local_auto_upload_enable" | "local_auto_upload_disable" | "local_turn_upload";
 
 export interface SnapshotRequestSummary {
   id: string;
   sessionId: string;
+  kind: SnapshotRequestKind;
   throughSequence: number;
   status: SnapshotRequestStatus;
+  targetRuntimeId?: string;
   createdAt?: string;
   failure?: { code: string; message: string };
   /** @deprecated Compatibility alias for pre-final snapshot wire drafts. */
@@ -202,7 +206,7 @@ export interface CollaborationApi {
   ): Promise<CanonicalEvent>;
   completeAgentRequest(sessionId: string, requestId: string, input: CompleteAgentRequestInput): Promise<CanonicalEvent>;
   commitLocalTurn?(sessionId: string, input: CommitLocalTurnInput): Promise<CommitLocalTurnResult>;
-  createSnapshotRequest?(sessionId: string): Promise<SnapshotRequestSummary>;
+  createSnapshotRequest?(sessionId: string, kind?: SnapshotRequestKind, targetRuntimeId?: string): Promise<SnapshotRequestSummary>;
   getSnapshotRequest?(requestId: string): Promise<SnapshotRequestSummary>;
   listSnapshotRequests?(status: SnapshotRequestStatus, limit?: number): Promise<SnapshotRequestSummary[]>;
   claimSnapshotRequest?(requestId: string, runtimeId: string): Promise<SnapshotRequestSummary>;

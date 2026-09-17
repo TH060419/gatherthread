@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { redactText, redactValue } from "@gatherthread/adapters";
 import type {
   CollaborationApi,
+  LocalConversationSyncControl,
   RuntimeRegistration,
 } from "@gatherthread/bridge";
 
@@ -32,6 +33,7 @@ export interface CollaborationMcpServiceOptions {
   serverVersion?: string;
   allowProviderRequestCapture?: boolean;
   toolProfile?: "user" | "runtime";
+  localSync?: LocalConversationSyncControl;
 }
 
 const READ_ONLY_TOOL_ANNOTATIONS = {
@@ -74,6 +76,19 @@ const USER_TOOL_DEFINITIONS = [
   tool("collaboration_get_connection_status", "Show sanitized connector presence for sessions in one visible project", {
     project_id: stringSchema("Project identifier"),
   }, ["project_id"]),
+  tool("collaboration_get_local_sync_status", "Show automatic and pending local-upload status for one bound conversation", {
+    session_id: stringSchema("Session identifier"),
+  }, ["session_id"]),
+  tool("collaboration_set_local_auto_upload", "Enable or disable automatic upload for one local conversation", {
+    session_id: stringSchema("Session identifier"),
+    enabled: { type: "boolean" },
+  }, ["session_id", "enabled"], MUTATING_TOOL_ANNOTATIONS),
+  tool("collaboration_upload_local_turns", "Manually discover and upload completed local turns, including turns missed by Hooks", {
+    session_id: stringSchema("Session identifier"),
+  }, ["session_id"], MUTATING_TOOL_ANNOTATIONS),
+  tool("collaboration_import_codex_history", "Replace the Desktop-visible Codex task with a verified snapshot of current shared history; realtime context injection remains active", {
+    session_id: stringSchema("Session identifier"),
+  }, ["session_id"], MUTATING_TOOL_ANNOTATIONS),
 ] as const;
 
 const RUNTIME_TOOL_DEFINITIONS = [
@@ -118,6 +133,7 @@ export class CollaborationMcpService {
   readonly #serverVersion: string;
   readonly #allowProviderRequestCapture: boolean;
   readonly #toolProfile: "user" | "runtime";
+  readonly #localSync: LocalConversationSyncControl | undefined;
   readonly #toolDefinitions: readonly (typeof USER_TOOL_DEFINITIONS[number] | typeof RUNTIME_TOOL_DEFINITIONS[number])[];
   readonly #toolNames: ReadonlySet<string>;
 
@@ -127,6 +143,7 @@ export class CollaborationMcpService {
     this.#serverVersion = options.serverVersion ?? "0.1.0";
     this.#allowProviderRequestCapture = options.allowProviderRequestCapture === true;
     this.#toolProfile = options.toolProfile ?? "user";
+    this.#localSync = options.localSync;
     this.#toolDefinitions = this.#toolProfile === "runtime" ? RUNTIME_TOOL_DEFINITIONS : USER_TOOL_DEFINITIONS;
     this.#toolNames = new Set(this.#toolDefinitions.map(({ name }) => name));
   }
@@ -205,6 +222,21 @@ export class CollaborationMcpService {
       case "collaboration_get_connection_status":
         result = await this.#connectionStatus(requiredString(args, "project_id"));
         break;
+      case "collaboration_get_local_sync_status":
+        result = await this.#requireLocalSync().getLocalSyncStatus(requiredString(args, "session_id"));
+        break;
+      case "collaboration_set_local_auto_upload":
+        result = await this.#requireLocalSync().setLocalAutoUpload(
+          requiredString(args, "session_id"),
+          requiredBoolean(args, "enabled"),
+        );
+        break;
+      case "collaboration_upload_local_turns":
+        result = await this.#requireLocalSync().uploadLocalTurns(requiredString(args, "session_id"));
+        break;
+      case "collaboration_import_codex_history":
+        result = await this.#requireLocalSync().importVisibleHistorySnapshot(requiredString(args, "session_id"));
+        break;
       case "collaboration_register_runtime":
         result = await this.#api.registerRuntime(runtimeInput(args));
         break;
@@ -233,6 +265,11 @@ export class CollaborationMcpService {
         throw new MethodNotFoundError(`Unknown tool: ${name}`);
     }
     return toolResult(result);
+  }
+
+  #requireLocalSync(): LocalConversationSyncControl {
+    if (!this.#localSync) throw new Error("Local conversation upload controls require an active local connector");
+    return this.#localSync;
   }
 
   async #connectionStatus(projectId: string): Promise<unknown> {
@@ -442,6 +479,12 @@ function optionalObject(value: unknown): Record<string, unknown> {
 function requiredString(input: Record<string, unknown>, key: string): string {
   const value = input[key];
   if (typeof value !== "string" || value.length === 0) throw new Error(`${key} must be a non-empty string`);
+  return value;
+}
+
+function requiredBoolean(input: Record<string, unknown>, key: string): boolean {
+  const value = input[key];
+  if (typeof value !== "boolean") throw new Error(`${key} must be true or false`);
   return value;
 }
 

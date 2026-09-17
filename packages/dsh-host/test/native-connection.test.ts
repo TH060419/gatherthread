@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 import test from "node:test";
 import {
   DSH_NATIVE_CREDENTIAL_KEY,
@@ -189,7 +190,11 @@ test("server URL, native state, and mainstream launch command are bounded and de
   });
   assert.equal(configured.credentialReference.kind, "dsh-grant");
   assert.equal(configured.model, "CaseSensitiveModel");
-  assert.match(configured.stateRoot, /^\/private\/dsh-home\/gatherthread\/state\/[a-f0-9]{32}$/u);
+  assert.equal(
+    path.dirname(configured.stateRoot),
+    path.join(path.resolve("/private/dsh-home"), "gatherthread", "state"),
+  );
+  assert.match(path.basename(configured.stateRoot), /^[a-f0-9]{32}$/u);
   assert.equal(configured.stateRoot.includes(grant.token), false);
   assert.equal(dshNpmLaunchCommand(), "npx @deepseek-ai/dsh web");
 });

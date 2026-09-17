@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260906-3" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260916-2" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -116,10 +116,20 @@
 
     <div id="workspace" class="workspace" hidden>
       <header class="topbar">
-        <a class="wordmark" href="#" aria-label="GatherThread home">
-          <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
-          <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
-        </a>
+        <div class="topbar-brand-cluster">
+          <button id="toggle-session-rail-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Collapse session sidebar" title="Collapse session sidebar" aria-controls="session-rail" aria-expanded="true" data-tooltip>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M8.5 4.5v15"/><path d="m14 9-3 3 3 3"/></svg>
+          </button>
+          <a class="wordmark" href="#" aria-label="GatherThread home">
+            <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
+            <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
+          </a>
+        </div>
+        <div id="topbar-session-context" class="topbar-session-context" hidden>
+          <span id="topbar-project-name" class="topbar-project-name" data-i18n-skip></span>
+          <span class="topbar-context-separator" aria-hidden="true">›</span>
+          <strong id="topbar-session-name" data-i18n-skip></strong>
+        </div>
         <div class="account-cluster">
           <div class="connection-chip" id="global-connection" role="status">
             <span class="status-dot"></span>
@@ -131,11 +141,14 @@
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" shape-rendering="geometricPrecision"><path d="M8.939 4.609L9.929 4.273L10.044 1.938L13.956 1.938L14.071 4.273L15.061 4.609L16 5.072L17.732 3.502L20.498 6.268L18.928 8L19.391 8.939L19.727 9.929L22.062 10.044L22.062 13.956L19.727 14.071L19.391 15.061L18.928 16L20.498 17.732L17.732 20.498L16 18.928L15.061 19.391L14.071 19.727L13.956 22.062L10.044 22.062L9.929 19.727L8.939 19.391L8 18.928L6.268 20.498L3.502 17.732L5.072 16L4.609 15.061L4.273 14.071L1.938 13.956L1.938 10.044L4.273 9.929L4.609 8.939L5.072 8L3.502 6.268L6.268 3.502L8 5.072Z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
           <button id="logout-button" class="text-button" type="button">Log out</button>
+          <button id="mobile-members-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Collapse member sidebar" title="Collapse member sidebar" aria-controls="member-panel" aria-expanded="true" data-tooltip>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M15.5 4.5v15"/><path d="m10 9 3 3-3 3"/></svg>
+          </button>
         </div>
       </header>
 
       <div class="workspace-grid">
-        <nav class="session-rail" aria-label="Sessions">
+        <nav id="session-rail" class="session-rail" aria-label="Sessions">
           <div class="rail-heading">
             <div>
               <p class="eyebrow">Project</p>
@@ -229,9 +242,52 @@
                   <button id="delete-session-button" class="icon-button workspace-icon-button workspace-icon-button-danger session-delete-button" type="button" aria-label="Delete" title="Delete" data-tooltip aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
                     <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5M14 11v5"/></svg><span class="sr-only">Delete</span>
                   </button>
+                  <details id="session-context-details" class="session-context-details">
+                    <summary class="icon-button workspace-icon-button session-context-toggle" aria-label="Show session status details" title="Session status details" aria-controls="session-context-panel" aria-expanded="false" data-tooltip>
+                      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 10.8v5"/><circle cx="12" cy="7.7" r=".7" fill="currentColor" stroke="none"/></svg>
+                    </summary>
+                    <div id="session-context-panel" class="session-context-panel" aria-label="Session status details">
+                      <div class="session-context-panel-heading">
+                        <strong>Session status details</strong>
+                      </div>
+                      <div class="session-context-copy">
+                        <span class="session-context-section-label">Access</span>
+                        <p id="session-subtitle" class="session-subtitle"></p>
+                        <p id="session-access-note" class="session-access-note" hidden>Only the creator can edit this Solo session.</p>
+                      </div>
+                      <div id="connector-status" class="connector-status" hidden>
+                        <span class="session-context-section-label connector-status-heading">Synchronization</span>
+                        <span class="status-dot" aria-hidden="true"></span>
+                        <div class="connector-status-copy" role="status" aria-live="polite">
+                          <strong id="connector-status-label">Synced</strong>
+                          <span id="connector-status-detail">Local execution history matches the canonical session.</span>
+                        </div>
+                        <div id="visible-history-controls" class="visible-history-controls" hidden>
+                          <div class="session-context-control-heading">
+                            <strong>Codex history</strong>
+                            <button id="import-visible-history-button" class="text-button" type="button">Import Codex history</button>
+                          </div>
+                          <span id="visible-history-import-status" role="status" aria-live="polite"></span>
+                        </div>
+                      </div>
+                      <div id="codex-local-sync-controls" class="codex-local-sync-controls" hidden>
+                        <div class="session-context-control-heading codex-local-sync-heading">
+                          <strong>Local turns to cloud</strong>
+                        </div>
+                        <label id="codex-local-runtime-field" class="codex-local-runtime-field" for="codex-local-runtime-select" hidden>
+                          <span>Codex device</span>
+                          <select id="codex-local-runtime-select" aria-label="Codex device"></select>
+                        </label>
+                        <label class="codex-auto-upload-control" for="codex-auto-upload-toggle">
+                          <input id="codex-auto-upload-toggle" type="checkbox" disabled>
+                          <span>Auto-upload local turns to cloud</span>
+                        </label>
+                        <button id="upload-local-turns-button" class="button button-secondary compact-button" type="button" disabled>Upload local turns to cloud now</button>
+                        <span id="codex-local-sync-status" role="status" aria-live="polite">Waiting for Codex.</span>
+                      </div>
+                    </div>
+                  </details>
                 </div>
-                <p id="session-subtitle" class="session-subtitle"></p>
-                <p id="session-access-note" class="session-access-note" hidden>Only the creator can edit this Solo session.</p>
               </div>
               <div class="session-header-actions">
                 <button
@@ -243,25 +299,8 @@
                 >
                   <span>Download to Codex</span>
                 </button>
-                <button
-                  id="mobile-members-button"
-                  class="button button-secondary mobile-only"
-                  type="button"
-                  aria-controls="member-panel"
-                  aria-expanded="false"
-                >
-                  Members
-                </button>
               </div>
             </header>
-
-            <div id="connector-status" class="connector-status" role="status" aria-live="polite" hidden>
-              <span class="status-dot" aria-hidden="true"></span>
-              <div>
-                <strong id="connector-status-label">Synced</strong>
-                <span id="connector-status-detail">Local execution history matches the canonical session.</span>
-              </div>
-            </div>
 
             <div
               id="sync-banner"
@@ -370,8 +409,8 @@
               <p class="eyebrow">Presence</p>
               <h2 id="members-title">Members</h2>
             </div>
-            <button id="close-members-button" class="icon-button mobile-only" type="button" aria-label="Close members">
-              ×
+            <button id="close-members-button" class="icon-button mobile-only workspace-icon-button" type="button" aria-label="Close members">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
             </button>
           </div>
           <ul id="member-list" class="member-list"></ul>
@@ -584,11 +623,12 @@
         <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
           <li>
             <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>Requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.</p></div></div>
+            <p class="field-help codex-cli-recovery-hint">If Terminal reports “codex: command not found”, first run npm install -g @openai/codex, reopen Terminal, and confirm codex plugin --help works.</p>
             <div class="command-heading">
               <span id="connect-codex-marketplace-title" class="command-label">Codex plugin</span>
               <button class="button button-secondary" type="button" data-copy-command="marketplace" aria-describedby="copy-marketplace-command-status">Copy commands</button>
             </div>
-            <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread
+            <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread</code>
           <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
           </li>
@@ -796,6 +836,7 @@ codex plugin add gatherthread@gatherthread</code>
                 <p>Controls the maximum history used by connector projection, rebuilds, snapshots, and Web Agent execution.</p>
               </div>
               <label class="settings-row" for="settings-sync-mode"><span><strong>Budget mode</strong><small>Adaptive respects the configured maximum and local connector capability.</small></span><select id="settings-sync-mode" name="sync-mode"><option value="adaptive">Adaptive · recommended</option><option value="fixed">Fixed maximum</option></select></label>
+              <label class="settings-row" for="settings-visible-history-sync"><span><strong>Initial Codex history import</strong><small>Choose whether each cloud session gets one readable local task when first connected. Manual import creates a new task; archive the previous task yourself. Realtime context injection always stays active.</small></span><select id="settings-visible-history-sync" name="visible-history-sync"><option value="first-connect" selected>Import once when each session is first created locally</option><option value="never">Do not import automatically</option></select></label>
               <div class="settings-row settings-row-tall">
                 <span><strong>Projection context ceiling</strong><small>Small values load faster but compact long histories more often. Large values can be slower, consume more memory, or exceed a model limit. Match this to the connected model. Limits and reconnect guidance for every enabled Agent appear below.</small></span>
                 <div class="numeric-setting numeric-setting-context"><select id="settings-context-preset" aria-label="Context budget preset"><option value="8192">8 KiB</option><option value="32768">32 KiB</option><option value="131072">128 KiB</option><option value="524288">512 KiB</option><option value="2097152">2 MiB</option><option value="5242880">5 MiB</option><option value="custom">Custom</option></select><label><input id="settings-context-budget" name="context-budget" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" aria-label="Exact context budget" /><select id="settings-context-unit" aria-label="Context budget unit"><option value="KiB">KiB</option><option value="MiB">MiB</option></select></label></div>
@@ -871,6 +912,6 @@ codex plugin add gatherthread@gatherthread</code>
     </dialog>
 
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260906-4"></script>
+    <script type="module" src="./src/main.js?v=20260916-2"></script>
   </body>
 </html>

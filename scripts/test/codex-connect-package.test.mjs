@@ -15,7 +15,7 @@ const temporaryBase = process.platform === "darwin" ? "/private/tmp" : tmpdir();
 test("Codex connector package exposes one standalone fixed-version npm entry", async () => {
   const manifest = JSON.parse(await readFile(packageJsonPath, "utf8"));
   assert.equal(manifest.name, "@gatherthread/codex-connect");
-  assert.equal(manifest.version, "0.1.0-alpha.1");
+  assert.equal(manifest.version, "0.1.0-alpha.5");
   assert.equal(manifest.author, "Yuhan He and contributors");
   assert.equal(manifest.license, "Apache-2.0");
   assert.deepEqual(manifest.publishConfig, { access: "public", tag: "alpha" });
@@ -59,7 +59,7 @@ test("published entry is importable and its executable provides help without cre
     env: { PATH: process.env.PATH },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /npx --yes @gatherthread\/codex-connect@0\.1\.0-alpha\.1/);
+  assert.match(result.stdout, /npx --yes @gatherthread\/codex-connect@0\.1\.0-alpha\.5/);
   assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /gta_|Bearer|cookie|password/i);
 });
 

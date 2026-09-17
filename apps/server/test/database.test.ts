@@ -1754,12 +1754,30 @@ test("local-turn commits and private snapshot connector jobs preserve sync invar
     const snapshot = f.service.createSnapshotRequest(f.member, session.id);
     const canonicalHead = f.database.requireSession(session.id).next_sequence;
     assert.equal(snapshot.through_sequence, canonicalHead);
+    assert.equal(snapshot.kind, "immutable");
+    const visibleImport = f.service.createSnapshotRequest(f.member, session.id, "visible_history_replace");
+    assert.equal(visibleImport.kind, "visible_history_replace");
+    const localStatus = f.service.createSnapshotRequest(f.member, session.id, "local_sync_status", execution.id);
+    assert.equal(localStatus.target_runtime_id, execution.id);
+    assert.throws(
+      () => f.service.claimSnapshotRequest(f.member, localStatus.id, connector.id),
+      (error: unknown) => error instanceof ApiError && error.status === 403,
+    );
+    assert.equal(f.service.claimSnapshotRequest(f.member, localStatus.id, execution.id).status, "claimed");
+    assert.deepEqual(f.service.completeSnapshotRequest(f.member, localStatus.id, execution.id, {
+      automatic_upload: true, pending_local_turns: 0, uploadable_local_turns: 2,
+    }).result, { automatic_upload: true, pending_local_turns: 0, uploadable_local_turns: 2 });
     assert.equal(f.service.claimSnapshotRequest(f.member, snapshot.id, connector.id).status, "claimed");
     assert.deepEqual(f.service.completeSnapshotRequest(f.member, snapshot.id, connector.id, {
       summary: "ready", api_key: "secret",
     }).result, { summary: "ready", api_key: "[REDACTED]" });
     assert.equal(f.database.requireSession(session.id).next_sequence, canonicalHead);
     f.service.setProjectMembership(f.owner, session.project_id, f.member.user_id, "viewer");
+    assert.equal(f.service.createSnapshotRequest(f.member, session.id).kind, "immutable");
+    assert.throws(
+      () => f.service.createSnapshotRequest(f.member, session.id, "visible_history_replace"),
+      (error: unknown) => error instanceof ApiError && error.status === 403,
+    );
     assert.equal(f.service.heartbeatRuntime(f.member, connector.id).purpose, "snapshot_connector");
     const viewerPresence = f.service.listMembers(f.member, session.id)
       .find((member) => member.user_id === f.member.user_id)?.runtime;

@@ -1,4 +1,4 @@
-export const SETTINGS_VERSION = 7;
+export const SETTINGS_VERSION = 10;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -54,6 +54,7 @@ export const DEFAULT_SETTINGS = deepFreeze({
   sync: {
     mode: "adaptive",
     contextBudgetBytes: 256 * 1024,
+    visibleHistorySync: "first-connect",
   },
   composer: {
     enterBehavior: "newline",
@@ -81,6 +82,9 @@ export function normalizeSettings(input) {
   const notifications = isObject(source.notifications) ? source.notifications : {};
   const agents = isObject(source.agents) ? source.agents : {};
   const general = isObject(source.general) ? source.general : {};
+  const visibleHistorySync = sync.visibleHistorySync === "every-connect" || sync.visibleHistorySync === "every-update"
+    ? "first-connect"
+    : sync.visibleHistorySync;
   const customCodexModels = uniqueStrings(agents.customCodexModels)
     .filter((model) => MODEL_ID_PATTERN.test(model))
     .slice(0, 40);
@@ -123,6 +127,11 @@ export function normalizeSettings(input) {
     },
     sync: {
       mode: oneOf(sync.mode, ["adaptive", "fixed"], DEFAULT_SETTINGS.sync.mode),
+      visibleHistorySync: oneOf(
+        visibleHistorySync,
+        ["first-connect", "never"],
+        DEFAULT_SETTINGS.sync.visibleHistorySync,
+      ),
       contextBudgetBytes: boundedInteger(
         sync.contextBudgetBytes,
         CONTEXT_BUDGET_MIN_BYTES,
@@ -347,6 +356,7 @@ function migrateStoredSettings(input) {
   const previousVersion = Number(input.version);
   const appearance = isObject(input.appearance) ? input.appearance : {};
   const layout = isObject(input.layout) ? input.layout : {};
+  const sync = isObject(input.sync) ? input.sync : {};
   const agents = isObject(input.agents) ? input.agents : {};
   const legacyProjectProfiles = isObject(agents.projectProfiles) ? Object.values(agents.projectProfiles) : [];
   const inheritedEnabledHarnesses = normalizeEnabledHarnesses([
@@ -367,6 +377,14 @@ function migrateStoredSettings(input) {
       ...layout,
       leftRailPixels: layout.leftRailPixels == null || layout.leftRailPixels === 260 ? DEFAULT_SETTINGS.layout.leftRailPixels : layout.leftRailPixels,
       rightPanelPixels: layout.rightPanelPixels == null || layout.rightPanelPixels === 290 ? DEFAULT_SETTINGS.layout.rightPanelPixels : layout.rightPanelPixels,
+    },
+    sync: {
+      ...sync,
+      visibleHistorySync: previousVersion < 8
+        ? DEFAULT_SETTINGS.sync.visibleHistorySync
+        : sync.visibleHistorySync === "every-connect" || sync.visibleHistorySync === "every-update"
+          ? "first-connect"
+          : sync.visibleHistorySync,
     },
     agents: {
       ...agents,

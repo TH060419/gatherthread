@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { mkdir, open, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import path from "node:path";
 import { redactText, type TranscriptEvent } from "@gatherthread/adapters";
 import {
@@ -19,6 +20,8 @@ import type {
   ProjectHarnessPreflight,
   ProjectHarnessSessionBinding,
   ProjectHarnessDeactivationReason,
+  LocalConversationSyncStatus,
+  LocalConversationUploadResult,
 } from "./project-harness.js";
 import type {
   CanonicalEvent,
@@ -34,6 +37,17 @@ interface JsonRpcResponse {
   id: number;
   result?: unknown;
   error?: { code?: unknown; message?: unknown; data?: unknown };
+}
+
+const CODEX_THREAD_NAME_MAX_LENGTH = 240;
+
+export function managedCodexThreadName(
+  session: Pick<SessionSummary, "id" | "name" | "mode">,
+  marker = "GatherThread",
+): string {
+  const sessionName = session.name ?? session.id;
+  const suffix = ` · ${session.mode.toUpperCase()} · ${marker}`;
+  return `${sessionName.slice(0, Math.max(0, CODEX_THREAD_NAME_MAX_LENGTH - suffix.length))}${suffix}`;
 }
 
 interface JsonRpcNotification {
@@ -98,12 +112,53 @@ interface CodexAppServerState {
   connectorTurnIds: string[];
   localTurnBindings: Record<string, LocalTurnBinding>;
   pendingLocalTurns: LocalTurnOutbox[];
+  /** Hooks may still capture locally while false, but may not upload automatically. */
+  automaticUpload: boolean;
   hookDrafts: Record<string, HookLocalTurnDraft>;
   executionJournal: Record<string, ExecutionJournalEntry>;
   projectionJournal?: ProjectionJournalEntry;
   rebuild?: RebuildProjection;
   desktopProjectMigration?: DesktopProjectMigration;
+  visibleHistorySnapshot?: VisibleHistorySnapshotState;
 }
+
+interface VisibleHistorySnapshotState {
+  digest: string;
+  threadId: string;
+  throughSequence: number;
+  importedAt: string;
+  compacted: boolean;
+  /** @deprecated Alpha replacement cleanup marker; retained only for state migration. */
+  replacedThreadId?: string;
+}
+
+export interface VisibleHistoryImportMessage {
+  role: "user" | "assistant";
+  text: string;
+  timestamp: string;
+}
+
+export interface VisibleHistoryImport {
+  digest: string;
+  messages: VisibleHistoryImportMessage[];
+  estimatedTokens: number;
+  compacted: boolean;
+}
+
+export interface VisibleHistoryImportResult {
+  status: "imported" | "unchanged" | "disabled";
+  threadId?: string;
+  threadName?: string;
+  previousThreadId?: string;
+  previousTaskRetained?: boolean;
+  throughSequence: number;
+  compacted?: boolean;
+}
+
+export type VisibleHistoryImporter = (input: {
+  workspacePath: string;
+  history: VisibleHistoryImport;
+}) => Promise<{ threadId: string }>;
 
 interface DesktopProjectMigration {
   oldThreadId: string;
@@ -282,6 +337,7 @@ export interface CodexAppServerExecutorOptions {
   desktopNativeResumeTimeoutMs?: number;
   threadSource?: "vscode" | "exec";
   gatherThreadSessionId?: string;
+  visibleHistoryImporter?: VisibleHistoryImporter;
 }
 
 export interface CodexProjectHarnessOptions {
@@ -303,6 +359,7 @@ export interface CodexProjectHarnessOptions {
   signal?: AbortSignal;
   env?: NodeJS.ProcessEnv;
   revealThread?: (threadId: string) => Promise<boolean>;
+  visibleHistorySync?: "first-connect" | "never";
 }
 
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
@@ -654,6 +711,55 @@ export class CodexAppServerClient {
     }
   }
 
+  async importDetectedExternalSession(input: {
+    workspacePath: string;
+    sourcePath: string;
+    timeoutMs?: number;
+  }): Promise<string> {
+    const detected = await this.request("externalAgentConfig/detect", {
+      includeHome: true,
+      cwds: [input.workspacePath],
+      maxSessionAgeDays: 2,
+      maxSessions: 20,
+    });
+    const item = (objectArray(detected, "items") ?? []).find((candidate) => {
+      if (!isObject(candidate) || candidate.itemType !== "SESSIONS") return false;
+      const sessions = objectArray(objectValue(candidate, "details"), "sessions") ?? [];
+      return sessions.some((session) => objectString(session, "path") === input.sourcePath);
+    });
+    if (!isObject(item)) throw new Error("Codex did not detect the isolated GatherThread history source");
+    const details = objectValue(item, "details");
+    const session = (objectArray(details, "sessions") ?? [])
+      .find((candidate) => objectString(candidate, "path") === input.sourcePath);
+    if (!isObject(details) || !isObject(session)) {
+      throw new Error("Codex detected the history source without its exact session record");
+    }
+    const started = await this.request("externalAgentConfig/import", {
+      migrationItems: [{ ...item, details: { ...details, sessions: [session] } }],
+      source: "gatherthread",
+      providerId: "gatherthread-visible-history",
+    });
+    const importId = objectString(started, "importId");
+    if (!importId) throw new Error("Codex external history import omitted its operation id");
+    const deadline = Date.now() + (input.timeoutMs ?? this.#options.turnTimeoutMs);
+    while (Date.now() < deadline) {
+      const histories = await this.request("externalAgentConfig/import/readHistories", undefined);
+      const history = (objectArray(histories, "data") ?? [])
+        .find((candidate) => objectString(candidate, "importId") === importId);
+      if (isObject(history)) {
+        const success = (objectArray(history, "successes") ?? [])
+          .find((candidate) => objectString(candidate, "itemType") === "SESSIONS");
+        const target = objectString(success, "target");
+        if (target) return target;
+        const failure = (objectArray(history, "failures") ?? [])[0];
+        const message = objectString(failure, "message") ?? "Codex rejected the visible history import";
+        throw new Error(`Codex visible history import failed: ${safeText(message)}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("Codex visible history import timed out");
+  }
+
   async archiveThread(threadId: string): Promise<void> {
     await this.request("thread/archive", { threadId });
   }
@@ -929,6 +1035,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   readonly #desktopNativeResumeTimeoutMs: number;
   readonly #threadSource: "vscode" | "exec";
   readonly #gatherThreadSessionId: string | undefined;
+  readonly #visibleHistoryImporter: VisibleHistoryImporter | undefined;
   #localPublishingActive: boolean;
   #revealedThreadId: string | undefined;
   #loadedExecThreadId: string | undefined;
@@ -977,6 +1084,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     }
     this.#threadSource = options.threadSource ?? "vscode";
     this.#gatherThreadSessionId = options.gatherThreadSessionId;
+    this.#visibleHistoryImporter = options.visibleHistoryImporter;
   }
 
   async execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
@@ -1281,6 +1389,157 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       }
       const state = this.#newState(sessionId, workspacePath, threadId);
       await this.#saveState(state, false);
+    });
+  }
+
+  importVisibleHistorySnapshot(
+    events: readonly CanonicalEvent[],
+    throughSequence: number,
+    options: { onlyIfMissing?: boolean } = {},
+  ): Promise<VisibleHistoryImportResult> {
+    const importer = this.#visibleHistoryImporter;
+    const gatherThreadSessionId = this.#gatherThreadSessionId;
+    if (!this.#desktopHookOnly || !importer || !gatherThreadSessionId) {
+      return Promise.resolve({ status: "disabled", throughSequence });
+    }
+    return this.#withStateWriter(async () => {
+      if (!Number.isSafeInteger(throughSequence) || throughSequence < 0) {
+        throw new Error("Visible history snapshot requires a valid through_sequence");
+      }
+      const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+      const history = buildVisibleHistoryImport(events, throughSequence, this.#contextWindowTokens);
+      const previous = await this.#loadStateFromDisk(workspacePath);
+      if (previous?.visibleHistorySnapshot?.replacedThreadId) {
+        // Older alpha builds tried to delete or archive the previous task.
+        // Current imports intentionally leave it visible for the user to
+        // review and archive, so the stale cleanup marker has no work left.
+        delete previous.visibleHistorySnapshot.replacedThreadId;
+        await this.#saveState(previous, false);
+      }
+      if (options.onlyIfMissing && previous?.visibleHistorySnapshot) {
+        return {
+          status: "unchanged",
+          threadId: previous.threadId,
+          throughSequence: previous.visibleHistorySnapshot.throughSequence,
+          compacted: previous.visibleHistorySnapshot.compacted,
+        };
+      }
+      if (previous) {
+        if (previous.pendingLocalTurns.length > 0
+          || Object.values(previous.localTurnBindings).some((binding) => binding.status !== "acked")
+          || Object.keys(previous.hookDrafts).length > 0) {
+          throw new Error("Upload pending local Codex turns before importing a new visible history task");
+        }
+      }
+
+      let candidateThreadId: string | undefined;
+      let bindingCommitted = false;
+      try {
+        candidateThreadId = (await importer({ workspacePath, history })).threadId;
+        if (!candidateThreadId) throw new Error("Codex visible history import omitted its task id");
+        const suffix = ` · history #${throughSequence}`;
+        const candidateThreadName = `${this.#threadName.slice(
+          0,
+          Math.max(0, CODEX_THREAD_NAME_MAX_LENGTH - suffix.length),
+        )}${suffix}`;
+        await this.#setManagedThreadName(candidateThreadId, candidateThreadName);
+        await this.#ensureDesktopProjectBinding(candidateThreadId, workspacePath);
+        let candidate = await this.#client.readThread(candidateThreadId);
+        if (candidate.status === "active" || candidate.turns.length === 0) {
+          throw new Error("Codex visible history import did not create a complete, idle native turn");
+        }
+        let compacted = history.compacted;
+        if (history.estimatedTokens >= Math.floor(this.#contextWindowTokens * this.#contextHighWatermark)) {
+          await this.#client.compactThread(candidateThreadId);
+          compacted = true;
+          candidate = await this.#client.readThread(candidateThreadId);
+          if (candidate.turns.length === 0) throw new Error("Codex compaction removed the imported native history");
+        }
+
+        const next = previous === undefined
+          ? this.#newState(gatherThreadSessionId, workspacePath, candidateThreadId)
+          : structuredClone(previous);
+        const previousThreadId = previous?.threadId;
+        next.threadId = candidateThreadId;
+        next.threadName = candidateThreadName;
+        next.contextWindowTokens = this.#contextWindowTokens;
+        next.estimatedContextTokens = compacted
+          ? Math.floor(this.#contextWindowTokens * 0.15)
+          : history.estimatedTokens;
+        next.contextUsageSource = "fallback_estimate";
+        next.cloudCursor = Math.max(next.cloudCursor, throughSequence);
+        next.desktopDeliveryCursor = throughSequence;
+        next.desktopProjectionCursor = throughSequence;
+        next.coveredThroughSequence = Math.max(next.coveredThroughSequence, throughSequence);
+        next.lastInjectedSequence = throughSequence;
+        next.connectorClientMessageIds = [];
+        next.connectorTurnIds = candidate.turns.map((turn) => turn.id);
+        next.localTurnBindings = {};
+        next.pendingLocalTurns = [];
+        next.hookDrafts = {};
+        next.sidecar = events
+          .filter((event) => event.sequence <= throughSequence)
+          .map((event) => sidecarEntry(event, 0, projectionRole(event), "connector_turn"));
+        next.visibleHistorySnapshot = {
+          digest: history.digest,
+          threadId: candidateThreadId,
+          throughSequence,
+          importedAt: new Date().toISOString(),
+          compacted,
+        };
+        delete next.desktopProjectionJournal;
+        delete next.projectionJournal;
+        delete next.rebuild;
+        await this.#saveState(next, false);
+        try {
+          if (this.#hookRegistryPath) {
+            await updateCodexHookRegistry({
+              registryPath: this.#hookRegistryPath,
+              workspacePath,
+              ...(previousThreadId && previousThreadId !== candidateThreadId
+                ? { remove: [previousThreadId] }
+                : {}),
+              ...(this.#localPublishingActive
+                ? { add: { [candidateThreadId]: this.#hookThreadPurpose } }
+                : {}),
+            });
+          }
+        } catch (registryError) {
+          try {
+            if (previous) await this.#saveState(previous, false);
+            else await rm(this.#statePath, { force: true });
+          } catch (rollbackError) {
+            bindingCommitted = true;
+            throw new AggregateError(
+              [registryError, rollbackError],
+              "Codex visible history was imported, but its Hook authorization could not be switched or rolled back",
+            );
+          }
+          throw registryError;
+        }
+        bindingCommitted = true;
+        if (previousThreadId && previousThreadId !== candidateThreadId) {
+          await this.#unsubscribeManagedThread(previousThreadId).catch(() => undefined);
+        }
+        await this.#unsubscribeManagedThread(candidateThreadId).catch(() => undefined);
+        this.#revealedThreadId = undefined;
+        await this.#revealThreadIfNeeded(candidateThreadId).catch(() => undefined);
+        return {
+          status: "imported",
+          threadId: candidateThreadId,
+          threadName: candidateThreadName,
+          ...(previousThreadId === undefined || previousThreadId === candidateThreadId
+            ? {}
+            : { previousThreadId, previousTaskRetained: true }),
+          throughSequence,
+          compacted,
+        };
+      } catch (error) {
+        if (!bindingCommitted && candidateThreadId && candidateThreadId !== previous?.threadId) {
+          await this.#client.archiveThread(candidateThreadId).catch(() => undefined);
+        }
+        throw error;
+      }
     });
   }
 
@@ -1820,7 +2079,73 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     return this.#withStateWriter(() => this.#synchronizeLocalTurns(api, runtime));
   }
 
-  async #synchronizeLocalTurns(api: CollaborationApi, runtime: RegisteredRuntime): Promise<void> {
+  getLocalSyncStatus(): Promise<LocalConversationSyncStatus> {
+    return this.#withStateWriter(async () => {
+      const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+      const state = await this.#loadStateFromDisk(workspacePath);
+      if (!state) throw new Error("Codex local conversation is not initialized");
+      return this.#localSyncStatus(state, await this.#countUploadableLocalTurns(state));
+    });
+  }
+
+  setLocalAutoUpload(enabled: boolean): Promise<LocalConversationSyncStatus> {
+    return this.#withStateWriter(async () => {
+      const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+      const state = await this.#loadStateFromDisk(workspacePath);
+      if (!state) throw new Error("Codex local conversation is not initialized");
+      state.automaticUpload = enabled;
+      await this.#saveState(state);
+      return this.#localSyncStatus(state, await this.#countUploadableLocalTurns(state));
+    });
+  }
+
+  uploadLocalTurns(
+    api: CollaborationApi,
+    runtime: RegisteredRuntime,
+  ): Promise<LocalConversationUploadResult> {
+    return this.#withStateWriter(async () => {
+      if (!this.#desktopHookOnly) {
+        throw new Error("Manual local upload is available only for the Desktop-owned Codex conversation");
+      }
+      const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+      const state = await this.#loadState(runtime.sessionId, workspacePath);
+      if (!state) throw new Error("Codex local conversation is not initialized");
+      const thread = await this.#client.readThread(state.threadId);
+      if (thread.status === "active") throw new Error("Wait for the current Codex turn to finish before uploading");
+      const discovered = discoverCompletedLocalTurns(thread.turns, state);
+      for (const turn of discovered) {
+        state.localTurnBindings[turn.localTurnId] = {
+          localTurnId: turn.localTurnId,
+          threadId: state.threadId,
+          turnId: turn.turnId,
+          basedOnSequence: 0,
+          status: "pending",
+        };
+        state.pendingLocalTurns.push({
+          ...turn,
+          threadId: state.threadId,
+          basedOnSequence: 0,
+          observedModel: state.model,
+        });
+      }
+      if (discovered.length > 0) await this.#saveState(state);
+      const pendingBefore = state.pendingLocalTurns.length;
+      await this.#synchronizeLocalTurns(api, runtime, true);
+      const refreshed = await this.#loadState(runtime.sessionId, workspacePath);
+      if (!refreshed) throw new Error("Codex local conversation state disappeared during upload");
+      return {
+        ...this.#localSyncStatus(refreshed, await this.#countUploadableLocalTurns(refreshed)),
+        discoveredLocalTurns: discovered.length,
+        uploadedLocalTurns: Math.max(0, pendingBefore - refreshed.pendingLocalTurns.length),
+      };
+    });
+  }
+
+  async #synchronizeLocalTurns(
+    api: CollaborationApi,
+    runtime: RegisteredRuntime,
+    forceUpload = false,
+  ): Promise<void> {
     if (runtime.purpose === "snapshot_connector") throw new Error("Snapshot connector runtimes cannot publish local turns");
     const workspacePath = await validateCodexWorkspace(this.#workspacePath);
     let state = await this.#loadState(runtime.sessionId, workspacePath);
@@ -1861,6 +2186,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         if (turn) pending.toolEvents = canonicalLocalToolEvents(turn, pending.occurredAt);
       }
     }
+    if (!forceUpload && !state.automaticUpload) return;
     for (const pending of [...state.pendingLocalTurns]) {
       const upload = boundLocalTurnUpload(pending);
       const pendingBinding = state.localTurnBindings[pending.localTurnId];
@@ -1903,6 +2229,22 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       state.pendingLocalTurns = state.pendingLocalTurns.filter((item) => item.localTurnId !== pending.localTurnId);
       await this.#saveState(state);
     }
+  }
+
+  async #countUploadableLocalTurns(state: CodexAppServerState): Promise<number> {
+    if (!this.#desktopHookOnly) return state.pendingLocalTurns.length;
+    const thread = await this.#client.readThread(state.threadId);
+    return state.pendingLocalTurns.length + discoverCompletedLocalTurns(thread.turns, state).length;
+  }
+
+  #localSyncStatus(state: CodexAppServerState, uploadableLocalTurns: number): LocalConversationSyncStatus {
+    return {
+      sessionId: state.gatherThreadSessionId,
+      localSessionId: state.threadId,
+      automaticUpload: state.automaticUpload,
+      pendingLocalTurns: state.pendingLocalTurns.length,
+      uploadableLocalTurns,
+    };
   }
 
   projectSnapshot(
@@ -1957,7 +2299,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       cloudCursor: 0, desktopDeliveryCursor: 0, desktopProjectionCursor: 0,
       projectionGeneration: 1, compactionGeneration: 0,
       coveredThroughSequence: 0, lastInjectedSequence: 0, sidecar: [],
-      connectorClientMessageIds: [], connectorTurnIds: [], localTurnBindings: {}, pendingLocalTurns: [], hookDrafts: {}, executionJournal: {},
+      connectorClientMessageIds: [], connectorTurnIds: [], localTurnBindings: {}, pendingLocalTurns: [], automaticUpload: true,
+      hookDrafts: {}, executionJournal: {},
     };
   }
 
@@ -2320,6 +2663,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         ...(parsed.desktopProjectGeneration === undefined ? { desktopProjectGeneration: 0 } : {}),
         ...(parsed.hookDrafts === undefined ? { hookDrafts: {} } : {}),
         ...(parsed.executionJournal === undefined ? { executionJournal: {} } : {}),
+        ...(parsed.automaticUpload === undefined ? { automaticUpload: true } : {}),
         ...(parsed.contextUsageSource === undefined ? { contextUsageSource: "fallback_estimate" } : {}),
         ...(parsed.desktopDeliveryCursor === undefined
           ? { desktopDeliveryCursor: this.#desktopHookOnly ? 0 : parsed.cloudCursor }
@@ -2374,6 +2718,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         ...(parsed.desktopProjectGeneration === undefined ? { desktopProjectGeneration: 0 } : {}),
         ...(parsed.hookDrafts === undefined ? { hookDrafts: {} } : {}),
         ...(parsed.executionJournal === undefined ? { executionJournal: {} } : {}),
+        ...(parsed.automaticUpload === undefined ? { automaticUpload: true } : {}),
         ...(parsed.contextUsageSource === undefined ? { contextUsageSource: "fallback_estimate" } : {}),
         ...(parsed.desktopDeliveryCursor === undefined
           ? { desktopDeliveryCursor: this.#desktopHookOnly ? 0 : parsed.cloudCursor }
@@ -2442,15 +2787,85 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   }
 }
 
+class CodexExternalHistoryImporter {
+  readonly #options: Pick<CodexProjectHarnessOptions,
+  "command" | "commandArgs" | "env" | "signal" | "stateRoot">;
+
+  constructor(options: CodexProjectHarnessOptions) {
+    this.#options = options;
+  }
+
+  async import(input: { workspacePath: string; history: VisibleHistoryImport }): Promise<{ threadId: string }> {
+    const sessionId = randomUUID();
+    const importRoot = path.join(this.#options.stateRoot, "visible-history-imports", sessionId);
+    const importHome = path.join(importRoot, "home");
+    const projectDirectory = path.join(importHome, ".claude", "projects", claudeProjectDirectory(input.workspacePath));
+    const sourcePath = path.join(projectDirectory, `${sessionId}.jsonl`);
+    const environment = this.#options.env ?? process.env;
+    const codexHome = path.resolve(environment.CODEX_HOME?.trim() || path.join(homedir(), ".codex"));
+    await mkdir(projectDirectory, { recursive: true, mode: 0o700 });
+    let parentUuid: string | null = null;
+    const records = input.history.messages.map((message) => {
+      const uuid = randomUUID();
+      const record = {
+        parentUuid,
+        isSidechain: false,
+        type: message.role,
+        message: message.role === "user"
+          ? { role: "user", content: message.text }
+          : { role: "assistant", content: [{ type: "text", text: message.text }], model: "gatherthread-import" },
+        uuid,
+        timestamp: message.timestamp,
+        cwd: input.workspacePath,
+        sessionId,
+        version: "gatherthread",
+        gitBranch: "",
+      };
+      parentUuid = uuid;
+      return JSON.stringify(record);
+    });
+    await writeFile(sourcePath, `${records.join("\n")}\n`, { mode: 0o600 });
+    const client = new CodexAppServerClient({
+      command: this.#options.command,
+      ...(this.#options.commandArgs === undefined ? {} : { commandArgs: this.#options.commandArgs }),
+      cwd: input.workspacePath,
+      env: {
+        ...environment,
+        HOME: importHome,
+        USERPROFILE: importHome,
+        CODEX_HOME: codexHome,
+      },
+      ...(this.#options.signal === undefined ? {} : { signal: this.#options.signal }),
+    });
+    try {
+      return {
+        threadId: await client.importDetectedExternalSession({
+          workspacePath: input.workspacePath,
+          sourcePath,
+        }),
+      };
+    } finally {
+      await client.dispose().catch(() => undefined);
+      await rm(importRoot, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+}
+
+function claudeProjectDirectory(workspacePath: string): string {
+  return path.resolve(workspacePath).replace(/[\\/:]/gu, "-");
+}
+
 export class CodexProjectHarness implements ProjectHarnessAdapter {
   readonly descriptor: ProjectHarnessDescriptor;
   readonly #options: CodexProjectHarnessOptions;
   readonly #clients = new Set<CodexAppServerClient>();
+  readonly #visibleHistoryImporter: CodexExternalHistoryImporter;
   #backgroundClient: CodexAppServerClient | undefined;
 
   constructor(options: CodexProjectHarnessOptions) {
     validateCodexModel(options.model);
     this.#options = options;
+    this.#visibleHistoryImporter = new CodexExternalHistoryImporter(options);
     this.descriptor = {
       harness: "codex",
       provider: "openai",
@@ -2503,9 +2918,8 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
     sessionKey: string;
     statePath: string;
   }): ProjectHarnessSessionBinding {
-    const sessionName = input.session.name ?? input.session.id;
-    const threadName = [sessionName, "GatherThread"].join(" · ");
-    const executionThreadName = [sessionName, "GatherThread background"].join(" · ");
+    const threadName = managedCodexThreadName(input.session);
+    const executionThreadName = managedCodexThreadName(input.session, "GatherThread background");
     const executor = new CodexAppServerExecutor({
       client: this.#projectBackgroundClient(),
       workspacePath: this.#options.workspacePath,
@@ -2537,6 +2951,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
         desktopHookOnly: true,
         threadSource: "vscode",
         gatherThreadSessionId: input.session.id,
+        visibleHistoryImporter: (historyInput) => this.#visibleHistoryImporter.import(historyInput),
         ...(this.#options.sandbox === undefined ? {} : { sandbox: this.#options.sandbox }),
         ...(this.#options.revealThread === undefined ? {} : { revealThread: this.#options.revealThread }),
       })
@@ -2556,6 +2971,28 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
           // between them so a contended Desktop task cannot delay the Agent.
           synchronizeLocalTurns: ({ api, runtime }: { api: CollaborationApi; runtime: RegisteredRuntime }) =>
             desktop.synchronizeLocalTurns(api, runtime),
+          getLocalSyncStatus: () => desktop.getLocalSyncStatus(),
+          setLocalAutoUpload: (enabled: boolean) => desktop.setLocalAutoUpload(enabled),
+          uploadLocalTurns: ({ api, runtime }: { api: CollaborationApi; runtime: RegisteredRuntime }) =>
+            desktop.uploadLocalTurns(api, runtime),
+          importVisibleHistorySnapshot: async ({
+            api,
+            throughSequence,
+            automatic,
+          }: {
+            api: CollaborationApi;
+            throughSequence: number;
+            automatic: boolean;
+          }) => {
+            const mode = this.#options.visibleHistorySync ?? "first-connect";
+            if (automatic && mode === "never") {
+              return { status: "disabled" as const, throughSequence };
+            }
+            const history = await readCanonicalThrough(api, input.session.id, throughSequence);
+            return desktop.importVisibleHistorySnapshot(history.events, throughSequence, {
+              onlyIfMissing: automatic && mode === "first-connect",
+            });
+          },
           synchronizeCanonicalHistory: ({ api, runtime }: { api: CollaborationApi; runtime: RegisteredRuntime }) =>
             desktop.synchronizeCanonicalHistory(api, runtime),
           activateLocalPublishing: () => desktop.activateLocalPublishing(),
@@ -2611,7 +3048,9 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
       ...(await api.listSnapshotRequests("pending", 20)),
       ...(await api.listSnapshotRequests("claimed", 20)),
     ].filter((job, index, all) =>
-      visibleSessionIds.has(job.sessionId) && all.findIndex((candidate) => candidate.id === job.id) === index,
+      job.kind !== "visible_history_replace"
+      && visibleSessionIds.has(job.sessionId)
+      && all.findIndex((candidate) => candidate.id === job.id) === index,
     );
     for (const job of jobs) {
       const localSessionId = `gatherthread-codex:snapshot:${job.id}`;
@@ -2638,13 +3077,18 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
       try {
         const history = await readCanonicalThrough(api, job.sessionId, job.throughSequence);
         const session = input.sessions.find((candidate) => candidate.id === job.sessionId);
+        if (!session) throw new Error("Snapshot session is no longer visible");
+        const snapshotThreadName = managedCodexThreadName(
+          session,
+          `GatherThread snapshot · through ${job.throughSequence}`,
+        );
         const client = this.#createClient();
         try {
           const executor = new CodexAppServerExecutor({
             client,
             workspacePath: this.#options.workspacePath,
             statePath: path.join(this.#options.stateRoot, "snapshots", `${codexSessionKey(job.id)}.json`),
-            threadName: [session?.name ?? job.sessionId, "GatherThread snapshot", `through ${job.throughSequence}`].join(" · "),
+            threadName: snapshotThreadName,
             model: this.#options.model,
             ...(this.#options.hookRegistryPath === undefined ? {} : {
               hookRegistryPath: this.#options.hookRegistryPath,
@@ -2664,7 +3108,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
           );
           await api.completeSnapshotRequest(job.id, runtime.id, {
             thread_id: projection.threadId,
-            thread_name: [session?.name ?? job.sessionId, "GatherThread snapshot", `through ${job.throughSequence}`].join(" · "),
+            thread_name: snapshotThreadName,
             through_sequence: job.throughSequence,
             projection_generation: projection.projectionGeneration,
             compaction_generation: projection.compactionGeneration,
@@ -2811,11 +3255,28 @@ function isCodexAppServerState(value: unknown): value is CodexAppServerState {
     && Array.isArray(value.connectorTurnIds)
     && isObject(value.localTurnBindings)
     && Array.isArray(value.pendingLocalTurns)
+    && typeof value.automaticUpload === "boolean"
     && isHookDrafts(value.hookDrafts)
     && isExecutionJournal(value.executionJournal)
     && (value.projectionJournal === undefined || isProjectionJournal(value.projectionJournal))
     && (value.desktopProjectionJournal === undefined || isProjectionJournal(value.desktopProjectionJournal))
-    && (value.desktopProjectMigration === undefined || isDesktopProjectMigration(value.desktopProjectMigration));
+    && (value.desktopProjectMigration === undefined || isDesktopProjectMigration(value.desktopProjectMigration))
+    && (value.visibleHistorySnapshot === undefined || isVisibleHistorySnapshotState(value.visibleHistorySnapshot));
+}
+
+function isVisibleHistorySnapshotState(value: unknown): value is VisibleHistorySnapshotState {
+  return isObject(value)
+    && typeof value.digest === "string"
+    && /^[a-f0-9]{64}$/u.test(value.digest)
+    && typeof value.threadId === "string"
+    && value.threadId.length > 0
+    && Number.isSafeInteger(value.throughSequence)
+    && Number(value.throughSequence) >= 0
+    && typeof value.importedAt === "string"
+    && Number.isFinite(Date.parse(value.importedAt))
+    && typeof value.compacted === "boolean"
+    && (value.replacedThreadId === undefined
+      || (typeof value.replacedThreadId === "string" && value.replacedThreadId.length > 0));
 }
 
 function isDesktopProjectMigration(value: unknown): value is DesktopProjectMigration {
@@ -2979,6 +3440,7 @@ function migrateLegacyState(
     connectorTurnIds: [],
     localTurnBindings: {},
     pendingLocalTurns: [],
+    automaticUpload: true,
     hookDrafts: {},
     executionJournal: {},
   };
@@ -3030,6 +3492,88 @@ function renderProjectionEvent(
     session_state_change: "Session State Change",
   };
   return { role: projectionRole(event), text: `${username} · ${eventLabel[event.type]}：${content}` };
+}
+
+export function buildVisibleHistoryImport(
+  events: readonly CanonicalEvent[],
+  throughSequence: number,
+  contextWindowTokens: number,
+): VisibleHistoryImport {
+  const ordered = events
+    .filter((event) => event.sequence <= throughSequence)
+    .sort((left, right) => left.sequence - right.sequence);
+  const digest = createHash("sha256")
+    .update(JSON.stringify({
+      throughSequence,
+      events: ordered.map((event) => ({
+        id: event.id,
+        sequence: event.sequence,
+        type: event.type,
+        actorId: event.actorId,
+        timestamp: event.timestamp,
+        payload: event.payload,
+        runtime: event.runtime,
+      })),
+    }))
+    .digest("hex");
+  if (ordered.length === 0) {
+    const timestamp = new Date(0).toISOString();
+    const messages = [
+      { role: "user" as const, text: "[GatherThread visible history snapshot: empty shared session]", timestamp },
+      {
+        role: "assistant" as const,
+        text: "This local marker makes the empty shared session visible in Codex Desktop. It is not uploaded to GatherThread.",
+        timestamp,
+      },
+    ];
+    return { digest, messages, estimatedTokens: visibleImportTokens(messages), compacted: false };
+  }
+  const messages: VisibleHistoryImportMessage[] = ordered.map((event) => {
+    const rendered = renderProjectionEvent(event);
+    return { role: rendered.role, text: rendered.text, timestamp: event.timestamp };
+  });
+  if (!messages.some((message) => message.role === "user")) {
+    messages.unshift({
+      role: "user",
+      text: "[GatherThread session initialized]\nThis shared session has no user messages yet. This local-only marker makes it visible in Codex Desktop and is never uploaded to GatherThread.",
+      timestamp: ordered[0]?.timestamp ?? new Date(0).toISOString(),
+    });
+  }
+  const highWaterTokens = Math.max(512, Math.floor(contextWindowTokens * 0.8));
+  const fullTokens = visibleImportTokens(messages);
+  if (fullTokens < highWaterTokens) {
+    return { digest, messages, estimatedTokens: fullTokens, compacted: false };
+  }
+  const summary: VisibleHistoryImportMessage = {
+    role: "user",
+    text: `[GatherThread automatic compact]\nEarlier visible history was compacted before import to fit the configured Codex context window. Canonical realtime synchronization remains authoritative. Snapshot through sequence #${throughSequence}.`,
+    timestamp: ordered[0]?.timestamp ?? new Date(0).toISOString(),
+  };
+  const retained: VisibleHistoryImportMessage[] = [];
+  let retainedTokens = visibleImportTokens([summary]);
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as VisibleHistoryImportMessage;
+    const incoming = visibleImportTokens([message]);
+    if (retained.length > 0 && retainedTokens + incoming >= highWaterTokens) break;
+    if (retained.length === 0 && retainedTokens + incoming >= highWaterTokens) {
+      const maximumBytes = Math.max(256, (highWaterTokens - retainedTokens - 64) * 3);
+      retained.unshift({ ...message, text: splitUtf8(message.text, maximumBytes)[0] ?? "" });
+      break;
+    }
+    retained.unshift(message);
+    retainedTokens += incoming;
+  }
+  const compactedMessages = [summary, ...retained];
+  return {
+    digest,
+    messages: compactedMessages,
+    estimatedTokens: visibleImportTokens(compactedMessages),
+    compacted: true,
+  };
+}
+
+function visibleImportTokens(messages: readonly VisibleHistoryImportMessage[]): number {
+  return messages.reduce((total, message) => total + estimateTokens(message.text), 0);
 }
 
 function executionProfileForRequest(
@@ -3544,6 +4088,25 @@ function isActiveWriterError(error: unknown): boolean {
     if (current instanceof CodexAppServerRequestError
       && /already has an active writer/i.test(current.detail)) return true;
     if (current instanceof CodexThreadActiveError) return true;
+    if (current instanceof Error
+      && /already has an active writer/i.test(current.message)) return true;
+    current = current instanceof Error ? current.cause : undefined;
+  }
+  return false;
+}
+
+function isArchivedThreadError(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && !seen.has(current)) {
+    seen.add(current);
+    const message = current instanceof CodexAppServerRequestError
+      ? current.detail
+      : current instanceof Error
+        ? current.message
+        : "";
+    if (/(?:session|thread)\s+\S+\s+(?:is|was) archived/i.test(message)
+      || /Managed Codex thread status archived/i.test(message)) return true;
     current = current instanceof Error ? current.cause : undefined;
   }
   return false;

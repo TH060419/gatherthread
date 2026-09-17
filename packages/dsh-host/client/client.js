@@ -105,7 +105,9 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       }
       onSuccess?.(next);
     } catch {
-      setNotice("操作未完成。请检查服务器地址、当前授权和模型配置。");
+      setNotice(endpoint.startsWith("sync/")
+        ? "上传操作未完成。请检查连接和会话权限后重试。"
+        : "操作未完成。请检查服务器地址、当前授权和模型配置。");
     } finally {
       setBusy(false);
     }
@@ -129,7 +131,9 @@ function GatherThreadStatusPanel({ connection, sessions }) {
   React.createElement("p", { style: styles.summary },
     `活跃会话 ${String(snapshot?.activeSessionCount ?? 0)} / ${String(sessionRows.length)}`),
   React.createElement("div", { style: styles.list },
-    ...sessionRows.map((session) => React.createElement("div", {
+    ...sessionRows.map((session) => {
+      const sync = nativeState?.localSync?.find((item) => item.sessionId === session.sessionId);
+      return React.createElement("div", {
       key: session.sessionId,
       style: styles.row,
     },
@@ -137,7 +141,30 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       React.createElement("strong", { style: styles.sessionTitle }, session.title),
       React.createElement("span", { style: styles.sessionMeta },
         session.lastSyncedAt === undefined ? "尚未同步" : `最近同步 ${formatTime(session.lastSyncedAt)}`)),
-    React.createElement("span", { style: badgeStyle(session.state) }, statusLabel(session.state))))),
+    sync === undefined ? React.createElement("span", { style: badgeStyle(session.state) }, statusLabel(session.state))
+      : React.createElement("div", { style: styles.syncActions },
+        React.createElement("label", { style: styles.syncToggle },
+          React.createElement("input", {
+            type: "checkbox",
+            checked: sync.automaticUpload,
+            disabled: busy,
+            onChange: (event) => void runAction("sync/set-auto-upload", {
+              projectId: sync.projectId,
+              sessionId: sync.sessionId,
+              enabled: event.target.checked,
+            }),
+          }),
+          "自动上传"),
+        React.createElement("button", {
+          type: "button",
+          disabled: busy || sync.uploadableLocalTurns < 1,
+          style: styles.compactButton,
+          onClick: () => void runAction("sync/upload", {
+            projectId: sync.projectId,
+            sessionId: sync.sessionId,
+          }),
+        }, sync.uploadableLocalTurns > 0 ? `手动上传 ${String(sync.uploadableLocalTurns)}` : "已上传")));
+    })),
   nativeState === undefined || unavailable
     ? null
     : renderNativeControls({
@@ -386,7 +413,7 @@ function detail(label, value) {
 function parseNativeState(value) {
   exactObject(value, [
     "schemaVersion", "integration", "authorization", "compatibility", "runtime",
-    "officialServerUrl", "serverUrl", "deviceName", "route", "projectCount", "bindings", "pairing", "recoverableError",
+    "officialServerUrl", "serverUrl", "deviceName", "route", "projectCount", "bindings", "localSync", "pairing", "recoverableError",
   ]);
   if (value.schemaVersion !== 2 || value.integration !== "gatherthread") throw new Error("invalid native status identity");
   if (!AUTHORIZATION_STATES.has(value.authorization)) throw new Error("invalid native authorization state");
@@ -409,6 +436,7 @@ function parseNativeState(value) {
   if (value.deviceName !== undefined) boundedText(value.deviceName, 120);
   let route;
   let bindings;
+  let localSync;
   if (value.route !== undefined || value.bindings !== undefined || value.projectCount !== undefined) {
     if (value.route === undefined || !Number.isSafeInteger(value.projectCount) || value.projectCount < 0
       || !Array.isArray(value.bindings) || value.bindings.length > 100
@@ -429,6 +457,25 @@ function parseNativeState(value) {
         throw new Error("inconsistent native Project route");
       }
       return { ...binding };
+    });
+    const localSyncValue = value.localSync ?? [];
+    if (!Array.isArray(localSyncValue) || localSyncValue.length > 100) throw new Error("invalid local sync status");
+    localSync = localSyncValue.map((sync) => {
+      exactObject(sync, [
+        "projectId", "projectName", "sessionId", "localSessionId", "title", "automaticUpload",
+        "pendingLocalTurns", "uploadableLocalTurns",
+      ]);
+      boundedText(sync.projectId, 128);
+      boundedText(sync.projectName, 160);
+      boundedText(sync.sessionId, 128);
+      boundedText(sync.localSessionId, 200);
+      boundedText(sync.title, 160);
+      if (typeof sync.automaticUpload !== "boolean"
+        || !Number.isSafeInteger(sync.pendingLocalTurns) || sync.pendingLocalTurns < 0
+        || !Number.isSafeInteger(sync.uploadableLocalTurns) || sync.uploadableLocalTurns < 0) {
+        throw new Error("invalid local sync status");
+      }
+      return { ...sync };
     });
   }
   let pairing;
@@ -465,7 +512,7 @@ function parseNativeState(value) {
     ...(officialServerUrl === undefined ? {} : { officialServerUrl }),
     ...(serverUrl === undefined ? {} : { serverUrl }),
     ...(value.deviceName === undefined ? {} : { deviceName: value.deviceName }),
-    ...(route === undefined ? {} : { route, projectCount: value.projectCount, bindings }),
+    ...(route === undefined ? {} : { route, projectCount: value.projectCount, bindings, localSync }),
     ...(pairing === undefined ? {} : { pairing }),
     ...(value.recoverableError === undefined ? {} : { recoverableError: value.recoverableError }),
   };
@@ -592,6 +639,9 @@ const styles = {
   sessionText: { minWidth: 0, display: "grid", gap: 3 },
   sessionTitle: { overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontSize: 14 },
   sessionMeta: { opacity: 0.62, fontSize: 12 },
+  syncActions: { flex: "none", display: "grid", justifyItems: "end", gap: 6 },
+  syncToggle: { display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, cursor: "pointer" },
+  compactButton: { minHeight: 28, padding: "4px 8px", borderRadius: 8, border: "1px solid rgba(127,127,127,.3)", background: "transparent", color: "inherit", font: "inherit", fontSize: 12, cursor: "pointer" },
   badge: { flex: "none", padding: "4px 8px", borderRadius: 999, fontSize: 12, fontWeight: 600, background: "rgba(127,127,127,.12)", color: "inherit", border: "1px solid rgba(127,127,127,.2)" },
   connectionCard: { display: "grid", gap: 12, padding: "14px", border: "1px solid rgba(127,127,127,.2)", borderRadius: 14, background: "rgba(127,127,127,.06)" },
   subheading: { display: "grid", gap: 4 },

@@ -21,6 +21,7 @@ export async function runMcpCli(env: NodeJS.ProcessEnv = process.env): Promise<v
       : httpClientFromEnvironment(env, shutdown.signal);
     const service = new CollaborationMcpService({
       api,
+      ...(transport === "connector" ? { localSync: api as LocalConnectorCollaborationClient } : {}),
       toolProfile: profile,
       allowProviderRequestCapture: booleanEnv(
         env,

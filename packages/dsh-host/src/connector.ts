@@ -30,6 +30,10 @@ import type {
   DshSessionEventRecord,
 } from "./types.js";
 import type { SessionSummary } from "@gatherthread/bridge";
+import type {
+  LocalConversationSyncStatus,
+  LocalConversationUploadResult,
+} from "@gatherthread/bridge";
 
 export interface DshHostConnectorOptions {
   config: EnabledDshHostConfig;
@@ -79,6 +83,7 @@ export class DshHostConnector {
   #timer: ReturnType<typeof setInterval> | undefined;
   #heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   #pollPromise: Promise<DshPollResult> | undefined;
+  #localSyncControlPromise: Promise<void> | undefined;
   #heartbeatPromise: Promise<void> | undefined;
   #stopPromise: Promise<void> | undefined;
   #backgroundFatalError: Error | undefined;
@@ -112,6 +117,62 @@ export class DshHostConnector {
 
   get stopped(): boolean {
     return this.#stopped;
+  }
+
+  localSyncStatus(): LocalConversationSyncStatus {
+    const state = this.#requireState();
+    const pendingOperations = state.outbox.filter((operation) => operation.kind === "local_turn");
+    const pending = pendingOperations.length;
+    const discoverFrom = pendingOperations.reduce(
+      (sequence, operation) => Math.max(sequence, operation.dshToSequence),
+      state.publishedDshSequence,
+    );
+    const discoverable = state.activeRequest === undefined
+      ? captureCompletedLocalTurns(
+        this.#host.snapshotFrom(discoverFrom),
+        discoverFrom,
+        this.#config.dshSessionId,
+      ).turns.length
+      : 0;
+    return {
+      sessionId: this.#config.sessionId,
+      localSessionId: this.#config.dshSessionId,
+      automaticUpload: state.automaticUpload,
+      pendingLocalTurns: pending,
+      uploadableLocalTurns: pending + discoverable,
+    };
+  }
+
+  async setLocalAutoUpload(enabled: boolean): Promise<LocalConversationSyncStatus> {
+    const status = await this.#withLocalSyncControl(async () => {
+      const state = this.#requireState();
+      state.automaticUpload = enabled;
+      await this.#stateStore.save(state);
+      return this.localSyncStatus();
+    });
+    if (enabled) await this.pollOnce();
+    return enabled ? this.localSyncStatus() : status;
+  }
+
+  uploadLocalTurns(): Promise<LocalConversationUploadResult> {
+    return this.#withLocalSyncControl(async () => {
+      const before = this.localSyncStatus();
+      // Retry already-durable operations first, then scan beyond their native
+      // sequence so one explicit action uploads every currently eligible turn.
+      await this.#flushOutbox(true);
+      // A manually recovered turn may have happened before cloud history that
+      // arrived while automatic upload was disabled. Its exact base is unknown.
+      await this.#captureLocalTurns(0);
+      const discoveredLocalTurns = this.localSyncStatus().pendingLocalTurns;
+      const pendingBefore = this.localSyncStatus().pendingLocalTurns;
+      await this.#flushOutbox(true);
+      const after = this.localSyncStatus();
+      return {
+        ...after,
+        discoveredLocalTurns,
+        uploadedLocalTurns: Math.max(0, before.pendingLocalTurns + pendingBefore - after.pendingLocalTurns),
+      };
+    });
   }
 
   async start(options: DshConnectorStartOptions = {}): Promise<void> {
@@ -179,7 +240,7 @@ export class DshHostConnector {
       this.#assertRuntime(this.#runtime);
       this.#notifyLifecycle("idle");
       if (options.schedule !== false) this.#scheduleHeartbeat();
-      await this.#flushOutbox();
+      await this.#flushOutbox(this.#requireState().automaticUpload);
       await this.#finalizeDeliveredRequest();
       if (this.#state.activeRequest !== undefined) {
         await this.#withExecutionPermit(() => this.#recoverActiveRequest());
@@ -198,6 +259,10 @@ export class DshHostConnector {
     if (!this.#started || this.#stopped) {
       return Promise.reject(new Error("DSH connector is not running"));
     }
+    const localSyncControl = this.#localSyncControlPromise;
+    if (localSyncControl !== undefined) {
+      return localSyncControl.then(() => this.pollOnce());
+    }
     if (this.#pollPromise !== undefined) return this.#pollPromise;
     this.#pollPromise = this.#poll()
       .then((result) => {
@@ -212,6 +277,24 @@ export class DshHostConnector {
         this.#pollPromise = undefined;
       });
     return this.#pollPromise;
+  }
+
+  async #withLocalSyncControl<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.#localSyncControlPromise;
+    let release!: () => void;
+    const barrier = new Promise<void>((resolve) => { release = resolve; });
+    const current = (previous ?? Promise.resolve()).then(() => barrier);
+    this.#localSyncControlPromise = current;
+    try {
+      await previous;
+      const poll = this.#pollPromise;
+      if (poll !== undefined) await poll;
+      if (!this.#started || this.#stopped) throw new Error("DSH connector is not running");
+      return await operation();
+    } finally {
+      release();
+      if (this.#localSyncControlPromise === current) this.#localSyncControlPromise = undefined;
+    }
   }
 
   stop(): Promise<void> {
@@ -247,15 +330,19 @@ export class DshHostConnector {
 
   async #poll(): Promise<DshPollResult> {
     const state = this.#requireState();
-    await this.#flushOutbox();
+    await this.#flushOutbox(state.automaticUpload);
     await this.#finalizeDeliveredRequest();
     if (state.activeRequest !== undefined) {
       await this.#withExecutionPermit(() => this.#recoverActiveRequest());
       return { scanned: 0, claimed: 0, completed: 1 };
     }
 
-    await this.#captureLocalTurns();
-    await this.#flushOutbox();
+    if (state.automaticUpload) {
+      await this.#captureLocalTurns();
+      await this.#flushOutbox(true);
+    }
+    const manualUploadRequired = !state.automaticUpload
+      && this.localSyncStatus().uploadableLocalTurns > 0;
 
     let scanCursor = state.projectionCursor;
     let scanned = 0;
@@ -281,6 +368,12 @@ export class DshHostConnector {
           passive,
           passive.at(-1)?.sequence ?? state.projectionCursor,
         );
+        // Do not run a later cloud request across an unpublished native turn:
+        // finalizing that request would advance the native cursor past the
+        // private turn and make the user's explicit manual recovery impossible.
+        if (manualUploadRequired) {
+          return { scanned, claimed: 0, completed: 0 };
+        }
         if (profile.provider !== undefined && profile.provider !== this.#config.provider) {
           throw new Error("DeepSeek Harness Agent request provider does not match the configured Host binding");
         }
@@ -483,7 +576,7 @@ export class DshHostConnector {
     await this.#stateStore.save(state);
   }
 
-  async #captureLocalTurns(): Promise<void> {
+  async #captureLocalTurns(basedOnSequence?: number): Promise<void> {
     const state = this.#requireState();
     if (state.activeRequest !== undefined || state.outbox.length > 0) return;
     const current = this.#host.currentSequence();
@@ -503,7 +596,7 @@ export class DshHostConnector {
       input: {
         localTurnId: turn.localTurnId,
         runtimeId: runtime.id,
-        basedOnSequence: state.serverCursor,
+        basedOnSequence: basedOnSequence ?? state.serverCursor,
         occurredAt: turn.occurredAt,
         observedModel: this.#config.model,
         requestPayload: {
@@ -617,12 +710,13 @@ export class DshHostConnector {
     return operations;
   }
 
-  async #flushOutbox(): Promise<void> {
+  async #flushOutbox(includeLocalTurns = true): Promise<void> {
     const state = this.#requireState();
     const runtime = this.#requireRuntime();
     while (state.outbox.length > 0) {
       const operation = state.outbox[0];
       if (operation === undefined) break;
+      if (operation.kind === "local_turn" && !includeLocalTurns) break;
       if (operation.input.runtimeId !== runtime.id) {
         throw new Error("DSH connector outbox belongs to a different runtime");
       }
@@ -727,7 +821,7 @@ export class DshHostConnector {
         throw new Error("Persisted DSH Session exists without connector state; refusing ambiguous resume");
       }
       return {
-        version: 2,
+        version: 3,
         binding: {
           projectId: this.#config.projectId,
           sessionId: this.#config.sessionId,
@@ -736,6 +830,7 @@ export class DshHostConnector {
         serverCursor: 0,
         projectionCursor: 0,
         publishedDshSequence: 0,
+        automaticUpload: true,
         outbox: [],
       };
     }

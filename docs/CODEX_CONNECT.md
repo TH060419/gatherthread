@@ -2,14 +2,28 @@
 
 GatherThread keeps one selected cloud project connected to Codex Desktop through a small local connector. The browser never launches Codex and never places a credential in a copied command.
 
-> Alpha preview: `0.1.0-alpha.1` is prepared for private repository testing. The npm package and fixed Git ref commands work after they are published. Until then, use the source-checkout path below.
+> Alpha preview: `0.1.0-alpha.5` is prepared for private repository testing. The npm package and fixed Git ref commands work after they are published. Until then, use the source-checkout path below.
 
 ## Normal three-step setup
 
 ### 1. Install the Codex plugin once
 
+First confirm that the Codex CLI is available:
+
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.1 --sparse .agents/plugins --sparse plugins/gatherthread
+codex --version
+```
+
+If Terminal reports `codex: command not found`, install or update the official CLI, then reopen Terminal:
+
+```bash
+npm install -g @openai/codex
+```
+
+Run `codex plugin --help` to confirm that this Codex build supports plugins, then install GatherThread:
+
+```bash
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -20,7 +34,7 @@ Restart Codex Desktop. Open Settings, review the **共序 / GatherThread** MCP s
 Open that project in GatherThread, select **Connect Codex**, and copy the command shown for your operating system. It has this shape:
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.1 \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 \
   --url 'https://your-gatherthread-server.example' \
   --project 'PROJECT_ID' \
   --create-workspace \
@@ -49,17 +63,19 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-Use the server URL and project ID displayed by the local Web app. The fixed plugin commands above become available when the private `v0.1.0-alpha.1` ref exists. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
+Use the server URL and project ID displayed by the local Web app. The fixed plugin commands above become available when the private `v0.1.0-alpha.5` ref exists. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
 
 ## What synchronizes
 
 - Editable GatherThread sessions receive independent Codex tasks.
 - Web **Request my Agent** runs in an isolated background projection and publishes its final response to canonical history.
 - Reviewed Hooks upload completed direct Desktop turns and deliver new shared context.
+- Each local conversation defaults to automatic upload. The GatherThread workspace shows the selected Codex device, an **Auto-upload local turns to cloud** switch, pending cloud-upload status, and **Upload local turns to cloud now** for the open session. The reviewed Codex plugin exposes the same controls by session name.
+- With the connector still running in reviewed `--plugin-hooks` mode, manual upload scans the Desktop task itself, so it can recover an eligible completed turn even when the trusted Hook did not run, missed it, or failed. It never re-enables automation implicitly.
 - New local tasks create a creator-owned cloud Solo only after the first completed turn. Empty tasks and viewer tasks stay local.
 - Cloud deletion never deletes local files or Codex tasks.
 
-Canonical history is always injected for model context. Some Codex Desktop builds may persist imported history without repainting every imported event as a visible bubble immediately; reopening the task can refresh the visible transcript.
+Canonical history is always injected for model context. The connector separately imports a verified native history snapshot so the first connected task has readable Desktop bubbles. Settings has two choices: `first-connect` imports once when each session is first established locally (default), while `never` disables automatic visible-history import. Use **Import Codex history** in the workspace or `collaboration_import_codex_history` in the reviewed plugin at any time. Every manual import creates a new local Codex task, compacts long history to the configured context budget, verifies the result, then switches the durable binding and Hook allowlist. It does not overwrite, delete, or archive the previous task; review and archive that task yourself. Realtime delta injection remains active independently, including when automatic visible-history import is disabled.
 
 ## Project and workspace rules
 
@@ -74,9 +90,9 @@ Canonical history is always injected for model context. Some Codex Desktop build
 |---|---|
 | `Local workspace is already bound...` | Stop the connector and choose a new workspace, or reconnect the matching original project/server. |
 | `thread/start` or `thread/resume request timed out` | Leave the connector running. It retries and prints `recovered` when Codex App Server responds. Restart Codex Desktop if retries continue. |
-| Project appears but no task is visible | Send the first Web Agent request or create a completed direct task turn, then reopen the Codex project. Empty sessions do not create synthetic turns. |
+| Project appears but no task is visible | Keep the connector running and use **Import Codex history**. Empty sessions receive a local-only visibility marker; it is never uploaded to shared history. |
 | Web says Codex is offline | Confirm the terminal is still running and the connector URL is the same origin shown in the browser. |
-| Hooks do not upload direct turns | Confirm `--plugin-hooks` is present, the plugin is installed, Hooks are enabled, and the task belongs to the managed workspace. |
+| Hooks do not upload direct turns | Confirm `--plugin-hooks` is present, the plugin is installed, Hooks are enabled, and the task belongs to the managed workspace. Then ask the plugin to manually upload that session's completed local turns. |
 
 ## Security boundary
 

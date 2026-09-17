@@ -6,6 +6,7 @@ import {
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
   CreateBrowserSessionInputSchema,
+  CreateSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
   CompleteSnapshotRequestInputSchema,
   CreateInvitationInputSchema,
@@ -233,11 +234,19 @@ test("local turn, snapshot request, and runtime purpose contracts are bounded", 
     tool_events: Array.from({ length: 33 }, () => ({ type: "tool_result", payload: {} })),
   }).success, false);
   const record = {
-    id: "snapshot-1", session_id: "session-1", requested_by_user_id: "user-1", through_sequence: 1,
-    status: "pending", claimed_by_runtime_id: null, created_at: "2026-08-25T12:00:00.000Z",
+    id: "snapshot-1", session_id: "session-1", requested_by_user_id: "user-1", kind: "immutable", through_sequence: 1,
+    status: "pending", target_runtime_id: null, claimed_by_runtime_id: null, created_at: "2026-08-25T12:00:00.000Z",
     claimed_at: null, completed_at: null, failed_at: null, result: null, failure: null,
   };
   assert.deepEqual(SnapshotRequestRecordSchema.parse(record), record);
+  assert.deepEqual(CreateSnapshotRequestInputSchema.parse({}), { kind: "immutable" });
+  assert.deepEqual(CreateSnapshotRequestInputSchema.parse({ kind: "visible_history_replace" }), {
+    kind: "visible_history_replace",
+  });
+  assert.deepEqual(CreateSnapshotRequestInputSchema.parse({
+    kind: "local_auto_upload_disable", target_runtime_id: "runtime-1",
+  }), { kind: "local_auto_upload_disable", target_runtime_id: "runtime-1" });
+  assert.equal(CreateSnapshotRequestInputSchema.safeParse({ kind: "replace" }).success, false);
   assert.equal(CompleteSnapshotRequestInputSchema.safeParse({ runtime_id: "runtime-1", result: {} }).success, true);
   assert.equal(CompleteSnapshotRequestInputSchema.safeParse({
     runtime_id: "runtime-1", result: { content: "x".repeat(100_000) },

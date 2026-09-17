@@ -2,6 +2,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import {
   refreshProjectSessionPermissions,
+  type LocalConversationSyncStatus,
+  type LocalConversationUploadResult,
   type CurrentActor,
   type ProjectHarnessDeactivationReason,
   type SessionSummary,
@@ -22,6 +24,9 @@ export interface DshManagedConnector {
   readonly stopped: boolean;
   start(): Promise<void>;
   stop(): Promise<void>;
+  localSyncStatus?(): LocalConversationSyncStatus;
+  setLocalAutoUpload?(enabled: boolean): Promise<LocalConversationSyncStatus>;
+  uploadLocalTurns?(): Promise<LocalConversationUploadResult>;
 }
 
 export interface DshProjectConnectorFactoryInput {
@@ -138,6 +143,25 @@ export class DshProjectManager {
       .filter(([, binding]) => binding.phase === "active" && !binding.connector.stopped)
       .map(([sessionId]) => sessionId)
       .sort();
+  }
+
+  localSyncStatuses(): LocalConversationSyncStatus[] {
+    return [...this.#managed.entries()]
+      .filter(([, binding]) => binding.phase === "active" && !binding.connector.stopped)
+      .flatMap(([, binding]) => binding.connector.localSyncStatus?.() ?? [])
+      .sort((left, right) => left.sessionId.localeCompare(right.sessionId));
+  }
+
+  async setLocalAutoUpload(sessionId: string, enabled: boolean): Promise<LocalConversationSyncStatus> {
+    const connector = this.#requireManagedConnector(sessionId);
+    if (!connector.setLocalAutoUpload) throw new Error("This DSH conversation does not support upload controls");
+    return connector.setLocalAutoUpload(enabled);
+  }
+
+  async uploadLocalTurns(sessionId: string): Promise<LocalConversationUploadResult> {
+    const connector = this.#requireManagedConnector(sessionId);
+    if (!connector.uploadLocalTurns) throw new Error("This DSH conversation does not support manual upload");
+    return connector.uploadLocalTurns();
   }
 
   async start(): Promise<void> {
@@ -400,6 +424,14 @@ export class DshProjectManager {
   #requireActor(): CurrentActor {
     if (this.#actor === undefined) throw new Error("Authenticated GatherThread actor is unavailable");
     return this.#actor;
+  }
+
+  #requireManagedConnector(sessionId: string): DshManagedConnector {
+    const binding = this.#managed.get(sessionId);
+    if (!binding || binding.phase !== "active" || binding.connector.stopped) {
+      throw new Error("The selected DSH conversation is not active");
+    }
+    return binding.connector;
   }
 
   #reportError(error: Error): void {

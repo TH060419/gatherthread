@@ -420,6 +420,23 @@ export const snapshotRequestStatuses = ["pending", "claimed", "completed", "fail
 export const SnapshotRequestStatusSchema = z.enum(snapshotRequestStatuses);
 export type SnapshotRequestStatus = z.infer<typeof SnapshotRequestStatusSchema>;
 
+export const snapshotRequestKinds = [
+  "immutable",
+  "visible_history_replace",
+  "local_sync_status",
+  "local_auto_upload_enable",
+  "local_auto_upload_disable",
+  "local_turn_upload",
+] as const;
+export const SnapshotRequestKindSchema = z.enum(snapshotRequestKinds);
+export type SnapshotRequestKind = z.infer<typeof SnapshotRequestKindSchema>;
+
+export const CreateSnapshotRequestInputSchema = z.object({
+  kind: SnapshotRequestKindSchema.default("immutable"),
+  target_runtime_id: IdSchema.optional(),
+});
+export type CreateSnapshotRequestInput = z.infer<typeof CreateSnapshotRequestInputSchema>;
+
 export const SnapshotFailureSchema = z.object({
   code: z.string().trim().min(1).max(80),
   message: z.string().trim().min(1).max(1_000),
@@ -440,8 +457,10 @@ export const SnapshotRequestRecordSchema = z.object({
   id: IdSchema,
   session_id: IdSchema,
   requested_by_user_id: IdSchema,
+  kind: SnapshotRequestKindSchema,
   through_sequence: z.number().int().nonnegative(),
   status: SnapshotRequestStatusSchema,
+  target_runtime_id: IdSchema.nullable(),
   claimed_by_runtime_id: IdSchema.nullable(),
   created_at: z.string().datetime(),
   claimed_at: z.string().datetime().nullable(),

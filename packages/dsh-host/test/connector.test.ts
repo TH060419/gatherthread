@@ -549,6 +549,90 @@ test("a completed local DSH turn is atomically committed and its canonical echo 
   await connector.stop();
 });
 
+test("per-conversation automatic upload can be disabled and manual upload discovers the missed DSH turn", async () => {
+  const cfg = config({ shareToolEvents: false });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const store = new MemoryConnectorStateStore();
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ runImmediately: false, schedule: false });
+
+  const disabled = await connector.setLocalAutoUpload(false);
+  assert.equal(disabled.automaticUpload, false);
+  host.emitLocalTurn("PRIVATE_UNTIL_MANUAL", "MANUAL_DSH_RESPONSE");
+  await connector.pollOnce();
+  assert.equal(api.localTurns.length, 0, "ordinary polling must honor the disabled upload preference");
+  assert.equal(connector.localSyncStatus().uploadableLocalTurns, 1);
+
+  const uploaded = await connector.uploadLocalTurns();
+  assert.equal(uploaded.discoveredLocalTurns, 1);
+  assert.equal(uploaded.uploadedLocalTurns, 1);
+  assert.equal(uploaded.automaticUpload, false, "manual recovery must not silently change the preference");
+  assert.equal(api.localTurns[0]?.requestPayload && (api.localTurns[0].requestPayload as any).content, "PRIVATE_UNTIL_MANUAL");
+  assert.equal(api.localTurns[0]?.basedOnSequence, 0, "manual recovery must not invent a historical cloud base");
+  assert.equal((await store.load())?.automaticUpload, false);
+  await connector.stop();
+});
+
+test("a disabled conversation preserves a missed local turn before claiming a later Web request", async () => {
+  const cfg = config({ shareToolEvents: false });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await connector.start({ runImmediately: false, schedule: false });
+  await connector.setLocalAutoUpload(false);
+  host.emitLocalTurn("PRIVATE_BEFORE_WEB_REQUEST", "LOCAL_FIRST");
+  api.events.push(request(1));
+
+  await connector.pollOnce();
+  assert.equal(api.claims.size, 0, "the later Web request must wait for the user's upload choice");
+  assert.equal(host.prompts.length, 0);
+  assert.equal(connector.localSyncStatus().uploadableLocalTurns, 1);
+
+  await connector.uploadLocalTurns();
+  await connector.pollOnce();
+  assert.equal(api.claims.get("event-1"), "completed");
+  assert.equal(host.prompts.length, 1);
+  await connector.stop();
+});
+
+test("manual DSH recovery deduplicates a failed outbox turn and uploads newer turns in one action", async () => {
+  const cfg = config({ shareToolEvents: false });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await connector.start({ runImmediately: false, schedule: false });
+  await connector.setLocalAutoUpload(false);
+  host.emitLocalTurn("FIRST_OFFLINE_TURN", "FIRST_RESPONSE");
+  api.failNextKind = "local_turn";
+  await assert.rejects(connector.uploadLocalTurns(), /simulated offline transport/);
+
+  host.emitLocalTurn("SECOND_OFFLINE_TURN", "SECOND_RESPONSE");
+  const pending = connector.localSyncStatus();
+  assert.equal(pending.pendingLocalTurns, 1);
+  assert.equal(pending.uploadableLocalTurns, 2, "the durable turn must not also be counted as newly discoverable");
+
+  const recovered = await connector.uploadLocalTurns();
+  assert.equal(recovered.discoveredLocalTurns, 1);
+  assert.equal(recovered.uploadedLocalTurns, 2);
+  assert.equal(recovered.uploadableLocalTurns, 0);
+  assert.deepEqual(api.localTurns.map((turn) => (turn.requestPayload as { content: string }).content), [
+    "FIRST_OFFLINE_TURN",
+    "SECOND_OFFLINE_TURN",
+  ]);
+  await connector.stop();
+});
+
 test("a newly adopted native DSH Session uploads its existing completed turn before canonical replay", async () => {
   const cfg = config({ dshSessionId: "session-1" });
   const api = new FakeApi();
@@ -675,7 +759,7 @@ test("connector runs register, replay, claim, prompt, progress/tool/final, curso
   assert.doesNotMatch(uploaded, /PRIVATE_|hunter2|reasoning|replayState|stream/i);
   assert.match(uploaded, /\[REDACTED\]/);
   assert.deepEqual(await store.load(), {
-    version: 2,
+    version: 3,
     binding: {
       projectId: "project-1",
       sessionId: "session-1",
@@ -684,6 +768,7 @@ test("connector runs register, replay, claim, prompt, progress/tool/final, curso
     serverCursor: 2,
     projectionCursor: 2,
     publishedDshSequence: 5,
+    automaticUpload: true,
     outbox: [],
   });
   await connector.stop();
@@ -862,7 +947,7 @@ test("crash-repaired active request resumes through DSH context instead of repla
     ],
   };
   const state: ConnectorState = {
-    version: 2,
+    version: 3,
     binding: {
       projectId: cfg.projectId,
       sessionId: cfg.sessionId,
@@ -871,6 +956,7 @@ test("crash-repaired active request resumes through DSH context instead of repla
     serverCursor: 0,
     projectionCursor: 0,
     publishedDshSequence: 0,
+    automaticUpload: true,
     activeRequest: {
       requestId: activeRequest.id,
       requestSequence: activeRequest.sequence,
@@ -932,6 +1018,36 @@ test("concurrent polling coalesces, and unload removes timer/listeners/write own
   const readsAfterStop = api.readCount;
   await new Promise<void>((resolve) => setTimeout(resolve, 80));
   assert.equal(api.readCount, readsAfterStop);
+});
+
+test("manual upload waits for an in-flight poll before mutating the local outbox", async () => {
+  const cfg = config({ shareToolEvents: false });
+  const api = new FakeApi();
+  let releaseRead: (() => void) | undefined;
+  api.readGate = new Promise<void>((resolve) => { releaseRead = resolve; });
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await connector.start({ runImmediately: false, schedule: false });
+  await connector.setLocalAutoUpload(false);
+  host.emitLocalTurn("MANUAL_DURING_POLL", "SERIALIZED_RESPONSE");
+
+  const poll = connector.pollOnce();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const upload = connector.uploadLocalTurns();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(api.localTurns.length, 0, "manual upload must not race an active poll");
+
+  releaseRead?.();
+  await poll;
+  const result = await upload;
+  assert.equal(result.uploadedLocalTurns, 1);
+  assert.equal(api.localTurns.length, 1);
+  await connector.stop();
 });
 
 test("scheduled polling stops across unload and a clean HMR-style reload owns one fresh listener set", async () => {
@@ -1111,7 +1227,7 @@ test("ambiguous state/session identity and viewer access fail closed", async () 
   assert.equal(viewerHost.disposeCount, 1);
 
   const staleState: ConnectorState = {
-    version: 2,
+    version: 3,
     binding: {
       projectId: cfg.projectId,
       sessionId: cfg.sessionId,
@@ -1120,6 +1236,7 @@ test("ambiguous state/session identity and viewer access fail closed", async () 
     serverCursor: 5,
     projectionCursor: 5,
     publishedDshSequence: 0,
+    automaticUpload: true,
     outbox: [],
   };
   const rewoundHost = new FakeHost(cfg.dshSessionId, freshPersistence());

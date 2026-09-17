@@ -172,6 +172,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
       occurred_at: "2026-08-25T00:00:03.500Z",
     }],
   });
+  assert.deepEqual(JSON.parse(String(requests[14]?.init.body)), { kind: "immutable" });
   assert.deepEqual(JSON.parse(String(requests[18]?.init.body)), {
     runtime_id: "runtime-1",
     result: {
@@ -256,6 +257,7 @@ function wireSnapshotRequest(id: string, status = "pending") {
   return {
     id,
     session_id: "s1",
+    kind: "immutable",
     through_sequence: 5,
     status,
     created_at: "2026-08-25T00:00:00.000Z",

@@ -25,6 +25,7 @@ import type {
   SessionMode,
   SnapshotFailure,
   SnapshotRequestRecord,
+  SnapshotRequestKind,
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
@@ -218,8 +219,10 @@ interface SnapshotRequestRow {
   id: string;
   session_id: string;
   requested_by_user_id: string;
+  request_kind: SnapshotRequestKind;
   through_sequence: number;
   status: SnapshotRequestStatus;
+  target_runtime_id: string | null;
   claimed_by_runtime_id: string | null;
   created_at: string;
   claimed_at: string | null;
@@ -382,8 +385,10 @@ CREATE TABLE IF NOT EXISTS snapshot_requests (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload')),
   through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
+  target_runtime_id TEXT REFERENCES runtimes(id),
   claimed_by_runtime_id TEXT REFERENCES runtimes(id),
   created_at TEXT NOT NULL,
   claimed_at TEXT,
@@ -560,6 +565,13 @@ function runtimeStatus(
     : "offline";
 }
 
+function isLocalSyncRequestKind(kind: SnapshotRequestKind): boolean {
+  return kind === "local_sync_status"
+    || kind === "local_auto_upload_enable"
+    || kind === "local_auto_upload_disable"
+    || kind === "local_turn_upload";
+}
+
 interface AgentRequestTarget {
   harness: string;
   provider?: string;
@@ -724,6 +736,7 @@ export class CollaborationDatabase {
     this.migrateAgentProgressEventType();
     this.migrateCanonicalProvenancePrivacy();
     this.migrateSnapshotStorageLedger();
+    this.migrateSnapshotControlRequests();
     this.initializeEventStorageUsage();
   }
 
@@ -2439,19 +2452,38 @@ export class CollaborationDatabase {
     });
   }
 
-  createSnapshotRequest(actor: Actor, sessionId: string): SnapshotRequestRecord {
+  createSnapshotRequest(
+    actor: Actor,
+    sessionId: string,
+    kind: SnapshotRequestKind = "immutable",
+    targetRuntimeId?: string,
+  ): SnapshotRequestRecord {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
-      const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
+      const localControl = isLocalSyncRequestKind(kind);
+      const session = kind === "visible_history_replace" || localControl
+        ? this.requireWritableSessionInsideTransaction(actor, sessionId)
+        : this.requireReadableSessionInsideTransaction(actor, sessionId);
+      let targetRuntime: RuntimeRecord | undefined;
+      if (localControl) {
+        targetRuntime = this.listSessionRuntimesForUser(sessionId, actor.user_id)
+          .find((runtime) => runtime.id === targetRuntimeId);
+        if (!targetRuntime || targetRuntime.purpose !== "execution"
+          || targetRuntime.status !== "online" || targetRuntime.harness.trim().toLowerCase() !== "codex") {
+          throw conflict("An online Codex execution runtime owned by this user is required");
+        }
+      } else if (targetRuntimeId !== undefined) {
+        throw conflict("Only local sync controls can target an execution runtime");
+      }
       this.enforceActiveSnapshotRequestQuota(sessionId, actor.user_id);
       this.enforceSnapshotStorageQuota(sessionId, actor.user_id, SNAPSHOT_REQUEST_METADATA_BYTES);
       const id = randomUUID();
       this.sqlite.prepare(`
         INSERT INTO snapshot_requests(
-          id, session_id, requested_by_user_id, through_sequence, status, created_at,
+          id, session_id, requested_by_user_id, request_kind, through_sequence, status, target_runtime_id, created_at,
           storage_bytes, metadata_charged
-        ) VALUES (?, ?, ?, ?, 'pending', ?, ?, 1)
-      `).run(id, sessionId, actor.user_id, session.next_sequence, this.now(), SNAPSHOT_REQUEST_METADATA_BYTES);
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, 1)
+      `).run(id, sessionId, actor.user_id, kind, session.next_sequence, targetRuntime?.id ?? null, this.now(), SNAPSHOT_REQUEST_METADATA_BYTES);
       this.sqlite.prepare(`
         INSERT INTO snapshot_storage_usage(session_id, user_id, bytes) VALUES (?, ?, ?)
         ON CONFLICT(session_id, user_id) DO UPDATE SET bytes = bytes + excluded.bytes
@@ -2509,8 +2541,21 @@ export class CollaborationDatabase {
       this.assertActiveDevice(actor);
       const request = this.requireSnapshotRequest(requestId);
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
-      this.requireReadableSessionInsideTransaction(actor, request.session_id);
-      this.requireRuntimeForActor(actor, request.session_id, runtimeId, "snapshot_connector");
+      const localControl = isLocalSyncRequestKind(request.kind);
+      if (request.kind === "visible_history_replace" || localControl) {
+        this.requireWritableSessionInsideTransaction(actor, request.session_id);
+      } else {
+        this.requireReadableSessionInsideTransaction(actor, request.session_id);
+      }
+      const runtime = this.requireRuntimeForActor(
+        actor,
+        request.session_id,
+        runtimeId,
+        localControl ? "execution" : "snapshot_connector",
+      );
+      if (localControl && (request.target_runtime_id !== runtime.id || runtime.harness.trim().toLowerCase() !== "codex")) {
+        throw forbidden("This local sync control targets a different Codex runtime");
+      }
       if (request.status === "claimed" && request.claimed_by_runtime_id === runtimeId) return request;
       if (request.status !== "pending") throw conflict("Snapshot request is not pending");
       const changed = this.sqlite.prepare(`
@@ -2611,7 +2656,9 @@ export class CollaborationDatabase {
   private mapSnapshotRequest(row: SnapshotRequestRow): SnapshotRequestRecord {
     return {
       id: row.id, session_id: row.session_id, requested_by_user_id: row.requested_by_user_id,
+      kind: row.request_kind,
       through_sequence: row.through_sequence, status: row.status,
+      target_runtime_id: row.target_runtime_id,
       claimed_by_runtime_id: row.claimed_by_runtime_id, created_at: row.created_at,
       claimed_at: row.claimed_at, completed_at: row.completed_at, failed_at: row.failed_at,
       result: row.result_json === null ? null : JSON.parse(row.result_json) as JsonValue,
@@ -2636,7 +2683,16 @@ export class CollaborationDatabase {
       this.assertActiveDevice(actor);
       const request = this.requireSnapshotRequest(requestId);
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
-      this.requireRuntimeForActor(actor, request.session_id, runtimeId, "snapshot_connector");
+      const localControl = isLocalSyncRequestKind(request.kind);
+      const runtime = this.requireRuntimeForActor(
+        actor,
+        request.session_id,
+        runtimeId,
+        localControl ? "execution" : "snapshot_connector",
+      );
+      if (localControl && (request.target_runtime_id !== runtime.id || runtime.harness.trim().toLowerCase() !== "codex")) {
+        throw forbidden("This local sync control targets a different Codex runtime");
+      }
       const targetStatus = "result" in outcome ? "completed" : "failed";
       if (request.status === targetStatus && request.claimed_by_runtime_id === runtimeId) {
         const matches = "result" in outcome
@@ -3137,6 +3193,9 @@ export class CollaborationDatabase {
     if (!columns.has("metadata_charged")) {
       this.sqlite.exec("ALTER TABLE snapshot_requests ADD COLUMN metadata_charged INTEGER NOT NULL DEFAULT 0 CHECK (metadata_charged IN (0, 1))");
     }
+    if (!columns.has("request_kind")) {
+      this.sqlite.exec("ALTER TABLE snapshot_requests ADD COLUMN request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace'))");
+    }
     this.transaction(() => {
       this.sqlite.exec(`
         UPDATE snapshot_requests
@@ -3152,6 +3211,60 @@ export class CollaborationDatabase {
         GROUP BY session_id, requested_by_user_id
       `);
     });
+  }
+
+  private migrateSnapshotControlRequests(): void {
+    const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'snapshot_requests'")
+      .get() as { sql?: string } | undefined;
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (table?.sql?.includes("'local_sync_status'") && columns.has("target_runtime_id")) return;
+    this.sqlite.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.sqlite.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE snapshot_requests_next (
+          id TEXT PRIMARY KEY,
+          session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+          requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload')),
+          through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
+          status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
+          target_runtime_id TEXT REFERENCES runtimes(id),
+          claimed_by_runtime_id TEXT REFERENCES runtimes(id),
+          created_at TEXT NOT NULL,
+          claimed_at TEXT,
+          completed_at TEXT,
+          failed_at TEXT,
+          result_json TEXT CHECK (result_json IS NULL OR json_valid(result_json)),
+          failure_json TEXT CHECK (failure_json IS NULL OR json_valid(failure_json)),
+          storage_bytes INTEGER NOT NULL DEFAULT ${SNAPSHOT_REQUEST_METADATA_BYTES} CHECK (storage_bytes >= 0),
+          metadata_charged INTEGER NOT NULL DEFAULT 1 CHECK (metadata_charged IN (0, 1))
+        ) STRICT;
+        INSERT INTO snapshot_requests_next(
+          id, session_id, requested_by_user_id, request_kind, through_sequence, status,
+          target_runtime_id, claimed_by_runtime_id, created_at, claimed_at, completed_at,
+          failed_at, result_json, failure_json, storage_bytes, metadata_charged
+        ) SELECT
+          id, session_id, requested_by_user_id, request_kind, through_sequence, status,
+          NULL, claimed_by_runtime_id, created_at, claimed_at, completed_at,
+          failed_at, result_json, failure_json, storage_bytes, metadata_charged
+        FROM snapshot_requests;
+        DROP TABLE snapshot_requests;
+        ALTER TABLE snapshot_requests_next RENAME TO snapshot_requests;
+        CREATE INDEX snapshot_requests_user_status_idx
+          ON snapshot_requests(requested_by_user_id, status, created_at, id);
+        COMMIT;
+      `);
+    } catch (error) {
+      try { this.sqlite.exec("ROLLBACK"); } catch { /* The migration may have failed before BEGIN. */ }
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) throw new Error("Snapshot control migration failed foreign-key validation");
   }
 
   private migrateCanonicalProvenancePrivacy(): void {
