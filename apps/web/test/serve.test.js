@@ -7,7 +7,7 @@ test("Web preview binds to loopback and proxies only owner-host API paths", () =
   const config = loadWebServerConfig({});
   assert.equal(config.host, "127.0.0.1");
   assert.equal(config.port, 4173);
-  assert.equal(config.upstream.origin, "http://127.0.0.1:8787");
+  assert.equal(config.upstream.origin, "http://127.0.0.1:18787");
   assert.equal(isProxyPath("/health"), true);
   assert.equal(isProxyPath("/v1/me"), true);
   assert.equal(isProxyPath("/src/main.js"), false);

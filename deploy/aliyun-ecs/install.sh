@@ -173,7 +173,7 @@ if [[ ! -e "$environment_file" ]]; then
   cat > "$temporary_directory/gatherthread.env" <<EOF
 NODE_ENV=production
 GATHERTHREAD_SERVER_HOST=127.0.0.1
-GATHERTHREAD_SERVER_PORT=8787
+GATHERTHREAD_SERVER_PORT=18787
 GATHERTHREAD_DATABASE_PATH=/var/lib/gatherthread/collaboration.sqlite
 GATHERTHREAD_STATIC_DIRECTORY=/opt/gatherthread/current/apps/web/dist
 GATHERTHREAD_PUBLIC_BASE_URL=https://$domain
@@ -216,12 +216,12 @@ systemctl restart gatherthread.service
 systemctl reload caddy.service
 
 for _ in {1..30}; do
-  if curl --fail --silent --show-error http://127.0.0.1:8787/health/ready >/dev/null; then
+  if curl --fail --silent --show-error http://127.0.0.1:18787/health/ready >/dev/null; then
     break
   fi
   sleep 1
 done
-curl --fail --silent --show-error http://127.0.0.1:8787/health/ready >/dev/null || {
+curl --fail --silent --show-error http://127.0.0.1:18787/health/ready >/dev/null || {
   journalctl -u gatherthread.service --no-pager -n 50 >&2
   exit 70
 }
@@ -230,7 +230,7 @@ cat <<EOF
 GatherThread $release_version is ready on loopback and Caddy is configured for https://$domain.
 
 Next:
-  1. In the Alibaba Cloud security group, allow TCP 80 and 443. Never open 8787.
+  1. In the Alibaba Cloud security group, allow TCP 80 and 443. Never open 18787.
   2. Create the first owner:
      sudo $repository_root/deploy/aliyun-ecs/create-owner.sh --display-name "Your name" --device-name "Server bootstrap"
   3. Run:

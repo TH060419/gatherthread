@@ -1,13 +1,13 @@
 # Alibaba Cloud ECS deployment: 0.1.0-alpha.5 preview
 
-This profile prepares the private `0.1.0-alpha.5` preview for later server deployment. The official GatherThread service is not open yet. The application always listens on `127.0.0.1:8787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 8787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host and invite every later user with a single-use project invitation.
+This profile prepares the private `0.1.0-alpha.5` preview for later server deployment. The official GatherThread service is not open yet. The application always listens on `127.0.0.1:18787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 18787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host and invite every later user with a single-use project invitation.
 
 ## 1. Prerequisites
 
 - An Alibaba Cloud mainland-China ECS instance with a fixed public IPv4 address and Ubuntu 22.04 or 24.04. The supported starting profile is at least 2 vCPU and 2 GiB memory, with separate capacity headroom for the database and backups.
 - A verified domain with an A record for the ECS public IP.
 - Complete the required ICP filing before opening a Web service on a mainland-China instance. Alibaba Cloud states that a domain pointing to a mainland server must be filed through the actual access provider regardless of port or use; follow the current [Alibaba Cloud filing guide](https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/icp-filing-application-overview) and the rules for the filing owner's province.
-- Security-group ingress: TCP 22 from fixed administrator addresses only, TCP 80/443 for intended users, and no rule for 8787. See the [Alibaba Cloud ECS security-group guide](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups).
+- Security-group ingress: TCP 22 from fixed administrator addresses only, TCP 80/443 for intended users, and no rule for 18787. See the [Alibaba Cloud ECS security-group guide](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups).
 - A local `v0.1.0-alpha.5` preview commit or archive that has passed `npm run release:verify`.
 
 Before filing approval, system installation and loopback checks may be prepared, but do not point the domain at the instance or open public Web ingress.
@@ -66,7 +66,7 @@ Every preflight check must pass: candidate version, systemd, Caddy, loopback liv
 sudo systemctl status gatherthread caddy gatherthread-backup.timer
 sudo journalctl -u gatherthread -f
 sudo ls -lh /var/backups/gatherthread
-curl -fsS http://127.0.0.1:8787/health/ready
+curl -fsS http://127.0.0.1:18787/health/ready
 ```
 
 The database is `/var/lib/gatherthread/collaboration.sqlite`; configuration and the credential pepper are in `/etc/gatherthread/gatherthread.env`. Daily backups are retained for 14 days. Copy encrypted database backups and the pepper separately to another failure domain, or device credentials cannot be verified after total host loss.

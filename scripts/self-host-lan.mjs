@@ -31,7 +31,7 @@ export function assertLanProxyConfiguration(env = process.env) {
   }
   const host = env.GATHERTHREAD_SERVER_HOST?.trim() || "127.0.0.1";
   if (host !== "127.0.0.1") throw new Error("LAN HTTPS requires GATHERTHREAD_SERVER_HOST=127.0.0.1");
-  const rawPort = env.GATHERTHREAD_SERVER_PORT ?? "8787";
+  const rawPort = env.GATHERTHREAD_SERVER_PORT ?? "18787";
   if (!/^\d+$/.test(rawPort) || Number(rawPort) < 1 || Number(rawPort) > 65_535) {
     throw new Error("GATHERTHREAD_SERVER_PORT must be an integer from 1 to 65535");
   }

@@ -1,6 +1,6 @@
 @@DOMAIN@@ {
 	encode zstd gzip
-	reverse_proxy 127.0.0.1:8787 {
+	reverse_proxy 127.0.0.1:18787 {
 		health_uri /health/ready
 		health_interval 30s
 		health_timeout 5s

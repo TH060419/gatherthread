@@ -16,7 +16,7 @@
                                       └── 远程协作者的浏览器和本地 Agent
 ```
 
-GatherThread 始终只监听主机的 `127.0.0.1:8787`。Tailscale Serve 在外层提供私有 HTTPS 和 WebSocket 访问，不需要路由器端口转发，也不启用 Tailscale Funnel。
+GatherThread 始终只监听主机的 `127.0.0.1:18787`。Tailscale Serve 在外层提供私有 HTTPS 和 WebSocket 访问，不需要路由器端口转发，也不启用 Tailscale Funnel。
 
 主机关闭、休眠、断网或停止 GatherThread 后，远程协作者将暂时无法访问。已有历史仍保存在主机的 SQLite 数据库中。
 
@@ -112,7 +112,7 @@ npm run connection:tailscale -- --url https://gatherthread-host.example-tailnet.
 NODE_ENV=production
 
 GATHERTHREAD_SERVER_HOST=127.0.0.1
-GATHERTHREAD_SERVER_PORT=8787
+GATHERTHREAD_SERVER_PORT=18787
 GATHERTHREAD_DATABASE_PATH=.local/collaboration.sqlite
 GATHERTHREAD_STATIC_DIRECTORY=apps/web/dist
 
@@ -166,7 +166,7 @@ npm run owner-host
 成功时会看到类似：
 
 ```text
-GatherThread owner host listening at http://127.0.0.1:8787
+GatherThread owner host listening at http://127.0.0.1:18787
 ```
 
 保持该终端运行。
@@ -190,7 +190,7 @@ tailscale serve status
 Available within your tailnet:
 https://gatherthread-host.example-tailnet.ts.net
 
-|-- / proxy http://127.0.0.1:8787
+|-- / proxy http://127.0.0.1:18787
 ```
 
 确认输出写的是 **within your tailnet**。不要运行 `tailscale funnel`。

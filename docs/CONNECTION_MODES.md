@@ -4,7 +4,7 @@ GatherThread has three ready-to-use connection modes that do not require a publi
 
 | Mode | Best for | Client requirement | Entry point |
 |---|---|---|---|
-| Local | One-person development and full-flow testing | Node.js on the host | `http://127.0.0.1:8787` |
+| Local | One-person development and full-flow testing | Node.js on the host | `http://127.0.0.1:18787` |
 | LAN HTTPS | A trusted home, lab, or office network | Caddy on the host; the dedicated local CA trusted by clients | `https://private-address:8443` |
 | Tailscale Serve | A small known group across networks | Tailscale on every device | `https://host.tailnet.ts.net` |
 
@@ -28,7 +28,7 @@ npm run connection:local
 npm run owner-host
 ```
 
-Open `http://127.0.0.1:8787`. This mode accepts no other computer. Do not replace the loopback bind with `0.0.0.0`.
+Open `http://127.0.0.1:18787`. This mode accepts no other computer. Do not replace the loopback bind with `0.0.0.0`.
 
 ## LAN HTTPS
 
@@ -62,7 +62,7 @@ npm run owner-host
 npm run owner-host:lan
 ```
 
-GatherThread remains on `127.0.0.1:8787`. The helper binds Caddy only to the selected private interface and gives it no GatherThread, Codex, or model credentials. Its dedicated local CA root is generated at:
+GatherThread remains on `127.0.0.1:18787`. The helper binds Caddy only to the selected private interface and gives it no GatherThread, Codex, or model credentials. Its dedicated local CA root is generated at:
 
 ```text
 .local/network/lan/caddy-data/caddy/pki/authorities/local/root.crt

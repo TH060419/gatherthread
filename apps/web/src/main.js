@@ -43,6 +43,11 @@ import {
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import { captureTimelineScroll, settleTimelineScroll } from "./timeline-scroll.js?v=20260917-1";
 import {
+  INITIAL_CONNECTION_NOTICE_STATE,
+  advanceConnectionNotice,
+  notificationPermissionNeeded,
+} from "./notifications.js?v=20260918-1";
+import {
   contextBudgetInputBytes,
   digitsOnly,
   numericPresetAction,
@@ -187,6 +192,8 @@ const agentModelSelect = element("agent-model-select");
 const agentEffortSelect = element("agent-effort-select");
 const agentHarnessSelect = element("agent-harness-select");
 const agentDshRuntimeSelect = element("agent-dsh-runtime-select");
+const attentionNotice = element("attention-notice");
+const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
 let connectCodexReturnFocus = null;
@@ -199,6 +206,8 @@ let settingsReturnFocus = null;
 let settingsPreview = state.settings;
 let currentDeviceName = "";
 let settingsDeviceLoadGeneration = 0;
+let attentionNoticeTimer;
+let connectionNoticeState = INITIAL_CONNECTION_NOTICE_STATE;
 
 applyVisualSettings(state.settings);
 setAutomaticClaimDeviceName({ force: true });
@@ -236,18 +245,27 @@ void restoreBrowserSession();
 
 sync.subscribe((snapshot) => {
   const previousCount = state.sync.events.length;
+  const connectionTransition = advanceConnectionNotice(
+    connectionNoticeState,
+    snapshot,
+    state.settings.notifications.connectionLost,
+  );
+  connectionNoticeState = connectionTransition.state;
   applySessionMetadataEvents(snapshot.events.slice(previousCount));
   state.sync = snapshot;
   renderSyncState();
   renderTimeline({ followNewEvents: snapshot.events.length > previousCount });
   renderComposerPermissions();
   renderSessionDeliveryControls();
+  if (connectionTransition.notify) notifyConnectionLost();
   if (snapshot.phase === "live" && snapshot.events.length > previousCount && previousCount > 0) {
     const latest = snapshot.events.at(-1);
     announce(`${eventLabel(latest.type)} from ${latest.actor.username}`);
     maybeNotifyAgentCompletion(latest);
   }
 });
+
+element("dismiss-attention-notice").addEventListener("click", hideAttentionNotice);
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -2206,6 +2224,35 @@ function announce(message) {
   });
 }
 
+function showAttentionNotice(message) {
+  clearTimeout(attentionNoticeTimer);
+  attentionNoticeMessage.textContent = message;
+  attentionNotice.hidden = false;
+  attentionNoticeTimer = setTimeout(hideAttentionNotice, 8_000);
+}
+
+function hideAttentionNotice() {
+  clearTimeout(attentionNoticeTimer);
+  attentionNoticeTimer = undefined;
+  attentionNotice.hidden = true;
+}
+
+function notifyConnectionLost() {
+  const title = localizer.t("Live connection interrupted");
+  const body = localizer.t("Trying to reconnect. Your draft is safe.");
+  showAttentionNotice(`${title}. ${body}`);
+  announce(`${title}. ${body}`);
+  if (!document.hidden || !("Notification" in window) || Notification.permission !== "granted") return;
+  try {
+    new Notification(`GatherThread · ${title}`, {
+      body,
+      tag: `gatherthread-connection-${state.sync.sessionId ?? "current"}`,
+    });
+  } catch {
+    // The accessible in-page notice remains available when a system notification fails.
+  }
+}
+
 function closeMembersPanelWithoutFocus() {
   memberPanel.classList.remove("member-panel-open");
   updateSidebarControls();
@@ -2621,14 +2668,24 @@ async function saveSettings(event) {
   }
   const submit = event.submitter;
   if (submit) submit.disabled = true;
+  const nextSettings = readSettingsForm(settingsPreview);
+  const permissionRequest = notificationPermissionNeeded(nextSettings.notifications)
+    ? ensureNotificationPermission()
+    : Promise.resolve();
   try {
+    await permissionRequest;
     if (!deviceInput.disabled && nextDeviceName !== currentDeviceName) {
       const updated = await api.renameDevice(state.currentUser.device_id, nextDeviceName);
       currentDeviceName = updated.name;
     }
-    settingsPreview = readSettingsForm(settingsPreview);
+    settingsPreview = nextSettings;
     state.settings = settingsStore.set(settingsPreview);
-    if (state.settings.notifications.agentCompleted) await ensureNotificationPermission();
+    connectionNoticeState = advanceConnectionNotice(
+      INITIAL_CONNECTION_NOTICE_STATE,
+      state.sync,
+      state.settings.notifications.connectionLost,
+    ).state;
+    if (!state.settings.notifications.connectionLost) hideAttentionNotice();
     applyVisualSettings(state.settings);
     renderProjectAgentButtons();
     renderAgentProfileControls();
@@ -2660,10 +2717,14 @@ function maybeNotifyAgentCompletion(event) {
   if (!state.settings.notifications.agentCompleted || event?.type !== "agent_response" || !document.hidden) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
   const content = eventContent(event);
-  new Notification("GatherThread · Agent completed", {
-    body: content ? content.slice(0, 180) : `${event.actor.username}'s Agent completed.`,
-    tag: `gatherthread-agent-${event.id}`,
-  });
+  try {
+    new Notification("GatherThread · Agent completed", {
+      body: content ? content.slice(0, 180) : `${event.actor.username}'s Agent completed.`,
+      tag: `gatherthread-agent-${event.id}`,
+    });
+  } catch {
+    // Completion remains visible in the timeline if a system notification fails.
+  }
 }
 
 function addCustomModelFromSettings() {

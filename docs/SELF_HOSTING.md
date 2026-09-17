@@ -15,7 +15,7 @@ The host operator is inside the plaintext trust boundary defined by [ADR-0001](a
 - A Tailscale HTTPS/MagicDNS name for the host.
 - A private directory on the host for `.env`, SQLite, and backups.
 
-Do not expose port 8787 through a router, firewall, Tailscale Funnel, or a public tunnel.
+Do not expose the default application port 18787 through a router, firewall, Tailscale Funnel, or a public tunnel.
 
 ## Install and configure
 
@@ -31,7 +31,7 @@ The profile command creates or updates a mode-`0600` `.env`, preserves the datab
 ```dotenv
 NODE_ENV=production
 GATHERTHREAD_SERVER_HOST=127.0.0.1
-GATHERTHREAD_SERVER_PORT=8787
+GATHERTHREAD_SERVER_PORT=18787
 GATHERTHREAD_DATABASE_PATH=.local/collaboration.sqlite
 GATHERTHREAD_STATIC_DIRECTORY=apps/web/dist
 GATHERTHREAD_PUBLIC_BASE_URL=https://your-host.your-tailnet.ts.net

@@ -23,11 +23,11 @@ check "GatherThread systemd service is active" systemctl is-active --quiet gathe
 check "Caddy systemd service is active" systemctl is-active --quiet caddy.service
 check "daily backup timer is active" systemctl is-active --quiet gatherthread-backup.timer
 check "loopback health reports SQLite WAL" bash -c \
-  "curl --fail --silent --show-error http://127.0.0.1:8787/health | grep -q '\"journal_mode\":\"wal\"'"
+  "curl --fail --silent --show-error http://127.0.0.1:18787/health | grep -q '\"journal_mode\":\"wal\"'"
 check "public HTTPS health reports SQLite WAL" bash -c \
   "curl --fail --silent --show-error --max-time 15 https://$domain/health | grep -q '\"journal_mode\":\"wal\"'"
 check "application does not listen on a non-loopback address" bash -c \
-  "! ss -H -ltn 'sport = :8787' | awk '{ print \$4 }' | grep -Ev '^(127\\.0\\.0\\.1|\\[::1\\]):8787$' | grep -q ."
+  "! ss -H -ltn 'sport = :18787' | awk '{ print \$4 }' | grep -Ev '^(127\\.0\\.0\\.1|\\[::1\\]):18787$' | grep -q ."
 check "private database directory is mode 0700" bash -c \
   "[[ \$(stat -c '%a' /var/lib/gatherthread) == 700 ]]"
 check "private environment is not world-readable" bash -c \

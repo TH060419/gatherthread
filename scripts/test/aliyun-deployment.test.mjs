@@ -36,7 +36,7 @@ test("Alibaba reverse proxy and service retain the loopback security boundary", 
   assert.match(installer, /GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true/);
   assert.match(installer, /GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP=false/);
   assert.doesNotMatch(installer, /GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP=true/);
-  assert.match(caddyfile, /reverse_proxy 127\.0\.0\.1:8787/);
+  assert.match(caddyfile, /reverse_proxy 127\.0\.0\.1:18787/);
   assert.match(caddyfile, /health_uri \/health\/ready/);
   assert.doesNotMatch(caddyfile, /reverse_proxy 0\.0\.0\.0/);
   assert.match(service, /^User=gatherthread$/m);
