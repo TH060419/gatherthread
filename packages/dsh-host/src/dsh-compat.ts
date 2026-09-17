@@ -213,6 +213,40 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     for (const subscriber of statusSubscribers) subscriber(status);
   }, { global: true }));
 
+  /**
+   * Acquire one Agent, publish it into the lifecycle slot, and reject it when
+   * this open can no longer proceed.
+   *
+   * Publication is the statement immediately after the acquire await and runs
+   * before any further yield, so acceptance and publication are one
+   * lifecycle-owned step: a queued `dispose()` can never observe an empty slot
+   * while an accepted Agent is still unpublished, and a rejected Agent is
+   * always released through that same slot.
+   */
+  const adoptHandle = async (acquire: () => Promise<DshAgentHandleLike>): Promise<void> => {
+    const acquired = await acquire();
+    handle = acquired;
+    if (disposed || lifecycleAbort.signal.aborted) {
+      await releaseHandle();
+      throw new Error("DSH host facade was disposed during open");
+    }
+    if (acquired.agent.session.id !== options.sessionId) {
+      await releaseHandle();
+      throw new Error("DSH Host returned an agent for an unexpected Session identity");
+    }
+  };
+
+  /**
+   * Release the Agent this facade currently owns. The slot is cleared
+   * synchronously before the release awaits, so a concurrent `dispose()` or a
+   * failing `open()` can never release the same handle twice.
+   */
+  const releaseHandle = async (): Promise<void> => {
+    const owned = handle;
+    handle = undefined;
+    await owned?.dispose();
+  };
+
   const open = (): Promise<"created" | "resumed"> => {
     if (disposed) return Promise.reject(new Error("DSH host facade is disposed"));
     if (openPromise !== undefined) return openPromise;
@@ -231,17 +265,20 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         : true;
       throwIfDisposed(disposed, lifecycleAbort.signal, "open");
       const mode = stored ? "resumed" : "created";
-      let openedHandle: DshAgentHandleLike;
+      // Publish each accepted Agent into `handle` as soon as it is adopted, so
+      // `dispose()` can always release it. Everything after this point awaits —
+      // marker flush and workspace setup — and a handle kept only local would
+      // survive a disposal that had no way to reach it.
       try {
-        openedHandle = liveAgent !== undefined
-          ? { agent: liveAgent, dispose: async () => undefined }
+        await adoptHandle(() => (liveAgent !== undefined
+          ? Promise.resolve({ agent: liveAgent, dispose: async () => undefined })
           : stored
-          ? await agents.resume({
+          ? agents.resume({
             resumeSessionId: options.sessionId,
             agentOptions: { provider: options.provider, model: options.model },
             signal: lifecycleAbort.signal,
           })
-          : await agents.create({
+          : agents.create({
             sessionId: options.sessionId,
             meta: {
               cwd: options.workspacePath,
@@ -249,31 +286,52 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
             },
             agentOptions: { provider: options.provider, model: options.model },
             signal: lifecycleAbort.signal,
-          });
+          })));
       } catch (error) {
         throwIfDisposed(disposed, lifecycleAbort.signal, "open");
         throw error;
       }
-      if (disposed || lifecycleAbort.signal.aborted) {
-        await openedHandle.dispose();
-        throw new Error("DSH host facade was disposed during open");
-      }
-      if (openedHandle.agent.session.id !== options.sessionId) {
-        await openedHandle.dispose();
-        throw new Error("DSH Host returned an agent for an unexpected Session identity");
-      }
       if (sessionTitle !== undefined && workspaceRegistry !== undefined
         && options.sessionTitle !== undefined && options.workspaceTitle !== undefined) {
         try {
-          await sessionTitle.rename(openedHandle.agent.session, options.sessionTitle);
-          ensureNativeSessionListVisibility(openedHandle.agent.session);
-          await sessions.flush(openedHandle.agent.session);
+          const session = requireAgent(handle).session;
+          await sessionTitle.rename(session, options.sessionTitle);
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
+          // Only mark a Session whose Agent this open owns. A marker is safe only
+          // when the Agent is rebuilt afterwards, and the facade may neither
+          // dispose nor resume an Agent the DSH UI owns; a borrowed live Agent
+          // captured its starting turn before any marker, so marking its Session
+          // would put that loop back on turn 1.
+          const markerWritten = liveAgent === undefined
+            && ensureNativeSessionListVisibility(session);
+          await sessions.flush(session);
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
+          if (markerWritten) {
+            // The Agent captured its starting turn from the turnBoundary
+            // projection before the marker existed, so its loop would number the
+            // first real turn 1 and collide with the marker. Rebuild it from the
+            // log the marker was just committed to; the loop then starts after
+            // turn 1 and DSH's consecutive-turn invariant holds.
+            await releaseHandle();
+            throwIfDisposed(disposed, lifecycleAbort.signal, "open");
+            await adoptHandle(() => agents.resume({
+              resumeSessionId: options.sessionId,
+              agentOptions: { provider: options.provider, model: options.model },
+              signal: lifecycleAbort.signal,
+            }));
+          }
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           const workspace = await workspaceRegistry.create(options.workspacePath, options.workspaceTitle);
           if (workspace === null || typeof workspace !== "object"
             || typeof workspace.attachSession !== "function") {
             throw new Error("Pinned DSH workspace registry returned an incompatible Workspace");
           }
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           await workspace.attachSession(options.sessionId);
+          // Every awaited workspace mutation rechecks disposal: attaching or
+          // detaching after teardown would mutate a workspace this facade no
+          // longer has a live Agent for.
+          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           if (options.supersededSessionId !== undefined
             && options.supersededSessionId !== options.sessionId
             && workspace.sessionIds.includes(options.supersededSessionId)) {
@@ -281,14 +339,19 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
               throw new Error("Pinned DSH Workspace detachSession API is unavailable or incompatible");
             }
             await workspace.detachSession(options.supersededSessionId);
+            throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           }
         } catch (error) {
-          await openedHandle.dispose();
+          // `releaseHandle` clears the slot before releasing, and `adoptHandle`
+          // releases a replacement it refuses, so this never double-releases.
+          await releaseHandle();
           throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           throw error;
         }
       }
-      handle = openedHandle;
+      // A disposal anywhere up to here must surface as a rejected open rather
+      // than a facade that reports success after teardown.
+      throwIfDisposed(disposed, lifecycleAbort.signal, "open");
       return mode;
     })();
     return openPromise;
@@ -397,17 +460,34 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
   };
 
   const dispose = (): Promise<void> => {
-    disposePromise ??= (async () => {
-      disposed = true;
-      lifecycleAbort.abort(new Error("DSH host facade disposed"));
-      eventSubscribers.clear();
-      statusSubscribers.clear();
-      for (const stop of listenerDisposers.splice(0)) stop();
+    if (disposePromise !== undefined) return disposePromise;
+    disposed = true;
+    lifecycleAbort.abort(new Error("DSH host facade disposed"));
+    eventSubscribers.clear();
+    statusSubscribers.clear();
+    for (const stop of listenerDisposers.splice(0)) stop();
+    // Take ownership the moment disposal starts, then remain a teardown barrier
+    // until an in-flight open has observed cancellation and released anything it
+    // acquired late. A final release closes the narrow case where acquisition
+    // settles after the first slot drain.
+    disposePromise = (async () => {
+      let releaseError: unknown;
       try {
-        await handle?.dispose();
-      } finally {
-        handle = undefined;
+        await releaseHandle();
+      } catch (error) {
+        releaseError = error;
       }
+      try {
+        await openPromise;
+      } catch {
+        // Disposal intentionally makes an in-flight open reject.
+      }
+      try {
+        await releaseHandle();
+      } catch (error) {
+        releaseError ??= error;
+      }
+      if (releaseError !== undefined) throw releaseError;
     })();
     return disposePromise;
   };
@@ -437,18 +517,28 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
 }
 
 /**
- * DSH intentionally hides every non-current Session whose list projection has
- * never observed a turn/start. GatherThread can attach an existing canonical
- * Session before its first local DSH prompt, so establish the same balanced,
- * content-free turn that DSH's own Agent loop emits when it has no messages.
- * This makes the Session discoverable without invoking a model or fabricating
- * an assistant response, and is idempotent across reloads.
+ * DSH hides every Session whose list metadata has never observed a `turn/start`
+ * (`applySessionListMetadata` only clears `blank` for that event type), so a
+ * canonical Session attached before its first local turn would not appear in the
+ * workspace list. Write the same balanced, content-free turn DSH's own Agent loop
+ * emits when it has no messages. This makes the Session discoverable without
+ * invoking a model or fabricating an assistant response, and is idempotent
+ * across reloads.
+ *
+ * The caller must rebuild the Agent afterwards: the loop captures its starting
+ * turn from the `turnBoundary` projection when it is constructed, so a loop built
+ * before this marker would number its first real turn 1 and collide with it. The
+ * turn-outline fold drops a turn that does not increase (`turn <= last.turn`) along
+ * with every message inside it, which is what hid Web agent turns from DSH.
+ *
+ * @returns whether a marker was written and the Agent must be rebuilt.
  */
-function ensureNativeSessionListVisibility(session: DshSessionLike): void {
+function ensureNativeSessionListVisibility(session: DshSessionLike): boolean {
   const events = session.snapshotEvents(0);
-  if (events.some((event) => asSessionEvent(event)?.type === "turn/start")) return;
+  if (events.some((event) => asSessionEvent(event)?.type === "turn/start")) return false;
   session.append("turn/start", { turn: 1 });
   session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
+  return true;
 }
 
 /** Register a Project workspace even when it has no locally writable Sessions. */

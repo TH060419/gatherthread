@@ -21,6 +21,16 @@ function fixture(
     exposeLiveSession?: boolean;
     exposeLiveAgent?: boolean;
     persistenceReadApi?: "inspect" | "readFrom" | "handle";
+    /** Gates only the post-marker rebuild, so a test can dispose mid-rebuild. */
+    rebuildGate?: Promise<void>;
+    /** Gates workspace creation, so a test can dispose during workspace setup. */
+    workspaceGate?: Promise<void>;
+    /** Gates Session attachment, so a test can dispose during that mutation. */
+    attachGate?: Promise<void>;
+    /** Gates Session title persistence, so a test can dispose during rename. */
+    renameGate?: Promise<void>;
+    /** Gates Session flushing, so a test can dispose before a rebuild. */
+    flushGate?: Promise<void>;
   } = {},
 ) {
   const listeners = new Map<string, Set<Listener>>();
@@ -218,6 +228,12 @@ function fixture(
           signal,
         });
         openStarted.resolve();
+        // Gate only the post-marker rebuild, so a test can dispose the facade
+        // while the replacement Agent is still being acquired. The first
+        // acquisition is `create` on a new Session and `resume` on a stored one.
+        if (calls.resume + calls.create > 1 && fixtureOptions.rebuildGate !== undefined) {
+          await fixtureOptions.rebuildGate;
+        }
         await fixtureOptions.openGate;
         return handle;
       },
@@ -243,6 +259,7 @@ function fixture(
         assert.equal(candidate, session);
         calls.flush += 1;
         calls.order.push("flush");
+        if (fixtureOptions.flushGate !== undefined) await fixtureOptions.flushGate;
       },
     },
     sessionTitle: {
@@ -251,6 +268,7 @@ function fixture(
         assert.equal(candidate, session);
         assert.equal(title, "Canonical Session Title");
         calls.order.push("rename");
+        if (fixtureOptions.renameGate !== undefined) await fixtureOptions.renameGate;
       },
     },
     workspaceRegistry: {
@@ -258,13 +276,15 @@ function fixture(
         assert.equal(workspacePath, "/readonly/workspace");
         assert.equal(title, "Project One");
         calls.order.push("workspace:create");
+        if (fixtureOptions.workspaceGate !== undefined) await fixtureOptions.workspaceGate;
         return {
           path: workspacePath,
           sessionIds: fixtureOptions.workspaceSnapshots ? [...workspaceSessionIds] : workspaceSessionIds,
           async attachSession(sessionId: string) {
             assert.equal(sessionId, "dsh-session-1");
-            if (!workspaceSessionIds.includes(sessionId)) workspaceSessionIds.unshift(sessionId);
             calls.order.push("workspace:attach");
+            if (fixtureOptions.attachGate !== undefined) await fixtureOptions.attachGate;
+            if (!workspaceSessionIds.includes(sessionId)) workspaceSessionIds.unshift(sessionId);
           },
           async detachSession(sessionId: string) {
             calls.detached.push(sessionId);
@@ -432,6 +452,274 @@ test("native workspace integration does not duplicate its list-visibility turn",
   assert.equal(await facade.open(), "resumed");
   assert.deepEqual(f.events.map((event) => event.type), ["turn/start", "turn/end"]);
   await facade.dispose();
+});
+
+test("Open lists a new Session and rebuilds the Agent so the marker is not collided with", async () => {
+  const f = fixture(false);
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  assert.equal(await facade.open(), "created");
+  // The list-visibility marker is required: DSH hides any Session whose list
+  // metadata has never observed a turn/start. Dropping it removes the Session
+  // from the workspace list, which is what the real DSH lifecycle test asserts.
+  assert.deepEqual(
+    f.events.map((event) => event.type),
+    ["turn/start", "turn/end"],
+    "a Session with no turns still needs its list-visibility turn",
+  );
+  // The Agent captured its starting turn from the turnBoundary projection
+  // before that marker existed, so it must be rebuilt from the log the marker
+  // was committed to. Otherwise the loop numbers its first real turn 1 and
+  // collides with the marker, and the turn-outline fold drops that second turn
+  // along with every message inside it.
+  assert.equal(f.calls.dispose, 1, "the Agent that predates the marker is released");
+  assert.equal(f.calls.resume, 1, "the Agent is rebuilt so its loop starts after the marker");
+  await facade.dispose();
+});
+
+test("Open does not rebuild an Agent whose Session already has turns", async () => {
+  const f = fixture(true);
+  f.events.push(
+    { type: "turn/start", seq: 0, time: 1_700_000_000_000, data: { turn: 1 } },
+    { type: "turn/end", seq: 1, time: 1_700_000_000_000, data: { turn: 1, reason: { kind: "completed" } } },
+  );
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  assert.equal(await facade.open(), "resumed");
+  assert.equal(f.calls.dispose, 0, "an already-listable Session keeps its Agent");
+  assert.equal(f.calls.resume, 1, "only the resume that open already performs");
+  await facade.dispose();
+});
+
+test("Open does not mark a borrowed live Agent whose turn boundary it cannot refresh", async () => {
+  // A borrowed Agent owns its loop and captured its starting turn before any
+  // marker existed. Writing the marker anyway would put that loop back on turn
+  // 1 and recreate the collision the marker exists to avoid, and the facade may
+  // not dispose or resume an Agent the DSH UI owns.
+  const f = fixture(true, { persistenceProbe: "list", exposeLiveAgent: true });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  assert.equal(await facade.open(), "resumed");
+  assert.deepEqual(
+    f.events,
+    [],
+    "a borrowed live Agent must not receive a marker the facade cannot rebuild",
+  );
+  assert.equal(f.calls.resume, 0, "a borrowed Agent is never resumed or replaced");
+  assert.equal(f.calls.dispose, 0, "the DSH UI remains the owner of its live Agent");
+  await facade.dispose();
+});
+
+test("Open releases a rebuilt Agent when the facade is disposed during the rebuild", async () => {
+  const rebuildGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", rebuildGate: rebuildGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const settled = facade.open().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await f.openStarted;
+  await bounded((async () => {
+    while (f.calls.resume + f.calls.create < 2) await new Promise((resolve) => setImmediate(resolve));
+  })(), 2_000);
+  // The original Agent is released and the replacement is still being acquired.
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for the in-flight Agent rebuild");
+  rebuildGate.resolve();
+  await disposing;
+  const outcome = await settled;
+  assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
+  assert.match(outcome.message, /disposed during open/u);
+  assert.equal(
+    f.calls.dispose,
+    2,
+    "the original Agent and the replacement acquired after disposal are both released",
+  );
+});
+
+test("Open releases the accepted Agent when the facade is disposed during workspace setup", async () => {
+  // The Agent is accepted as soon as adoptHandle resolves, but the marker flush
+  // and workspace setup await afterwards. Disposal during those awaits must
+  // still release it, and must stop the remaining workspace mutation.
+  const workspaceGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", workspaceGate: workspaceGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const settled = facade.open().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await f.openStarted;
+  await bounded((async () => {
+    while (!f.calls.order.includes("workspace:create")) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  })(), 2_000);
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for in-flight workspace setup");
+  workspaceGate.resolve();
+  await disposing;
+  const outcome = await settled;
+  assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
+  assert.equal(
+    f.calls.dispose,
+    2,
+    "the pre-marker Agent (rebuilt) and the accepted Agent are both released",
+  );
+  assert.equal(
+    f.calls.order.includes("workspace:attach"),
+    false,
+    "workspace mutation must stop once the facade is disposed",
+  );
+});
+
+test("Open rejects and stops mutating when the facade is disposed during Session attachment", async () => {
+  const attachGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", attachGate: attachGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    supersededSessionId: "gatherthread-legacy-read-only",
+  });
+  f.workspaceSessionIds.push("gatherthread-legacy-read-only");
+  const settled = facade.open().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await bounded((async () => {
+    while (!f.calls.order.includes("workspace:attach")) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  })(), 2_000);
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for in-flight Session attachment");
+  attachGate.resolve();
+  await disposing;
+  const outcome = await settled;
+  assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
+  assert.equal(f.calls.dispose, 2, "the pre-marker Agent and the accepted Agent are released");
+  assert.deepEqual(
+    f.calls.detached,
+    [],
+    "no workspace mutation may follow teardown",
+  );
+});
+
+test("Open releases an Agent acquired while the facade is being disposed", async () => {
+  // No native-workspace options on purpose: the acquisition path alone must not
+  // let an Agent escape a disposal, and it must not publish one afterwards.
+  const openGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", openGate: openGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const settled = facade.open().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await f.openStarted;
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for an in-flight Agent acquisition");
+  openGate.resolve();
+  await disposing;
+  const outcome = await settled;
+  assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
+  assert.equal(f.calls.dispose, 1, "the acquired Agent is released rather than published");
+});
+
+test("Open does not write a visibility marker after disposal during Session rename", async () => {
+  const renameGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", renameGate: renameGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const opening = facade.open();
+  await bounded((async () => {
+    while (!f.calls.order.includes("rename")) await new Promise((resolve) => setImmediate(resolve));
+  })(), 2_000);
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for in-flight Session rename");
+  renameGate.resolve();
+  await disposing;
+  await assert.rejects(opening, /disposed during open/u);
+  assert.deepEqual(f.events, [], "teardown must prevent a late visibility marker");
+  assert.equal(f.calls.flush, 0, "teardown must prevent a late Session flush");
+  assert.equal(f.calls.resume, 0, "teardown must prevent a late Agent rebuild");
+});
+
+test("Open does not rebuild an Agent after disposal during Session flush", async () => {
+  const flushGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", flushGate: flushGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const opening = facade.open();
+  await bounded((async () => {
+    while (!f.calls.order.includes("flush")) await new Promise((resolve) => setImmediate(resolve));
+  })(), 2_000);
+  const disposing = facade.dispose();
+  await assertPending(disposing, "dispose must wait for the in-flight Session flush");
+  flushGate.resolve();
+  await disposing;
+  await assert.rejects(opening, /disposed during open/u);
+  assert.equal(f.calls.resume, 0, "teardown must prevent a post-flush Agent rebuild");
 });
 
 test("Host facade appends canonical history through the native model-visible surface and deduplicates by id", async () => {
@@ -777,10 +1065,12 @@ test("Host facade aborts delayed create and resume without retaining a late hand
     assert.equal(f.calls.openSignals.length, 1);
     assert.equal(f.calls.openSignals[0]?.aborted, false);
 
-    await bounded(facade.dispose(), 500);
+    const disposing = facade.dispose();
+    await assertPending(disposing, "dispose must wait for delayed Agent acquisition");
     assert.equal(f.calls.openSignals[0]?.aborted, true);
     gate.resolve();
 
+    await bounded(disposing, 500);
     await assert.rejects(bounded(opening, 500), /disposed during open/);
     assert.equal(f.calls.dispose, 1);
     assert.throws(() => facade.currentSequence(), /Agent is not open/);
@@ -839,6 +1129,16 @@ async function bounded<T>(value: Promise<T>, milliseconds: number): Promise<T> {
       setTimeout(() => reject(new Error("DSH facade operation exceeded its time bound")), milliseconds).unref?.();
     }),
   ]);
+}
+
+async function assertPending(value: Promise<unknown>, message: string): Promise<void> {
+  let settled = false;
+  void value.then(
+    () => { settled = true; },
+    () => { settled = true; },
+  );
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(settled, false, message);
 }
 
 function deferred<T>() {

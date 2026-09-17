@@ -77,8 +77,47 @@ function runProcess(command, args, options) {
   }), path.basename(command));
 }
 
+/**
+ * Run the npm CLI without assuming a POSIX launcher.
+ *
+ * `spawn("npm", ...)` fails with ENOENT on Windows, where npm is only reachable
+ * as `npm.cmd`, and Node no longer resolves `.cmd`/`.bat` shims for a
+ * `shell: false` spawn. Resolve an argument-preserving CLI entry instead: the
+ * path npm exports to its own lifecycle scripts, then the one shipped beside the
+ * running Node. If neither exists the gate refuses rather than falling back to a
+ * shell that would reparse the arguments.
+ */
+async function runNpm(args, options = { cwd: ROOT, env: process.env }) {
+  const npmCli = process.env.npm_execpath?.trim();
+  if (npmCli) return runProcess(process.execPath, [npmCli, ...args], options);
+  if (process.platform === "win32") {
+    // Prefer the CLI entry the Windows Node installer ships beside the running
+    // binary. Launching it through `process.execPath` keeps every argument
+    // intact, where a `cmd /c` string would be re-parsed by the shell.
+    const bundled = path.join(
+      path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js",
+    );
+    try {
+      await access(bundled);
+      return await runProcess(process.execPath, [bundled, ...args], options);
+    } catch {
+      // Fall through to the shell shim.
+    }
+    // Refuse rather than shell-reparse. A `cmd /c` command line would
+    // reinterpret any argument carrying spaces or metacharacters, and silently
+    // running something other than what this gate asked for is worse than
+    // stopping with something the operator can act on.
+    throw new Error(
+      "Unable to locate the npm CLI without a shell on Windows. "
+      + "Run this gate through an npm script (which sets npm_execpath), or install "
+      + "Node with its bundled npm.",
+    );
+  }
+  return await runProcess("npm", args, options);
+}
+
 async function npmCacheRoot() {
-  const result = await runProcess("npm", ["config", "get", "cache"], { cwd: ROOT, env: process.env });
+  const result = await runNpm(["config", "get", "cache"]);
   if (result.code !== 0 || !path.isAbsolute(result.stdout.trim())) {
     throw new Error("Unable to resolve the local npm cache without network access");
   }
@@ -372,7 +411,7 @@ async function main() {
   let browser;
   let grantSecret = "";
   try {
-    const packed = await runProcess("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", artifacts], {
+    const packed = await runNpm(["pack", "--ignore-scripts", "--json", "--pack-destination", artifacts], {
       cwd: PACKAGE_ROOT,
       env: environment,
     });
@@ -746,7 +785,14 @@ async function main() {
 
     const credentialPath = path.join(dshHome, ".credentials.yaml");
     const credentialText = await readFile(credentialPath, "utf8");
-    assert.equal((await lstat(credentialPath)).mode & 0o777, 0o600);
+    // Windows synthesises a fixed 0o666 for every file, so the mode is only
+    // meaningful where the filesystem stores one. Content and containment are
+    // asserted on every platform, and the reported result says which of the two
+    // this run actually checked.
+    const credentialModeVerified = process.platform !== "win32";
+    if (credentialModeVerified) {
+      assert.equal((await lstat(credentialPath)).mode & 0o777, 0o600);
+    }
     assert.match(credentialText, /gatherthread-dsh-host\/default/u);
     grantSecret = credentialText.match(/gta_[A-Za-z0-9_-]+/u)?.[0] ?? "";
     assert.ok(grantSecret, "the fixture DSH grant was not written to the official credential store");
@@ -770,7 +816,13 @@ async function main() {
     await browser.close();
     browser = undefined;
     const exit = await stopDsh(host);
-    assert.equal(exit.code, 0);
+    // Windows has no POSIX signals, so the shutdown kill surfaces as a null
+    // exit code carrying a signal instead of a graceful zero.
+    if (process.platform === "win32") {
+      assert.ok(exit.code === 0 || exit.signal !== null, `unexpected DSH shutdown: ${JSON.stringify(exit)}`);
+    } else {
+      assert.equal(exit.code, 0);
+    }
     host = undefined;
 
     const removed = await runProcess(process.execPath, [
@@ -790,7 +842,12 @@ async function main() {
       lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "writable-native-session", "native-cloud-adoption", "web-request", "progress", "final", "reload", "disconnect", "remove"],
       realDshHome: false,
       networkDownloads: false,
-      credentialStore: { official: true, mode: "0600", clearedBeforeRemove: true },
+      credentialStore: {
+        official: true,
+        mode: credentialModeVerified ? "0600" : null,
+        modeVerified: credentialModeVerified,
+        clearedBeforeRemove: true,
+      },
     })}\n`);
   } finally {
     await browser?.close().catch(() => undefined);
