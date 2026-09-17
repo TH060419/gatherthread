@@ -12,3 +12,21 @@
       inject: [agents, sessions, sessionPersistence, sessionQuery, sessionTitle, workspaceRegistry, llm, credentials, connection]
       config:
         enabled: true
+
+# DSH 0.1.5-rc.x dropped `webServer` from the Connection plugin's own inject list
+# (`["webServer", "credentials"]` became `["credentials"]`), moving it into a
+# nested scope that covers only DSH's new index-injection feature. Connection
+# still reads `owner.webServer` from its *providing* context -- cordis starts
+# every service lookup at the shadow origin, `(ctx[symbols.shadow] ?? ctx).fiber`
+# -- so `connection.rpc.handle()` raises "cannot get property \"webServer\"
+# without inject" for every caller, and the whole plugin tree fails to load.
+# 0.1.2-rc.1 kept the dependency at the top level, so restoring it here is what
+# makes the Host plugin load on both versions.
+#
+# A row patch replaces `inject` wholesale rather than merging, so each entry the
+# 0.1.5 row already declares is repeated: `webRuntime` still feeds this row's
+# `trustedHosts: !!js ctx.webRuntime.trustedHosts` expression, and `credentials`
+# is repeated so the row stays self-sufficient no matter how the Loader folds a
+# row's list together with the module's own `inject` export.
+- id: connection
+  inject: [webRuntime, credentials, webServer]
