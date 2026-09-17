@@ -213,6 +213,24 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     for (const subscriber of statusSubscribers) subscriber(status);
   }, { global: true }));
 
+  /**
+   * Adopt one acquired Agent handle, releasing it when this open can no longer
+   * proceed. Every acquisition path must pass through here — including the
+   * post-marker rebuild: a handle assigned after disposal would otherwise never
+   * be released, because the facade only owns whatever `handle` already holds.
+   */
+  const adoptHandle = async (acquired: DshAgentHandleLike): Promise<DshAgentHandleLike> => {
+    if (disposed || lifecycleAbort.signal.aborted) {
+      await acquired.dispose();
+      throw new Error("DSH host facade was disposed during open");
+    }
+    if (acquired.agent.session.id !== options.sessionId) {
+      await acquired.dispose();
+      throw new Error("DSH Host returned an agent for an unexpected Session identity");
+    }
+    return acquired;
+  };
+
   const open = (): Promise<"created" | "resumed"> => {
     if (disposed) return Promise.reject(new Error("DSH host facade is disposed"));
     if (openPromise !== undefined) return openPromise;
@@ -231,61 +249,56 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         : true;
       throwIfDisposed(disposed, lifecycleAbort.signal, "open");
       const mode = stored ? "resumed" : "created";
-      let openedHandle: DshAgentHandleLike;
+      let openedHandle: DshAgentHandleLike | undefined;
       try {
-        openedHandle = liveAgent !== undefined
-          ? { agent: liveAgent, dispose: async () => undefined }
-          : stored
-          ? await agents.resume({
-            resumeSessionId: options.sessionId,
-            agentOptions: { provider: options.provider, model: options.model },
-            signal: lifecycleAbort.signal,
-          })
-          : await agents.create({
-            sessionId: options.sessionId,
-            meta: {
-              cwd: options.workspacePath,
-              ...(options.agentPreset === undefined ? {} : { agentPreset: options.agentPreset }),
-            },
-            agentOptions: { provider: options.provider, model: options.model },
-            signal: lifecycleAbort.signal,
-          });
+        openedHandle = await adoptHandle(
+          liveAgent !== undefined
+            ? { agent: liveAgent, dispose: async () => undefined }
+            : stored
+            ? await agents.resume({
+              resumeSessionId: options.sessionId,
+              agentOptions: { provider: options.provider, model: options.model },
+              signal: lifecycleAbort.signal,
+            })
+            : await agents.create({
+              sessionId: options.sessionId,
+              meta: {
+                cwd: options.workspacePath,
+                ...(options.agentPreset === undefined ? {} : { agentPreset: options.agentPreset }),
+              },
+              agentOptions: { provider: options.provider, model: options.model },
+              signal: lifecycleAbort.signal,
+            }),
+        );
       } catch (error) {
         throwIfDisposed(disposed, lifecycleAbort.signal, "open");
         throw error;
-      }
-      if (disposed || lifecycleAbort.signal.aborted) {
-        await openedHandle.dispose();
-        throw new Error("DSH host facade was disposed during open");
-      }
-      if (openedHandle.agent.session.id !== options.sessionId) {
-        await openedHandle.dispose();
-        throw new Error("DSH Host returned an agent for an unexpected Session identity");
       }
       if (sessionTitle !== undefined && workspaceRegistry !== undefined
         && options.sessionTitle !== undefined && options.workspaceTitle !== undefined) {
         try {
           await sessionTitle.rename(openedHandle.agent.session, options.sessionTitle);
-          const markerWritten = ensureNativeSessionListVisibility(openedHandle.agent.session);
+          // Only mark a Session whose Agent this open owns. A marker is safe only
+          // when the Agent is rebuilt afterwards, and the facade may neither
+          // dispose nor resume an Agent the DSH UI owns; a borrowed live Agent
+          // captured its starting turn before any marker, so marking its Session
+          // would put that loop back on turn 1.
+          const markerWritten = liveAgent === undefined
+            && ensureNativeSessionListVisibility(openedHandle.agent.session);
           await sessions.flush(openedHandle.agent.session);
-          if (markerWritten && liveAgent === undefined) {
+          if (markerWritten) {
             // The Agent captured its starting turn from the turnBoundary
             // projection before the marker existed, so its loop would number the
             // first real turn 1 and collide with the marker. Rebuild it from the
             // log the marker was just committed to; the loop then starts after
-            // turn 1 and DSH's consecutive-turn invariant holds. A borrowed live
-            // Agent is left untouched — it owns its loop, and the user already
-            // has that Session open.
+            // turn 1 and DSH's consecutive-turn invariant holds.
             await openedHandle.dispose();
-            openedHandle = await agents.resume({
+            openedHandle = undefined;
+            openedHandle = await adoptHandle(await agents.resume({
               resumeSessionId: options.sessionId,
               agentOptions: { provider: options.provider, model: options.model },
               signal: lifecycleAbort.signal,
-            });
-            if (openedHandle.agent.session.id !== options.sessionId) {
-              await openedHandle.dispose();
-              throw new Error("DSH Host returned an agent for an unexpected Session identity");
-            }
+            }));
           }
           const workspace = await workspaceRegistry.create(options.workspacePath, options.workspaceTitle);
           if (workspace === null || typeof workspace !== "object"
@@ -302,10 +315,15 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
             await workspace.detachSession(options.supersededSessionId);
           }
         } catch (error) {
-          await openedHandle.dispose();
+          // `openedHandle` is cleared before a rebuild, and `adoptHandle`
+          // releases a replacement it refuses, so this never double-releases.
+          await openedHandle?.dispose();
           throwIfDisposed(disposed, lifecycleAbort.signal, "open");
           throw error;
         }
+      }
+      if (openedHandle === undefined) {
+        throw new Error("DSH host facade open completed without an Agent handle");
       }
       handle = openedHandle;
       return mode;

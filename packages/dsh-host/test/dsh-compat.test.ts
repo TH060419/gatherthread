@@ -21,6 +21,8 @@ function fixture(
     exposeLiveSession?: boolean;
     exposeLiveAgent?: boolean;
     persistenceReadApi?: "inspect" | "readFrom" | "handle";
+    /** Gates only the post-marker rebuild, so a test can dispose mid-rebuild. */
+    rebuildGate?: Promise<void>;
   } = {},
 ) {
   const listeners = new Map<string, Set<Listener>>();
@@ -218,6 +220,12 @@ function fixture(
           signal,
         });
         openStarted.resolve();
+        // Gate only the post-marker rebuild, so a test can dispose the facade
+        // while the replacement Agent is still being acquired. The first
+        // acquisition is `create` on a new Session and `resume` on a stored one.
+        if (calls.resume + calls.create > 1 && fixtureOptions.rebuildGate !== undefined) {
+          await fixtureOptions.rebuildGate;
+        }
         await fixtureOptions.openGate;
         return handle;
       },
@@ -483,6 +491,65 @@ test("Open does not rebuild an Agent whose Session already has turns", async () 
   assert.equal(f.calls.dispose, 0, "an already-listable Session keeps its Agent");
   assert.equal(f.calls.resume, 1, "only the resume that open already performs");
   await facade.dispose();
+});
+
+test("Open does not mark a borrowed live Agent whose turn boundary it cannot refresh", async () => {
+  // A borrowed Agent owns its loop and captured its starting turn before any
+  // marker existed. Writing the marker anyway would put that loop back on turn
+  // 1 and recreate the collision the marker exists to avoid, and the facade may
+  // not dispose or resume an Agent the DSH UI owns.
+  const f = fixture(true, { persistenceProbe: "list", exposeLiveAgent: true });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  assert.equal(await facade.open(), "resumed");
+  assert.deepEqual(
+    f.events,
+    [],
+    "a borrowed live Agent must not receive a marker the facade cannot rebuild",
+  );
+  assert.equal(f.calls.resume, 0, "a borrowed Agent is never resumed or replaced");
+  assert.equal(f.calls.dispose, 0, "the DSH UI remains the owner of its live Agent");
+  await facade.dispose();
+});
+
+test("Open releases a rebuilt Agent when the facade is disposed during the rebuild", async () => {
+  const rebuildGate = deferred<void>();
+  const f = fixture(false, { persistenceProbe: "list", rebuildGate: rebuildGate.promise });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  const settled = facade.open().then(
+    () => undefined,
+    (error: unknown) => error,
+  );
+  await f.openStarted;
+  await bounded((async () => {
+    while (f.calls.resume + f.calls.create < 2) await new Promise((resolve) => setImmediate(resolve));
+  })(), 2_000);
+  // The original Agent is released and the replacement is still being acquired.
+  await facade.dispose();
+  rebuildGate.resolve();
+  const outcome = await settled;
+  assert.ok(outcome instanceof Error, "open must reject once the facade is disposed");
+  assert.match(outcome.message, /disposed during open/u);
+  assert.equal(
+    f.calls.dispose,
+    2,
+    "the original Agent and the replacement acquired after disposal are both released",
+  );
 });
 
 test("Host facade appends canonical history through the native model-visible surface and deduplicates by id", async () => {
