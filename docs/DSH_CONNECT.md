@@ -4,7 +4,7 @@ The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and con
 
 > Alpha preview: `0.1.0-alpha.5` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
 
-## Normal three-step setup
+## Normal four-step setup
 
 ### 1. Install the plugin once
 

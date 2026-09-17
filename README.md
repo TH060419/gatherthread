@@ -108,11 +108,12 @@ The fixed Alpha commands are documented in the [Codex connection guide](docs/COD
 
 ## Connect DeepSeek Harness
 
-DeepSeek Harness uses the same three-step shape:
+DeepSeek Harness uses the same four-step shape:
 
 1. Install `@gatherthread/dsh-host` into the verified DSH Web profile.
 2. Start `@deepseek-ai/dsh@0.1.2-rc.1 web` and keep it running.
 3. Open **Settings → GatherThread / 共序**, enter the current server, and approve the one-use pairing code in the already signed-in browser.
+4. In the same panel, choose a DSH provider and model and connect the projects this identity can access. Pairing alone registers no runtime, so the GatherThread workspace cannot discover this DSH before this step.
 
 One explicit pairing connects every active Project visible to that identity and discovers new access later. Writable GatherThread sessions appear as editable native DSH conversations; completed DSH turns upload once, and canonical server history projects back in order. DSH Settings exposes a per-conversation automatic-upload switch and manual upload action. A successful first turn in a new DSH conversation creates a creator-owned cloud Solo; empty, failed, and viewer conversations remain local. Only the explicitly selected runtime handles an Agent request, with no Codex fallback.
 
