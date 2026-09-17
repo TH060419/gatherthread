@@ -266,16 +266,27 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         && options.sessionTitle !== undefined && options.workspaceTitle !== undefined) {
         try {
           await sessionTitle.rename(openedHandle.agent.session, options.sessionTitle);
-          // No synthetic `turn/start` is written to make this Session listable.
-          // The DSH agent loop numbers turns from an in-memory counter that
-          // starts at zero and is never restored from the Session log
-          // (`const turn = phase.turn + 1;` in dsh-agent-loop), so a turn
-          // written here is invisible to it and the loop's first real turn
-          // reuses the same number. The turn-outline fold then discards that
-          // second turn (`turn <= last.turn` returns the state unchanged) along
-          // with every message inside it. A Session becomes listable through
-          // its first real turn instead.
+          const markerWritten = ensureNativeSessionListVisibility(openedHandle.agent.session);
           await sessions.flush(openedHandle.agent.session);
+          if (markerWritten && liveAgent === undefined) {
+            // The Agent captured its starting turn from the turnBoundary
+            // projection before the marker existed, so its loop would number the
+            // first real turn 1 and collide with the marker. Rebuild it from the
+            // log the marker was just committed to; the loop then starts after
+            // turn 1 and DSH's consecutive-turn invariant holds. A borrowed live
+            // Agent is left untouched — it owns its loop, and the user already
+            // has that Session open.
+            await openedHandle.dispose();
+            openedHandle = await agents.resume({
+              resumeSessionId: options.sessionId,
+              agentOptions: { provider: options.provider, model: options.model },
+              signal: lifecycleAbort.signal,
+            });
+            if (openedHandle.agent.session.id !== options.sessionId) {
+              await openedHandle.dispose();
+              throw new Error("DSH Host returned an agent for an unexpected Session identity");
+            }
+          }
           const workspace = await workspaceRegistry.create(options.workspacePath, options.workspaceTitle);
           if (workspace === null || typeof workspace !== "object"
             || typeof workspace.attachSession !== "function") {
@@ -442,6 +453,31 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     },
     dispose,
   };
+}
+
+/**
+ * DSH hides every Session whose list metadata has never observed a `turn/start`
+ * (`applySessionListMetadata` only clears `blank` for that event type), so a
+ * canonical Session attached before its first local turn would not appear in the
+ * workspace list. Write the same balanced, content-free turn DSH's own Agent loop
+ * emits when it has no messages. This makes the Session discoverable without
+ * invoking a model or fabricating an assistant response, and is idempotent
+ * across reloads.
+ *
+ * The caller must rebuild the Agent afterwards: the loop captures its starting
+ * turn from the `turnBoundary` projection when it is constructed, so a loop built
+ * before this marker would number its first real turn 1 and collide with it. The
+ * turn-outline fold drops a turn that does not increase (`turn <= last.turn`) along
+ * with every message inside it, which is what hid Web agent turns from DSH.
+ *
+ * @returns whether a marker was written and the Agent must be rebuilt.
+ */
+function ensureNativeSessionListVisibility(session: DshSessionLike): boolean {
+  const events = session.snapshotEvents(0);
+  if (events.some((event) => asSessionEvent(event)?.type === "turn/start")) return false;
+  session.append("turn/start", { turn: 1 });
+  session.append("turn/end", { turn: 1, reason: { kind: "completed" } });
+  return true;
 }
 
 /** Register a Project workspace even when it has no locally writable Sessions. */

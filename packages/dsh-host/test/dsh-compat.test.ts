@@ -410,11 +410,11 @@ test("native workspace integration names and persists a Session before attaching
   });
   assert.equal(await facade.open(), "created");
   assert.deepEqual(f.calls.order, ["rename", "flush", "workspace:create", "workspace:attach"]);
-  assert.deepEqual(f.events, [], "opening a Session writes no synthetic turn");
+  assert.deepEqual(f.events.map((event) => event.type), ["turn/start", "turn/end"]);
   await facade.dispose();
 });
 
-test("native workspace integration leaves existing Session turns untouched on resume", async () => {
+test("native workspace integration does not duplicate its list-visibility turn", async () => {
   const f = fixture(true);
   f.events.push(
     { type: "turn/start", seq: 0, time: 1_700_000_000_000, data: { turn: 1 } },
@@ -434,7 +434,7 @@ test("native workspace integration leaves existing Session turns untouched on re
   await facade.dispose();
 });
 
-test("Open must not occupy the turn number the DSH agent loop will use for its first turn", async () => {
+test("Open lists a new Session and rebuilds the Agent so the marker is not collided with", async () => {
   const f = fixture(false);
   const facade = createDshHostFacade({
     context: f.context,
@@ -446,18 +446,42 @@ test("Open must not occupy the turn number the DSH agent loop will use for its f
     model: "deepseek-v4-flash",
   });
   assert.equal(await facade.open(), "created");
-  // The DSH agent loop numbers turns from an in-memory counter that starts at
-  // zero and is never restored from the Session log:
-  //   const turn = phase.turn + 1;  // @deepseek-ai/dsh-agent-loop
-  // A synthetic `turn/start { turn: 1 }` written here is invisible to that
-  // counter, so the loop's first real turn reuses turn 1. The turn-outline
-  // fold then discards the second turn (`turn <= last.turn` returns the state
-  // unchanged) and every message inside it never reaches the conversation.
-  assert.equal(
-    f.events.some((event) => event.type === "turn/start"),
-    false,
-    "opening a Session must not write a synthetic turn that the agent loop will collide with",
+  // The list-visibility marker is required: DSH hides any Session whose list
+  // metadata has never observed a turn/start. Dropping it removes the Session
+  // from the workspace list, which is what the real DSH lifecycle test asserts.
+  assert.deepEqual(
+    f.events.map((event) => event.type),
+    ["turn/start", "turn/end"],
+    "a Session with no turns still needs its list-visibility turn",
   );
+  // The Agent captured its starting turn from the turnBoundary projection
+  // before that marker existed, so it must be rebuilt from the log the marker
+  // was committed to. Otherwise the loop numbers its first real turn 1 and
+  // collides with the marker, and the turn-outline fold drops that second turn
+  // along with every message inside it.
+  assert.equal(f.calls.dispose, 1, "the Agent that predates the marker is released");
+  assert.equal(f.calls.resume, 1, "the Agent is rebuilt so its loop starts after the marker");
+  await facade.dispose();
+});
+
+test("Open does not rebuild an Agent whose Session already has turns", async () => {
+  const f = fixture(true);
+  f.events.push(
+    { type: "turn/start", seq: 0, time: 1_700_000_000_000, data: { turn: 1 } },
+    { type: "turn/end", seq: 1, time: 1_700_000_000_000, data: { turn: 1, reason: { kind: "completed" } } },
+  );
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  assert.equal(await facade.open(), "resumed");
+  assert.equal(f.calls.dispose, 0, "an already-listable Session keeps its Agent");
+  assert.equal(f.calls.resume, 1, "only the resume that open already performs");
   await facade.dispose();
 });
 
