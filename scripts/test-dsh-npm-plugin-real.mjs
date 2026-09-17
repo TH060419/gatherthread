@@ -77,8 +77,30 @@ function runProcess(command, args, options) {
   }), path.basename(command));
 }
 
+/**
+ * Run the npm CLI without assuming a POSIX launcher.
+ *
+ * `spawn("npm", ...)` fails with ENOENT on Windows, where npm is only reachable
+ * as `npm.cmd`, and Node no longer resolves `.cmd`/`.bat` shims for a
+ * `shell: false` spawn. Prefer the CLI path npm exports to its own lifecycle
+ * scripts, then ComSpec, then plain `npm` elsewhere — the same resolution the
+ * owner-host scripts already use.
+ */
+function runNpm(args, options = { cwd: ROOT, env: process.env }) {
+  const npmCli = process.env.npm_execpath?.trim();
+  if (npmCli) return runProcess(process.execPath, [npmCli, ...args], options);
+  if (process.platform === "win32") {
+    return runProcess(
+      process.env.ComSpec ?? "cmd.exe",
+      ["/d", "/s", "/c", `npm ${args.join(" ")}`],
+      options,
+    );
+  }
+  return runProcess("npm", args, options);
+}
+
 async function npmCacheRoot() {
-  const result = await runProcess("npm", ["config", "get", "cache"], { cwd: ROOT, env: process.env });
+  const result = await runNpm(["config", "get", "cache"]);
   if (result.code !== 0 || !path.isAbsolute(result.stdout.trim())) {
     throw new Error("Unable to resolve the local npm cache without network access");
   }
@@ -372,7 +394,7 @@ async function main() {
   let browser;
   let grantSecret = "";
   try {
-    const packed = await runProcess("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", artifacts], {
+    const packed = await runNpm(["pack", "--ignore-scripts", "--json", "--pack-destination", artifacts], {
       cwd: PACKAGE_ROOT,
       env: environment,
     });
@@ -746,7 +768,12 @@ async function main() {
 
     const credentialPath = path.join(dshHome, ".credentials.yaml");
     const credentialText = await readFile(credentialPath, "utf8");
-    assert.equal((await lstat(credentialPath)).mode & 0o777, 0o600);
+    // Windows synthesises a fixed 0o666 for every file, so the mode is only
+    // meaningful where the filesystem stores one. Content and containment are
+    // asserted on every platform.
+    if (process.platform !== "win32") {
+      assert.equal((await lstat(credentialPath)).mode & 0o777, 0o600);
+    }
     assert.match(credentialText, /gatherthread-dsh-host\/default/u);
     grantSecret = credentialText.match(/gta_[A-Za-z0-9_-]+/u)?.[0] ?? "";
     assert.ok(grantSecret, "the fixture DSH grant was not written to the official credential store");
@@ -770,7 +797,13 @@ async function main() {
     await browser.close();
     browser = undefined;
     const exit = await stopDsh(host);
-    assert.equal(exit.code, 0);
+    // Windows has no POSIX signals, so the shutdown kill surfaces as a null
+    // exit code carrying a signal instead of a graceful zero.
+    if (process.platform === "win32") {
+      assert.ok(exit.code === 0 || exit.signal !== null, `unexpected DSH shutdown: ${JSON.stringify(exit)}`);
+    } else {
+      assert.equal(exit.code, 0);
+    }
     host = undefined;
 
     const removed = await runProcess(process.execPath, [
