@@ -1365,10 +1365,10 @@ code {
 .timeline-region {
   grid-row: 6;
   overflow-y: auto;
+  overflow-anchor: none;
   padding: 18px 34px 24px;
   border-top: 1px solid color-mix(in srgb, var(--line-strong) 72%, transparent);
   box-shadow: inset 0 1px color-mix(in srgb, white 22%, transparent);
-  scroll-behavior: smooth;
 }
 
 .event-timeline {

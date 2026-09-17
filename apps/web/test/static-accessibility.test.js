@@ -312,6 +312,16 @@ test("runtime presence refreshes while a session is open and stops with the page
   assert.match(main, /error\?\.status === 403 \|\| error\?\.status === 404[\s\S]*?sync\.disconnect\(\)[\s\S]*?await enterWorkspace\(\)/);
 });
 
+test("timeline auto-follow runs only for appended events and preserves a reader's position", async () => {
+  const [main, styles] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
+  assert.match(main, /renderTimeline\(\{ followNewEvents: snapshot\.events\.length > previousCount \}\)/);
+  assert.match(main, /function renderTimeline\(\{ followNewEvents = false \} = \{\}\)/);
+  assert.match(main, /const scrollSnapshot = captureTimelineScroll\([\s\S]*?followNewEvents/);
+  assert.match(main, /settleTimelineScroll\(timelineRegion, \{[\s\S]*?\.\.\.scrollSnapshot/);
+  const timelineRule = styles.match(/\.timeline-region \{[\s\S]*?\}/)?.[0] ?? "";
+  assert.doesNotMatch(timelineRule, /scroll-behavior:\s*smooth/);
+});
+
 test("pending agent feedback is announced and respects reduced-motion preferences", async () => {
   const [main, styles] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
   assert.match(main, /className = "agent-pending-status"/);
