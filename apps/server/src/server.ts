@@ -169,8 +169,17 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
 function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string): boolean {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
   if (pathname.startsWith("/v1/") || pathname.startsWith("/health")) return false;
+  if (pathname === "/app") {
+    response.writeHead(308, { location: "/app/", "cache-control": "no-store" });
+    response.end();
+    return true;
+  }
   const root = realpathSync(staticDirectory);
-  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const relative = pathname === "/"
+    ? "index.html"
+    : pathname.endsWith("/")
+      ? `${pathname.replace(/^\/+/, "")}index.html`
+      : pathname.replace(/^\/+/, "");
   const candidate = resolve(root, relative);
   if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) return false;
   let resolved: string;
@@ -185,7 +194,7 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   response.writeHead(200, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
     "content-length": stat.size,
-    "cache-control": relative === "index.html" ? "no-store" : "no-cache",
+    "cache-control": relative.endsWith("index.html") ? "no-store" : "no-cache",
   });
   if (request.method === "HEAD") response.end();
   else createReadStream(resolved).pipe(response);

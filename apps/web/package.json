@@ -8,7 +8,8 @@
     "dev": "npm run build && node scripts/serve.mjs",
     "build": "node scripts/build.mjs",
     "test": "node --test",
-    "check": "npm run test && npm run build"
+    "test:output": "node --test scripts/check-build-output.mjs",
+    "check": "npm run test && npm run build && npm run test:output"
   },
   "engines": {
     "node": ">=20"

@@ -11,7 +11,8 @@ Tailnet client ── Tailscale Serve HTTPS + WSS (tailnet mode) ─────
                                                                        │
 Host loopback ── Collaboration server ── SQLite WAL                    │
                        │                                               │
-                       ├── same-origin Web client                      │
+                       ├── same-origin product home at `/`            │
+                       ├── same-origin Web application at `/app/`     │
                        └── MCP collaboration surface                   │
                                                                        │
 Local project connector ── ProjectHarnessAdapter ── local harness ─────┘
@@ -27,12 +28,19 @@ One deployment has one active authoritative host as defined by [ADR-0003](adr/00
 ```text
 apps/server       HTTP, WebSocket, authentication, ACL, persistence
 apps/web          collaboration UI
+site              product home source and application entry links
 packages/protocol shared schemas and event contracts
 packages/mcp      MCP tools/resources over the collaboration API
 packages/bridge   project connector, native thread projection, outbox/reconciliation, request execution
 packages/adapters harness-specific Codex and Claude Code parsers
 tests/e2e          multi-client and bridge end-to-end tests
 ```
+
+## Web entry architecture
+
+The owner host publishes one browser origin. `/` is the public product home; its primary actions open the authenticated application at `/app/`. Both surfaces are assembled by the `apps/web` build, so the product page does not introduce another network service, cookie scope, API origin, or WebSocket origin. The product page and application keep independent CSS and JavaScript entry points to prevent global marketing styles from changing workspace behavior.
+
+Operational links created before the product home remain valid. A request to the root containing `?api=...`, `?mock=1`, or a `#project`, `#session`, `#dsh-pair`, `#settings-*`, or `#main-content` fragment is redirected client-side to `/app/` with its query and fragment unchanged. API and WebSocket paths remain rooted at `/v1`; browser session cookies retain path `/`. [ADR-0022](adr/0022-place-the-product-home-above-the-same-origin-application.md) records this boundary.
 
 ## Data model
 
