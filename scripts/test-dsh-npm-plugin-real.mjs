@@ -666,11 +666,13 @@ async function main() {
     await firstProjectEntry.click();
     await page.waitForTimeout(1_000);
     const firstWorkspaceText = await page.locator("body").innerText();
-    assert.match(firstWorkspaceText, /DSH npm real session/u, firstWorkspaceText);
+    // The GatherThread marker has to survive DSH's own title clipping and reach
+    // the session rail, which is the only place it is visible to the operator.
+    assert.match(firstWorkspaceText, /DSH npm real session · 共序 · MULTI/u, firstWorkspaceText);
     await secondProjectEntry.click();
     await page.waitForTimeout(1_000);
     const secondWorkspaceText = await page.locator("body").innerText();
-    assert.match(secondWorkspaceText, /DSH npm second session/u, secondWorkspaceText);
+    assert.match(secondWorkspaceText, /DSH npm second session · 共序 · MULTI/u, secondWorkspaceText);
 
     await page.locator('button[aria-label="新建会话"]:visible').first().click();
     const nativeComposer = page.locator('[contenteditable="true"][data-placeholder]:visible').first();

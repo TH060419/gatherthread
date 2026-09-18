@@ -6,6 +6,7 @@ import {
 } from "@gatherthread/bridge";
 import path from "node:path";
 import { createHttpDshCollaborationApi } from "./collaboration-api.js";
+import { managedDshSessionTitle } from "./session-title.js";
 import {
   assertSafeDshStateRoot,
   deriveDshSessionId,
@@ -940,7 +941,11 @@ function createNativeManagedConnector(options: {
     model: options.input.config.model,
     agentPreset: DSH_NATIVE_AGENT_PRESET,
     ...(supersededSessionId === undefined ? {} : { supersededSessionId }),
-    sessionTitle: options.input.session.name ?? options.input.session.id,
+    // The DSH-native title carries the GatherThread marker so the session rail
+    // distinguishes this conversation from a plain local one. The published
+    // status snapshot below stays on the bare cloud name: that surface belongs
+    // to the GatherThread Web UI, not to the local harness.
+    sessionTitle: managedDshSessionTitle(options.input.session),
     workspaceTitle: options.workspaceTitle,
   });
   const connector = new DshHostConnector({
