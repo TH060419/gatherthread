@@ -24,6 +24,7 @@ Alpha status never permits silent reinterpretation of persisted data, identity, 
 | Capability-protected local connector relay | Internal versioned | `packages/bridge/src/local-api-relay.ts` | GatherThread Codex plugin MCP only |
 | Codex App Server adapter and persisted projection state | Internal versioned | `packages/bridge/src/codex-app-server.ts`, `packages/bridge/src/project-harness.ts` | Codex connector |
 | DSH native plugin RPC and persisted state | Public Alpha package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
+| Browser entry routes and legacy deep-link forwarding | Public Alpha | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
 | Stable Web control IDs and accessible names | Internal versioned | `apps/web/index.html`, `apps/web/test/static-accessibility.test.js` | Web event bindings, accessibility, browser tests |
 
 When this document conflicts with the schemas or tested implementation, stop and resolve the discrepancy in the same PR. Do not silently choose whichever behavior is more convenient.
@@ -131,6 +132,8 @@ The published MCP surface is intentionally narrower than the internal collaborat
 
 Web HTML IDs, form names, accessible labels, dialog relationships, and the separate chat/Agent actions are integration points between static markup, JavaScript, tests, assistive technology, and browser automation.
 
+- `/` is the product home and `/app/` is the authenticated application. Root operational links containing `?api=...`, `?mock=1`, `#project`, `#session`, `#dsh-pair`, `#settings-*`, or `#main-content` must preserve their query and fragment when forwarded to `/app/`.
+- The product home and application must share one origin while retaining separate style and script entry points. Do not move authentication, API, WebSocket, Cookie, or invitation behavior into the product home.
 - Preserve them during visual-only changes or update every consumer and accessibility test in the same PR.
 - All user and Agent Markdown is untrusted. Keep URL filtering, escaped raw HTML, code-fence protection, bounded parsing, and bundled KaTeX limits intact.
 - Bilingual copy must be updated in English and Simplified Chinese without translating product names, user content, provider/model identifiers, or opaque IDs.

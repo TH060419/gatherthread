@@ -20,10 +20,13 @@ const HOP_BY_HOP_HEADERS = new Set([
 const types = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
+  ".ico": "image/x-icon",
   ".js": "text/javascript; charset=utf-8",
   ".json": "application/json; charset=utf-8",
   ".map": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
   ".ttf": "font/ttf",
+  ".webmanifest": "application/manifest+json",
   ".woff": "font/woff",
   ".woff2": "font/woff2",
 };
@@ -87,11 +90,28 @@ function proxyHttp(request, response, upstream) {
 }
 
 async function serveStatic(request, response, root) {
+  if (request.method !== "GET" && request.method !== "HEAD") {
+    response.writeHead(405, {
+      "Content-Type": "text/plain; charset=utf-8",
+      "Allow": "GET, HEAD",
+    }).end("Method not allowed");
+    return;
+  }
   let url;
   let requestedPath;
   try {
     url = requestTarget(request);
-    requestedPath = decodeURIComponent(url.pathname === "/" ? "/index.html" : url.pathname);
+    if (url.pathname === "/app") {
+      response.writeHead(308, { "Location": "/app/", "Cache-Control": "no-store" }).end();
+      return;
+    }
+    requestedPath = decodeURIComponent(
+      url.pathname === "/"
+        ? "/index.html"
+        : url.pathname.endsWith("/")
+          ? `${url.pathname}index.html`
+          : url.pathname,
+    );
   } catch {
     response.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" }).end("Invalid request target");
     return;
@@ -117,7 +137,8 @@ async function serveStatic(request, response, root) {
       "X-Content-Type-Options": "nosniff",
       "X-Frame-Options": "DENY",
     });
-    createReadStream(resolvedFile).pipe(response);
+    if (request.method === "HEAD") response.end();
+    else createReadStream(resolvedFile).pipe(response);
   } catch {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" }).end("Not found");
   }

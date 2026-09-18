@@ -9,9 +9,9 @@ cd apps/web
 npm run dev
 ```
 
-Start the API with `GATHERTHREAD_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173` and enter an access token from the owner host. The development server proxies same-origin `/v1` and `/health` requests to `GATHERTHREAD_WEB_API_ORIGIN` (default `http://127.0.0.1:18787`).
+Start the API with `GATHERTHREAD_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173` for the product home and choose **Get Started** to enter the application at `/app/`. Enter an access token from the owner host there. The development server proxies same-origin `/v1` and `/health` requests to `GATHERTHREAD_WEB_API_ORIGIN` (default `http://127.0.0.1:18787`).
 
-For the isolated mock preview, explicitly open `http://127.0.0.1:4173/?mock=1` and sign in with `demo-token`.
+For the isolated mock preview, explicitly open `http://127.0.0.1:4173/app/?mock=1` and sign in with `demo-token`. Legacy root `?mock=1`, project/session fragments, and DSH pairing fragments are forwarded to `/app/` with their query and fragment preserved.
 
 ```bash
 npm test

@@ -39,6 +39,7 @@ MCP 服务器无法自行读取 host 中的完整会话。因此，根据历史�
 |---|---|
 | `apps/server` | 带身份验证的 HTTP/WebSocket 服务、SQLite WAL、ACL、历史重放和 runtime 请求领取 |
 | `apps/web` | 支持中英文、区域调节、Agent 设置、solo/multi、聊天/Agent 请求和断线补偿的响应式工作区 |
+| `site` | 介绍 GatherThread 并进入同源应用的中英文产品首页 |
 | `packages/protocol` | 规范事件和 API schema |
 | `packages/adapters` | 已授权的 Codex、Claude Code 会话发现、解析和脱敏 |
 | `packages/bridge` | 本地 runtime 注册、游标、上下文上传和请求领取/完成流程 |
@@ -69,9 +70,9 @@ npm run owner-host
 
 如需自定义端口或路径，可以在初始化前手动复制 `.env.example`；`owner-host:init` 会只填充空的 Pepper，不会覆盖其他设置。`owner-host` 每次启动都会自动构建当前源码。
 
-在 `http://127.0.0.1:18787` 输入命令一次性显示的设备凭据。页面会用它换取一个不透明的 `HttpOnly; SameSite=Strict` 浏览器会话 Cookie，然后立即从 JavaScript 内存中清除设备凭据。刷新页面时可以自动恢复登录，不使用 `localStorage` 或 `sessionStorage`。默认会话在服务器端有 24 小时绝对有效期，Cookie 本身不持久；勾选“记住此设备”后，会改用 30 天持久 Cookie。主动退出、撤销设备或轮换设备 Token 都会立即使两种会话失效。HTTPS 部署会额外启用 `Secure` 和 `__Host-` Cookie 前缀。WebSocket 仍使用独立的 30 秒有效、一次性、限定会话的 ticket，任何凭据都不会写入 URL。较高的默认端口可以减少 Windows 上常见的低端口占用冲突。已经显式设置 `GATHERTHREAD_SERVER_PORT=8787` 的既有安装仍会继续使用该值；`18787` 只作为新的默认端口。
+打开 `http://127.0.0.1:18787` 进入产品首页，再选择“开始使用”进入同源的 `/app/` 登录页与工作区。在这里输入命令一次性显示的设备凭据；应用会用它换取一个不透明的 `HttpOnly; SameSite=Strict` 浏览器会话 Cookie，然后立即从 JavaScript 内存中清除设备凭据。刷新页面时可以自动恢复登录，不使用 `localStorage` 或 `sessionStorage`。默认会话在服务器端有 24 小时绝对有效期，Cookie 本身不持久；勾选“记住此设备”后，会改用 30 天持久 Cookie。主动退出、撤销设备或轮换设备 Token 都会立即使两种会话失效。HTTPS 部署会额外启用 `Secure` 和 `__Host-` Cookie 前缀。WebSocket 仍使用独立的 30 秒有效、一次性、限定会话的 ticket，任何凭据都不会写入 URL。较高的默认端口可以减少 Windows 上常见的低端口占用冲突。已经显式设置 `GATHERTHREAD_SERVER_PORT=8787` 的既有安装仍会继续使用该值；`18787` 只作为新的默认端口。
 
-如果只开发 UI，运行 `npm --workspace apps/web run dev` 即可启动仅绑定 loopback 的预览服务并代理本地 API。显式 mock 模式只在 `http://127.0.0.1:4173/?mock=1` 可用，演示凭据为 `demo-token`。
+如果只开发 UI，运行 `npm --workspace apps/web run dev` 即可启动仅绑定 loopback 的预览服务并代理本地 API。产品首页位于 `http://127.0.0.1:4173/`；工作区显式 mock 模式只在 `http://127.0.0.1:4173/app/?mock=1` 可用，演示凭据为 `demo-token`。
 
 ## 选择连接方式
 

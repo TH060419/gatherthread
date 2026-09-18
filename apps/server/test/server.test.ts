@@ -1296,7 +1296,9 @@ test("owner host serves only the configured static tree without authentication",
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-static-"));
   const staticDirectory = join(directory, "public");
   mkdirSync(join(staticDirectory, "assets"), { recursive: true });
+  mkdirSync(join(staticDirectory, "app"), { recursive: true });
   writeFileSync(join(staticDirectory, "index.html"), "<!doctype html><title>GatherThread</title>");
+  writeFileSync(join(staticDirectory, "app", "index.html"), "<!doctype html><title>GatherThread app</title>");
   writeFileSync(join(staticDirectory, "assets", "app.js"), "export const ready = true;\n");
   writeFileSync(join(directory, "private.txt"), "must not leak");
   const running = await startCollaborationServer({
@@ -1310,6 +1312,17 @@ test("owner host serves only the configured static tree without authentication",
     assert.equal(index.headers.get("content-type"), "text/html; charset=utf-8");
     assert.equal(index.headers.get("cache-control"), "no-store");
     assert.match(await index.text(), /GatherThread/);
+
+    const application = await fetch(`${running.origin}/app/`);
+    assert.equal(application.status, 200);
+    assert.equal(application.headers.get("content-type"), "text/html; charset=utf-8");
+    assert.equal(application.headers.get("cache-control"), "no-store");
+    assert.match(await application.text(), /GatherThread app/);
+
+    const applicationRedirect = await fetch(`${running.origin}/app`, { redirect: "manual" });
+    assert.equal(applicationRedirect.status, 308);
+    assert.equal(applicationRedirect.headers.get("location"), "/app/");
+    assert.equal(applicationRedirect.headers.get("cache-control"), "no-store");
 
     const asset = await fetch(`${running.origin}/assets/app.js`);
     assert.equal(asset.status, 200);

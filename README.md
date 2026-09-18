@@ -39,6 +39,7 @@ An MCP server cannot independently read an entire host conversation. Therefore r
 |---|---|
 | `apps/server` | Authenticated HTTP/WebSocket service, SQLite WAL, ACL, replay, runtime claims |
 | `apps/web` | Bilingual, resizable solo/multi workspace with Agent settings, chat/request controls, and gap recovery |
+| `site` | Bilingual product home that introduces GatherThread and opens the same-origin application |
 | `packages/protocol` | Canonical event and API schemas |
 | `packages/adapters` | Authorized Codex and Claude Code transcript discovery, parsing, and redaction |
 | `packages/bridge` | Local runtime registration, cursoring, context upload, claim/complete workflow |
@@ -69,9 +70,9 @@ npm run owner-host
 
 To customize ports or paths, copy `.env.example` before initialization. `owner-host:init` fills only a blank pepper and preserves every other setting. `owner-host` builds the current source automatically on every start.
 
-Enter the one-time displayed device credential at `http://127.0.0.1:18787`. The page exchanges it for an opaque `HttpOnly; SameSite=Strict` browser session cookie and immediately clears the credential from JavaScript memory. Reloading restores the signed-in workspace without `localStorage` or `sessionStorage`. The default session has a 24-hour absolute server-side lifetime and a non-persistent Cookie. Choosing **Remember this device** instead creates a 30-day persistent Cookie; explicit logout, device revocation, or device-token rotation still revokes it immediately. HTTPS deployments add `Secure` and the `__Host-` cookie prefix. WebSockets still use a separate 30-second, one-use, session-scoped ticket, and no credential is placed in a URL. The higher default reduces collisions with commonly occupied low ports on Windows. Existing installations that explicitly set `GATHERTHREAD_SERVER_PORT=8787` continue to use that value; `18787` is only the new default.
+Open `http://127.0.0.1:18787` to see the product home, then choose **Get Started** to enter the same-origin application at `/app/`. Enter the one-time displayed device credential there. The application exchanges it for an opaque `HttpOnly; SameSite=Strict` browser session cookie and immediately clears the credential from JavaScript memory. Reloading restores the signed-in workspace without `localStorage` or `sessionStorage`. The default session has a 24-hour absolute server-side lifetime and a non-persistent Cookie. Choosing **Remember this device** instead creates a 30-day persistent Cookie; explicit logout, device revocation, or device-token rotation still revokes it immediately. HTTPS deployments add `Secure` and the `__Host-` cookie prefix. WebSockets still use a separate 30-second, one-use, session-scoped ticket, and no credential is placed in a URL. The higher default reduces collisions with commonly occupied low ports on Windows. Existing installations that explicitly set `GATHERTHREAD_SERVER_PORT=8787` continue to use that value; `18787` is only the new default.
 
-For UI-only development, `npm --workspace apps/web run dev` starts the loopback preview and proxies the local API. Explicit mock mode is available only at `http://127.0.0.1:4173/?mock=1` with `demo-token`.
+For UI-only development, `npm --workspace apps/web run dev` starts the loopback preview and proxies the local API. The product home is at `http://127.0.0.1:4173/`; explicit workspace mock mode is available only at `http://127.0.0.1:4173/app/?mock=1` with `demo-token`.
 
 ## Choose a connection mode
 
