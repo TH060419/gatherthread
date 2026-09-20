@@ -29,7 +29,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
-import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 
 export interface Actor {
   user_id: string;
@@ -194,7 +194,12 @@ interface CountRow { count: number }
 interface BytesRow { bytes: number }
 interface SequenceRow { next_sequence: number }
 interface MembershipRow { role: MembershipRole }
-interface ClaimRow { runtime_id: string; status: "claimed" | "completed" }
+interface ClaimRow {
+  runtime_id: string;
+  status: "claimed" | "completed" | "failed";
+  attempt_count?: number;
+  lease_expires_at?: string | null;
+}
 interface InvitationRow extends InvitationRecord { token_digest: string }
 interface ProjectInvitationRow extends ProjectInvitationRecord { token_digest: string }
 interface DeviceAuthorizationRow extends DeviceAuthorizationRecord { token_digest: string }
@@ -258,6 +263,16 @@ const DEFAULT_MAX_USER_ACTIVE_SNAPSHOT_REQUESTS = 64;
 const DEFAULT_MAX_SESSION_ACTIVE_SNAPSHOT_REQUESTS = 256;
 const DEFAULT_MAX_TOTAL_ACTIVE_SNAPSHOT_REQUESTS = 4_096;
 const RUNTIME_OFFLINE_AFTER_MS = 30_000;
+/**
+ * How long a claim survives without proof of work. The holder renews it by
+ * appending `agent_progress`, so a claim lapses only when its runtime has
+ * genuinely gone quiet — which covers a dead device and, just as importantly, a
+ * live device whose execution has wedged. Runtime presence is a separate
+ * question and deliberately does not extend a lease on its own.
+ */
+const AGENT_CLAIM_LEASE_MS = 5 * 60_000;
+/** Automatic re-dispatch attempts before a request is terminally failed. */
+const MAX_AGENT_CLAIM_ATTEMPTS = 3;
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -367,7 +382,9 @@ CREATE TABLE IF NOT EXISTS agent_request_claims (
   runtime_id TEXT NOT NULL REFERENCES runtimes(id),
   claimed_at TEXT NOT NULL,
   completed_at TEXT,
-  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed'))
+  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+  attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+  lease_expires_at TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS local_turn_commits (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -565,6 +582,18 @@ function runtimeStatus(
     : "offline";
 }
 
+/**
+ * A claim with no lease was written before leases existed. Nothing renews such a
+ * row, so it reads as expired: recovery is the safe interpretation of a claim no
+ * live build can be working on.
+ */
+function claimLeaseLapsed(leaseExpiresAt: string | null | undefined, now: string): boolean {
+  if (typeof leaseExpiresAt !== "string") return true;
+  const expires = Date.parse(leaseExpiresAt);
+  const current = Date.parse(now);
+  return !Number.isFinite(expires) || !Number.isFinite(current) || expires <= current;
+}
+
 function isLocalSyncRequestKind(kind: SnapshotRequestKind): boolean {
   return kind === "local_sync_status"
     || kind === "local_auto_upload_enable"
@@ -737,6 +766,7 @@ export class CollaborationDatabase {
     this.migrateCanonicalProvenancePrivacy();
     this.migrateSnapshotStorageLedger();
     this.migrateSnapshotControlRequests();
+    this.migrateAgentClaimLease();
     this.initializeEventStorageUsage();
   }
 
@@ -2228,7 +2258,10 @@ export class CollaborationDatabase {
 
   claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string): { request_event_id: string; runtime_id: string; status: string } {
     this.assertActiveDevice(actor);
-    return this.transaction(() => {
+    // The transaction rolls back on throw, so terminal failure is signalled out
+    // of it and raised afterwards. Failing the request must not be undone by the
+    // very error that reports it.
+    const outcome = this.transaction((): { claim: { request_event_id: string; runtime_id: string; status: string } } | { abandoned: true } => {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be claimed");
       if (this.sqlite.prepare("SELECT 1 FROM local_turn_commits WHERE request_event_id = ?").get(requestEventId)) {
@@ -2256,22 +2289,78 @@ export class CollaborationDatabase {
         || !matching.some((candidate) => candidate.id === runtime.id)) {
         throw conflict(`A matching online ${target.harness} runtime is required for this Agent request`);
       }
-      const existing = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const now = this.now();
+      const leaseExpiresAt = new Date(Date.parse(now) + AGENT_CLAIM_LEASE_MS).toISOString();
+      const existing = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
       if (existing) {
-        if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
-        return { request_event_id: requestEventId, runtime_id: runtimeId, status: existing.status };
+        if (existing.status === "failed") return { abandoned: true };
+        if (existing.status === "completed" || !claimLeaseLapsed(existing.lease_expires_at, now)) {
+          if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
+          return { claim: { request_event_id: requestEventId, runtime_id: runtimeId, status: existing.status } };
+        }
+        // The lease lapsed, so no one is working on this request. Re-dispatch is
+        // bounded: past the budget the request ends in a visible failure instead
+        // of rotating between runtimes for ever.
+        if ((existing.attempt_count ?? 1) >= MAX_AGENT_CLAIM_ATTEMPTS) {
+          this.failAbandonedClaim(sessionId, event, target.harness);
+          return { abandoned: true };
+        }
+        this.sqlite.prepare(`
+          UPDATE agent_request_claims
+          SET runtime_id = ?, claimed_at = ?, attempt_count = attempt_count + 1, lease_expires_at = ?
+          WHERE request_event_id = ?
+        `).run(runtimeId, now, leaseExpiresAt, requestEventId);
+        return { claim: { request_event_id: requestEventId, runtime_id: runtimeId, status: "claimed" } };
       }
       const active = this.sqlite.prepare(`
         SELECT request_event_id FROM agent_request_claims
-        WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ?
+        WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ? AND lease_expires_at > ?
         LIMIT 1
-      `).get(runtimeId, requestEventId) as { request_event_id: string } | undefined;
+      `).get(runtimeId, requestEventId, now) as { request_event_id: string } | undefined;
       if (active) throw runtimeBusy();
-      this.sqlite.prepare("INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status) VALUES (?, ?, ?, 'claimed')")
-        .run(requestEventId, runtimeId, this.now());
-      return { request_event_id: requestEventId, runtime_id: runtimeId, status: "claimed" };
+      this.sqlite.prepare(`
+        INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status, attempt_count, lease_expires_at)
+        VALUES (?, ?, ?, 'claimed', 1, ?)
+      `).run(requestEventId, runtimeId, now, leaseExpiresAt);
+      return { claim: { request_event_id: requestEventId, runtime_id: runtimeId, status: "claimed" } };
     });
+    if ("abandoned" in outcome) throw agentRequestFailed();
+    return outcome.claim;
+  }
+
+  /**
+   * End an abandoned request in a terminal failure the timeline can show, rather
+   * than leaving it pending for ever.
+   *
+   * The response is attributed to the requesting user because that is whose
+   * runtime held it, exactly as a harness-reported execution failure already is.
+   * It carries no runtime provenance and claims no capture fidelity: no harness
+   * produced it, and saying otherwise would overstate what the server observed.
+   */
+  private failAbandonedClaim(sessionId: string, request: CanonicalEvent, harness: string): void {
+    this.sqlite.prepare(`
+      UPDATE agent_request_claims
+      SET status = 'failed', completed_at = ?, lease_expires_at = NULL
+      WHERE request_event_id = ?
+    `).run(this.now(), request.id);
+    const idempotencyKey = `agent-claim-abandoned:${request.id}`;
+    if (this.findByIdempotencyKey(sessionId, idempotencyKey)) return;
+    this.appendInsideTransaction(request.actor_user_id, sessionId, {
+      idempotency_key: idempotencyKey,
+      type: "agent_response",
+      visibility: "session",
+      reply_to_event_id: request.id,
+      payload: {
+        text: "This Agent request was interrupted and could not be recovered.",
+        status: "failed",
+        source_harness: harness,
+        error: {
+          code: "agent_request_abandoned",
+          message: "Every runtime that claimed this request stopped reporting progress.",
+        },
+      },
+    }, null);
   }
 
   completeAgentRequest(
@@ -2362,7 +2451,7 @@ export class CollaborationDatabase {
         ...(observedModel === undefined ? {} : { model: observedModel }),
         ...(observedReasoningEffort === undefined ? {} : { reasoning_effort: observedReasoningEffort }),
       };
-      return this.appendInsideTransaction(actor.user_id, sessionId, {
+      const progress = this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "agent_progress",
         visibility: "session",
@@ -2370,6 +2459,12 @@ export class CollaborationDatabase {
         payload,
         runtime_id: runtimeId,
       }, provenance);
+      // Reporting accepted progress is what proves the claimant is still working,
+      // so it — not a device heartbeat — is what extends the lease. A runtime that
+      // is merely switched on cannot keep a dead execution alive.
+      this.sqlite.prepare("UPDATE agent_request_claims SET lease_expires_at = ? WHERE request_event_id = ?")
+        .run(new Date(Date.parse(this.now()) + AGENT_CLAIM_LEASE_MS).toISOString(), requestEventId);
+      return progress;
     });
   }
 
@@ -3181,6 +3276,51 @@ export class CollaborationDatabase {
     }
     const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
     if (violations.length > 0) throw new Error("Agent progress migration failed foreign-key validation");
+  }
+
+  /**
+   * Give agent claims a lease and a re-dispatch budget, and let them end in a
+   * terminal `failed` rather than sitting `claimed` forever.
+   *
+   * Pre-lease rows are inserted with a null `lease_expires_at`, which the claim
+   * path reads as "already expired". That is deliberate: a claim written by an
+   * older build is by definition one nothing is renewing, so recovery is the
+   * safe reading of it.
+   */
+  private migrateAgentClaimLease(): void {
+    const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_request_claims'")
+      .get() as { sql?: string } | undefined;
+    if (table?.sql === undefined || table.sql.includes("lease_expires_at")) return;
+    this.sqlite.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.sqlite.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE agent_request_claims_next (
+          request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+          runtime_id TEXT NOT NULL REFERENCES runtimes(id),
+          claimed_at TEXT NOT NULL,
+          completed_at TEXT,
+          status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+          attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+          lease_expires_at TEXT
+        ) STRICT;
+        INSERT INTO agent_request_claims_next(
+          request_event_id, runtime_id, claimed_at, completed_at, status, attempt_count, lease_expires_at
+        ) SELECT
+          request_event_id, runtime_id, claimed_at, completed_at, status, 1, NULL
+        FROM agent_request_claims;
+        DROP TABLE agent_request_claims;
+        ALTER TABLE agent_request_claims_next RENAME TO agent_request_claims;
+        COMMIT;
+      `);
+    } catch (error) {
+      try { this.sqlite.exec("ROLLBACK"); } catch { /* The migration may have failed before BEGIN. */ }
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) throw new Error("Agent claim lease migration failed foreign-key validation");
   }
 
   private migrateSnapshotStorageLedger(): void {

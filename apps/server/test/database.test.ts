@@ -865,6 +865,220 @@ test("only the initiating user's runtime can claim and complete an agent request
   }
 });
 
+/**
+ * A claim-lease fixture: one `multi` session with `member` as a participant, a
+ * request from `member`, and two `member` runtimes on two devices. `nowMs` is
+ * mutable so a test can advance the clock past a claim lease without sleeping.
+ */
+function claimLeaseFixture(nowMs: { value: number }) {
+  const f = fixture({ clock: () => new Date(nowMs.value) });
+  const { session } = f.service.createSession(f.owner, {
+    session_id: "lease-session",
+    idempotency_key: "create-lease-0001",
+    mode: "multi",
+    title: "Lease work",
+  });
+  f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "lease-member-0001");
+  const secondDevice = f.database.createDevice(f.member.user_id, "Member second device", "member-device-lease-2");
+  const secondActor = { ...f.member, device_id: secondDevice.device_id };
+  const first = f.service.registerRuntime(f.member, {
+    runtime_id: "runtime-lease-1",
+    session_id: session.id,
+    device_id: f.member.device_id,
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5",
+    local_session_id: "local-lease-1",
+    capture_fidelity: "harness_transcript",
+  });
+  const second = f.service.registerRuntime(secondActor, {
+    runtime_id: "runtime-lease-2",
+    session_id: session.id,
+    device_id: secondActor.device_id,
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5",
+    local_session_id: "local-lease-2",
+    capture_fidelity: "harness_transcript",
+  });
+  const request = (idempotencyKey: string) => f.service.appendEvent(f.member, session.id, {
+    idempotency_key: idempotencyKey,
+    type: "agent_request",
+    visibility: "session",
+    payload: { prompt: "do the work" },
+  });
+  /**
+   * Keep both devices present across a clock jump. Runtime presence and claim
+   * liveness are separate questions: a device that is up and heartbeating can
+   * still be holding a claim whose execution has wedged, which is the case
+   * automatic re-dispatch exists to recover from.
+   */
+  const keepAlive = () => {
+    f.service.heartbeatRuntime(f.member, first.id);
+    f.service.heartbeatRuntime(secondActor, second.id);
+  };
+  return { f, sessionId: session.id, secondActor, first, second, request, keepAlive };
+}
+
+/** Comfortably past any claim lease the server would choose for itself. */
+const PAST_LEASE_MS = 10 * 60_000;
+
+test("an abandoned agent claim is re-dispatched instead of blocking the request forever", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-lease-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // The claiming device never comes back. Its lease has to lapse, or the
+    // request is stuck forever and no other runtime may answer it.
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    const takeover = f.service.claimAgentRequest(secondActor, sessionId, event.id, second.id);
+    assert.equal(takeover.status, "claimed");
+    assert.equal(
+      takeover.runtime_id,
+      second.id,
+      "the abandoned request must move to the runtime that can actually answer it",
+    );
+    assert.equal(
+      f.service.completeAgentRequest(secondActor, sessionId, event.id, second.id, "agent-response-lease-0001", { text: "done" })
+        .reply_to_event_id,
+      event.id,
+      "the replacement runtime owns the completion",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a lapsed claim no longer wedges the runtime that was holding it", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const abandoned = request("agent-request-lease-0002");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, abandoned.id, first.id).status, "claimed");
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    // One runtime may hold one active claim. A claim nobody is working on is not
+    // active, so the device that came back must be free for the next request.
+    const next = request("agent-request-lease-0003");
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, next.id, first.id).status,
+      "claimed",
+      "an abandoned claim must not consume the runtime's single active slot",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a claim that keeps reporting progress is never taken over", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-lease-0004");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    for (let step = 1; step <= 3; step += 1) {
+      nowMs.value += PAST_LEASE_MS / 2;
+      f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, `progress-lease-000${String(step)}`, {
+        content: `step ${String(step)}`,
+      });
+    }
+    // Three half-lease steps is far past one lease, but every step proved the
+    // claimant is still working, so the claim is alive rather than abandoned.
+    keepAlive();
+    assert.throws(
+      () => f.service.claimAgentRequest(secondActor, sessionId, event.id, second.id),
+      (error: unknown) => error instanceof ApiError && error.code === "agent_request_already_claimed",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a request fails visibly instead of ping-ponging between runtimes forever", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-lease-0005");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // Every runtime that picks the request up dies the same way. Automatic
+    // re-dispatch has to run out somewhere, and has to say so when it does.
+    const holders = [[secondActor, second.id], [f.member, first.id]] as const;
+    let bounded = false;
+    for (let round = 0; round < 10; round += 1) {
+      const [actor, runtimeId] = holders[round % 2]!;
+      nowMs.value += PAST_LEASE_MS;
+      keepAlive();
+      try {
+        f.service.claimAgentRequest(actor, sessionId, event.id, runtimeId);
+      } catch (error) {
+        assert.ok(error instanceof ApiError && error.code === "agent_request_failed", `unexpected ${String(error)}`);
+        bounded = true;
+        break;
+      }
+    }
+    assert.ok(bounded, "automatic re-dispatch must run out rather than rotate between runtimes forever");
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, sessionId, event.id, first.id),
+      (error: unknown) => error instanceof ApiError && error.code === "agent_request_failed",
+      "an exhausted request must stay failed rather than be re-dispatched again",
+    );
+    const failure = f.service.replay(f.member, sessionId, 0, 100).events
+      .find((candidate) => candidate.type === "agent_response" && candidate.reply_to_event_id === event.id);
+    assert.ok(failure, "the timeline must carry a canonical failure response");
+    assert.equal((failure.payload as { status?: string }).status, "failed");
+  } finally {
+    f.close();
+  }
+});
+
+test("a database written before claim leases migrates its claims into recoverable ones", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const lease = claimLeaseFixture(nowMs);
+  const path = join(lease.f.directory, "test.sqlite");
+  const event = lease.request("agent-request-migration-0001");
+  assert.equal(lease.f.service.claimAgentRequest(lease.f.member, lease.sessionId, event.id, lease.first.id).status, "claimed");
+  lease.f.database.close();
+
+  // Put the claim table back into exactly the shape the previous release wrote,
+  // so reopening exercises the migration rather than the fresh schema.
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP TABLE agent_request_claims;
+    CREATE TABLE agent_request_claims (
+      request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+      runtime_id TEXT NOT NULL REFERENCES runtimes(id),
+      claimed_at TEXT NOT NULL,
+      completed_at TEXT,
+      status TEXT NOT NULL CHECK (status IN ('claimed', 'completed'))
+    ) STRICT;
+  `);
+  legacy.prepare(`
+    INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, completed_at, status)
+    VALUES (?, ?, ?, NULL, 'claimed')
+  `).run(event.id, lease.first.id, "2026-09-20T00:00:00.000Z");
+  legacy.close();
+
+  const reopened = new CollaborationDatabase(path, { authTokenPepper: "unit-test-auth-token-pepper" });
+  try {
+    const service = new CollaborationService(reopened);
+    nowMs.value += PAST_LEASE_MS;
+    service.heartbeatRuntime(lease.f.member, lease.first.id);
+    service.heartbeatRuntime(lease.secondActor, lease.second.id);
+    // The migrated row carries no lease, so nothing is renewing it. It must read
+    // as recoverable rather than keep holding the request — and the runtime —
+    // for ever, which is exactly what the previous release did.
+    const takeover = service.claimAgentRequest(lease.secondActor, lease.sessionId, event.id, lease.second.id);
+    assert.equal(takeover.status, "claimed");
+    assert.equal(takeover.runtime_id, lease.second.id);
+  } finally {
+    reopened.close();
+    rmSync(lease.f.directory, { recursive: true, force: true });
+  }
+});
+
 test("DeepSeek Harness claims honor the exact Web-selected runtime and model without changing Codex claims", () => {
   const f = fixture();
   try {
