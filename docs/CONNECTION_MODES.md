@@ -28,7 +28,7 @@ npm run connection:local
 npm run owner-host
 ```
 
-Open `http://127.0.0.1:18787`. This mode accepts no other computer. Do not replace the loopback bind with `0.0.0.0`.
+Open `http://127.0.0.1:18787` for the product home, then choose **Get Started** to enter the login and workspace application at `/app/`. This mode accepts no other computer. Do not replace the loopback bind with `0.0.0.0`.
 
 ## LAN HTTPS
 

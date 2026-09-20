@@ -4,6 +4,10 @@
 
 Enable multiple people to collaborate on an agent-assisted project while each person keeps using their own local harness, model, credentials, filesystem, and context-management policy.
 
+## Browser entry flow
+
+Opening a GatherThread deployment at `/` presents the bilingual product home. Its primary action opens the existing login and collaboration application at same-origin `/app/`; authenticated users continue into their workspace and signed-out users see the established device-token or invitation flow. Existing root links carrying `?api=...`, `?mock=1`, `#project`, `#session`, `#dsh-pair`, `#settings-*`, or `#main-content` are forwarded to `/app/` without changing their query or fragment. The product home does not read credentials or replace the application's authentication, invitation, Cookie, API, realtime, accessibility, or responsive behavior.
+
 ## Project collaboration boundary
 
 A project groups related sessions and is the stable membership, invitation, and local-agent binding boundary. Creating a project atomically creates only its owner membership; an owner or participant then creates an eligible first session explicitly. Existing sessions named `General` are preserved, but new and historical projects are never backfilled with one. A project invitation grants access to the project's current and future sessions. The project owner can rename the project, creates and renames `multi` sessions, switches their own sessions between `solo` and `multi`, and can change every other member between `participant` and `viewer`. Owners and participants create and rename only their own personal `solo` sessions. A session creator or project owner may permanently delete that session's cloud copy; only the project owner may delete the whole cloud project. Neither operation deletes local workspaces or Agent conversations.
