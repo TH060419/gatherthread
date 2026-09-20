@@ -1,0 +1,47 @@
+{
+  "name": "@gatherthread/zcode-connect",
+  "version": "0.1.0-alpha.5",
+  "description": "Standalone local ZCode connector for GatherThread projects",
+  "author": "Yuhan He and contributors",
+  "license": "Apache-2.0",
+  "publishConfig": {
+    "access": "public",
+    "tag": "alpha"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "bin": {
+    "gatherthread-zcode-connect": "dist/zcode-connect.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "keywords": [
+    "gatherthread",
+    "zcode",
+    "connector",
+    "collaboration"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TH060419/gatherthread.git",
+    "directory": "packages/zcode-connect"
+  },
+  "homepage": "https://github.com/TH060419/gatherthread#readme",
+  "bugs": "https://github.com/TH060419/gatherthread/issues"
+}

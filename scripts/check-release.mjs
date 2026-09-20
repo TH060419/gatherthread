@@ -16,6 +16,7 @@ const manifestPaths = [
   "packages/dsh-host/package.json",
   "packages/mcp/package.json",
   "packages/protocol/package.json",
+  "packages/zcode-connect/package.json",
 ];
 
 async function json(path) {
@@ -29,7 +30,7 @@ for (const path of manifestPaths) {
 
 const lock = await json("package-lock.json");
 assert.equal(lock.version, EXPECTED_VERSION, "package-lock.json must declare the candidate version");
-for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/dsh-host", "packages/mcp", "packages/protocol"]) {
+for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/dsh-host", "packages/mcp", "packages/protocol", "packages/zcode-connect"]) {
   assert.equal(lock.packages?.[path]?.version, EXPECTED_VERSION, `package-lock.json package ${path || "root"} is stale`);
 }
 
@@ -139,6 +140,14 @@ assert.equal(connector.private, undefined);
 assert.deepEqual(connector.publishConfig, { access: "public", tag: "alpha" });
 assert.deepEqual(connector.bin, { "gatherthread-codex-connect": "dist/codex-connect.js" });
 assert.deepEqual(connector.dependencies ?? {}, {});
+
+const zcodeConnector = await json("packages/zcode-connect/package.json");
+assert.equal(zcodeConnector.name, "@gatherthread/zcode-connect");
+assert.equal(zcodeConnector.private, undefined);
+assert.deepEqual(zcodeConnector.publishConfig, { access: "public", tag: "alpha" });
+assert.deepEqual(zcodeConnector.bin, { "gatherthread-zcode-connect": "dist/zcode-connect.js" });
+assert.deepEqual(zcodeConnector.dependencies ?? {}, {});
+assert.equal(zcodeConnector.engines?.node, ">=24");
 
 const plugin = await json("plugins/gatherthread/.codex-plugin/plugin.json");
 assert.equal(plugin.version, EXPECTED_VERSION);
