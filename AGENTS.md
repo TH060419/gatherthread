@@ -105,3 +105,14 @@ Select checks in proportion to risk. Any release candidate must pass `npm run re
 - Prior approval for implementation or for an earlier release does not authorize a later merge, publication, tag, or deployment.
 - Do not delete source branches after merge unless their owner or the project lead explicitly requests it.
 - `.github/CODEOWNERS` requests the project lead's review. Repository administrators must also enable branch protection for `main`, require pull-request reviews, require Code Owner review, dismiss stale approvals, and require the quality workflow; the files in this repository cannot enforce those GitHub settings by themselves.
+
+## Current task consensus: ZCode harness adaptation (2026-09-20)
+
+Task-scoped consensus agreed with the operator before implementation; this section may be removed when the task's release review closes. It does not weaken any rule above.
+
+- Goal: add ZCode as a third harness through an independent connector package `packages/zcode-connect` (`@gatherthread/zcode-connect`), mirroring the `@gatherthread/codex-connect` thin-shell structure. New implementation files (`packages/bridge/src/zcode-*.ts`, `packages/adapters/src/zcode.ts`) stay decoupled from `codex-app-server.ts`, `codex-hooks.ts`, and `packages/dsh-host`.
+- First-release scope: the Web Agent execution loop only — project connection, runtime registration, `agent_request` claim, headless ZCode execution, `agent_progress`/`agent_response` publication, canonical-history projection, contract and negative tests.
+- ZCode native-surface boundary: execution uses the official headless CLI (`-p`, `--output-format stream-json`, `--resume`); local-turn capture is deferred to the official hooks mechanism in a later phase; the private session store (`~/.zcode/cli/db/db.sqlite`, rollout JSONL) is never parsed.
+- Reuse the harness-neutral `ProjectHarnessAdapter`/`HarnessExecutor`/collaboration-client boundaries. No server protocol, ACL, or persistence changes.
+- Non-goals for this task: ZCode hooks local-turn upload and per-conversation upload preference, visible-history import, snapshots, first-prompt discovery, pairing UI.
+- Work branch: `codex/zcode-harness-connector`. No push to `main`; merge/tag/publish remain with the project lead.

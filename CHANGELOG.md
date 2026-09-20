@@ -2,6 +2,19 @@
 
 All notable changes to GatherThread are documented here. The project follows Semantic Versioning while pre-release APIs may still change.
 
+## [Unreleased]
+
+### Added
+
+- Add ZCode as a third harness through the standalone `@gatherthread/zcode-connect` connector: headless CLI discovery and structural preflight probing, one execution runtime per writable session, claimed Web Agent request execution in a bounded headless ZCode child, incremental canonical-history hydration with native session resume, and versioned private binding state (see [ADR-0023](docs/adr/0023-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md)).
+- Add a ZCode stream-json transcript parser and the `zcode` harness name to the shared adapters and bridge registries.
+- Add ZCode to the Web workspace: agent harness selection, runtime resolution, connector command dialog, and bilingual copy.
+
+### Known limitations
+
+- The ZCode connector covers the Web Agent execution loop only. Local direct-ZCode turn capture through reviewed ZCode hooks, per-conversation upload preferences, visible-history import, snapshots, and first-prompt discovery remain future phases; the connector never reads ZCode's private session store.
+- Headless ZCode behavior (permission prompts, model availability) requires a real-device smoke test before release.
+
 ## [0.1.0-alpha.5] - 2026-09-16
 
 ### Added

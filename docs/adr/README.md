@@ -26,3 +26,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0020](0020-per-conversation-upload-consent-and-manual-recovery.md) | Add per-conversation upload consent and manual recovery | accepted | 2026-09-15 |
 | [0021](0021-import-visible-codex-history-as-a-new-task.md) | Import visible Codex history as a new task | accepted | 2026-09-16 |
 | [0022](0022-place-the-product-home-above-the-same-origin-application.md) | Place the product home above the same-origin application | accepted | 2026-09-18 |
+| [0023](0023-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md) | Add ZCode as a third harness through a standalone headless connector | accepted | 2026-09-20 |

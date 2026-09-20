@@ -23,6 +23,7 @@ Alpha status never permits silent reinterpretation of persisted data, identity, 
 | User-facing MCP tools and resources | Public Alpha | `packages/mcp/src/service.ts`, `packages/mcp/README.md` | GatherThread Codex plugin and user Agents |
 | Capability-protected local connector relay | Internal versioned | `packages/bridge/src/local-api-relay.ts` | GatherThread Codex plugin MCP only |
 | Codex App Server adapter and persisted projection state | Internal versioned | `packages/bridge/src/codex-app-server.ts`, `packages/bridge/src/project-harness.ts` | Codex connector |
+| ZCode headless connector and persisted binding state | Internal versioned | `packages/bridge/src/zcode-compat.ts`, `zcode-executor.ts`, `zcode-harness.ts`, `zcode-connect.ts` | `@gatherthread/zcode-connect` |
 | DSH native plugin RPC and persisted state | Public Alpha package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
 | Browser entry routes and legacy deep-link forwarding | Public Alpha | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
 | Stable Web control IDs and accessible names | Internal versioned | `apps/web/index.html`, `apps/web/test/static-accessibility.test.js` | Web event bindings, accessibility, browser tests |
@@ -120,11 +121,12 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - Ambiguous routing across multiple connector registrations fails closed.
 - Renaming or removing an MCP tool/resource, parameter, URI, or result field is a Public Alpha interface change.
 
-## Codex and DSH native boundaries
+## Codex, DSH, and ZCode native boundaries
 
 - Codex Hooks are limited to reviewed `UserPromptSubmit` and `Stop` definitions. Hook payloads, output limits, registry purpose, and workspace path checks are security contracts.
 - Codex Desktop projection, background execution, and snapshot tasks have separate purposes and single-writer rules. Never mutate an active or ambiguously owned native task.
 - DSH uses public session append/flush and Agent services, durable projected-event IDs, echo suppression, and an outgoing outbox. Only allowlisted assistant output and redacted tool data may leave DSH.
+- The ZCode connector resolves and probes the headless CLI structurally, fails closed on missing headless capabilities or unsupported binding-state versions, spawns one bounded child per claimed request, strips GatherThread credentials from the child environment, and never reads ZCode's private session store. All version-sensitive CLI behavior lives in the ZCode compatibility module.
 - Persistent connector and DSH state must carry a version. A state change needs atomic migration or a safe, actionable refusal; never guess at an old structure.
 - Upstream version support is explicit. An unsupported Codex App Server or DSH Host API must fail safely and preserve local/cloud data.
 
