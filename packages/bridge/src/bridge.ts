@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   ClaudeCodeProjectAdapter,
   CodexRolloutAdapter,
+  ZcodeStreamAdapter,
   discoverJsonlTranscripts,
   redactText,
   redactValue,
@@ -76,6 +77,7 @@ export class LocalBridge {
     this.#adapters = {
       codex: new CodexRolloutAdapter(),
       "claude-code": new ClaudeCodeProjectAdapter(),
+      zcode: new ZcodeStreamAdapter(),
     };
   }
 
