@@ -325,6 +325,34 @@ test("losing a cross-device claim race projects and advances only for the typed 
   assert.equal((await otherCursor.load()).server["session-1"] ?? 0, 0);
 });
 
+test("a request the server has given up on is projected instead of retried forever", async () => {
+  const request = canonical("session-1", 1, {
+    type: "agent_request",
+    idempotencyKey: "abandoned-request",
+    payload: { text: "work no runtime could finish" },
+  });
+  const api = new FakeApi();
+  api.history.push(request);
+  api.claimAgentRequest = async () => {
+    throw new CollaborationHttpError(409, "abandoned", "agent_request_failed");
+  };
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const projected: number[] = [];
+  const result = await bridge.processPendingAgentRequests({
+    async execute() { throw new Error("an abandoned request must not be executed"); },
+    async projectCanonicalEvents(events) { projected.push(...events.map((event) => event.sequence)); },
+  });
+  assert.deepEqual(projected, [1], "the canonical failure must reach the native projection");
+  assert.equal(result.claimed, 0);
+  assert.equal(
+    (await cursorStore.load()).server["session-1"],
+    1,
+    "a terminal failure must advance the cursor rather than be retried on every poll",
+  );
+});
+
 test("an atomically completed local turn is projected without retrying its agent request", async () => {
   const request = canonical("session-1", 1, {
     type: "agent_request",

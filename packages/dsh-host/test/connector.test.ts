@@ -995,6 +995,25 @@ test("terminal claim conflict advances safely without driving DSH", async () => 
   await connector.stop();
 });
 
+test("a request the server has given up on advances without driving DSH", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  api.events.push(request(1));
+  api.claimConflictCode = "agent_request_failed";
+  const persistence = freshPersistence();
+  const store = new MemoryConnectorStateStore();
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false });
+  assert.equal(persistence.prompts.length, 0, "an abandoned request must not be re-driven locally");
+  assert.equal(
+    (await store.load())?.serverCursor,
+    1,
+    "a terminal failure must advance the cursor instead of being retried on every poll",
+  );
+  await connector.stop();
+});
+
 test("concurrent polling coalesces, and unload removes timer/listeners/write owner", async () => {
   const cfg = config();
   const api = new FakeApi();

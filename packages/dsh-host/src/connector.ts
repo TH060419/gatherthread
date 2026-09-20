@@ -380,9 +380,9 @@ export class DshHostConnector {
         if (profile.model !== this.#config.model) {
           throw new Error("DeepSeek Harness Agent request model does not match the configured Host binding");
         }
-        // The alpha server has no claim-abandon or lease-expiry API. Capacity
-        // and this connector's lifecycle therefore gate the entire
-        // claim -> prompt -> durable settlement transaction.
+        // Capacity and this connector's lifecycle gate the entire
+        // claim -> prompt -> durable settlement transaction. A lease now bounds
+        // how long a request stays ours if this process stops making progress.
         const outcome = await this.#withExecutionPermit(
           () => this.#executeRequest(event),
         );

@@ -98,10 +98,11 @@ bounded exponential delay.
 
 Every eligible Session has its own DSH Session id, HTTP abort scope, connector
 state file, runtime identity, heartbeat, canonical cursor and durable outbox.
-The project gate bounds the whole claim-to-settlement operation. This is
-required because the current GatherThread alpha has no claim-abandon or claim
-lease-expiry API. Removing or downgrading a Session cancels its queued permit
-before it can claim a request. Existing single-Session configuration remains
+The project gate bounds the whole claim-to-settlement operation. Claims are
+leased and renewed by accepted progress, so a Session that stops producing work
+releases its request for another runtime to take over; the gate still bounds this
+connector's own concurrency while it holds one. Removing or downgrading a Session
+cancels its queued permit before it can claim a request. Existing single-Session configuration remains
 valid when `bindingMode` is omitted; both modes resolve the real current actor
 before applying Solo permissions.
 

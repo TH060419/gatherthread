@@ -452,11 +452,18 @@ export class LocalBridge {
   }
 }
 
+/**
+ * A claim conflict the server has already resolved. `agent_request_failed` means
+ * the server exhausted its re-dispatch budget, so the request is finished as far
+ * as this connector is concerned: projecting the canonical failure and moving on
+ * is the only correct response, and retrying would spin on it every poll.
+ */
 function isTerminalAgentRequestClaimConflict(error: unknown): boolean {
   return error instanceof CollaborationHttpError
     && error.status === 409
     && (error.code === "agent_request_already_claimed"
-      || error.code === "agent_request_already_completed");
+      || error.code === "agent_request_already_completed"
+      || error.code === "agent_request_failed");
 }
 
 function toAppendEvent(
