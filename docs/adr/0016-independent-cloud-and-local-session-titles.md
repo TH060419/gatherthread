@@ -14,6 +14,8 @@ Cloud sessions and local Agent conversations are the same collaboration stream b
 
 A newly materialized visible Codex task receives the initial name `<cloud session title> · MULTI|SOLO · GatherThread`. The project name is omitted. Its implementation-private background projection and immutable snapshots receive the same uppercase cloud session-type label. The label suffix is preserved when a long cloud title is truncated to the Codex limit. An adopted pre-existing local task keeps its existing title.
 
+A newly materialized DeepSeek Harness Session receives the initial name `<cloud session title> · 共序 · MULTI|SOLO`. DSH limits a title to 80 UTF-8 bytes; the cloud title is clipped by code point so the complete marker survives without splitting a character. DSH uses one native Session for both execution and projection, with no separate background or snapshot Session to label. An adopted pre-existing DSH Session and a persisted Session resumed after reconnect keep their existing local titles. Upgrading the plugin does not retroactively rename existing Sessions, even if they still have an older unmarked title.
+
 After the binding exists, cloud and local titles are independent. GatherThread does not push later cloud renames into the local task and does not upload later local renames to the cloud. The cloud permission rule remains authoritative: a Personal Solo may be renamed only by its Solo Creator while they retain a non-viewer project role, and a Multi may be renamed only by the Project Owner.
 
 Titles are display metadata only. A binding is resolved by the cloud `project_id` and `session_id`, the persisted local native `thread_id`, and the verified workspace. Hook dispatch checks all existing managed bindings by those stable identifiers before first-prompt Solo discovery. Changing either title cannot create, adopt, rebuild, or replace a session or native task.
@@ -29,6 +31,7 @@ Titles are display metadata only. A binding is resolved by the cloud `project_id
 ## Verification requirements
 
 - A cloud rename with the same session ID preserves the existing managed binding.
+- A newly created DSH Session has the bounded marker, while adopted and resumed DSH Sessions retain any locally edited title and remain attached to the project workspace.
 - A Hook whose workspace and native thread ID match a managed state is handled even when its local title differs.
 - Only an unregistered native thread's first trusted prompt may enter deterministic Personal Solo discovery.
 - Idempotent Personal Solo creation remains keyed by device, project, and native thread identity, never by title.

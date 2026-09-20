@@ -21,6 +21,5 @@ export * from "./native-connection.js";
 export * from "./native-plugin.js";
 export * from "./path-security.js";
 export * from "./project-manager.js";
-export * from "./session-title.js";
 export * from "./state-store.js";
 export * from "./types.js";
