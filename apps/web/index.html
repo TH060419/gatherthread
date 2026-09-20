@@ -185,6 +185,16 @@
             <span>Connect DeepSeek Harness</span>
             <small id="connect-dsh-button-status">Not connected</small>
           </button>
+          <button
+            id="connect-zcode-button"
+            class="button button-secondary project-connect-button"
+            type="button"
+            aria-haspopup="dialog"
+            aria-controls="connect-zcode-dialog"
+            hidden
+          >
+            <span>Connect ZCode</span>
+          </button>
           <div class="project-action-row">
             <button id="rename-project-button" class="text-button project-rename-button" type="button" aria-haspopup="dialog" aria-controls="rename-project-dialog" hidden>
               Rename project
@@ -674,6 +684,68 @@ codex plugin add gatherthread@gatherthread</code>
     </dialog>
 
     <dialog
+      id="connect-zcode-dialog"
+      class="create-dialog codex-connect-dialog"
+      aria-labelledby="connect-zcode-title"
+      aria-describedby="connect-zcode-summary connect-zcode-security"
+    >
+      <div class="codex-connect-content">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">Project connector</p>
+            <h2 id="connect-zcode-title">Connect ZCode</h2>
+          </div>
+          <button id="close-connect-zcode-button" class="icon-button" type="button" aria-label="Close Connect ZCode dialog">×</button>
+        </div>
+        <p id="connect-zcode-summary" class="connection-lead">The connector runs Web Agent requests in a headless ZCode child inside the project workspace. Setup takes two steps.</p>
+        <div class="connection-preview-banner" role="note">
+          <span class="connection-preview-badge">Alpha preview</span>
+          <span>Current server only</span>
+          <button class="button button-secondary" type="button" disabled>Official service is not open yet</button>
+        </div>
+        <ol id="connect-zcode-steps" class="connection-guide codex-connect-steps">
+          <li>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Connect this project</h3><p>Requires Node 24+ and a local ZCode installation. The device token is requested by a hidden CLI prompt.</p></div></div>
+            <strong id="connect-zcode-project-name" class="connection-project-name"></strong>
+            <section class="command-card command-card-compact" aria-labelledby="connect-zcode-posix-title">
+              <div class="command-heading">
+                <span id="connect-zcode-posix-title" class="command-label">macOS / Linux</span>
+                <button class="button button-secondary" type="button" data-copy-zcode-command="posix" aria-describedby="copy-zcode-posix-command-status">Copy command</button>
+              </div>
+              <code id="connect-zcode-posix-command" class="connector-command" tabindex="0" aria-label="macOS and Linux connector command"></code>
+              <p id="copy-zcode-posix-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
+            </section>
+            <details class="connection-alternative">
+              <summary>Windows PowerShell</summary>
+              <section class="command-card command-card-compact" aria-labelledby="connect-zcode-powershell-title">
+                <div class="command-heading">
+                  <span id="connect-zcode-powershell-title" class="command-label">Windows PowerShell</span>
+                  <button class="button button-secondary" type="button" data-copy-zcode-command="powershell" aria-describedby="copy-zcode-powershell-command-status">Copy command</button>
+                </div>
+                <code id="connect-zcode-powershell-command" class="connector-command" tabindex="0" aria-label="Windows PowerShell connector command"></code>
+                <p id="copy-zcode-powershell-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
+              </section>
+            </details>
+          </li>
+          <li>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Keep the connector running</h3><p>Every writable session registers one ZCode runtime. Web Agent requests run once in a headless ZCode child and never fall back to another harness.</p></div></div>
+          </li>
+        </ol>
+        <details id="connect-zcode-security" class="connection-details">
+          <summary>What gets synchronized?</summary>
+          <p>Shared canonical history is quoted into the headless prompt as untrusted data; public commentary and the final answer return as ordered shared events. Hidden reasoning never leaves the ZCode child.</p>
+          <p>Local-turn capture through reviewed ZCode hooks is planned as a later phase. The connector never reads ZCode's private session store.</p>
+        </details>
+        <p class="codex-connect-notice">This page only copies commands. No token is placed in a command, URL, or shared history.</p>
+
+        <p id="connect-zcode-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions">
+          <button id="done-connect-zcode-button" class="button button-primary" type="button">Done</button>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog
       id="connect-dsh-dialog"
       class="create-dialog codex-connect-dialog dsh-connect-dialog"
       aria-labelledby="connect-dsh-title"
@@ -855,9 +927,10 @@ codex plugin add gatherthread@gatherthread</code>
                 <div class="settings-agent-options">
                   <label class="settings-agent-option" for="settings-enabled-codex"><input id="settings-enabled-codex" name="enabled-agent" type="checkbox" value="codex" /><span>Codex</span></label>
                   <label class="settings-agent-option" for="settings-enabled-dsh"><input id="settings-enabled-dsh" name="enabled-agent" type="checkbox" value="deepseek-harness" /><span>DeepSeek Harness</span></label>
+                  <label class="settings-agent-option" for="settings-enabled-zcode"><input id="settings-enabled-zcode" name="enabled-agent" type="checkbox" value="zcode" /><span>ZCode</span></label>
                 </div>
               </fieldset>
-              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option disabled>Claude Code · coming later</option></select></label>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="zcode">ZCode</option><option disabled>Claude Code · coming later</option></select></label>
               <div id="settings-codex-agent-fields" class="settings-agent-fields">
                 <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
                 <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>

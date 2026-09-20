@@ -13,6 +13,7 @@ import {
   normalizeConnectorState,
   pendingAgentRequests,
   projectCodexConnectionCommands,
+  projectZcodeConnectionCommands,
   provenanceSummary,
   invitationStatusLabel,
   invitationRolePolicy,
@@ -42,6 +43,11 @@ import {
 } from "./dsh.js?v=20260906-3";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import { captureTimelineScroll, settleTimelineScroll } from "./timeline-scroll.js?v=20260917-1";
+import {
+  resolveZcodeRuntime,
+  ZCODE_HARNESS,
+  zcodeExecutionProfile,
+} from "./zcode.js?v=20260920-1";
 import {
   INITIAL_CONNECTION_NOTICE_STATE,
   advanceConnectionNotice,
@@ -175,6 +181,8 @@ const connectCodexDialog = element("connect-codex-dialog");
 const connectCodexButton = element("connect-codex-button");
 const connectDshDialog = element("connect-dsh-dialog");
 const connectDshButton = element("connect-dsh-button");
+const connectZcodeDialog = element("connect-zcode-dialog");
+const connectZcodeButton = element("connect-zcode-button");
 const approveDshPairingDialog = element("approve-dsh-pairing-dialog");
 const approveDshPairingForm = element("approve-dsh-pairing-form");
 const memberPanel = element("member-panel");
@@ -197,6 +205,7 @@ const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
 let connectCodexReturnFocus = null;
+let connectZcodeReturnFocus = null;
 let connectDshReturnFocus = null;
 let renameSessionReturnFocus = null;
 let renameProjectReturnFocus = null;
@@ -468,6 +477,17 @@ connectCodexDialog.addEventListener("close", () => {
 });
 for (const button of connectCodexDialog.querySelectorAll("button[data-copy-command]")) {
   button.addEventListener("click", () => void copyCodexCommand(button.dataset.copyCommand));
+}
+connectZcodeButton.addEventListener("click", openConnectZcodeDialog);
+element("close-connect-zcode-button").addEventListener("click", () => connectZcodeDialog.close());
+element("done-connect-zcode-button").addEventListener("click", () => connectZcodeDialog.close());
+connectZcodeDialog.addEventListener("close", () => {
+  const returnFocus = connectZcodeReturnFocus;
+  connectZcodeReturnFocus = null;
+  requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
+});
+for (const button of connectZcodeDialog.querySelectorAll("button[data-copy-zcode-command]")) {
+  button.addEventListener("click", () => void copyZcodeCommand(button.dataset.copyZcodeCommand));
 }
 connectDshButton.addEventListener("click", openConnectDshDialog);
 element("close-connect-dsh-button").addEventListener("click", () => connectDshDialog.close());
@@ -941,6 +961,7 @@ function renderProjectAgentButtons(settings = state.settings) {
   const enabled = state.project ? new Set(projectEnabledHarnesses(settings, state.project.id)) : new Set();
   connectCodexButton.hidden = !enabled.has("codex");
   connectDshButton.hidden = !enabled.has(DSH_HARNESS);
+  connectZcodeButton.hidden = !enabled.has(ZCODE_HARNESS);
 }
 
 function renderProjectPermissions() {
@@ -1031,6 +1052,10 @@ function currentDshResolution(settings = state.settings) {
 
 function currentCodexResolution() {
   return resolveCodexRuntime(state.executionRuntimes);
+}
+
+function currentZcodeResolution() {
+  return resolveZcodeRuntime(state.executionRuntimes);
 }
 
 function renderDshConnectionStatus() {
@@ -1892,7 +1917,9 @@ function renderComposerPermissions() {
   const common = { session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase };
   const chat = canAppend({ ...common, kind: "human_chat" });
   const harness = currentProjectHarness();
-  const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
+  const resolution = harness === DSH_HARNESS
+    ? currentDshResolution()
+    : harness === ZCODE_HARNESS ? currentZcodeResolution() : currentCodexResolution();
   const agentAllowed = chat.allowed && resolution.runtime !== null;
   const agentReason = chat.allowed ? resolution.reason : chat.reason;
   sendChatButton.disabled = !chat.allowed;
@@ -1902,7 +1929,9 @@ function renderComposerPermissions() {
   element("agent-target-label").textContent = agentAllowed
     ? harness === DSH_HARNESS
       ? `${resolution.runtime.deviceName} · ${resolution.runtime.provider} · ${resolution.runtime.model}`
-      : `${resolution.runtime.harness} · ${resolution.runtime.provider} · ${agentModelSelect.value}`
+      : harness === ZCODE_HARNESS
+        ? `${resolution.runtime.harness} · ${resolution.runtime.provider} · ${resolution.runtime.model}`
+        : `${resolution.runtime.harness} · ${resolution.runtime.provider} · ${agentModelSelect.value}`
     : agentReason;
   renderAgentProfileControls();
 }
@@ -1931,10 +1960,12 @@ async function sendMessage(kind) {
       const harness = currentProjectHarness();
       const executionProfile = harness === DSH_HARNESS
         ? dshExecutionProfile(currentDshResolution().runtime)
-        : codexExecutionProfile(currentCodexResolution().runtime, {
-          model: agentModelSelect.value,
-          reasoningEffort: agentEffortSelect.value,
-        });
+        : harness === ZCODE_HARNESS
+          ? zcodeExecutionProfile(currentZcodeResolution().runtime)
+          : codexExecutionProfile(currentCodexResolution().runtime, {
+            model: agentModelSelect.value,
+            reasoningEffort: agentEffortSelect.value,
+          });
       await api.appendAgentRequest(state.session.id, { ...input, executionProfile });
     }
     messageInput.value = "";
@@ -2070,6 +2101,57 @@ async function copyCodexCommand(platform) {
     range.selectNodeContents(commandNode);
     selection.removeAllRanges();
     selection.addRange(range);
+    status.textContent = "Clipboard access is unavailable. The command is selected for manual copy.";
+  }
+}
+
+function openConnectZcodeDialog() {
+  if (!state.project) return;
+  const errorNode = element("connect-zcode-error");
+  errorNode.textContent = "";
+  for (const status of connectZcodeDialog.querySelectorAll("[data-copy-status]")) status.textContent = "";
+  try {
+    const commands = projectZcodeConnectionCommands({
+      baseUrl: location.origin,
+      projectId: state.project.id,
+    });
+    element("connect-zcode-project-name").textContent = state.project.name;
+    element("connect-zcode-posix-command").textContent = commands.posix;
+    element("connect-zcode-powershell-command").textContent = commands.powershell;
+    for (const button of connectZcodeDialog.querySelectorAll("button[data-copy-zcode-command]")) button.disabled = false;
+  } catch (error) {
+    errorNode.textContent = error.message ?? "Unable to create a safe connector command.";
+    for (const button of connectZcodeDialog.querySelectorAll("button[data-copy-zcode-command]")) button.disabled = true;
+  }
+  connectZcodeReturnFocus = document.activeElement;
+  connectZcodeDialog.showModal();
+  requestAnimationFrame(() => element("close-connect-zcode-button").focus());
+}
+
+async function copyZcodeCommand(platform) {
+  const commandNode = element(`connect-zcode-${platform}-command`);
+  const status = element(`copy-zcode-${platform}-command-status`);
+  const command = commandNode.textContent;
+  if (!command) return;
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(command);
+    } else {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(commandNode);
+      selection.removeAllRanges();
+      if (!document.execCommand?.("copy")) throw new Error("Clipboard unavailable");
+      selection.removeAllRanges();
+    }
+    status.textContent = "Copied.";
+    announce(platform === "posix" ? "Shell connector command copied."
+      : "PowerShell connector command copied.");
+  } catch {
+    const selection = window.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(commandNode);
+    selection.removeAllRanges();
     status.textContent = "Clipboard access is unavailable. The command is selected for manual copy.";
   }
 }
@@ -2366,7 +2448,9 @@ function renderAgentProfileControls() {
   for (const enabledHarness of enabledHarnesses) {
     const option = document.createElement("option");
     option.value = enabledHarness;
-    option.textContent = enabledHarness === DSH_HARNESS ? "DeepSeek Harness" : "Codex";
+    option.textContent = enabledHarness === DSH_HARNESS
+      ? "DeepSeek Harness"
+      : enabledHarness === ZCODE_HARNESS ? "ZCode" : "Codex";
     option.selected = enabledHarness === harness;
     agentHarnessSelect.append(option);
   }
@@ -2423,17 +2507,22 @@ function settingsEnabledHarnesses() {
   return [
     ["settings-enabled-codex", "codex"],
     ["settings-enabled-dsh", DSH_HARNESS],
+    ["settings-enabled-zcode", ZCODE_HARNESS],
   ].filter(([id]) => element(id).checked).map(([, harness]) => harness);
 }
 
 function settingsAgentSummary(harness) {
-  return harness === DSH_HARNESS
-    ? "DeepSeek Harness supplies this project's runtime and handles new Agent requests by default."
-    : "Codex supplies this project's connection command and handles new Agent requests by default.";
+  if (harness === DSH_HARNESS) {
+    return "DeepSeek Harness supplies this project's runtime and handles new Agent requests by default.";
+  }
+  if (harness === ZCODE_HARNESS) {
+    return "ZCode supplies this project's connection command and handles new Agent requests by default.";
+  }
+  return "Codex supplies this project's connection command and handles new Agent requests by default.";
 }
 
 function syncSettingsAgentControls({ changedCheckbox } = {}) {
-  const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh")];
+  const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh"), element("settings-enabled-zcode")];
   let enabled = settingsEnabledHarnesses();
   if (enabled.length === 0) {
     changedCheckbox.checked = true;
@@ -2442,7 +2531,9 @@ function syncSettingsAgentControls({ changedCheckbox } = {}) {
   for (const control of controls) control.disabled = control.checked && enabled.length === 1;
   const harnessSelect = element("settings-agent-harness");
   for (const option of harnessSelect.options) {
-    if (option.value === "codex" || option.value === DSH_HARNESS) option.disabled = !enabled.includes(option.value);
+    if (option.value === "codex" || option.value === DSH_HARNESS || option.value === ZCODE_HARNESS) {
+      option.disabled = !enabled.includes(option.value);
+    }
   }
   if (!enabled.includes(harnessSelect.value)) harnessSelect.value = enabled[0];
   const dsh = harnessSelect.value === DSH_HARNESS;
@@ -2477,6 +2568,7 @@ function populateSettingsForm(settings) {
   const enabledHarnesses = new Set(currentProjectEnabledHarnesses(normalized));
   element("settings-enabled-codex").checked = enabledHarnesses.has("codex");
   element("settings-enabled-dsh").checked = enabledHarnesses.has(DSH_HARNESS);
+  element("settings-enabled-zcode").checked = enabledHarnesses.has(ZCODE_HARNESS);
   element("settings-agent-harness").value = harness;
   const profile = currentProjectProfile(normalized);
   renderModelOptions(element("settings-default-model"), profile.model, normalized);
@@ -2607,7 +2699,7 @@ function handleNumericPresetSelection(target, { focusCustom = false } = {}) {
 }
 
 function handleSettingsControlInput(event) {
-  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-agent-harness"].includes(event.target.id)) return;
+  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-zcode", "settings-agent-harness"].includes(event.target.id)) return;
   if (handleNumericPresetSelection(event.target)) return;
   if (event.target.classList?.contains("digits-only-input")) {
     const sanitized = digitsOnly(event.target.value);
@@ -2771,7 +2863,9 @@ function renderContextDiagnostic(settings) {
   diagnostic.dataset.state = "valid";
   const connectorGuidance = enabledHarnesses.map((harness) => harness === DSH_HARNESS
     ? "DeepSeek Harness uses the context limit configured by its GatherThread plugin instead of this browser value. Reconnect the DSH plugin after changing its local limit."
-    : "Reconnect Codex after changing this value. Codex Desktop Hooks use a separate 7 KiB capsule and continue across turns.").join(" ");
+    : harness === ZCODE_HARNESS
+      ? "The ZCode connector quotes the shared history into each headless request and does not use this browser value."
+      : "Reconnect Codex after changing this value. Codex Desktop Hooks use a separate 7 KiB capsule and continue across turns.").join(" ");
   diagnostic.textContent = `Configured projection ceiling: ${formatBytes(result.configuredBytes)} (about ${new Intl.NumberFormat().format(approximateTokens)} tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. ${connectorGuidance}`;
 }
 

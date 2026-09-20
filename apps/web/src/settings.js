@@ -31,7 +31,7 @@ const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const DEVICE_ID_PATTERN = PROJECT_ID_PATTERN;
 const DSH_PROVIDER_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,80}$/u;
 const DSH_MODEL_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,160}$/u;
-export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness"]);
+export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness", "zcode"]);
 
 export const DEFAULT_SETTINGS = deepFreeze({
   version: SETTINGS_VERSION,
