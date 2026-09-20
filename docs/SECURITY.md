@@ -59,7 +59,7 @@ The collaboration service never inherits authority to approve local tools. Trans
 | T2 | Cross-project or cross-session IDOR | project-membership check for every project/session resource, including replay cursors and attachments | two-user negative API tests |
 | T3 | Project role or solo-mode privilege escalation | project role and session mode check at the mutation boundary; owner-only role changes | participant/viewer and solo/multi E2E |
 | T4 | Idempotency poisoning | scope uniqueness to session; require the same actor, operation, and canonical payload hash on retry; return conflict for mismatches | retry and mismatch tests |
-| T5 | Runtime claim theft or duplicate work | bind request, user, device, session, and runtime; atomic claim; one active turn per runtime | runtime claim and device-binding tests; abandoned-claim recovery remains open |
+| T5 | Runtime claim theft or duplicate work | bind request, user, device, session, and runtime; atomic claim; one active turn per runtime; a claim is leased and renewed only by accepted progress | runtime claim, device-binding, lease-takeover, and bounded re-dispatch tests |
 | T6 | Reorder, gap, or phantom event | allocate sequence in a write transaction; publish after commit; detect gaps and replay over authenticated HTTP | concurrent append and reconnect E2E |
 | T7 | Credential or private-context exfiltration | structural allowlist, key-based and pattern redaction, excluded roles, size limits, and no payload logging | redaction E2E and secret scan |
 | T8 | Transcript path escape | explicit owner opt-in; canonicalize path; deny symlink escape; allow regular files under approved roots only | adapter filesystem tests |

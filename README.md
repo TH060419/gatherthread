@@ -126,7 +126,7 @@ The first release includes peppered device credentials, HMAC-protected and revoc
 
 The hosted GatherThread service and public Beta are not open in `0.1.0-alpha.5`. Local-only, private LAN HTTPS, and private Tailscale Serve are available. The [Alibaba Cloud ECS profile](docs/ALIYUN_ECS.md) is deployment-ready documentation for the next stage, not a claim that the service is online. Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic.
 
-Not yet implemented: automatic host failover, multi-process WebSocket fan-out, abandoned agent-claim recovery, token-by-token agent streaming, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers. Current progress delivery is item-level public commentary rather than token streaming.
+Not yet implemented: automatic host failover, multi-process WebSocket fan-out, token-by-token agent streaming, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers. Current progress delivery is item-level public commentary rather than token streaming.
 
 See the [`0.1.0-alpha.5` notes](docs/releases/0.1.0-alpha.5.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [connection modes](docs/CONNECTION_MODES.md), [Codex guide](docs/CODEX_CONNECT.md), [DSH guide](docs/DSH_CONNECT.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), and [operations](docs/OPERATIONS.md).
 

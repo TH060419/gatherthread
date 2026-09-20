@@ -51,7 +51,7 @@ Persist only the Codex thread ID, workspace binding, GatherThread session ID, an
 
 - The connector must track Codex CLI JSONL compatibility and reject unknown or incomplete output safely.
 - The first version returns a completed response rather than streaming model tokens into the room.
-- A crash after a server claim but before completion still requires abandoned-claim recovery, which remains a known alpha limitation.
+- A crash after a server claim but before completion required abandoned-claim recovery. Resolved by [ADR-0023](0023-lease-and-bounded-redispatch-agent-claims.md).
 
 ### Risks
 

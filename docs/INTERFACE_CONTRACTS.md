@@ -100,6 +100,9 @@ An `agent_request` names an exact harness/model profile and eligible runtime. Th
 - Public commentary may be uploaded; hidden reasoning is excluded.
 - The final response does not close the claim until it is durably committed.
 - Other connected harnesses may passively project the result but cannot execute the same request.
+- A claim carries a server-assigned lease and is renewed only by accepted `agent_progress` from its holder. Runtime presence never extends a lease.
+- A lapsed claim may be taken over by another eligible runtime of the same user; the takeover is idempotent and rebinds the request. Only a live claim occupies a runtime's single active slot.
+- Re-dispatch is bounded. A request past the attempt budget terminates as `failed`: claiming it returns `agent_request_failed`, the server appends exactly one canonical `agent_response` with `status: "failed"` and no capture-fidelity or runtime-provenance claim, and a connector treats that conflict as terminal rather than retrying it.
 
 ## Snapshot and visible-history boundary
 
