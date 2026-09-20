@@ -6,6 +6,7 @@ import {
 } from "@gatherthread/bridge";
 import path from "node:path";
 import { createHttpDshCollaborationApi } from "./collaboration-api.js";
+import { managedDshSessionTitle } from "./session-title.js";
 import {
   assertSafeDshStateRoot,
   deriveDshSessionId,
@@ -940,7 +941,10 @@ function createNativeManagedConnector(options: {
     model: options.input.config.model,
     agentPreset: DSH_NATIVE_AGENT_PRESET,
     ...(supersededSessionId === undefined ? {} : { supersededSessionId }),
-    sessionTitle: options.input.session.name ?? options.input.session.id,
+    // A newly created DSH Session receives the GatherThread marker once;
+    // resumed or adopted Sessions keep their locally editable titles. The
+    // published status snapshot below stays on the bare cloud name.
+    sessionTitle: managedDshSessionTitle(options.input.session),
     workspaceTitle: options.workspaceTitle,
   });
   const connector = new DshHostConnector({

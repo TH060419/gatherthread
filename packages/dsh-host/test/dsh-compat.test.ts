@@ -31,6 +31,7 @@ function fixture(
     renameGate?: Promise<void>;
     /** Gates Session flushing, so a test can dispose before a rebuild. */
     flushGate?: Promise<void>;
+    initialTitle?: string;
   } = {},
 ) {
   const listeners = new Map<string, Set<Listener>>();
@@ -53,6 +54,7 @@ function fixture(
   };
   const openStarted = deferred<void>();
   const workspaceSessionIds: string[] = [];
+  let title = fixtureOptions.initialTitle;
   let status = "idle";
   let waiting: (() => void) | undefined;
   let pendingMessage: unknown;
@@ -263,10 +265,11 @@ function fixture(
       },
     },
     sessionTitle: {
-      get() { return undefined; },
-      async rename(candidate: unknown, title: string) {
+      get() { return title === undefined ? undefined : { title }; },
+      async rename(candidate: unknown, nextTitle: string) {
         assert.equal(candidate, session);
-        assert.equal(title, "Canonical Session Title");
+        assert.equal(nextTitle, "Canonical Session Title");
+        title = nextTitle;
         calls.order.push("rename");
         if (fixtureOptions.renameGate !== undefined) await fixtureOptions.renameGate;
       },
@@ -316,6 +319,8 @@ function fixture(
     calls,
     events,
     workspaceSessionIds,
+    get title() { return title; },
+    renameLocally(value: string) { title = value; },
     effects,
     openStarted: openStarted.promise,
     get pendingMessage() { return pendingMessage; },
@@ -430,7 +435,50 @@ test("native workspace integration names and persists a Session before attaching
   });
   assert.equal(await facade.open(), "created");
   assert.deepEqual(f.calls.order, ["rename", "flush", "workspace:create", "workspace:attach"]);
+  assert.equal(f.title, "Canonical Session Title");
   assert.deepEqual(f.events.map((event) => event.type), ["turn/start", "turn/end"]);
+  await facade.dispose();
+});
+
+test("a resumed native Session keeps its locally edited title", async () => {
+  const f = fixture(false, { persistenceProbe: "list" });
+  const options = {
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  };
+  const first = createDshHostFacade(options);
+  assert.equal(await first.open(), "created");
+  await first.dispose();
+  f.renameLocally("My own DSH title");
+
+  const restarted = createDshHostFacade(options);
+  assert.equal(await restarted.open(), "resumed");
+  assert.equal(f.title, "My own DSH title");
+  assert.equal(f.calls.order.filter((operation) => operation === "rename").length, 1);
+  assert.ok(f.calls.order.includes("workspace:attach"), "the resumed Session remains in the workspace");
+  await restarted.dispose();
+});
+
+test("adopting an already-live DSH Session does not replace its local title", async () => {
+  const f = fixture(true, { exposeLiveAgent: true, initialTitle: "My existing DSH title" });
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    sessionTitle: "Canonical Session Title",
+    workspaceTitle: "Project One",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+  });
+  assert.equal(await facade.open(), "resumed");
+  assert.equal(f.title, "My existing DSH title");
+  assert.equal(f.calls.order.includes("rename"), false);
+  assert.ok(f.calls.order.includes("workspace:attach"), "the adopted Session remains in the workspace");
   await facade.dispose();
 });
 
