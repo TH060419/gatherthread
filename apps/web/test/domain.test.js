@@ -6,11 +6,13 @@ import {
   createSelectionGuard,
   eventContent,
   eventLabel,
+  failedRequestFor,
   invitationStatus,
   invitationStatusLabel,
   invitationRolePolicy,
   hasOnlineSnapshotConnector,
   isExecutionRuntime,
+  isFailedAgentResponse,
   isTimelineEventVisible,
   normalizeConnectorState,
   normalizeInvitation,
@@ -19,6 +21,7 @@ import {
   pendingAgentRequests,
   projectCodexConnectionCommands,
   provenanceSummary,
+  retryAgentRequestInput,
   runtimeLabel,
   sessionMetadataFromEvent,
   sessionDeliveryMode,
@@ -363,4 +366,67 @@ test("invitation records normalize wire keys and derive fail-closed status", () 
     { projectId: "p1", role: "participant", status: "pending" },
   );
   assert.equal(invitationStatusLabel("claimed"), "Accepted");
+});
+
+function agentRequestEvent(overrides = {}) {
+  return {
+    id: "request-1",
+    type: "agent_request",
+    sequence: 4,
+    replyTo: null,
+    payload: {
+      content: "summarise the migration",
+      execution_profile: {
+        harness: "codex",
+        provider: "openai",
+        model: "gpt-5",
+        reasoning_effort: "high",
+        runtime_id: "runtime-7",
+      },
+    },
+    ...overrides,
+  };
+}
+
+function failedResponseEvent(overrides = {}) {
+  return {
+    id: "response-1",
+    type: "agent_response",
+    sequence: 5,
+    replyTo: "request-1",
+    payload: { status: "failed", text: "This Agent request was interrupted and could not be recovered." },
+    ...overrides,
+  };
+}
+
+test("only a response that reports a failed execution is treated as a failure", () => {
+  assert.equal(isFailedAgentResponse(failedResponseEvent()), true);
+  assert.equal(isFailedAgentResponse({ ...failedResponseEvent(), payload: { text: "all good" } }), false);
+  assert.equal(isFailedAgentResponse({ ...failedResponseEvent(), payload: { status: "completed" } }), false);
+  assert.equal(isFailedAgentResponse(agentRequestEvent()), false);
+  assert.equal(isFailedAgentResponse(undefined), false);
+});
+
+test("a failed response resolves to the request it belongs to", () => {
+  const events = [agentRequestEvent(), failedResponseEvent()];
+  assert.equal(failedRequestFor(events, failedResponseEvent())?.id, "request-1");
+  assert.equal(failedRequestFor(events, failedResponseEvent({ replyTo: "missing" })), undefined);
+  assert.equal(failedRequestFor(events, { type: "agent_response", payload: {} }), undefined);
+});
+
+test("retrying a failed request reuses its exact original target", () => {
+  const request = agentRequestEvent();
+  const input = retryAgentRequestInput(request, "agent_request:retry-key");
+  assert.equal(input.content, "summarise the migration");
+  assert.equal(input.idempotencyKey, "agent_request:retry-key");
+  assert.deepEqual(input.executionProfile, {
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5",
+    reasoningEffort: "high",
+    runtimeId: "runtime-7",
+  });
+  // A request with no recorded target must not be retried onto a different one.
+  const untargeted = agentRequestEvent({ payload: { content: "no profile" } });
+  assert.deepEqual(retryAgentRequestInput(untargeted, "agent_request:retry-key").executionProfile, undefined);
 });

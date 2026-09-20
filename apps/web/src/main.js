@@ -9,6 +9,7 @@ import {
   initials,
   hasOnlineSnapshotConnector,
   isExecutionRuntime,
+  isFailedAgentResponse,
   isTimelineEventVisible,
   normalizeConnectorState,
   pendingAgentRequests,
@@ -17,6 +18,7 @@ import {
   invitationStatusLabel,
   invitationRolePolicy,
   normalizeInvitation,
+  retryAgentRequestInput,
   runtimeLabel,
   sessionMetadataFromEvent,
   sessionDeliveryMode,
@@ -695,6 +697,10 @@ uploadLocalTurnsButton.addEventListener("click", () => void queueCodexLocalSyncA
 snapshotRequestList.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action='retry-snapshot']");
   if (button) void createSnapshotDownload();
+});
+timeline.addEventListener("click", (event) => {
+  const button = event.target.closest("button[data-action='retry-agent-request']");
+  if (button) void retryAgentRequest(button.dataset.requestId);
 });
 element("retry-sync-button").addEventListener("click", () => sync.retry());
 
@@ -1439,6 +1445,8 @@ function renderTimeline({ followNewEvents = false } = {}) {
     const time = document.createElement("time");
 
     article.className = `event-card event-${event.type}`;
+    const failedResponse = isFailedAgentResponse(event);
+    if (failedResponse) article.classList.add("event-agent_response-failed");
     article.setAttribute("aria-labelledby", `event-${event.id}-actor`);
     avatar.className = "avatar";
     avatar.textContent = event.type.includes("agent") ? "✦" : initials(event.actor.username);
@@ -1464,6 +1472,33 @@ function renderTimeline({ followNewEvents = false } = {}) {
         const body = document.createElement("p");
         body.textContent = content;
         article.append(body);
+      }
+    }
+
+    if (failedResponse) {
+      // A failure that no runtime finished has to look like one, and it has to
+      // offer the only action that can help: run the same request again.
+      const notice = document.createElement("p");
+      notice.className = "agent-failure-notice";
+      notice.textContent = localizer.t("This Agent request failed before it produced an answer.");
+      article.append(notice);
+      const request = failedRequestFor(state.sync.events, event);
+      if (request) {
+        const retry = document.createElement("button");
+        retry.className = "text-button agent-retry-button";
+        retry.type = "button";
+        retry.textContent = localizer.t("Retry Agent request");
+        retry.setAttribute("data-action", "retry-agent-request");
+        retry.setAttribute("data-request-id", request.id);
+        // Mirror the composer's rule rather than letting a viewer press a button
+        // the server is guaranteed to refuse.
+        retry.disabled = !canAppend({
+          session: state.session,
+          currentUser: state.currentUser,
+          connectionPhase: state.sync.phase,
+          kind: "agent_request",
+        }).allowed;
+        article.append(retry);
       }
     }
 
@@ -1944,6 +1979,27 @@ async function sendMessage(kind) {
   } finally {
     button.textContent = original;
     renderComposerPermissions();
+  }
+}
+
+/**
+ * Re-run a failed request. The recorded execution profile is replayed verbatim,
+ * so the retry targets the same harness, provider, model, and runtime the user
+ * originally chose; it never falls back to a different target.
+ */
+async function retryAgentRequest(requestId) {
+  const request = state.session
+    ? state.sync.events.find((event) => event.type === "agent_request" && event.id === requestId)
+    : undefined;
+  if (!request || !state.session) return;
+  sendError.textContent = "";
+  try {
+    await api.appendAgentRequest(
+      state.session.id,
+      retryAgentRequestInput(request, createIdempotencyKey("agent_request")),
+    );
+  } catch (error) {
+    sendError.textContent = error.message ?? "The event was not accepted.";
   }
 }
 
