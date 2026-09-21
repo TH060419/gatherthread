@@ -27,5 +27,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0021](0021-import-visible-codex-history-as-a-new-task.md) | Import visible Codex history as a new task | accepted | 2026-09-16 |
 | [0022](0022-place-the-product-home-above-the-same-origin-application.md) | Place the product home above the same-origin application | accepted | 2026-09-17 |
 | [0023](0023-lease-and-bounded-redispatch-agent-claims.md) | Lease exact-runtime agent claims and fence recovery attempts | accepted | 2026-09-20 |
-| [0022](0022-place-the-product-home-above-the-same-origin-application.md) | Place the product home above the same-origin application | accepted | 2026-09-18 |
-| [0023](0023-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md) | Add ZCode as a third harness through a standalone headless connector | accepted | 2026-09-20 |
+| [0024](0024-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md) | Add ZCode as a third harness through a standalone headless connector | accepted | 2026-09-20 |

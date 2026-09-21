@@ -63,6 +63,10 @@ import {
   numericPresetAction,
 } from "./settings-controls.js?v=20260829-3";
 import {
+  agentSettingsSummary,
+  syncAgentControlState,
+} from "./settings-agent-controls.js?v=20260921-1";
+import {
   addCustomCodexModel,
   CODEX_MODELS,
   CODEX_REASONING_EFFORTS,
@@ -2576,35 +2580,32 @@ function settingsEnabledHarnesses() {
   ].filter(([id]) => element(id).checked).map(([, harness]) => harness);
 }
 
-function settingsAgentSummary(harness) {
-  if (harness === DSH_HARNESS) {
-    return "DeepSeek Harness supplies this project's runtime and handles new Agent requests by default.";
-  }
-  if (harness === ZCODE_HARNESS) {
-    return "ZCode supplies this project's connection command and handles new Agent requests by default.";
-  }
-  return "Codex supplies this project's connection command and handles new Agent requests by default.";
-}
-
 function syncSettingsAgentControls({ changedCheckbox } = {}) {
-  const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh"), element("settings-enabled-zcode")];
-  let enabled = settingsEnabledHarnesses();
-  if (enabled.length === 0) {
-    changedCheckbox.checked = true;
-    enabled = settingsEnabledHarnesses();
-  }
-  for (const control of controls) control.disabled = control.checked && enabled.length === 1;
+  const state = syncAgentControlState({
+    enabled: {
+      codex: element("settings-enabled-codex").checked,
+      [DSH_HARNESS]: element("settings-enabled-dsh").checked,
+      [ZCODE_HARNESS]: element("settings-enabled-zcode").checked,
+    },
+    harness: element("settings-agent-harness").value,
+    ...(changedCheckbox === undefined ? {} : { changed: changedCheckbox.id === "settings-enabled-zcode" ? ZCODE_HARNESS : changedCheckbox.id === "settings-enabled-dsh" ? DSH_HARNESS : "codex" }),
+  });
+  element("settings-enabled-codex").checked = state.enabled.codex;
+  element("settings-enabled-dsh").checked = state.enabled[DSH_HARNESS];
+  element("settings-enabled-zcode").checked = state.enabled[ZCODE_HARNESS];
+  element("settings-enabled-codex").disabled = state.disabled.codex;
+  element("settings-enabled-dsh").disabled = state.disabled[DSH_HARNESS];
+  element("settings-enabled-zcode").disabled = state.disabled[ZCODE_HARNESS];
   const harnessSelect = element("settings-agent-harness");
   for (const option of harnessSelect.options) {
     if (option.value === "codex" || option.value === DSH_HARNESS || option.value === ZCODE_HARNESS) {
-      option.disabled = !enabled.includes(option.value);
+      option.disabled = !state.enabled[option.value];
     }
   }
-  if (!enabled.includes(harnessSelect.value)) harnessSelect.value = enabled[0];
-  const dsh = harnessSelect.value === DSH_HARNESS;
-  element("settings-codex-agent-fields").hidden = dsh;
-  element("settings-dsh-agent-fields").hidden = !dsh;
-  element("settings-agent-summary").textContent = settingsAgentSummary(harnessSelect.value);
+  harnessSelect.value = state.harness;
+  element("settings-codex-agent-fields").hidden = state.codexFieldsHidden;
+  element("settings-dsh-agent-fields").hidden = state.dshFieldsHidden;
+  element("settings-agent-summary").textContent = agentSettingsSummary(state.harness);
 }
 
 function populateSettingsForm(settings) {
@@ -2782,13 +2783,15 @@ function handleSettingsControlChange(event) {
   if (event.target.id === "settings-default-model") {
     updateEffortControl(event.target, element("settings-default-effort"), element("settings-default-effort").value, settingsPreview);
   }
-  if (event.target.id === "settings-enabled-codex" || event.target.id === "settings-enabled-dsh") {
+  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-zcode"].includes(event.target.id)) {
     syncSettingsAgentControls({ changedCheckbox: event.target });
   }
   if (event.target.id === "settings-agent-harness") {
     const selectedCheckbox = event.target.value === DSH_HARNESS
       ? element("settings-enabled-dsh")
-      : element("settings-enabled-codex");
+      : event.target.value === ZCODE_HARNESS
+        ? element("settings-enabled-zcode")
+        : element("settings-enabled-codex");
     selectedCheckbox.checked = true;
     syncSettingsAgentControls();
   }

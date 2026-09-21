@@ -15,3 +15,4 @@ export * from "./local-api-relay.js";
 export * from "./zcode-compat.js";
 export * from "./zcode-executor.js";
 export * from "./zcode-harness.js";
+export * from "./zcode-protocol.js";

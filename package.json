@@ -49,9 +49,11 @@
     "release:check": "node scripts/check-release.mjs",
     "release:verify-codex": "node scripts/verify-codex-package.mjs",
     "release:verify-dsh": "node scripts/verify-dsh-package.mjs",
+    "release:verify-zcode": "node scripts/verify-zcode-package.mjs",
     "release:pack-npm": "node scripts/pack-npm-release.mjs",
     "release:dry-run-npm": "node scripts/dry-run-npm-release.mjs",
-    "release:verify": "npm run verify && npm run release:check && npm run release:verify-codex && npm run release:verify-dsh",
+    "release:verify": "npm run verify && npm run release:check && npm run release:verify-codex && npm run release:verify-dsh && npm run release:verify-zcode",
+    "test:zcode-connect:real": "npm run build:ts && node scripts/test-zcode-connect-real.mjs",
     "verify": "npm run typecheck && npm run build:dsh-plugin && npm run build:web && npm run test && npm run audit:references && npm run audit:licenses && npm run audit:branding && npm run audit:secrets && npm run audit:vulnerabilities"
   },
   "devDependencies": {

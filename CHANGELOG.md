@@ -6,8 +6,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Added
 
-- Add ZCode as a third harness through the standalone `@gatherthread/zcode-connect` connector: headless CLI discovery and structural preflight probing, one execution runtime per writable session, claimed Web Agent request execution in a bounded headless ZCode child, incremental canonical-history hydration with native session resume, and versioned private binding state (see [ADR-0023](docs/adr/0023-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md)).
-- Add a ZCode stream-json transcript parser and the `zcode` harness name to the shared adapters and bridge registries.
+- Add ZCode as a third harness through the standalone `@gatherthread/zcode-connect` connector: headless CLI discovery and structural preflight probing, one execution runtime per writable session, claimed Web Agent request execution in a bounded headless ZCode child, incremental canonical-history hydration with native session resume, and versioned private binding state (see [ADR-0024](docs/adr/0024-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md)).
+- Add a ZCode Protocol app-server client and event parser, plus the `zcode` harness name, to the shared adapters and bridge registries. Execution uses the official `zcode app-server` stdio protocol with live preflight handshake, protocol-version refusal, and durable write-ahead execution journaling so retries replay a finished native turn exactly once.
 - Add ZCode to the Web workspace: agent harness selection, runtime resolution, connector command dialog, and bilingual copy.
 - Lease Agent claims and bound exact-runtime recovery. A claim is renewed only by accepted progress, a lapsed claim may be reclaimed only by its recorded runtime, stale attempts are fenced, and a request that exhausts its recovery budget fails visibly instead of staying pending.
 - Show a failed Agent response as a failure in the timeline, with a retry that replays the request's exact recorded harness, provider, model, and runtime.

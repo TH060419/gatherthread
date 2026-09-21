@@ -20,7 +20,10 @@ export interface ZcodeProjectHarnessOptions {
   workspacePath: string;
   provider: string;
   model: string;
-  shareToolEvents: boolean;
+  /** Share redacted tool events; default false (final-answer-only). */
+  shareToolEvents?: boolean;
+  /** Exact tool names eligible for sharing when shareToolEvents is on. */
+  toolAllowlist?: readonly string[];
   /** Connector state root; scanned during preflight to recover native ids. */
   stateRoot?: string;
   timeoutMs?: number;
@@ -44,6 +47,8 @@ export class ZcodeProjectHarness implements ProjectHarnessAdapter {
   readonly descriptor: ProjectHarnessDescriptor;
   readonly #options: ZcodeProjectHarnessOptions;
   readonly #known = new Map<string, KnownSessionIdentity>();
+  readonly #executors = new Set<ZcodeSessionExecutor>();
+  #deactivated = false;
 
   constructor(options: ZcodeProjectHarnessOptions) {
     this.#options = options;
@@ -80,11 +85,14 @@ export class ZcodeProjectHarness implements ProjectHarnessAdapter {
       sessionId: input.session.id,
       workspacePath: this.#options.workspacePath,
       statePath: input.statePath,
-      shareToolEvents: this.#options.shareToolEvents,
+      ...(this.#options.shareToolEvents === undefined ? {} : { shareToolEvents: this.#options.shareToolEvents }),
+      ...(this.#options.toolAllowlist === undefined ? {} : { toolAllowlist: this.#options.toolAllowlist }),
       ...(this.#options.timeoutMs === undefined ? {} : { timeoutMs: this.#options.timeoutMs }),
       ...(this.#options.maxOutputBytes === undefined ? {} : { maxOutputBytes: this.#options.maxOutputBytes }),
       ...(this.#options.signal === undefined ? {} : { signal: this.#options.signal }),
     });
+    if (this.#deactivated) executor.deactivate();
+    this.#executors.add(executor);
     return {
       executor,
       localSessionId: known?.localSessionId
@@ -92,15 +100,22 @@ export class ZcodeProjectHarness implements ProjectHarnessAdapter {
     };
   }
 
+  /**
+   * Revocation, removal, role downgrade, and shutdown abort every in-flight
+   * headless child and refuse later publication of its result. In-flight
+   * turns surface as bounded failures instead of committing after the
+   * binding lost its authorization.
+   */
   async deactivateExecutionBindings(): Promise<void> {
-    // No persistent native process and no local capture pipeline yet: an
-    // execution binding ends with its bounded child run, so deactivation has
-    // nothing durable to revoke. In-flight children finish under their own
-    // timeout and their results still commit through the atomic local bridge.
+    this.#deactivated = true;
+    for (const executor of this.#executors) {
+      executor.deactivate();
+    }
   }
 
   async close(): Promise<void> {
-    // No persistent native process: each execution is one bounded child run.
+    await this.deactivateExecutionBindings();
+    this.#executors.clear();
   }
 
   /**

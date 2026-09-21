@@ -7,14 +7,14 @@ import { promisify } from "node:util";
 const execFile = promisify(execFileCallback);
 
 /**
- * Every ZCode-version-sensitive interaction lives in this module.
- *
- * The upstream ZCode CLI is an Electron-bundled executable whose headless
- * surface may change between builds. Nothing outside this module guesses at
- * CLI paths, flags, or output shapes: the connector resolves one command spec,
- * probes its capabilities structurally, and refuses to run when a required
- * capability is missing. This mirrors the fail-closed compatibility boundary
- * the repository applies to Codex App Server and DSH Host versions.
+ * Every ZCode-version-sensitive interaction lives in this module (plus the
+ * protocol client in `zcode-protocol.ts`). The upstream ZCode CLI is an
+ * Electron-bundled executable whose headless surface changes between builds.
+ * Nothing outside these modules guesses at CLI paths, subcommands, or output
+ * shapes: the connector resolves one command spec, probes its capabilities
+ * structurally and through a live protocol handshake, and refuses to run when
+ * a required capability is missing. This mirrors the fail-closed compatibility
+ * boundary the repository applies to Codex App Server and DSH Host versions.
  */
 
 export interface ZcodeCommandSpec {
@@ -29,22 +29,17 @@ export interface ZcodeCommandSpec {
 export interface ZcodeCliProbe {
   /** First line of `--version` output, bounded to 80 characters. */
   version: string;
-  /** `--help` advertises `-p/--print` with a structured `--output-format`. */
-  supportsHeadless: boolean;
-  /** `--help` advertises `stream-json` output. */
-  supportsStreamJson: boolean;
-  /** `--help` advertises `--resume`. */
+  /** `--help` advertises the `app-server` stdio protocol subcommand. */
+  supportsAppServer: boolean;
+  /** `--help` advertises `-p, --prompt` single-prompt mode (informational). */
+  supportsPromptMode: boolean;
+  /** `--help` advertises `--resume` (informational; resume uses the protocol). */
   supportsResume: boolean;
-  /** `--help` advertises `--input-format` (needed for oversized prompts). */
-  supportsStdinPrompt: boolean;
 }
 
 const PROBE_TIMEOUT_MS = 15_000;
 const PROBE_MAX_OUTPUT_BYTES = 262_144;
-const MAX_PROMPT_ARGV_CHARS = 30_000;
 const SCRIPT_EXTENSIONS = new Set([".cjs", ".mjs", ".js"]);
-
-export { MAX_PROMPT_ARGV_CHARS };
 
 interface ProbeRunner {
   (spec: ZcodeCommandSpec, args: readonly string[]): Promise<string>;
@@ -190,58 +185,22 @@ export async function probeZcodeCli(
   ]);
   const version = firstLine(versionOutput).slice(0, 80);
   if (!version) throw new Error("ZCode CLI --version produced no usable output");
-  const probe: ZcodeCliProbe = {
+  return {
     version,
-    supportsHeadless: helpOutput.includes("--print") || helpOutput.includes("-p,"),
-    supportsStreamJson: helpOutput.includes("stream-json"),
+    supportsAppServer: /(?:^|\s)app-server(?:\s|$)/.test(helpOutput),
+    supportsPromptMode: helpOutput.includes("--prompt") || helpOutput.includes("-p,"),
     supportsResume: helpOutput.includes("--resume"),
-    supportsStdinPrompt: helpOutput.includes("--input-format"),
   };
-  return probe;
 }
 
 export function assertUsableZcodeCli(probe: ZcodeCliProbe): void {
   const missing: string[] = [];
-  if (!probe.supportsHeadless) missing.push("headless print mode (-p/--print)");
-  if (!probe.supportsStreamJson) missing.push("structured stream-json output (--output-format stream-json)");
-  if (!probe.supportsResume) missing.push("native session resume (--resume)");
+  if (!probe.supportsAppServer) missing.push("the ZCode Protocol app-server (`zcode app-server`)");
   if (missing.length > 0) {
     throw new Error(
       `The resolved ZCode CLI (${probe.version}) is missing required headless capabilities: ${missing.join(", ")}. Upgrade ZCode or point --zcode-command at a compatible build.`,
     );
   }
-}
-
-/** Headless output is line-delimited JSON; oversize prompts must go through stdin. */
-export function promptFitsArgv(prompt: string): boolean {
-  return Buffer.byteLength(prompt, "utf8") <= MAX_PROMPT_ARGV_CHARS;
-}
-
-export function zcodeHeadlessArgs(options: {
-  probe: ZcodeCliProbe;
-  prompt: string;
-  resumeSessionId?: string;
-}): { args: string[]; stdinPrompt: string | undefined } {
-  if (options.prompt.length === 0) throw new Error("ZCode execution prompt must not be empty");
-  const args = ["-p"];
-  if (options.resumeSessionId) {
-    if (!options.probe.supportsResume) {
-      throw new Error("ZCode session continuation requires a CLI with --resume support");
-    }
-    args.push("--resume", options.resumeSessionId);
-  }
-  if (promptFitsArgv(options.prompt)) {
-    return { args: [...args, "--output-format", "stream-json", options.prompt], stdinPrompt: undefined };
-  }
-  if (!options.probe.supportsStdinPrompt) {
-    throw new Error(
-      "The GatherThread session history exceeds the ZCode CLI argument budget and the resolved CLI does not advertise --input-format for stdin prompts. Shorten the shared session history or upgrade ZCode.",
-    );
-  }
-  return {
-    args: [...args, "--output-format", "stream-json", "--input-format", "text"],
-    stdinPrompt: options.prompt,
-  };
 }
 
 function firstLine(value: string): string {

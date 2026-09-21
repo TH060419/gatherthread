@@ -1,7 +1,7 @@
-import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { parseZcodeStreamLine, type TranscriptEvent } from "@gatherthread/adapters";
+import { parseZcodeProtocolEvent, type TranscriptEvent } from "@gatherthread/adapters";
 import type {
   CanonicalEvent,
   HarnessExecutionInput,
@@ -9,10 +9,14 @@ import type {
   HarnessExecutor,
   RegisteredRuntime,
 } from "./types.js";
-import type { ZcodeCliProbe, ZcodeCommandSpec } from "./zcode-compat.js";
-import { zcodeHeadlessArgs } from "./zcode-compat.js";
 import { HarnessExecutionTerminatedError } from "./bridge.js";
-import { withoutGatherThreadCredentials } from "./executor.js";
+import type { ZcodeCliProbe, ZcodeCommandSpec } from "./zcode-compat.js";
+import {
+  boundZcodeToolValue,
+  withZcodeProtocol,
+  zcodeTranscriptEvent,
+  type ZcodeProtocolEvent,
+} from "./zcode-protocol.js";
 
 /**
  * Per-session ZCode binding state. `version` must move together with an
@@ -30,9 +34,40 @@ export interface ZcodeSessionState {
   /** Canonical sequence through which the native session has been hydrated. */
   projectedThroughSequence: number;
   observedModel?: string;
+  /**
+   * Durable execution journal for the most recent claimed request. It is
+   * written before the bridge publishes anything canonical, so a retry after a
+   * transport failure replays the recorded result instead of re-running the
+   * native turn, and an interrupted `running` entry refuses re-execution.
+   */
+  journal?: ZcodeExecutionJournal;
+}
+
+export interface ZcodeExecutionJournal {
+  requestId: string;
+  requestSequence: number;
+  status: "running" | "completed";
+  nativeSessionId?: string;
+  observedModel?: string;
+  answerEvent?: TranscriptEvent;
+  toolEvents?: TranscriptEvent[];
+  startedAt: string;
 }
 
 const STATE_VERSION = 1;
+/** Upper bound for the recorded journal payload; oversized results fail closed. */
+const MAX_JOURNAL_BYTES = 512 * 1024;
+/** Per-value bound for shared tool arguments and results. */
+export const MAX_TOOL_VALUE_BYTES = 32 * 1024;
+/**
+ * Reviewed default allowlist for shareable ZCode tool events: read-only
+ * discovery tools only. Everything else stays local unless the operator opts
+ * in through --share-tool-events together with an explicit allowlist.
+ */
+export const DEFAULT_ZCODE_TOOL_ALLOWLIST: readonly string[] = ["Read", "Glob", "Grep"];
+const DEFAULT_TIMEOUT_MS = 900_000;
+const DEFAULT_MAX_OUTPUT_BYTES = 33_554_432;
+const MAX_PROMPT_BYTES = 8 * 1024 * 1024;
 
 export async function loadZcodeState(statePath: string): Promise<ZcodeConnectorState> {
   let parsed: unknown;
@@ -60,15 +95,35 @@ export async function loadZcodeState(statePath: string): Promise<ZcodeConnectorS
       projectedThroughSequence: value.projectedThroughSequence as number,
       ...(typeof value.localSessionId === "string" && value.localSessionId ? { localSessionId: value.localSessionId } : {}),
       ...(typeof value.observedModel === "string" && value.observedModel ? { observedModel: value.observedModel } : {}),
+      ...(isZcodeExecutionJournal(value.journal) ? { journal: value.journal } : {}),
     };
     sessions[sessionId] = session;
   }
   return { version: STATE_VERSION, sessions };
 }
 
+function isZcodeExecutionJournal(value: unknown): value is ZcodeExecutionJournal {
+  if (!isRecord(value)
+    || typeof value.requestId !== "string"
+    || !Number.isSafeInteger(value.requestSequence)
+    || (value.status !== "running" && value.status !== "completed")
+    || typeof value.startedAt !== "string") {
+    return false;
+  }
+  if (value.answerEvent !== undefined && !isTranscriptEvent(value.answerEvent)) return false;
+  if (value.toolEvents !== undefined) {
+    if (!Array.isArray(value.toolEvents) || !value.toolEvents.every(isTranscriptEvent)) return false;
+  }
+  return true;
+}
+
+function isTranscriptEvent(value: unknown): value is TranscriptEvent {
+  return isRecord(value) && typeof value.kind === "string" && typeof value.localEventId === "string";
+}
+
 export async function saveZcodeState(statePath: string, state: ZcodeConnectorState): Promise<void> {
   await mkdir(path.dirname(statePath), { recursive: true, mode: 0o700 });
-  const temporaryPath = `${statePath}.tmp-${process.pid}`;
+  const temporaryPath = `${statePath}.tmp-${process.pid}-${randomUUID()}`;
   await writeFile(temporaryPath, `${JSON.stringify(state, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
   await rename(temporaryPath, statePath);
 }
@@ -83,163 +138,286 @@ export interface ZcodeExecutorOptions {
   sessionId: string;
   workspacePath: string;
   statePath: string;
-  shareToolEvents: boolean;
+  /** Share redacted tool events; default false (final-answer-only). */
+  shareToolEvents?: boolean;
+  /** Exact tool names eligible for sharing when shareToolEvents is on. */
+  toolAllowlist?: readonly string[];
   timeoutMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
 }
 
-interface SpawnRunnerOptions {
+export interface ZcodeTurnRunnerOptions {
   spec: ZcodeCommandSpec;
-  args: readonly string[];
-  stdinPrompt: string | undefined;
-  cwd: string;
+  workspacePath: string;
+  resumeSessionId: string | undefined;
+  prompt: string;
   timeoutMs: number;
   maxOutputBytes: number;
-  signal?: AbortSignal;
-  onStdoutLine: (line: string) => void;
+  signal: AbortSignal | undefined;
+  /** Reviewed assistant/tool projections streamed while the turn runs. */
+  onTurnEvent: (event: TranscriptEvent) => Promise<void> | void;
 }
 
-type SpawnRunner = (options: SpawnRunnerOptions) => Promise<void>;
+export interface ZcodeTurnOutcome {
+  nativeSessionId: string;
+  finalResponse: string;
+  observedModel?: string;
+}
+
+export type ZcodeTurnRunner = (options: ZcodeTurnRunnerOptions) => Promise<ZcodeTurnOutcome>;
 
 /**
- * Executes one claimed Web Agent request in a headless ZCode child process.
+ * Executes one claimed Web Agent request in a bounded headless ZCode child.
  *
- * The child receives the shared canonical delta plus the request as one plain
- * text prompt, streams structured JSON events back, and never sees
- * GatherThread credentials. Assistant text emitted before the final answer is
- * published as public commentary; the final answer is the single assistant
- * transcript event required by the bridge. Hidden reasoning never leaves the
- * child: the parser only surfaces text, tool_use, and tool_result blocks.
+ * The child is one `zcode app-server` process: the connector creates or
+ * resumes the session's native ZCode conversation, sends the shared canonical
+ * delta plus the request as one plain text prompt, streams public commentary
+ * while the turn runs, and maps `turn.completed` to the single final answer.
+ * `turn.failed`, cancellation, and deactivation always complete as bounded
+ * failures — never as a successful answer. Hidden reasoning never leaves the
+ * child: only reviewed text and allowlisted tool blocks are surfaced.
  */
 export class ZcodeSessionExecutor implements HarnessExecutor {
-  readonly #options: ZcodeExecutorOptions;
-  readonly #spawn: SpawnRunner;
+  readonly #options: Required<Pick<ZcodeExecutorOptions, "shareToolEvents">> & ZcodeExecutorOptions;
+  readonly #runTurn: ZcodeTurnRunner;
+  #deactivated = false;
+  #activeTurns = 0;
 
-  constructor(options: ZcodeExecutorOptions, spawnRunner: SpawnRunner = runZcodeChild) {
-    this.#options = options;
-    this.#spawn = spawnRunner;
+  constructor(options: ZcodeExecutorOptions, runTurn: ZcodeTurnRunner = runZcodeProtocolTurn) {
+    this.#options = { ...options, shareToolEvents: options.shareToolEvents === true };
+    this.#runTurn = runTurn;
+  }
+
+  /**
+   * Revocation, shutdown, and connector close abort in-flight children and
+   * refuse later publication. Idempotent; safe to call repeatedly.
+   */
+  deactivate(): void {
+    this.#deactivated = true;
+  }
+
+  get hasActiveTurn(): boolean {
+    return this.#activeTurns > 0;
   }
 
   shouldExecute(request: CanonicalEvent, runtime: RegisteredRuntime): boolean {
     if (request.actorId !== runtime.userId) return false;
+    // Legacy requests without an execution profile belong to the server's
+    // Codex compatibility target, never to ZCode; ambiguity must not claim.
     const requested = requestedHarness(request);
-    return requested === undefined || requested === "zcode";
+    return requested === "zcode";
   }
 
   async execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
+    if (this.#deactivated || this.#options.signal?.aborted) {
+      throw new HarnessExecutionTerminatedError(
+        "zcode_deactivated",
+        "ZCode execution was deactivated before it could run",
+      );
+    }
     const state = await loadZcodeState(this.#options.statePath);
     const sessionState = state.sessions[this.#options.sessionId]
       ?? { projectedThroughSequence: 0 };
+
+    const journal = sessionState.journal;
+    if (journal && journal.requestId === input.request.id) {
+      if (journal.status === "completed") {
+        return this.#replayJournal(journal);
+      }
+      throw new HarnessExecutionTerminatedError(
+        "zcode_interrupted_execution",
+        "A previous execution of this request was interrupted before its native turn completed; refusing to run it twice",
+      );
+    }
+
     const resumeSessionId = sessionState.localSessionId;
+    // Own progress/tool/response events and the current request are excluded:
+    // the native session already contains the connector's earlier output, and
+    // the request itself is rendered as the authoritative final instruction.
     const historyDelta = input.canonicalHistory.filter((event) =>
-      event.sequence > sessionState.projectedThroughSequence || event.id === input.request.id,
-    );
+      event.sequence > sessionState.projectedThroughSequence
+      && event.sequence < input.request.sequence
+      && !isOwnRuntimeEvent(event, input.runtime.id));
     const prompt = renderZcodePrompt({
       history: historyDelta,
       request: input.request,
       resume: resumeSessionId !== undefined,
     });
-
-    const assistantTexts: TranscriptEvent[] = [];
-    const toolEvents: TranscriptEvent[] = [];
-    let nativeSessionId = resumeSessionId;
-    let observedModel: string | undefined;
-    let finalAnswerText: string | undefined;
-    let streamFailed: string | undefined;
-
-    const { args, stdinPrompt } = zcodeHeadlessArgs({
-      probe: this.#options.probe,
-      prompt,
-      ...(resumeSessionId === undefined ? {} : { resumeSessionId }),
-    });
-
-    try {
-      await this.#spawn({
-        spec: this.#options.spec,
-        args,
-        stdinPrompt,
-        cwd: this.#options.workspacePath,
-        timeoutMs: this.#options.timeoutMs ?? 900_000,
-        maxOutputBytes: this.#options.maxOutputBytes ?? 33_554_432,
-        ...(this.#options.signal === undefined ? {} : { signal: this.#options.signal }),
-        onStdoutLine: (line) => {
-          if (!line.trim()) return;
-          let record;
-          try {
-            record = parseZcodeStreamLine(line);
-          } catch {
-            streamFailed = "ZCode headless output contained a malformed stream-json line";
-            return;
-          }
-          if (record.sessionId) nativeSessionId = record.sessionId;
-          if (record.model) observedModel = record.model;
-          for (const event of record.events) {
-            if (event.kind === "assistant") assistantTexts.push(event);
-            else if (event.kind === "tool_call" || event.kind === "tool_result") toolEvents.push(event);
-          }
-          if (record.finalResultText !== undefined && record.finalResultText.trim()) {
-            finalAnswerText = record.finalResultText;
-          }
-        },
-      });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "unknown ZCode child failure";
-      throw new HarnessExecutionTerminatedError("zcode_execution_failed", message);
-    }
-    if (streamFailed) {
-      throw new HarnessExecutionTerminatedError("zcode_invalid_stream", streamFailed);
-    }
-
-    const answerEvent = assistantTexts[assistantTexts.length - 1];
-    const answer = finalAnswerText ?? answerEvent?.content;
-    if (!answer || !answer.trim()) {
+    if (Buffer.byteLength(prompt, "utf8") > MAX_PROMPT_BYTES) {
       throw new HarnessExecutionTerminatedError(
-        "zcode_empty_response",
-        "ZCode ended without a final answer",
+        "zcode_prompt_too_large",
+        `The GatherThread hydration prompt exceeds ${MAX_PROMPT_BYTES} bytes; shorten the shared session history`,
       );
     }
 
-    // Everything except the final assistant text is public commentary.
-    const commentary = finalAnswerText === undefined
-      ? assistantTexts.slice(0, -1)
-      : assistantTexts;
-    if (input.publishProgress) {
-      for (const event of commentary) {
-        if (!event.content?.trim()) continue;
-        await input.publishProgress({ id: event.localEventId, content: event.content });
-      }
+    const toolEvents: TranscriptEvent[] = [];
+    this.#activeTurns += 1;
+    // Write-ahead journal: a crash or restart while the child runs leaves a
+    // durable `running` entry that refuses re-execution of the same request.
+    await saveZcodeState(this.#options.statePath, {
+      version: STATE_VERSION,
+      sessions: {
+        ...state.sessions,
+        [this.#options.sessionId]: {
+          ...sessionState,
+          journal: {
+            requestId: input.request.id,
+            requestSequence: input.request.sequence,
+            status: "running",
+            ...(resumeSessionId === undefined ? {} : { nativeSessionId: resumeSessionId }),
+            startedAt: new Date().toISOString(),
+          },
+        },
+      },
+    });
+    let outcome: ZcodeTurnOutcome;
+    try {
+      outcome = await this.#runTurn({
+        spec: this.#options.spec,
+        workspacePath: this.#options.workspacePath,
+        resumeSessionId,
+        prompt,
+        timeoutMs: this.#options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        maxOutputBytes: this.#options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
+        signal: this.#options.signal,
+        onTurnEvent: async (event) => {
+          if (event.kind === "assistant") {
+            // Public commentary streams while the turn runs, renewing the
+            // claim lease through accepted progress.
+            if (event.content?.trim() && input.publishProgress) {
+              await input.publishProgress({ id: event.localEventId, content: event.content });
+            }
+            return;
+          }
+          if (this.#isShareableToolEvent(event)) toolEvents.push(event);
+        },
+      });
+    } catch (error) {
+      this.#activeTurns -= 1;
+      if (error instanceof HarnessExecutionTerminatedError) throw error;
+      const message = error instanceof Error ? error.message : "unknown ZCode child failure";
+      throw new HarnessExecutionTerminatedError("zcode_execution_failed", message);
     }
+    this.#activeTurns -= 1;
 
+    const answerEvent = zcodeTranscriptEvent("assistant", `zcode-final-${input.request.id}`, {
+      content: outcome.finalResponse,
+    });
+    const sharedToolEvents = this.#sharedToolEvents(toolEvents);
+    const completedJournal = this.#boundedJournal({
+      requestId: input.request.id,
+      requestSequence: input.request.sequence,
+      status: "completed",
+      nativeSessionId: outcome.nativeSessionId,
+      ...(outcome.observedModel === undefined ? {} : { observedModel: outcome.observedModel }),
+      answerEvent,
+      toolEvents: sharedToolEvents,
+      startedAt: new Date().toISOString(),
+    });
+
+    // Persist the durable journal and the binding cursor BEFORE the bridge
+    // appends anything canonical: a crash or transport failure after this
+    // point replays instead of re-running the native turn. Deactivation after
+    // the native turn still records the journal first, so a restart replays
+    // the finished turn instead of re-running it.
     await saveZcodeState(this.#options.statePath, {
       version: STATE_VERSION,
       sessions: {
         ...state.sessions,
         [this.#options.sessionId]: {
           projectedThroughSequence: input.request.sequence,
-          ...(nativeSessionId === undefined ? {} : { localSessionId: nativeSessionId }),
-          ...(observedModel === undefined ? {} : { observedModel }),
+          localSessionId: outcome.nativeSessionId,
+          ...(outcome.observedModel === undefined
+            ? sessionState.observedModel === undefined ? {} : { observedModel: sessionState.observedModel }
+            : { observedModel: outcome.observedModel }),
+          journal: completedJournal,
         },
       },
     });
+    if (this.#deactivated || this.#options.signal?.aborted) {
+      throw new HarnessExecutionTerminatedError(
+        "zcode_deactivated",
+        "ZCode execution was deactivated after the native turn completed; its result was not published",
+      );
+    }
 
-    const answerId = answerEvent?.localEventId ?? `zcode-final-${input.request.id}`;
-    const sharedToolEvents = this.#options.shareToolEvents ? toolEvents : [];
     return {
-      events: [
-        ...sharedToolEvents,
-        {
-          kind: "assistant",
-          localEventId: answerId,
-          harness: "zcode",
-          captureFidelity: "harness_transcript",
-          content: answer,
-        },
-      ],
-      ...(nativeSessionId === undefined ? {} : { localSessionId: nativeSessionId }),
-      ...(observedModel === undefined ? {} : { observedModel }),
+      events: [...sharedToolEvents, answerEvent],
+      localSessionId: outcome.nativeSessionId,
+      ...(outcome.observedModel === undefined ? {} : { observedModel: outcome.observedModel }),
     };
   }
+
+  #boundedJournal(journal: ZcodeExecutionJournal): ZcodeExecutionJournal {
+    if (jsonByteLength(journal) <= MAX_JOURNAL_BYTES) return journal;
+    // Shrink tool events first, then refuse if the answer itself cannot fit.
+    const reduced: ZcodeExecutionJournal = {
+      ...journal,
+      toolEvents: [],
+    };
+    if (jsonByteLength(reduced) <= MAX_JOURNAL_BYTES) return reduced;
+    throw new HarnessExecutionTerminatedError(
+      "zcode_journal_too_large",
+      "The ZCode execution result exceeds the durable journal budget and cannot be recovered safely",
+    );
+  }
+
+  #replayJournal(journal: ZcodeExecutionJournal): HarnessExecutionResult {
+    if (!journal.answerEvent || journal.nativeSessionId === undefined) {
+      throw new HarnessExecutionTerminatedError(
+        "zcode_interrupted_execution",
+        "The recorded execution is incomplete; refusing to fabricate a result",
+      );
+    }
+    return {
+      events: [...(journal.toolEvents ?? []), journal.answerEvent],
+      localSessionId: journal.nativeSessionId,
+      ...(journal.observedModel === undefined ? {} : { observedModel: journal.observedModel }),
+    };
+  }
+
+  #isShareableToolEvent(event: TranscriptEvent): boolean {
+    if (!this.#options.shareToolEvents) return false;
+    if (event.kind !== "tool_call" && event.kind !== "tool_result") return false;
+    const allowlist = this.#options.toolAllowlist ?? DEFAULT_ZCODE_TOOL_ALLOWLIST;
+    return event.toolName !== undefined && allowlist.includes(event.toolName);
+  }
+
+  #sharedToolEvents(events: readonly TranscriptEvent[]): TranscriptEvent[] {
+    return events
+      .filter((event) => this.#isShareableToolEvent(event))
+      .map((event) => this.#boundedToolEvent(event));
+  }
+
+  #boundedToolEvent(event: TranscriptEvent): TranscriptEvent {
+    if (event.kind !== "tool_call" && event.kind !== "tool_result") return event;
+    const bounded: TranscriptEvent = { ...event };
+    if (bounded.arguments !== undefined) {
+      bounded.arguments = boundZcodeToolValue(bounded.arguments, MAX_TOOL_VALUE_BYTES);
+    }
+    if (bounded.result !== undefined) {
+      bounded.result = boundZcodeToolValue(bounded.result, MAX_TOOL_VALUE_BYTES);
+    }
+    return bounded;
+  }
+}
+
+function jsonByteLength(value: unknown): number {
+  return Buffer.byteLength(JSON.stringify(value) ?? "", "utf8");
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
+function isOwnRuntimeEvent(event: CanonicalEvent, runtimeId: string): boolean {
+  return event.runtime?.runtimeId === runtimeId
+    && ["agent_progress", "agent_response", "tool_call", "tool_result"].includes(event.type);
 }
 
 /**
@@ -312,97 +490,134 @@ function requestedHarness(request: CanonicalEvent): string | undefined {
   return harness;
 }
 
-async function runZcodeChild(options: SpawnRunnerOptions): Promise<void> {
-  return new Promise((resolvePromise, rejectPromise) => {
-    if (options.signal?.aborted) {
-      rejectPromise(options.signal.reason ?? new Error("ZCode execution aborted"));
-      return;
-    }
-    const child = spawn(options.spec.command, [...options.spec.baseArgs, ...options.args], {
-      cwd: options.cwd,
-      env: withoutGatherThreadCredentials(process.env),
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    });
-    let pendingLine = "";
-    let outputBytes = 0;
-    let settled = false;
-    let stderrTail = "";
-    let forceKillTimer: NodeJS.Timeout | undefined;
-
-    const finish = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      options.signal?.removeEventListener("abort", abort);
-      if (error) rejectPromise(error);
-      else resolvePromise();
-    };
-    const abort = () => {
-      terminateChild();
-      finish(new Error("ZCode execution aborted"));
-    };
-    const timeout = setTimeout(() => {
-      terminateChild();
-      finish(new Error(`ZCode execution exceeded ${Math.round(options.timeoutMs / 1_000)}s`));
-    }, options.timeoutMs);
-    timeout.unref();
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      outputBytes += Buffer.byteLength(chunk, "utf8");
-      if (outputBytes > options.maxOutputBytes) {
-        terminateChild();
-        finish(new Error("ZCode headless output exceeded the configured limit"));
-        return;
+/**
+ * The real turn runner: one bounded `zcode app-server` child, create-or-resume
+ * of the session's native conversation, one `session/send`, and completion
+ * through the reviewed `turn.completed` / `turn.failed` events.
+ */
+export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Promise<ZcodeTurnOutcome> {
+  if (options.signal?.aborted) {
+    throw options.signal.reason instanceof Error ? options.signal.reason : new Error("ZCode execution aborted");
+  }
+  return withZcodeProtocol(
+    {
+      spec: options.spec,
+      cwd: options.workspacePath,
+      timeoutMs: options.timeoutMs,
+      maxOutputBytes: options.maxOutputBytes,
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    },
+    async (connection) => {
+      const workspace = { workspacePath: options.workspacePath, workspaceKey: options.workspacePath };
+      const created = options.resumeSessionId === undefined
+        ? await connection.request("session/create", { workspace }, options.timeoutMs)
+        : await connection.request("session/resume", {
+          sessionId: options.resumeSessionId,
+          workspace,
+        }, options.timeoutMs);
+      const sessionId = isRecord(created.session) && typeof created.session.sessionId === "string"
+        ? created.session.sessionId
+        : undefined;
+      if (!sessionId) throw new Error("ZCode app-server did not return a native session id");
+      if (options.resumeSessionId !== undefined && sessionId !== options.resumeSessionId) {
+        throw new Error("ZCode resumed an unexpected native session");
       }
-      pendingLine += chunk;
-      let newlineIndex = pendingLine.indexOf("\n");
-      while (newlineIndex !== -1) {
-        const line = pendingLine.slice(0, newlineIndex).replace(/\r$/, "");
-        pendingLine = pendingLine.slice(newlineIndex + 1);
-        options.onStdoutLine(line);
-        newlineIndex = pendingLine.indexOf("\n");
+      if (created.protocol !== undefined) {
+        const protocol = isRecord(created.protocol) ? created.protocol : {};
+        if (protocol.name !== "ZCode Protocol" || protocol.version !== 1) {
+          throw new Error(
+            `ZCode app-server speaks ${String(protocol.name)} version ${String(protocol.version)}; this connector requires ZCode Protocol version 1`,
+          );
+        }
       }
-    });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      // Bounded tail for the failure message only; never logged elsewhere.
-      stderrTail = (stderrTail + chunk).slice(-2_000);
-    });
-    child.once("error", (error: Error) => finish(new Error(`ZCode CLI could not be started: ${error.message}`)));
-    child.once("close", (code, signal) => {
-      if (forceKillTimer) clearTimeout(forceKillTimer);
-      if (pendingLine.trim()) options.onStdoutLine(pendingLine);
-      if (code !== 0) {
-        const suffix = stderrTail.trim().split(/\r?\n/).pop();
-        finish(new Error(`ZCode CLI exited unsuccessfully (${signal ?? code ?? "unknown"})${suffix ? `: ${suffix.slice(0, 400)}` : ""}`));
-        return;
+
+      // Per-run completion state: only this turn's events can settle it.
+      let observedModel: string | undefined;
+      let completedResponse: string | undefined;
+      let failure: { code?: string; message: string } | undefined;
+      let settled = false;
+
+      connection.setTurnHandlers({
+        onSessionEvent: (event: ZcodeProtocolEvent) => {
+          void (async () => {
+            const parsed = parseZcodeProtocolEvent(event.payload);
+            if (parsed.eventType === "turn.completed") {
+              if (!settled) {
+                settled = true;
+                completedResponse = parsed.finalResponse;
+
+              }
+              return;
+            }
+            if (parsed.eventType === "turn.failed") {
+              if (!settled) {
+                settled = true;
+                failure = {
+                  ...(parsed.errorCode === undefined ? {} : { code: parsed.errorCode }),
+                  message: parsed.errorMessage ?? "ZCode turn failed",
+                };
+
+              }
+              return;
+            }
+            for (const shareable of parsed.events) {
+              if (shareable.kind === "assistant" && shareable.content && !settled) {
+                // Assistant text before completion is public commentary.
+                await options.onTurnEvent(shareable);
+              } else if (shareable.kind === "tool_call" || shareable.kind === "tool_result") {
+                await options.onTurnEvent(shareable);
+              }
+            }
+          })();
+        },
+        onStateUpdated: (patch) => {
+          const model = isRecord(patch.model) ? patch.model : {};
+          if (typeof model.current === "string") observedModel = model.current;
+        },
+      });
+
+      await connection.request("session/subscribe", {
+        sessionId,
+        deliveryKind: "desktop-continuous",
+      }, options.timeoutMs);
+
+      const sent = await connection.request("session/send", {
+        sessionId,
+        content: options.prompt,
+      }, options.timeoutMs);
+      if (sent.accepted !== true) {
+        throw new Error("ZCode app-server did not accept the execution prompt");
       }
-      finish();
-    });
 
-    if (options.stdinPrompt === undefined) {
-      child.stdin.end();
-    } else {
-      // A child that exits before draining stdin must not crash the connector.
-      child.stdin.on("error", () => undefined);
-      child.stdin.end(options.stdinPrompt, "utf8");
-    }
-
-    function terminateChild() {
-      child.kill("SIGTERM");
-      forceKillTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
-      forceKillTimer.unref();
-    }
-  });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function isNodeError(error: unknown): error is NodeJS.ErrnoException {
-  return error instanceof Error && "code" in error;
+      const deadline = Date.now() + options.timeoutMs;
+      while (!settled && Date.now() < deadline && !connection.exited) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      if (!settled) {
+        throw new HarnessExecutionTerminatedError(
+          "zcode_turn_timeout",
+          "ZCode turn did not complete in time",
+        );
+      }
+      if (failure !== undefined) {
+        throw new HarnessExecutionTerminatedError(
+          "zcode_turn_failed",
+          failure.code === "CONFIGURATION_ERROR"
+            ? `${failure.message}. Open ZCode on this device, sign in, and select a default model before reconnecting the GatherThread connector.`
+            : failure.message,
+        );
+      }
+      if (completedResponse === undefined || !completedResponse.trim()) {
+        throw new HarnessExecutionTerminatedError(
+          "zcode_empty_response",
+          "ZCode completed the turn without a final answer",
+        );
+      }
+      return {
+        nativeSessionId: sessionId,
+        finalResponse: completedResponse,
+        ...(observedModel === undefined ? {} : { observedModel }),
+      };
+    },
+  );
 }

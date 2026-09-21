@@ -11,6 +11,8 @@ import { isProjectAccessRevoked, refreshProjectSessionPermissions } from "./proj
 import type { ProjectSummary, SessionSummary } from "./types.js";
 import { validateZcodeWorkspace, ZcodeProjectHarness } from "./zcode-harness.js";
 import { assertUsableZcodeCli, probeZcodeCli, resolveZcodeCommand } from "./zcode-compat.js";
+import { DEFAULT_ZCODE_TOOL_ALLOWLIST } from "./zcode-executor.js";
+import { probeZcodeProtocol } from "./zcode-protocol.js";
 
 export interface ZcodeConnectOptions {
   apiUrl: string;
@@ -20,7 +22,10 @@ export interface ZcodeConnectOptions {
   projectId?: string;
   createWorkspace: boolean;
   zcodeCommand?: string;
+  /** Default false: only the final ZCode answer is shared. */
   shareToolEvents: boolean;
+  /** Exact tool names eligible for sharing when shareToolEvents is on. */
+  toolAllowlist: readonly string[];
   preflightOnly: boolean;
   executionTimeoutMs: number;
 }
@@ -41,7 +46,12 @@ Options:
   --provider <name>        Provenance provider label (default: zcode)
   --model <name>           Provenance model label until the first execution reports the observed model (default: default)
   --zcode-command <path>   ZCode CLI executable, or its bundled glm/zcode.cjs entry (default: discover automatically)
-  --no-share-tool-events   Share only the final ZCode answer, not redacted tool events
+  --share-tool-events      Also share redacted tool events for the allowlisted
+                           tools below. Default: share only the final answer.
+  --share-tool-allowlist <names>
+                           Comma-separated exact tool names eligible for
+                           sharing (default: Read,Glob,Grep). Non-allowlisted
+                           tool activity always stays local.
   --execution-timeout-ms <n>
                            Per-request headless execution ceiling (default: 900000)
   --preflight-only         Validate server access, workspace, and the ZCode CLI, then exit
@@ -51,9 +61,12 @@ The device access token is read from GATHERTHREAD_TOKEN when set. Otherwise it
 is requested using a hidden terminal prompt. It is kept only in this process
 and is never passed to ZCode, written to session state, or printed. Each
 writable session registers one execution runtime; a claimed Web Agent request
-runs once in a headless ZCode child inside the workspace. Local-turn capture
+runs once in a bounded headless ZCode app-server child inside the workspace.
+Interactive permission and input requests from the child are declined: this
+connector never grants local tool approval remotely. Local-turn capture
 through reviewed ZCode hooks is planned as a later phase and is not part of
-this connector yet.
+this connector yet. The ZCode CLI must be signed in (run \`zcode login\`) with
+a default model selected on this device before connecting.
 `;
 
 export async function runZcodeConnectCli(
@@ -90,6 +103,8 @@ export async function runZcodeConnectCli(
   const spec = await resolveZcodeCommand(parsed.zcodeCommand, env);
   const probe = await probeZcodeCli(spec);
   assertUsableZcodeCli(probe);
+  const protocol = await probeZcodeProtocol(spec, { cwd: workspacePath });
+  const shutdown = new AbortController();
   const harness = new ZcodeProjectHarness({
     probe,
     spec,
@@ -97,8 +112,10 @@ export async function runZcodeConnectCli(
     provider: parsed.provider,
     model: parsed.model,
     shareToolEvents: parsed.shareToolEvents,
+    toolAllowlist: parsed.toolAllowlist,
     stateRoot,
     timeoutMs: parsed.executionTimeoutMs,
+    signal: shutdown.signal,
   });
   const preflight = await harness.preflight();
 
@@ -108,13 +125,14 @@ export async function runZcodeConnectCli(
     process.stdout.write(`Project: ${selected.name} (${selected.id}) as ${selected.role}\n`);
     process.stdout.write(`Workspace: ${preflight.workspacePath}\n`);
     process.stdout.write(`ZCode CLI: ${preflight.version} (${spec.source})\n`);
+    process.stdout.write(`ZCode Protocol: ${protocol.protocolName} version ${protocol.protocolVersion}\n`);
+    process.stdout.write(`Tool sharing: ${parsed.shareToolEvents ? `redacted events for ${parsed.toolAllowlist.join(", ")}` : "final answer only"}\n`);
     return;
   }
 
   process.stdout.write(`Connecting GatherThread project ${selected.name} to ZCode at ${preflight.workspacePath}\n`);
-  process.stdout.write(`ZCode CLI ${preflight.version}; headless execution ready.\n`);
+  process.stdout.write(`ZCode CLI ${preflight.version} (${protocol.protocolName} v${protocol.protocolVersion}); headless execution ready.\n`);
 
-  const shutdown = new AbortController();
   const stop = () => shutdown.abort(new Error("ZCode connector shutdown requested"));
   process.once("SIGINT", stop);
   process.once("SIGTERM", stop);
@@ -185,7 +203,8 @@ export function parseZcodeConnectArgs(argv: readonly string[]): ZcodeConnectOpti
     provider: "zcode",
     model: "default",
     createWorkspace: false,
-    shareToolEvents: true,
+    shareToolEvents: false,
+    toolAllowlist: DEFAULT_ZCODE_TOOL_ALLOWLIST,
     preflightOnly: false,
     executionTimeoutMs: 900_000,
   };
@@ -205,8 +224,10 @@ export function parseZcodeConnectArgs(argv: readonly string[]): ZcodeConnectOpti
     else if (argument === "--provider") options.provider = validateLabel(value(), "--provider");
     else if (argument === "--model") options.model = validateLabel(value(), "--model");
     else if (argument === "--zcode-command") options.zcodeCommand = value();
-    else if (argument === "--no-share-tool-events") options.shareToolEvents = false;
-    else if (argument === "--execution-timeout-ms") {
+    else if (argument === "--share-tool-events") options.shareToolEvents = true;
+    else if (argument === "--share-tool-allowlist") {
+      options.toolAllowlist = parseToolAllowlist(value());
+    } else if (argument === "--execution-timeout-ms") {
       const parsedValue = Number(value());
       if (!Number.isSafeInteger(parsedValue) || parsedValue < 1_000 || parsedValue > 3_600_000) {
         throw new Error("--execution-timeout-ms must be an integer between 1000 and 3600000");
@@ -217,6 +238,24 @@ export function parseZcodeConnectArgs(argv: readonly string[]): ZcodeConnectOpti
   }
   if (!options.apiUrl) throw new Error("--url is required. Pass --help for usage.");
   return options;
+}
+
+function parseToolAllowlist(value: string): readonly string[] {
+  const names = [...new Set(
+    value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  )];
+  if (names.length === 0) {
+    throw new Error("--share-tool-allowlist must contain at least one comma-separated tool name");
+  }
+  for (const name of names) {
+    if (name.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(name)) {
+      throw new Error(`Invalid tool name in --share-tool-allowlist: ${JSON.stringify(name.slice(0, 20))}`);
+    }
+  }
+  return names;
 }
 
 function validateLabel(value: string, flag: string): string {

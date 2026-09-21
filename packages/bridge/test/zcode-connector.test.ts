@@ -1,20 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import {
   assertUsableZcodeCli,
+  DEFAULT_ZCODE_TOOL_ALLOWLIST,
   LocalBridge,
   MemoryCursorStore,
   pendingZcodeLocalSessionId,
   probeZcodeCli,
+  probeZcodeProtocol,
   resolveZcodeCommand,
   renderZcodePrompt,
+  runZcodeProtocolTurn,
   saveZcodeState,
   ZcodeProjectHarness,
   ZcodeSessionExecutor,
-  zcodeHeadlessArgs,
   type AppendEventInput,
   type AgentProgressInput,
   type CanonicalEvent,
@@ -24,14 +26,15 @@ import {
   type RuntimeRegistration,
   type ZcodeCliProbe,
   type ZcodeConnectorState,
+  type ZcodeTurnOutcome,
+  type ZcodeTurnRunnerOptions,
 } from "../src/index.js";
 
 const usableProbe: ZcodeCliProbe = {
   version: "test-cli 1.0.0",
-  supportsHeadless: true,
-  supportsStreamJson: true,
+  supportsAppServer: true,
+  supportsPromptMode: true,
   supportsResume: true,
-  supportsStdinPrompt: true,
 };
 
 function canonicalEvent(overrides: Partial<CanonicalEvent> & { sequence: number; type: CanonicalEvent["type"] }): CanonicalEvent {
@@ -46,29 +49,45 @@ function canonicalEvent(overrides: Partial<CanonicalEvent> & { sequence: number;
   };
 }
 
-interface RecordedSpawn {
-  args: string[];
-  stdinPrompt: string | undefined;
+interface RecordedTurn {
+  resumeSessionId: string | undefined;
+  prompt: string;
 }
 
-function recordedExecutor(statePath: string, options: {
-  stream?: string;
-  exitCode?: number;
-  capture?: RecordedSpawn[];
+interface FakeTurnResult {
+  outcome?: Omit<ZcodeTurnOutcome, "nativeSessionId"> & { nativeSessionId?: string };
+  failure?: Error;
+  turnEvents?: Parameters<ZcodeTurnRunnerOptions["onTurnEvent"]>[0][];
+}
+
+function fakeExecutor(statePath: string, options: Omit<FakeTurnResult, "outcome"> & {
+  turns?: FakeTurnResult[];
+  capture?: RecordedTurn[];
   shareToolEvents?: boolean;
+  toolAllowlist?: readonly string[];
+  signal?: AbortSignal;
 } = {}): ZcodeSessionExecutor {
-  const stream = options.stream ?? defaultStream("credentials-removed");
-  const spawnRunner = async (spawnOptions: {
-    args: readonly string[];
-    stdinPrompt: string | undefined;
-    onStdoutLine: (line: string) => void;
-  }) => {
+  const defaultTurn: FakeTurnResult = {
+    ...(options.turnEvents === undefined ? {} : { turnEvents: options.turnEvents }),
+    ...(options.failure === undefined ? {} : { failure: options.failure }),
+  };
+  const providedTurns = options.turns ?? [defaultTurn];
+  const turns = providedTurns.map((turn, index) => index === 0 ? { ...defaultTurn, ...turn } : turn);
+  const runner = async (turnOptions: ZcodeTurnRunnerOptions): Promise<ZcodeTurnOutcome> => {
     options.capture?.push({
-      args: [...spawnOptions.args],
-      stdinPrompt: spawnOptions.stdinPrompt,
+      resumeSessionId: turnOptions.resumeSessionId,
+      prompt: turnOptions.prompt,
     });
-    if ((options.exitCode ?? 0) !== 0) throw new Error("ZCode CLI exited unsuccessfully (1)");
-    for (const line of stream.split("\n")) spawnOptions.onStdoutLine(line);
+    const turn = turns.shift() ?? {};
+    for (const event of turn.turnEvents ?? []) {
+      await turnOptions.onTurnEvent(event);
+    }
+    if (turn.failure) throw turn.failure;
+    return {
+      nativeSessionId: turn.outcome?.nativeSessionId ?? "sess_generated_1",
+      finalResponse: turn.outcome?.finalResponse ?? "final result text",
+      ...(turn.outcome?.observedModel === undefined ? {} : { observedModel: turn.outcome.observedModel }),
+    };
   };
   return new ZcodeSessionExecutor({
     probe: usableProbe,
@@ -76,38 +95,34 @@ function recordedExecutor(statePath: string, options: {
     sessionId: "session-1",
     workspacePath: ".",
     statePath,
-    shareToolEvents: options.shareToolEvents ?? true,
-  }, spawnRunner);
+    ...(options.shareToolEvents === undefined ? {} : { shareToolEvents: options.shareToolEvents }),
+    ...(options.toolAllowlist === undefined ? {} : { toolAllowlist: options.toolAllowlist }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  }, runner);
 }
 
-function defaultStream(answerText: string): string {
-  return [
-    JSON.stringify({ type: "system", subtype: "init", session_id: "sess_generated_1", model: "GLM-Test-1" }),
-    JSON.stringify({ type: "assistant", uuid: "a1", session_id: "sess_generated_1", message: { role: "assistant", content: [
-      { type: "thinking", thinking: "hidden reasoning" },
-      { type: "text", text: "thinking out loud" },
-    ] } }),
-    JSON.stringify({ type: "assistant", uuid: "a2", session_id: "sess_generated_1", message: { role: "assistant", content: [
-      { type: "tool_use", id: "t1", name: "Read", input: { file_path: "a.ts" } },
-    ] } }),
-    JSON.stringify({ type: "user", uuid: "u1", session_id: "sess_generated_1", message: { role: "user", content: [
-      { type: "tool_result", tool_use_id: "t1", content: "ok" },
-    ] } }),
-    JSON.stringify({ type: "assistant", uuid: "a3", session_id: "sess_generated_1", message: { role: "assistant", content: [
-      { type: "text", text: answerText },
-    ] } }),
-    JSON.stringify({ type: "result", subtype: "success", session_id: "sess_generated_1", result: "final result text" }),
-    "",
-  ].join("\n");
+function assistantText(localEventId: string, content: string) {
+  return { kind: "assistant" as const, localEventId, harness: "zcode" as const, captureFidelity: "harness_transcript" as const, content };
 }
 
-test("ZCode execution maps stream-json into one final answer, shared tool events, and durable binding state", async () => {
+function toolCallEvent(localEventId: string, toolName: string, argumentsValue: unknown) {
+  return { kind: "tool_call" as const, localEventId, harness: "zcode" as const, captureFidelity: "harness_transcript" as const, toolName, toolCallId: `${localEventId}:id`, arguments: argumentsValue };
+}
+
+test("ZCode execution maps protocol events into one final answer and durable binding state", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "zcode-exec-"));
   const statePath = path.join(root, "state", "binding-session.json");
   const progress: { id: string; content: string }[] = [];
-  const executor = recordedExecutor(statePath);
+  const executor = fakeExecutor(statePath, {
+    shareToolEvents: true,
+    turnEvents: [
+      assistantText("msg-1:text", "thinking out loud"),
+      toolCallEvent("msg-1:tool:0", "Read", { file_path: "a.ts" }),
+    ],
+    turns: [{ outcome: { nativeSessionId: "sess_generated_1", finalResponse: "final result text", observedModel: "GLM-Test-1" } }],
+  });
   const result = await executor.execute({
-    request: canonicalEvent({ sequence: 5, type: "agent_request" }),
+    request: canonicalEvent({ sequence: 5, type: "agent_request", payload: { content: "do the thing" } }),
     canonicalHistory: [
       canonicalEvent({ sequence: 1, type: "human_chat" }),
       canonicalEvent({ sequence: 5, type: "agent_request", payload: { content: "do the thing" } }),
@@ -118,137 +133,186 @@ test("ZCode execution maps stream-json into one final answer, shared tool events
     },
   });
 
-  assert.deepEqual(result.events.map((event) => event.kind), ["tool_call", "tool_result", "assistant"]);
+  assert.deepEqual(result.events.map((event) => event.kind), ["tool_call", "assistant"]);
+  assert.equal(result.events[0]?.toolName, "Read");
   assert.equal(result.localSessionId, "sess_generated_1");
   assert.equal(result.observedModel, "GLM-Test-1");
   assert.equal(result.events.at(-1)?.content, "final result text");
   assert.equal(result.events.at(-1)?.harness, "zcode");
-  assert.deepEqual(progress.map((update) => update.content), ["thinking out loud", "credentials-removed"]);
+  assert.deepEqual(progress.map((update) => update.content), ["thinking out loud"]);
 
   const state = JSON.parse(await readFile(statePath, "utf8")) as ZcodeConnectorState;
   assert.equal(state.version, 1);
   assert.equal(state.sessions["session-1"]?.localSessionId, "sess_generated_1");
   assert.equal(state.sessions["session-1"]?.projectedThroughSequence, 5);
   assert.equal(state.sessions["session-1"]?.observedModel, "GLM-Test-1");
+  assert.equal(state.sessions["session-1"]?.journal?.status, "completed");
   await rm(root, { recursive: true, force: true });
 });
 
-test("ZCode headless arguments resume the recorded native session", async () => {
+test("ZCode execution resumes the recorded native session and excludes own output from hydration", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "zcode-resume-"));
   const statePath = path.join(root, "binding-session.json");
   await saveZcodeState(statePath, {
     version: 1,
     sessions: { "session-1": { localSessionId: "sess_prev_1", projectedThroughSequence: 3, observedModel: "GLM-Old" } },
   });
-  const captured: RecordedSpawn[] = [];
-  const executor = recordedExecutor(statePath, { capture: captured });
-  const result = await executor.execute({
-    request: canonicalEvent({ sequence: 5, type: "agent_request" }),
+  const captured: RecordedTurn[] = [];
+  const executor = fakeExecutor(statePath, { capture: captured });
+  await executor.execute({
+    request: canonicalEvent({ sequence: 10, type: "agent_request", payload: { content: "continue" } }),
     canonicalHistory: [
       canonicalEvent({ sequence: 2, type: "human_chat" }),
       canonicalEvent({ sequence: 3, type: "human_chat" }),
-      canonicalEvent({ sequence: 5, type: "agent_request", payload: { content: "continue" } }),
+      // The connector's own earlier output (above the stored cursor) must not
+      // echo back into the native session.
+      { ...canonicalEvent({ sequence: 4, type: "agent_progress", payload: { content: "older progress" } }), runtime: ownProvenance() },
+      { ...canonicalEvent({ sequence: 6, type: "agent_response", payload: { content: "older answer" } }), runtime: ownProvenance() },
+      canonicalEvent({ sequence: 8, type: "human_chat", payload: { content: "fresh human context" } }),
+      canonicalEvent({ sequence: 10, type: "agent_request", payload: { content: "continue" } }),
     ],
     runtime: runtimeValue(),
   });
 
-  assert.equal(result.localSessionId, "sess_generated_1");
-  const spawn = captured[0];
-  assert.ok(spawn);
-  const resumeIndex = spawn.args.indexOf("--resume");
-  assert.ok(resumeIndex >= 0);
-  assert.equal(spawn.args[resumeIndex + 1], "sess_prev_1");
-  assert.equal(spawn.stdinPrompt, undefined);
+  assert.equal(captured[0]?.resumeSessionId, "sess_prev_1");
+  const prompt = captured[0]?.prompt ?? "";
+  assert.ok(prompt.includes("[seq 8] human_chat"));
+  assert.ok(!prompt.includes("older progress"));
+  assert.ok(!prompt.includes("older answer"));
+  // The request is rendered once, as the final instruction, not as transcript.
+  assert.equal(prompt.split("continue").length - 1 >= 1, true);
+  assert.ok(!prompt.includes("[seq 10]"));
   await rm(root, { recursive: true, force: true });
 });
 
-test("ZCode execution strips GatherThread credentials from the child environment", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "zcode-env-"));
+test("ZCode execution writes a running journal before the child and refuses re-execution after interruption", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-journal-"));
   const statePath = path.join(root, "binding-session.json");
-  const script = `
-const lines = [
-  JSON.stringify({ type: "system", subtype: "init", session_id: "sess_env_1", model: "GLM-Test-1" }),
-  JSON.stringify({ type: "assistant", uuid: "a1", session_id: "sess_env_1", message: { role: "assistant", content: [
-    { type: "text", text: ["GATHERTHREAD_TOKEN", "GATHERTHREAD_BEARER_TOKEN", "GATHERTHREAD_AUTH_TOKEN_PEPPER"].every((name) => process.env[name] === undefined) ? "credentials-removed" : "credential-leaked" }
-  ] } }),
-  JSON.stringify({ type: "result", subtype: "success", session_id: "sess_env_1", result: "done" })
-];
-process.stdout.write(lines.join("\\n") + "\\n");
-`;
-  const executor = new ZcodeSessionExecutor({
-    probe: usableProbe,
-    // "--" stops Node from parsing the headless arguments intended for the script.
-    spec: { command: process.execPath, baseArgs: ["-e", script, "--"], source: "test" },
-    sessionId: "session-1",
-    workspacePath: root,
-    statePath,
+  const executor = fakeExecutor(statePath, {
+    turns: [{ failure: new Error("ZCode app-server exited unexpectedly") }],
+  });
+  await assert.rejects(
+    executor.execute(executionInput()),
+    /exited unexpectedly/,
+  );
+  const afterFailure = JSON.parse(await readFile(statePath, "utf8")) as ZcodeConnectorState;
+  assert.equal(afterFailure.sessions["session-1"]?.journal?.status, "running");
+
+  // A retry of the same request (claim reclaim, restart recovery) must refuse
+  // instead of re-running an interrupted native turn.
+  await assert.rejects(
+    fakeExecutor(statePath).execute(executionInput()),
+    /refusing to run it twice/,
+  );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ZCode execution replays the recorded result after a transport failure instead of re-running", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-replay-"));
+  const statePath = path.join(root, "binding-session.json");
+  const captured: RecordedTurn[] = [];
+  const first = fakeExecutor(statePath, {
+    capture: captured,
     shareToolEvents: true,
+    toolAllowlist: ["Read"],
+    turnEvents: [toolCallEvent("t1", "Read", { file_path: "a.ts" })],
+    turns: [{ outcome: { nativeSessionId: "sess_done_1", finalResponse: "recorded answer" } }],
   });
-  const result = await executor.execute({
-    request: canonicalEvent({ sequence: 1, type: "agent_request" }),
-    canonicalHistory: [canonicalEvent({ sequence: 1, type: "agent_request" })],
-    runtime: runtimeValue(),
+  await first.execute(executionInput());
+  assert.equal(captured.length, 1);
+
+  // Simulate a restart: a fresh executor over the same durable state replays.
+  const replay = fakeExecutor(statePath, { capture: captured });
+  const result = await replay.execute(executionInput());
+  assert.equal(captured.length, 1, "the native turn must not run twice");
+  assert.equal(result.localSessionId, "sess_done_1");
+  assert.equal(result.events.at(-1)?.content, "recorded answer");
+  assert.deepEqual(result.events.filter((event) => event.kind === "tool_call").map((event) => event.toolName), ["Read"]);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ZCode deactivation aborts publication before and after the native turn", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-deactivate-"));
+  const statePath = path.join(root, "binding-session.json");
+  const before = fakeExecutor(statePath, {});
+  before.deactivate();
+  await assert.rejects(before.execute(executionInput()), /deactivated before it could run/);
+
+  // Deactivation during the native turn records the completed journal
+  // (restart replays instead of re-running) but refuses publication.
+  const holder: { executor?: ZcodeSessionExecutor } = {};
+  const late = new ZcodeSessionExecutor({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    sessionId: "session-1",
+    workspacePath: ".",
+    statePath,
+  }, async () => {
+    holder.executor?.deactivate();
+    return { nativeSessionId: "sess_late_1", finalResponse: "too late" };
   });
-  assert.equal(result.events.at(-1)?.content, "done");
+  holder.executor = late;
+  await assert.rejects(late.execute(executionInput()), /deactivated after the native turn/);
   const state = JSON.parse(await readFile(statePath, "utf8")) as ZcodeConnectorState;
-  assert.equal(state.sessions["session-1"]?.localSessionId, "sess_env_1");
+  assert.equal(state.sessions["session-1"]?.journal?.status, "completed");
+  assert.equal(state.sessions["session-1"]?.localSessionId, "sess_late_1");
   await rm(root, { recursive: true, force: true });
 });
 
-test("ZCode execution fails closed on malformed streams, empty answers, and child failures", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "zcode-fail-"));
-  const malformed = recordedExecutor(path.join(root, "a.json"), {
-    stream: `${JSON.stringify({ type: "assistant", uuid: "a1", message: { role: "assistant", content: [{ type: "text", text: "hi" }] } })}\nnot-json\n`,
-  });
-  await assert.rejects(malformed.execute(executionInput()), /malformed stream-json/);
-
-  const empty = recordedExecutor(path.join(root, "b.json"), {
-    stream: [
-      JSON.stringify({ type: "system", subtype: "init", session_id: "s", model: "m" }),
-      JSON.stringify({ type: "result", subtype: "success", session_id: "s", result: "   " }),
-      "",
-    ].join("\n"),
-  });
-  await assert.rejects(empty.execute(executionInput()), /without a final answer/);
-
-  const crashed = recordedExecutor(path.join(root, "c.json"), { exitCode: 1 });
-  await assert.rejects(crashed.execute(executionInput()), /exited unsuccessfully/);
-
-  for (const name of ["a", "b", "c"]) {
-    await assert.rejects(readFile(path.join(root, `${name}.json`), "utf8"));
-  }
-  await rm(root, { recursive: true, force: true });
-});
-
-test("ZCode tool sharing can be disabled while the final answer is still published", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "zcode-tools-"));
-  const executor = recordedExecutor(path.join(root, "state.json"), { shareToolEvents: false });
-  const result = await executor.execute(executionInput());
-  assert.deepEqual(result.events.map((event) => event.kind), ["assistant"]);
-  await rm(root, { recursive: true, force: true });
-});
-
-test("ZCode execution refuses an unsupported persisted state version instead of guessing", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "zcode-state-"));
-  const statePath = path.join(root, "state.json");
-  await writeFile(statePath, `${JSON.stringify({ version: 99, sessions: {} })}\n`);
-  const executor = recordedExecutor(statePath);
-  await assert.rejects(executor.execute(executionInput()), /Unsupported ZCode connector state version/);
-  await rm(root, { recursive: true, force: true });
-});
-
-test("ZCode shouldExecute follows the requested harness profile exactly", () => {
-  const executor = recordedExecutor("unused-state.json");
+test("ZCode shouldExecute only claims requests explicitly targeted at zcode", () => {
+  const executor = fakeExecutor("unused-state.json");
   const runtime = runtimeValue();
   const request = (payload: unknown) => canonicalEvent({ sequence: 1, type: "agent_request", payload });
-  assert.equal(executor.shouldExecute(request({ content: "x" }), runtime), true);
+  // Legacy requests without an execution profile belong to the Codex target.
+  assert.equal(executor.shouldExecute(request({ content: "x" }), runtime), false);
   assert.equal(executor.shouldExecute(request({ execution_profile: { harness: "zcode", model: "m" } }), runtime), true);
   assert.equal(executor.shouldExecute(request({ execution_profile: { harness: "codex", model: "m" } }), runtime), false);
+  assert.equal(executor.shouldExecute(request({ execution_profile: { harness: "deepseek-harness", model: "m" } }), runtime), false);
   assert.equal(executor.shouldExecute(request({ execution_profile: { harness: "zcode", model: "m" } }), {
     ...runtime,
     userId: "user-2",
   }), false);
   assert.throws(() => executor.shouldExecute(request({ execution_profile: { harness: "bad\nharness" } }), runtime), /invalid target harness/);
+});
+
+test("ZCode tool sharing is opt-in, allowlisted, and bounded", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-tools-"));
+  const turnEvents = [
+    toolCallEvent("t-read", "Read", { file_path: "a.ts" }),
+    toolCallEvent("t-bash", "Bash", { command: "rm -rf /" }),
+    toolCallEvent("t-big", "Read", { blob: "x".repeat(40_000) }),
+    assistantText("t-answer", "answer"),
+  ];
+  const outcome = { nativeSessionId: "sess_tools_1", finalResponse: "done" };
+
+  // Default: final answer only.
+  const quiet = fakeExecutor(path.join(root, "a.json"), { turnEvents, turns: [{ outcome }] });
+  assert.deepEqual((await quiet.execute(executionInput())).events.map((event) => event.kind), ["assistant"]);
+
+  // Opt-in: allowlisted tools only, oversized values truncated.
+  const shared = fakeExecutor(path.join(root, "b.json"), {
+    shareToolEvents: true,
+    turnEvents,
+    turns: [{ outcome }],
+  });
+  const sharedEvents = (await shared.execute(executionInput())).events;
+  assert.deepEqual(sharedEvents.filter((event) => event.kind === "tool_call").map((event) => event.toolName), ["Read", "Read"]);
+  const bounded = sharedEvents.find((event) => event.localEventId === "t-big");
+  assert.ok(Buffer.byteLength(JSON.stringify(bounded?.arguments) ?? "") < 40_000);
+  assert.equal((bounded?.arguments as { truncated?: boolean })?.truncated, true);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ZCode tool allowlist default covers read-only discovery tools", () => {
+  assert.deepEqual(DEFAULT_ZCODE_TOOL_ALLOWLIST, ["Read", "Glob", "Grep"]);
+  const executor = fakeExecutor("unused.json", { shareToolEvents: true, toolAllowlist: ["Write"] });
+  // The policy is enforced inside the executor; Write would be shared here,
+  // but the default allowlist stays read-only for operators who do not
+  // override it.
+  assert.equal(executor.shouldExecute(
+    canonicalEvent({ sequence: 1, type: "agent_request", payload: { execution_profile: { harness: "zcode" } } }),
+    runtimeValue(),
+  ), true);
 });
 
 test("ZCode prompt rendering quotes shared history as untrusted data with the request last", () => {
@@ -267,43 +331,29 @@ test("ZCode prompt rendering quotes shared history as untrusted data with the re
   assert.ok(prompt.endsWith("Answer the current request. Reply with the final answer text only."));
 });
 
-test("ZCode headless arguments switch to stdin prompts above the argv budget and refuse unsupported resume", () => {
-  const small = zcodeHeadlessArgs({ probe: usableProbe, prompt: "hello" });
-  assert.deepEqual(small.args, ["-p", "--output-format", "stream-json", "hello"]);
-  assert.equal(small.stdinPrompt, undefined);
-
-  const oversizedPrompt = "x".repeat(31_000);
-  const large = zcodeHeadlessArgs({ probe: usableProbe, prompt: oversizedPrompt, resumeSessionId: "sess_prev" });
-  assert.deepEqual(large.args, ["-p", "--resume", "sess_prev", "--output-format", "stream-json", "--input-format", "text"]);
-  assert.equal(large.stdinPrompt, oversizedPrompt);
-
-  assert.throws(() => zcodeHeadlessArgs({
-    probe: { ...usableProbe, supportsStdinPrompt: false },
-    prompt: oversizedPrompt,
-  }), /argument budget/);
-  assert.throws(() => zcodeHeadlessArgs({
-    probe: { ...usableProbe, supportsStdinPrompt: false, supportsResume: false },
-    prompt: "hello",
-    resumeSessionId: "sess_prev",
-  }), /--resume support/);
-  assert.throws(() => zcodeHeadlessArgs({ probe: usableProbe, prompt: "" }), /must not be empty/);
-});
-
-test("ZCode CLI capability probe refuses builds that omit required headless flags", async () => {
+test("ZCode CLI capability probe refuses builds without the app-server subcommand", async () => {
   const probe = await probeZcodeCli(
     { command: "fake", baseArgs: [], source: "test" },
     async (_spec, args) => args[0] === "--version"
       ? "zcode 9.9.9 (build abc)\n"
-      : "Usage: zcode [options]\n  -p, --print  print mode\n  --output-format text|json|stream-json\n  --resume <id>\n  --input-format <fmt>\n",
+      : [
+        "Usage: zcode [command] [options]",
+        "Commands:",
+        "  app-server Run the ZCode Protocol stdio app server",
+        "  -p, --prompt <text>  Run a single prompt without opening the TUI",
+        "  --resume <sessionId>  Resume a persisted session by sessionId (sess_...)",
+        "  --json           Print machine-readable JSON where supported",
+      ].join("\n"),
   );
   assert.equal(probe.version, "zcode 9.9.9 (build abc)");
+  assert.equal(probe.supportsAppServer, true);
   assertUsableZcodeCli(probe);
 
-  const limited = await probeZcodeCli(
+  const legacy = await probeZcodeCli(
     { command: "fake", baseArgs: [], source: "test" },
     async (_spec, args) => args[0] === "--version" ? "zcode 0.1.0\n" : "Usage: zcode\n  -p  print\n",
   );
-  assert.throws(() => assertUsableZcodeCli(limited), /stream-json output .*--resume/);
+  assert.throws(() => assertUsableZcodeCli(legacy), /app-server/);
 });
 
 test("ZCode CLI resolution prefers an explicit entry and fails closed when nothing is found", async () => {
@@ -318,6 +368,97 @@ test("ZCode CLI resolution prefers an explicit entry and fails closed when nothi
   await assert.rejects(resolveZcodeCommand(undefined, { PATH: root }, "win32"), /Could not locate the ZCode CLI/);
   await rm(root, { recursive: true, force: true });
 });
+
+test("ZCode protocol probe refuses a server speaking an unexpected protocol version", async () => {
+  await withFakeAppServer(
+    `let buffer = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => { buffer += chunk; let i; while ((i = buffer.indexOf("\\n")) >= 0) { const line = buffer.slice(0, i); buffer = buffer.slice(i + 1); if (!line.trim()) continue; const message = JSON.parse(line); if (message.method === "session/list") { process.stdout.write(JSON.stringify({ id: message.id, result: { sessions: [], protocol: { name: "ZCode Protocol", version: 2 } } }) + "\\n"); } } });`,
+    async (commandSpec, directory) => {
+      await assert.rejects(
+        probeZcodeProtocol(commandSpec, { cwd: directory, timeoutMs: 5000 }),
+        /version 2/,
+      );
+    },
+  );
+});
+
+test("ZCode protocol turn runs against a compatible app-server", async () => {
+  const script = `
+let buffer = "";
+let eventSeq = 0;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    let message;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message.method === "session/requestRuntimePreferences") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { nativeSearchEnhancementsEnabled: false } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/create") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {
+        session: { sessionId: "sess_fake_1", status: "idle" },
+        protocol: { name: "ZCode Protocol", version: 1 },
+      } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/subscribe") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { eventSeq: 0, events: [], sessionId: message.params.sessionId } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/send") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { accepted: true, sessionId: message.params.sessionId } }) + "\\n");
+      const events = [
+        { type: "message.upserted", messageId: "m1", content: "working" },
+        { type: "turn.completed", response: "fake final answer" },
+      ];
+      for (const payload of events) {
+        process.stdout.write(JSON.stringify({ method: "session/event", params: { deliveryKind: "desktop-continuous", eventId: "e" + (++eventSeq), payload } }) + "\\n");
+      }
+      continue;
+    }
+    if (message.id !== undefined) {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+    }
+  }
+});
+`;
+  await withFakeAppServer(script, async (commandSpec, directory) => {
+    const toolEvents: Parameters<ZcodeTurnRunnerOptions["onTurnEvent"]>[0][] = [];
+    const outcome = await runZcodeProtocolTurn({
+      spec: commandSpec,
+      workspacePath: directory,
+      resumeSessionId: undefined,
+      prompt: "hello",
+      timeoutMs: 10_000,
+      maxOutputBytes: 1_000_000,
+      signal: undefined,
+      onTurnEvent: async (event) => {
+        toolEvents.push(event);
+      },
+    });
+    assert.equal(outcome.nativeSessionId, "sess_fake_1");
+    assert.equal(outcome.finalResponse, "fake final answer");
+    assert.equal(toolEvents.length, 1);
+    assert.equal(toolEvents[0]?.content, "working");
+  });
+});
+
+async function withFakeAppServer(script: string, run: (spec: { command: string; baseArgs: string[]; source: string }, directory: string) => Promise<void>): Promise<void> {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-proto-"));
+  const scriptPath = path.join(root, "fake-app-server.cjs");
+  await writeFile(scriptPath, script);
+  try {
+    await run({ command: process.execPath, baseArgs: [scriptPath], source: "test" }, root);
+  } finally {
+    // The fake app-server child may still be releasing the directory on Windows.
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  }
+}
 
 class FakeApi implements CollaborationApi {
   readonly appended: AppendEventInput[] = [];
@@ -350,7 +491,7 @@ class FakeApi implements CollaborationApi {
   }
 }
 
-test("local bridge completes a claimed ZCode request with tool events, commentary, and the final response", async () => {
+test("local bridge completes a claimed ZCode request and redacts shared tool content", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "zcode-bridge-"));
   const api = new FakeApi();
   api.history.push(
@@ -371,23 +512,33 @@ test("local bridge completes a claimed ZCode request with tool events, commentar
     },
     transcriptRoots: {},
   });
-  const runtime = await bridge.connect();
-  const executor = recordedExecutor(path.join(root, "state.json"));
+  await bridge.connect();
+  const statePath = path.join(root, "state.json");
+  const executor = fakeExecutor(statePath, {
+    shareToolEvents: true,
+    toolAllowlist: ["Read"],
+    turnEvents: [
+      assistantText("commentary-1", "public progress note"),
+      toolCallEvent("tool-1", "Read", { note: "token gta_abc123def456ghijklmnopqr inside arguments" }),
+    ],
+    turns: [{ outcome: { nativeSessionId: "sess_bridge_1", finalResponse: "final result text", observedModel: "GLM-Test-1" } }],
+  });
   const outcome = await bridge.processAgentRequest(api.history[1] as CanonicalEvent, executor);
 
   assert.equal(outcome.claimed, true);
-  assert.deepEqual(api.appended.map((event) => event.type), ["tool_call", "tool_result"]);
+  assert.deepEqual(api.appended.map((event) => event.type), ["tool_call"]);
+  const toolPayload = JSON.stringify(api.appended[0]?.payload);
+  assert.ok(!toolPayload.includes("gta_abc123def456ghijklmnopqr"), "tool arguments must be redacted before persistence");
   assert.equal(api.completeInput && (api.completeInput.payload as { text?: string }).text, "final result text");
   assert.equal(api.completeInput?.observedModel, "GLM-Test-1");
-  assert.equal(runtime.harness, "zcode");
   const progressPayloads = api.progressInputs.map((input) => input.payload as { phase?: string; content?: string; status?: string });
   assert.ok(progressPayloads.some((payload) => payload.phase === "lifecycle" && payload.status === "started"));
-  assert.ok(progressPayloads.some((payload) => payload.phase === "commentary" && payload.content === "thinking out loud"));
+  assert.ok(progressPayloads.some((payload) => payload.phase === "commentary" && payload.content === "public progress note"));
   assert.ok(api.appended.every((event) => event.runtime?.harness === "zcode"));
   await rm(root, { recursive: true, force: true });
 });
 
-test("ZCode harness recovers native session identities from per-session state files", async () => {
+test("ZCode harness recovers native session identities and deactivation covers new bindings", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "zcode-harness-"));
   const stateRoot = path.join(root, "state");
   await mkdir(stateRoot, { recursive: true });
@@ -406,7 +557,9 @@ test("ZCode harness recovers native session identities from per-session state fi
   });
   const preflight = await harness.preflight();
   assert.equal(preflight.version, usableProbe.version);
-  assert.equal(preflight.workspacePath, path.resolve(root));
+  // Compare canonical file identity: temp paths differ in spelling across
+  // macOS (/var vs /private/var) and Windows (short vs long names).
+  assert.equal(preflight.workspacePath, await realpath(root));
   const binding = harness.createSessionBinding({
     session: { id: "session-1", mode: "multi" },
     sessionKey: "aaaaaaaaaaaaaaaaaaaaaaaa",
@@ -420,7 +573,7 @@ test("ZCode harness recovers native session identities from per-session state fi
     workspacePath: root,
     provider: "GLM Account",
     model: "default",
-    shareToolEvents: true,
+    stateRoot,
   });
   const freshBinding = freshHarness.createSessionBinding({
     session: { id: "session-2", mode: "multi" },
@@ -428,9 +581,45 @@ test("ZCode harness recovers native session identities from per-session state fi
     statePath: path.join(stateRoot, "bbbbbbbbbbbbbbbbbbbbbbbb-session.json"),
   });
   assert.equal(freshBinding.localSessionId, pendingZcodeLocalSessionId("bbbbbbbbbbbbbbbbbbbbbbbb"));
+
+  await harness.close();
+  await freshHarness.close();
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ZCode harness deactivation refuses later executor runs", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-revoke-"));
+  const statePath = path.join(root, "state.json");
+  const harness = new ZcodeProjectHarness({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    workspacePath: root,
+    provider: "GLM Account",
+    model: "default",
+  });
+  const binding = harness.createSessionBinding({
+    session: { id: "session-1", mode: "multi" },
+    sessionKey: "key-1",
+    statePath,
+  });
+  await harness.deactivateExecutionBindings();
+  await assert.rejects(binding.executor.execute(executionInput()), /deactivated/);
   await harness.close();
   await rm(root, { recursive: true, force: true });
 });
+
+function ownProvenance() {
+  return {
+    userId: "user-1",
+    deviceId: "device-1",
+    runtimeId: "runtime-1",
+    harness: "zcode" as const,
+    provider: "GLM Account",
+    model: "default",
+    localSessionId: "pending:key-1",
+    captureFidelity: "harness_transcript" as const,
+  };
+}
 
 function runtimeValue(): RegisteredRuntime {
   return {
@@ -448,8 +637,8 @@ function runtimeValue(): RegisteredRuntime {
 
 function executionInput() {
   return {
-    request: canonicalEvent({ sequence: 5, type: "agent_request" }),
-    canonicalHistory: [canonicalEvent({ sequence: 5, type: "agent_request" })],
+    request: canonicalEvent({ sequence: 5, type: "agent_request", payload: { content: "request body" } }),
+    canonicalHistory: [canonicalEvent({ sequence: 5, type: "agent_request", payload: { content: "request body" } })],
     runtime: runtimeValue(),
   };
 }
