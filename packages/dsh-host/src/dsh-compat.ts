@@ -3,6 +3,7 @@ import type {
   DshCanonicalProjection,
   DshHostFacade,
   DshPromptResult,
+  DshExecutionSelection,
   DshSessionEventRecord,
   DshLocalSessionCandidate,
 } from "./types.js";
@@ -63,6 +64,7 @@ interface DshAgentLike {
   readonly id: string;
   readonly session: DshSessionLike;
   readonly status: string;
+  readonly ctx: unknown;
   followup(message: unknown): void;
   whenIdle(): Promise<void>;
 }
@@ -86,6 +88,20 @@ interface DshAgentsServiceLike {
     signal: AbortSignal;
   }): Promise<DshAgentHandleLike>;
 }
+
+interface DshLlmServiceLike {
+  resolveModelInfo(provider: string, model: string, signal?: AbortSignal): Promise<unknown>;
+}
+
+interface DshModelSelectionRef {
+  current: DshExecutionSelection | undefined;
+  assembled: DshExecutionSelection | undefined;
+}
+
+type DshModelSelectionInstaller = (
+  agentContext: unknown,
+  selection: DshModelSelectionRef,
+) => () => void;
 
 interface DshPersistenceServiceLike {
   stat?: (
@@ -161,6 +177,8 @@ export interface DshCompatibilityOptions {
   supersededSessionId?: string;
   moduleImporter?: (specifier: string) => Promise<unknown>;
   messageFactory?: (text: string) => unknown;
+  /** Test seam for DSH's public `installModelSelection` Agent API. */
+  modelSelectionInstaller?: DshModelSelectionInstaller;
 }
 
 export interface DshNativeWorkspaceBinding {
@@ -371,7 +389,10 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     });
   };
 
-  const prompt = async (text: string): Promise<DshPromptResult> => {
+  const prompt = async (
+    text: string,
+    requestedSelection?: DshExecutionSelection,
+  ): Promise<DshPromptResult> => {
     if (disposed) throw new Error("DSH host facade is disposed");
     if (!text.trim()) throw new Error("DSH prompt must not be empty");
     if (Buffer.byteLength(text, "utf8") > 256 * 1_024) {
@@ -380,11 +401,27 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     if (promptActive) throw new Error("DSH host facade permits only one active prompt");
     if (projectionActive) throw new Error("DSH host facade permits only one active write");
     promptActive = true;
+    let disposeSelection: (() => void) | undefined;
+    let selectionRef: DshModelSelectionRef | undefined;
     try {
       await open();
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
       const agent = requireAgent(handle);
       if (agent.status !== "idle") throw new Error("DSH Agent must be idle before a GatherThread prompt");
+      if (requestedSelection !== undefined) {
+        const selection = await resolveDshExecutionSelection(
+          context,
+          requestedSelection,
+          lifecycleAbort.signal,
+        );
+        throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
+        const install = options.modelSelectionInstaller ?? await loadModelSelectionInstaller();
+        selectionRef = { current: selection, assembled: undefined };
+        disposeSelection = install(agent.ctx, selectionRef);
+        if (typeof disposeSelection !== "function") {
+          throw new Error("Pinned DSH installModelSelection API returned an incompatible disposer");
+        }
+      }
       const fromSequence = agent.session.seq;
       const message = await createUserMessage(text, options);
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
@@ -400,6 +437,11 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         events: snapshotFrom(fromSequence),
       };
     } finally {
+      if (selectionRef !== undefined) {
+        selectionRef.current = undefined;
+        selectionRef.assembled = undefined;
+      }
+      disposeSelection?.();
       promptActive = false;
     }
   };
@@ -769,6 +811,61 @@ async function createUserMessage(text: string, options: DshCompatibilityOptions)
     content: [{ type: "text", text }],
     source: { kind: "user" },
   });
+}
+
+async function loadModelSelectionInstaller(): Promise<DshModelSelectionInstaller> {
+  const imported = asObject(await importDshModule("@deepseek-ai/dsh-agent"));
+  if (imported === undefined || typeof imported.installModelSelection !== "function") {
+    throw new Error("Pinned DSH installModelSelection API is unavailable");
+  }
+  return imported.installModelSelection as DshModelSelectionInstaller;
+}
+
+async function importDshModule(specifier: string): Promise<unknown> {
+  return import(specifier);
+}
+
+async function resolveDshExecutionSelection(
+  context: DshContextLike,
+  requested: DshExecutionSelection,
+  signal: AbortSignal,
+): Promise<DshExecutionSelection> {
+  const provider = safeSelectionText(requested.provider, "provider", 80);
+  const model = safeSelectionText(requested.model, "model", 160);
+  const reasoningEffort = requested.reasoningEffort === undefined
+    ? undefined
+    : safeSelectionText(requested.reasoningEffort, "reasoning effort", 80);
+  const llm = requireService<DshLlmServiceLike>(context, "llm", ["resolveModelInfo"]);
+  const resolved = asObject(await llm.resolveModelInfo(provider, model, signal));
+  if (resolved === undefined || resolved.provider !== provider || resolved.id !== model) {
+    throw new Error("DeepSeek Harness did not resolve the requested provider/model exactly");
+  }
+  if (reasoningEffort !== undefined) {
+    const reasoning = asObject(resolved.reasoning);
+    const efforts = Array.isArray(reasoning?.efforts) ? reasoning.efforts : [];
+    const supported = efforts.some((value) => asObject(value)?.id === reasoningEffort);
+    if (!supported) {
+      throw new Error(
+        `DeepSeek Harness model ${provider}/${model} does not support reasoning effort ${reasoningEffort}`,
+      );
+    }
+  }
+  return {
+    provider,
+    model,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+  };
+}
+
+function safeSelectionText(value: unknown, label: string, maximum: number): string {
+  if (typeof value !== "string") {
+    throw new Error(`DeepSeek Harness ${label} selection must be a string`);
+  }
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maximum || /[\u0000-\u001f\u007f-\u009f]/u.test(normalized)) {
+    throw new Error(`DeepSeek Harness ${label} selection is invalid`);
+  }
+  return normalized;
 }
 
 function requireContext(value: unknown): DshContextLike {

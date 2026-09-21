@@ -2,7 +2,7 @@
 
 The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
 
-> Alpha preview: `0.1.0-alpha.5` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
+> Alpha preview: `0.1.0-alpha.6` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
 
 ## Normal four-step setup
 
@@ -17,7 +17,7 @@ npm install --global pnpm@10
 Then add the fixed GatherThread plugin to the DSH Web profile:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.5
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.6
 ```
 
 ### 2. Open DSH
@@ -34,7 +34,7 @@ Paste the GatherThread server address, choose **Sign in and pair**, and compare 
 
 ### 4. Select a DSH provider and model
 
-Approving the short code completes pairing, but pairing alone registers nothing. Back in **Settings → GatherThread / 共序**, choose a provider and a model, then confirm to connect every project this identity can access. No GatherThread runtime exists for this device until that step, so the GatherThread Web workspace cannot find this DSH yet, and the panel still reports a stopped connection. Only an explicitly selected provider and model is ever used; nothing falls back to Codex.
+Approving the short code completes pairing, but pairing alone registers nothing. Back in **Settings → GatherThread / 共序**, choose a provider and a model, then confirm to connect every project this identity can access. No GatherThread runtime exists for this device until that step, so the GatherThread Web workspace cannot find this DSH yet, and the panel still reports a stopped connection. For a compatible DeepSeek route, this selection is the connection default and the plugin also advertises the exact models and reasoning efforts reported by DSH. The GatherThread work page may then choose one of those profiles for an individual Agent request. That temporary request choice does not overwrite the model selected in DSH. Nothing falls back to Codex.
 
 ## Private-repository test before npm publication
 
@@ -44,7 +44,7 @@ From a private source checkout:
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.5.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.6.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -58,7 +58,7 @@ Do not add `--offline` unless the complete dependency metadata is already cached
 - In **Settings → GatherThread / 共序**, every connected conversation has its own **Automatic upload** switch and **Manual upload** action. Turning automation off keeps subsequent local turns private until the user uploads them; manual upload does not change the switch.
 - A new DSH conversation creates a creator-owned cloud Solo only after its first successful human/assistant turn.
 - Empty conversations, failed turns, and viewer conversations remain local-only.
-- Web Agent requests target the exact selected DSH device/provider/model and never silently fall back to Codex.
+- Web Agent requests target the exact selected DSH device and one provider/model/reasoning profile that runtime advertised. Unsupported values are not offered and fail closed if submitted. Legacy and non-advertising routes keep the connection's fixed model; no request silently falls back to Codex.
 
 DSH uses its configured provider quota. `Insufficient Balance` or `QUOTA` means the selected DSH model account cannot run the turn; it is not a GatherThread synchronization failure.
 

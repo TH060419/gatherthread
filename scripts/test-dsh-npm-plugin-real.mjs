@@ -763,6 +763,7 @@ async function main() {
       harness: "deepseek-harness",
       provider: "deepseek-official",
       model: "deepseek-v4-flash",
+      reasoning_effort: "high",
       runtime_id: selectedRuntime.id,
     });
     const outputs = completed.events.filter((event) => event.reply_to_event_id === completed.request.id);

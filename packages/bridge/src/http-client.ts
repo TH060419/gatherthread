@@ -160,7 +160,7 @@ export class HttpCollaborationClient implements CollaborationApi {
   async registerRuntime(runtime: RuntimeRegistration): Promise<RegisteredRuntime> {
     const body = requiredObject(await this.#request("/runtimes", {
       method: "POST",
-      body: JSON.stringify(toSnakeCase(runtime as unknown as Record<string, unknown>)),
+      body: JSON.stringify(toWireRuntimeRegistration(runtime)),
     }));
     return fromWireRuntime(body.runtime ?? body);
   }
@@ -393,11 +393,29 @@ function toWireEvent(event: AppendEventInput): Record<string, unknown> {
   };
 }
 
-function toSnakeCase(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).map(([key, item]) => [
-    key.replace(/[A-Z]/g, (letter) => `_${letter.toLowerCase()}`),
-    item,
-  ]));
+function toWireRuntimeRegistration(runtime: RuntimeRegistration): Record<string, unknown> {
+  return {
+    ...(runtime.runtimeId === undefined ? {} : { runtime_id: runtime.runtimeId }),
+    session_id: runtime.sessionId,
+    device_id: runtime.deviceId,
+    harness: runtime.harness,
+    provider: runtime.provider,
+    model: runtime.model,
+    ...(runtime.executionProfiles === undefined ? {} : {
+      execution_profiles: runtime.executionProfiles.map((profile) => ({
+        provider: profile.provider,
+        model: profile.model,
+        ...(profile.reasoningEfforts === undefined ? {} : { reasoning_efforts: [...profile.reasoningEfforts] }),
+        ...(profile.defaultReasoningEffort === undefined ? {} : {
+          default_reasoning_effort: profile.defaultReasoningEffort,
+        }),
+      })),
+    }),
+    local_session_id: runtime.localSessionId,
+    capture_fidelity: runtime.captureFidelity,
+    ...(runtime.capabilities === undefined ? {} : { capabilities: [...runtime.capabilities] }),
+    ...(runtime.purpose === undefined ? {} : { purpose: runtime.purpose }),
+  };
 }
 
 function fromWireEvent(value: unknown): CanonicalEvent {
@@ -515,10 +533,80 @@ function fromWireRuntime(value: unknown): RegisteredRuntime {
     harness: requiredString(input.harness, "runtime.harness") as RegisteredRuntime["harness"],
     provider: requiredString(input.provider, "runtime.provider"),
     model: requiredString(input.model, "runtime.model"),
+    ...(input.execution_profiles === undefined || input.execution_profiles === null
+      ? {}
+      : { executionProfiles: fromWireExecutionProfiles(input.execution_profiles) }),
     localSessionId: requiredString(input.local_session_id, "runtime.local_session_id"),
     captureFidelity: requiredString(input.capture_fidelity, "runtime.capture_fidelity") as RegisteredRuntime["captureFidelity"],
     purpose,
   };
+}
+
+function fromWireExecutionProfiles(value: unknown): NonNullable<RegisteredRuntime["executionProfiles"]> {
+  if (!Array.isArray(value) || value.length < 1 || value.length > 32) {
+    throw new Error("Collaboration API returned invalid runtime.execution_profiles");
+  }
+  const routes = new Set<string>();
+  return value.map((entry, index) => {
+    const profile = requiredObject(entry);
+    const allowedKeys = new Set(["provider", "model", "reasoning_efforts", "default_reasoning_effort"]);
+    if (Object.keys(profile).some((key) => !allowedKeys.has(key))) {
+      throw new Error(`Collaboration API returned invalid runtime.execution_profiles[${index}]`);
+    }
+    const provider = requiredExecutionProfileString(
+      profile.provider,
+      `runtime.execution_profiles[${index}].provider`,
+      80,
+    );
+    const model = requiredExecutionProfileString(
+      profile.model,
+      `runtime.execution_profiles[${index}].model`,
+      160,
+    );
+    const route = `${provider}\u0000${model}`;
+    if (routes.has(route)) throw new Error("Collaboration API returned duplicate runtime.execution_profiles");
+    routes.add(route);
+    const rawEfforts = profile.reasoning_efforts;
+    let reasoningEfforts: string[] | undefined;
+    if (rawEfforts !== undefined) {
+      if (!Array.isArray(rawEfforts) || rawEfforts.length < 1 || rawEfforts.length > 16) {
+        throw new Error(`Collaboration API returned invalid runtime.execution_profiles[${index}].reasoning_efforts`);
+      }
+      reasoningEfforts = rawEfforts.map((effort, effortIndex) => requiredExecutionProfileString(
+        effort,
+        `runtime.execution_profiles[${index}].reasoning_efforts[${effortIndex}]`,
+        80,
+      ));
+      if (new Set(reasoningEfforts).size !== reasoningEfforts.length) {
+        throw new Error(`Collaboration API returned duplicate runtime.execution_profiles[${index}].reasoning_efforts`);
+      }
+    }
+    const defaultReasoningEffort = profile.default_reasoning_effort === undefined
+      ? undefined
+      : requiredExecutionProfileString(
+        profile.default_reasoning_effort,
+        `runtime.execution_profiles[${index}].default_reasoning_effort`,
+        80,
+      );
+    if (defaultReasoningEffort !== undefined && !reasoningEfforts?.includes(defaultReasoningEffort)) {
+      throw new Error(`Collaboration API returned an unadvertised runtime.execution_profiles[${index}].default_reasoning_effort`);
+    }
+    return {
+      provider,
+      model,
+      ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+      ...(defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort }),
+    };
+  });
+}
+
+function requiredExecutionProfileString(value: unknown, field: string, maxLength: number): string {
+  if (typeof value !== "string") throw new Error(`Collaboration API omitted ${field}`);
+  const normalized = value.trim();
+  if (!normalized || normalized.length > maxLength || /[\u0000-\u001f\u007f-\u009f]/u.test(normalized)) {
+    throw new Error(`Collaboration API returned invalid ${field}`);
+  }
+  return normalized;
 }
 
 function fromWireProvenance(value: unknown): RuntimeProvenance {

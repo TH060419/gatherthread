@@ -96,6 +96,7 @@ Automatic upload, manual upload, realtime projection, and Web-triggered Agent ex
 An `agent_request` names an exact harness/model profile and eligible runtime. The selected same-user execution runtime may claim it once, append public `agent_progress`, and complete it with one final `agent_response`.
 
 - Runtime selection never falls back silently.
+- A runtime may advertise a bounded set of exact provider/model profiles and adapter-owned reasoning efforts. The server accepts a targeted DSH request only when the complete requested profile appears in that declaration. A legacy runtime without the declaration retains fixed-provider/model matching.
 - Claims and completions are idempotent and bound to the request and runtime.
 - Public commentary may be uploaded; hidden reasoning is excluded.
 - The final response does not close the claim until it is durably committed.
@@ -129,6 +130,7 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - Codex Hooks are limited to reviewed `UserPromptSubmit` and `Stop` definitions. Hook payloads, output limits, registry purpose, and workspace path checks are security contracts.
 - Codex Desktop projection, background execution, and snapshot tasks have separate purposes and single-writer rules. Never mutate an active or ambiguously owned native task.
 - DSH uses public session append/flush and Agent services, durable projected-event IDs, echo suppression, and an outgoing outbox. Only allowlisted assistant output and redacted tool data may leave DSH.
+- DSH model selection uses exact metadata advertised by the connected runtime. A GatherThread request may temporarily select one declared model and effort for its own DSH turn; it must not persistently rewrite DSH-native selection for later local turns.
 - Persistent connector and DSH state must carry a version. A state change needs atomic migration or a safe, actionable refusal; never guess at an old structure.
 - Upstream version support is explicit. An unsupported Codex App Server or DSH Host API must fail safely and preserve local/cloud data.
 

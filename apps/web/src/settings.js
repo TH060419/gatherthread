@@ -1,4 +1,4 @@
-export const SETTINGS_VERSION = 10;
+export const SETTINGS_VERSION = 11;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -396,12 +396,25 @@ function migrateStoredSettings(input) {
 function normalizeDshProfile(profile) {
   if (!isObject(profile)) return null;
   const deviceId = typeof profile.deviceId === "string" ? profile.deviceId.trim() : "";
+  const runtimeIdSource = profile.runtimeId ?? profile.id;
+  const runtimeId = typeof runtimeIdSource === "string" ? runtimeIdSource.trim() : "";
   const provider = typeof profile.provider === "string" ? profile.provider.trim() : "";
   const model = typeof profile.model === "string" ? profile.model.trim() : "";
+  const effort = typeof (profile.effort ?? profile.reasoningEffort) === "string"
+    ? (profile.effort ?? profile.reasoningEffort).trim()
+    : "";
   if (!DEVICE_ID_PATTERN.test(deviceId) || !DSH_PROVIDER_PATTERN.test(provider) || !DSH_MODEL_PATTERN.test(model)) {
     return null;
   }
-  return { deviceId, provider, model };
+  if (runtimeId && !DEVICE_ID_PATTERN.test(runtimeId)) return null;
+  if (effort && !DSH_PROVIDER_PATTERN.test(effort)) return null;
+  return {
+    deviceId,
+    ...(runtimeId ? { runtimeId } : {}),
+    provider,
+    model,
+    ...(effort ? { effort } : {}),
+  };
 }
 
 function defaultProjectAgentProfile(settings) {

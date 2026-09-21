@@ -4713,6 +4713,42 @@ html[lang="zh-CN"] .project-select {
   grid-column: 2 / 4;
 }
 
+.composer .agent-request-profile[data-layout="dsh-dynamic"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #dsh-agent-profile-fields > label,
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #dsh-agent-profile-fields > select {
+  min-width: 0;
+}
+
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #dsh-agent-profile-fields > label {
+  grid-row: 1;
+}
+
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #dsh-agent-profile-fields > select {
+  grid-row: 2;
+}
+
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #dsh-agent-profile-fields > label[for="agent-dsh-runtime-select"],
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-runtime-select {
+  grid-column: 2;
+}
+
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-model-label,
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-model-select {
+  grid-column: 3;
+}
+
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-effort-label,
+.composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-effort-select {
+  grid-column: 4;
+}
+
+.composer .agent-request-profile [hidden] {
+  display: none !important;
+}
+
 .composer .composer-actions {
   display: flex;
   align-items: flex-start;
@@ -4775,6 +4811,42 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
 
   .composer #dsh-agent-profile-fields > label[for="agent-dsh-runtime-select"],
   .composer #agent-dsh-runtime-select {
+    grid-column: 2;
+  }
+
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: auto 40px auto 40px;
+  }
+
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #dsh-agent-profile-fields > label[for="agent-dsh-runtime-select"] {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-runtime-select {
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-model-label,
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-effort-label {
+    grid-row: 3;
+    margin-top: 3px;
+  }
+
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-model-select,
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-effort-select {
+    grid-row: 4;
+  }
+
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-model-label,
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-model-select {
+    grid-column: 1;
+  }
+
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-effort-label,
+  .composer .agent-request-profile[data-layout="dsh-dynamic"] #agent-dsh-effort-select {
     grid-column: 2;
   }
 

@@ -36,7 +36,7 @@ The handler is intentionally stateless and POST-only. It does not implement serv
 
 ## Local stdio executable
 
-The packaged Codex plugin launches fixed `@gatherthread/codex-connect@0.1.0-alpha.5 mcp`. Its default `connector` transport derives a private endpoint from the current workspace and reads a per-run capability from current-user-only connector state. The connector retains the server token; it is never passed to the MCP process. This is the ordinary Desktop path because Finder-launched applications do not reliably inherit terminal credential variables.
+The packaged Codex plugin launches fixed `@gatherthread/codex-connect@0.1.0-alpha.6 mcp`. Its default `connector` transport derives a private endpoint from the current workspace and reads a per-run capability from current-user-only connector state. The connector retains the server token; it is never passed to the MCP process. This is the ordinary Desktop path because Finder-launched applications do not reliably inherit terminal credential variables.
 
 For repository development, build the workspace and launch `gatherthread-mcp` or `npm --workspace packages/mcp start` while the connector is running for the current directory. `GATHERTHREAD_MCP_TRANSPORT=server-env` switches to direct HTTP only for developer preview and then requires `GATHERTHREAD_API_URL` and `GATHERTHREAD_TOKEN`. The executable accepts no credential arguments and writes no logs to stdout; stdout is reserved for newline-delimited MCP JSON-RPC responses. A future public remote Streamable HTTP endpoint requires OAuth 2.1/PKCE and is not implemented here.
 

@@ -2,7 +2,7 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/badge/release-0.1.0--alpha.5-0f766e.svg)](docs/releases/0.1.0-alpha.5.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.1.0--alpha.6-0f766e.svg)](docs/releases/0.1.0-alpha.6.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **One room, many minds.**
 
@@ -99,13 +99,13 @@ One-time plugin install:
 If `codex --version` is unavailable or Terminal reports `codex: command not found`, first install or update the official Codex CLI with `npm install -g @openai/codex`. Reopen Terminal and confirm `codex plugin --help` works before continuing.
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.6 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
 The connector asks for the device token in a hidden terminal prompt, creates or reuses the local project, opens Codex Desktop, and discovers later sessions automatically. Editable GatherThread sessions become Codex tasks; Web Agent requests run in an isolated background projection, while trusted Hooks return direct Desktop turns to the same canonical history. The workspace provides a per-conversation **Auto-upload local turns to cloud** switch and **Upload local turns to cloud now** recovery action; the Codex plugin exposes the same controls. Manual upload scans completed turns when a Hook was missed or failed without turning automation back on. By default, each session imports one verified, readable native-history snapshot the first time it is established locally; Settings can disable that initial import. **Import Codex history** always creates a new verified local task, compacts long history to the configured context budget, and switches future Hook and context delivery to it. GatherThread neither overwrites nor archives the previous local task; review and archive it yourself. Continuing that previous task stays local and cannot create a replacement binding or cloud session. Realtime context injection remains active regardless of the visible-history setting or manual imports. A genuinely new local task creates a personal Solo only after its first completed turn; viewer tasks remain local.
 
-The fixed Alpha commands are documented in the [Codex connection guide](docs/CODEX_CONNECT.md). Registry commands become usable only after the packages and `v0.1.0-alpha.5` ref are published. Before that, collaborators with private repository access use the source-checkout path in the same guide.
+The fixed Alpha commands are documented in the [Codex connection guide](docs/CODEX_CONNECT.md). Registry commands become usable only after the packages and `v0.1.0-alpha.6` ref are published. Before that, collaborators with private repository access use the source-checkout path in the same guide.
 
 ## Connect DeepSeek Harness
 
@@ -116,7 +116,7 @@ DeepSeek Harness uses the same four-step shape:
 3. Open **Settings → GatherThread / 共序**, enter the current server, and approve the one-use pairing code in the already signed-in browser.
 4. In the same panel, choose a DSH provider and model and connect the projects this identity can access. Pairing alone registers no runtime, so the GatherThread workspace cannot discover this DSH before this step.
 
-One explicit pairing connects every active Project visible to that identity and discovers new access later. Writable GatherThread sessions appear as editable native DSH conversations; completed DSH turns upload once, and canonical server history projects back in order. DSH Settings exposes a per-conversation automatic-upload switch and manual upload action. A successful first turn in a new DSH conversation creates a creator-owned cloud Solo; empty, failed, and viewer conversations remain local. Only the explicitly selected runtime handles an Agent request, with no Codex fallback.
+One explicit pairing connects every active Project visible to that identity and discovers new access later. Writable GatherThread sessions appear as editable native DSH conversations; completed DSH turns upload once, and canonical server history projects back in order. DSH Settings exposes a per-conversation automatic-upload switch and manual upload action. A successful first turn in a new DSH conversation creates a creator-owned cloud Solo; empty, failed, and viewer conversations remain local. When the connected DSH route exposes DeepSeek model metadata, the GatherThread workspace can choose any advertised model and reasoning effort for each Agent request. The temporary choice applies only to that GatherThread-driven turn, so model selection inside DSH remains independent. Older or non-advertising routes keep their fixed model. Only the explicitly selected runtime handles an Agent request, with no Codex fallback.
 
 The official GatherThread service button is present but disabled in this Alpha. Local, LAN, self-hosted, and Tailscale origins work now. See the [DSH connection guide](docs/DSH_CONNECT.md) for the published-package and private-checkout paths.
 
@@ -124,11 +124,11 @@ The official GatherThread service button is present but disabled in this Alpha. 
 
 The first release includes peppered device credentials, HMAC-protected and revocable browser sessions, strict Cookie-write Origin checks, single-use invitations and device authorization, device-bound runtime provenance, immediate session/socket/authorization invalidation on device or membership revocation, solo/multi ACL, event redaction, session-scoped idempotency validation, single-runtime request serialization, one-use realtime tickets, strict production WebSocket Origin checks, bounded JSON complexity and byte-paged replay, per-device rate limits, per-user/project/deployment session-count limits, event and snapshot-job storage quotas, reconnect replay, and SQLite backup/restore scripts. A newly invited user sees the new device credential once and must save it before dismissing the dialog.
 
-The hosted GatherThread service and public Beta are not open in `0.1.0-alpha.5`. Local-only, private LAN HTTPS, and private Tailscale Serve are available. The [Alibaba Cloud ECS profile](docs/ALIYUN_ECS.md) is deployment-ready documentation for the next stage, not a claim that the service is online. Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic.
+The hosted GatherThread service and public Beta are not open in `0.1.0-alpha.6`. Local-only, private LAN HTTPS, and private Tailscale Serve are available. The [Alibaba Cloud ECS profile](docs/ALIYUN_ECS.md) is deployment-ready documentation for the next stage, not a claim that the service is online. Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic.
 
 Not yet implemented: automatic host failover, multi-process WebSocket fan-out, token-by-token agent streaming, attachment blob storage, retention workers, offline Web outbox, reply/search UI, and packaged native installers. Current progress delivery is item-level public commentary rather than token streaming.
 
-See the [`0.1.0-alpha.5` notes](docs/releases/0.1.0-alpha.5.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [connection modes](docs/CONNECTION_MODES.md), [Codex guide](docs/CODEX_CONNECT.md), [DSH guide](docs/DSH_CONNECT.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), and [operations](docs/OPERATIONS.md).
+See the [`0.1.0-alpha.6` notes](docs/releases/0.1.0-alpha.6.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [connection modes](docs/CONNECTION_MODES.md), [Codex guide](docs/CODEX_CONNECT.md), [DSH guide](docs/DSH_CONNECT.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), and [operations](docs/OPERATIONS.md).
 
 ## Contributing and release governance
 

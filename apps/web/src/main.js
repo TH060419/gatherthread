@@ -1,4 +1,4 @@
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260906-2";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260922-1";
 import {
   canAppend,
   canRetryFailedAgentRequest,
@@ -28,7 +28,7 @@ import {
 } from "./domain.js?v=20260829-3";
 import { SessionSync } from "./realtime.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260906-3";
+import { createLocalizer } from "./i18n.js?v=20260922-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -38,12 +38,13 @@ import {
   DSH_START_COMMAND,
   DSH_VERSION_COMMAND,
   dshExecutionProfile,
+  dshExecutionSelection,
   dshPairingCodeFromHash,
   dshRuntimeChoices,
   resolveCodexRuntime,
   resolveDshRuntime,
   withoutDshPairingHash,
-} from "./dsh.js?v=20260906-3";
+} from "./dsh.js?v=20260922-1";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import { captureTimelineScroll, settleTimelineScroll } from "./timeline-scroll.js?v=20260917-1";
 import {
@@ -76,7 +77,7 @@ import {
   withProjectCodexProfile,
   withProjectDshProfile,
   withProjectEnabledHarnesses,
-} from "./settings.js?v=20260906-4";
+} from "./settings.js?v=20260922-1";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -197,6 +198,8 @@ const agentModelSelect = element("agent-model-select");
 const agentEffortSelect = element("agent-effort-select");
 const agentHarnessSelect = element("agent-harness-select");
 const agentDshRuntimeSelect = element("agent-dsh-runtime-select");
+const agentDshModelSelect = element("agent-dsh-model-select");
+const agentDshEffortSelect = element("agent-dsh-effort-select");
 const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
@@ -674,6 +677,8 @@ agentModelSelect.addEventListener("change", () => updateComposerAgentProfile("mo
 agentEffortSelect.addEventListener("change", () => updateComposerAgentProfile("effort"));
 agentHarnessSelect.addEventListener("change", updateComposerHarness);
 agentDshRuntimeSelect.addEventListener("change", updateComposerDshRuntime);
+agentDshModelSelect.addEventListener("change", () => updateComposerDshExecutionProfile("model"));
+agentDshEffortSelect.addEventListener("change", () => updateComposerDshExecutionProfile("effort"));
 messageInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
   const behavior = state.settings.composer.enterBehavior;
@@ -1005,12 +1010,25 @@ async function refreshDshRuntimes({ sessionId = state.session?.id, generation = 
     if (runtimesResult.status === "rejected") throw runtimesResult.reason;
     state.executionRuntimes = runtimesResult.value;
     state.devices = devicesResult.status === "fulfilled" ? devicesResult.value : [];
-    if (state.project
-      && projectAgentHarness(state.settings, state.project.id) === DSH_HARNESS
-      && projectDshProfile(state.settings, state.project.id) === null) {
-      const resolved = resolveDshRuntime(state.executionRuntimes, state.devices, null);
+    if (state.project && projectAgentHarness(state.settings, state.project.id) === DSH_HARNESS) {
+      const storedProfile = projectDshProfile(state.settings, state.project.id);
+      const resolved = resolveDshRuntime(state.executionRuntimes, state.devices, storedProfile);
       if (resolved.runtime) {
-        state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, resolved.runtime));
+        const selected = dshExecutionSelection(resolved.runtime, storedProfile);
+        const normalizedProfile = dshStoredProjectProfile(resolved.runtime, selected);
+        const profileChanged = storedProfile === null
+          || storedProfile.runtimeId !== normalizedProfile.runtimeId
+          || storedProfile.deviceId !== normalizedProfile.deviceId
+          || storedProfile.provider !== normalizedProfile.provider
+          || storedProfile.model !== normalizedProfile.model
+          || (storedProfile.effort ?? "") !== (normalizedProfile.effort ?? "");
+        if (profileChanged) {
+          state.settings = settingsStore.set(withProjectDshProfile(
+            state.settings,
+            state.project.id,
+            normalizedProfile,
+          ));
+        }
       }
     }
     element("connect-dsh-error").textContent = "";
@@ -1937,9 +1955,15 @@ function renderComposerPermissions() {
   sendAgentButton.disabled = !agentAllowed;
   messageInput.disabled = !chat.allowed && !agentAllowed;
   element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
+  const dshSelection = harness === DSH_HARNESS && resolution.runtime
+    ? dshExecutionSelection(
+      resolution.runtime,
+      state.project ? projectDshProfile(state.settings, state.project.id) : null,
+    )
+    : null;
   element("agent-target-label").textContent = agentAllowed
     ? harness === DSH_HARNESS
-      ? `${resolution.runtime.deviceName} · ${resolution.runtime.provider} · ${resolution.runtime.model}`
+      ? `${resolution.runtime.deviceName} · ${dshSelection.provider} · ${dshSelection.model}${dshSelection.reasoningEffort ? ` · ${dshSelection.reasoningEffort}` : ""}`
       : `${resolution.runtime.harness} · ${resolution.runtime.provider} · ${agentModelSelect.value}`
     : agentReason;
   renderAgentProfileControls();
@@ -1968,7 +1992,13 @@ async function sendMessage(kind) {
     else {
       const harness = currentProjectHarness();
       const executionProfile = harness === DSH_HARNESS
-        ? dshExecutionProfile(currentDshResolution().runtime)
+        ? dshExecutionProfile(
+          currentDshResolution().runtime,
+          dshExecutionSelection(
+            currentDshResolution().runtime,
+            projectDshProfile(state.settings, state.project.id),
+          ),
+        )
         : codexExecutionProfile(currentCodexResolution().runtime, {
           model: agentModelSelect.value,
           reasoningEffort: agentEffortSelect.value,
@@ -2423,6 +2453,62 @@ function renderDshRuntimeOptions(select, settings = state.settings) {
   select.disabled = false;
 }
 
+function dshStoredProjectProfile(runtime, selection) {
+  return {
+    runtimeId: runtime.id,
+    deviceId: runtime.deviceId,
+    provider: selection.provider,
+    model: selection.model,
+    ...(selection.reasoningEffort ? { effort: selection.reasoningEffort } : {}),
+  };
+}
+
+function dshModelOptionValue(provider, model) {
+  return JSON.stringify([provider, model]);
+}
+
+function renderDshExecutionControls(runtime, storedProfile) {
+  const profiles = runtime?.executionProfiles ?? [];
+  const dynamic = profiles.length > 0;
+  const selection = runtime ? dshExecutionSelection(runtime, storedProfile) : null;
+  const modelLabel = element("agent-dsh-model-label");
+  const effortLabel = element("agent-dsh-effort-label");
+  const hasReasoning = dynamic && selection.reasoningEfforts.length > 0;
+  modelLabel.hidden = !dynamic;
+  agentDshModelSelect.hidden = !dynamic;
+  effortLabel.hidden = !hasReasoning;
+  agentDshEffortSelect.hidden = !hasReasoning;
+  element("agent-request-profile").dataset.layout = dynamic ? "dsh-dynamic" : "dsh-fixed";
+
+  agentDshModelSelect.replaceChildren();
+  if (dynamic) {
+    const providers = new Set(profiles.map((profile) => profile.provider));
+    for (const profile of profiles) {
+      const option = document.createElement("option");
+      option.value = dshModelOptionValue(profile.provider, profile.model);
+      option.dataset.provider = profile.provider;
+      option.dataset.model = profile.model;
+      option.textContent = providers.size > 1 ? `${profile.provider} · ${profile.model}` : profile.model;
+      option.selected = profile.provider === selection.provider && profile.model === selection.model;
+      agentDshModelSelect.append(option);
+    }
+  }
+
+  agentDshEffortSelect.replaceChildren();
+  if (hasReasoning) {
+    for (const effort of selection.reasoningEfforts) {
+      const option = document.createElement("option");
+      option.value = effort;
+      option.textContent = effort;
+      option.selected = effort === selection.reasoningEffort;
+      agentDshEffortSelect.append(option);
+    }
+  }
+  agentDshModelSelect.disabled = !state.project || !dynamic;
+  agentDshEffortSelect.disabled = !state.project || !hasReasoning;
+  return selection;
+}
+
 function renderAgentProfileControls() {
   const harness = currentProjectHarness();
   const enabledHarnesses = currentProjectEnabledHarnesses();
@@ -2439,12 +2525,18 @@ function renderAgentProfileControls() {
   renderModelOptions(agentModelSelect, profile.model, state.settings);
   updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
   renderDshRuntimeOptions(agentDshRuntimeSelect, state.settings);
+  const dshResolution = currentDshResolution();
+  renderDshExecutionControls(
+    dshResolution.runtime,
+    state.project ? projectDshProfile(state.settings, state.project.id) : null,
+  );
   const disabled = !state.project;
   agentHarnessSelect.disabled = disabled;
   agentModelSelect.disabled = disabled;
   agentEffortSelect.disabled = disabled;
   element("codex-agent-profile-fields").hidden = harness !== "codex";
   element("dsh-agent-profile-fields").hidden = harness !== DSH_HARNESS;
+  if (harness !== DSH_HARNESS) element("agent-request-profile").dataset.layout = "codex";
 }
 
 function updateComposerAgentProfile(changed) {
@@ -2464,7 +2556,12 @@ function updateComposerHarness() {
   if (agentHarnessSelect.value === DSH_HARNESS) {
     const resolution = currentDshResolution();
     if (resolution.runtime) {
-      state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, resolution.runtime));
+      const selected = dshExecutionSelection(resolution.runtime, projectDshProfile(state.settings, state.project.id));
+      state.settings = settingsStore.set(withProjectDshProfile(
+        state.settings,
+        state.project.id,
+        dshStoredProjectProfile(resolution.runtime, selected),
+      ));
     }
   }
   renderProjectAgentButtons();
@@ -2479,8 +2576,33 @@ function updateComposerDshRuntime() {
     renderComposerPermissions();
     return;
   }
-  state.settings = settingsStore.set(withProjectDshProfile(state.settings, state.project.id, selected));
+  const executionSelection = dshExecutionSelection(selected, projectDshProfile(state.settings, state.project.id));
+  state.settings = settingsStore.set(withProjectDshProfile(
+    state.settings,
+    state.project.id,
+    dshStoredProjectProfile(selected, executionSelection),
+  ));
   renderProjectAgentButtons();
+  renderComposerPermissions();
+}
+
+function updateComposerDshExecutionProfile(changed) {
+  if (!state.project) return;
+  const resolution = currentDshResolution();
+  if (!resolution.runtime?.executionProfiles?.length) return;
+  const option = agentDshModelSelect.selectedOptions[0];
+  if (!option) return;
+  const previous = projectDshProfile(state.settings, state.project.id);
+  const selected = dshExecutionSelection(resolution.runtime, {
+    provider: option.dataset.provider,
+    model: option.dataset.model,
+    effort: changed === "model" ? previous?.effort : agentDshEffortSelect.value,
+  });
+  state.settings = settingsStore.set(withProjectDshProfile(
+    state.settings,
+    state.project.id,
+    dshStoredProjectProfile(resolution.runtime, selected),
+  ));
   renderComposerPermissions();
 }
 
@@ -2595,7 +2717,10 @@ function readSettingsForm(baseSettings = settingsPreview) {
     if (element("settings-agent-harness").value === DSH_HARNESS) {
       const selected = dshRuntimeChoices(state.executionRuntimes, state.devices)
         .find((runtime) => runtime.id === element("settings-dsh-runtime").value && runtime.status === "online");
-      if (selected) next = withProjectDshProfile(next, state.project.id, selected);
+      if (selected) {
+        const executionSelection = dshExecutionSelection(selected, projectDshProfile(next, state.project.id));
+        next = withProjectDshProfile(next, state.project.id, dshStoredProjectProfile(selected, executionSelection));
+      }
     }
   }
   return next;

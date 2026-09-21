@@ -12,6 +12,21 @@ import type {
 
 export type DshHarnessName = "deepseek-harness";
 
+/** One exact DSH route advertised to GatherThread by a dynamic native runtime. */
+export interface DshRuntimeExecutionProfile {
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEfforts?: readonly string[];
+  readonly defaultReasoningEffort?: string;
+}
+
+/** Exact per-request route installed only while one GatherThread prompt runs. */
+export interface DshExecutionSelection {
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEffort?: string;
+}
+
 export interface DshRuntimeRegistration {
   sessionId: string;
   deviceId: string;
@@ -21,6 +36,7 @@ export interface DshRuntimeRegistration {
   localSessionId: string;
   captureFidelity: "harness_transcript";
   capabilities: readonly string[];
+  executionProfiles?: readonly DshRuntimeExecutionProfile[];
   purpose: "execution";
 }
 
@@ -133,7 +149,7 @@ export interface DshHostFacade {
   snapshotFrom(sequence: number): readonly DshSessionEventRecord[];
   projectCanonicalEvents(events: readonly DshCanonicalProjection[]): Promise<void>;
   flush(): Promise<void>;
-  prompt(text: string): Promise<DshPromptResult>;
+  prompt(text: string, selection?: DshExecutionSelection): Promise<DshPromptResult>;
   onSessionEvent(listener: (event: DshSessionEventRecord) => void): () => void;
   onStatus(listener: (status: DshAgentStatus) => void): () => void;
   dispose(): Promise<void>;

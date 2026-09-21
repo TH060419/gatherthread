@@ -20,6 +20,7 @@ import type {
   ProjectInvitationRecord,
   ProjectListItem,
   ReplayResponse,
+  RuntimeExecutionProfile,
   RuntimeProvenance,
   SessionListItem,
   SessionMode,
@@ -28,7 +29,7 @@ import type {
   SnapshotRequestKind,
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
-import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
+import { MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema } from "@gatherthread/protocol";
 import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 
 export interface Actor {
@@ -73,6 +74,7 @@ export interface RuntimeRecord {
   harness: string;
   provider: string;
   model: string;
+  execution_profiles?: RuntimeExecutionProfile[];
   local_session_id: string;
   capture_fidelity: CaptureFidelity;
   status: "online" | "offline" | "revoked";
@@ -189,7 +191,9 @@ interface ProjectMutationRow {
   title: string;
   created_at: string;
 }
-interface RuntimeRow extends RuntimeRecord {}
+interface RuntimeRow extends Omit<RuntimeRecord, "execution_profiles"> {
+  execution_profiles_json: string | null;
+}
 interface CountRow { count: number }
 interface BytesRow { bytes: number }
 interface SequenceRow { next_sequence: number }
@@ -355,6 +359,7 @@ CREATE TABLE IF NOT EXISTS runtimes (
   harness TEXT NOT NULL,
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
+  execution_profiles_json TEXT CHECK (execution_profiles_json IS NULL OR json_valid(execution_profiles_json)),
   local_session_id TEXT NOT NULL,
   capture_fidelity TEXT NOT NULL CHECK (capture_fidelity IN ('canonical_history', 'harness_transcript', 'provider_request')),
   status TEXT NOT NULL DEFAULT 'online' CHECK (status IN ('online', 'offline', 'revoked')),
@@ -591,6 +596,21 @@ function runtimeStatus(
     : "offline";
 }
 
+function parseRuntimeExecutionProfiles(value: string | null | undefined): RuntimeExecutionProfile[] | undefined {
+  if (value === null || value === undefined) return undefined;
+  return RuntimeExecutionProfilesSchema.parse(JSON.parse(value));
+}
+
+function mapRuntimeRow(row: RuntimeRow, now?: number): RuntimeRecord {
+  const { execution_profiles_json: executionProfilesJson, ...runtime } = row;
+  const executionProfiles = parseRuntimeExecutionProfiles(executionProfilesJson);
+  return {
+    ...runtime,
+    ...(executionProfiles === undefined ? {} : { execution_profiles: executionProfiles }),
+    ...(now === undefined ? {} : { status: runtimeStatus(row.status, row.last_seen_at, now) }),
+  };
+}
+
 /**
  * A claim with no lease was written before leases existed. Nothing renews such a
  * row, so it reads as expired: recovery is the safe interpretation of a claim no
@@ -614,6 +634,7 @@ interface AgentRequestTarget {
   harness: string;
   provider?: string;
   model?: string;
+  reasoningEffort?: string;
   runtimeId?: string;
 }
 
@@ -645,12 +666,19 @@ function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
   if (harness === "deepseek-harness" && !model) {
     throw conflict("DeepSeek Harness Agent request requires a model target");
   }
+  const rawReasoningEffort = profile?.reasoning_effort;
+  const reasoningEffort = typeof rawReasoningEffort === "string" ? rawReasoningEffort.trim() : "";
+  if (rawReasoningEffort !== undefined
+    && (!reasoningEffort || reasoningEffort.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(reasoningEffort))) {
+    throw conflict("Agent request has an invalid reasoning effort target");
+  }
   const rawRuntimeId = profile?.runtime_id;
   if (rawRuntimeId === undefined) {
     return {
       harness,
       ...(rawProvider === undefined ? {} : { provider }),
       ...(rawModel === undefined ? {} : { model }),
+      ...(rawReasoningEffort === undefined ? {} : { reasoningEffort }),
     };
   }
   const runtimeId = typeof rawRuntimeId === "string" ? rawRuntimeId.trim() : "";
@@ -661,8 +689,27 @@ function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
     harness,
     ...(rawProvider === undefined ? {} : { provider }),
     ...(rawModel === undefined ? {} : { model }),
+    ...(rawReasoningEffort === undefined ? {} : { reasoningEffort }),
     runtimeId,
   };
+}
+
+function runtimeSupportsAgentTarget(runtime: RuntimeRecord, target: AgentRequestTarget): boolean {
+  if (runtime.harness.trim().toLowerCase() !== target.harness) return false;
+  if (target.harness === "codex") {
+    return target.provider === undefined || runtime.provider === target.provider;
+  }
+  if (runtime.execution_profiles !== undefined) {
+    if (target.runtimeId === undefined || target.runtimeId !== runtime.id
+      || target.provider === undefined || target.model === undefined) return false;
+    const advertised = runtime.execution_profiles.find((profile) =>
+      profile.provider === target.provider && profile.model === target.model);
+    if (advertised === undefined) return false;
+    return target.reasoningEffort === undefined
+      || advertised.reasoning_efforts?.includes(target.reasoningEffort) === true;
+  }
+  return (target.provider === undefined || runtime.provider === target.provider)
+    && (target.model === undefined || runtime.model === target.model);
 }
 
 function mapEvent(row: EventRow): CanonicalEvent {
@@ -770,6 +817,7 @@ export class CollaborationDatabase {
     this.migrateDeviceCredentialColumns();
     this.migrateProjectModel();
     this.migrateRuntimePurposeColumn();
+    this.migrateRuntimeExecutionProfilesColumn();
     this.migrateEventActorDisplayNameColumn();
     this.migrateAgentProgressEventType();
     this.migrateCanonicalProvenancePrivacy();
@@ -2010,17 +2058,14 @@ export class CollaborationDatabase {
   listSessionRuntimesForUser(sessionId: string, userId: string): RuntimeRecord[] {
     const rows = this.sqlite.prepare(`
       SELECT id, session_id, user_id, device_id, purpose, harness, provider,
-             model, local_session_id, capture_fidelity, status, last_seen_at
+             model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at
       FROM runtimes
       WHERE session_id = ? AND user_id = ? AND status != 'revoked'
       ORDER BY CASE WHEN status = 'online' THEN 0 ELSE 1 END,
                last_seen_at DESC, id ASC
     `).all(sessionId, userId) as unknown as RuntimeRow[];
     const now = this.clock().getTime();
-    return rows.map((row) => ({
-      ...row,
-      status: runtimeStatus(row.status, row.last_seen_at, now),
-    }));
+    return rows.map((row) => mapRuntimeRow(row, now));
   }
 
   membershipRole(sessionId: string, userId: string): MembershipRole | null {
@@ -2247,6 +2292,7 @@ export class CollaborationDatabase {
     harness: string;
     provider: string;
     model: string;
+    execution_profiles?: RuntimeExecutionProfile[] | undefined;
     local_session_id: string;
     capture_fidelity: CaptureFidelity;
   }): RuntimeRecord {
@@ -2254,26 +2300,30 @@ export class CollaborationDatabase {
     this.assertActiveDevice(actor);
     const runtimeId = input.runtime_id ?? randomUUID();
     const timestamp = this.now();
+    const executionProfiles = input.execution_profiles === undefined
+      ? null
+      : JSON.stringify(RuntimeExecutionProfilesSchema.parse(input.execution_profiles));
     this.sqlite.prepare(`
-      INSERT INTO runtimes(id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+      INSERT INTO runtimes(id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
       ON CONFLICT(device_id, harness, local_session_id) DO UPDATE SET
         session_id = excluded.session_id,
         purpose = excluded.purpose,
         provider = excluded.provider,
         model = excluded.model,
+        execution_profiles_json = excluded.execution_profiles_json,
         capture_fidelity = excluded.capture_fidelity,
         status = 'online',
         last_seen_at = excluded.last_seen_at
-    `).run(runtimeId, input.session_id, actor.user_id, input.device_id, input.purpose ?? "execution", input.harness, input.provider, input.model, input.local_session_id, input.capture_fidelity, timestamp, timestamp);
+    `).run(runtimeId, input.session_id, actor.user_id, input.device_id, input.purpose ?? "execution", input.harness, input.provider, input.model, executionProfiles, input.local_session_id, input.capture_fidelity, timestamp, timestamp);
     return this.getRuntimeByIdentity(input.device_id, input.harness, input.local_session_id);
   }
 
   getRuntime(runtimeId: string): RuntimeRecord {
-    const row = this.sqlite.prepare("SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at FROM runtimes WHERE id = ?")
+    const row = this.sqlite.prepare("SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at FROM runtimes WHERE id = ?")
       .get(runtimeId) as unknown as RuntimeRow | undefined;
     if (!row) throw notFound("Runtime");
-    return row;
+    return mapRuntimeRow(row);
   }
 
   heartbeatRuntime(actor: Actor, runtimeId: string): RuntimeRecord {
@@ -2304,14 +2354,10 @@ export class CollaborationDatabase {
       const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
         candidate.purpose === "execution"
         && candidate.status === "online"
-        && candidate.harness.trim().toLowerCase() === target.harness
-        && (target.provider === undefined || candidate.provider === target.provider)
-        && (target.harness === "codex" || target.model === undefined || candidate.model === target.model));
+        && runtimeSupportsAgentTarget(candidate, target));
       const selectedRuntimeId = target.runtimeId
         ?? (target.harness === "codex" ? runtime.id : matching.length === 1 ? matching[0]?.id : undefined);
-      if (runtime.harness.trim().toLowerCase() !== target.harness
-        || (target.provider !== undefined && runtime.provider !== target.provider)
-        || (target.harness !== "codex" && target.model !== undefined && runtime.model !== target.model)
+      if (!runtimeSupportsAgentTarget(runtime, target)
         || selectedRuntimeId === undefined
         || runtime.id !== selectedRuntimeId
         || !matching.some((candidate) => candidate.id === runtime.id)) {
@@ -2748,10 +2794,10 @@ export class CollaborationDatabase {
 
   private getRuntimeByIdentity(deviceId: string, harness: string, localSessionId: string): RuntimeRecord {
     const row = this.sqlite.prepare(`
-      SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at
+      SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at
       FROM runtimes WHERE device_id = ? AND harness = ? AND local_session_id = ?
     `).get(deviceId, harness, localSessionId) as unknown as RuntimeRow;
-    return row;
+    return mapRuntimeRow(row);
   }
 
   private requireRuntimeForActor(actor: Actor, sessionId: string, runtimeId: string, purpose: RuntimeRecord["purpose"]): RuntimeRecord {
@@ -3248,6 +3294,15 @@ export class CollaborationDatabase {
     );
     if (!columns.has("purpose")) {
       this.sqlite.exec("ALTER TABLE runtimes ADD COLUMN purpose TEXT NOT NULL DEFAULT 'execution' CHECK (purpose IN ('execution', 'snapshot_connector'))");
+    }
+  }
+
+  private migrateRuntimeExecutionProfilesColumn(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(runtimes)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("execution_profiles_json")) {
+      this.sqlite.exec("ALTER TABLE runtimes ADD COLUMN execution_profiles_json TEXT CHECK (execution_profiles_json IS NULL OR json_valid(execution_profiles_json))");
     }
   }
 

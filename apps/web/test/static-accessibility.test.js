@@ -198,11 +198,11 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(html, /codex: command not found/);
   assert.match(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);
-  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.5 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.6 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
   assert.match(domain, /--plugin-hooks/);
   const pluginCommands = (html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "")
     .replace(/\r\n?/gu, "\n");
-  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.6 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Alpha 预览版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);
@@ -244,6 +244,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
     "approve-dsh-pairing-code",
     "agent-harness-select",
     "agent-dsh-runtime-select",
+    "agent-dsh-model-select",
+    "agent-dsh-effort-select",
     "settings-agent-harness",
     "settings-dsh-runtime",
   ]) assert.match(html, new RegExp(`id="${id}"`));
@@ -259,7 +261,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(dsh, /plugin --profile web add @gatherthread\/dsh-host/);
   assert.doesNotMatch(dsh, /--dsh-source|(?:https?|dsh):\/\/localhost|deep[-_ ]?link/iu);
   assert.match(main, /api\.listSessionRuntimes\(sessionId\)/);
-  assert.match(main, /dshExecutionProfile\(currentDshResolution\(\)\.runtime\)/);
+  assert.match(main, /dshExecutionProfile\([\s\S]*?currentDshResolution\(\)\.runtime,/);
+  assert.match(main, /withProjectDshProfile[\s\S]*agentDshModelSelect/);
   assert.match(api, /runtime_id: input\.executionProfile\.runtimeId/);
   assert.match(main, /resolveCodexRuntime\(state\.executionRuntimes\)/);
   assert.match(main, /codexExecutionProfile\(currentCodexResolution\(\)\.runtime/);
@@ -273,6 +276,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(styles, /\.connection-guide/);
   assert.match(styles, /\.connection-preview-banner/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.dsh-runtime-row/);
+  assert.match(styles, /agent-request-profile\[data-layout="dsh-dynamic"\][\s\S]*?agent-dsh-model-select/);
+  assert.match(i18n, /"DSH runtime": "DSH 运行环境"/);
   assert.match(i18n, /不假设公共账户注册系统已经上线/);
   assert.match(i18n, /长期设备凭据只保存在 DSH 本机凭据库/);
 });

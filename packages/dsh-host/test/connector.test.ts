@@ -79,6 +79,19 @@ function request(sequence = 2): DshCanonicalEvent {
   });
 }
 
+function dynamicRequest(sequence = 2): DshCanonicalEvent {
+  return canonical(sequence, "agent_request", {
+    content: "Use the selected DeepSeek route",
+    execution_profile: {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-reasoner",
+      reasoning_effort: "high",
+      runtime_id: "runtime-1",
+    },
+  });
+}
+
 class FakeConflict extends Error {
   readonly status = 409;
   constructor(readonly code: string) { super(code); }
@@ -338,12 +351,23 @@ class FakeHost implements DshHostFacade {
     return this.#persistence.prompts;
   }
 
+  readonly promptProfiles: Array<{
+    provider: string;
+    model: string;
+    reasoningEffort?: string;
+  } | undefined> = [];
+
   snapshotFrom(sequence: number): readonly DshSessionEventRecord[] {
     return structuredClone(this.#persistence.events.slice(sequence));
   }
 
-  async prompt(text: string): Promise<DshPromptResult> {
+  async prompt(text: string, profile?: {
+    provider: string;
+    model: string;
+    reasoningEffort?: string;
+  }): Promise<DshPromptResult> {
     this.#persistence.prompts.push(text);
+    this.promptProfiles.push(profile === undefined ? undefined : structuredClone(profile));
     const fromSequence = this.currentSequence();
     this.emitStatus("running");
     await Promise.race([
@@ -524,6 +548,108 @@ test("ordinary canonical updates are durably projected before a later request wi
   assert.doesNotMatch(host.prompts.at(-1) ?? "", /EARLY_REMOTE_CONTEXT|canonical context follows/);
   assert.match(host.prompts.at(-1) ?? "", /Do the work password=\[REDACTED\]/);
   await connector.stop();
+});
+
+test("native DeepSeek runtimes advertise exact profiles and apply the selected model and effort per request", async () => {
+  const executionProfiles = [{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    reasoningEfforts: ["low", "high"],
+    defaultReasoningEffort: "low",
+  }, {
+    provider: "deepseek-official",
+    model: "deepseek-reasoner",
+    reasoningEfforts: ["high"],
+    defaultReasoningEffort: "high",
+  }];
+  const cfg = config({ executionProfiles });
+  const api = new FakeApi();
+  api.events.push(dynamicRequest(1));
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+
+  await connector.start({ schedule: false });
+  assert.deepEqual(api.registrations[0]?.executionProfiles, executionProfiles);
+  assert.deepEqual(host.promptProfiles, [{
+    provider: "deepseek-official",
+    model: "deepseek-reasoner",
+    reasoningEffort: "high",
+  }]);
+  assert.equal(api.completions[0]?.observedModel, "deepseek-reasoner");
+  assert.equal(api.completions[0]?.observedReasoningEffort, "high");
+  assert.ok(api.progress.every((item) => item.observedModel === "deepseek-reasoner"));
+  assert.ok(api.progress.every((item) => item.observedReasoningEffort === "high"));
+  await connector.stop();
+});
+
+test("dynamic DSH requests without an exact runtime target stay passive", async () => {
+  const cfg = config({
+    executionProfiles: [{
+      provider: "deepseek-official",
+      model: "deepseek-reasoner",
+      reasoningEfforts: ["high"],
+      defaultReasoningEffort: "high",
+    }],
+  });
+  const api = new FakeApi();
+  api.events.push(canonical(1, "agent_request", {
+    content: "untargeted dynamic request",
+    execution_profile: {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-reasoner",
+      reasoning_effort: "high",
+    },
+  }));
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+
+  await connector.start({ schedule: false });
+  assert.equal(api.claims.size, 0);
+  assert.equal(host.prompts.length, 0);
+  await connector.stop();
+});
+
+test("dynamic DeepSeek profiles fail closed before claim when model or effort was not advertised", async () => {
+  const cfg = config({
+    executionProfiles: [{
+      provider: "deepseek-official",
+      model: "deepseek-reasoner",
+      reasoningEfforts: ["high"],
+      defaultReasoningEffort: "high",
+    }],
+  });
+  const api = new FakeApi();
+  api.events.push(canonical(1, "agent_request", {
+    content: "unsupported effort",
+    execution_profile: {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-reasoner",
+      reasoning_effort: "low",
+      runtime_id: "runtime-1",
+    },
+  }));
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await assert.rejects(connector.start({ schedule: false }), /reasoning effort was not advertised/);
+  assert.equal(api.claims.size, 0);
+  assert.equal(host.prompts.length, 0);
 });
 
 test("a completed local DSH turn is atomically committed and its canonical echo is not projected back", async () => {
@@ -948,10 +1074,18 @@ test("a changed runtime id fails closed without dropping a persisted outbox", as
 });
 
 test("crash-repaired active request resumes through DSH context instead of replaying canonical history", async () => {
-  const cfg = config({ shareToolEvents: false });
+  const cfg = config({
+    shareToolEvents: false,
+    executionProfiles: [{
+      provider: "deepseek-official",
+      model: "deepseek-reasoner",
+      reasoningEfforts: ["high"],
+      defaultReasoningEffort: "high",
+    }],
+  });
   const api = new FakeApi();
   const chat = canonical(1, "human_chat", { content: "shared before crash" });
-  const activeRequest = request(2);
+  const activeRequest = dynamicRequest(2);
   api.events.push(chat, activeRequest);
   api.claims.set(activeRequest.id, "claimed");
   const originalPrompt = buildDshCanonicalPrompt([chat, activeRequest], activeRequest);
@@ -996,7 +1130,14 @@ test("crash-repaired active request resumes through DSH context instead of repla
   assert.equal(persistence.prompts.length, 2);
   assert.match(persistence.prompts[1] ?? "", /^Continue the interrupted GatherThread request/);
   assert.doesNotMatch(persistence.prompts[1] ?? "", /shared before crash|Do the work/);
+  assert.deepEqual(host.promptProfiles, [{
+    provider: "deepseek-official",
+    model: "deepseek-reasoner",
+    reasoningEffort: "high",
+  }]);
   assert.equal((api.completions[0]?.payload as { text: string }).text, "recovered final");
+  assert.equal(api.completions[0]?.observedModel, "deepseek-reasoner");
+  assert.equal(api.completions[0]?.observedReasoningEffort, "high");
   assert.doesNotMatch(JSON.stringify(api.completions), /PRIVATE_CRASH_REASONING|partial/);
   assert.equal((await store.load())?.activeRequest, undefined);
   await connector.stop();

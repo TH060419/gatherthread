@@ -276,6 +276,16 @@ export class HttpCollaborationApi {
       model: runtime.model,
       status: runtime.status,
       lastSeenAt: runtime.last_seen_at,
+      ...(Array.isArray(runtime.execution_profiles) ? {
+        executionProfiles: runtime.execution_profiles.map((profile) => ({
+          provider: profile.provider,
+          model: profile.model,
+          reasoningEfforts: profile.reasoning_efforts ?? [],
+          ...(profile.default_reasoning_effort === undefined ? {} : {
+            defaultReasoningEffort: profile.default_reasoning_effort,
+          }),
+        })),
+      } : {}),
     }));
   }
 
@@ -888,6 +898,20 @@ export class MockCollaborationApi {
         model: "deepseek-v4-flash",
         status: "online",
         lastSeenAt: new Date().toISOString(),
+        executionProfiles: [
+          {
+            provider: "deepseek-official",
+            model: "deepseek-v4-flash",
+            reasoningEfforts: ["low", "high", "max"],
+            defaultReasoningEffort: "max",
+          },
+          {
+            provider: "deepseek-official",
+            model: "deepseek-v4",
+            reasoningEfforts: ["low", "high", "max"],
+            defaultReasoningEffort: "max",
+          },
+        ],
       }]),
     ];
   }

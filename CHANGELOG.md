@@ -4,15 +4,34 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+## [0.1.0-alpha.6] - 2026-09-22
+
 ### Added
 
 - Lease Agent claims and bound exact-runtime recovery. A claim is renewed only by accepted progress, a lapsed claim may be reclaimed only by its recorded runtime, stale attempts are fenced, and a request that exhausts its recovery budget fails visibly instead of staying pending.
 - Show a failed Agent response as a failure in the timeline, with a retry that replays the request's exact recorded harness, provider, model, and runtime.
+- Let compatible DeepSeek Harness runtimes advertise executable model and reasoning-effort combinations so each new Agent request can select them directly from the GatherThread work page.
+- Persist runtime execution profiles across the protocol, server, bridge, Web client, and DSH plugin while retaining compatibility with older fixed-profile runtimes.
+
+### Changed
+
+- Discover `deepseek-official` models through the DSH Host's public LLM services and apply the selected model and reasoning effort only for the requested turn, restoring the prior native selection afterward.
+- Advance the fixed Codex connector, DeepSeek Harness plugin, Web onboarding, deployment preview, and release-verification metadata to `0.1.0-alpha.6` without overwriting immutable Alpha 5 artifacts.
 
 ### Fixed
 
 - Recover a request whose exact bound runtime restarts or resumes after a stalled execution, instead of leaving it unanswered forever.
 - Stop an abandoned claim from permanently consuming its runtime's single active-claim slot and blocking every later request on that runtime.
+- Keep legacy, unsupported, non-DeepSeek, and ambiguous DSH runtimes on their existing fixed model path rather than silently falling back or misrouting a request.
+
+### Security
+
+- Keep runtime, provider, model, and reasoning selection exact and fail closed at both the server claim boundary and the DSH execution boundary.
+
+### Known limitations
+
+- Dynamic model and reasoning selection is available only when an exact compatible DSH runtime advertises execution profiles; other providers continue to use their native fixed selection.
+- The hosted GatherThread service and public Beta remain closed; this Alpha supports local, private LAN HTTPS, private Tailscale, and operator-managed self-hosting.
 
 ## [0.1.0-alpha.5] - 2026-09-16
 
@@ -136,6 +155,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - Alibaba Cloud deployment is intended for a small, invitation-only beta and requires operator-managed domain, filing, security-group, monitoring, and restore checks.
 - Public npm scope ownership, public plugin-directory distribution, and remote OAuth 2.1/PKCE MCP remain release follow-ups.
 
+[0.1.0-alpha.6]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.3

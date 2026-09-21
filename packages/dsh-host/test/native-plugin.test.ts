@@ -58,6 +58,11 @@ const unboundGrant: DshNativeGrant = {
   token: "gta_fixture-long-lived-secret",
 };
 
+const deepseekChatExecutionProfiles = async (provider: string) => [{
+  provider,
+  model: "deepseek-chat",
+}];
+
 test("native GatherThread Sessions use DSH's editable standard preset", () => {
   assert.equal(DSH_NATIVE_AGENT_PRESET, "standard");
 });
@@ -91,9 +96,39 @@ test("native controller pairs, configures one project owner, and resumes it afte
   const pairing = pairingFetch();
   const ownerStops: number[] = [];
   const ownerStarts: string[] = [];
+  const advertisedProfiles: unknown[] = [];
   const validated: string[] = [];
+  const resolvedModels: string[] = [];
   const makeController = () => new DshNativeHostController({
-    context: { credentials: credentials.service },
+    context: {
+      credentials: credentials.service,
+      llm: {
+        listProviders: () => [{ id: "deepseek-official", name: "DeepSeek" }],
+        listModels: async (provider: string) => [{
+          provider,
+          id: "CaseSensitiveModel",
+          name: "Case-sensitive model",
+        }, {
+          provider,
+          id: "deepseek-chat",
+          name: "DeepSeek Chat",
+        }],
+        resolveModelInfo: async (provider: string, model: string) => {
+          resolvedModels.push(`${provider}/${model}`);
+          return model === "CaseSensitiveModel"
+            ? {
+              provider,
+              id: model,
+              name: "Case-sensitive model",
+              reasoning: {
+                efforts: [{ id: "low", name: "Low" }, { id: "high", name: "High" }],
+                defaultEffort: "high",
+              },
+            }
+            : { provider, id: model, name: "DeepSeek Chat" };
+        },
+      },
+    },
     status: status(),
     workspacePath: "/readonly/workspace",
     fetch: pairing.run,
@@ -113,8 +148,9 @@ test("native controller pairs, configures one project owner, and resumes it afte
       validated.push(`${provider}/${model}`);
     },
     resolveWorkspace: async () => "/readonly/workspace",
-    createOwner: async (_grant, binding) => {
+    createOwner: async (_grant, binding, _signal, _status, _workspace, executionProfiles) => {
       ownerStarts.push(`${binding.projectId}/${binding.provider}/${binding.model}`);
+      advertisedProfiles.push(structuredClone(executionProfiles));
       let stopped = false;
       return { async stop() { if (!stopped) ownerStops.push(1); stopped = true; } };
     },
@@ -153,6 +189,19 @@ test("native controller pairs, configures one project owner, and resumes it afte
   assert.equal(JSON.stringify(connected).includes(unboundGrant.token), false);
   assert.deepEqual(validated, ["deepseek-official/CaseSensitiveModel"]);
   assert.deepEqual(ownerStarts, ["project-1/deepseek-official/CaseSensitiveModel"]);
+  assert.deepEqual(advertisedProfiles[0], [{
+    provider: "deepseek-official",
+    model: "CaseSensitiveModel",
+    reasoningEfforts: ["low", "high"],
+    defaultReasoningEffort: "high",
+  }, {
+    provider: "deepseek-official",
+    model: "deepseek-chat",
+  }]);
+  assert.deepEqual(resolvedModels, [
+    "deepseek-official/CaseSensitiveModel",
+    "deepseek-official/deepseek-chat",
+  ]);
   assert.equal(credentials.calls.write, 2);
   await controller.dispose();
   assert.equal(ownerStops.length, 1);
@@ -205,6 +254,7 @@ test("native settings RPC controls automatic and manual upload for one DSH conve
     context,
     status: publicStatus,
     workspacePath: "/readonly/workspace",
+    listExecutionProfiles: deepseekChatExecutionProfiles,
     listProjects: async () => [{
       id: "project-1",
       name: "Project One",
@@ -282,6 +332,7 @@ test("one paired route reconciles every active accessible project and isolates p
     context: { credentials: credentials.service },
     status: status(),
     workspacePath: "/readonly/workspace",
+    listExecutionProfiles: deepseekChatExecutionProfiles,
     listProjects: async () => projects.map((project) => ({ ...project })),
     validateModel: async () => undefined,
     resolveWorkspace: async () => "/readonly/workspace",
@@ -329,6 +380,7 @@ test("paired account periodically discovers newly accessible Projects", async ()
     context: { credentials: credentials.service },
     status: status(),
     workspacePath: "/readonly/workspace",
+    listExecutionProfiles: deepseekChatExecutionProfiles,
     projectRefreshIntervalMs: 5,
     listProjects: async () => projects.map((project) => ({ ...project })),
     resolveWorkspace: async (_grant, binding) => `/managed/${binding.projectId}`,
@@ -363,6 +415,7 @@ test("paired account retries Project discovery after an initial startup failure"
     context: { credentials: credentials.service },
     status: status(),
     workspacePath: "/readonly/workspace",
+    listExecutionProfiles: deepseekChatExecutionProfiles,
     projectRefreshIntervalMs: 5,
     listProjects: async () => {
       attempts += 1;
@@ -396,6 +449,7 @@ test("configuration cancellation reaches an in-flight Project activation", async
     context: { credentials: credentials.service },
     status: status(),
     workspacePath: "/readonly/workspace",
+    listExecutionProfiles: deepseekChatExecutionProfiles,
     listProjects: async () => [{
       id: "project-cancelled",
       name: "Cancelled Project",

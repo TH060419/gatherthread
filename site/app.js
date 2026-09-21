@@ -15,7 +15,7 @@
     "nav.specs":      { zh: "规格", en: "Specs" },
     "nav.app":        { zh: "进入共序", en: "Open App" },
 
-    "hero.eyebrow":   { zh: "[ 0.1.0-ALPHA.5 · ALPHA 预览版 ]", en: "[ 0.1.0-ALPHA.5 · ALPHA PREVIEW ]" },
+    "hero.eyebrow":   { zh: "[ 0.1.0-ALPHA.6 · ALPHA 预览版 ]", en: "[ 0.1.0-ALPHA.6 · ALPHA PREVIEW ]" },
     "hero.l1":        { zh: "一个空间，汇聚众智。", en: "One room, many minds." },
     "hero.tagline":   { zh: "One room, many minds.", en: "一个空间，汇聚众智。" },
     "hero.copy":      { zh: "让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。",

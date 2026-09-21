@@ -82,6 +82,48 @@ export const AgentExecutionProfileSchema = z.object({
 
 export type AgentExecutionProfile = z.infer<typeof AgentExecutionProfileSchema>;
 
+const RuntimeExecutionReasoningEffortsSchema = z.array(
+  z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+).min(1).max(16).superRefine((efforts, context) => {
+  if (new Set(efforts).size !== efforts.length) {
+    context.addIssue({ code: "custom", message: "Runtime reasoning efforts must be unique" });
+  }
+});
+
+export const RuntimeExecutionProfileSchema = z.object({
+  provider: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+  model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+  reasoning_efforts: RuntimeExecutionReasoningEffortsSchema.optional(),
+  default_reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
+}).strict().superRefine((profile, context) => {
+  if (profile.default_reasoning_effort !== undefined
+    && !profile.reasoning_efforts?.includes(profile.default_reasoning_effort)) {
+    context.addIssue({
+      code: "custom",
+      path: ["default_reasoning_effort"],
+      message: "The default reasoning effort must be advertised by this execution profile",
+    });
+  }
+});
+
+export type RuntimeExecutionProfile = z.infer<typeof RuntimeExecutionProfileSchema>;
+
+export const RuntimeExecutionProfilesSchema = z.array(RuntimeExecutionProfileSchema).min(1).max(32)
+  .superRefine((profiles, context) => {
+    const routes = new Set<string>();
+    for (const [index, profile] of profiles.entries()) {
+      const route = `${profile.provider}\u0000${profile.model}`;
+      if (routes.has(route)) {
+        context.addIssue({
+          code: "custom",
+          path: [index],
+          message: "Runtime execution profiles must have unique provider and model pairs",
+        });
+      }
+      routes.add(route);
+    }
+  });
+
 export const CanonicalEventSchema = z.object({
   id: IdSchema,
   session_id: IdSchema,
@@ -367,6 +409,7 @@ export const RegisterRuntimeInputSchema = z.object({
   harness: z.string().trim().min(1).max(80),
   provider: z.string().trim().min(1).max(80),
   model: z.string().trim().min(1).max(160),
+  execution_profiles: RuntimeExecutionProfilesSchema.optional(),
   local_session_id: z.string().trim().min(1).max(512),
   capture_fidelity: CaptureFidelitySchema,
 });

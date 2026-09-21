@@ -48,6 +48,7 @@ import {
   DshStatusController,
   type DshPublicStatusSnapshot,
 } from "./status.js";
+import type { DshRuntimeExecutionProfile } from "./types.js";
 
 export const name = "gatherthread-dsh-native";
 /** DSH's built-in editable Web preset; recorded in new native Session headers. */
@@ -76,6 +77,8 @@ const RPC_ENDPOINTS = new Set([
 ]);
 const MAX_CATALOG_PROVIDERS = 64;
 const MAX_CATALOG_MODELS = 256;
+const MAX_EXECUTION_PROFILES = 32;
+const MAX_REASONING_EFFORTS = 16;
 
 export interface DshNativePluginConfig {
   readonly enabled: boolean;
@@ -174,6 +177,7 @@ export interface DshNativeHostControllerOptions {
     signal: AbortSignal,
     status: DshStatusController,
     workspacePath: string,
+    executionProfiles?: readonly DshRuntimeExecutionProfile[],
   ) => Promise<NativeOwner>;
   readonly resolveWorkspace?: (
     grant: DshNativeGrant,
@@ -185,6 +189,10 @@ export interface DshNativeHostControllerOptions {
     signal: AbortSignal,
   ) => Promise<ProjectSummary[]>;
   readonly listCatalog?: (signal: AbortSignal) => Promise<DshNativeCatalog["providers"]>;
+  readonly listExecutionProfiles?: (
+    provider: string,
+    signal: AbortSignal,
+  ) => Promise<readonly DshRuntimeExecutionProfile[]>;
   readonly validateModel?: (
     provider: string,
     model: string,
@@ -216,6 +224,8 @@ export class DshNativeHostController {
   #projectRefreshPromise: Promise<void> | undefined;
   #projectRefreshAbort: AbortController | undefined;
   #projectRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+  #executionProfileRouteKey: string | undefined;
+  #executionProfiles: readonly DshRuntimeExecutionProfile[] | undefined;
 
   constructor(options: DshNativeHostControllerOptions) {
     this.#options = options;
@@ -387,6 +397,8 @@ export class DshNativeHostController {
       throw new Error("The single-Project DSH client is obsolete; refresh DSH and explicitly confirm all accessible Projects");
     }
     await this.#validateModel(provider, model, operationSignal);
+    this.#executionProfileRouteKey = undefined;
+    this.#executionProfiles = undefined;
     const route: DshNativeRoute = { provider, model };
     const nextGrant: DshNativeGrant = { ...grant, route };
     try {
@@ -445,6 +457,8 @@ export class DshNativeHostController {
     await this.#stopOwners();
     await this.#credentials.clear();
     this.#grant = undefined;
+    this.#executionProfileRouteKey = undefined;
+    this.#executionProfiles = undefined;
     this.#recoverableError = undefined;
     this.#options.status.setProjectName("GatherThread / 共序");
     this.#options.status.setConnection("stopped");
@@ -544,6 +558,9 @@ export class DshNativeHostController {
         ...(this.#options.dshHome === undefined ? {} : { dshHome: this.#options.dshHome }),
         signal,
         status,
+        ...(this.#executionProfiles === undefined ? {} : {
+          executionProfiles: this.#executionProfiles,
+        }),
         canCreateLocalSessions: role === "owner" || role === "participant",
         onStatus: (update) => this.#updateProjectStatus(bindingValue.projectId, update),
       });
@@ -554,6 +571,7 @@ export class DshNativeHostController {
       signal,
       this.#options.status,
       workspacePath,
+      this.#executionProfiles,
     );
     if (this.#disposed || signal.aborted) {
       await owner.stop();
@@ -596,6 +614,8 @@ export class DshNativeHostController {
     const route = grant.route;
     if (route === undefined) return;
     throwIfAborted(signal);
+    await this.#refreshExecutionProfiles(route, signal);
+    throwIfAborted(signal);
     const nextIds = new Set(projects.map((project) => project.id));
     this.#projects.clear();
     for (const project of projects) this.#projects.set(project.id, { ...project });
@@ -624,6 +644,29 @@ export class DshNativeHostController {
     }
     this.#refreshAggregateStatus();
     this.#recoverableError = failures > 0 ? "connection_failed" : undefined;
+  }
+
+  async #refreshExecutionProfiles(
+    route: DshNativeRoute,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const routeKey = `${route.provider}\u0000${route.model}`;
+    if (this.#executionProfileRouteKey === routeKey) return;
+    if (route.provider !== "deepseek-official") {
+      this.#executionProfiles = undefined;
+      this.#executionProfileRouteKey = routeKey;
+      return;
+    }
+    const discovered = this.#options.listExecutionProfiles === undefined
+      ? await listNativeExecutionProfiles(this.#options.context, route.provider, signal)
+      : await this.#options.listExecutionProfiles(route.provider, signal);
+    throwIfAborted(signal);
+    const profiles = normalizeExecutionProfiles(discovered, route.provider);
+    if (!profiles.some((profile) => profile.model === route.model)) {
+      throw new Error("DeepSeek Harness did not advertise the configured model as an execution profile");
+    }
+    this.#executionProfiles = profiles;
+    this.#executionProfileRouteKey = routeKey;
   }
 
   #currentBindings(route: DshNativeRoute): DshNativeBinding[] {
@@ -846,13 +889,20 @@ async function createProductionOwner(options: {
   readonly status: DshStatusController;
   readonly onStatus: (update: DshProjectManagerStatusUpdate) => void;
   readonly canCreateLocalSessions: boolean;
+  readonly executionProfiles?: readonly DshRuntimeExecutionProfile[];
 }): Promise<NativeOwner> {
-  const config = createNativeProjectConfig({
+  const baseConfig = createNativeProjectConfig({
     grant: options.grant,
     binding: options.binding,
     workspacePath: options.workspacePath,
     ...(options.dshHome === undefined ? {} : { dshHome: options.dshHome }),
   });
+  const config: EnabledDshProjectHostConfig = {
+    ...baseConfig,
+    ...(options.executionProfiles === undefined ? {} : {
+      executionProfiles: cloneExecutionProfiles(options.executionProfiles),
+    }),
+  };
   await assertSafeDshStateRoot(config);
   const nativeWorkspace = await registerDshNativeWorkspace(
     options.context,
@@ -1032,6 +1082,31 @@ async function listNativeLlmCatalog(
   return result;
 }
 
+async function listNativeExecutionProfiles(
+  contextValue: unknown,
+  provider: string,
+  signal: AbortSignal,
+): Promise<readonly DshRuntimeExecutionProfile[]> {
+  const llm = requireLlm(contextValue);
+  const models = parseModels(await llm.listModels(provider), provider)
+    .slice(0, MAX_EXECUTION_PROFILES);
+  const profiles: DshRuntimeExecutionProfile[] = [];
+  for (const model of models) {
+    throwIfAborted(signal);
+    const resolved = asObject(await llm.resolveModelInfo(provider, model.id, signal));
+    if (resolved === undefined || resolved.provider !== provider || resolved.id !== model.id) {
+      throw new Error("DeepSeek Harness did not resolve an advertised provider/model exactly");
+    }
+    const reasoning = parseNativeReasoningMetadata(resolved.reasoning, provider, model.id);
+    profiles.push({
+      provider,
+      model: model.id,
+      ...reasoning,
+    });
+  }
+  return normalizeExecutionProfiles(profiles, provider);
+}
+
 async function validateNativeLlmModel(
   contextValue: unknown,
   provider: string,
@@ -1074,6 +1149,107 @@ function parseModels(
     seen.add(id);
     return { id, name: nameValue };
   });
+}
+
+function parseNativeReasoningMetadata(
+  value: unknown,
+  provider: string,
+  model: string,
+): Pick<DshRuntimeExecutionProfile, "reasoningEfforts" | "defaultReasoningEffort"> {
+  if (value === undefined) return {};
+  const reasoning = asObject(value);
+  if (reasoning === undefined || !Array.isArray(reasoning.efforts)) {
+    throw new Error(`DeepSeek Harness returned invalid reasoning metadata for ${provider}/${model}`);
+  }
+  const reasoningEfforts = reasoning.efforts.map((entry) => {
+    const effort = asObject(entry);
+    return boundedPublicText(effort?.id, "reasoning effort id", 80);
+  });
+  if (reasoningEfforts.length === 0
+    || reasoningEfforts.length > MAX_REASONING_EFFORTS
+    || new Set(reasoningEfforts).size !== reasoningEfforts.length) {
+    throw new Error(`DeepSeek Harness returned invalid reasoning efforts for ${provider}/${model}`);
+  }
+  const defaultReasoningEffort = reasoning.defaultEffort === undefined
+    ? undefined
+    : boundedPublicText(reasoning.defaultEffort, "default reasoning effort", 80);
+  if (defaultReasoningEffort !== undefined && !reasoningEfforts.includes(defaultReasoningEffort)) {
+    throw new Error(`DeepSeek Harness returned an unknown default reasoning effort for ${provider}/${model}`);
+  }
+  return {
+    reasoningEfforts,
+    ...(defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort }),
+  };
+}
+
+function normalizeExecutionProfiles(
+  values: readonly unknown[],
+  expectedProvider: string,
+): readonly DshRuntimeExecutionProfile[] {
+  if (!Array.isArray(values) || values.length === 0 || values.length > MAX_EXECUTION_PROFILES) {
+    throw new Error("DeepSeek Harness returned an invalid execution profile catalog");
+  }
+  const seen = new Set<string>();
+  return values.map((value) => {
+    const profile = asObject(value);
+    const provider = boundedPublicText(profile?.provider, "execution profile provider", 80);
+    const model = boundedPublicText(profile?.model, "execution profile model", 160);
+    if (provider !== expectedProvider) {
+      throw new Error("DeepSeek Harness returned an execution profile for an unexpected provider");
+    }
+    const key = `${provider}\u0000${model}`;
+    if (seen.has(key)) throw new Error("DeepSeek Harness returned duplicate execution profiles");
+    seen.add(key);
+    const rawReasoningEfforts = profile?.reasoningEfforts;
+    if (rawReasoningEfforts !== undefined && !Array.isArray(rawReasoningEfforts)) {
+      throw new Error("DeepSeek Harness returned invalid execution profile reasoning efforts");
+    }
+    const reasoningEfforts = rawReasoningEfforts === undefined
+      ? undefined
+      : rawReasoningEfforts.map((effort: unknown) => boundedPublicText(
+        effort,
+        "execution profile reasoning effort",
+        80,
+      ));
+    if (reasoningEfforts !== undefined
+      && (reasoningEfforts.length === 0
+        || reasoningEfforts.length > MAX_REASONING_EFFORTS
+        || new Set(reasoningEfforts).size !== reasoningEfforts.length)) {
+      throw new Error("DeepSeek Harness returned invalid execution profile reasoning efforts");
+    }
+    const defaultReasoningEffort = profile?.defaultReasoningEffort === undefined
+      ? undefined
+      : boundedPublicText(
+        profile.defaultReasoningEffort,
+        "execution profile default reasoning effort",
+        80,
+      );
+    if (defaultReasoningEffort !== undefined
+      && !reasoningEfforts?.includes(defaultReasoningEffort)) {
+      throw new Error("DeepSeek Harness returned an invalid execution profile default reasoning effort");
+    }
+    return {
+      provider,
+      model,
+      ...(reasoningEfforts === undefined ? {} : { reasoningEfforts }),
+      ...(defaultReasoningEffort === undefined ? {} : { defaultReasoningEffort }),
+    };
+  });
+}
+
+function cloneExecutionProfiles(
+  values: readonly DshRuntimeExecutionProfile[],
+): readonly DshRuntimeExecutionProfile[] {
+  return values.map((value) => ({
+    provider: value.provider,
+    model: value.model,
+    ...(value.reasoningEfforts === undefined ? {} : {
+      reasoningEfforts: [...value.reasoningEfforts],
+    }),
+    ...(value.defaultReasoningEffort === undefined ? {} : {
+      defaultReasoningEffort: value.defaultReasoningEffort,
+    }),
+  }));
 }
 
 function requireConnection(contextValue: unknown): NativeRpcConnectionLike {

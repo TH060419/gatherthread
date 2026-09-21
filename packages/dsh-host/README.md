@@ -19,7 +19,7 @@ The package does not install a DSH runtime dependency.
 After `@gatherthread/dsh-host` is published, the ordinary three-step path is:
 
 ```text
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.5
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.6
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
 ```
@@ -118,6 +118,14 @@ Project starts its isolated manager without another pairing step. Archiving a
 Project or revoking access stops only that Project manager; its local workspace
 and DSH Session history are retained. A failure in one Project does not stop
 healthy peers, and discovery retries periodically.
+
+For a `deepseek-official` route, the plugin also advertises the exact models and
+reasoning efforts returned by DSH's public LLM catalog. The GatherThread work
+page may select one advertised combination for an individual Agent request.
+That selection is installed only on the borrowed Agent while the request runs
+and is removed in `finally`; it does not rewrite DSH Web's saved model choice.
+Unsupported combinations fail closed. Older plugins and non-DeepSeek routes
+retain the account route's fixed provider and model.
 
 An existing schema-v1 single-Project pairing keeps its device credential when
 the plugin is upgraded, but deliberately drops the old model binding. The user
