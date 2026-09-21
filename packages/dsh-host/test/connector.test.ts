@@ -757,8 +757,18 @@ test("connector runs register, replay, claim, prompt, progress/tool/final, curso
   assert.doesNotMatch(persistence.prompts[0] ?? "", /shared context/);
   assert.match(persistence.prompts[0] ?? "", /password=\[REDACTED\]/);
   assert.doesNotMatch(persistence.prompts[0] ?? "", /PRIVATE_/);
-  assert.deepEqual(api.progress.map((item) => (item.payload as { status: string }).status), ["running", "idle"]);
-  assert.deepEqual(api.progress.map((item) => item.claimAttempt), [2, 2]);
+  const lifecycleProgress = api.progress.filter(
+    (item) => (item.payload as { phase?: string }).phase === "lifecycle",
+  );
+  assert.deepEqual(
+    lifecycleProgress.map((item) => (item.payload as { status: string }).status),
+    ["running", "idle"],
+  );
+  assert.ok(
+    api.progress.some((item) => (item.payload as { phase?: string }).phase === "activity"),
+    "durable DSH activity should renew the claim before completion",
+  );
+  assert.ok(api.progress.every((item) => item.claimAttempt === 2));
   assert.equal(api.appended.filter((item) => item.type === "tool_call").length, 1);
   assert.equal(api.appended.filter((item) => item.type === "tool_result").length, 1);
   assert.equal(api.completions.length, 1);
@@ -1029,6 +1039,7 @@ test("terminal failure while recovering retires durable active state and resumes
   };
   const store = new MemoryConnectorStateStore(state);
   const persistence = freshPersistence();
+  persistence.exists = true;
   const connector = new DshHostConnector({
     config: cfg,
     api,
@@ -1037,15 +1048,18 @@ test("terminal failure while recovering retires durable active state and resumes
   });
 
   await connector.start({ schedule: false });
-  const recovered = await store.load();
+  let recovered = await store.load();
   assert.equal(recovered?.activeRequest, undefined);
   assert.deepEqual(recovered?.outbox, []);
+  assert.equal(recovered?.serverCursor, 1);
+  await connector.pollOnce();
+  recovered = await store.load();
   assert.equal(recovered?.serverCursor, 2);
   assert.equal(persistence.prompts.length, 0);
   await connector.stop();
 });
 
-test("live DSH status and durable events renew the claim before the prompt returns", async () => {
+test("live durable DSH events renew the claim before the prompt returns", async () => {
   const cfg = config();
   const api = new FakeApi();
   api.events.push(request(1));
@@ -1062,7 +1076,6 @@ test("live DSH status and durable events renew the claim before the prompt retur
 
   const started = connector.start({ schedule: false });
   await waitFor(() => persistence.prompts.length === 1);
-  await waitFor(() => api.progress.length >= 1);
   const progressBeforeEvent = api.progress.length;
   host.emitActiveEvent();
   await waitFor(() => api.progress.length > progressBeforeEvent);

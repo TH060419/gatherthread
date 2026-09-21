@@ -106,6 +106,12 @@ cancels its queued permit before it can claim a request. Existing single-Session
 valid when `bindingMode` is omitted; both modes resolve the real current actor
 before applying Solo permissions.
 
+During an active prompt, each newly durable DSH Host event queues one bounded,
+generic progress marker. The marker carries no event text, reasoning, headers,
+or private stream data, but renews the exact claim attempt. Progress, completion,
+and request-linked tool outbox entries are rebound to the renewed attempt after a
+crash recovery, while stale attempts remain fenced by the server.
+
 The installed native plugin stores one account-level model route and reconciles
 every active Project visible to the paired GatherThread identity. Adding a
 Project starts its isolated manager without another pairing step. Archiving a

@@ -2169,6 +2169,21 @@ export class CollaborationDatabase {
         input.visibility ?? "session",
         provenance?.runtime_id ?? null,
       );
+      if ((input.type === "tool_call" || input.type === "tool_result")
+        && input.reply_to_event_id !== undefined
+        && input.reply_to_event_id !== null) {
+        const request = this.getEvent(sessionId, input.reply_to_event_id);
+        if (request.type === "agent_request") {
+          const runtimeId = provenance?.runtime_id;
+          const claim = this.sqlite.prepare(
+            "SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?",
+          ).get(request.id) as unknown as ClaimRow | undefined;
+          if (runtimeId === undefined
+            || !this.isCurrentClaimAttempt(claim, runtimeId, input.claim_attempt, this.now())) {
+            throw conflict("A matching active claim is required to append request-linked tool events");
+          }
+        }
+      }
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
     });
   }
@@ -2371,8 +2386,10 @@ export class CollaborationDatabase {
       SET status = 'failed', completed_at = ?, lease_expires_at = NULL
       WHERE request_event_id = ?
     `).run(this.now(), request.id);
-    const idempotencyKey = `agent-claim-abandoned:${request.id}`;
-    if (this.findByIdempotencyKey(sessionId, idempotencyKey)) return undefined;
+    // This key is generated inside the same transaction that marks the claim
+    // failed. It is therefore unforgeable in advance and does not let a public,
+    // client-chosen idempotency key suppress the canonical failure response.
+    const idempotencyKey = `server:agent-claim-abandoned:${randomUUID()}`;
     return this.appendInsideTransaction(request.actor_user_id, sessionId, {
       idempotency_key: idempotencyKey,
       type: "agent_response",
@@ -2384,7 +2401,7 @@ export class CollaborationDatabase {
         source_harness: harness,
         error: {
           code: "agent_request_abandoned",
-          message: "Every runtime that claimed this request stopped reporting progress.",
+          message: "The exact runtime for this request stopped reporting progress.",
         },
       },
     }, null);

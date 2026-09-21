@@ -297,6 +297,7 @@ function parseAppendInput(value: unknown, label: string): DshAppendEventInput {
       "replyTo",
       "visibility",
       "runtimeId",
+      "claimAttempt",
       "observedModel",
       "observedReasoningEffort",
     ]),
@@ -312,6 +313,9 @@ function parseAppendInput(value: unknown, label: string): DshAppendEventInput {
     ...(input.replyTo === undefined ? {} : { replyTo: safeString(input.replyTo, `${label}.replyTo`, 128) }),
     ...(input.visibility === undefined ? {} : { visibility: safeString(input.visibility, `${label}.visibility`, 32) }),
     ...(input.runtimeId === undefined ? {} : { runtimeId: safeString(input.runtimeId, `${label}.runtimeId`, 128) }),
+    ...(input.claimAttempt === undefined ? {} : {
+      claimAttempt: positiveInteger(input.claimAttempt, `${label}.claimAttempt`),
+    }),
     ...(input.observedModel === undefined ? {} : { observedModel: safeString(input.observedModel, `${label}.observedModel`, 160) }),
     ...(input.observedReasoningEffort === undefined ? {} : {
       observedReasoningEffort: safeString(input.observedReasoningEffort, `${label}.observedReasoningEffort`, 80),

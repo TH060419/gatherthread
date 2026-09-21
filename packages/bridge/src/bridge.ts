@@ -378,7 +378,7 @@ export class LocalBridge {
       return toAppendEvent(redactTranscriptEvent(event, this.#redaction), {
         ...runtime,
         localSessionId: execution.localSessionId ?? runtime.localSessionId,
-      }, request.id, execution);
+      }, request.id, execution, { requestId: request.id, claimAttempt });
     });
     const responseEvents = events.filter((event) => event.type === "agent_response");
     if (responseEvents.length === 0) throw new Error("Harness execution did not produce an assistant response");
@@ -476,6 +476,7 @@ function toAppendEvent(
   runtime: RegisteredRuntime,
   source: string,
   execution?: Pick<HarnessExecutionResult, "observedModel" | "observedReasoningEffort">,
+  claim?: { requestId: string; claimAttempt: number },
 ): AppendEventInput {
   const eventType = {
     user: "human_chat",
@@ -500,6 +501,10 @@ function toAppendEvent(
     }),
     runtime: provenance(runtime, event.captureFidelity),
     runtimeId: runtime.id,
+    ...(claim === undefined ? {} : {
+      replyTo: claim.requestId,
+      claimAttempt: claim.claimAttempt,
+    }),
     ...(execution?.observedModel === undefined ? {} : { observedModel: execution.observedModel }),
     ...(execution?.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: execution.observedReasoningEffort }),
   };

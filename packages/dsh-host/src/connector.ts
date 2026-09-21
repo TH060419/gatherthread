@@ -85,6 +85,7 @@ export class DshHostConnector {
   #pollPromise: Promise<DshPollResult> | undefined;
   #localSyncControlPromise: Promise<void> | undefined;
   #heartbeatPromise: Promise<void> | undefined;
+  #liveProgressPromise: Promise<void> = Promise.resolve();
   #stopPromise: Promise<void> | undefined;
   #backgroundFatalError: Error | undefined;
   readonly #lifecycleAbort = new AbortController();
@@ -185,6 +186,17 @@ export class DshHostConnector {
       const active = this.#state?.activeRequest;
       if (active !== undefined && event.seq >= active.dshFromSequence) {
         this.#liveEventSequences.add(event.seq);
+        this.#queueLiveProgress(
+          `dsh-live-${String(event.seq)}`,
+          {
+            content: "DeepSeek Harness produced durable work for the active request.",
+            phase: "activity",
+            status: "running",
+            dsh_event_sequence: event.seq,
+            capture_fidelity: "harness_transcript",
+            source_harness: "deepseek-harness",
+          },
+        );
       }
       if (active === undefined
         && event.type === "turn/end"
@@ -201,7 +213,9 @@ export class DshHostConnector {
     }));
     this.#listenerDisposers.push(this.#host.onStatus((status) => {
       if (this.#state?.activeRequest === undefined) return;
-      if (this.#activeStatuses.at(-1) !== status) this.#activeStatuses.push(status);
+      if (this.#activeStatuses.at(-1) !== status) {
+        this.#activeStatuses.push(status);
+      }
       this.#notifyLifecycle(status);
     }));
 
@@ -449,6 +463,7 @@ export class DshHostConnector {
     if (result.fromSequence !== baseline || result.toSequence < result.fromSequence) {
       throw new Error("DSH Host prompt returned an inconsistent durable event range");
     }
+    await this.#liveProgressPromise;
     this.#assertLiveEventsDurable(result);
     await this.#settleActiveRequest(result.events, result.toSequence);
     return { claimed: true, completed: true };
@@ -459,11 +474,25 @@ export class DshHostConnector {
     const state = this.#requireState();
     const active = state.activeRequest;
     if (active === undefined) return;
-    const claim = await this.#api.claimAgentRequest(
-      this.#config.sessionId,
-      active.requestId,
-      this.#requireRuntime().id,
-    );
+    let claim;
+    try {
+      claim = await this.#api.claimAgentRequest(
+        this.#config.sessionId,
+        active.requestId,
+        this.#requireRuntime().id,
+      );
+    } catch (error) {
+      if (!isTerminalClaimConflict(error)) throw error;
+      state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
+      if (active.dshToSequence !== undefined) {
+        state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
+      }
+      delete state.activeRequest;
+      this.#activeStatuses = [];
+      this.#liveEventSequences.clear();
+      await this.#stateStore.save(state);
+      return;
+    }
     if (claim.status === "completed" && active.dshToSequence !== undefined) {
       state.outbox = [];
       await this.#stateStore.save(state);
@@ -477,17 +506,14 @@ export class DshHostConnector {
     active.claimAttempt = claimAttempt;
     if (active.dshToSequence !== undefined) {
       state.outbox = state.outbox.map((operation) => {
-        if ((operation.kind !== "progress" && operation.kind !== "complete")
-          || operation.requestId !== active.requestId) {
-          return operation;
+        if ((operation.kind === "progress" || operation.kind === "complete")
+          && operation.requestId === active.requestId) {
+          return { ...operation, input: { ...operation.input, claimAttempt } };
         }
-        return {
-          ...operation,
-          input: {
-            ...operation.input,
-            claimAttempt,
-          },
-        };
+        if (operation.kind === "append" && operation.input.replyTo === active.requestId) {
+          return { ...operation, input: { ...operation.input, claimAttempt } };
+        }
+        return operation;
       });
     }
     await this.#stateStore.save(state);
@@ -535,6 +561,7 @@ export class DshHostConnector {
     if (result.fromSequence !== baseline || result.toSequence < result.fromSequence) {
       throw new Error("DSH Host recovery prompt returned an inconsistent durable event range");
     }
+    await this.#liveProgressPromise;
     this.#assertLiveEventsDurable(result);
     await this.#settleActiveRequest(result.events, result.toSequence);
   }
@@ -560,6 +587,30 @@ export class DshHostConnector {
     await this.#stateStore.save(state);
     await this.#flushOutbox();
     await this.#finalizeDeliveredRequest();
+  }
+
+  #queueLiveProgress(idSuffix: string, payload: Record<string, unknown>): void {
+    const active = this.#state?.activeRequest;
+    const runtime = this.#runtime;
+    if (active === undefined || runtime === undefined) return;
+    const requestId = active.requestId;
+    const claimAttempt = active.claimAttempt ?? 1;
+    const idempotencyKey = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${idSuffix}`;
+    this.#liveProgressPromise = this.#liveProgressPromise
+      .then(async () => {
+        const current = this.#state?.activeRequest;
+        if (current?.requestId !== requestId || (current.claimAttempt ?? 1) !== claimAttempt) return;
+        await this.#api.appendAgentProgress(this.#config.sessionId, requestId, {
+          runtimeId: runtime.id,
+          claimAttempt,
+          idempotencyKey,
+          payload,
+          observedModel: this.#config.model,
+        });
+      })
+      .catch((error: unknown) => {
+        this.#onBackgroundError?.(publicError(error));
+      });
   }
 
   async #projectCanonicalBatch(
@@ -718,6 +769,7 @@ export class DshHostConnector {
             payload: redactValue(payload),
             replyTo: requestId,
             runtimeId: runtime.id,
+            claimAttempt,
             observedModel: this.#config.model,
           },
         });
@@ -1140,6 +1192,13 @@ function boundedPublicText(value: string): string {
     else high = middle - 1;
   }
   return `${redacted.slice(0, low)}${suffix}`;
+}
+
+function outboxBelongsToRequest(operation: ConnectorOutboxOperation, requestId: string): boolean {
+  if (operation.kind === "progress" || operation.kind === "complete") {
+    return operation.requestId === requestId;
+  }
+  return operation.kind === "append" && operation.input.replyTo === requestId;
 }
 
 function sessionTimestamp(value: number): string {

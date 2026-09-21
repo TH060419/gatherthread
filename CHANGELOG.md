@@ -11,7 +11,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Fixed
 
-- Recover a request whose claiming runtime died, hung, or was rebuilt on another device, instead of leaving it unanswered forever.
+- Recover a request whose exact bound runtime restarts or resumes after a stalled execution, instead of leaving it unanswered forever.
 - Stop an abandoned claim from permanently consuming its runtime's single active-claim slot and blocking every later request on that runtime.
 
 ## [0.1.0-alpha.5] - 2026-09-16

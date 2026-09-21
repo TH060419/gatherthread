@@ -32,7 +32,7 @@ export function agentRequestAlreadyCompleted(): ApiError {
   return new ApiError(409, "agent_request_already_completed", "Agent request was already completed as a local turn");
 }
 
-export function agentRequestFailed(message = "Agent request was abandoned by every runtime that claimed it"): ApiError {
+export function agentRequestFailed(message = "Agent request was abandoned by its exact runtime after bounded recovery attempts"): ApiError {
   return new ApiError(409, "agent_request_failed", message);
 }
 

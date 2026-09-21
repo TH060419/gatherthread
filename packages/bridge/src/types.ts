@@ -128,6 +128,7 @@ export interface AppendEventInput {
   replyTo?: string;
   visibility?: string;
   runtimeId?: string;
+  claimAttempt?: number;
   runtime?: RuntimeProvenance;
   observedModel?: string;
   observedReasoningEffort?: string;

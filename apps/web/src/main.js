@@ -129,6 +129,7 @@ let selectedSessionGeneration = 0;
 let pendingDshPairingCode = dshPairingCodeFromHash(location.hash);
 const expandedWorklogs = new Set();
 const localSyncStatusRequestsInFlight = new Set();
+const retryingAgentRequestIds = new Set();
 const LOCAL_SYNC_REQUEST_KINDS = new Set([
   "local_sync_status",
   "local_auto_upload_enable",
@@ -702,7 +703,7 @@ snapshotRequestList.addEventListener("click", (event) => {
 });
 timeline.addEventListener("click", (event) => {
   const button = event.target.closest("button[data-action='retry-agent-request']");
-  if (button) void retryAgentRequest(button.dataset.requestId);
+  if (button && !button.disabled) void retryAgentRequest(button.dataset.requestId, button);
 });
 element("retry-sync-button").addEventListener("click", () => sync.retry());
 
@@ -1499,7 +1500,7 @@ function renderTimeline({ followNewEvents = false } = {}) {
           currentUser: state.currentUser,
           connectionPhase: state.sync.phase,
           kind: "agent_request",
-        }).allowed;
+        }).allowed || retryingAgentRequestIds.has(request.id);
         article.append(retry);
       }
     }
@@ -1989,11 +1990,14 @@ async function sendMessage(kind) {
  * so the retry targets the same harness, provider, model, and runtime the user
  * originally chose; it never falls back to a different target.
  */
-async function retryAgentRequest(requestId) {
+async function retryAgentRequest(requestId, button) {
+  if (retryingAgentRequestIds.has(requestId)) return;
   const request = state.session
     ? state.sync.events.find((event) => event.type === "agent_request" && event.id === requestId)
     : undefined;
   if (!request || !state.session) return;
+  retryingAgentRequestIds.add(requestId);
+  button.disabled = true;
   sendError.textContent = "";
   try {
     await api.appendAgentRequest(
@@ -2002,6 +2006,9 @@ async function retryAgentRequest(requestId) {
     );
   } catch (error) {
     sendError.textContent = error.message ?? "The event was not accepted.";
+  } finally {
+    retryingAgentRequestIds.delete(requestId);
+    if (button.isConnected) button.disabled = false;
   }
 }
 
