@@ -105,6 +105,7 @@ class FakeApi implements DshCollaborationApi {
   readonly idempotent = new Map<string, DshCanonicalEvent>();
   readCount = 0;
   heartbeatCount = 0;
+  claimAttempt = 2;
   claimConflictCode: string | undefined;
   failNextKind: "progress" | "append" | "complete" | "local_turn" | undefined;
   failNextHeartbeat = false;
@@ -176,10 +177,10 @@ class FakeApi implements DshCollaborationApi {
     if (this.claimConflictCode !== undefined) throw new FakeConflict(this.claimConflictCode);
     const status = this.claims.get(requestId);
     if (status !== undefined) {
-      return { claimed: status === "claimed", status, requestId, runtimeId, attemptCount: 2 };
+      return { claimed: status === "claimed", status, requestId, runtimeId, attemptCount: this.claimAttempt };
     }
     this.claims.set(requestId, "claimed");
-    return { claimed: true, status: "claimed", requestId, runtimeId, attemptCount: 2 };
+    return { claimed: true, status: "claimed", requestId, runtimeId, attemptCount: this.claimAttempt };
   }
 
   async appendAgentProgress(
@@ -835,12 +836,14 @@ test("offline outbox failure survives disposal and resumes without re-prompting"
   assert.equal(persistence.prompts.length, 1);
   assert.equal(firstHost.disposeCount, 1);
 
+  api.claimAttempt = 3;
   const resumedHost = new FakeHost(cfg.dshSessionId, persistence);
   const resumed = new DshHostConnector({ config: cfg, api, host: resumedHost, stateStore: store });
   await resumed.start({ schedule: false });
   assert.equal(persistence.prompts.length, 1, "outbox replay must not call the model again");
   assert.equal(api.appended.length, 2);
   assert.equal(api.completions.length, 1);
+  assert.equal(api.completions[0]?.claimAttempt, 3, "recovered outbox must use the renewed claim attempt");
   assert.equal((await store.load())?.outbox.length, 0);
   assert.equal((await store.load())?.activeRequest, undefined);
   await resumed.stop();
