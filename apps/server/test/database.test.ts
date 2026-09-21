@@ -987,6 +987,15 @@ test("expired and superseded claim attempts cannot publish progress or completio
     const event = request("agent-request-lease-fence-0001");
     const firstClaim = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id);
     assert.equal(firstClaim.attempt_count, 1);
+    assert.equal(f.service.appendEvent(f.member, sessionId, {
+      type: "tool_call",
+      visibility: "session",
+      idempotency_key: "tool-current-attempt-0001",
+      reply_to_event_id: event.id,
+      runtime_id: first.id,
+      claim_attempt: 1,
+      payload: { tool_name: "shell", tool_call_id: "call-1", arguments: {} },
+    }).reply_to_event_id, event.id);
     nowMs.value += PAST_LEASE_MS;
     keepAlive();
     assert.throws(
@@ -995,6 +1004,27 @@ test("expired and superseded claim attempts cannot publish progress or completio
     );
     const secondClaim = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id);
     assert.equal(secondClaim.attempt_count, 2);
+    assert.throws(
+      () => f.service.appendEvent(f.member, sessionId, {
+        type: "tool_result",
+        visibility: "session",
+        idempotency_key: "tool-stale-attempt-0001",
+        reply_to_event_id: event.id,
+        runtime_id: first.id,
+        claim_attempt: 1,
+        payload: { tool_call_id: "call-1", result: "stale" },
+      }),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.equal(f.service.appendEvent(f.member, sessionId, {
+      type: "tool_result",
+      visibility: "session",
+      idempotency_key: "tool-current-attempt-0002",
+      reply_to_event_id: event.id,
+      runtime_id: first.id,
+      claim_attempt: 2,
+      payload: { tool_call_id: "call-1", result: "current" },
+    }).reply_to_event_id, event.id);
     assert.throws(
       () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "complete-stale-0001", { text: "stale" }, undefined, undefined, 1),
       (error: unknown) => error instanceof ApiError && error.code === "conflict",
@@ -1058,6 +1088,12 @@ test("a request fails visibly instead of ping-ponging between runtimes forever",
   const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
   try {
     const event = request("agent-request-lease-0005");
+    f.service.appendEvent(f.member, sessionId, {
+      type: "human_chat",
+      visibility: "session",
+      idempotency_key: `agent-claim-abandoned:${event.id}`,
+      payload: { content: "pre-existing client-controlled collision" },
+    });
     assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
     // Every runtime that picks the request up dies the same way. Automatic
     // recovery has to run out somewhere, and has to say so when it does.

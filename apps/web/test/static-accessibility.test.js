@@ -604,6 +604,10 @@ test("a failed Agent response is shown as a failure with an explicit retry", asy
   assert.match(main, /retryAgentRequestInput\(/);
   assert.match(main, /api\.appendAgentRequest\(state\.session\.id/);
   assert.match(main, /closest\("button\[data-action='retry-agent-request'\]"\)/);
+  assert.match(main, /retryingAgentRequestIds\.has\(request\.id\)/);
+  assert.match(main, /retryingAgentRequestIds\.add\(requestId\)/);
+  assert.match(main, /retryingAgentRequestIds\.delete\(requestId\)/);
+  assert.match(main, /button\.disabled = true/);
   assert.match(styles, /\.event-agent_response-failed/);
   assert.match(styles, /\.agent-retry-button/);
 });

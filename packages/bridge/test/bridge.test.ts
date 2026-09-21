@@ -207,6 +207,14 @@ test("agent request claim hydrates canonical history and completes with redacted
       await input.publishProgress?.({ id: "commentary-1", content: "Checking token=supersecretvalue" });
       return {
         events: [{
+          kind: "tool_call",
+          localEventId: "tool-1",
+          harness: "codex",
+          captureFidelity: "harness_transcript",
+          toolName: "shell",
+          toolCallId: "call-1",
+          arguments: { command: "echo safe" },
+        }, {
           kind: "assistant",
           localEventId: "answer-1",
           harness: "codex",
@@ -224,6 +232,8 @@ test("agent request claim hydrates canonical history and completes with redacted
   assert.match(api.progressInputs[0]?.idempotencyKey ?? "", /:progress:start$/);
   assert.match(api.progressInputs[1]?.idempotencyKey ?? "", /:progress:/);
   assert.doesNotMatch(JSON.stringify(api.progressInputs[1]?.payload), /supersecretvalue/);
+  assert.equal(api.appended[0]?.replyTo, request.id);
+  assert.equal(api.appended[0]?.claimAttempt, 2);
   assert.equal((api.completeInput?.payload as any).text, "[REDACTED]");
   assert.equal(api.completeInput?.claimAttempt, 2);
 });

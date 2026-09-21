@@ -206,6 +206,54 @@ test("HTTP client redacts its bearer credential from server errors", async () =>
   });
 });
 
+test("HTTP client rejects a malformed present claim attempt instead of treating it as legacy", async () => {
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async () => Response.json({
+      data: {
+        request_event_id: "request-1",
+        runtime_id: "runtime-1",
+        status: "claimed",
+        attempt_count: "2",
+      },
+    }),
+  });
+  await assert.rejects(
+    client.claimAgentRequest("session-1", "request-1", "runtime-1"),
+    /claim\.attempt_count/,
+  );
+});
+
+test("HTTP client carries the claim attempt on request-linked tool events", async () => {
+  let requestBody: unknown;
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async (_input, init = {}) => {
+      requestBody = JSON.parse(String(init.body));
+      return Response.json({ data: { event: wireEvent("tool-1", 1, wireProvenance()) } });
+    },
+  });
+  await client.appendEvent("session-1", {
+    type: "tool_call",
+    idempotencyKey: "tool-event-0001",
+    payload: { tool_name: "shell", tool_call_id: "call-1", arguments: {} },
+    replyTo: "request-1",
+    runtimeId: "runtime-1",
+    claimAttempt: 3,
+  });
+  assert.deepEqual(requestBody, {
+    type: "tool_call",
+    idempotency_key: "tool-event-0001",
+    payload: { tool_name: "shell", tool_call_id: "call-1", arguments: {} },
+    reply_to_event_id: "request-1",
+    visibility: "session",
+    runtime_id: "runtime-1",
+    claim_attempt: 3,
+  });
+});
+
 test("HTTP client creates creator-owned project solos with a stable idempotency key", async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
   const client = new HttpCollaborationClient({

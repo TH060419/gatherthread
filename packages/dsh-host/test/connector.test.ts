@@ -397,7 +397,7 @@ class FakeHost implements DshHostFacade {
       for (const listener of this.#eventListeners) listener(event);
     }
     this.emitStatus("idle");
-    const returned = structuredClone(additions);
+    const returned = structuredClone(this.#persistence.events.slice(fromSequence));
     if (this.duplicateReturnedEvent) returned.push(structuredClone(additions[1]!));
     return {
       fromSequence,
@@ -423,6 +423,12 @@ class FakeHost implements DshHostFacade {
 
   async flush(): Promise<void> {
     this.flushCount += 1;
+  }
+
+  emitActiveEvent(): void {
+    const event = this.event("step/start", { turn: 1, step: 1 });
+    this.#persistence.events.push(event);
+    for (const listener of this.#eventListeners) listener(event);
   }
 
   emitLocalTurn(input = "LOCAL_DSH_REQUEST", output = "LOCAL_DSH_RESPONSE"): void {
@@ -842,6 +848,7 @@ test("offline outbox failure survives disposal and resumes without re-prompting"
   await resumed.start({ schedule: false });
   assert.equal(persistence.prompts.length, 1, "outbox replay must not call the model again");
   assert.equal(api.appended.length, 2);
+  assert.deepEqual(api.appended.map((item) => item.claimAttempt), [3, 3]);
   assert.equal(api.completions.length, 1);
   assert.equal(api.completions[0]?.claimAttempt, 3, "recovered outbox must use the renewed claim attempt");
   assert.equal((await store.load())?.outbox.length, 0);
@@ -982,6 +989,86 @@ test("crash-repaired active request resumes through DSH context instead of repla
   assert.equal((api.completions[0]?.payload as { text: string }).text, "recovered final");
   assert.doesNotMatch(JSON.stringify(api.completions), /PRIVATE_CRASH_REASONING|partial/);
   assert.equal((await store.load())?.activeRequest, undefined);
+  await connector.stop();
+});
+
+test("terminal failure while recovering retires durable active state and resumes canonical replay", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  const activeRequest = request(1);
+  api.events.push(activeRequest, canonical(2, "agent_response", {
+    text: "This Agent request was interrupted and could not be recovered.",
+    status: "failed",
+  }));
+  api.claimConflictCode = "agent_request_failed";
+  const state: ConnectorState = {
+    version: 3,
+    binding: { projectId: cfg.projectId, sessionId: cfg.sessionId, dshSessionId: cfg.dshSessionId },
+    serverCursor: 0,
+    projectionCursor: 0,
+    publishedDshSequence: 0,
+    automaticUpload: true,
+    activeRequest: {
+      requestId: activeRequest.id,
+      requestSequence: activeRequest.sequence,
+      dshFromSequence: 0,
+      promptDigest: "a".repeat(64),
+      claimAttempt: 3,
+    },
+    outbox: [{
+      id: "pending-progress",
+      kind: "progress",
+      requestId: activeRequest.id,
+      input: {
+        runtimeId: "runtime-1",
+        claimAttempt: 3,
+        idempotencyKey: "pending-progress",
+        payload: { content: "stale pending progress" },
+      },
+    }],
+  };
+  const store = new MemoryConnectorStateStore(state);
+  const persistence = freshPersistence();
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host: new FakeHost(cfg.dshSessionId, persistence),
+    stateStore: store,
+  });
+
+  await connector.start({ schedule: false });
+  const recovered = await store.load();
+  assert.equal(recovered?.activeRequest, undefined);
+  assert.deepEqual(recovered?.outbox, []);
+  assert.equal(recovered?.serverCursor, 2);
+  assert.equal(persistence.prompts.length, 0);
+  await connector.stop();
+});
+
+test("live DSH status and durable events renew the claim before the prompt returns", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  api.events.push(request(1));
+  const persistence = freshPersistence();
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  let releasePrompt: (() => void) | undefined;
+  host.promptGate = new Promise<void>((resolve) => { releasePrompt = resolve; });
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+
+  const started = connector.start({ schedule: false });
+  await waitFor(() => persistence.prompts.length === 1);
+  await waitFor(() => api.progress.length >= 1);
+  const progressBeforeEvent = api.progress.length;
+  host.emitActiveEvent();
+  await waitFor(() => api.progress.length > progressBeforeEvent);
+  assert.ok(api.progress.every((item) => item.claimAttempt === 2));
+  releasePrompt?.();
+  await started;
   await connector.stop();
 });
 

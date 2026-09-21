@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   AgentExecutionProfileSchema,
   AgentProgressInputSchema,
+  AgentRequestClaimSchema,
   AppendEventInputSchema,
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
@@ -56,6 +57,19 @@ test("Agent progress and completion accept a positive claim attempt fence", () =
   assert.equal(CompleteAgentRequestInputSchema.parse(input).claim_attempt, 2);
   assert.equal(AgentProgressInputSchema.parse(input).claim_attempt, 2);
   assert.equal(CompleteAgentRequestInputSchema.safeParse({ ...input, claim_attempt: 0 }).success, false);
+});
+
+test("Agent request claim results distinguish legacy omission from malformed attempts", () => {
+  const legacy = {
+    request_event_id: "request-1",
+    runtime_id: "runtime-1",
+    status: "claimed",
+  };
+  assert.equal(AgentRequestClaimSchema.parse(legacy).attempt_count, undefined);
+  assert.equal(AgentRequestClaimSchema.parse({ ...legacy, attempt_count: 2 }).attempt_count, 2);
+  assert.equal(AgentRequestClaimSchema.safeParse({ ...legacy, attempt_count: 0 }).success, false);
+  assert.equal(AgentRequestClaimSchema.safeParse({ ...legacy, attempt_count: "2" }).success, false);
+  assert.equal(AgentRequestClaimSchema.safeParse({ ...legacy, status: "unknown" }).success, false);
 });
 
 test("append input rejects unknown event types and short idempotency keys", () => {
