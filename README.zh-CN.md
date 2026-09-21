@@ -125,7 +125,7 @@ DeepSeek Harness 也使用同样清晰的三步流程：
 
 `0.1.0-alpha.5` 尚未开放共序官方服务和公共 Beta。本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用；[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)已经为下一阶段部署准备好，但不代表服务器已上线。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
 
-尚未实现：主机自动故障转移、多进程 WebSocket fan-out、无人处理的 Agent 请求领取恢复、Agent token 级流式显示、附件对象存储、保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。
+尚未实现：主机自动故障转移、多进程 WebSocket fan-out、Agent token 级流式显示、附件对象存储、保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。
 
 更多信息请参阅 [`0.1.0-alpha.5` 说明](docs/releases/0.1.0-alpha.5.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
 

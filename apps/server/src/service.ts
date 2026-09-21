@@ -11,7 +11,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { CollaborationDatabase, type Actor, type RuntimeRecord, type SessionRecord } from "./database.js";
-import { conflict, forbidden, notFound } from "./errors.js";
+import { agentRequestFailed, conflict, forbidden, notFound } from "./errors.js";
 import { redactJson } from "./redaction.js";
 
 type EventListener = (event: CanonicalEvent) => void;
@@ -312,7 +312,12 @@ export class CollaborationService {
 
   claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string) {
     this.requireWrite(actor, sessionId);
-    return this.database.claimAgentRequest(actor, sessionId, requestEventId, runtimeId);
+    const outcome = this.database.claimAgentRequest(actor, sessionId, requestEventId, runtimeId);
+    if ("failed" in outcome) {
+      if (outcome.event !== undefined) this.publish(outcome.event);
+      throw agentRequestFailed();
+    }
+    return outcome.claim;
   }
 
   appendAgentProgress(
@@ -324,6 +329,7 @@ export class CollaborationService {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     const { session } = this.requireWrite(actor, sessionId);
     if (session.state !== "active") throw conflict("Archived sessions do not accept agent progress");
@@ -336,6 +342,7 @@ export class CollaborationService {
       redactJson(payload),
       observedModel,
       observedReasoningEffort,
+      claimAttempt,
     );
     this.publish(event);
     return event;
@@ -350,6 +357,7 @@ export class CollaborationService {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     const { session } = this.requireWrite(actor, sessionId);
     if (session.state !== "active") throw conflict("Archived sessions do not accept agent responses");
@@ -362,6 +370,7 @@ export class CollaborationService {
       redactJson(payload),
       observedModel,
       observedReasoningEffort,
+      claimAttempt,
     );
     this.publish(event);
     return event;

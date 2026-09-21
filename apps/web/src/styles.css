@@ -1689,6 +1689,21 @@ code {
   background: #f4faf7;
 }
 
+.event-agent_response-failed {
+  border-color: #d4ad67;
+  background: var(--amber-wash);
+}
+
+.agent-failure-notice {
+  margin: 8px 0 0;
+  color: var(--ink-soft);
+  font-size: 0.82rem;
+}
+
+.agent-retry-button {
+  margin: 8px 0 0;
+}
+
 .agent-pending-status {
   display: flex;
   align-items: center;

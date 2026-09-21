@@ -591,3 +591,23 @@ test("the composer uses its accessible divider instead of a scrolling control pa
   assert.match(styles, /\.composer > textarea \{[\s\S]*?resize: none;/);
   assert.match(main, /installComposerLayoutResizer\(composerLayoutResizer\)/);
 });
+
+test("a failed Agent response is shown as a failure with an explicit retry", async () => {
+  const [main, styles] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
+  // The failure has to be visible: a request that no runtime could finish must
+  // not read as an ordinary answer, and it must offer a way forward.
+  assert.match(main, /isFailedAgentResponse\(event\)/);
+  assert.match(main, /failedRequestFor,/);
+  assert.match(main, /request && canRetryFailedAgentRequest\(request, state\.currentUser\)/);
+  assert.match(main, /event-agent_response-failed/);
+  assert.match(main, /setAttribute\("data-action", "retry-agent-request"\)/);
+  assert.match(main, /retryAgentRequestInput\(/);
+  assert.match(main, /api\.appendAgentRequest\(state\.session\.id/);
+  assert.match(main, /closest\("button\[data-action='retry-agent-request'\]"\)/);
+  assert.match(main, /retryingAgentRequestIds\.has\(request\.id\)/);
+  assert.match(main, /retryingAgentRequestIds\.add\(requestId\)/);
+  assert.match(main, /retryingAgentRequestIds\.delete\(requestId\)/);
+  assert.match(main, /button\.disabled = true/);
+  assert.match(styles, /\.event-agent_response-failed/);
+  assert.match(styles, /\.agent-retry-button/);
+});

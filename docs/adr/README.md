@@ -25,4 +25,6 @@ Architecture Decision Records document significant technical choices, their rati
 | [0019](0019-native-history-projection-across-harness-switches.md) | Project canonical history into native sessions across harness switches | accepted | 2026-09-06 |
 | [0020](0020-per-conversation-upload-consent-and-manual-recovery.md) | Add per-conversation upload consent and manual recovery | accepted | 2026-09-15 |
 | [0021](0021-import-visible-codex-history-as-a-new-task.md) | Import visible Codex history as a new task | accepted | 2026-09-16 |
+| [0022](0022-place-the-product-home-above-the-same-origin-application.md) | Place the product home above the same-origin application | accepted | 2026-09-17 |
+| [0023](0023-lease-and-bounded-redispatch-agent-claims.md) | Lease exact-runtime agent claims and fence recovery attempts | accepted | 2026-09-20 |
 | [0022](0022-place-the-product-home-above-the-same-origin-application.md) | Place the product home above the same-origin application | accepted | 2026-09-18 |

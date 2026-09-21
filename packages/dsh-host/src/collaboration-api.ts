@@ -80,10 +80,17 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
   };
 }
 
+/**
+ * A claim conflict the server has already resolved. `agent_request_failed` means
+ * the server exhausted its re-dispatch budget, so the request is finished as far
+ * as this connector is concerned: projecting the canonical failure and moving on
+ * is the only correct response, and retrying would spin on it every poll.
+ */
 export function isTerminalClaimConflict(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { status?: unknown; code?: unknown };
   return candidate.status === 409
     && (candidate.code === "agent_request_already_claimed"
-      || candidate.code === "agent_request_already_completed");
+      || candidate.code === "agent_request_already_completed"
+      || candidate.code === "agent_request_failed");
 }

@@ -84,4 +84,4 @@ Restore is an operator-approved destructive procedure. Follow [OPERATIONS.md](OP
 
 ## Alpha limitations
 
-This is one Node.js process with one SQLite database. It has no automatic failover, horizontal scaling, public registration, attachment storage, automated content-retention worker, token-level Agent streaming, or abandoned-claim recovery. Keep any later preview small and invitation-only, and alert on ECS disk/memory pressure, certificate expiry, service exit, backup failure, and database-integrity failure.
+This is one Node.js process with one SQLite database. It has no automatic failover, horizontal scaling, public registration, attachment storage, automated content-retention worker, or token-level Agent streaming. Keep any later preview small and invitation-only, and alert on ECS disk/memory pressure, certificate expiry, service exit, backup failure, and database-integrity failure.

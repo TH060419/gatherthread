@@ -179,6 +179,7 @@ export interface ConnectorActiveRequest {
   dshFromSequence: number;
   dshToSequence?: number;
   promptDigest: string;
+  claimAttempt?: number;
 }
 
 export type ConnectorOutboxOperation =

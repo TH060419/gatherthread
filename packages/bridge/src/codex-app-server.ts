@@ -1099,8 +1099,13 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   shouldExecute(request: CanonicalEvent, runtime: RegisteredRuntime): Promise<boolean> {
     return this.#withStateWriter(async () => {
       if (request.actorId !== runtime.userId) return false;
-      const requestedHarness = requestedHarnessForRequest(request);
-      if (requestedHarness !== undefined && requestedHarness !== runtime.harness) return false;
+      const requestedTarget = requestedTargetForRequest(request);
+      if (requestedTarget !== undefined
+        && (requestedTarget.harness !== runtime.harness
+          || (requestedTarget.provider !== undefined && requestedTarget.provider !== runtime.provider)
+          || (requestedTarget.runtimeId !== undefined && requestedTarget.runtimeId !== runtime.id))) {
+        return false;
+      }
       const workspacePath = await validateCodexWorkspace(this.#workspacePath);
       const state = await this.#loadState(runtime.sessionId, workspacePath);
       if (!state) return true;
@@ -3653,13 +3658,29 @@ function executionProfileForRequest(
   };
 }
 
-function requestedHarnessForRequest(request: CanonicalEvent): string | undefined {
+function requestedTargetForRequest(request: CanonicalEvent): {
+  harness: string;
+  provider?: string;
+  runtimeId?: string;
+} | undefined {
   const payload = isObject(request.payload) ? request.payload : undefined;
   const raw = payload && isObject(payload.execution_profile) ? payload.execution_profile : undefined;
   if (raw === undefined) return undefined;
   const harness = typeof raw.harness === "string" ? raw.harness.trim().toLowerCase() : "";
   if (!isSafeExecutionProfileText(harness, 80)) throw new Error("Agent request contains an invalid target harness");
-  return harness;
+  const provider = raw.provider === undefined ? undefined : typeof raw.provider === "string" ? raw.provider.trim() : "";
+  if (provider !== undefined && !isSafeExecutionProfileText(provider, 80)) {
+    throw new Error("Agent request contains an invalid target provider");
+  }
+  const runtimeId = raw.runtime_id === undefined ? undefined : typeof raw.runtime_id === "string" ? raw.runtime_id.trim() : "";
+  if (runtimeId !== undefined && !isSafeExecutionProfileText(runtimeId, 128)) {
+    throw new Error("Agent request contains an invalid target runtime");
+  }
+  return {
+    harness,
+    ...(provider === undefined ? {} : { provider }),
+    ...(runtimeId === undefined ? {} : { runtimeId }),
+  };
 }
 
 function isSafeExecutionProfileText(value: unknown, maximum: number): value is string {

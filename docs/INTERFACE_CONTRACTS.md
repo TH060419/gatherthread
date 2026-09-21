@@ -100,6 +100,10 @@ An `agent_request` names an exact harness/model profile and eligible runtime. Th
 - Public commentary may be uploaded; hidden reasoning is excluded.
 - The final response does not close the claim until it is durably committed.
 - Other connected harnesses may passively project the result but cannot execute the same request.
+- A claim carries a server-assigned lease and is renewed only by accepted `agent_progress` from its holder. Runtime presence never extends a lease.
+- A lapsed exact-runtime claim may be reclaimed only by the runtime recorded in the request profile. Reclaim never changes device, harness, provider, model, or runtime implicitly. Legacy requests without a runtime target retain their existing fail-closed selection rules. Only a live claim occupies a runtime's single active slot.
+- Claim success includes `attempt_count`. Progress and completion may send it as `claim_attempt`; current connectors always do. The server rejects an expired lease or a superseded attempt. For compatibility with Alpha connectors, omission is accepted only on attempt 1.
+- Reclaim is bounded. A request past the attempt budget terminates as `failed`: claiming it returns `agent_request_failed`, the server commits and publishes exactly one canonical `agent_response` with `status: "failed"` and no capture-fidelity or runtime-provenance claim, and a connector treats that conflict as terminal rather than retrying it.
 
 ## Snapshot and visible-history boundary
 

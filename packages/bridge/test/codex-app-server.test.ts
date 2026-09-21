@@ -19,6 +19,30 @@ import {
   type RegisteredRuntime,
 } from "../src/index.js";
 
+test("Codex executor passively skips requests targeted to another exact runtime or provider", async () => {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gatherthread-codex-routing-")));
+  const executor = new CodexAppServerExecutor({
+    client: { close: async () => undefined } as unknown as CodexAppServerClient,
+    workspacePath: directory,
+    statePath: path.join(directory, "state.json"),
+    threadName: "GatherThread · routing",
+    model: "gpt-test",
+  });
+  const runtime = registeredRuntime("routing-thread");
+  const targeted = (profile: Record<string, unknown>) => canonical(1, "agent_request", {
+    content: "route exactly once",
+    execution_profile: {
+      harness: "codex",
+      model: "gpt-5.6-sol",
+      ...profile,
+    },
+  });
+
+  assert.equal(await executor.shouldExecute(targeted({ runtime_id: "runtime-other" }), runtime), false);
+  assert.equal(await executor.shouldExecute(targeted({ provider: "provider-other" }), runtime), false);
+  assert.equal(await executor.shouldExecute(targeted({ runtime_id: runtime.id, provider: runtime.provider }), runtime), true);
+});
+
 test("visible-history import is deterministic, creates an empty-session marker, and compacts to its budget", () => {
   const empty = buildVisibleHistoryImport([], 1, 4_096);
   assert.equal(empty.messages.length, 2);

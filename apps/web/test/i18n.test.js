@@ -120,3 +120,8 @@ test("dynamic collaboration labels translate without touching unknown user text"
   assert.match(combinedDiagnostic, /重新连接 Codex/);
   assert.match(combinedDiagnostic, /重新连接 DSH 插件/);
 });
+
+test("agent failure and retry wording is bilingual", () => {
+  assert.equal(translateUiText("This Agent request failed before it produced an answer.", "zh-CN"), "该 Agent 请求未能产出回答。");
+  assert.equal(translateUiText("Retry Agent request", "zh-CN"), "重试 Agent 请求");
+});
