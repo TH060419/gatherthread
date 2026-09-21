@@ -375,10 +375,19 @@ export const ClaimAgentRequestInputSchema = z.object({
   runtime_id: IdSchema,
 });
 
+/**
+ * Pausing carries no parameters: the request is named by the path and the actor
+ * is the only authority. The empty strict object still requires a JSON content
+ * type, which is what keeps a cross-site form post from reaching it.
+ */
+export const PauseAgentRequestInputSchema = z.object({}).strict();
+
 export const AgentRequestClaimSchema = z.object({
   request_event_id: IdSchema,
   runtime_id: IdSchema,
-  status: z.enum(["claimed", "completed"]),
+  // `paused` is a decision by the requester, not a claim a runtime can execute.
+  // It is reported so a connector can skip the request without advancing past it.
+  status: z.enum(["claimed", "completed", "paused"]),
   attempt_count: z.number().int().positive().optional(),
 }).strict();
 

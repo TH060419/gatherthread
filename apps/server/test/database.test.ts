@@ -1238,6 +1238,143 @@ test("a database written before claim leases migrates its claims into recoverabl
   }
 });
 
+test("pausing fences the execution that was holding the claim", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count, 1);
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // The paused claim is no longer "claimed", so every write the in-flight
+    // execution could still make is fenced by the existing attempt check.
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-progress-0001", { content: "late" }),
+      (error: unknown) => error instanceof ApiError,
+      "a paused execution must not append progress",
+    );
+    assert.throws(
+      () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "pause-complete-0001", { text: "late" }),
+      (error: unknown) => error instanceof ApiError,
+      "a paused execution must not publish a final answer",
+    );
+    const responses = f.service.replay(f.member, sessionId, 0, 100).events
+      .filter((candidate) => candidate.type === "agent_response");
+    assert.deepEqual(responses, [], "the discarded in-flight answer must never reach canonical history");
+  } finally {
+    f.close();
+  }
+});
+
+test("a paused request is never resumed by the lease on its own", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0002");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // Long past the lease. Automatic recovery must not treat an explicit pause
+    // as an abandoned execution, or the button would do nothing.
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status,
+      "paused",
+      "a paused request stays paused until the requester resumes it",
+    );
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count,
+      1,
+      "a pause opens no execution and spends no recovery budget",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("pausing is visible to the whole room as an ordered lifecycle marker", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, secondActor, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0006");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // Everyone reads the same canonical log, so a pause has to be an event and
+    // not just a control-plane row: otherwise the room still believes the agent
+    // is working.
+    const marker = f.service.replay(f.member, sessionId, 0, 100).events
+      .find((candidate) => candidate.type === "agent_progress" && candidate.reply_to_event_id === event.id);
+    assert.ok(marker, "a pause must leave a canonical marker on the request");
+    assert.equal((marker.payload as { status?: string }).status, "paused");
+    assert.equal((marker.payload as { phase?: string }).phase, "lifecycle");
+    assert.equal(marker.actor_user_id, f.member.user_id, "the pause is attributed to the person who asked for it");
+    assert.ok(marker.sequence > event.sequence, "the marker is ordered after the request it pauses");
+    // Repeating the pause must not spam the timeline.
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    assert.equal(
+      f.service.replay(f.member, sessionId, 0, 100).events
+        .filter((candidate) => candidate.type === "agent_progress"
+          && (candidate.payload as { status?: string }).status === "paused").length,
+      1,
+      "pausing an already paused request is idempotent",
+    );
+    // A second member reads the same marker.
+    assert.ok(f.service.replay(secondActor, sessionId, 0, 100).events
+      .some((candidate) => candidate.reply_to_event_id === event.id
+        && (candidate.payload as { status?: string }).status === "paused"));
+  } finally {
+    f.close();
+  }
+});
+
+test("an execution fenced by a pause can never publish, however it ends", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0005");
+    const heldAttempt = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count;
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // The execution that was running when the author paused must never publish,
+    // whether it reports the generation it holds or omits it as a legacy client.
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-fence-progress-0001", { content: "late" },
+        undefined, undefined, heldAttempt),
+      (error: unknown) => error instanceof ApiError,
+    );
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-fence-progress-0002", { content: "late" }),
+      (error: unknown) => error instanceof ApiError,
+    );
+    assert.throws(
+      () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "pause-fence-complete-0001", { text: "late" }),
+      (error: unknown) => error instanceof ApiError,
+    );
+    // And no amount of waiting turns it back into work.
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "paused");
+  } finally {
+    f.close();
+  }
+});
+
+test("only the requesting user may pause an agent request", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0003");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // The project owner holds write access to this multi session and is still
+    // not the author of the request.
+    assert.throws(
+      () => f.service.pauseAgentRequest(f.owner, sessionId, event.id),
+      (error: unknown) => error instanceof ApiError,
+      "another member must not be able to stop someone else's agent",
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("DeepSeek Harness claims honor the exact Web-selected runtime and model without changing Codex claims", () => {
   const f = fixture();
   try {

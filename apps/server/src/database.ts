@@ -29,7 +29,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
-import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 
 export interface Actor {
   user_id: string;
@@ -196,14 +196,14 @@ interface SequenceRow { next_sequence: number }
 interface MembershipRow { role: MembershipRole }
 interface ClaimRow {
   runtime_id: string;
-  status: "claimed" | "completed" | "failed";
+  status: "claimed" | "completed" | "failed" | "paused";
   attempt_count?: number;
   lease_expires_at?: string | null;
 }
 export interface AgentClaimRecord {
   request_event_id: string;
   runtime_id: string;
-  status: "claimed" | "completed";
+  status: "claimed" | "completed" | "paused";
   attempt_count: number;
 }
 export type AgentClaimOutcome =
@@ -391,7 +391,7 @@ CREATE TABLE IF NOT EXISTS agent_request_claims (
   runtime_id TEXT NOT NULL REFERENCES runtimes(id),
   claimed_at TEXT NOT NULL,
   completed_at TEXT,
-  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed', 'paused')),
   attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
   lease_expires_at TEXT
 ) STRICT;
@@ -776,6 +776,7 @@ export class CollaborationDatabase {
     this.migrateSnapshotStorageLedger();
     this.migrateSnapshotControlRequests();
     this.migrateAgentClaimLease();
+    this.migrateAgentClaimPause();
     this.initializeEventStorageUsage();
   }
 
@@ -2323,6 +2324,16 @@ export class CollaborationDatabase {
         .get(requestEventId) as unknown as ClaimRow | undefined;
       if (existing) {
         if (existing.status === "failed") return { failed: true };
+        // A pause is a decision, not a lapsed lease. Handing the request back to
+        // a runtime here would make the button do nothing at all.
+        if (existing.status === "paused") {
+          return { claim: {
+            request_event_id: requestEventId,
+            runtime_id: existing.runtime_id,
+            status: "paused",
+            attempt_count: existing.attempt_count ?? 1,
+          } };
+        }
         if (existing.status === "completed" || !claimLeaseLapsed(existing.lease_expires_at, now)) {
           if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
           return { claim: {
@@ -2364,6 +2375,72 @@ export class CollaborationDatabase {
         attempt_count: 1,
       } };
     });
+  }
+
+  /**
+   * Stop an Agent request on its author's instruction.
+   *
+   * No counter moves. `isCurrentClaimAttempt` already refuses every write from a
+   * claim that is not `claimed`, so flipping the status is enough to fence out
+   * whatever execution was holding it — and because a paused request is never
+   * reclaimed, nothing can outlive that fence.
+   */
+  pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string): AgentClaimRecord {
+    this.assertActiveDevice(actor);
+    return this.transaction(() => {
+      const event = this.getEvent(sessionId, requestEventId);
+      if (event.type !== "agent_request") throw conflict("Only agent_request events can be paused");
+      if (event.actor_user_id !== actor.user_id) {
+        throw forbidden("Only the author of an Agent request may pause it");
+      }
+      const claim = this.requireClaimRow(requestEventId);
+      if (!claim) throw conflict("Only an Agent request a runtime has already claimed can be paused");
+      if (claim.status === "completed") throw agentRequestAlreadyCompleted();
+      if (claim.status === "failed") throw agentRequestFailed();
+      if (claim.status === "paused") return this.claimRecord(requestEventId, claim);
+      this.sqlite.prepare(`
+        UPDATE agent_request_claims
+        SET status = 'paused', lease_expires_at = NULL
+        WHERE request_event_id = ?
+      `).run(requestEventId);
+      // The claim row is a control-plane fact; the room reads the canonical log.
+      // Without an event the other members would keep believing the agent is
+      // working, and the timeline could not show the pause where it happened.
+      this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: `agent-request-paused:${requestEventId}`,
+        type: "agent_progress",
+        visibility: "session",
+        reply_to_event_id: requestEventId,
+        payload: {
+          content: "The author paused this Agent request.",
+          phase: "lifecycle",
+          status: "paused",
+        },
+      }, null);
+      // Report the row as it now stands, not as it was read before the update.
+      return {
+        request_event_id: requestEventId,
+        runtime_id: claim.runtime_id,
+        status: "paused",
+        attempt_count: claim.attempt_count ?? 1,
+      };
+    });
+  }
+
+  private requireClaimRow(requestEventId: string): ClaimRow | undefined {
+    return this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
+      .get(requestEventId) as unknown as ClaimRow | undefined;
+  }
+
+  private claimRecord(requestEventId: string, claim: ClaimRow): AgentClaimRecord {
+    // A terminally failed request is not a claim anyone can hold or resume.
+    if (claim.status === "failed") throw agentRequestFailed();
+    return {
+      request_event_id: requestEventId,
+      runtime_id: claim.runtime_id,
+      status: claim.status,
+      attempt_count: claim.attempt_count ?? 1,
+    };
   }
 
   private assertRuntimeClaimSlotAvailable(runtimeId: string, requestEventId: string, now: string): void {
@@ -3384,6 +3461,49 @@ export class CollaborationDatabase {
     }
     const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
     if (violations.length > 0) throw new Error("Agent claim lease migration failed foreign-key validation");
+  }
+
+  /**
+   * Let the author of an Agent request stop it. A paused claim stays paused: the
+   * request is a record, and asking again is a new request rather than a
+   * resurrection of this one, exactly as a terminally failed request is.
+   */
+  private migrateAgentClaimPause(): void {
+    const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_request_claims'")
+      .get() as { sql?: string } | undefined;
+    if (table?.sql === undefined || table.sql.includes("'paused'")) return;
+    this.sqlite.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.sqlite.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE agent_request_claims_next (
+          request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+          runtime_id TEXT NOT NULL REFERENCES runtimes(id),
+          claimed_at TEXT NOT NULL,
+          completed_at TEXT,
+          status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed', 'paused')),
+          attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+          lease_expires_at TEXT
+        ) STRICT;
+        INSERT INTO agent_request_claims_next(
+          request_event_id, runtime_id, claimed_at, completed_at, status,
+          attempt_count, lease_expires_at
+        ) SELECT
+          request_event_id, runtime_id, claimed_at, completed_at, status,
+          COALESCE(attempt_count, 1), lease_expires_at
+        FROM agent_request_claims;
+        DROP TABLE agent_request_claims;
+        ALTER TABLE agent_request_claims_next RENAME TO agent_request_claims;
+        COMMIT;
+      `);
+    } catch (error) {
+      try { this.sqlite.exec("ROLLBACK"); } catch { /* The migration may have failed before BEGIN. */ }
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) throw new Error("Agent claim pause migration failed foreign-key validation");
   }
 
   private migrateSnapshotStorageLedger(): void {

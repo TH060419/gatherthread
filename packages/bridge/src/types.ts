@@ -162,7 +162,7 @@ export interface CurrentActor {
 
 export interface AgentRequestClaim {
   claimed: boolean;
-  status: "claimed" | "completed";
+  status: "claimed" | "completed" | "paused";
   requestId: string;
   runtimeId: string;
   attemptCount?: number;
