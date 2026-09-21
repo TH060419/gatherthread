@@ -106,9 +106,9 @@ cancels its queued permit before it can claim a request. Existing single-Session
 valid when `bindingMode` is omitted; both modes resolve the real current actor
 before applying Solo permissions.
 
-During an active prompt, each newly durable DSH Host event queues one bounded,
-generic progress marker. The marker carries no event text, reasoning, headers,
-or private stream data, but renews the exact claim attempt. Progress, completion,
+During an active prompt, newly durable DSH Host events queue a rate-limited,
+generic progress marker; event bursts coalesce. The marker carries no event text,
+reasoning, headers, or private stream data, but renews the exact claim attempt. Progress, completion,
 and request-linked tool outbox entries are rebound to the renewed attempt after a
 crash recovery, while stale attempts remain fenced by the server.
 

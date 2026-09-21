@@ -60,6 +60,8 @@ export interface DshPollResult {
   completed: number;
 }
 
+const LIVE_PROGRESS_MIN_INTERVAL_MS = 60_000;
+
 /**
  * One project/session binding and one DSH write owner. The connector is not a
  * replacement for GatherThread's bridge: it is an opt-in Host-side runner with
@@ -86,6 +88,8 @@ export class DshHostConnector {
   #localSyncControlPromise: Promise<void> | undefined;
   #heartbeatPromise: Promise<void> | undefined;
   #liveProgressPromise: Promise<void> = Promise.resolve();
+  #lastLiveProgressKey: string | undefined;
+  #lastLiveProgressAt = 0;
   #stopPromise: Promise<void> | undefined;
   #backgroundFatalError: Error | undefined;
   readonly #lifecycleAbort = new AbortController();
@@ -595,6 +599,14 @@ export class DshHostConnector {
     if (active === undefined || runtime === undefined) return;
     const requestId = active.requestId;
     const claimAttempt = active.claimAttempt ?? 1;
+    const progressKey = `${requestId}:${String(claimAttempt)}`;
+    const now = Date.now();
+    if (this.#lastLiveProgressKey === progressKey
+      && now - this.#lastLiveProgressAt < LIVE_PROGRESS_MIN_INTERVAL_MS) {
+      return;
+    }
+    this.#lastLiveProgressKey = progressKey;
+    this.#lastLiveProgressAt = now;
     const idempotencyKey = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${idSuffix}`;
     this.#liveProgressPromise = this.#liveProgressPromise
       .then(async () => {
@@ -609,6 +621,10 @@ export class DshHostConnector {
         });
       })
       .catch((error: unknown) => {
+        if (this.#lastLiveProgressKey === progressKey) {
+          this.#lastLiveProgressKey = undefined;
+          this.#lastLiveProgressAt = 0;
+        }
         this.#onBackgroundError?.(publicError(error));
       });
   }

@@ -1078,7 +1078,11 @@ test("live durable DSH events renew the claim before the prompt returns", async 
   await waitFor(() => persistence.prompts.length === 1);
   const progressBeforeEvent = api.progress.length;
   host.emitActiveEvent();
+  host.emitActiveEvent();
+  host.emitActiveEvent();
   await waitFor(() => api.progress.length > progressBeforeEvent);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(api.progress.length, progressBeforeEvent + 1, "a durable event burst should coalesce");
   assert.ok(api.progress.every((item) => item.claimAttempt === 2));
   releasePrompt?.();
   await started;

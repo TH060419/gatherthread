@@ -766,7 +766,17 @@ async function main() {
       runtime_id: selectedRuntime.id,
     });
     const outputs = completed.events.filter((event) => event.reply_to_event_id === completed.request.id);
-    assert.deepEqual(outputs.map((event) => event.type), ["agent_progress", "agent_progress", "agent_response"]);
+    assert.deepEqual(outputs.map((event) => event.type), [
+      "agent_progress",
+      "agent_progress",
+      "agent_progress",
+      "agent_response",
+    ]);
+    assert.equal(
+      outputs.filter((event) => event.type === "agent_progress" && event.payload?.phase === "activity").length,
+      1,
+      "a burst of durable DSH events should produce one bounded activity renewal",
+    );
     assert.equal(new Set(outputs.map((event) => event.id)).size, outputs.length);
     assert.ok(outputs.every((event) => event.runtime_provenance?.runtime_id === selectedRuntime.id));
     assert.equal(JSON.stringify(completed.events).includes("PRIVATE_NPM_WEB_REASONING"), false);
