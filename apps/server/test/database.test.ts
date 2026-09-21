@@ -919,7 +919,7 @@ function claimLeaseFixture(nowMs: { value: number }) {
    * Keep both devices present across a clock jump. Runtime presence and claim
    * liveness are separate questions: a device that is up and heartbeating can
    * still be holding a claim whose execution has wedged, which is the case
-   * automatic re-dispatch exists to recover from.
+   * exact-runtime reclaim exists to recover from.
    */
   const keepAlive = () => {
     f.service.heartbeatRuntime(f.member, first.id);
@@ -1060,7 +1060,7 @@ test("a request fails visibly instead of ping-ponging between runtimes forever",
     const event = request("agent-request-lease-0005");
     assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
     // Every runtime that picks the request up dies the same way. Automatic
-    // re-dispatch has to run out somewhere, and has to say so when it does.
+    // recovery has to run out somewhere, and has to say so when it does.
     const published: string[] = [];
     const unsubscribe = f.service.onEvent((candidate) => published.push(candidate.id));
     const holders = [[f.member, first.id]] as const;
@@ -1077,7 +1077,7 @@ test("a request fails visibly instead of ping-ponging between runtimes forever",
         break;
       }
     }
-    assert.ok(bounded, "automatic re-dispatch must run out rather than rotate between runtimes forever");
+    assert.ok(bounded, "automatic recovery must run out rather than execute forever");
     assert.throws(
       () => f.service.claimAgentRequest(f.member, sessionId, event.id, first.id),
       (error: unknown) => error instanceof ApiError && error.code === "agent_request_failed",

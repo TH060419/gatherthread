@@ -280,7 +280,7 @@ const RUNTIME_OFFLINE_AFTER_MS = 30_000;
  * question and deliberately does not extend a lease on its own.
  */
 const AGENT_CLAIM_LEASE_MS = 5 * 60_000;
-/** Automatic re-dispatch attempts before a request is terminally failed. */
+/** Exact-runtime recovery attempts before a request is terminally failed. */
 const MAX_AGENT_CLAIM_ATTEMPTS = 3;
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
@@ -3321,7 +3321,7 @@ export class CollaborationDatabase {
   }
 
   /**
-   * Give agent claims a lease and a re-dispatch budget, and let them end in a
+   * Give agent claims a lease and a bounded recovery budget, and let them end in a
    * terminal `failed` rather than sitting `claimed` forever.
    *
    * Pre-lease rows are inserted with a null `lease_expires_at`, which the claim

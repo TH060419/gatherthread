@@ -6,7 +6,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Added
 
-- Lease Agent claims and bound their automatic re-dispatch. A claim is renewed only by accepted progress, a lapsed claim may be taken over by another eligible runtime of the same user, and a request that exhausts its re-dispatch budget fails visibly instead of staying pending.
+- Lease Agent claims and bound exact-runtime recovery. A claim is renewed only by accepted progress, a lapsed claim may be reclaimed only by its recorded runtime, stale attempts are fenced, and a request that exhausts its recovery budget fails visibly instead of staying pending.
 - Show a failed Agent response as a failure in the timeline, with a retry that replays the request's exact recorded harness, provider, model, and runtime.
 
 ### Fixed
