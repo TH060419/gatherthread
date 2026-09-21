@@ -50,7 +50,7 @@ class FakeApi implements CollaborationApi {
     return canonical(sessionId, this.appended.length, input);
   }
   async claimAgentRequest(_sessionId: string, requestId: string, runtimeId: string) {
-    return { claimed: true, status: "claimed" as const, requestId, runtimeId };
+    return { claimed: true, status: "claimed" as const, requestId, runtimeId, attemptCount: 2 };
   }
   async completeAgentRequest(_sessionId: string, _requestId: string, input: CompleteAgentRequestInput) {
     this.completeInput = input;
@@ -217,12 +217,14 @@ test("agent request claim hydrates canonical history and completes with redacted
   });
   assert.equal(result.claimed, true);
   assert.equal(api.progressInputs.length, 2);
+  assert.deepEqual(api.progressInputs.map((input) => input.claimAttempt), [2, 2]);
   assert.equal((api.progressInputs[0]?.payload as any)?.content, "Agent started processing the request.");
   assert.equal((api.progressInputs[0]?.payload as any)?.phase, "lifecycle");
   assert.match(api.progressInputs[0]?.idempotencyKey ?? "", /:progress:start$/);
   assert.match(api.progressInputs[1]?.idempotencyKey ?? "", /:progress:/);
   assert.doesNotMatch(JSON.stringify(api.progressInputs[1]?.payload), /supersecretvalue/);
   assert.equal((api.completeInput?.payload as any).text, "[REDACTED]");
+  assert.equal(api.completeInput?.claimAttempt, 2);
 });
 
 test("pending request polling persists the server cursor only after execution completes", async () => {

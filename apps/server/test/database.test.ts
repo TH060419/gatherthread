@@ -905,7 +905,15 @@ function claimLeaseFixture(nowMs: { value: number }) {
     idempotency_key: idempotencyKey,
     type: "agent_request",
     visibility: "session",
-    payload: { prompt: "do the work" },
+    payload: {
+      prompt: "do the work",
+      execution_profile: {
+        harness: "codex",
+        provider: "openai",
+        model: "gpt-5",
+        runtime_id: first.id,
+      },
+    },
   });
   /**
    * Keep both devices present across a clock jump. Runtime presence and claim
@@ -923,7 +931,7 @@ function claimLeaseFixture(nowMs: { value: number }) {
 /** Comfortably past any claim lease the server would choose for itself. */
 const PAST_LEASE_MS = 10 * 60_000;
 
-test("an abandoned agent claim is re-dispatched instead of blocking the request forever", () => {
+test("an abandoned exact-runtime claim can only be reclaimed by that runtime", () => {
   const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
   const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
   try {
@@ -933,18 +941,67 @@ test("an abandoned agent claim is re-dispatched instead of blocking the request 
     // request is stuck forever and no other runtime may answer it.
     nowMs.value += PAST_LEASE_MS;
     keepAlive();
-    const takeover = f.service.claimAgentRequest(secondActor, sessionId, event.id, second.id);
-    assert.equal(takeover.status, "claimed");
-    assert.equal(
-      takeover.runtime_id,
-      second.id,
-      "the abandoned request must move to the runtime that can actually answer it",
+    assert.throws(
+      () => f.service.claimAgentRequest(secondActor, sessionId, event.id, second.id),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+      "an exact target must not silently move to another runtime",
     );
+    const takeover = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id);
+    assert.equal(takeover.status, "claimed");
+    assert.equal(takeover.runtime_id, first.id);
+    assert.equal(takeover.attempt_count, 2);
     assert.equal(
-      f.service.completeAgentRequest(secondActor, sessionId, event.id, second.id, "agent-response-lease-0001", { text: "done" })
+      f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "agent-response-lease-0001", { text: "done" }, undefined, undefined, 2)
         .reply_to_event_id,
       event.id,
       "the replacement runtime owns the completion",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a runtime with a live claim cannot reclaim another lapsed request", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const lapsed = request("agent-request-lease-slot-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, lapsed.id, first.id).status, "claimed");
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    const live = request("agent-request-lease-slot-0002");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, live.id, first.id).status, "claimed");
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, sessionId, lapsed.id, first.id),
+      (error: unknown) => error instanceof ApiError && error.code === "runtime_busy",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("expired and superseded claim attempts cannot publish progress or completion", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-lease-fence-0001");
+    const firstClaim = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id);
+    assert.equal(firstClaim.attempt_count, 1);
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "progress-expired-0001", { content: "stale" }, undefined, undefined, 1),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    const secondClaim = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id);
+    assert.equal(secondClaim.attempt_count, 2);
+    assert.throws(
+      () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "complete-stale-0001", { text: "stale" }, undefined, undefined, 1),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.equal(
+      f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "complete-current-0001", { text: "done" }, undefined, undefined, 2).reply_to_event_id,
+      event.id,
     );
   } finally {
     f.close();
@@ -989,7 +1046,7 @@ test("a claim that keeps reporting progress is never taken over", () => {
     keepAlive();
     assert.throws(
       () => f.service.claimAgentRequest(secondActor, sessionId, event.id, second.id),
-      (error: unknown) => error instanceof ApiError && error.code === "agent_request_already_claimed",
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
     );
   } finally {
     f.close();
@@ -998,13 +1055,15 @@ test("a claim that keeps reporting progress is never taken over", () => {
 
 test("a request fails visibly instead of ping-ponging between runtimes forever", () => {
   const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
-  const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
   try {
     const event = request("agent-request-lease-0005");
     assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
     // Every runtime that picks the request up dies the same way. Automatic
     // re-dispatch has to run out somewhere, and has to say so when it does.
-    const holders = [[secondActor, second.id], [f.member, first.id]] as const;
+    const published: string[] = [];
+    const unsubscribe = f.service.onEvent((candidate) => published.push(candidate.id));
+    const holders = [[f.member, first.id]] as const;
     let bounded = false;
     for (let round = 0; round < 10; round += 1) {
       const [actor, runtimeId] = holders[round % 2]!;
@@ -1028,6 +1087,8 @@ test("a request fails visibly instead of ping-ponging between runtimes forever",
       .find((candidate) => candidate.type === "agent_response" && candidate.reply_to_event_id === event.id);
     assert.ok(failure, "the timeline must carry a canonical failure response");
     assert.equal((failure.payload as { status?: string }).status, "failed");
+    assert.ok(published.includes(failure.id), "terminal failure must be published to live subscribers");
+    unsubscribe();
   } finally {
     f.close();
   }
@@ -1070,9 +1131,9 @@ test("a database written before claim leases migrates its claims into recoverabl
     // The migrated row carries no lease, so nothing is renewing it. It must read
     // as recoverable rather than keep holding the request — and the runtime —
     // for ever, which is exactly what the previous release did.
-    const takeover = service.claimAgentRequest(lease.secondActor, lease.sessionId, event.id, lease.second.id);
+    const takeover = service.claimAgentRequest(lease.f.member, lease.sessionId, event.id, lease.first.id);
     assert.equal(takeover.status, "claimed");
-    assert.equal(takeover.runtime_id, lease.second.id);
+    assert.equal(takeover.runtime_id, lease.first.id);
   } finally {
     reopened.close();
     rmSync(lease.f.directory, { recursive: true, force: true });

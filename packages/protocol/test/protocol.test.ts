@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   AgentExecutionProfileSchema,
+  AgentProgressInputSchema,
   AppendEventInputSchema,
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
   CreateBrowserSessionInputSchema,
   CreateSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
+  CompleteAgentRequestInputSchema,
   CompleteSnapshotRequestInputSchema,
   CreateInvitationInputSchema,
   CreateProjectInputSchema,
@@ -42,6 +44,18 @@ test("Agent execution profiles are bounded single-line data", () => {
   assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "gpt-5.6-sol", reasoning_effort: "bad\u0085value" }).success, false);
   assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", provider: "bad\nprovider", model: "gpt-5.6-sol" }).success, false);
   assert.equal(AgentExecutionProfileSchema.safeParse({ harness: "codex", model: "gpt-5.6-sol", runtime_id: "bad runtime" }).success, false);
+});
+
+test("Agent progress and completion accept a positive claim attempt fence", () => {
+  const input = {
+    runtime_id: "runtime-1",
+    claim_attempt: 2,
+    idempotency_key: "agent-complete-0001",
+    payload: { text: "done" },
+  };
+  assert.equal(CompleteAgentRequestInputSchema.parse(input).claim_attempt, 2);
+  assert.equal(AgentProgressInputSchema.parse(input).claim_attempt, 2);
+  assert.equal(CompleteAgentRequestInputSchema.safeParse({ ...input, claim_attempt: 0 }).success, false);
 });
 
 test("append input rejects unknown event types and short idempotency keys", () => {

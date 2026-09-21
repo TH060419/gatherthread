@@ -176,10 +176,10 @@ class FakeApi implements DshCollaborationApi {
     if (this.claimConflictCode !== undefined) throw new FakeConflict(this.claimConflictCode);
     const status = this.claims.get(requestId);
     if (status !== undefined) {
-      return { claimed: status === "claimed", status, requestId, runtimeId };
+      return { claimed: status === "claimed", status, requestId, runtimeId, attemptCount: 2 };
     }
     this.claims.set(requestId, "claimed");
-    return { claimed: true, status: "claimed", requestId, runtimeId };
+    return { claimed: true, status: "claimed", requestId, runtimeId, attemptCount: 2 };
   }
 
   async appendAgentProgress(
@@ -751,9 +751,11 @@ test("connector runs register, replay, claim, prompt, progress/tool/final, curso
   assert.match(persistence.prompts[0] ?? "", /password=\[REDACTED\]/);
   assert.doesNotMatch(persistence.prompts[0] ?? "", /PRIVATE_/);
   assert.deepEqual(api.progress.map((item) => (item.payload as { status: string }).status), ["running", "idle"]);
+  assert.deepEqual(api.progress.map((item) => item.claimAttempt), [2, 2]);
   assert.equal(api.appended.filter((item) => item.type === "tool_call").length, 1);
   assert.equal(api.appended.filter((item) => item.type === "tool_result").length, 1);
   assert.equal(api.completions.length, 1);
+  assert.equal(api.completions[0]?.claimAttempt, 2);
   assert.equal((api.completions[0]?.payload as { text: string }).text, "public final");
   const uploaded = JSON.stringify({ progress: api.progress, tools: api.appended, final: api.completions });
   assert.doesNotMatch(uploaded, /PRIVATE_|hunter2|reasoning|replayState|stream/i);

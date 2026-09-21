@@ -597,6 +597,8 @@ test("a failed Agent response is shown as a failure with an explicit retry", asy
   // The failure has to be visible: a request that no runtime could finish must
   // not read as an ordinary answer, and it must offer a way forward.
   assert.match(main, /isFailedAgentResponse\(event\)/);
+  assert.match(main, /failedRequestFor,/);
+  assert.match(main, /canRetryFailedAgentRequest\(request, state\.currentUser\)/);
   assert.match(main, /event-agent_response-failed/);
   assert.match(main, /setAttribute\("data-action", "retry-agent-request"\)/);
   assert.match(main, /retryAgentRequestInput\(/);

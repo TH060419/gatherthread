@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   canAppend,
+  canRetryFailedAgentRequest,
   createSelectionGuard,
   eventContent,
   eventLabel,
@@ -429,4 +430,11 @@ test("retrying a failed request reuses its exact original target", () => {
   // A request with no recorded target must not be retried onto a different one.
   const untargeted = agentRequestEvent({ payload: { content: "no profile" } });
   assert.deepEqual(retryAgentRequestInput(untargeted, "agent_request:retry-key").executionProfile, undefined);
+});
+
+test("only the original requester can retry a failed Agent request", () => {
+  const request = agentRequestEvent({ actor: { id: "user-1", username: "Requester" } });
+  assert.equal(canRetryFailedAgentRequest(request, { id: "user-1" }), true);
+  assert.equal(canRetryFailedAgentRequest(request, { id: "user-2" }), false);
+  assert.equal(canRetryFailedAgentRequest(request, undefined), false);
 });
