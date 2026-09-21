@@ -206,6 +206,20 @@ test("HTTP client redacts its bearer credential from server errors", async () =>
   });
 });
 
+test("a paused claim is reported as not executing rather than as a protocol error", async () => {
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async () => Response.json({
+      data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "paused", attempt_count: 2 },
+    }),
+  });
+  const claim = await client.claimAgentRequest("session-1", "request-1", "runtime-1");
+  assert.equal(claim.status, "paused");
+  assert.equal(claim.claimed, false, "a paused request must never be handed to a runtime to execute");
+  assert.equal(claim.attemptCount, 2);
+});
+
 test("HTTP client rejects a malformed present claim attempt instead of treating it as legacy", async () => {
   const client = new HttpCollaborationClient({
     baseUrl: "https://collab.example/v1",

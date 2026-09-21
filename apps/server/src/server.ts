@@ -10,6 +10,7 @@ import {
   ApproveDshPairingInputSchema,
   BeginDshPairingInputSchema,
   ClaimAgentRequestInputSchema,
+  PauseAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
   ClaimInvitationInputSchema,
   ClaimSnapshotRequestInputSchema,
@@ -919,6 +920,12 @@ export async function startCollaborationServer(
       if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "claim" && parts.length === 6 && request.method === "POST") {
         const input = ClaimAgentRequestInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: service.claimAgentRequest(actor, sessionId, parts[4], input.runtime_id) });
+        return;
+      }
+
+      if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "pause" && parts.length === 6 && request.method === "POST") {
+        PauseAgentRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: service.pauseAgentRequest(actor, sessionId, parts[4]) });
         return;
       }
 

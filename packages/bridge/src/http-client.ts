@@ -182,7 +182,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       method: "POST",
       body: JSON.stringify({ runtime_id: runtimeId }),
     }));
-    if (body.status !== "claimed" && body.status !== "completed") {
+    if (body.status !== "claimed" && body.status !== "completed" && body.status !== "paused") {
       throw new Error("Collaboration API omitted claim.status");
     }
     const attemptCount = body.attempt_count === undefined

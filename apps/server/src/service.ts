@@ -320,6 +320,12 @@ export class CollaborationService {
     return outcome.claim;
   }
 
+  pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string) {
+    const { session } = this.requireWrite(actor, sessionId);
+    if (session.state !== "active") throw conflict("Archived sessions do not accept Agent request control");
+    return this.database.pauseAgentRequest(actor, sessionId, requestEventId);
+  }
+
   appendAgentProgress(
     actor: Actor,
     sessionId: string,

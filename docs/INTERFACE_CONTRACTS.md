@@ -104,6 +104,9 @@ An `agent_request` names an exact harness/model profile and eligible runtime. Th
 - A lapsed exact-runtime claim may be reclaimed only by the runtime recorded in the request profile. Reclaim never changes device, harness, provider, model, or runtime implicitly. Legacy requests without a runtime target retain their existing fail-closed selection rules. Only a live claim occupies a runtime's single active slot.
 - Claim success includes `attempt_count`. Progress and completion may send it as `claim_attempt`; current connectors always do. The server rejects an expired lease or a superseded attempt. For compatibility with Alpha connectors, omission is accepted only on attempt 1.
 - Reclaim is bounded. A request past the attempt budget terminates as `failed`: claiming it returns `agent_request_failed`, the server commits and publishes exactly one canonical `agent_response` with `status: "failed"` and no capture-fidelity or runtime-provenance claim, and a connector treats that conflict as terminal rather than retrying it.
+- The author of a request may **pause** it. Pausing is authorized to that author alone — a project owner who did not ask has no more right to stop it than to have asked it — and it is idempotent. A paused request is never handed to a runtime: claiming it returns `status: "paused"`, which is neither an execution nor a failure. A connector skips it, and no later lease lapse re-opens it.
+- A pause is announced as one canonical `agent_progress` lifecycle marker (`phase: "lifecycle"`, `status: "paused"`) linked to the request, so every member reads it in the ordered log rather than only the pausing client learning it from a control-plane response.
+- A paused request is a record, not a queue entry. Continuing is a **new** `agent_request`, exactly as retrying a failed one is: the new request's position in the log is what lets the resumed run see anything said while it was stopped.
 
 ## Snapshot and visible-history boundary
 
