@@ -60,6 +60,8 @@ export interface DshPollResult {
   completed: number;
 }
 
+const LIVE_PROGRESS_MIN_INTERVAL_MS = 60_000;
+
 /**
  * One project/session binding and one DSH write owner. The connector is not a
  * replacement for GatherThread's bridge: it is an opt-in Host-side runner with
@@ -85,6 +87,9 @@ export class DshHostConnector {
   #pollPromise: Promise<DshPollResult> | undefined;
   #localSyncControlPromise: Promise<void> | undefined;
   #heartbeatPromise: Promise<void> | undefined;
+  #liveProgressPromise: Promise<void> = Promise.resolve();
+  #lastLiveProgressKey: string | undefined;
+  #lastLiveProgressAt = 0;
   #stopPromise: Promise<void> | undefined;
   #backgroundFatalError: Error | undefined;
   readonly #lifecycleAbort = new AbortController();
@@ -185,6 +190,17 @@ export class DshHostConnector {
       const active = this.#state?.activeRequest;
       if (active !== undefined && event.seq >= active.dshFromSequence) {
         this.#liveEventSequences.add(event.seq);
+        this.#queueLiveProgress(
+          `dsh-live-${String(event.seq)}`,
+          {
+            content: "DeepSeek Harness produced durable work for the active request.",
+            phase: "activity",
+            status: "running",
+            dsh_event_sequence: event.seq,
+            capture_fidelity: "harness_transcript",
+            source_harness: "deepseek-harness",
+          },
+        );
       }
       if (active === undefined
         && event.type === "turn/end"
@@ -201,7 +217,9 @@ export class DshHostConnector {
     }));
     this.#listenerDisposers.push(this.#host.onStatus((status) => {
       if (this.#state?.activeRequest === undefined) return;
-      if (this.#activeStatuses.at(-1) !== status) this.#activeStatuses.push(status);
+      if (this.#activeStatuses.at(-1) !== status) {
+        this.#activeStatuses.push(status);
+      }
       this.#notifyLifecycle(status);
     }));
 
@@ -240,10 +258,11 @@ export class DshHostConnector {
       this.#assertRuntime(this.#runtime);
       this.#notifyLifecycle("idle");
       if (options.schedule !== false) this.#scheduleHeartbeat();
-      await this.#flushOutbox(this.#requireState().automaticUpload);
-      await this.#finalizeDeliveredRequest();
       if (this.#state.activeRequest !== undefined) {
         await this.#withExecutionPermit(() => this.#recoverActiveRequest());
+      } else {
+        await this.#flushOutbox(this.#requireState().automaticUpload);
+        await this.#finalizeDeliveredRequest();
       }
       if (options.runImmediately !== false) await this.pollOnce();
       if (this.#backgroundFatalError !== undefined) throw this.#backgroundFatalError;
@@ -330,12 +349,12 @@ export class DshHostConnector {
 
   async #poll(): Promise<DshPollResult> {
     const state = this.#requireState();
-    await this.#flushOutbox(state.automaticUpload);
-    await this.#finalizeDeliveredRequest();
     if (state.activeRequest !== undefined) {
       await this.#withExecutionPermit(() => this.#recoverActiveRequest());
       return { scanned: 0, claimed: 0, completed: 1 };
     }
+    await this.#flushOutbox(state.automaticUpload);
+    await this.#finalizeDeliveredRequest();
 
     if (state.automaticUpload) {
       await this.#captureLocalTurns();
@@ -380,9 +399,9 @@ export class DshHostConnector {
         if (profile.model !== this.#config.model) {
           throw new Error("DeepSeek Harness Agent request model does not match the configured Host binding");
         }
-        // The alpha server has no claim-abandon or lease-expiry API. Capacity
-        // and this connector's lifecycle therefore gate the entire
-        // claim -> prompt -> durable settlement transaction.
+        // Capacity and this connector's lifecycle gate the entire
+        // claim -> prompt -> durable settlement transaction. A lease now bounds
+        // how long a request stays ours if this process stops making progress.
         const outcome = await this.#withExecutionPermit(
           () => this.#executeRequest(event),
         );
@@ -439,6 +458,7 @@ export class DshHostConnector {
       requestSequence: request.sequence,
       dshFromSequence: baseline,
       promptDigest: digest(prompt),
+      claimAttempt: claim.attemptCount ?? 1,
     };
     this.#activeStatuses = [];
     this.#liveEventSequences.clear();
@@ -447,6 +467,7 @@ export class DshHostConnector {
     if (result.fromSequence !== baseline || result.toSequence < result.fromSequence) {
       throw new Error("DSH Host prompt returned an inconsistent durable event range");
     }
+    await this.#liveProgressPromise;
     this.#assertLiveEventsDurable(result);
     await this.#settleActiveRequest(result.events, result.toSequence);
     return { claimed: true, completed: true };
@@ -457,6 +478,49 @@ export class DshHostConnector {
     const state = this.#requireState();
     const active = state.activeRequest;
     if (active === undefined) return;
+    let claim;
+    try {
+      claim = await this.#api.claimAgentRequest(
+        this.#config.sessionId,
+        active.requestId,
+        this.#requireRuntime().id,
+      );
+    } catch (error) {
+      if (!isTerminalClaimConflict(error)) throw error;
+      state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
+      if (active.dshToSequence !== undefined) {
+        state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
+      }
+      delete state.activeRequest;
+      this.#activeStatuses = [];
+      this.#liveEventSequences.clear();
+      await this.#stateStore.save(state);
+      return;
+    }
+    if (claim.status === "completed" && active.dshToSequence !== undefined) {
+      state.outbox = [];
+      await this.#stateStore.save(state);
+      await this.#finalizeDeliveredRequest();
+      return;
+    }
+    if (!claim.claimed) {
+      throw new Error("Active GatherThread request no longer has a recoverable claim");
+    }
+    const claimAttempt = claim.attemptCount ?? active.claimAttempt ?? 1;
+    active.claimAttempt = claimAttempt;
+    if (active.dshToSequence !== undefined) {
+      state.outbox = state.outbox.map((operation) => {
+        if ((operation.kind === "progress" || operation.kind === "complete")
+          && operation.requestId === active.requestId) {
+          return { ...operation, input: { ...operation.input, claimAttempt } };
+        }
+        if (operation.kind === "append" && operation.input.replyTo === active.requestId) {
+          return { ...operation, input: { ...operation.input, claimAttempt } };
+        }
+        return operation;
+      });
+    }
+    await this.#stateStore.save(state);
     if (active.dshToSequence !== undefined) {
       await this.#flushOutbox();
       await this.#finalizeDeliveredRequest();
@@ -501,6 +565,7 @@ export class DshHostConnector {
     if (result.fromSequence !== baseline || result.toSequence < result.fromSequence) {
       throw new Error("DSH Host recovery prompt returned an inconsistent durable event range");
     }
+    await this.#liveProgressPromise;
     this.#assertLiveEventsDurable(result);
     await this.#settleActiveRequest(result.events, result.toSequence);
   }
@@ -522,10 +587,46 @@ export class DshHostConnector {
     }
     if (state.outbox.length > 0) throw new Error("DSH connector outbox was not empty before settlement");
     state.activeRequest = { ...active, dshToSequence: toSequence };
-    state.outbox = this.#outboxFor(mapped, this.#activeStatuses, active.requestId);
+    state.outbox = this.#outboxFor(mapped, this.#activeStatuses, active.requestId, active.claimAttempt ?? 1);
     await this.#stateStore.save(state);
     await this.#flushOutbox();
     await this.#finalizeDeliveredRequest();
+  }
+
+  #queueLiveProgress(idSuffix: string, payload: Record<string, unknown>): void {
+    const active = this.#state?.activeRequest;
+    const runtime = this.#runtime;
+    if (active === undefined || runtime === undefined) return;
+    const requestId = active.requestId;
+    const claimAttempt = active.claimAttempt ?? 1;
+    const progressKey = `${requestId}:${String(claimAttempt)}`;
+    const now = Date.now();
+    if (this.#lastLiveProgressKey === progressKey
+      && now - this.#lastLiveProgressAt < LIVE_PROGRESS_MIN_INTERVAL_MS) {
+      return;
+    }
+    this.#lastLiveProgressKey = progressKey;
+    this.#lastLiveProgressAt = now;
+    const idempotencyKey = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${idSuffix}`;
+    this.#liveProgressPromise = this.#liveProgressPromise
+      .then(async () => {
+        const current = this.#state?.activeRequest;
+        if (current?.requestId !== requestId || (current.claimAttempt ?? 1) !== claimAttempt) return;
+        await this.#api.appendAgentProgress(this.#config.sessionId, requestId, {
+          runtimeId: runtime.id,
+          claimAttempt,
+          idempotencyKey,
+          payload,
+          observedModel: this.#config.model,
+        });
+      })
+      .catch((error: unknown) => {
+        if (this.#lastLiveProgressKey === progressKey) {
+          this.#lastLiveProgressKey = undefined;
+          this.#lastLiveProgressAt = 0;
+        }
+        this.#onBackgroundError?.(publicError(error));
+      });
   }
 
   async #projectCanonicalBatch(
@@ -624,6 +725,7 @@ export class DshHostConnector {
     events: readonly DshMappedEvent[],
     statuses: readonly DshAgentStatus[],
     requestId: string,
+    claimAttempt: number,
   ): ConnectorOutboxOperation[] {
     const runtime = this.#requireRuntime();
     const prefix = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}`;
@@ -636,6 +738,7 @@ export class DshHostConnector {
         requestId,
         input: {
           runtimeId: runtime.id,
+          claimAttempt,
           idempotencyKey,
           payload: {
             content: status === "running"
@@ -682,6 +785,7 @@ export class DshHostConnector {
             payload: redactValue(payload),
             replyTo: requestId,
             runtimeId: runtime.id,
+            claimAttempt,
             observedModel: this.#config.model,
           },
         });
@@ -696,6 +800,7 @@ export class DshHostConnector {
       requestId,
       input: {
         runtimeId: runtime.id,
+        claimAttempt,
         idempotencyKey: completionKey,
         payload: {
           text: final.content,
@@ -1103,6 +1208,13 @@ function boundedPublicText(value: string): string {
     else high = middle - 1;
   }
   return `${redacted.slice(0, low)}${suffix}`;
+}
+
+function outboxBelongsToRequest(operation: ConnectorOutboxOperation, requestId: string): boolean {
+  if (operation.kind === "progress" || operation.kind === "complete") {
+    return operation.requestId === requestId;
+  }
+  return operation.kind === "append" && operation.input.replyTo === requestId;
 }
 
 function sessionTimestamp(value: number): string {

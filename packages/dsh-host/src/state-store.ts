@@ -184,7 +184,7 @@ function parseActiveRequest(value: unknown): NonNullable<ConnectorState["activeR
   const active = requiredObject(value, "state.activeRequest");
   exactKeys(
     active,
-    new Set(["requestId", "requestSequence", "dshFromSequence", "dshToSequence", "promptDigest"]),
+    new Set(["requestId", "requestSequence", "dshFromSequence", "dshToSequence", "promptDigest", "claimAttempt"]),
     "state.activeRequest",
   );
   const parsed = {
@@ -195,6 +195,9 @@ function parseActiveRequest(value: unknown): NonNullable<ConnectorState["activeR
       dshToSequence: nonNegativeInteger(active.dshToSequence, "state.activeRequest.dshToSequence"),
     }),
     promptDigest: hexDigest(active.promptDigest, "state.activeRequest.promptDigest"),
+    ...(active.claimAttempt === undefined ? {} : {
+      claimAttempt: positiveInteger(active.claimAttempt, "state.activeRequest.claimAttempt"),
+    }),
   };
   if (parsed.dshToSequence !== undefined && parsed.dshToSequence < parsed.dshFromSequence) {
     throw new Error("state.activeRequest.dshToSequence cannot precede dshFromSequence");
@@ -294,6 +297,7 @@ function parseAppendInput(value: unknown, label: string): DshAppendEventInput {
       "replyTo",
       "visibility",
       "runtimeId",
+      "claimAttempt",
       "observedModel",
       "observedReasoningEffort",
     ]),
@@ -309,6 +313,9 @@ function parseAppendInput(value: unknown, label: string): DshAppendEventInput {
     ...(input.replyTo === undefined ? {} : { replyTo: safeString(input.replyTo, `${label}.replyTo`, 128) }),
     ...(input.visibility === undefined ? {} : { visibility: safeString(input.visibility, `${label}.visibility`, 32) }),
     ...(input.runtimeId === undefined ? {} : { runtimeId: safeString(input.runtimeId, `${label}.runtimeId`, 128) }),
+    ...(input.claimAttempt === undefined ? {} : {
+      claimAttempt: positiveInteger(input.claimAttempt, `${label}.claimAttempt`),
+    }),
     ...(input.observedModel === undefined ? {} : { observedModel: safeString(input.observedModel, `${label}.observedModel`, 160) }),
     ...(input.observedReasoningEffort === undefined ? {} : {
       observedReasoningEffort: safeString(input.observedReasoningEffort, `${label}.observedReasoningEffort`, 80),
@@ -320,11 +327,14 @@ function parseCompletionInput(value: unknown, label: string): CompleteAgentReque
   const input = requiredObject(value, label);
   exactKeys(
     input,
-    new Set(["runtimeId", "idempotencyKey", "payload", "observedModel", "observedReasoningEffort"]),
+    new Set(["runtimeId", "claimAttempt", "idempotencyKey", "payload", "observedModel", "observedReasoningEffort"]),
     label,
   );
   return {
     runtimeId: safeString(input.runtimeId, `${label}.runtimeId`, 128),
+    ...(input.claimAttempt === undefined ? {} : {
+      claimAttempt: positiveInteger(input.claimAttempt, `${label}.claimAttempt`),
+    }),
     idempotencyKey: safeString(input.idempotencyKey, `${label}.idempotencyKey`, 200),
     payload: jsonValue(input.payload, `${label}.payload`),
     ...(input.observedModel === undefined ? {} : { observedModel: safeString(input.observedModel, `${label}.observedModel`, 160) }),

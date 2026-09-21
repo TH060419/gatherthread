@@ -182,12 +182,20 @@ export class HttpCollaborationClient implements CollaborationApi {
       method: "POST",
       body: JSON.stringify({ runtime_id: runtimeId }),
     }));
-    const status = body.status === "completed" ? "completed" : "claimed";
+    if (body.status !== "claimed" && body.status !== "completed") {
+      throw new Error("Collaboration API omitted claim.status");
+    }
+    const attemptCount = body.attempt_count === undefined
+      ? 1
+      : requiredNumber(body.attempt_count, "claim.attempt_count");
+    if (attemptCount < 1) throw new Error("Collaboration API omitted claim.attempt_count");
+    const status = body.status;
     return {
       claimed: status === "claimed",
       status,
       requestId: requiredString(body.request_event_id, "claim.request_event_id"),
       runtimeId: requiredString(body.runtime_id, "claim.runtime_id"),
+      attemptCount,
     };
   }
 
@@ -200,6 +208,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       method: "POST",
       body: JSON.stringify({
         runtime_id: input.runtimeId,
+        ...(input.claimAttempt === undefined ? {} : { claim_attempt: input.claimAttempt }),
         idempotency_key: input.idempotencyKey,
         payload: truncateJsonValue(input.payload, 160 * 1024),
         ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
@@ -218,6 +227,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       method: "POST",
       body: JSON.stringify({
         runtime_id: input.runtimeId,
+        ...(input.claimAttempt === undefined ? {} : { claim_attempt: input.claimAttempt }),
         idempotency_key: input.idempotencyKey,
         payload: truncateJsonValue(input.payload, 32 * 1024),
         ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
@@ -377,6 +387,7 @@ function toWireEvent(event: AppendEventInput): Record<string, unknown> {
     reply_to_event_id: event.replyTo,
     visibility: event.visibility ?? "session",
     runtime_id: event.runtimeId ?? event.runtime?.runtimeId,
+    claim_attempt: event.claimAttempt,
     observed_model: event.observedModel,
     observed_reasoning_effort: event.observedReasoningEffort,
   };

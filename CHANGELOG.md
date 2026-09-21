@@ -9,6 +9,13 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - Add ZCode as a third harness through the standalone `@gatherthread/zcode-connect` connector: headless CLI discovery and structural preflight probing, one execution runtime per writable session, claimed Web Agent request execution in a bounded headless ZCode child, incremental canonical-history hydration with native session resume, and versioned private binding state (see [ADR-0023](docs/adr/0023-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md)).
 - Add a ZCode stream-json transcript parser and the `zcode` harness name to the shared adapters and bridge registries.
 - Add ZCode to the Web workspace: agent harness selection, runtime resolution, connector command dialog, and bilingual copy.
+- Lease Agent claims and bound exact-runtime recovery. A claim is renewed only by accepted progress, a lapsed claim may be reclaimed only by its recorded runtime, stale attempts are fenced, and a request that exhausts its recovery budget fails visibly instead of staying pending.
+- Show a failed Agent response as a failure in the timeline, with a retry that replays the request's exact recorded harness, provider, model, and runtime.
+
+### Fixed
+
+- Recover a request whose exact bound runtime restarts or resumes after a stalled execution, instead of leaving it unanswered forever.
+- Stop an abandoned claim from permanently consuming its runtime's single active-claim slot and blocking every later request on that runtime.
 
 ### Known limitations
 
@@ -132,7 +139,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 - The Alpha is a single Node.js process with one SQLite database and no automatic failover or multi-process WebSocket fan-out.
 - Agent progress is item-level rather than token-level streaming. Hidden reasoning is never uploaded.
-- Attachments, retention workers, abandoned claim recovery, offline Web outbox, and open registration are not implemented.
+- Attachments, retention workers, offline Web outbox, and open registration are not implemented.
 - The DSH package is prepared but not published by this candidate; its verified npm Host surface is `@deepseek-ai/dsh@0.1.2-rc.1`, and DSH does not yet expose a stable root-version service or public plugin marketplace.
 - Alibaba Cloud deployment is intended for a small, invitation-only beta and requires operator-managed domain, filing, security-group, monitoring, and restore checks.
 - Public npm scope ownership, public plugin-directory distribution, and remote OAuth 2.1/PKCE MCP remain release follow-ups.

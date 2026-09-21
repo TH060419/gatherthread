@@ -35,6 +35,7 @@ const state: ConnectorState = {
     requestSequence: 9,
     dshFromSequence: 35,
     promptDigest: "a".repeat(64),
+    claimAttempt: 2,
   },
   outbox: [{
     id: "operation-1",
@@ -42,6 +43,7 @@ const state: ConnectorState = {
     requestId: "request-1",
     input: {
       runtimeId: "runtime-1",
+      claimAttempt: 2,
       idempotencyKey: "device:request:complete",
       payload: { text: "safe" },
     },

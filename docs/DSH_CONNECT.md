@@ -53,7 +53,7 @@ Do not add `--offline` unless the complete dependency metadata is already cached
 ## What synchronizes
 
 - One pairing connects every active project visible to that GatherThread identity and discovers later permissions.
-- Writable GatherThread sessions appear as editable native DSH conversations.
+- Writable GatherThread sessions appear as editable native DSH conversations. Newly created ones start with `<session> · 共序 · MULTI|SOLO` in the DSH session list; adopted and previously connected conversations keep their local titles, including user edits.
 - Canonical cloud history is projected into DSH; completed local turns upload once through a durable outbox.
 - In **Settings → GatherThread / 共序**, every connected conversation has its own **Automatic upload** switch and **Manual upload** action. Turning automation off keeps subsequent local turns private until the user uploads them; manual upload does not change the switch.
 - A new DSH conversation creates a creator-owned cloud Solo only after its first successful human/assistant turn.

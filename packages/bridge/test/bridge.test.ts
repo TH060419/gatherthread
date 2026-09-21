@@ -11,6 +11,7 @@ import {
   MemoryCursorStore,
   type AppendEventInput,
   type AgentProgressInput,
+  type AgentRequestClaim,
   type CanonicalEvent,
   type CollaborationApi,
   type CompleteAgentRequestInput,
@@ -49,8 +50,8 @@ class FakeApi implements CollaborationApi {
     this.appended.push(input);
     return canonical(sessionId, this.appended.length, input);
   }
-  async claimAgentRequest(_sessionId: string, requestId: string, runtimeId: string) {
-    return { claimed: true, status: "claimed" as const, requestId, runtimeId };
+  async claimAgentRequest(_sessionId: string, requestId: string, runtimeId: string): Promise<AgentRequestClaim> {
+    return { claimed: true, status: "claimed" as const, requestId, runtimeId, attemptCount: 2 };
   }
   async completeAgentRequest(_sessionId: string, _requestId: string, input: CompleteAgentRequestInput) {
     this.completeInput = input;
@@ -206,6 +207,14 @@ test("agent request claim hydrates canonical history and completes with redacted
       await input.publishProgress?.({ id: "commentary-1", content: "Checking token=supersecretvalue" });
       return {
         events: [{
+          kind: "tool_call",
+          localEventId: "tool-1",
+          harness: "codex",
+          captureFidelity: "harness_transcript",
+          toolName: "shell",
+          toolCallId: "call-1",
+          arguments: { command: "echo safe" },
+        }, {
           kind: "assistant",
           localEventId: "answer-1",
           harness: "codex",
@@ -217,12 +226,16 @@ test("agent request claim hydrates canonical history and completes with redacted
   });
   assert.equal(result.claimed, true);
   assert.equal(api.progressInputs.length, 2);
+  assert.deepEqual(api.progressInputs.map((input) => input.claimAttempt), [2, 2]);
   assert.equal((api.progressInputs[0]?.payload as any)?.content, "Agent started processing the request.");
   assert.equal((api.progressInputs[0]?.payload as any)?.phase, "lifecycle");
   assert.match(api.progressInputs[0]?.idempotencyKey ?? "", /:progress:start$/);
   assert.match(api.progressInputs[1]?.idempotencyKey ?? "", /:progress:/);
   assert.doesNotMatch(JSON.stringify(api.progressInputs[1]?.payload), /supersecretvalue/);
+  assert.equal(api.appended[0]?.replyTo, request.id);
+  assert.equal(api.appended[0]?.claimAttempt, 2);
   assert.equal((api.completeInput?.payload as any).text, "[REDACTED]");
+  assert.equal(api.completeInput?.claimAttempt, 2);
 });
 
 test("pending request polling persists the server cursor only after execution completes", async () => {
@@ -323,6 +336,34 @@ test("losing a cross-device claim race projects and advances only for the typed 
     async projectCanonicalEvents() { throw new Error("unrelated 409 must not be projected"); },
   }), (error: unknown) => error instanceof CollaborationHttpError && error.code === "runtime_busy");
   assert.equal((await otherCursor.load()).server["session-1"] ?? 0, 0);
+});
+
+test("a request the server has given up on is projected instead of retried forever", async () => {
+  const request = canonical("session-1", 1, {
+    type: "agent_request",
+    idempotencyKey: "abandoned-request",
+    payload: { text: "work no runtime could finish" },
+  });
+  const api = new FakeApi();
+  api.history.push(request);
+  api.claimAgentRequest = async () => {
+    throw new CollaborationHttpError(409, "abandoned", "agent_request_failed");
+  };
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const projected: number[] = [];
+  const result = await bridge.processPendingAgentRequests({
+    async execute() { throw new Error("an abandoned request must not be executed"); },
+    async projectCanonicalEvents(events) { projected.push(...events.map((event) => event.sequence)); },
+  });
+  assert.deepEqual(projected, [1], "the canonical failure must reach the native projection");
+  assert.equal(result.claimed, 0);
+  assert.equal(
+    (await cursorStore.load()).server["session-1"],
+    1,
+    "a terminal failure must advance the cursor rather than be retried on every poll",
+  );
 });
 
 test("an atomically completed local turn is projected without retrying its agent request", async () => {

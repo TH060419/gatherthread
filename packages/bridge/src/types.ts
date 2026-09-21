@@ -128,6 +128,7 @@ export interface AppendEventInput {
   replyTo?: string;
   visibility?: string;
   runtimeId?: string;
+  claimAttempt?: number;
   runtime?: RuntimeProvenance;
   observedModel?: string;
   observedReasoningEffort?: string;
@@ -164,10 +165,12 @@ export interface AgentRequestClaim {
   status: "claimed" | "completed";
   requestId: string;
   runtimeId: string;
+  attemptCount?: number;
 }
 
 export interface CompleteAgentRequestInput {
   runtimeId: string;
+  claimAttempt?: number;
   idempotencyKey: string;
   payload: unknown;
   observedModel?: string;

@@ -318,9 +318,10 @@ export class LocalBridge {
     this.#assertRuntimeFidelity("harness_transcript");
     const claim = await this.#api.claimAgentRequest(request.sessionId, request.id, runtime.id);
     if (!claim.claimed) return { claimed: false, completed: [] };
+    const claimAttempt = claim.attemptCount ?? 1;
 
     const canonicalHistory = await this.#readCanonicalHistory(request.sessionId, request.sequence);
-    await this.#appendProgressFailSoft(request, runtime, {
+    await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
       idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:start`,
       payload: {
         content: "Agent started processing the request.",
@@ -340,7 +341,7 @@ export class LocalBridge {
           publishProgress: async (update) => {
             const content = redactText(update.content).trim();
             if (!content) return;
-            await this.#appendProgressFailSoft(request, runtime, {
+            await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
               idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:${hash(update.id)}`,
               payload: redactValue({
                 content,
@@ -357,6 +358,7 @@ export class LocalBridge {
       if (!(error instanceof HarnessExecutionTerminatedError)) throw error;
       const failure = await this.#api.completeAgentRequest(request.sessionId, request.id, {
         runtimeId: runtime.id,
+        claimAttempt,
         idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:complete`,
         payload: {
           text: `Agent execution failed: ${error.publicMessage}`,
@@ -378,7 +380,7 @@ export class LocalBridge {
       return toAppendEvent(redactTranscriptEvent(event, this.#redaction), {
         ...runtime,
         localSessionId: execution.localSessionId ?? runtime.localSessionId,
-      }, request.id, execution);
+      }, request.id, execution, { requestId: request.id, claimAttempt });
     });
     const responseEvents = events.filter((event) => event.type === "agent_response");
     if (responseEvents.length === 0) throw new Error("Harness execution did not produce an assistant response");
@@ -391,6 +393,7 @@ export class LocalBridge {
       : { transcript_events: responseEvents.map((event) => event.payload) };
     completed.push(await this.#api.completeAgentRequest(request.sessionId, request.id, {
       runtimeId: runtime.id,
+      claimAttempt,
       idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:complete`,
       payload: responsePayload,
       ...(execution.observedModel === undefined ? {} : { observedModel: execution.observedModel }),
@@ -402,12 +405,14 @@ export class LocalBridge {
   async #appendProgressFailSoft(
     request: CanonicalEvent,
     runtime: RegisteredRuntime,
+    claimAttempt: number,
     input: { idempotencyKey: string; payload: unknown },
   ): Promise<void> {
     if (this.#api.appendAgentProgress === undefined) return;
     try {
       await this.#api.appendAgentProgress(request.sessionId, request.id, {
         runtimeId: runtime.id,
+        claimAttempt,
         idempotencyKey: input.idempotencyKey,
         payload: input.payload,
       });
@@ -454,11 +459,18 @@ export class LocalBridge {
   }
 }
 
+/**
+ * A claim conflict the server has already resolved. `agent_request_failed` means
+ * the server exhausted its re-dispatch budget, so the request is finished as far
+ * as this connector is concerned: projecting the canonical failure and moving on
+ * is the only correct response, and retrying would spin on it every poll.
+ */
 function isTerminalAgentRequestClaimConflict(error: unknown): boolean {
   return error instanceof CollaborationHttpError
     && error.status === 409
     && (error.code === "agent_request_already_claimed"
-      || error.code === "agent_request_already_completed");
+      || error.code === "agent_request_already_completed"
+      || error.code === "agent_request_failed");
 }
 
 function toAppendEvent(
@@ -466,6 +478,7 @@ function toAppendEvent(
   runtime: RegisteredRuntime,
   source: string,
   execution?: Pick<HarnessExecutionResult, "observedModel" | "observedReasoningEffort">,
+  claim?: { requestId: string; claimAttempt: number },
 ): AppendEventInput {
   const eventType = {
     user: "human_chat",
@@ -490,6 +503,10 @@ function toAppendEvent(
     }),
     runtime: provenance(runtime, event.captureFidelity),
     runtimeId: runtime.id,
+    ...(claim === undefined ? {} : {
+      replyTo: claim.requestId,
+      claimAttempt: claim.claimAttempt,
+    }),
     ...(execution?.observedModel === undefined ? {} : { observedModel: execution.observedModel }),
     ...(execution?.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: execution.observedReasoningEffort }),
   };

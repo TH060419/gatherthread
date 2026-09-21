@@ -151,7 +151,7 @@ export interface DshCompatibilityOptions {
   workspacePath: string;
   provider: string;
   model: string;
-  /** Canonical GatherThread Session label shown in DSH's native sidebar. */
+  /** Initial label for a newly created DSH Session; resumed titles stay local. */
   sessionTitle?: string;
   /** Canonical GatherThread Project label shown as a DSH native workspace. */
   workspaceTitle?: string;
@@ -295,8 +295,10 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         && options.sessionTitle !== undefined && options.workspaceTitle !== undefined) {
         try {
           const session = requireAgent(handle).session;
-          await sessionTitle.rename(session, options.sessionTitle);
-          throwIfDisposed(disposed, lifecycleAbort.signal, "open");
+          if (mode === "created") {
+            await sessionTitle.rename(session, options.sessionTitle);
+            throwIfDisposed(disposed, lifecycleAbort.signal, "open");
+          }
           // Only mark a Session whose Agent this open owns. A marker is safe only
           // when the Agent is rebuilt afterwards, and the facade may neither
           // dispose nor resume an Agent the DSH UI owns; a borrowed live Agent

@@ -79,7 +79,7 @@ Conversation reconciliation never resets, checks out, or overwrites local projec
 
 ### Risks
 
-- A connector crash after a server claim but before terminal reporting can leave an abandoned claim until a future lease or recovery mechanism resolves it.
+- A connector crash after a server claim but before terminal reporting leaves an abandoned claim until its lease lapses; [ADR-0023](0023-lease-and-bounded-redispatch-agent-claims.md) defines exact-runtime reclaim, attempt fencing, and bounded recovery.
 - Codex desktop and a connector may be separate processes; all supported App Server mutations must remain fail-closed when exclusive ownership cannot be proven.
 - Harness protocol changes can invalidate thread or turn assumptions. Contract tests, strict schema validation, bounded payloads, and version preflight remain release gates.
 - Local private state and Hook spools may contain sensitive conversation content. They require OS-account protection, restrictive permissions or ACLs, redaction, bounded storage, and explicit project trust.

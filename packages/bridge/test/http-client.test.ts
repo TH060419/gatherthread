@@ -19,7 +19,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     { data: { event: wireEvent("e2", 2) } },
     { data: { runtime: wireRuntime() } },
     { data: { runtime: wireRuntime() } },
-    { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed" } },
+    { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed", attempt_count: 2 } },
     { data: { event: wireEvent("progress-1", 3, wireProvenance()) } },
     { data: { event: wireEvent("response-1", 3, wireProvenance()) } },
     { data: {
@@ -72,15 +72,17 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   assert.equal(runtime.id, "runtime-1");
   assert.equal(runtime.purpose, "execution");
   assert.equal((await client.heartbeatRuntime(runtime.id)).id, "runtime-1");
-  assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).claimed, true);
+  assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).attemptCount, 2);
   const progress = await client.appendAgentProgress("s1", "request-1", {
     runtimeId: runtime.id,
+    claimAttempt: 2,
     idempotencyKey: "progress-key-0001",
     payload: { content: "Checking files" },
   });
   assert.equal(progress.runtime?.captureFidelity, "harness_transcript");
   const completed = await client.completeAgentRequest("s1", "request-1", {
     runtimeId: runtime.id,
+    claimAttempt: 2,
     idempotencyKey: "complete-key-0001",
     payload: { text: "done" },
   });
@@ -154,8 +156,15 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   assert.equal(requests[0]?.init.redirect, "error");
   assert.deepEqual(JSON.parse(String(requests[11]?.init.body)), {
     runtime_id: "runtime-1",
+    claim_attempt: 2,
     idempotency_key: "progress-key-0001",
     payload: { content: "Checking files" },
+  });
+  assert.deepEqual(JSON.parse(String(requests[12]?.init.body)), {
+    runtime_id: "runtime-1",
+    claim_attempt: 2,
+    idempotency_key: "complete-key-0001",
+    payload: { text: "done" },
   });
   assert.deepEqual(JSON.parse(String(requests[13]?.init.body)), {
     local_turn_id: "codex-local-1",
@@ -194,6 +203,54 @@ test("HTTP client redacts its bearer credential from server errors", async () =>
     assert.equal(error.code, "unauthorized");
     assert.equal(error.message, "Collaboration API 401: rejected [REDACTED]");
     return true;
+  });
+});
+
+test("HTTP client rejects a malformed present claim attempt instead of treating it as legacy", async () => {
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async () => Response.json({
+      data: {
+        request_event_id: "request-1",
+        runtime_id: "runtime-1",
+        status: "claimed",
+        attempt_count: "2",
+      },
+    }),
+  });
+  await assert.rejects(
+    client.claimAgentRequest("session-1", "request-1", "runtime-1"),
+    /claim\.attempt_count/,
+  );
+});
+
+test("HTTP client carries the claim attempt on request-linked tool events", async () => {
+  let requestBody: unknown;
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async (_input, init = {}) => {
+      requestBody = JSON.parse(String(init.body));
+      return Response.json({ data: { event: wireEvent("tool-1", 1, wireProvenance()) } });
+    },
+  });
+  await client.appendEvent("session-1", {
+    type: "tool_call",
+    idempotencyKey: "tool-event-0001",
+    payload: { tool_name: "shell", tool_call_id: "call-1", arguments: {} },
+    replyTo: "request-1",
+    runtimeId: "runtime-1",
+    claimAttempt: 3,
+  });
+  assert.deepEqual(requestBody, {
+    type: "tool_call",
+    idempotency_key: "tool-event-0001",
+    payload: { tool_name: "shell", tool_call_id: "call-1", arguments: {} },
+    reply_to_event_id: "request-1",
+    visibility: "session",
+    runtime_id: "runtime-1",
+    claim_attempt: 3,
   });
 });
 

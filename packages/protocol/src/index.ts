@@ -107,6 +107,7 @@ export const AppendEventInputSchema = z.object({
   reply_to_event_id: IdSchema.nullable().optional(),
   payload: JsonValueSchema,
   runtime_id: IdSchema.optional(),
+  claim_attempt: z.number().int().positive().optional(),
   observed_model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
   observed_reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
 });
@@ -374,8 +375,18 @@ export const ClaimAgentRequestInputSchema = z.object({
   runtime_id: IdSchema,
 });
 
+export const AgentRequestClaimSchema = z.object({
+  request_event_id: IdSchema,
+  runtime_id: IdSchema,
+  status: z.enum(["claimed", "completed"]),
+  attempt_count: z.number().int().positive().optional(),
+}).strict();
+
+export type AgentRequestClaim = z.infer<typeof AgentRequestClaimSchema>;
+
 export const CompleteAgentRequestInputSchema = z.object({
   runtime_id: IdSchema,
+  claim_attempt: z.number().int().positive().optional(),
   idempotency_key: IdempotencyKeySchema,
   payload: JsonValueSchema,
   observed_model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),

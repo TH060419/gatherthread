@@ -105,6 +105,7 @@ class FakeApi implements DshCollaborationApi {
   readonly idempotent = new Map<string, DshCanonicalEvent>();
   readCount = 0;
   heartbeatCount = 0;
+  claimAttempt = 2;
   claimConflictCode: string | undefined;
   failNextKind: "progress" | "append" | "complete" | "local_turn" | undefined;
   failNextHeartbeat = false;
@@ -176,10 +177,10 @@ class FakeApi implements DshCollaborationApi {
     if (this.claimConflictCode !== undefined) throw new FakeConflict(this.claimConflictCode);
     const status = this.claims.get(requestId);
     if (status !== undefined) {
-      return { claimed: status === "claimed", status, requestId, runtimeId };
+      return { claimed: status === "claimed", status, requestId, runtimeId, attemptCount: this.claimAttempt };
     }
     this.claims.set(requestId, "claimed");
-    return { claimed: true, status: "claimed", requestId, runtimeId };
+    return { claimed: true, status: "claimed", requestId, runtimeId, attemptCount: this.claimAttempt };
   }
 
   async appendAgentProgress(
@@ -396,7 +397,7 @@ class FakeHost implements DshHostFacade {
       for (const listener of this.#eventListeners) listener(event);
     }
     this.emitStatus("idle");
-    const returned = structuredClone(additions);
+    const returned = structuredClone(this.#persistence.events.slice(fromSequence));
     if (this.duplicateReturnedEvent) returned.push(structuredClone(additions[1]!));
     return {
       fromSequence,
@@ -422,6 +423,12 @@ class FakeHost implements DshHostFacade {
 
   async flush(): Promise<void> {
     this.flushCount += 1;
+  }
+
+  emitActiveEvent(): void {
+    const event = this.event("step/start", { turn: 1, step: 1 });
+    this.#persistence.events.push(event);
+    for (const listener of this.#eventListeners) listener(event);
   }
 
   emitLocalTurn(input = "LOCAL_DSH_REQUEST", output = "LOCAL_DSH_RESPONSE"): void {
@@ -750,10 +757,22 @@ test("connector runs register, replay, claim, prompt, progress/tool/final, curso
   assert.doesNotMatch(persistence.prompts[0] ?? "", /shared context/);
   assert.match(persistence.prompts[0] ?? "", /password=\[REDACTED\]/);
   assert.doesNotMatch(persistence.prompts[0] ?? "", /PRIVATE_/);
-  assert.deepEqual(api.progress.map((item) => (item.payload as { status: string }).status), ["running", "idle"]);
+  const lifecycleProgress = api.progress.filter(
+    (item) => (item.payload as { phase?: string }).phase === "lifecycle",
+  );
+  assert.deepEqual(
+    lifecycleProgress.map((item) => (item.payload as { status: string }).status),
+    ["running", "idle"],
+  );
+  assert.ok(
+    api.progress.some((item) => (item.payload as { phase?: string }).phase === "activity"),
+    "durable DSH activity should renew the claim before completion",
+  );
+  assert.ok(api.progress.every((item) => item.claimAttempt === 2));
   assert.equal(api.appended.filter((item) => item.type === "tool_call").length, 1);
   assert.equal(api.appended.filter((item) => item.type === "tool_result").length, 1);
   assert.equal(api.completions.length, 1);
+  assert.equal(api.completions[0]?.claimAttempt, 2);
   assert.equal((api.completions[0]?.payload as { text: string }).text, "public final");
   const uploaded = JSON.stringify({ progress: api.progress, tools: api.appended, final: api.completions });
   assert.doesNotMatch(uploaded, /PRIVATE_|hunter2|reasoning|replayState|stream/i);
@@ -833,12 +852,15 @@ test("offline outbox failure survives disposal and resumes without re-prompting"
   assert.equal(persistence.prompts.length, 1);
   assert.equal(firstHost.disposeCount, 1);
 
+  api.claimAttempt = 3;
   const resumedHost = new FakeHost(cfg.dshSessionId, persistence);
   const resumed = new DshHostConnector({ config: cfg, api, host: resumedHost, stateStore: store });
   await resumed.start({ schedule: false });
   assert.equal(persistence.prompts.length, 1, "outbox replay must not call the model again");
   assert.equal(api.appended.length, 2);
+  assert.deepEqual(api.appended.map((item) => item.claimAttempt), [3, 3]);
   assert.equal(api.completions.length, 1);
+  assert.equal(api.completions[0]?.claimAttempt, 3, "recovered outbox must use the renewed claim attempt");
   assert.equal((await store.load())?.outbox.length, 0);
   assert.equal((await store.load())?.activeRequest, undefined);
   await resumed.stop();
@@ -980,6 +1002,93 @@ test("crash-repaired active request resumes through DSH context instead of repla
   await connector.stop();
 });
 
+test("terminal failure while recovering retires durable active state and resumes canonical replay", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  const activeRequest = request(1);
+  api.events.push(activeRequest, canonical(2, "agent_response", {
+    text: "This Agent request was interrupted and could not be recovered.",
+    status: "failed",
+  }));
+  api.claimConflictCode = "agent_request_failed";
+  const state: ConnectorState = {
+    version: 3,
+    binding: { projectId: cfg.projectId, sessionId: cfg.sessionId, dshSessionId: cfg.dshSessionId },
+    serverCursor: 0,
+    projectionCursor: 0,
+    publishedDshSequence: 0,
+    automaticUpload: true,
+    activeRequest: {
+      requestId: activeRequest.id,
+      requestSequence: activeRequest.sequence,
+      dshFromSequence: 0,
+      promptDigest: "a".repeat(64),
+      claimAttempt: 3,
+    },
+    outbox: [{
+      id: "pending-progress",
+      kind: "progress",
+      requestId: activeRequest.id,
+      input: {
+        runtimeId: "runtime-1",
+        claimAttempt: 3,
+        idempotencyKey: "pending-progress",
+        payload: { content: "stale pending progress" },
+      },
+    }],
+  };
+  const store = new MemoryConnectorStateStore(state);
+  const persistence = freshPersistence();
+  persistence.exists = true;
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host: new FakeHost(cfg.dshSessionId, persistence),
+    stateStore: store,
+  });
+
+  await connector.start({ schedule: false });
+  let recovered = await store.load();
+  assert.equal(recovered?.activeRequest, undefined);
+  assert.deepEqual(recovered?.outbox, []);
+  assert.equal(recovered?.serverCursor, 1);
+  await connector.pollOnce();
+  recovered = await store.load();
+  assert.equal(recovered?.serverCursor, 2);
+  assert.equal(persistence.prompts.length, 0);
+  await connector.stop();
+});
+
+test("live durable DSH events renew the claim before the prompt returns", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  api.events.push(request(1));
+  const persistence = freshPersistence();
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  let releasePrompt: (() => void) | undefined;
+  host.promptGate = new Promise<void>((resolve) => { releasePrompt = resolve; });
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+
+  const started = connector.start({ schedule: false });
+  await waitFor(() => persistence.prompts.length === 1);
+  const progressBeforeEvent = api.progress.length;
+  host.emitActiveEvent();
+  host.emitActiveEvent();
+  host.emitActiveEvent();
+  await waitFor(() => api.progress.length > progressBeforeEvent);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(api.progress.length, progressBeforeEvent + 1, "a durable event burst should coalesce");
+  assert.ok(api.progress.every((item) => item.claimAttempt === 2));
+  releasePrompt?.();
+  await started;
+  await connector.stop();
+});
+
 test("terminal claim conflict advances safely without driving DSH", async () => {
   const cfg = config();
   const api = new FakeApi();
@@ -992,6 +1101,25 @@ test("terminal claim conflict advances safely without driving DSH", async () => 
   await connector.start({ schedule: false });
   assert.equal(persistence.prompts.length, 0);
   assert.equal((await store.load())?.serverCursor, 1);
+  await connector.stop();
+});
+
+test("a request the server has given up on advances without driving DSH", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  api.events.push(request(1));
+  api.claimConflictCode = "agent_request_failed";
+  const persistence = freshPersistence();
+  const store = new MemoryConnectorStateStore();
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false });
+  assert.equal(persistence.prompts.length, 0, "an abandoned request must not be re-driven locally");
+  assert.equal(
+    (await store.load())?.serverCursor,
+    1,
+    "a terminal failure must advance the cursor instead of being retried on every poll",
+  );
   await connector.stop();
 });
 

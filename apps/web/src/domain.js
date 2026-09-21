@@ -336,6 +336,55 @@ export function pendingAgentRequests(events) {
   );
 }
 
+/**
+ * An `agent_response` that reports a failed execution rather than an answer. The
+ * server raises one when it gives up on a request no runtime could finish, and a
+ * harness raises one when its own execution terminates. Both belong in the
+ * timeline as a failure, not as an ordinary reply that happens to read oddly.
+ */
+export function isFailedAgentResponse(event) {
+  return event?.type === "agent_response" && event?.payload?.status === "failed";
+}
+
+/** The original request a response points at, when it is still in the timeline. */
+export function failedRequestFor(events, responseEvent) {
+  const requestId = responseEvent?.replyTo
+    ?? responseEvent?.reply_to_event_id
+    ?? responseEvent?.payload?.reply_to_event_id;
+  if (typeof requestId !== "string" || requestId.length === 0) return undefined;
+  return (events ?? []).find((event) => event?.type === "agent_request" && event.id === requestId);
+}
+
+/** A retry is a new request by the original author, never an impersonation. */
+export function canRetryFailedAgentRequest(request, currentUser) {
+  return typeof request?.actor?.id === "string"
+    && typeof currentUser?.id === "string"
+    && request.actor.id === currentUser.id;
+}
+
+/**
+ * The append input that re-runs a failed request against the exact target it
+ * originally named. Replaying the recorded profile keeps runtime selection exact
+ * and fail-closed: a retry can never quietly land on a different harness,
+ * device, provider, or model than the user chose.
+ */
+export function retryAgentRequestInput(request, idempotencyKey) {
+  const content = eventContent(request);
+  const profile = request?.payload?.execution_profile;
+  if (profile === null || typeof profile !== "object") return { content, idempotencyKey };
+  return {
+    content,
+    idempotencyKey,
+    executionProfile: {
+      harness: profile.harness,
+      ...(profile.provider === undefined ? {} : { provider: profile.provider }),
+      model: profile.model,
+      ...(profile.reasoning_effort === undefined ? {} : { reasoningEffort: profile.reasoning_effort }),
+      ...(profile.runtime_id === undefined ? {} : { runtimeId: profile.runtime_id }),
+    },
+  };
+}
+
 export function isTimelineEventVisible(event) {
   const isControlEvent = event?.type === "membership_change" || event?.type === "session_state_change";
   const content = event?.payload?.content;

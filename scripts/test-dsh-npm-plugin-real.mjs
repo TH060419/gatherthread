@@ -666,11 +666,13 @@ async function main() {
     await firstProjectEntry.click();
     await page.waitForTimeout(1_000);
     const firstWorkspaceText = await page.locator("body").innerText();
-    assert.match(firstWorkspaceText, /DSH npm real session/u, firstWorkspaceText);
+    // The GatherThread marker has to survive DSH's own title clipping and reach
+    // the session rail, which is the only place it is visible to the operator.
+    assert.match(firstWorkspaceText, /DSH npm real session · 共序 · MULTI/u, firstWorkspaceText);
     await secondProjectEntry.click();
     await page.waitForTimeout(1_000);
     const secondWorkspaceText = await page.locator("body").innerText();
-    assert.match(secondWorkspaceText, /DSH npm second session/u, secondWorkspaceText);
+    assert.match(secondWorkspaceText, /DSH npm second session · 共序 · MULTI/u, secondWorkspaceText);
 
     await page.locator('button[aria-label="新建会话"]:visible').first().click();
     const nativeComposer = page.locator('[contenteditable="true"][data-placeholder]:visible').first();
@@ -764,7 +766,17 @@ async function main() {
       runtime_id: selectedRuntime.id,
     });
     const outputs = completed.events.filter((event) => event.reply_to_event_id === completed.request.id);
-    assert.deepEqual(outputs.map((event) => event.type), ["agent_progress", "agent_progress", "agent_response"]);
+    assert.deepEqual(outputs.map((event) => event.type), [
+      "agent_progress",
+      "agent_progress",
+      "agent_progress",
+      "agent_response",
+    ]);
+    assert.equal(
+      outputs.filter((event) => event.type === "agent_progress" && event.payload?.phase === "activity").length,
+      1,
+      "a burst of durable DSH events should produce one bounded activity renewal",
+    );
     assert.equal(new Set(outputs.map((event) => event.id)).size, outputs.length);
     assert.ok(outputs.every((event) => event.runtime_provenance?.runtime_id === selectedRuntime.id));
     assert.equal(JSON.stringify(completed.events).includes("PRIVATE_NPM_WEB_REASONING"), false);

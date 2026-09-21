@@ -194,7 +194,21 @@ interface CountRow { count: number }
 interface BytesRow { bytes: number }
 interface SequenceRow { next_sequence: number }
 interface MembershipRow { role: MembershipRole }
-interface ClaimRow { runtime_id: string; status: "claimed" | "completed" }
+interface ClaimRow {
+  runtime_id: string;
+  status: "claimed" | "completed" | "failed";
+  attempt_count?: number;
+  lease_expires_at?: string | null;
+}
+export interface AgentClaimRecord {
+  request_event_id: string;
+  runtime_id: string;
+  status: "claimed" | "completed";
+  attempt_count: number;
+}
+export type AgentClaimOutcome =
+  | { claim: AgentClaimRecord }
+  | { failed: true; event?: CanonicalEvent };
 interface InvitationRow extends InvitationRecord { token_digest: string }
 interface ProjectInvitationRow extends ProjectInvitationRecord { token_digest: string }
 interface DeviceAuthorizationRow extends DeviceAuthorizationRecord { token_digest: string }
@@ -258,6 +272,16 @@ const DEFAULT_MAX_USER_ACTIVE_SNAPSHOT_REQUESTS = 64;
 const DEFAULT_MAX_SESSION_ACTIVE_SNAPSHOT_REQUESTS = 256;
 const DEFAULT_MAX_TOTAL_ACTIVE_SNAPSHOT_REQUESTS = 4_096;
 const RUNTIME_OFFLINE_AFTER_MS = 30_000;
+/**
+ * How long a claim survives without proof of work. The holder renews it by
+ * appending `agent_progress`, so a claim lapses only when its runtime has
+ * genuinely gone quiet — which covers a dead device and, just as importantly, a
+ * live device whose execution has wedged. Runtime presence is a separate
+ * question and deliberately does not extend a lease on its own.
+ */
+const AGENT_CLAIM_LEASE_MS = 5 * 60_000;
+/** Exact-runtime recovery attempts before a request is terminally failed. */
+const MAX_AGENT_CLAIM_ATTEMPTS = 3;
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -367,7 +391,9 @@ CREATE TABLE IF NOT EXISTS agent_request_claims (
   runtime_id TEXT NOT NULL REFERENCES runtimes(id),
   claimed_at TEXT NOT NULL,
   completed_at TEXT,
-  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed'))
+  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+  attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+  lease_expires_at TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS local_turn_commits (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -565,6 +591,18 @@ function runtimeStatus(
     : "offline";
 }
 
+/**
+ * A claim with no lease was written before leases existed. Nothing renews such a
+ * row, so it reads as expired: recovery is the safe interpretation of a claim no
+ * live build can be working on.
+ */
+function claimLeaseLapsed(leaseExpiresAt: string | null | undefined, now: string): boolean {
+  if (typeof leaseExpiresAt !== "string") return true;
+  const expires = Date.parse(leaseExpiresAt);
+  const current = Date.parse(now);
+  return !Number.isFinite(expires) || !Number.isFinite(current) || expires <= current;
+}
+
 function isLocalSyncRequestKind(kind: SnapshotRequestKind): boolean {
   return kind === "local_sync_status"
     || kind === "local_auto_upload_enable"
@@ -737,6 +775,7 @@ export class CollaborationDatabase {
     this.migrateCanonicalProvenancePrivacy();
     this.migrateSnapshotStorageLedger();
     this.migrateSnapshotControlRequests();
+    this.migrateAgentClaimLease();
     this.initializeEventStorageUsage();
   }
 
@@ -2120,6 +2159,12 @@ export class CollaborationDatabase {
   appendEvent(actor: Actor, sessionId: string, input: AppendEventInput, provenance: RuntimeProvenance | null): CanonicalEvent {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
+      const replyTarget = input.reply_to_event_id === undefined || input.reply_to_event_id === null
+        ? undefined
+        : this.getEvent(sessionId, input.reply_to_event_id);
+      if (input.type === "agent_response" && replyTarget?.type === "agent_request") {
+        throw conflict("Request-linked Agent responses require the dedicated completion endpoint");
+      }
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
       if (existing) return this.requireIdempotencyMatch(
         existing,
@@ -2130,6 +2175,19 @@ export class CollaborationDatabase {
         input.visibility ?? "session",
         provenance?.runtime_id ?? null,
       );
+      if ((input.type === "tool_call" || input.type === "tool_result")
+        && replyTarget !== undefined) {
+        if (replyTarget.type === "agent_request") {
+          const runtimeId = provenance?.runtime_id;
+          const claim = this.sqlite.prepare(
+            "SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?",
+          ).get(replyTarget.id) as unknown as ClaimRow | undefined;
+          if (runtimeId === undefined
+            || !this.isCurrentClaimAttempt(claim, runtimeId, input.claim_attempt, this.now())) {
+            throw conflict("A matching active claim is required to append request-linked tool events");
+          }
+        }
+      }
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
     });
   }
@@ -2226,9 +2284,12 @@ export class CollaborationDatabase {
     return this.getRuntime(runtimeId);
   }
 
-  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string): { request_event_id: string; runtime_id: string; status: string } {
+  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string): AgentClaimOutcome {
     this.assertActiveDevice(actor);
-    return this.transaction(() => {
+    // The transaction returns terminal failure to the service instead of
+    // throwing. That lets the canonical failure commit before the service
+    // publishes it and raises the HTTP conflict.
+    return this.transaction((): AgentClaimOutcome => {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be claimed");
       if (this.sqlite.prepare("SELECT 1 FROM local_turn_commits WHERE request_event_id = ?").get(requestEventId)) {
@@ -2256,22 +2317,98 @@ export class CollaborationDatabase {
         || !matching.some((candidate) => candidate.id === runtime.id)) {
         throw conflict(`A matching online ${target.harness} runtime is required for this Agent request`);
       }
-      const existing = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const now = this.now();
+      const leaseExpiresAt = new Date(Date.parse(now) + AGENT_CLAIM_LEASE_MS).toISOString();
+      const existing = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
       if (existing) {
-        if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
-        return { request_event_id: requestEventId, runtime_id: runtimeId, status: existing.status };
+        if (existing.status === "failed") return { failed: true };
+        if (existing.status === "completed" || !claimLeaseLapsed(existing.lease_expires_at, now)) {
+          if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
+          return { claim: {
+            request_event_id: requestEventId,
+            runtime_id: runtimeId,
+            status: existing.status,
+            attempt_count: existing.attempt_count ?? 1,
+          } };
+        }
+        // The lease lapsed, so no accepted work is arriving. Exact-runtime
+        // reclaim is bounded: past the budget the request ends visibly instead
+        // of executing forever.
+        if ((existing.attempt_count ?? 1) >= MAX_AGENT_CLAIM_ATTEMPTS) {
+          const failure = this.failAbandonedClaim(sessionId, event, target.harness);
+          return failure === undefined ? { failed: true } : { failed: true, event: failure };
+        }
+        this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
+        this.sqlite.prepare(`
+          UPDATE agent_request_claims
+          SET runtime_id = ?, claimed_at = ?, attempt_count = attempt_count + 1, lease_expires_at = ?
+          WHERE request_event_id = ?
+        `).run(runtimeId, now, leaseExpiresAt, requestEventId);
+        return { claim: {
+          request_event_id: requestEventId,
+          runtime_id: runtimeId,
+          status: "claimed",
+          attempt_count: (existing.attempt_count ?? 1) + 1,
+        } };
       }
-      const active = this.sqlite.prepare(`
-        SELECT request_event_id FROM agent_request_claims
-        WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ?
-        LIMIT 1
-      `).get(runtimeId, requestEventId) as { request_event_id: string } | undefined;
-      if (active) throw runtimeBusy();
-      this.sqlite.prepare("INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status) VALUES (?, ?, ?, 'claimed')")
-        .run(requestEventId, runtimeId, this.now());
-      return { request_event_id: requestEventId, runtime_id: runtimeId, status: "claimed" };
+      this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
+      this.sqlite.prepare(`
+        INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status, attempt_count, lease_expires_at)
+        VALUES (?, ?, ?, 'claimed', 1, ?)
+      `).run(requestEventId, runtimeId, now, leaseExpiresAt);
+      return { claim: {
+        request_event_id: requestEventId,
+        runtime_id: runtimeId,
+        status: "claimed",
+        attempt_count: 1,
+      } };
     });
+  }
+
+  private assertRuntimeClaimSlotAvailable(runtimeId: string, requestEventId: string, now: string): void {
+    const active = this.sqlite.prepare(`
+      SELECT request_event_id FROM agent_request_claims
+      WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ? AND lease_expires_at > ?
+      LIMIT 1
+    `).get(runtimeId, requestEventId, now) as { request_event_id: string } | undefined;
+    if (active) throw runtimeBusy();
+  }
+
+  /**
+   * End an abandoned request in a terminal failure the timeline can show, rather
+   * than leaving it pending for ever.
+   *
+   * The response is attributed to the requesting user because that is whose
+   * runtime held it, exactly as a harness-reported execution failure already is.
+   * It carries no runtime provenance and claims no capture fidelity: no harness
+   * produced it, and saying otherwise would overstate what the server observed.
+   */
+  private failAbandonedClaim(sessionId: string, request: CanonicalEvent, harness: string): CanonicalEvent | undefined {
+    this.sqlite.prepare(`
+      UPDATE agent_request_claims
+      SET status = 'failed', completed_at = ?, lease_expires_at = NULL
+      WHERE request_event_id = ?
+    `).run(this.now(), request.id);
+    // This key is generated inside the same transaction that marks the claim
+    // failed. It is therefore unforgeable in advance and does not let a public,
+    // client-chosen idempotency key suppress the canonical failure response.
+    const idempotencyKey = `server:agent-claim-abandoned:${randomUUID()}`;
+    return this.appendInsideTransaction(request.actor_user_id, sessionId, {
+      idempotency_key: idempotencyKey,
+      type: "agent_response",
+      visibility: "session",
+      reply_to_event_id: request.id,
+      payload: {
+        text: "This Agent request was interrupted and could not be recovered.",
+        status: "failed",
+        source_harness: harness,
+        error: {
+          code: "agent_request_abandoned",
+          message: "The exact runtime for this request stopped reporting progress.",
+        },
+      },
+    }, null);
   }
 
   completeAgentRequest(
@@ -2283,6 +2420,7 @@ export class CollaborationDatabase {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
@@ -2301,9 +2439,9 @@ export class CollaborationDatabase {
         "session",
         runtimeId,
       );
-      const claim = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const claim = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
-      if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed") {
+      if (!this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())) {
         throw conflict("A matching active claim is required to complete this request");
       }
       const provenance = {
@@ -2334,6 +2472,7 @@ export class CollaborationDatabase {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
@@ -2352,9 +2491,9 @@ export class CollaborationDatabase {
         "session",
         runtimeId,
       );
-      const claim = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const claim = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
-      if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed") {
+      if (!this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())) {
         throw conflict("A matching active claim is required to append progress for this request");
       }
       const provenance = {
@@ -2362,7 +2501,7 @@ export class CollaborationDatabase {
         ...(observedModel === undefined ? {} : { model: observedModel }),
         ...(observedReasoningEffort === undefined ? {} : { reasoning_effort: observedReasoningEffort }),
       };
-      return this.appendInsideTransaction(actor.user_id, sessionId, {
+      const progress = this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "agent_progress",
         visibility: "session",
@@ -2370,7 +2509,26 @@ export class CollaborationDatabase {
         payload,
         runtime_id: runtimeId,
       }, provenance);
+      // Reporting accepted progress is what proves the claimant is still working,
+      // so it — not a device heartbeat — is what extends the lease. A runtime that
+      // is merely switched on cannot keep a dead execution alive.
+      this.sqlite.prepare("UPDATE agent_request_claims SET lease_expires_at = ? WHERE request_event_id = ?")
+        .run(new Date(Date.parse(this.now()) + AGENT_CLAIM_LEASE_MS).toISOString(), requestEventId);
+      return progress;
     });
+  }
+
+  private isCurrentClaimAttempt(
+    claim: ClaimRow | undefined,
+    runtimeId: string,
+    claimAttempt: number | undefined,
+    now: string,
+  ): boolean {
+    if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed"
+      || claimLeaseLapsed(claim.lease_expires_at, now)) return false;
+    const currentAttempt = claim.attempt_count ?? 1;
+    if (claimAttempt !== undefined) return claimAttempt === currentAttempt;
+    return currentAttempt === 1;
   }
 
   commitLocalTurn(actor: Actor, sessionId: string, input: CommitLocalTurnInput): CommitLocalTurnResult {
@@ -3181,6 +3339,51 @@ export class CollaborationDatabase {
     }
     const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
     if (violations.length > 0) throw new Error("Agent progress migration failed foreign-key validation");
+  }
+
+  /**
+   * Give agent claims a lease and a bounded recovery budget, and let them end in a
+   * terminal `failed` rather than sitting `claimed` forever.
+   *
+   * Pre-lease rows are inserted with a null `lease_expires_at`, which the claim
+   * path reads as "already expired". That is deliberate: a claim written by an
+   * older build is by definition one nothing is renewing, so recovery is the
+   * safe reading of it.
+   */
+  private migrateAgentClaimLease(): void {
+    const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_request_claims'")
+      .get() as { sql?: string } | undefined;
+    if (table?.sql === undefined || table.sql.includes("lease_expires_at")) return;
+    this.sqlite.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.sqlite.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE agent_request_claims_next (
+          request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+          runtime_id TEXT NOT NULL REFERENCES runtimes(id),
+          claimed_at TEXT NOT NULL,
+          completed_at TEXT,
+          status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+          attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+          lease_expires_at TEXT
+        ) STRICT;
+        INSERT INTO agent_request_claims_next(
+          request_event_id, runtime_id, claimed_at, completed_at, status, attempt_count, lease_expires_at
+        ) SELECT
+          request_event_id, runtime_id, claimed_at, completed_at, status, 1, NULL
+        FROM agent_request_claims;
+        DROP TABLE agent_request_claims;
+        ALTER TABLE agent_request_claims_next RENAME TO agent_request_claims;
+        COMMIT;
+      `);
+    } catch (error) {
+      try { this.sqlite.exec("ROLLBACK"); } catch { /* The migration may have failed before BEGIN. */ }
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) throw new Error("Agent claim lease migration failed foreign-key validation");
   }
 
   private migrateSnapshotStorageLedger(): void {
