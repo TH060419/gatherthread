@@ -2159,6 +2159,12 @@ export class CollaborationDatabase {
   appendEvent(actor: Actor, sessionId: string, input: AppendEventInput, provenance: RuntimeProvenance | null): CanonicalEvent {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
+      const replyTarget = input.reply_to_event_id === undefined || input.reply_to_event_id === null
+        ? undefined
+        : this.getEvent(sessionId, input.reply_to_event_id);
+      if (input.type === "agent_response" && replyTarget?.type === "agent_request") {
+        throw conflict("Request-linked Agent responses require the dedicated completion endpoint");
+      }
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
       if (existing) return this.requireIdempotencyMatch(
         existing,
@@ -2170,14 +2176,12 @@ export class CollaborationDatabase {
         provenance?.runtime_id ?? null,
       );
       if ((input.type === "tool_call" || input.type === "tool_result")
-        && input.reply_to_event_id !== undefined
-        && input.reply_to_event_id !== null) {
-        const request = this.getEvent(sessionId, input.reply_to_event_id);
-        if (request.type === "agent_request") {
+        && replyTarget !== undefined) {
+        if (replyTarget.type === "agent_request") {
           const runtimeId = provenance?.runtime_id;
           const claim = this.sqlite.prepare(
             "SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?",
-          ).get(request.id) as unknown as ClaimRow | undefined;
+          ).get(replyTarget.id) as unknown as ClaimRow | undefined;
           if (runtimeId === undefined
             || !this.isCurrentClaimAttempt(claim, runtimeId, input.claim_attempt, this.now())) {
             throw conflict("A matching active claim is required to append request-linked tool events");

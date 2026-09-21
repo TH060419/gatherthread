@@ -1038,6 +1038,68 @@ test("expired and superseded claim attempts cannot publish progress or completio
   }
 });
 
+test("request-linked Agent responses can only use the dedicated fenced completion path", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-completion-path-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count, 1);
+    const appendResponse = (
+      actor: typeof f.member,
+      runtimeId: string,
+      claimAttempt: number,
+      key: string,
+    ) => f.service.appendEvent(actor, sessionId, {
+      type: "agent_response",
+      visibility: "session",
+      idempotency_key: key,
+      reply_to_event_id: event.id,
+      runtime_id: runtimeId,
+      claim_attempt: claimAttempt,
+      payload: { text: "must not bypass completeAgentRequest" },
+    });
+    assert.throws(
+      () => appendResponse(f.member, first.id, 1, "generic-response-current-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.throws(
+      () => appendResponse(secondActor, second.id, 1, "generic-response-wrong-runtime-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.throws(
+      () => appendResponse(f.member, first.id, 1, "generic-response-expired-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count, 2);
+    assert.throws(
+      () => appendResponse(f.member, first.id, 1, "generic-response-superseded-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.throws(
+      () => appendResponse(f.member, first.id, 2, "generic-response-reclaimed-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.equal(
+      f.service.completeAgentRequest(
+        f.member,
+        sessionId,
+        event.id,
+        first.id,
+        "dedicated-response-current-0001",
+        { text: "allowed" },
+        undefined,
+        undefined,
+        2,
+      ).reply_to_event_id,
+      event.id,
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("a lapsed claim no longer wedges the runtime that was holding it", () => {
   const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
   const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
