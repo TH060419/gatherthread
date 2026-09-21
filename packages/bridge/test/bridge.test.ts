@@ -11,6 +11,7 @@ import {
   MemoryCursorStore,
   type AppendEventInput,
   type AgentProgressInput,
+  type AgentRequestClaim,
   type CanonicalEvent,
   type CollaborationApi,
   type CompleteAgentRequestInput,
@@ -49,7 +50,7 @@ class FakeApi implements CollaborationApi {
     this.appended.push(input);
     return canonical(sessionId, this.appended.length, input);
   }
-  async claimAgentRequest(_sessionId: string, requestId: string, runtimeId: string) {
+  async claimAgentRequest(_sessionId: string, requestId: string, runtimeId: string): Promise<AgentRequestClaim> {
     return { claimed: true, status: "claimed" as const, requestId, runtimeId, attemptCount: 2 };
   }
   async completeAgentRequest(_sessionId: string, _requestId: string, input: CompleteAgentRequestInput) {

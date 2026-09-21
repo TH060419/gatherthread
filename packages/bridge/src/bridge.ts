@@ -316,9 +316,10 @@ export class LocalBridge {
     this.#assertRuntimeFidelity("harness_transcript");
     const claim = await this.#api.claimAgentRequest(request.sessionId, request.id, runtime.id);
     if (!claim.claimed) return { claimed: false, completed: [] };
+    const claimAttempt = claim.attemptCount ?? 1;
 
     const canonicalHistory = await this.#readCanonicalHistory(request.sessionId, request.sequence);
-    await this.#appendProgressFailSoft(request, runtime, {
+    await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
       idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:start`,
       payload: {
         content: "Agent started processing the request.",
@@ -338,7 +339,7 @@ export class LocalBridge {
           publishProgress: async (update) => {
             const content = redactText(update.content).trim();
             if (!content) return;
-            await this.#appendProgressFailSoft(request, runtime, {
+            await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
               idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:${hash(update.id)}`,
               payload: redactValue({
                 content,
@@ -355,6 +356,7 @@ export class LocalBridge {
       if (!(error instanceof HarnessExecutionTerminatedError)) throw error;
       const failure = await this.#api.completeAgentRequest(request.sessionId, request.id, {
         runtimeId: runtime.id,
+        claimAttempt,
         idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:complete`,
         payload: {
           text: `Agent execution failed: ${error.publicMessage}`,
@@ -389,6 +391,7 @@ export class LocalBridge {
       : { transcript_events: responseEvents.map((event) => event.payload) };
     completed.push(await this.#api.completeAgentRequest(request.sessionId, request.id, {
       runtimeId: runtime.id,
+      claimAttempt,
       idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:complete`,
       payload: responsePayload,
       ...(execution.observedModel === undefined ? {} : { observedModel: execution.observedModel }),
@@ -400,12 +403,14 @@ export class LocalBridge {
   async #appendProgressFailSoft(
     request: CanonicalEvent,
     runtime: RegisteredRuntime,
+    claimAttempt: number,
     input: { idempotencyKey: string; payload: unknown },
   ): Promise<void> {
     if (this.#api.appendAgentProgress === undefined) return;
     try {
       await this.#api.appendAgentProgress(request.sessionId, request.id, {
         runtimeId: runtime.id,
+        claimAttempt,
         idempotencyKey: input.idempotencyKey,
         payload: input.payload,
       });

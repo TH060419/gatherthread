@@ -933,6 +933,7 @@ export async function startCollaborationServer(
           input.payload,
           input.observed_model,
           input.observed_reasoning_effort,
+          input.claim_attempt,
         ) } });
         return;
       }
@@ -948,6 +949,7 @@ export async function startCollaborationServer(
           input.payload,
           input.observed_model,
           input.observed_reasoning_effort,
+          input.claim_attempt,
         ) } });
         return;
       }

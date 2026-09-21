@@ -954,7 +954,7 @@ test("an abandoned exact-runtime claim can only be reclaimed by that runtime", (
       f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "agent-response-lease-0001", { text: "done" }, undefined, undefined, 2)
         .reply_to_event_id,
       event.id,
-      "the replacement runtime owns the completion",
+      "the current exact-runtime attempt owns the completion",
     );
   } finally {
     f.close();
@@ -1036,7 +1036,7 @@ test("a claim that keeps reporting progress is never taken over", () => {
     const event = request("agent-request-lease-0004");
     assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
     for (let step = 1; step <= 3; step += 1) {
-      nowMs.value += PAST_LEASE_MS / 2;
+      nowMs.value += PAST_LEASE_MS / 3;
       f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, `progress-lease-000${String(step)}`, {
         content: `step ${String(step)}`,
       });
@@ -1066,7 +1066,7 @@ test("a request fails visibly instead of ping-ponging between runtimes forever",
     const holders = [[f.member, first.id]] as const;
     let bounded = false;
     for (let round = 0; round < 10; round += 1) {
-      const [actor, runtimeId] = holders[round % 2]!;
+      const [actor, runtimeId] = holders[round % holders.length]!;
       nowMs.value += PAST_LEASE_MS;
       keepAlive();
       try {

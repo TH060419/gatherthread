@@ -315,6 +315,13 @@ export function failedRequestFor(events, responseEvent) {
   return (events ?? []).find((event) => event?.type === "agent_request" && event.id === requestId);
 }
 
+/** A retry is a new request by the original author, never an impersonation. */
+export function canRetryFailedAgentRequest(request, currentUser) {
+  return typeof request?.actor?.id === "string"
+    && typeof currentUser?.id === "string"
+    && request.actor.id === currentUser.id;
+}
+
 /**
  * The append input that re-runs a failed request against the exact target it
  * originally named. Replaying the recorded profile keeps runtime selection exact

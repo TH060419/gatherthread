@@ -1,10 +1,12 @@
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260906-2";
 import {
   canAppend,
+  canRetryFailedAgentRequest,
   createIdempotencyKey,
   createSelectionGuard,
   eventContent,
   eventLabel,
+  failedRequestFor,
   formatTimestamp,
   initials,
   hasOnlineSnapshotConnector,
@@ -1483,7 +1485,7 @@ function renderTimeline({ followNewEvents = false } = {}) {
       notice.textContent = localizer.t("This Agent request failed before it produced an answer.");
       article.append(notice);
       const request = failedRequestFor(state.sync.events, event);
-      if (request) {
+      if (request && canRetryFailedAgentRequest(request, state.currentUser)) {
         const retry = document.createElement("button");
         retry.className = "text-button agent-retry-button";
         retry.type = "button";

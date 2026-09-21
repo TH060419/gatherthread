@@ -188,6 +188,9 @@ export class HttpCollaborationClient implements CollaborationApi {
       status,
       requestId: requiredString(body.request_event_id, "claim.request_event_id"),
       runtimeId: requiredString(body.runtime_id, "claim.runtime_id"),
+      attemptCount: typeof body.attempt_count === "number" && Number.isInteger(body.attempt_count) && body.attempt_count > 0
+        ? body.attempt_count
+        : 1,
     };
   }
 
@@ -200,6 +203,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       method: "POST",
       body: JSON.stringify({
         runtime_id: input.runtimeId,
+        ...(input.claimAttempt === undefined ? {} : { claim_attempt: input.claimAttempt }),
         idempotency_key: input.idempotencyKey,
         payload: truncateJsonValue(input.payload, 160 * 1024),
         ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
@@ -218,6 +222,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       method: "POST",
       body: JSON.stringify({
         runtime_id: input.runtimeId,
+        ...(input.claimAttempt === undefined ? {} : { claim_attempt: input.claimAttempt }),
         idempotency_key: input.idempotencyKey,
         payload: truncateJsonValue(input.payload, 32 * 1024),
         ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),

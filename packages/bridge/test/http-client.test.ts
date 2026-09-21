@@ -19,7 +19,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     { data: { event: wireEvent("e2", 2) } },
     { data: { runtime: wireRuntime() } },
     { data: { runtime: wireRuntime() } },
-    { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed" } },
+    { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed", attempt_count: 2 } },
     { data: { event: wireEvent("progress-1", 3, wireProvenance()) } },
     { data: { event: wireEvent("response-1", 3, wireProvenance()) } },
     { data: {
@@ -72,15 +72,17 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   assert.equal(runtime.id, "runtime-1");
   assert.equal(runtime.purpose, "execution");
   assert.equal((await client.heartbeatRuntime(runtime.id)).id, "runtime-1");
-  assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).claimed, true);
+  assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).attemptCount, 2);
   const progress = await client.appendAgentProgress("s1", "request-1", {
     runtimeId: runtime.id,
+    claimAttempt: 2,
     idempotencyKey: "progress-key-0001",
     payload: { content: "Checking files" },
   });
   assert.equal(progress.runtime?.captureFidelity, "harness_transcript");
   const completed = await client.completeAgentRequest("s1", "request-1", {
     runtimeId: runtime.id,
+    claimAttempt: 2,
     idempotencyKey: "complete-key-0001",
     payload: { text: "done" },
   });
@@ -154,8 +156,15 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   assert.equal(requests[0]?.init.redirect, "error");
   assert.deepEqual(JSON.parse(String(requests[11]?.init.body)), {
     runtime_id: "runtime-1",
+    claim_attempt: 2,
     idempotency_key: "progress-key-0001",
     payload: { content: "Checking files" },
+  });
+  assert.deepEqual(JSON.parse(String(requests[12]?.init.body)), {
+    runtime_id: "runtime-1",
+    claim_attempt: 2,
+    idempotency_key: "complete-key-0001",
+    payload: { text: "done" },
   });
   assert.deepEqual(JSON.parse(String(requests[13]?.init.body)), {
     local_turn_id: "codex-local-1",

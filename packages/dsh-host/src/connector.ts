@@ -439,6 +439,7 @@ export class DshHostConnector {
       requestSequence: request.sequence,
       dshFromSequence: baseline,
       promptDigest: digest(prompt),
+      claimAttempt: claim.attemptCount ?? 1,
     };
     this.#activeStatuses = [];
     this.#liveEventSequences.clear();
@@ -457,6 +458,22 @@ export class DshHostConnector {
     const state = this.#requireState();
     const active = state.activeRequest;
     if (active === undefined) return;
+    const claim = await this.#api.claimAgentRequest(
+      this.#config.sessionId,
+      active.requestId,
+      this.#requireRuntime().id,
+    );
+    if (claim.status === "completed" && active.dshToSequence !== undefined) {
+      state.outbox = [];
+      await this.#stateStore.save(state);
+      await this.#finalizeDeliveredRequest();
+      return;
+    }
+    if (!claim.claimed) {
+      throw new Error("Active GatherThread request no longer has a recoverable claim");
+    }
+    active.claimAttempt = claim.attemptCount ?? active.claimAttempt ?? 1;
+    await this.#stateStore.save(state);
     if (active.dshToSequence !== undefined) {
       await this.#flushOutbox();
       await this.#finalizeDeliveredRequest();
@@ -522,7 +539,7 @@ export class DshHostConnector {
     }
     if (state.outbox.length > 0) throw new Error("DSH connector outbox was not empty before settlement");
     state.activeRequest = { ...active, dshToSequence: toSequence };
-    state.outbox = this.#outboxFor(mapped, this.#activeStatuses, active.requestId);
+    state.outbox = this.#outboxFor(mapped, this.#activeStatuses, active.requestId, active.claimAttempt ?? 1);
     await this.#stateStore.save(state);
     await this.#flushOutbox();
     await this.#finalizeDeliveredRequest();
@@ -624,6 +641,7 @@ export class DshHostConnector {
     events: readonly DshMappedEvent[],
     statuses: readonly DshAgentStatus[],
     requestId: string,
+    claimAttempt: number,
   ): ConnectorOutboxOperation[] {
     const runtime = this.#requireRuntime();
     const prefix = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}`;
@@ -636,6 +654,7 @@ export class DshHostConnector {
         requestId,
         input: {
           runtimeId: runtime.id,
+          claimAttempt,
           idempotencyKey,
           payload: {
             content: status === "running"
@@ -696,6 +715,7 @@ export class DshHostConnector {
       requestId,
       input: {
         runtimeId: runtime.id,
+        claimAttempt,
         idempotencyKey: completionKey,
         payload: {
           text: final.content,

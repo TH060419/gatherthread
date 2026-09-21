@@ -29,7 +29,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
-import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 
 export interface Actor {
   user_id: string;
@@ -200,6 +200,15 @@ interface ClaimRow {
   attempt_count?: number;
   lease_expires_at?: string | null;
 }
+export interface AgentClaimRecord {
+  request_event_id: string;
+  runtime_id: string;
+  status: "claimed" | "completed";
+  attempt_count: number;
+}
+export type AgentClaimOutcome =
+  | { claim: AgentClaimRecord }
+  | { failed: true; event?: CanonicalEvent };
 interface InvitationRow extends InvitationRecord { token_digest: string }
 interface ProjectInvitationRow extends ProjectInvitationRecord { token_digest: string }
 interface DeviceAuthorizationRow extends DeviceAuthorizationRecord { token_digest: string }
@@ -2256,12 +2265,12 @@ export class CollaborationDatabase {
     return this.getRuntime(runtimeId);
   }
 
-  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string): { request_event_id: string; runtime_id: string; status: string } {
+  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string): AgentClaimOutcome {
     this.assertActiveDevice(actor);
-    // The transaction rolls back on throw, so terminal failure is signalled out
-    // of it and raised afterwards. Failing the request must not be undone by the
-    // very error that reports it.
-    const outcome = this.transaction((): { claim: { request_event_id: string; runtime_id: string; status: string } } | { abandoned: true } => {
+    // The transaction returns terminal failure to the service instead of
+    // throwing. That lets the canonical failure commit before the service
+    // publishes it and raises the HTTP conflict.
+    return this.transaction((): AgentClaimOutcome => {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be claimed");
       if (this.sqlite.prepare("SELECT 1 FROM local_turn_commits WHERE request_event_id = ?").get(requestEventId)) {
@@ -2294,39 +2303,57 @@ export class CollaborationDatabase {
       const existing = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
       if (existing) {
-        if (existing.status === "failed") return { abandoned: true };
+        if (existing.status === "failed") return { failed: true };
         if (existing.status === "completed" || !claimLeaseLapsed(existing.lease_expires_at, now)) {
           if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
-          return { claim: { request_event_id: requestEventId, runtime_id: runtimeId, status: existing.status } };
+          return { claim: {
+            request_event_id: requestEventId,
+            runtime_id: runtimeId,
+            status: existing.status,
+            attempt_count: existing.attempt_count ?? 1,
+          } };
         }
-        // The lease lapsed, so no one is working on this request. Re-dispatch is
-        // bounded: past the budget the request ends in a visible failure instead
-        // of rotating between runtimes for ever.
+        // The lease lapsed, so no accepted work is arriving. Exact-runtime
+        // reclaim is bounded: past the budget the request ends visibly instead
+        // of executing forever.
         if ((existing.attempt_count ?? 1) >= MAX_AGENT_CLAIM_ATTEMPTS) {
-          this.failAbandonedClaim(sessionId, event, target.harness);
-          return { abandoned: true };
+          const failure = this.failAbandonedClaim(sessionId, event, target.harness);
+          return failure === undefined ? { failed: true } : { failed: true, event: failure };
         }
+        this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
         this.sqlite.prepare(`
           UPDATE agent_request_claims
           SET runtime_id = ?, claimed_at = ?, attempt_count = attempt_count + 1, lease_expires_at = ?
           WHERE request_event_id = ?
         `).run(runtimeId, now, leaseExpiresAt, requestEventId);
-        return { claim: { request_event_id: requestEventId, runtime_id: runtimeId, status: "claimed" } };
+        return { claim: {
+          request_event_id: requestEventId,
+          runtime_id: runtimeId,
+          status: "claimed",
+          attempt_count: (existing.attempt_count ?? 1) + 1,
+        } };
       }
-      const active = this.sqlite.prepare(`
-        SELECT request_event_id FROM agent_request_claims
-        WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ? AND lease_expires_at > ?
-        LIMIT 1
-      `).get(runtimeId, requestEventId, now) as { request_event_id: string } | undefined;
-      if (active) throw runtimeBusy();
+      this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
       this.sqlite.prepare(`
         INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status, attempt_count, lease_expires_at)
         VALUES (?, ?, ?, 'claimed', 1, ?)
       `).run(requestEventId, runtimeId, now, leaseExpiresAt);
-      return { claim: { request_event_id: requestEventId, runtime_id: runtimeId, status: "claimed" } };
+      return { claim: {
+        request_event_id: requestEventId,
+        runtime_id: runtimeId,
+        status: "claimed",
+        attempt_count: 1,
+      } };
     });
-    if ("abandoned" in outcome) throw agentRequestFailed();
-    return outcome.claim;
+  }
+
+  private assertRuntimeClaimSlotAvailable(runtimeId: string, requestEventId: string, now: string): void {
+    const active = this.sqlite.prepare(`
+      SELECT request_event_id FROM agent_request_claims
+      WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ? AND lease_expires_at > ?
+      LIMIT 1
+    `).get(runtimeId, requestEventId, now) as { request_event_id: string } | undefined;
+    if (active) throw runtimeBusy();
   }
 
   /**
@@ -2338,15 +2365,15 @@ export class CollaborationDatabase {
    * It carries no runtime provenance and claims no capture fidelity: no harness
    * produced it, and saying otherwise would overstate what the server observed.
    */
-  private failAbandonedClaim(sessionId: string, request: CanonicalEvent, harness: string): void {
+  private failAbandonedClaim(sessionId: string, request: CanonicalEvent, harness: string): CanonicalEvent | undefined {
     this.sqlite.prepare(`
       UPDATE agent_request_claims
       SET status = 'failed', completed_at = ?, lease_expires_at = NULL
       WHERE request_event_id = ?
     `).run(this.now(), request.id);
     const idempotencyKey = `agent-claim-abandoned:${request.id}`;
-    if (this.findByIdempotencyKey(sessionId, idempotencyKey)) return;
-    this.appendInsideTransaction(request.actor_user_id, sessionId, {
+    if (this.findByIdempotencyKey(sessionId, idempotencyKey)) return undefined;
+    return this.appendInsideTransaction(request.actor_user_id, sessionId, {
       idempotency_key: idempotencyKey,
       type: "agent_response",
       visibility: "session",
@@ -2372,6 +2399,7 @@ export class CollaborationDatabase {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
@@ -2390,9 +2418,9 @@ export class CollaborationDatabase {
         "session",
         runtimeId,
       );
-      const claim = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const claim = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
-      if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed") {
+      if (!this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())) {
         throw conflict("A matching active claim is required to complete this request");
       }
       const provenance = {
@@ -2423,6 +2451,7 @@ export class CollaborationDatabase {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
@@ -2441,9 +2470,9 @@ export class CollaborationDatabase {
         "session",
         runtimeId,
       );
-      const claim = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const claim = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
-      if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed") {
+      if (!this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())) {
         throw conflict("A matching active claim is required to append progress for this request");
       }
       const provenance = {
@@ -2466,6 +2495,19 @@ export class CollaborationDatabase {
         .run(new Date(Date.parse(this.now()) + AGENT_CLAIM_LEASE_MS).toISOString(), requestEventId);
       return progress;
     });
+  }
+
+  private isCurrentClaimAttempt(
+    claim: ClaimRow | undefined,
+    runtimeId: string,
+    claimAttempt: number | undefined,
+    now: string,
+  ): boolean {
+    if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed"
+      || claimLeaseLapsed(claim.lease_expires_at, now)) return false;
+    const currentAttempt = claim.attempt_count ?? 1;
+    if (claimAttempt !== undefined) return claimAttempt === currentAttempt;
+    return currentAttempt === 1;
   }
 
   commitLocalTurn(actor: Actor, sessionId: string, input: CommitLocalTurnInput): CommitLocalTurnResult {
