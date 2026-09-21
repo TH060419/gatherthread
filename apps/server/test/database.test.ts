@@ -1238,6 +1238,43 @@ test("a database written before claim leases migrates its claims into recoverabl
   }
 });
 
+test("a database written before dynamic execution profiles migrates legacy runtimes as fixed routes", () => {
+  const f = fixture();
+  const path = join(f.directory, "test.sqlite");
+  const session = f.service.createSession(f.owner, {
+    session_id: "legacy-runtime-profile-session",
+    idempotency_key: "legacy-runtime-profile-create",
+    mode: "solo",
+    title: "Legacy runtime profile",
+  }).session;
+  const runtime = f.service.registerRuntime(f.owner, {
+    runtime_id: "legacy-runtime-profile",
+    session_id: session.id,
+    device_id: f.owner.device_id,
+    harness: "deepseek-harness",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    local_session_id: "legacy-runtime-local",
+    capture_fidelity: "harness_transcript",
+  });
+  f.database.close();
+
+  const legacy = new DatabaseSync(path);
+  legacy.exec("ALTER TABLE runtimes DROP COLUMN execution_profiles_json");
+  legacy.close();
+
+  const reopened = new CollaborationDatabase(path, { authTokenPepper: "unit-test-auth-token-pepper" });
+  try {
+    const columns = (reopened.sqlite.prepare("PRAGMA table_info(runtimes)").all() as Array<{ name: string }>)
+      .map((column) => column.name);
+    assert.ok(columns.includes("execution_profiles_json"));
+    assert.equal(reopened.getRuntime(runtime.id).execution_profiles, undefined);
+  } finally {
+    reopened.close();
+    rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
 test("DeepSeek Harness claims honor the exact Web-selected runtime and model without changing Codex claims", () => {
   const f = fixture();
   try {
@@ -1323,6 +1360,145 @@ test("DeepSeek Harness claims honor the exact Web-selected runtime and model wit
     });
     assert.throws(
       () => f.service.claimAgentRequest(f.member, session.id, ambiguous.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("DeepSeek Harness dynamic execution profiles accept only exact advertised model and reasoning selections", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "dsh-dynamic-routing",
+      idempotency_key: "create-dsh-dynamic-routing",
+      mode: "multi",
+      title: "DSH dynamic routing",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "dsh-dynamic-member");
+    const runtime = f.service.registerRuntime(f.member, {
+      runtime_id: "dsh-dynamic-runtime",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      local_session_id: "dsh-dynamic-local",
+      capture_fidelity: "harness_transcript",
+      execution_profiles: [{
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        reasoning_efforts: ["low", "high"],
+        default_reasoning_effort: "low",
+      }, {
+        provider: "deepseek-official",
+        model: "deepseek-reasoner",
+        reasoning_efforts: ["high", "max"],
+        default_reasoning_effort: "high",
+      }],
+    });
+    assert.equal(runtime.execution_profiles?.length, 2);
+
+    const accepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use another advertised model",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-reasoner",
+          reasoning_effort: "max",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(f.service.claimAgentRequest(f.member, session.id, accepted.id, runtime.id).runtime_id, runtime.id);
+    f.service.completeAgentRequest(
+      f.member, session.id, accepted.id, runtime.id, "dsh-dynamic-complete", { content: "done" },
+    );
+
+    for (const [suffix, profile] of [["model", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-unadvertised",
+      reasoning_effort: "low",
+      runtime_id: runtime.id,
+    }], ["effort", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoning_effort: "max",
+      runtime_id: runtime.id,
+    }], ["runtime", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoning_effort: "low",
+    }]] as const) {
+      const rejected = f.service.appendEvent(f.member, session.id, {
+        idempotency_key: `dsh-dynamic-rejected-${suffix}`,
+        type: "agent_request",
+        visibility: "session",
+        payload: { content: "Reject unsupported route", execution_profile: profile },
+      });
+      assert.throws(
+        () => f.service.claimAgentRequest(f.member, session.id, rejected.id, runtime.id),
+        (error: unknown) => error instanceof ApiError && error.status === 409,
+      );
+    }
+
+    const downgraded = f.service.registerRuntime(f.member, {
+      runtime_id: runtime.id,
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      local_session_id: "dsh-dynamic-local",
+      capture_fidelity: "harness_transcript",
+    });
+    assert.equal(downgraded.execution_profiles, undefined, "re-registration must not retain stale capabilities");
+    const legacyAccepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-legacy-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Retain the legacy fixed-model route",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-v4-flash",
+          reasoning_effort: "legacy-adapter-value",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, legacyAccepted.id, runtime.id).runtime_id,
+      runtime.id,
+    );
+    f.service.completeAgentRequest(
+      f.member, session.id, legacyAccepted.id, runtime.id, "dsh-dynamic-legacy-complete", { content: "done" },
+    );
+    const legacyWrongModel = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-legacy-wrong-model",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Do not retain stale dynamic models",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-reasoner",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, legacyWrongModel.id, runtime.id),
       (error: unknown) => error instanceof ApiError && error.status === 409,
     );
   } finally {

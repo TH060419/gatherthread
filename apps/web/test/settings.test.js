@@ -33,7 +33,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 10);
+  assert.equal(normalized.version, 11);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -77,8 +77,10 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
   let settings = withProjectAgentHarness(DEFAULT_SETTINGS, "project-alpha", "deepseek-harness");
   settings = withProjectDshProfile(settings, "project-alpha", {
     deviceId: "dsh-device-1",
+    runtimeId: "runtime-dsh-1",
     provider: "My Provider",
     model: "CaseSensitive/Model-X",
+    effort: "high",
     token: "must-not-survive",
   });
   assert.equal(projectAgentHarness(settings, "project-alpha"), "deepseek-harness");
@@ -86,8 +88,10 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
   assert.equal(projectAgentHarness(settings, "project-beta"), "deepseek-harness");
   assert.deepEqual(projectDshProfile(settings, "project-alpha"), {
     deviceId: "dsh-device-1",
+    runtimeId: "runtime-dsh-1",
     provider: "My Provider",
     model: "CaseSensitive/Model-X",
+    effort: "high",
   });
   assert.equal(projectDshProfile(settings, "project-beta"), null);
   assert.doesNotMatch(JSON.stringify(settings), /must-not-survive|token/i);
@@ -97,6 +101,32 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
     provider: "provider",
     model: "bad\nmodel",
   }), /connected DeepSeek Harness runtime/);
+});
+
+test("legacy DSH project profiles migrate without inventing runtime ids or reasoning values", () => {
+  const migrated = normalizeSettings({
+    version: 10,
+    agents: {
+      activeHarness: "deepseek-harness",
+      enabledHarnesses: ["deepseek-harness"],
+      projectProfiles: {
+        "project-alpha": {
+          harness: "deepseek-harness",
+          enabledHarnesses: ["deepseek-harness"],
+          dsh: {
+            deviceId: "dsh-device-legacy",
+            provider: "Legacy Provider",
+            model: "Legacy/Model",
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(projectDshProfile(migrated, "project-alpha"), {
+    deviceId: "dsh-device-legacy",
+    provider: "Legacy Provider",
+    model: "Legacy/Model",
+  });
 });
 
 test("project connection shortcuts are ordered, multi-select, and always keep one default Agent", () => {
@@ -127,7 +157,7 @@ test("legacy flat Codex project profiles migrate without changing their model or
       },
     },
   });
-  assert.equal(migrated.version, 10);
+  assert.equal(migrated.version, 11);
   assert.equal(projectAgentHarness(migrated, "project-alpha"), "codex");
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex"]);
   assert.deepEqual(projectCodexProfile(migrated, "project-alpha"), { model: "Legacy/Model", effort: "high" });
@@ -153,7 +183,7 @@ test("version 6 connection shortcuts become the default for newly opened project
     setItem: () => {},
     removeItem: () => {},
   }).get();
-  assert.equal(migrated.version, 10);
+  assert.equal(migrated.version, 11);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
 });
@@ -207,7 +237,7 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 10);
+  assert.equal(migrated.version, 11);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");

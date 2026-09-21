@@ -2,7 +2,7 @@
 
 共序通过一个轻量本地连接器，把当前选中的云端项目连接到 Codex Desktop。网页不会直接启动 Codex，也不会把任何凭据写进复制的命令。
 
-> Alpha 预览版：`0.1.0-alpha.5` 已为 private 仓库测试准备。npm 包和固定 Git 引用发布后可直接使用；发布前请使用下方“源码测试”路径。
+> Alpha 预览版：`0.1.0-alpha.6` 已为 private 仓库测试准备。npm 包和固定 Git 引用发布后可直接使用；发布前请使用下方“源码测试”路径。
 
 ## 正常连接只需三步
 
@@ -23,7 +23,7 @@ npm install -g @openai/codex
 运行 `codex plugin --help`，确认当前 Codex 版本支持插件后，再安装共序：
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.6 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -34,7 +34,7 @@ codex plugin add gatherthread@gatherthread
 在共序网页打开目标项目，选择 **连接 Codex**，复制与系统对应的命令。命令形式如下：
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.6 \
   --url 'https://你的共序服务器地址' \
   --project 'PROJECT_ID' \
   --create-workspace \
@@ -63,7 +63,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-服务器地址和项目 ID 以本地网页显示内容为准。private `v0.1.0-alpha.5` 引用建立后，上方固定插件命令即可使用。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
+服务器地址和项目 ID 以本地网页显示内容为准。private `v0.1.0-alpha.6` 引用建立后，上方固定插件命令即可使用。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
 
 ## 会同步什么
 

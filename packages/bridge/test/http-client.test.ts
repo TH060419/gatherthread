@@ -71,6 +71,12 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   const runtime = await client.registerRuntime(runtimeRegistration());
   assert.equal(runtime.id, "runtime-1");
   assert.equal(runtime.purpose, "execution");
+  assert.deepEqual(runtime.executionProfiles, [{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    reasoningEfforts: ["low", "high"],
+    defaultReasoningEffort: "low",
+  }]);
   assert.equal((await client.heartbeatRuntime(runtime.id)).id, "runtime-1");
   assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).attemptCount, 2);
   const progress = await client.appendAgentProgress("s1", "request-1", {
@@ -152,6 +158,12 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   });
   assert.equal(JSON.parse(String(requests[8]?.init.body)).capture_fidelity, "harness_transcript");
   assert.equal(JSON.parse(String(requests[8]?.init.body)).purpose, "execution");
+  assert.deepEqual(JSON.parse(String(requests[8]?.init.body)).execution_profiles, [{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    reasoning_efforts: ["low", "high"],
+    default_reasoning_effort: "low",
+  }]);
   assert.equal(requests[0]?.init.headers && new Headers(requests[0].init.headers).get("authorization"), "Bearer secret-token");
   assert.equal(requests[0]?.init.redirect, "error");
   assert.deepEqual(JSON.parse(String(requests[11]?.init.body)), {
@@ -223,6 +235,23 @@ test("HTTP client rejects a malformed present claim attempt instead of treating 
     client.claimAgentRequest("session-1", "request-1", "runtime-1"),
     /claim\.attempt_count/,
   );
+});
+
+test("HTTP client rejects malformed advertised runtime execution profiles", async () => {
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async () => Response.json({ data: { runtime: {
+      ...wireRuntime(),
+      execution_profiles: [{
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        reasoning_efforts: ["low"],
+        default_reasoning_effort: "high",
+      }],
+    } } }),
+  });
+  await assert.rejects(client.registerRuntime(runtimeRegistration()), /default_reasoning_effort/u);
 });
 
 test("HTTP client carries the claim attempt on request-linked tool events", async () => {
@@ -307,6 +336,12 @@ function runtimeRegistration(): RuntimeRegistration {
     localSessionId: "local-1",
     captureFidelity: "harness_transcript",
     purpose: "execution",
+    executionProfiles: [{
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "low",
+    }],
   };
 }
 
@@ -333,6 +368,12 @@ function wireRuntime() {
     model: "gpt-5",
     local_session_id: "local-1",
     capture_fidelity: "harness_transcript",
+    execution_profiles: [{
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoning_efforts: ["low", "high"],
+      default_reasoning_effort: "low",
+    }],
   };
 }
 

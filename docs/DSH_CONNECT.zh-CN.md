@@ -2,7 +2,7 @@
 
 共序 DSH 插件运行在 DeepSeek Harness 的 Web profile 中，并由 DSH 主动连接到选定的共序服务器。网页不会探测 `localhost`，也不会尝试启动本地进程。
 
-> Alpha 预览版：`0.1.0-alpha.5` 已为 private 仓库测试准备。“共序官方服务”入口已经保留但暂时禁用，请使用本机、局域网、自托管或 Tailscale 服务器。
+> Alpha 预览版：`0.1.0-alpha.6` 已为 private 仓库测试准备。“共序官方服务”入口已经保留但暂时禁用，请使用本机、局域网、自托管或 Tailscale 服务器。
 
 ## 正常连接只需四步
 
@@ -17,7 +17,7 @@ npm install --global pnpm@10
 再把固定版本的共序插件加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.5
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.6
 ```
 
 ### 2. 打开 DSH
@@ -34,7 +34,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 
 ### 4. 选择 DSH Provider 与 Model
 
-批准短码只完成配对，本身不会注册任何东西。回到 **设置 → GatherThread / 共序**，选择 Provider 与 Model，再确认连接当前身份可见的全部项目。只有完成这一步，本机才会注册共序运行时；在此之前，共序网页无法发现这台 DSH，面板也会一直显示为已停止。运行只使用显式选择的 Provider 与 Model，不会回退到 Codex。
+批准短码只完成配对，本身不会注册任何东西。回到 **设置 → GatherThread / 共序**，选择 Provider 与 Model，再确认连接当前身份可见的全部项目。只有完成这一步，本机才会注册共序运行时；在此之前，共序网页无法发现这台 DSH，面板也会一直显示为已停止。对于兼容的 DeepSeek 路由，该选择既是连接默认值，插件也会声明 DSH 实际提供的模型和推理强度。之后可以在 GatherThread 工作页为单次 Agent 请求选择其中一个组合；这个临时选择不会覆盖 DSH 页面自己的模型设置，也不会回退到 Codex。
 
 ## npm 发布前的 private 仓库测试
 
@@ -44,7 +44,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.5.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.6.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -58,7 +58,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 - 在 **设置 → GatherThread / 共序** 中，每个已连接对话都有独立的“自动上传”开关与“手动上传”。关闭后，新完成的本地回合会继续留在本地，直到用户显式补传；手动上传不会改变开关。
 - DSH 新会话只有在首个成功的人类/助手回合完成后，才创建一个由本人创建的云端 Solo。
 - 空会话、失败回合和访者会话始终留在本地。
-- 网页 Agent 请求只交给明确选择的 DSH 设备、Provider 和模型，不会静默回退到 Codex。
+- 网页 Agent 请求只交给明确选择的 DSH 设备，并使用该 runtime 已声明的 Provider、模型和推理强度组合。页面不会提供不支持的值，伪造请求也会失败关闭。旧版和未声明动态能力的路由继续使用连接时的固定模型，不会静默回退到 Codex。
 
 DSH 使用其自身配置的 Provider 额度。`Insufficient Balance` 或 `QUOTA` 表示所选 DSH 模型账户当前无法运行，不是共序同步故障。
 

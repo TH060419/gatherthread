@@ -7,7 +7,7 @@ The standalone GatherThread connector for a locally installed and authenticated 
 Copy the fixed-version command from GatherThread Web. It contains the server origin and project ID, but no browser cookie, invitation secret, device token, or local path:
 
 ```sh
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url https://gatherthread.example --project PROJECT_ID --create-workspace --plugin-hooks --visible-history-sync first-connect
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.6 --url https://gatherthread.example --project PROJECT_ID --create-workspace --plugin-hooks --visible-history-sync first-connect
 ```
 
 The connector requests the device access token with hidden terminal input. It supports Web **Request my agent**, canonical per-session projections, read-only snapshots, and a verified Desktop-visible history snapshot. `first-connect` imports once when each session is first established locally; `never` disables automatic import. Each manual import creates a new task and leaves the previous task for the user to archive. Realtime context injection stays active in both modes. Keep the process running.
@@ -15,7 +15,7 @@ The connector requests the device access token with hidden terminal input. It su
 After the matching Git release ref exists, install the fixed plugin source and plugin explicitly:
 
 ```sh
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.6 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 

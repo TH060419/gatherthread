@@ -9,6 +9,7 @@ export interface DshRequestProfile {
   harness: "deepseek-harness";
   provider?: string;
   model: string;
+  reasoningEffort?: string;
   runtimeId?: string;
 }
 
@@ -25,11 +26,18 @@ export function requestedDshProfile(event: DshCanonicalEvent): DshRequestProfile
   if (profile.provider !== undefined && !provider) {
     throw new Error("DeepSeek Harness Agent request has an invalid provider target");
   }
+  const reasoningEffort = profile.reasoning_effort === undefined
+    ? undefined
+    : safeProfileText(profile.reasoning_effort, 80);
+  if (profile.reasoning_effort !== undefined && !reasoningEffort) {
+    throw new Error("DeepSeek Harness Agent request has an invalid reasoning effort target");
+  }
   const runtimeId = profile.runtime_id === undefined ? undefined : safeRuntimeId(profile.runtime_id);
   return {
     harness,
     ...(provider === undefined ? {} : { provider }),
     model,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     ...(runtimeId === undefined ? {} : { runtimeId }),
   };
 }

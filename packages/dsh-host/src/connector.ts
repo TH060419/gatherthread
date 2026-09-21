@@ -24,9 +24,11 @@ import type {
   DshConnectorLifecycleState,
   DshConnectorLifecycleUpdate,
   DshExecutionGate,
+  DshExecutionSelection,
   DshHostFacade,
   DshMappedEvent,
   DshRegisteredRuntime,
+  DshRuntimeExecutionProfile,
   DshSessionEventRecord,
 } from "./types.js";
 import type { SessionSummary } from "@gatherthread/bridge";
@@ -95,6 +97,7 @@ export class DshHostConnector {
   readonly #lifecycleAbort = new AbortController();
   #listenerDisposers: Array<() => void> = [];
   #activeStatuses: DshAgentStatus[] = [];
+  #activeExecutionSelection: DshExecutionSelection | undefined;
   #liveEventSequences = new Set<number>();
   #session: SessionSummary | undefined;
   #visibleState: DshConnectorLifecycleState = "connecting";
@@ -253,6 +256,9 @@ export class DshHostConnector {
           "canonical_history_projection",
           "bidirectional_local_turns",
         ],
+        ...(this.#config.executionProfiles === undefined ? {} : {
+          executionProfiles: cloneExecutionProfiles(this.#config.executionProfiles),
+        }),
         purpose: "execution",
       });
       this.#assertRuntime(this.#runtime);
@@ -379,7 +385,7 @@ export class DshHostConnector {
         const profile = requestedDshProfile(event);
         if (profile === undefined
           || event.actorId !== this.#requireRuntime().userId
-          || (profile.runtimeId !== undefined && profile.runtimeId !== this.#requireRuntime().id)) {
+          || !this.#profileTargetsThisRuntime(profile)) {
           passive.push(event);
           continue;
         }
@@ -393,17 +399,12 @@ export class DshHostConnector {
         if (manualUploadRequired) {
           return { scanned, claimed: 0, completed: 0 };
         }
-        if (profile.provider !== undefined && profile.provider !== this.#config.provider) {
-          throw new Error("DeepSeek Harness Agent request provider does not match the configured Host binding");
-        }
-        if (profile.model !== this.#config.model) {
-          throw new Error("DeepSeek Harness Agent request model does not match the configured Host binding");
-        }
+        const selection = this.#resolveExecutionSelection(profile);
         // Capacity and this connector's lifecycle gate the entire
         // claim -> prompt -> durable settlement transaction. A lease now bounds
         // how long a request stays ours if this process stops making progress.
         const outcome = await this.#withExecutionPermit(
-          () => this.#executeRequest(event),
+          () => this.#executeRequest(event, selection),
         );
         return {
           scanned,
@@ -430,6 +431,7 @@ export class DshHostConnector {
 
   async #executeRequest(
     request: DshCanonicalEvent,
+    selection: DshExecutionSelection,
   ): Promise<{ claimed: boolean; completed: boolean }> {
     if (this.#stopped) throw new Error("DSH connector stopped before claiming an Agent request");
     const state = this.#requireState();
@@ -461,15 +463,16 @@ export class DshHostConnector {
       claimAttempt: claim.attemptCount ?? 1,
     };
     this.#activeStatuses = [];
+    this.#activeExecutionSelection = selection;
     this.#liveEventSequences.clear();
     await this.#stateStore.save(state);
-    const result = await this.#host.prompt(prompt);
+    const result = await this.#host.prompt(prompt, selection);
     if (result.fromSequence !== baseline || result.toSequence < result.fromSequence) {
       throw new Error("DSH Host prompt returned an inconsistent durable event range");
     }
     await this.#liveProgressPromise;
     this.#assertLiveEventsDurable(result);
-    await this.#settleActiveRequest(result.events, result.toSequence);
+    await this.#settleActiveRequest(result.events, result.toSequence, selection);
     return { claimed: true, completed: true };
   }
 
@@ -493,6 +496,7 @@ export class DshHostConnector {
       }
       delete state.activeRequest;
       this.#activeStatuses = [];
+      this.#activeExecutionSelection = undefined;
       this.#liveEventSequences.clear();
       await this.#stateStore.save(state);
       return;
@@ -532,6 +536,15 @@ export class DshHostConnector {
       throw new Error("Active GatherThread request is unavailable during DSH resume");
     }
     const prompt = buildDshRequestPrompt(request);
+    const profile = requestedDshProfile(request);
+    if (profile === undefined) {
+      throw new Error("Active GatherThread request lost its DeepSeek Harness execution profile");
+    }
+    if (!this.#profileTargetsThisRuntime(profile)) {
+      throw new Error("Active GatherThread request no longer targets this exact DSH runtime");
+    }
+    const selection = this.#resolveExecutionSelection(profile);
+    this.#activeExecutionSelection = selection;
     const legacyPrompt = buildDshCanonicalPrompt(history, request, this.#requireRuntime().id);
     if (digest(prompt) !== active.promptDigest && digest(legacyPrompt) !== active.promptDigest) {
       throw new Error("Active GatherThread request changed during DSH resume");
@@ -540,7 +553,7 @@ export class DshHostConnector {
     const recovered = this.#host.snapshotFrom(active.dshFromSequence);
     const settlement = turnSettlement(recovered);
     if (settlement === "completed") {
-      await this.#settleActiveRequest(recovered, this.#host.currentSequence());
+      await this.#settleActiveRequest(recovered, this.#host.currentSequence(), selection);
       return;
     }
     if (settlement !== undefined && settlement !== "interrupted") {
@@ -561,18 +574,19 @@ export class DshHostConnector {
     this.#activeStatuses = [];
     this.#liveEventSequences.clear();
     await this.#stateStore.save(state);
-    const result = await this.#host.prompt(continuation);
+    const result = await this.#host.prompt(continuation, selection);
     if (result.fromSequence !== baseline || result.toSequence < result.fromSequence) {
       throw new Error("DSH Host recovery prompt returned an inconsistent durable event range");
     }
     await this.#liveProgressPromise;
     this.#assertLiveEventsDurable(result);
-    await this.#settleActiveRequest(result.events, result.toSequence);
+    await this.#settleActiveRequest(result.events, result.toSequence, selection);
   }
 
   async #settleActiveRequest(
     durableEvents: readonly DshSessionEventRecord[],
     toSequence: number,
+    selection: DshExecutionSelection,
   ): Promise<void> {
     const state = this.#requireState();
     const active = state.activeRequest;
@@ -587,7 +601,13 @@ export class DshHostConnector {
     }
     if (state.outbox.length > 0) throw new Error("DSH connector outbox was not empty before settlement");
     state.activeRequest = { ...active, dshToSequence: toSequence };
-    state.outbox = this.#outboxFor(mapped, this.#activeStatuses, active.requestId, active.claimAttempt ?? 1);
+    state.outbox = this.#outboxFor(
+      mapped,
+      this.#activeStatuses,
+      active.requestId,
+      active.claimAttempt ?? 1,
+      selection,
+    );
     await this.#stateStore.save(state);
     await this.#flushOutbox();
     await this.#finalizeDeliveredRequest();
@@ -612,12 +632,17 @@ export class DshHostConnector {
       .then(async () => {
         const current = this.#state?.activeRequest;
         if (current?.requestId !== requestId || (current.claimAttempt ?? 1) !== claimAttempt) return;
+        const selection = this.#activeExecutionSelection;
+        if (selection === undefined) return;
         await this.#api.appendAgentProgress(this.#config.sessionId, requestId, {
           runtimeId: runtime.id,
           claimAttempt,
           idempotencyKey,
           payload,
-          observedModel: this.#config.model,
+          observedModel: selection.model,
+          ...(selection.reasoningEffort === undefined ? {} : {
+            observedReasoningEffort: selection.reasoningEffort,
+          }),
         });
       })
       .catch((error: unknown) => {
@@ -726,6 +751,7 @@ export class DshHostConnector {
     statuses: readonly DshAgentStatus[],
     requestId: string,
     claimAttempt: number,
+    selection: DshExecutionSelection,
   ): ConnectorOutboxOperation[] {
     const runtime = this.#requireRuntime();
     const prefix = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}`;
@@ -749,7 +775,10 @@ export class DshHostConnector {
             capture_fidelity: "harness_transcript",
             source_harness: "deepseek-harness",
           },
-          observedModel: this.#config.model,
+          observedModel: selection.model,
+          ...(selection.reasoningEffort === undefined ? {} : {
+            observedReasoningEffort: selection.reasoningEffort,
+          }),
         },
       });
     }
@@ -786,7 +815,10 @@ export class DshHostConnector {
             replyTo: requestId,
             runtimeId: runtime.id,
             claimAttempt,
-            observedModel: this.#config.model,
+            observedModel: selection.model,
+            ...(selection.reasoningEffort === undefined ? {} : {
+              observedReasoningEffort: selection.reasoningEffort,
+            }),
           },
         });
       }
@@ -809,7 +841,10 @@ export class DshHostConnector {
           source_timestamp: final.timestamp,
           dsh_event_sequence: final.sequence,
         },
-        observedModel: this.#config.model,
+        observedModel: selection.model,
+        ...(selection.reasoningEffort === undefined ? {} : {
+          observedReasoningEffort: selection.reasoningEffort,
+        }),
       },
     });
     return operations;
@@ -870,6 +905,7 @@ export class DshHostConnector {
     );
     delete state.activeRequest;
     this.#activeStatuses = [];
+    this.#activeExecutionSelection = undefined;
     this.#liveEventSequences.clear();
     await this.#stateStore.save(state);
   }
@@ -967,9 +1003,53 @@ export class DshHostConnector {
       || runtime.model !== this.#config.model
       || runtime.localSessionId !== this.#config.dshSessionId
       || runtime.captureFidelity !== "harness_transcript"
+      || !sameExecutionProfiles(runtime.executionProfiles, this.#config.executionProfiles)
       || runtime.purpose !== "execution") {
       throw new Error("GatherThread returned an incompatible DSH runtime registration");
     }
+  }
+
+  #resolveExecutionSelection(profile: {
+    provider?: string;
+    model: string;
+    reasoningEffort?: string;
+  }): DshExecutionSelection {
+    const provider = profile.provider ?? this.#config.provider;
+    const advertised = this.#config.executionProfiles;
+    if (advertised === undefined) {
+      if (provider !== this.#config.provider) {
+        throw new Error("DeepSeek Harness Agent request provider does not match the configured Host binding");
+      }
+      if (profile.model !== this.#config.model) {
+        throw new Error("DeepSeek Harness Agent request model does not match the configured Host binding");
+      }
+      if (profile.reasoningEffort !== undefined) {
+        throw new Error("DeepSeek Harness fixed runtime did not advertise reasoning effort selection");
+      }
+      return { provider, model: profile.model };
+    }
+    const route = advertised.find((candidate) => (
+      candidate.provider === provider && candidate.model === profile.model
+    ));
+    if (route === undefined) {
+      throw new Error("DeepSeek Harness Agent request provider/model was not advertised by this runtime");
+    }
+    const reasoningEffort = profile.reasoningEffort ?? route.defaultReasoningEffort;
+    if (reasoningEffort !== undefined
+      && !route.reasoningEfforts?.includes(reasoningEffort)) {
+      throw new Error("DeepSeek Harness Agent request reasoning effort was not advertised for this model");
+    }
+    return {
+      provider,
+      model: profile.model,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    };
+  }
+
+  #profileTargetsThisRuntime(profile: { runtimeId?: string }): boolean {
+    const runtimeId = profile.runtimeId;
+    if (runtimeId !== undefined) return runtimeId === this.#requireRuntime().id;
+    return this.#config.executionProfiles === undefined;
   }
 
   #validatePage(events: readonly DshCanonicalEvent[], afterSequence: number): void {
@@ -1081,6 +1161,28 @@ function turnSettlement(events: readonly DshSessionEventRecord[]): string | unde
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function cloneExecutionProfiles(
+  profiles: readonly DshRuntimeExecutionProfile[],
+): DshRuntimeExecutionProfile[] {
+  return profiles.map((profile) => ({
+    provider: profile.provider,
+    model: profile.model,
+    ...(profile.reasoningEfforts === undefined ? {} : {
+      reasoningEfforts: [...profile.reasoningEfforts],
+    }),
+    ...(profile.defaultReasoningEffort === undefined ? {} : {
+      defaultReasoningEffort: profile.defaultReasoningEffort,
+    }),
+  }));
+}
+
+function sameExecutionProfiles(
+  actual: readonly DshRuntimeExecutionProfile[] | undefined,
+  expected: readonly DshRuntimeExecutionProfile[] | undefined,
+): boolean {
+  return JSON.stringify(actual ?? null) === JSON.stringify(expected ?? null);
 }
 
 function publicError(error: unknown): Error {

@@ -85,6 +85,7 @@ test("DeepSeek Harness requests target one exact runtime without Codex fallback 
         harness: "deepseek-harness",
         provider: "Local Provider",
         model: "CaseSensitive/Model-X",
+        reasoningEffort: "high",
         runtimeId: "runtime-dsh-1",
       },
     });
@@ -95,9 +96,10 @@ test("DeepSeek Harness requests target one exact runtime without Codex fallback 
       harness: "deepseek-harness",
       provider: "Local Provider",
       model: "CaseSensitive/Model-X",
+      reasoning_effort: "high",
       runtime_id: "runtime-dsh-1",
     });
-    assert.doesNotMatch(captured.options.body, /reasoning|token|authorization/iu);
+    assert.doesNotMatch(captured.options.body, /token|authorization/iu);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -111,6 +113,10 @@ test("DeepSeek Harness discovery, pairing approval, and revocation use Cookie-au
       id: "runtime-dsh-1", device_id: "device-dsh-1", harness: "deepseek-harness",
       provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
       last_seen_at: "2026-09-06T00:00:00.000Z",
+      execution_profiles: [{
+        provider: "deepseek-official", model: "deepseek-v4-flash",
+        reasoning_efforts: ["low", "max"], default_reasoning_effort: "max",
+      }],
     }] } },
     { data: { pairing: {
       pairing_id: "dshp-one-use", user_code: "ABCD-2345", device_name: "Studio DSH",
@@ -132,6 +138,10 @@ test("DeepSeek Harness discovery, pairing approval, and revocation use Cookie-au
       id: "runtime-dsh-1", deviceId: "device-dsh-1", harness: "deepseek-harness",
       provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
       lastSeenAt: "2026-09-06T00:00:00.000Z",
+      executionProfiles: [{
+        provider: "deepseek-official", model: "deepseek-v4-flash",
+        reasoningEfforts: ["low", "max"], defaultReasoningEffort: "max",
+      }],
     }]);
     assert.equal((await api.approveDshPairing("ABCD-2345")).status, "approved");
     await api.revokeDevice("device / dsh");

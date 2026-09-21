@@ -51,6 +51,8 @@ function fixture(
     persistenceRead: 0,
     persistenceClose: 0,
     queryRead: 0,
+    modelSelections: [] as Array<{ provider: string; model: string; reasoningEffort?: string }>,
+    modelSelectionDisposals: 0,
   };
   const openStarted = deferred<void>();
   const workspaceSessionIds: string[] = [];
@@ -81,6 +83,7 @@ function fixture(
   };
   const agent = {
     id: "dsh-session-1",
+    ctx: {},
     session,
     get status() { return status; },
     followup(message: unknown) {
@@ -298,6 +301,22 @@ function fixture(
         };
       },
     },
+    llm: {
+      async resolveModelInfo(provider: string, model: string) {
+        if (provider !== "deepseek-official" || model !== "deepseek-reasoner") {
+          throw new Error("unknown model");
+        }
+        return {
+          provider,
+          id: model,
+          name: "DeepSeek Reasoner",
+          reasoning: {
+            efforts: [{ id: "high", name: "High" }],
+            defaultEffort: "high",
+          },
+        };
+      },
+    },
   };
   const context = {
     get(name: string) { return services[name as keyof typeof services]; },
@@ -420,6 +439,52 @@ test("Host facade creates, prompts, flushes durable events, and releases all res
   await facade.dispose();
   assert.equal(f.calls.dispose, 1);
   assert.equal(f.listenerCount(), 0);
+});
+
+test("Host facade applies an exact Agent-scoped model override for one prompt and then removes it", async () => {
+  const f = fixture(false);
+  let selectionRef: {
+    current: { provider: string; model: string; reasoningEffort?: string } | undefined;
+    assembled: { provider: string; model: string; reasoningEffort?: string } | undefined;
+  } | undefined;
+  const facade = createDshHostFacade({
+    context: f.context,
+    sessionId: "dsh-session-1",
+    workspacePath: "/readonly/workspace",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    messageFactory: (text) => ({ role: "user", source: { kind: "user" }, content: [{ type: "text", text }] }),
+    modelSelectionInstaller: (_context, selection) => {
+      selectionRef = selection;
+      f.calls.modelSelections.push({ ...selection.current! });
+      return () => {
+        f.calls.modelSelectionDisposals += 1;
+        selectionRef = undefined;
+      };
+    },
+  });
+
+  const result = await facade.prompt("dynamic", {
+    provider: "deepseek-official",
+    model: "deepseek-reasoner",
+    reasoningEffort: "high",
+  });
+  assert.equal(result.toSequence, 1);
+  assert.deepEqual(f.calls.modelSelections, [{
+    provider: "deepseek-official",
+    model: "deepseek-reasoner",
+    reasoningEffort: "high",
+  }]);
+  assert.equal(selectionRef, undefined);
+  assert.equal(f.calls.modelSelectionDisposals, 1);
+
+  await assert.rejects(facade.prompt("unsupported", {
+    provider: "deepseek-official",
+    model: "deepseek-reasoner",
+    reasoningEffort: "unknown",
+  }), /does not support reasoning effort/);
+  assert.equal(f.calls.followup, 1, "unsupported profiles must fail before Agent.followup");
+  await facade.dispose();
 });
 
 test("native workspace integration names and persists a Session before attaching it", async () => {

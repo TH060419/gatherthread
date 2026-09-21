@@ -33,7 +33,7 @@ export const DSH_CONNECTION_MANIFEST = "manifest.json";
 export const DSH_CONNECTION_PATCH = "cordis.patch.yml";
 
 const PACKAGE_NAME = "@gatherthread/dsh-host";
-const PACKAGE_VERSION = "0.1.0-alpha.5";
+const PACKAGE_VERSION = "0.1.0-alpha.6";
 
 export type DshConnectionProfile = "web" | "headless";
 

@@ -141,10 +141,18 @@ export interface RuntimeRegistration {
   harness: HarnessName;
   provider: string;
   model: string;
+  executionProfiles?: readonly RuntimeExecutionProfile[];
   localSessionId: string;
   captureFidelity: CaptureFidelity;
   capabilities?: readonly string[];
   purpose?: "execution" | "snapshot_connector";
+}
+
+export interface RuntimeExecutionProfile {
+  provider: string;
+  model: string;
+  reasoningEfforts?: readonly string[];
+  defaultReasoningEffort?: string;
 }
 
 export interface RegisteredRuntime extends RuntimeRegistration {

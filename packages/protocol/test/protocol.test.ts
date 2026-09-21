@@ -18,6 +18,7 @@ import {
   ProjectInvitationRecordSchema,
   ProjectListItemSchema,
   RegisterRuntimeInputSchema,
+  RuntimeExecutionProfilesSchema,
   RuntimeProvenanceSchema,
   SessionTitleSchema,
   SnapshotRequestRecordSchema,
@@ -249,6 +250,44 @@ test("local turn, snapshot request, and runtime purpose contracts are bounded", 
   };
   assert.equal(RegisterRuntimeInputSchema.parse(runtime).purpose, "execution");
   assert.equal(RegisterRuntimeInputSchema.parse({ ...runtime, purpose: "snapshot_connector" }).purpose, "snapshot_connector");
+  const executionProfiles = [{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    reasoning_efforts: ["low", "high"],
+    default_reasoning_effort: "low",
+  }, {
+    provider: "deepseek-official",
+    model: "deepseek-reasoner",
+  }];
+  assert.deepEqual(RuntimeExecutionProfilesSchema.parse(executionProfiles), executionProfiles);
+  assert.deepEqual(
+    RegisterRuntimeInputSchema.parse({ ...runtime, execution_profiles: executionProfiles }).execution_profiles,
+    executionProfiles,
+  );
+  assert.equal(RuntimeExecutionProfilesSchema.safeParse([{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    reasoning_efforts: ["low"],
+    default_reasoning_effort: "high",
+  }]).success, false);
+  assert.equal(RuntimeExecutionProfilesSchema.safeParse([{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    reasoning_efforts: ["low", "low"],
+  }]).success, false);
+  assert.equal(RuntimeExecutionProfilesSchema.safeParse([
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+  ]).success, false);
+  assert.equal(RuntimeExecutionProfilesSchema.safeParse([{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    unsupported: true,
+  }]).success, false);
+  assert.equal(RuntimeExecutionProfilesSchema.safeParse(Array.from({ length: 33 }, (_, index) => ({
+    provider: "deepseek-official",
+    model: `deepseek-model-${index}`,
+  }))).success, false);
   const turn = {
     local_turn_id: "turn-1", runtime_id: "runtime-1", based_on_sequence: 0,
     occurred_at: "2026-08-25T12:00:00.000Z", observed_model: "gpt-5.6-terra", observed_reasoning_effort: "high",

@@ -159,6 +159,7 @@ export class CollaborationService {
         harness: runtime.harness,
         provider: runtime.provider,
         model: runtime.model,
+        ...(runtime.execution_profiles === undefined ? {} : { execution_profiles: runtime.execution_profiles }),
         status: runtime.status,
         last_seen_at: runtime.last_seen_at,
       }));

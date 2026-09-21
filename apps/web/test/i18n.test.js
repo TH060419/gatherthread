@@ -90,6 +90,7 @@ test("dynamic collaboration labels translate without touching unknown user text"
     "手动导入会创建新的 Codex 本地任务，不会覆盖或归档旧任务。确认新任务可用后，请自行归档旧任务。实时上下文注入不受影响。",
   );
   assert.equal(translateUiText("2 online", "zh-CN"), "2 个在线");
+  assert.equal(translateUiText("off", "zh-CN"), "关闭");
   assert.equal(
     translateUiText("2 DeepSeek Harness runtimes are online for this session.", "zh-CN"),
     "当前会话有 2 个 DeepSeek Harness runtime 在线。",

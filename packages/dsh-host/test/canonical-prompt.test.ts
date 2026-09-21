@@ -35,12 +35,14 @@ test("only explicit DeepSeek Harness requests are eligible", () => {
       harness: " DeepSeek-Harness ",
       provider: " Local Provider ",
       model: " Custom/Model-X ",
+      reasoning_effort: " High ",
       runtime_id: " dsh-runtime-1 ",
     },
   })), {
     harness: "deepseek-harness",
     provider: "Local Provider",
     model: "Custom/Model-X",
+    reasoningEffort: "High",
     runtimeId: "dsh-runtime-1",
   });
   assert.throws(() => requestedDshProfile(canonical(1, "agent_request", {
@@ -50,6 +52,15 @@ test("only explicit DeepSeek Harness requests are eligible", () => {
   assert.throws(() => requestedDshProfile(canonical(1, "agent_request", {
     content: "DSH request",
     execution_profile: { harness: "deepseek-harness", provider: "bad\nprovider", model: "Custom/Model-X" },
+  })), /invalid execution profile/);
+  assert.throws(() => requestedDshProfile(canonical(1, "agent_request", {
+    content: "DSH request",
+    execution_profile: {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "Custom/Model-X",
+      reasoning_effort: "bad\neffort",
+    },
   })), /invalid execution profile/);
 });
 

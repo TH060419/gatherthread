@@ -252,6 +252,12 @@ test("DSH device pairing is Host-initiated, browser-approved, single-use, and CS
         harness: "deepseek-harness",
         provider: "deepseek-official",
         model: "DeepSeek-CustomCase",
+        execution_profiles: [{
+          provider: "deepseek-official",
+          model: "DeepSeek-CustomCase",
+          reasoning_efforts: ["low", "high"],
+          default_reasoning_effort: "low",
+        }],
         local_session_id: "private-dsh-session-id",
         capture_fidelity: "harness_transcript",
       },
@@ -265,8 +271,14 @@ test("DSH device pairing is Host-initiated, browser-approved, single-use, and CS
     assert.equal(runtimes.status, 200);
     assert.equal(runtimes.body.data.runtimes.length, 1);
     assert.deepEqual(Object.keys(runtimes.body.data.runtimes[0] ?? {}).sort(), [
-      "device_id", "harness", "id", "last_seen_at", "model", "provider", "status",
+      "device_id", "execution_profiles", "harness", "id", "last_seen_at", "model", "provider", "status",
     ]);
+    assert.deepEqual(runtimes.body.data.runtimes[0]?.execution_profiles, [{
+      provider: "deepseek-official",
+      model: "DeepSeek-CustomCase",
+      reasoning_efforts: ["low", "high"],
+      default_reasoning_effort: "low",
+    }]);
     assert.equal(JSON.stringify(runtimes.body).includes("private-dsh-session-id"), false);
 
     const replay = await api(
