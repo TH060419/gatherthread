@@ -240,10 +240,11 @@ export class DshHostConnector {
       this.#assertRuntime(this.#runtime);
       this.#notifyLifecycle("idle");
       if (options.schedule !== false) this.#scheduleHeartbeat();
-      await this.#flushOutbox(this.#requireState().automaticUpload);
-      await this.#finalizeDeliveredRequest();
       if (this.#state.activeRequest !== undefined) {
         await this.#withExecutionPermit(() => this.#recoverActiveRequest());
+      } else {
+        await this.#flushOutbox(this.#requireState().automaticUpload);
+        await this.#finalizeDeliveredRequest();
       }
       if (options.runImmediately !== false) await this.pollOnce();
       if (this.#backgroundFatalError !== undefined) throw this.#backgroundFatalError;
@@ -330,12 +331,12 @@ export class DshHostConnector {
 
   async #poll(): Promise<DshPollResult> {
     const state = this.#requireState();
-    await this.#flushOutbox(state.automaticUpload);
-    await this.#finalizeDeliveredRequest();
     if (state.activeRequest !== undefined) {
       await this.#withExecutionPermit(() => this.#recoverActiveRequest());
       return { scanned: 0, claimed: 0, completed: 1 };
     }
+    await this.#flushOutbox(state.automaticUpload);
+    await this.#finalizeDeliveredRequest();
 
     if (state.automaticUpload) {
       await this.#captureLocalTurns();
@@ -472,7 +473,23 @@ export class DshHostConnector {
     if (!claim.claimed) {
       throw new Error("Active GatherThread request no longer has a recoverable claim");
     }
-    active.claimAttempt = claim.attemptCount ?? active.claimAttempt ?? 1;
+    const claimAttempt = claim.attemptCount ?? active.claimAttempt ?? 1;
+    active.claimAttempt = claimAttempt;
+    if (active.dshToSequence !== undefined) {
+      state.outbox = state.outbox.map((operation) => {
+        if ((operation.kind !== "progress" && operation.kind !== "complete")
+          || operation.requestId !== active.requestId) {
+          return operation;
+        }
+        return {
+          ...operation,
+          input: {
+            ...operation.input,
+            claimAttempt,
+          },
+        };
+      });
+    }
     await this.#stateStore.save(state);
     if (active.dshToSequence !== undefined) {
       await this.#flushOutbox();
