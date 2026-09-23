@@ -180,12 +180,15 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
 });
 
 test("shared identity fields precede both token activation and project invitation forms", async () => {
-  const markup = await readFile(htmlPath, "utf8");
+  const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
   const name = markup.indexOf('id="claim-display-name"');
   const device = markup.indexOf('id="claim-device-name"');
   const tokenForm = markup.indexOf('id="login-form"');
   const projectForm = markup.indexOf('id="claim-invitation-form"');
   assert.ok(name > 0 && device > name && tokenForm > device && projectForm > tokenForm);
+  assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
+  assert.match(main, /if \(hasAccessToken\) loginForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(hasProjectInvitation\) claimInvitationForm\.requestSubmit\(\)/u);
 });
 
 test("official light and dark lockups include the approved mark and outlined wordmark", async () => {

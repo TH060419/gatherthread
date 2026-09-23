@@ -320,6 +320,22 @@ function authenticationIdentity({ required = false } = {}) {
   return { displayName, deviceName, deviceNameEdited: deviceInput.dataset.automatic === "false" };
 }
 
+for (const id of ["claim-display-name", "claim-device-name"]) {
+  element(id).addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    const hasAccessToken = Boolean(element("token").value.trim());
+    const hasProjectInvitation = Boolean(element("claim-invite-secret").value.trim());
+    if (hasAccessToken && hasProjectInvitation) {
+      loginError.textContent = localizer.t("Choose either an access token or a project invitation before continuing.");
+      return;
+    }
+    if (hasAccessToken) loginForm.requestSubmit();
+    else if (hasProjectInvitation) claimInvitationForm.requestSubmit();
+    else element("token").focus();
+  });
+}
+
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   const generation = ++authenticationGeneration;

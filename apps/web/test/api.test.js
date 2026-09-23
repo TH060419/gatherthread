@@ -654,6 +654,7 @@ test("new-user invitation claim requests a browser session without retaining the
 
 test("test access activation uses a separate route and returns only the new device credential once", async () => {
   const originalFetch = globalThis.fetch;
+  const qualificationCode = ["fixture", "qualification", "code"].join("-");
   let captured;
   globalThis.fetch = async (url, options = {}) => {
     captured = { url: String(url), options };
@@ -665,7 +666,7 @@ test("test access activation uses a separate route and returns only the new devi
   try {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
     const result = await api.claimTestAccess({
-      accessToken: "gtq_one-use-test-qualification-secret",
+      accessToken: qualificationCode,
       displayName: "Qualified", deviceName: "Work laptop", rememberDevice: true,
     });
     assert.equal(result.actor.can_create_projects, true);
@@ -675,7 +676,7 @@ test("test access activation uses a separate route and returns only the new devi
     assert.equal(captured.options.headers.Authorization, undefined);
     assert.equal(captured.options.headers["X-GatherThread-Browser-Session"], "1");
     assert.deepEqual(JSON.parse(captured.options.body), {
-      access_token: "gtq_one-use-test-qualification-secret",
+      access_token: qualificationCode,
       display_name: "Qualified", device_name: "Work laptop", remember_device: true,
     });
   } finally {

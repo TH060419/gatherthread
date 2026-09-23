@@ -156,6 +156,7 @@ const ZH_CN = Object.freeze({
   "Access token": "访问 token",
   "Enter the access token issued by this owner host.": "输入当前主机签发的访问 token。",
   "Use your device access token to sign in, or a one-time test access token to create your account.": "使用设备访问 token 登录，或使用一次性测试资格 token 创建账号。",
+  "Choose either an access token or a project invitation before continuing.": "请只填写访问 token 或项目邀请密钥中的一种，再继续。",
   "Set both names when activating test access or joining a project. For an existing device token, leave them unchanged or edit either name.": "激活测试资格或加入项目时请设置显示名称和设备名称；使用已有设备 token 登录时，可以不修改或编辑任一名称。",
   "Remember this device": "记住此设备",
   "Keep this browser signed in for 30 days. Leave off on a shared device.": "让当前浏览器保持登录 30 天；在共用设备上请勿启用。",
@@ -647,6 +648,8 @@ export function translateUiText(source, locale) {
   if (exact) return exact;
   const patterns = [
     [/^(Select message|Select summary) #(\d+)$/u, (_match, label, sequence) => `${ZH_CN[label]} #${sequence}`],
+    [/^Use a device token to sign in, or a one-time test access token to create an account on (.+)\. The token is exchanged for a secure browser session and is never stored by the page\.$/u,
+      (_match, destination) => `使用设备 token 登录，或使用一次性测试资格 token 在 ${destination} 创建账号。token 会被交换为安全的浏览器会话，且不会被页面存储。`],
     [/^Connects to (.+)\. The token is exchanged for a secure browser session and is never stored by the page\.$/u,
       (_match, destination) => `用于连接 ${destination}。token 会被交换为安全的浏览器会话，且不会被页面存储。`],
     [/^(\d+) member(s?) · (owner|participant|viewer)$/u, (_match, count, plural, role) => `${count} 位成员 · ${ZH_CN[role] ?? role}`],
