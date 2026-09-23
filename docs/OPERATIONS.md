@@ -53,6 +53,8 @@ scripts/verify-sqlite-backup.sh /secure/backups/gatherthread/collaboration-YYYYM
 
 The backup script runs `PRAGMA integrity_check`, restricts file permissions, and writes a SHA-256 checksum. Store backups encrypted on a separate failure domain. Restrict access to the service operator and record backup creation, verification, schema version, and retention expiry without recording event content.
 
+For the unreleased optional [code repository feature](CODE_SYNC.md), the same script also creates a companion `<backup.db>.code` directory. It packs immutable Git objects reachable from the **SQLite snapshot's** recorded heads, reconstructs those refs, and runs strict Git integrity checks before reporting success. Keep the database, companion directory and checksum together. A `.incomplete` marker means the backup is unusable. Node.js 24 is required; Git is additionally required when repositories exist. Do not run external Git garbage collection or mutate repository storage while this online backup runs. A custom programmatic `codeRepositoryDirectory` must be supplied as the script's third argument (or `CODE_REPOSITORY_DIRECTORY`); the default is `<absolute database path>.code`.
+
 At least monthly and before a schema migration, restore the newest backup into an isolated temporary directory and run integrity, schema, application smoke, replay, and membership authorization tests. A backup without a successful restore drill is not considered recoverable.
 
 ## Restore
@@ -63,6 +65,7 @@ Restore is an operator-approved destructive procedure and is intentionally not a
 2. Preserve the failed database plus its `-wal` and `-shm` files in a restricted incident directory.
 3. Verify the selected backup checksum and `PRAGMA integrity_check` with `scripts/verify-sqlite-backup.sh`.
 4. Copy the verified backup to a new database path rather than overwriting evidence.
+   If it contains code repositories, copy the matching companion directory to `<new absolute database path>.code` as well (or configure the matching explicit code directory). Never restore only SQLite: its commit references and the Git objects form one recoverable unit. The verify script rejects a missing or inconsistent companion directory.
 5. Start the service against the new path with external traffic disabled.
 6. Check schema version, foreign keys, maximum per-session sequence, memberships, retention state, and attachment references.
 7. Run the integrated E2E suite, including replay and runtime claims.
@@ -77,6 +80,10 @@ Recommended initial defaults are 30 days for closed-session content and backups,
 Deletion must cover canonical events, derived read models, attachments, invitations, runtime presence, search indexes, and scheduled backup expiry. Append a non-sensitive audit record before deleting content, then ensure the deletion job is idempotent and resumable. Clearly disclose that expired data can remain in encrypted backups until backup rotation completes.
 
 Local harness transcripts remain under each user's local retention policy unless the user explicitly uploads allowed content. The collaboration server must not delete or modify a local transcript.
+
+Code repository metadata is removed with a cloud project and its API access is revoked immediately. This source preview retains the corresponding physical bare repository until an operator-approved retention/backup cleanup. Monitor disk usage; there is no automatic code-object deletion or garbage-collection service yet. No such cleanup may delete a member's local workspace.
+
+Code storage uses conservative write reservations and a bounded cold/periodic disk reconciliation (at most every 60 seconds, limited to 20,000 visited entries or 100 ms). Failed Git writes and physically retained deleted projects still consume disk allowance. `code_storage_check_required` pauses **code writes** for that process rather than repeatedly scanning on user requests; conversation and code-read endpoints remain available. Preserve a complete backup, stop writes, inspect/compact the operator-owned storage during maintenance, then restart and verify before resuming. Never prune based only on derived Git refs: SQLite heads are authoritative. Large concurrent rewrites can also exceed the conservative merge reservation and need local resolution. Git subprocesses remain synchronous with per-command timeouts in this small-project preview; worker-isolated Git processing is required before treating it as a high-throughput hosting service.
 
 ## Logging and monitoring
 

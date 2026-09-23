@@ -1,4 +1,6 @@
-export const SETTINGS_VERSION = 11;
+import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
+
+export const SETTINGS_VERSION = 12;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -61,6 +63,7 @@ export const DEFAULT_SETTINGS = deepFreeze({
     confirmAgentRequest: false,
     autoScroll: true,
   },
+  historySummaries: { instructions: DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS },
   notifications: {
     agentCompleted: false,
     connectionLost: true,
@@ -82,6 +85,7 @@ export function normalizeSettings(input) {
   const notifications = isObject(source.notifications) ? source.notifications : {};
   const agents = isObject(source.agents) ? source.agents : {};
   const general = isObject(source.general) ? source.general : {};
+  const summaryInstructions = source.historySummaries?.instructions;
   const visibleHistorySync = sync.visibleHistorySync === "every-connect" || sync.visibleHistorySync === "every-update"
     ? "first-connect"
     : sync.visibleHistorySync;
@@ -143,6 +147,10 @@ export function normalizeSettings(input) {
       enterBehavior: oneOf(composer.enterBehavior, ["newline", "send_chat", "request_agent"], DEFAULT_SETTINGS.composer.enterBehavior),
       confirmAgentRequest: composer.confirmAgentRequest === true,
       autoScroll: composer.autoScroll !== false,
+    },
+    historySummaries: {
+      instructions: typeof summaryInstructions === "string" && summaryInstructions.trim()
+        && summaryInstructions.length <= 4000 ? summaryInstructions : DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS,
     },
     notifications: {
       agentCompleted: notifications.agentCompleted === true,

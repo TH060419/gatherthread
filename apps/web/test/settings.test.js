@@ -33,7 +33,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 11);
+  assert.equal(normalized.version, 12);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -157,7 +157,7 @@ test("legacy flat Codex project profiles migrate without changing their model or
       },
     },
   });
-  assert.equal(migrated.version, 11);
+  assert.equal(migrated.version, 12);
   assert.equal(projectAgentHarness(migrated, "project-alpha"), "codex");
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex"]);
   assert.deepEqual(projectCodexProfile(migrated, "project-alpha"), { model: "Legacy/Model", effort: "high" });
@@ -183,7 +183,7 @@ test("version 6 connection shortcuts become the default for newly opened project
     setItem: () => {},
     removeItem: () => {},
   }).get();
-  assert.equal(migrated.version, 11);
+  assert.equal(migrated.version, 12);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
 });
@@ -237,7 +237,7 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 11);
+  assert.equal(migrated.version, 12);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");

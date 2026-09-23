@@ -7,9 +7,11 @@ import type {
   CaptureFidelity,
   CommitLocalTurnInput,
   CommitLocalTurnResult,
+  CreateHistorySummaryInput,
   DeviceAuthorizationRecord,
   EventType,
   EventVisibility,
+  HistoryContext,
   InvitationAuditRecord,
   InvitationRecord,
   InvitationRole,
@@ -29,8 +31,15 @@ import type {
   SnapshotRequestKind,
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
-import { MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema } from "@gatherthread/protocol";
-import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import {
+  MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, isCodeSyncRequestKind,
+  HISTORY_SUMMARY_MAX_CONTEXT_BYTES, HistorySummaryError, buildHistoryContext,
+  buildHistorySummaryPrompt, historySummaryMarker, historySummarySourceJson, historySummaryText,
+  isHistorySummaryRequest, selectHistorySummarySources,
+} from "@gatherthread/protocol";
+import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
+import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { redactJson } from "./redaction.js";
 
 export interface Actor {
   user_id: string;
@@ -286,6 +295,28 @@ const RUNTIME_OFFLINE_AFTER_MS = 30_000;
 const AGENT_CLAIM_LEASE_MS = 5 * 60_000;
 /** Exact-runtime recovery attempts before a request is terminally failed. */
 const MAX_AGENT_CLAIM_ATTEMPTS = 3;
+const MAX_HISTORY_CONTEXT_SCAN_EVENTS = 10_000;
+const MAX_HISTORY_CONTEXT_SCAN_BYTES = 16 * 1024 * 1024;
+const MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS = 10_000;
+const MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES = 16 * 1024 * 1024;
+
+function rejectHistorySummaryMetadata(payload: JsonValue): void {
+  if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
+    && Object.hasOwn(payload, "history_summary")) {
+    throw forbidden("history_summary is server-owned metadata; use the history-summaries endpoint");
+  }
+}
+
+function historySummaryOperation<T>(operation: () => T): T {
+  try { return operation(); }
+  catch (error) {
+    if (error instanceof HistorySummaryError) {
+      throw new ApiError(error.code === "too_large" ? 413 : 400, `history_summary_${error.code}`, error.message);
+    }
+    throw error;
+  }
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
@@ -322,6 +353,14 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_id, user_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_context_policies (
+  project_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('summary', 'original')),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, user_id),
+  FOREIGN KEY (project_id, user_id) REFERENCES project_memberships(project_id, user_id) ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE IF NOT EXISTS project_mutations (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -416,7 +455,7 @@ CREATE TABLE IF NOT EXISTS snapshot_requests (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload')),
+  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable')),
   through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
   target_runtime_id TEXT REFERENCES runtimes(id),
@@ -624,7 +663,7 @@ function claimLeaseLapsed(leaseExpiresAt: string | null | undefined, now: string
 }
 
 function isLocalSyncRequestKind(kind: SnapshotRequestKind): boolean {
-  return kind === "local_sync_status"
+  return isCodeSyncRequestKind(kind) || kind === "local_sync_status"
     || kind === "local_auto_upload_enable"
     || kind === "local_auto_upload_disable"
     || kind === "local_turn_upload";
@@ -638,7 +677,7 @@ interface AgentRequestTarget {
   runtimeId?: string;
 }
 
-function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
+function agentRequestTarget(event: Pick<CanonicalEvent, "payload">): AgentRequestTarget {
   const payload = event.payload !== null && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? event.payload as Record<string, JsonValue>
     : undefined;
@@ -814,6 +853,7 @@ export class CollaborationDatabase {
     const journalMode = (this.sqlite.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
+    this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
     this.migrateDeviceCredentialColumns();
     this.migrateProjectModel();
     this.migrateRuntimePurposeColumn();
@@ -1260,6 +1300,27 @@ export class CollaborationDatabase {
       SELECT role FROM project_memberships WHERE project_id = ? AND user_id = ?
     `).get(projectId, userId) as unknown as MembershipRow | undefined;
     return row?.role ?? null;
+  }
+
+  getProjectContextPolicy(actor: Actor, projectId: string): { mode: "summary" | "original" } {
+    this.assertActiveDevice(actor);
+    if (this.projectMembershipRole(projectId, actor.user_id) === null) throw notFound("Project");
+    const row = this.sqlite.prepare("SELECT mode FROM project_context_policies WHERE project_id = ? AND user_id = ?")
+      .get(projectId, actor.user_id) as { mode: "summary" | "original" } | undefined;
+    return { mode: row?.mode ?? "summary" };
+  }
+
+  setProjectContextPolicy(actor: Actor, projectId: string, mode: "summary" | "original"): { mode: "summary" | "original" } {
+    return this.transaction(() => {
+      this.getProjectContextPolicy(actor, projectId);
+      if (mode !== "summary" && mode !== "original") throw new ApiError(400, "invalid_context_policy", "Unknown context policy");
+      // This is the authenticated user's preference, not a shared project mutation.
+      this.sqlite.prepare(`
+        INSERT INTO project_context_policies(project_id, user_id, mode, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(project_id, user_id) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at
+      `).run(projectId, actor.user_id, mode, this.now());
+      return { mode };
+    });
   }
 
   listProjectMembers(projectId: string): ProjectMemberRecord[] {
@@ -2201,8 +2262,129 @@ export class CollaborationDatabase {
     return mapEvent(row);
   }
 
+  createHistorySummary(actor: Actor, sessionId: string, input: CreateHistorySummaryInput): CanonicalEvent {
+    return historySummaryOperation(() => this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (session.state !== "active") throw conflict("Archived sessions do not accept summary requests");
+      // Fetch the bounded selection and its canonical relationships, not a replay
+      // page. A missing or foreign-session ID must never produce a partial summary.
+      if (input.source_event_ids.length < 1 || input.source_event_ids.length > 100) {
+        throw new HistorySummaryError("invalid_selection", "Select between 1 and 100 history messages");
+      }
+      const selectedIds = new Set(input.source_event_ids);
+      const related = new Map<string, CanonicalEvent>();
+      const queue: CanonicalEvent[] = [];
+      let dependencyBytes = 0;
+      const include = (event: CanonicalEvent) => {
+        if (related.has(event.id)) return;
+        dependencyBytes += Buffer.byteLength(JSON.stringify(event));
+        if (related.size >= MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS || dependencyBytes > MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES) {
+          throw new HistorySummaryError("too_large", "Summary source ancestry exceeds the validation limit; select fewer sources");
+        }
+        related.set(event.id, event);
+        queue.push(event);
+      };
+      for (const id of input.source_event_ids) include(this.getEvent(sessionId, id));
+      for (let index = 0; index < queue.length; index += 1) {
+        const event = queue[index]!;
+        if (event.reply_to_event_id !== null) {
+          include(this.getEvent(sessionId, event.reply_to_event_id));
+        }
+        if (event.type !== "agent_request") continue;
+        const marker = historySummaryMarker(event);
+        for (const id of marker?.source_event_ids ?? []) include(this.getEvent(sessionId, id));
+        const responses = this.sqlite.prepare(`
+          SELECT * FROM events WHERE session_id = ? AND reply_to_event_id = ? AND type = 'agent_response'
+          ORDER BY sequence ASC LIMIT 2
+        `).all(sessionId, event.id) as unknown as EventRow[];
+        if (selectedIds.has(event.id) && responses.length === 0 && event.visibility === "session"
+          && !isHistorySummaryRequest(event) && historySummaryText(event.payload).trim()) {
+          throw conflict("Unfinished Agent requests cannot be selected for a history summary");
+        }
+        for (const row of responses) include(mapEvent(row));
+      }
+      const sources = selectHistorySummarySources(
+        [...related.values()].map((event) => ({ ...event, payload: redactJson(event.payload) })), input.source_event_ids,
+      );
+      const instructions = input.instructions === undefined ? undefined : redactJson(input.instructions) as string;
+      const content = buildHistorySummaryPrompt(sources, instructions);
+      if (Buffer.byteLength(JSON.stringify(content)) >= 32 * 1024) {
+        throw new HistorySummaryError("too_large", "Serialized summary prompt exceeds the 32 KiB transport boundary; no text was shortened");
+      }
+      const payload: JsonValue = {
+        content,
+        execution_profile: {
+          harness: input.execution_profile.harness,
+          model: input.execution_profile.model,
+          runtime_id: input.execution_profile.runtime_id,
+          ...(input.execution_profile.provider === undefined ? {} : { provider: input.execution_profile.provider }),
+          ...(input.execution_profile.reasoning_effort === undefined ? {} : { reasoning_effort: input.execution_profile.reasoning_effort }),
+        },
+        history_summary: {
+          version: 1,
+          source_event_ids: sources.map((event) => event.id),
+          source_digest: createHash("sha256").update(historySummarySourceJson(sources)).digest("hex"),
+        },
+      };
+      const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
+      if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", payload, null, "session", null);
+      const target = agentRequestTarget({ payload });
+      const runtime = this.listSessionRuntimesForUser(sessionId, actor.user_id)
+        .find((candidate) => candidate.id === input.execution_profile.runtime_id);
+      if (!runtime || runtime.purpose !== "execution" || runtime.status !== "online" || !runtimeSupportsAgentTarget(runtime, target)) {
+        throw conflict("Select your own exact online execution runtime and supported execution profile");
+      }
+      if (!this.sqlite.prepare(`
+        SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > ?)
+      `).get(runtime.device_id, actor.user_id, this.now())) {
+        throw conflict("The selected execution runtime's device is expired or revoked");
+      }
+      return this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: input.idempotency_key, type: "agent_request", visibility: "session", payload,
+      }, null);
+    }));
+  }
+
+  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number): HistoryContext {
+    return historySummaryOperation(() => this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
+      const through = throughSequence ?? session.next_sequence;
+      if (!Number.isSafeInteger(through) || through < 0 || through > session.next_sequence) {
+        throw new ApiError(400, "invalid_context_sequence", "through_sequence must be between zero and the current session head");
+      }
+      const resolvedView = view ?? this.getProjectContextPolicy(actor, session.project_id).mode;
+      if (resolvedView !== "summary" && resolvedView !== "original") throw new ApiError(400, "invalid_context_view", "Unknown context view");
+      const events: CanonicalEvent[] = [];
+      let scannedBytes = 0;
+      const query = this.sqlite.prepare(`
+        SELECT * FROM events WHERE session_id = ? AND sequence <= ? AND visibility = 'session' ORDER BY sequence ASC
+      `);
+      for (const value of query.iterate(sessionId, through)) {
+        const row = value as unknown as EventRow;
+        scannedBytes += Buffer.byteLength(row.payload_json) + Buffer.byteLength(row.runtime_provenance_json ?? "") + 512;
+        if (events.length >= MAX_HISTORY_CONTEXT_SCAN_EVENTS || scannedBytes > MAX_HISTORY_CONTEXT_SCAN_BYTES) {
+          throw new HistorySummaryError("too_large", "Context scan limit exceeded. Use paginated canonical history; no context was silently omitted");
+        }
+        const event = mapEvent(row);
+        events.push({ ...event, payload: redactJson(event.payload) });
+      }
+      const context = buildHistoryContext(events, resolvedView);
+      // The frozen canonical head includes invisible/control events; it is not
+      // the sequence of the last conversational item returned by the projection.
+      context.through_sequence = through;
+      if (Buffer.byteLength(JSON.stringify(context)) > HISTORY_SUMMARY_MAX_CONTEXT_BYTES) {
+        throw new HistorySummaryError("too_large", "Context view exceeds 256 KiB; use paginated canonical history");
+      }
+      return context;
+    }));
+  }
+
   appendEvent(actor: Actor, sessionId: string, input: AppendEventInput, provenance: RuntimeProvenance | null): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(input.payload);
     return this.transaction(() => {
       const replyTarget = input.reply_to_event_id === undefined || input.reply_to_event_id === null
         ? undefined
@@ -2469,6 +2651,7 @@ export class CollaborationDatabase {
     claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(payload);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
@@ -2521,6 +2704,7 @@ export class CollaborationDatabase {
     claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(payload);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
@@ -2580,6 +2764,9 @@ export class CollaborationDatabase {
   commitLocalTurn(actor: Actor, sessionId: string, input: CommitLocalTurnInput): CommitLocalTurnResult {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
+      rejectHistorySummaryMetadata(input.request_payload);
+      rejectHistorySummaryMetadata(input.response_payload);
+      for (const event of input.tool_events ?? []) rejectHistorySummaryMetadata(event.payload);
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       const runtime = this.requireRuntimeForActor(actor, sessionId, input.runtime_id, "execution");
       if (session.state !== "active") throw conflict("Archived sessions do not accept completed local turns");
@@ -2670,11 +2857,12 @@ export class CollaborationDatabase {
         : this.requireReadableSessionInsideTransaction(actor, sessionId);
       let targetRuntime: RuntimeRecord | undefined;
       if (localControl) {
+        this.assertCodeControlEnabled(kind, session.project_id);
         targetRuntime = this.listSessionRuntimesForUser(sessionId, actor.user_id)
           .find((runtime) => runtime.id === targetRuntimeId);
         if (!targetRuntime || targetRuntime.purpose !== "execution"
-          || targetRuntime.status !== "online" || targetRuntime.harness.trim().toLowerCase() !== "codex") {
-          throw conflict("An online Codex execution runtime owned by this user is required");
+          || targetRuntime.status !== "online" || !this.supportsControlHarness(kind, targetRuntime.harness)) {
+          throw conflict("An exact online supported execution runtime owned by this user is required");
         }
       } else if (targetRuntimeId !== undefined) {
         throw conflict("Only local sync controls can target an execution runtime");
@@ -2747,7 +2935,8 @@ export class CollaborationDatabase {
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
       const localControl = isLocalSyncRequestKind(request.kind);
       if (request.kind === "visible_history_replace" || localControl) {
-        this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        this.assertCodeControlEnabled(request.kind, session.project_id);
       } else {
         this.requireReadableSessionInsideTransaction(actor, request.session_id);
       }
@@ -2757,8 +2946,8 @@ export class CollaborationDatabase {
         runtimeId,
         localControl ? "execution" : "snapshot_connector",
       );
-      if (localControl && (request.target_runtime_id !== runtime.id || runtime.harness.trim().toLowerCase() !== "codex")) {
-        throw forbidden("This local sync control targets a different Codex runtime");
+      if (localControl && (request.target_runtime_id !== runtime.id || !this.supportsControlHarness(request.kind, runtime.harness))) {
+        throw forbidden("This local sync control targets a different execution runtime");
       }
       if (request.status === "claimed" && request.claimed_by_runtime_id === runtimeId) return request;
       if (request.status !== "pending") throw conflict("Snapshot request is not pending");
@@ -2888,14 +3077,18 @@ export class CollaborationDatabase {
       const request = this.requireSnapshotRequest(requestId);
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
       const localControl = isLocalSyncRequestKind(request.kind);
+      if (isCodeSyncRequestKind(request.kind)) {
+        const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        this.assertCodeControlEnabled(request.kind, session.project_id);
+      }
       const runtime = this.requireRuntimeForActor(
         actor,
         request.session_id,
         runtimeId,
         localControl ? "execution" : "snapshot_connector",
       );
-      if (localControl && (request.target_runtime_id !== runtime.id || runtime.harness.trim().toLowerCase() !== "codex")) {
-        throw forbidden("This local sync control targets a different Codex runtime");
+      if (localControl && (request.target_runtime_id !== runtime.id || !this.supportsControlHarness(request.kind, runtime.harness))) {
+        throw forbidden("This local sync control targets a different execution runtime");
       }
       const targetStatus = "result" in outcome ? "completed" : "failed";
       if (request.status === targetStatus && request.claimed_by_runtime_id === runtimeId) {
@@ -2934,6 +3127,18 @@ export class CollaborationDatabase {
 
   private now(): string {
     return this.clock().toISOString();
+  }
+
+  private supportsControlHarness(kind: SnapshotRequestKind, harness: string): boolean {
+    const normalized = harness.trim().toLowerCase();
+    return normalized === "codex" || (isCodeSyncRequestKind(kind) && normalized === "deepseek-harness");
+  }
+
+  private assertCodeControlEnabled(kind: SnapshotRequestKind, projectId: string): void {
+    if (isCodeSyncRequestKind(kind) && kind !== "code_sync_status"
+      && !this.sqlite.prepare("SELECT 1 FROM code_repositories WHERE project_id=?").get(projectId)) {
+      throw conflict("Enable project code collaboration before changing local code sync");
+    }
   }
 
   private touchProject(projectId: string, timestamp = this.now()): void {
@@ -3477,7 +3682,7 @@ export class CollaborationDatabase {
     const columns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all() as Array<{ name: string }>).map((row) => row.name),
     );
-    if (table?.sql?.includes("'local_sync_status'") && columns.has("target_runtime_id")) return;
+    if (table?.sql?.includes("'code_sync_status'") && columns.has("target_runtime_id")) return;
     this.sqlite.exec("PRAGMA foreign_keys = OFF");
     try {
       this.sqlite.exec(`
@@ -3486,7 +3691,7 @@ export class CollaborationDatabase {
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
           requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload')),
+          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable')),
           through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
           status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
           target_runtime_id TEXT REFERENCES runtimes(id),
@@ -3506,7 +3711,7 @@ export class CollaborationDatabase {
           failed_at, result_json, failure_json, storage_bytes, metadata_charged
         ) SELECT
           id, session_id, requested_by_user_id, request_kind, through_sequence, status,
-          NULL, claimed_by_runtime_id, created_at, claimed_at, completed_at,
+          ${columns.has("target_runtime_id") ? "target_runtime_id" : "NULL"}, claimed_by_runtime_id, created_at, claimed_at, completed_at,
           failed_at, result_json, failure_json, storage_bytes, metadata_charged
         FROM snapshot_requests;
         DROP TABLE snapshot_requests;

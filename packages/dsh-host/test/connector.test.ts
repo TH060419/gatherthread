@@ -8,6 +8,7 @@ import type {
   CompleteAgentRequestInput,
   ReadEventsResult,
   SessionSummary,
+  HistoryContext,
 } from "@gatherthread/bridge";
 import { buildDshCanonicalPrompt } from "../src/canonical-prompt.js";
 import { parseDshHostConfig, type EnabledDshHostConfig } from "../src/config.js";
@@ -16,6 +17,7 @@ import { MemoryConnectorStateStore } from "../src/state-store.js";
 import type {
   ConnectorState,
   DshAgentStatus,
+  DshContextExecutionInput,
   DshAppendEventInput,
   DshCanonicalEvent,
   DshCollaborationApi,
@@ -328,6 +330,7 @@ class FakeHost implements DshHostFacade {
   promptGate: Promise<void> | undefined;
   flushCount = 0;
   failNextProjection = false;
+  failNextProjectionFlush = false;
   readonly projected: Array<{ eventId: string; role: string; content: string }> = [];
 
   constructor(sessionId: string, persistence: FakeDshPersistence) {
@@ -442,6 +445,10 @@ class FakeHost implements DshHostFacade {
         this.projected.push(structuredClone(event));
       }
     }
+    if (this.failNextProjectionFlush) {
+      this.failNextProjectionFlush = false;
+      throw new Error("simulated native projection flush failure");
+    }
     this.flushCount += 1;
   }
 
@@ -521,6 +528,192 @@ class FakeHost implements DshHostFacade {
 function freshPersistence(): FakeDshPersistence {
   return { exists: false, events: [], prompts: [] };
 }
+
+class ContextApi extends FakeApi {
+  contextCalls: Array<{ sessionId: string; view: unknown; throughSequence: unknown }> = [];
+  contextError: Error | undefined;
+  contextView: "summary" | "original" = "summary";
+  async readContext(sessionId: string, view?: "summary" | "original", throughSequence?: number): Promise<HistoryContext> {
+    this.contextCalls.push({ sessionId, view, throughSequence });
+    if (this.contextError) throw this.contextError;
+    return { view: this.contextView, through_sequence: throughSequence!, items: [this.contextView === "summary"
+      ? { kind: "summary", event_id: "summary-response", sequence: 1, actor_user_id: "user-2", content: "FROZEN_SUMMARY", source_event_ids: ["source-1", "source-3"] }
+      : { kind: "original", event_id: "source-1", sequence: 1, actor_user_id: "user-2", content: "FROZEN_ORIGINAL" }] };
+  }
+}
+
+class ContextHost extends FakeHost {
+  readonly execution: FakeHost;
+  readonly executionPersistence: FakeDshPersistence;
+  readonly executionId = `gatherthread-execution-${"a".repeat(32)}`;
+  readonly preparations: DshContextExecutionInput[] = [];
+  constructor(id: string, persistence: FakeDshPersistence, executionPersistence = freshPersistence()) {
+    super(id, persistence);
+    this.executionPersistence = executionPersistence;
+    this.execution = new FakeHost(this.executionId, executionPersistence);
+  }
+  async prepareContextExecution(input: DshContextExecutionInput) {
+    this.preparations.push(structuredClone(input));
+    if (!input.resume) this.executionPersistence.events.push({ type: "user/message", seq: this.execution.currentSequence(), time: eventTime,
+      data: { id: `context-${input.requestId}`, source: { kind: "plugin", plugin: "gatherthread" }, content: [{ type: "text", text: JSON.stringify(input.historyContext) }] } });
+    return { sessionId: this.executionId, fromSequence: this.execution.currentSequence() };
+  }
+  override currentSequence(executionId?: string) { return executionId ? this.execution.currentSequence() : super.currentSequence(); }
+  override snapshotFrom(sequence: number, executionId?: string) { return executionId ? this.execution.snapshotFrom(sequence) : super.snapshotFrom(sequence); }
+  override prompt(text: string, profile?: { provider: string; model: string; reasoningEffort?: string }, executionId?: string) {
+    return executionId ? this.execution.prompt(text, profile) : super.prompt(text, profile);
+  }
+  override onSessionEvent(listener: (event: DshSessionEventRecord) => void) {
+    const disposers = [super.onSessionEvent((event) => listener({ ...event, sourceSessionId: this.sessionId })),
+      this.execution.onSessionEvent((event) => listener({ ...event, sourceSessionId: this.executionId }))];
+    return () => disposers.forEach((dispose) => dispose());
+  }
+  override onStatus(listener: (status: DshAgentStatus, sourceSessionId?: string) => void) {
+    const disposers = [super.onStatus((status) => listener(status, this.sessionId)),
+      this.execution.onStatus((status) => listener(status, this.executionId))];
+    return () => disposers.forEach((dispose) => dispose());
+  }
+  override async dispose() { await this.execution.dispose(); await super.dispose(); }
+}
+
+function summaryRequest(sequence: number, actorId = "user-1"): DshCanonicalEvent {
+  const event = request(sequence);
+  return { ...event, actorId, payload: { ...event.payload as object, content: "Summarize selected JSON: SELECTED_SOURCE_ONLY",
+    history_summary: { version: 1, source_event_ids: ["source-1"], source_digest: "a".repeat(64) } } };
+}
+
+test("DSH ordinary sessions retain native context and do not require the new server context API", async () => {
+  const cfg = config(); const api = new ContextApi();
+  api.contextError = Object.assign(new Error("old server has no context route"), { status: 404 });
+  api.events.push(canonical(1, "human_chat", { content: "ordinary history" }), request(2));
+  const host = new ContextHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: new MemoryConnectorStateStore() });
+  await connector.start({ schedule: false });
+  assert.equal(host.prompts.length, 1);
+  assert.equal(host.execution.prompts.length, 0);
+  assert.equal(host.preparations.length, 0);
+  assert.equal(api.contextCalls.length, 0);
+  await connector.stop();
+});
+
+test("DSH summary-aware requests freeze policy, preserve native upload cursor, and passively show only public results", async () => {
+  const cfg = config({ executionProfiles: [
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    { provider: "deepseek-official", model: "deepseek-reasoner", reasoningEfforts: ["high"] },
+  ] }); const api = new ContextApi(); const store = new MemoryConnectorStateStore();
+  api.events.push(summaryRequest(1, "user-2"), dynamicRequest(2));
+  const host = new ContextHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false });
+  assert.deepEqual(api.contextCalls, [{ sessionId: "session-1", view: undefined, throughSequence: 1 }]);
+  assert.equal(host.preparations[0]?.historyContext.items[0]?.content, "FROZEN_SUMMARY");
+  assert.deepEqual(host.execution.promptProfiles[0], { provider: "deepseek-official", model: "deepseek-reasoner", reasoningEffort: "high" });
+  assert.equal(host.prompts.length, 0);
+  assert.equal((await store.load())?.publishedDshSequence, 0, "auxiliary sequence never skips native local turns");
+  assert.equal((await store.load())?.activeRequest, undefined, "full context is removed when delivery is durable");
+  assert.doesNotMatch(JSON.stringify([api.progress, api.appended, api.completions]), /FROZEN_SUMMARY|source_event_ids|gatherthread-execution-/);
+  assert.equal((api.completions[0]?.payload as any).context_execution, "isolated");
+  await connector.pollOnce(); // completed claim passively materializes the normal request
+  await connector.pollOnce(); // then its isolated answer is projected to the original Session
+  assert.equal(host.execution.prompts.length, 1);
+  assert.deepEqual(host.projected.map((event) => event.role), ["user", "assistant"]);
+  assert.doesNotMatch(JSON.stringify(host.projected), /SELECTED_SOURCE_ONLY/);
+  host.emitLocalTurn("NATIVE_AFTER_ISOLATED", "native response");
+  await connector.pollOnce();
+  assert.equal(api.localTurns.length, 1);
+  assert.match(JSON.stringify(api.localTurns), /NATIVE_AFTER_ISOLATED/);
+  api.contextView = "original";
+  api.events.push(dynamicRequest((api.events.at(-1)?.sequence ?? 0) + 1));
+  await connector.pollOnce();
+  assert.equal(host.preparations.at(-1)?.historyContext.view, "original");
+  assert.equal(host.preparations.at(-1)?.historyContext.items[0]?.content, "FROZEN_ORIGINAL");
+  assert.equal(host.prompts.length, 0);
+  await connector.stop();
+});
+
+test("DSH selected-only summary requests never read full context or project their selected originals", async () => {
+  const cfg = config(); const api = new ContextApi();
+  api.events.push(canonical(1, "human_chat", { content: "UNSELECTED_HISTORY" }, "user-2"), summaryRequest(2));
+  api.contextError = new Error("must not read unrelated history");
+  const host = new ContextHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: new MemoryConnectorStateStore() });
+  await connector.start({ schedule: false });
+  assert.equal(host.preparations[0]?.selectedOnly, true);
+  assert.deepEqual(host.preparations[0]?.historyContext.items, []);
+  assert.equal(api.contextCalls.length, 0);
+  assert.match(host.execution.prompts[0]!, /SELECTED_SOURCE_ONLY/);
+  assert.doesNotMatch(host.execution.prompts[0]!, /UNSELECTED_HISTORY/);
+  await connector.pollOnce(); await connector.pollOnce();
+  assert.doesNotMatch(JSON.stringify(host.projected), /SELECTED_SOURCE_ONLY/);
+  assert.match(JSON.stringify(host.projected), /public final/);
+  await connector.stop();
+});
+
+test("DSH marked sessions fail closed when context is unavailable and never fall back to a native paid run", async () => {
+  for (const unavailable of ["missing-api", "server-error", "missing-host"] as const) {
+    const cfg = config(); const api = unavailable === "missing-api" ? new FakeApi() : new ContextApi();
+    if (api instanceof ContextApi && unavailable === "server-error") api.contextError = Object.assign(new Error("context unsupported"), { status: 404 });
+    api.events.push(summaryRequest(1, "user-2"), request(2));
+    const host = unavailable === "missing-host" ? new FakeHost(cfg.dshSessionId, freshPersistence()) : new ContextHost(cfg.dshSessionId, freshPersistence());
+    const connector = new DshHostConnector({ config: cfg, api, host, stateStore: new MemoryConnectorStateStore() });
+    await connector.start({ schedule: false, runImmediately: false });
+    await assert.rejects(connector.pollOnce(), /context.*unavailable|context unsupported/);
+    assert.equal(host.prompts.length, 0);
+    if (host instanceof ContextHost) assert.equal(host.execution.prompts.length, 0);
+    await connector.stop();
+  }
+});
+
+test("DSH isolated lost acknowledgement retains one bounded frozen context and replays only the receipt after restart", async () => {
+  const cfg = config(); const api = new ContextApi(); const store = new MemoryConnectorStateStore();
+  const native = freshPersistence(); const execution = freshPersistence();
+  api.events.push(summaryRequest(1, "user-2"), request(2));
+  api.failNextKind = "complete";
+  const host = new ContextHost(cfg.dshSessionId, native, execution);
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false, runImmediately: false });
+  await assert.rejects(connector.pollOnce(), /offline transport/);
+  const saved = (await store.load())!;
+  assert.equal(saved.activeRequest?.contextExecution?.historyContext.items[0]?.content, "FROZEN_SUMMARY");
+  assert.equal(saved.publishedDshSequence, 0);
+  assert.doesNotMatch(JSON.stringify(saved.outbox), /FROZEN_SUMMARY/);
+  await connector.stop();
+  api.contextView = "original";
+  const resumedHost = new ContextHost(cfg.dshSessionId, native, execution);
+  const resumed = new DshHostConnector({ config: cfg, api, host: resumedHost, stateStore: store });
+  await resumed.start({ schedule: false });
+  assert.equal(execution.prompts.length, 1, "a lost acknowledgement never calls the model again");
+  assert.equal(api.contextCalls.length, 1, "recovery cannot re-read a changed context policy");
+  assert.equal((await store.load())?.activeRequest, undefined);
+  assert.doesNotMatch(JSON.stringify(await store.load()), /FROZEN_SUMMARY/);
+  await resumed.stop();
+});
+
+test("DSH isolated recovery of a completed native turn uses the stored context fence, not a changed policy", async () => {
+  const cfg = config(); const api = new ContextApi(); const store = new MemoryConnectorStateStore();
+  const native = freshPersistence(); const execution = freshPersistence();
+  api.events.push(summaryRequest(1, "user-2"), request(2)); api.failNextKind = "complete";
+  const host = new ContextHost(cfg.dshSessionId, native, execution);
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false, runImmediately: false });
+  await assert.rejects(connector.pollOnce(), /offline transport/);
+  const saved = (await store.load())!;
+  // Simulate a process ending after the DSH turn was flushed but before the
+  // connector's settlement transaction was saved. Only native log can prove it.
+  delete saved.activeRequest!.dshToSequence; saved.outbox = [];
+  await store.save(saved); await connector.stop();
+  api.contextView = "original";
+  const resumedHost = new ContextHost(cfg.dshSessionId, native, execution);
+  const resumed = new DshHostConnector({ config: cfg, api, host: resumedHost, stateStore: store });
+  await resumed.start({ schedule: false });
+  assert.equal(resumedHost.preparations[0]?.resume, true);
+  assert.equal(resumedHost.preparations[0]?.historyContext.view, "summary");
+  assert.equal(resumedHost.preparations[0]?.historyContext.through_sequence, 1);
+  assert.equal(api.contextCalls.length, 1);
+  assert.equal(execution.prompts.length, 1, "durable completion cannot replay the model");
+  assert.equal((await store.load())?.activeRequest, undefined);
+  await resumed.stop();
+});
 
 test("ordinary canonical updates are durably projected before a later request without duplicate prompt history", async () => {
   const cfg = config();
@@ -812,6 +1005,93 @@ test("a failed native projection retains its canonical cursor and retries withou
   await connector.pollOnce();
   assert.deepEqual(host.projected.map((event) => event.eventId), ["event-1"]);
   assert.equal((await store.load())?.projectionCursor, 1);
+  await connector.stop();
+});
+
+test("cloud history preserves text beyond 64 KiB without executing or changing a non-DeepSeek route", async () => {
+  const cfg = config({ provider: "other-provider", model: "native-model", pollLimit: 1 });
+  const api = new FakeApi();
+  const middle = "共享上下文".repeat(6_000);
+  const content = `OLD_HISTORY_BEGIN\n${middle}\npassword=synthetic-secret\nLATEST_HISTORY_TAIL`;
+  const redacted = `OLD_HISTORY_BEGIN\n${middle}\npassword=[REDACTED]\nLATEST_HISTORY_TAIL`;
+  assert.ok(Buffer.byteLength(JSON.stringify({ content }), "utf8") < 256 * 1_024);
+  assert.ok(Buffer.byteLength(redacted, "utf8") > 64 * 1_024);
+  api.events.push(
+    canonical(1, "human_chat", { content }, "user-2"),
+    canonical(2, "agent_response", { text: content, reasoning: "PRIVATE_REASONING" }, "user-2"),
+  );
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const store = new MemoryConnectorStateStore();
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false });
+
+  assert.deepEqual(host.projected.map(({ eventId, role }) => ({ eventId, role })), [
+    { eventId: "event-1", role: "user" },
+    { eventId: "event-2", role: "assistant" },
+  ]);
+  for (const event of host.projected) {
+    assert.ok(event.content.endsWith("LATEST_HISTORY_TAIL"), "the accepted event tail must reach native history");
+    assert.equal(event.content, redacted);
+  }
+  assert.equal(host.flushCount, 2, "each complete page must be flushed before its cursor advances");
+  assert.equal((await store.load())?.projectionCursor, 2);
+  assert.equal((await store.load())?.serverCursor, 2);
+  assert.equal(host.prompts.length, 0, "passive history projection must never wake a model");
+  assert.deepEqual(host.promptProfiles, []);
+  assert.equal(api.registrations[0]?.provider, "other-provider");
+  assert.equal(api.registrations[0]?.model, "native-model");
+  await connector.pollOnce();
+  assert.equal(host.projected.length, 2);
+  assert.equal(host.flushCount, 2);
+  await connector.stop();
+});
+
+test("long native projection retries after an uncertain flush without advancing or duplicating history", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  const content = `LONG_HISTORY_BEGIN\n${"context ".repeat(10_000)}\nLONG_HISTORY_TAIL`;
+  api.events.push(canonical(1, "human_chat", { content }, "user-2"));
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  host.failNextProjectionFlush = true;
+  const store = new MemoryConnectorStateStore();
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ runImmediately: false, schedule: false });
+
+  await assert.rejects(connector.pollOnce(), /simulated native projection flush failure/);
+  assert.equal((await store.load())?.projectionCursor, 0);
+  assert.equal((await store.load())?.serverCursor, 0);
+  assert.equal(host.projected.length, 1, "the native append may have committed before flush failed");
+  assert.ok(host.projected[0]?.content.endsWith("LONG_HISTORY_TAIL"));
+  await connector.pollOnce();
+  assert.equal(host.projected.length, 1, "retry must reuse the canonical event identity");
+  assert.equal(host.projected[0]?.content, content);
+  assert.equal(host.flushCount, 1);
+  assert.equal((await store.load())?.projectionCursor, 1);
+  assert.equal((await store.load())?.serverCursor, 1);
+  await connector.stop();
+});
+
+test("local DSH uploads retain their independent 64 KiB public text limit", async () => {
+  const cfg = config({ shareToolEvents: false });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: new MemoryConnectorStateStore() });
+  await connector.start({ runImmediately: false, schedule: false });
+  host.emitLocalTurn(
+    `password=synthetic-secret\n${"local input ".repeat(8_000)}INPUT_TAIL`,
+    `${"local output ".repeat(8_000)}OUTPUT_TAIL`,
+  );
+  await connector.pollOnce();
+
+  assert.equal(api.localTurns.length, 1);
+  const input = (api.localTurns[0]?.requestPayload as { content: string }).content;
+  const output = (api.localTurns[0]?.responsePayload as { text: string }).text;
+  for (const text of [input, output]) {
+    assert.ok(Buffer.byteLength(text, "utf8") <= 64 * 1_024);
+    assert.match(text, /\[TRUNCATED\]$/u);
+    assert.doesNotMatch(text, /INPUT_TAIL|OUTPUT_TAIL|synthetic-secret/u);
+  }
+  assert.match(input, /password=\[REDACTED\]/u);
   await connector.stop();
 });
 

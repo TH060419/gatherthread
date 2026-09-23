@@ -43,6 +43,7 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
   const heartbeatRuntime = client.heartbeatRuntime;
   const appendAgentProgress = client.appendAgentProgress;
   const commitLocalTurn = client.commitLocalTurn;
+  const readContext = client.readContext;
   if (listProjectSessions === undefined
     || heartbeatRuntime === undefined
     || appendAgentProgress === undefined
@@ -52,6 +53,10 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
   return {
     listProjectSessions: (projectId) => listProjectSessions.call(client, projectId),
     readEvents: (sessionId, afterSequence, limit) => client.readEvents(sessionId, afterSequence, limit),
+    ...(readContext === undefined ? {} : {
+      readContext: (sessionId: string, view?: Parameters<NonNullable<CollaborationApi["readContext"]>>[1], throughSequence?: number) =>
+        readContext.call(client, sessionId, view, throughSequence),
+    }),
     registerRuntime: async (input: DshRuntimeRegistration) => client.registerRuntime(
       input as unknown as RuntimeRegistration,
     ) as unknown as DshRegisteredRuntime,

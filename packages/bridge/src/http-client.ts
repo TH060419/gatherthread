@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { HISTORY_SUMMARY_MAX_CONTEXT_BYTES } from "@gatherthread/protocol";
 import type {
   AgentRequestClaim,
   AgentProgressInput,
@@ -9,6 +10,7 @@ import type {
   CommitLocalTurnInput,
   CommitLocalTurnResult,
   CurrentActor,
+  HistoryContext,
   ProjectSummary,
   ReadEventsResult,
   RegisteredRuntime,
@@ -147,6 +149,23 @@ export class HttpCollaborationClient implements CollaborationApi {
       nextSequence: requiredNumber(body.cursor, "cursor"),
       hasMore: body.has_more === true,
     };
+  }
+
+  async readContext(sessionId: string, view?: HistoryContext["view"], throughSequence?: number): Promise<HistoryContext> {
+    validateContextReadInput(sessionId, view, throughSequence);
+    const query = new URLSearchParams();
+    if (view !== undefined) query.set("view", view);
+    if (throughSequence !== undefined) query.set("through_sequence", String(throughSequence));
+    try {
+      const body = await this.#request(`/sessions/${encodeURIComponent(sessionId)}/context${query.size ? `?${query}` : ""}`);
+      return parseHistoryContext(body, view, throughSequence);
+    } catch (error) {
+      if (error instanceof CollaborationHttpError && [404, 405, 501].includes(error.status)) {
+        throw new CollaborationHttpError(error.status,
+          "Context reading is unavailable for this session or server; raw history was not substituted", error.code);
+      }
+      throw error;
+    }
   }
 
   async appendEvent(sessionId: string, event: AppendEventInput): Promise<CanonicalEvent> {
@@ -418,6 +437,77 @@ function toWireRuntimeRegistration(runtime: RuntimeRegistration): Record<string,
   };
 }
 
+/** Shared validation at HTTP, private relay and model-facing read boundaries. */
+export function validateContextReadInput(sessionId: string, view?: HistoryContext["view"], throughSequence?: number): void {
+  if (typeof sessionId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(sessionId)) {
+    throw new Error("Invalid session identifier for context read");
+  }
+  if (view !== undefined && view !== "summary" && view !== "original") {
+    throw new Error("Context view must be summary or original");
+  }
+  if (throughSequence !== undefined && (!Number.isSafeInteger(throughSequence) || throughSequence < 0)) {
+    throw new Error("Context through_sequence must be a non-negative integer");
+  }
+}
+
+export function parseHistoryContext(value: unknown, expectedView?: HistoryContext["view"], throughSequence?: number): HistoryContext {
+  if (!isObject(value) || (value.view !== "summary" && value.view !== "original")
+    || (expectedView !== undefined && value.view !== expectedView)) {
+    throw new Error("Collaboration API returned an invalid context view");
+  }
+  if (!Number.isSafeInteger(value.through_sequence) || Number(value.through_sequence) < 0
+    || (throughSequence !== undefined && value.through_sequence !== throughSequence)
+    || !Array.isArray(value.items)) {
+    throw new Error("Collaboration API returned invalid context metadata");
+  }
+  let encoded: string;
+  try { encoded = JSON.stringify(value); } catch { throw new Error("Collaboration API returned invalid context data"); }
+  if (Buffer.byteLength(encoded) > HISTORY_SUMMARY_MAX_CONTEXT_BYTES) {
+    throw new Error("Collaboration API context exceeds 256 KiB; no context was shortened");
+  }
+  let previousSequence = 0;
+  const eventIds = new Set<string>();
+  const sourceIds = new Set<string>();
+  const items = value.items.map((raw): HistoryContext["items"][number] => {
+    if (!isObject(raw) || (raw.kind !== "original" && raw.kind !== "summary")
+      || (value.view === "original" && raw.kind !== "original")
+      || !Number.isSafeInteger(raw.sequence) || Number(raw.sequence) <= previousSequence
+      || Number(raw.sequence) > Number(value.through_sequence) || typeof raw.content !== "string"
+      || !isContextId(raw.event_id) || !isContextId(raw.actor_user_id) || eventIds.has(raw.event_id)) {
+      throw new Error("Collaboration API returned an invalid context item");
+    }
+    previousSequence = Number(raw.sequence);
+    eventIds.add(raw.event_id);
+    const item: HistoryContext["items"][number] = {
+      kind: raw.kind, event_id: raw.event_id, sequence: previousSequence,
+      actor_user_id: raw.actor_user_id, content: raw.content,
+    };
+    if (raw.kind === "summary") {
+      // A single generation selects at most 100 direct IDs, but a valid
+      // summary-of-summaries can cover more terminal canonical events.
+      // The server scan and 256 KiB DTO limit remain the transport bounds.
+      if (!Array.isArray(raw.source_event_ids) || raw.source_event_ids.length < 1 || raw.source_event_ids.length > 10_000
+        || raw.source_event_ids.some((id) => !isContextId(id) || id === raw.event_id || sourceIds.has(id))
+        || new Set(raw.source_event_ids).size !== raw.source_event_ids.length) {
+        throw new Error("Collaboration API returned invalid context summary sources");
+      }
+      item.source_event_ids = [...raw.source_event_ids] as string[];
+      for (const id of item.source_event_ids) sourceIds.add(id);
+    } else if (raw.source_event_ids !== undefined) {
+      throw new Error("Collaboration API returned invalid original context sources");
+    }
+    return item;
+  });
+  if (items.some((item) => sourceIds.has(item.event_id))) {
+    throw new Error("Collaboration API context repeats summarized sources");
+  }
+  return { view: value.view, through_sequence: Number(value.through_sequence), items };
+}
+
+function isContextId(value: unknown): value is string {
+  return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value);
+}
+
 function fromWireEvent(value: unknown): CanonicalEvent {
   const input = requiredObject(value);
   const actorDisplayName = optionalWireString(input.actor_display_name) ?? optionalWireString(input.actor_username);
@@ -453,7 +543,8 @@ function fromWireSnapshotRequest(value: unknown): SnapshotRequestSummary {
   const createdAt = optionalWireString(input.created_at) ?? optionalWireString(input.requested_at);
   const kind = requiredString(input.kind, "snapshot_request.kind") as SnapshotRequestKind;
   if (!["immutable", "visible_history_replace", "local_sync_status", "local_auto_upload_enable",
-    "local_auto_upload_disable", "local_turn_upload"].includes(kind)) {
+    "local_auto_upload_disable", "local_turn_upload", "code_sync_status", "code_upload", "code_download",
+    "code_recover", "code_auto_upload_enable", "code_auto_upload_disable"].includes(kind)) {
     throw new Error("Collaboration API returned an invalid snapshot request kind");
   }
   return {

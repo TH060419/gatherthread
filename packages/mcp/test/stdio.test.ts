@@ -71,3 +71,26 @@ test("stdio MCP transport drops oversized lines before buffering the next reques
     { jsonrpc: "2.0", id: 2, result: {} },
   ]);
 });
+
+test("stdio rejects oversized batches without dispatch and still handles the next line", async () => {
+  let calls = 0;
+  const service = new CollaborationMcpService({ api: {
+    ...api, async listSessions() { calls += 1; return []; },
+  } });
+  const call = { jsonrpc: "2.0", id: 1, method: "tools/call", params: {
+    name: "collaboration_list_sessions", arguments: {},
+  } };
+  const input = Readable.from([
+    `${JSON.stringify(Array.from({ length: 129 }, () => call))}\n`,
+    `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" })}\n`,
+  ]);
+  const output = new PassThrough();
+  let text = "";
+  output.setEncoding("utf8");
+  output.on("data", (chunk) => { text += chunk; });
+  await new StdioMcpServer(service).run({ input, output });
+  const responses = text.trim().split("\n").map((line) => JSON.parse(line));
+  assert.equal(calls, 0);
+  assert.equal(responses[0].error.code, -32600);
+  assert.deepEqual(responses[1], { jsonrpc: "2.0", id: 2, result: {} });
+});

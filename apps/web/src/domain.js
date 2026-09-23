@@ -129,7 +129,8 @@ export function normalizeSnapshotRequest(payload) {
     result?.thread_id,
   ].find((value) => typeof value === "string" && value.length > 0) ?? "";
   const kind = ["immutable", "visible_history_replace", "local_sync_status", "local_auto_upload_enable",
-    "local_auto_upload_disable", "local_turn_upload"].includes(request.kind)
+    "local_auto_upload_disable", "local_turn_upload", "code_sync_status", "code_upload", "code_download",
+    "code_recover", "code_auto_upload_enable", "code_auto_upload_disable"].includes(request.kind)
     ? request.kind
     : "immutable";
   return {
@@ -142,6 +143,7 @@ export function normalizeSnapshotRequest(payload) {
     createdAt: request.created_at ?? request.createdAt ?? new Date().toISOString(),
     localTaskName,
     result,
+    failureCode: typeof failure === "object" && failure !== null ? failure.code ?? "" : "",
     failureMessage: typeof failure === "string" ? failure : failure?.message ?? "",
   };
 }

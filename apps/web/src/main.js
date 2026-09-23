@@ -27,6 +27,9 @@ import {
   snapshotStatusView,
 } from "./domain.js?v=20260829-3";
 import { SessionSync } from "./realtime.js";
+import { mountCodeSync } from "./code-sync-view.js";
+import { mountHistorySummaries } from "./history-summary-view.js";
+import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
 import { createLocalizer } from "./i18n.js?v=20260922-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
@@ -119,6 +122,9 @@ const state = {
 let createdInvitationSecret = "";
 let newDeviceAccessToken = "";
 let authenticationGeneration = 0;
+let workspaceLoadGeneration = 0;
+let pendingMessageSend = null;
+let selectionRetry = null;
 let memberRefreshTimer;
 let memberRefreshInFlight = false;
 let snapshotPollTimer;
@@ -130,6 +136,7 @@ let selectedSessionGeneration = 0;
 let pendingDshPairingCode = dshPairingCodeFromHash(location.hash);
 const expandedWorklogs = new Set();
 const localSyncStatusRequestsInFlight = new Set();
+const localSyncActionsInFlight = new Set();
 const retryingAgentRequestIds = new Set();
 const LOCAL_SYNC_REQUEST_KINDS = new Set([
   "local_sync_status",
@@ -204,6 +211,32 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
+const codeSyncUi = mountCodeSync({
+  document, api, localizer, mockEnabled,
+  getContext: () => ({
+    project: state.project,
+    userId: state.currentUser?.id,
+    sessionId: state.session?.id,
+    sessionWritable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+    runtimes: state.executionRuntimes,
+    devices: state.devices,
+    members: state.projectMembers,
+    enabledHarnesses: state.project ? projectEnabledHarnesses(state.settings, state.project.id) : [],
+  }),
+});
+const historySummaryUi = mountHistorySummaries({
+  document, api, localizer, renderMarkdown,
+  getContext: () => ({
+    scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.currentUser?.id ?? ""}:${state.session?.id ?? ""}`,
+    sessionId: state.session?.id,
+    userId: state.currentUser?.id,
+    events: state.sync.events,
+    writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+    executionProfile: historySummaryExecutionProfile(),
+    instructions: state.settings.historySummaries.instructions,
+  }),
+  onChange: () => renderTimeline(),
+});
 let connectCodexReturnFocus = null;
 let connectDshReturnFocus = null;
 let renameSessionReturnFocus = null;
@@ -214,6 +247,8 @@ let settingsReturnFocus = null;
 let settingsPreview = state.settings;
 let currentDeviceName = "";
 let settingsDeviceLoadGeneration = 0;
+let settingsHistoryPolicyGeneration = 0;
+let settingsHistoryPolicy = null;
 let attentionNoticeTimer;
 let connectionNoticeState = INITIAL_CONNECTION_NOTICE_STATE;
 
@@ -225,6 +260,7 @@ element("claim-device-name").addEventListener("input", () => {
 
 clearSensitiveInputs();
 window.addEventListener("pagehide", () => {
+  codeSyncUi.close();
   authenticationGeneration += 1;
   projectSelectionGuard.invalidate();
   selectedSessionGeneration += 1;
@@ -291,6 +327,7 @@ loginForm.addEventListener("submit", async (event) => {
     loginForm.reset();
     await enterWorkspace();
   } catch (error) {
+    if (generation !== authenticationGeneration) return;
     loginError.textContent = error.message ?? "Unable to sign in.";
     element("token").focus();
   } finally {
@@ -322,6 +359,7 @@ claimInvitationForm.addEventListener("submit", async (event) => {
     setAutomaticClaimDeviceName({ force: true });
     await enterWorkspace(result.invitation.projectId);
   } catch (error) {
+    if (generation !== authenticationGeneration) return;
     errorNode.textContent = error.message ?? "Unable to claim this invitation.";
     element("claim-invite-secret").focus();
   } finally {
@@ -332,6 +370,14 @@ claimInvitationForm.addEventListener("submit", async (event) => {
 
 element("logout-button").addEventListener("click", async () => {
   authenticationGeneration += 1;
+  projectSelectionGuard.invalidate();
+  selectedSessionGeneration += 1;
+  sync.disconnect();
+  stopMemberRefresh();
+  stopSnapshotPolling();
+  stopDshRuntimePolling();
+  clearCreatedInvitationSecret();
+  clearNewDeviceAccessToken();
   const button = element("logout-button");
   button.disabled = true;
   try {
@@ -347,6 +393,7 @@ element("logout-button").addEventListener("click", async () => {
 
 acceptInvitationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const isCurrent = captureWorkspaceScope();
   const errorNode = element("accept-invite-error");
   const submit = acceptInvitationForm.querySelector("button[type='submit']");
   const inviteSecret = new FormData(acceptInvitationForm).get("invite-secret")?.toString().trim() ?? "";
@@ -355,11 +402,15 @@ acceptInvitationForm.addEventListener("submit", async (event) => {
   submit.textContent = "Accepting…";
   try {
     const result = await api.acceptInvitation(inviteSecret);
+    if (!isCurrent()) return;
     acceptInvitationForm.reset();
-    state.projects = await api.listProjects();
+    const projects = await api.listProjects();
+    if (!isCurrent()) return;
+    state.projects = projects;
     await selectProject(result.invitation.projectId);
     announce("Invitation accepted. You joined the project.");
   } catch (error) {
+    if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to accept this invitation.";
     element("accept-invite-secret").focus();
   } finally {
@@ -371,6 +422,8 @@ acceptInvitationForm.addEventListener("submit", async (event) => {
 createInvitationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   if (!state.project) return;
+  const isCurrent = captureWorkspaceScope();
+  const projectId = state.project.id;
   const data = new FormData(createInvitationForm);
   const rolePolicy = invitationRolePolicy();
   const requestedRole = data.get("role")?.toString() ?? "";
@@ -381,10 +434,11 @@ createInvitationForm.addEventListener("submit", async (event) => {
   submit.textContent = "Creating…";
   clearCreatedInvitationSecret();
   try {
-    const result = await api.createInvitation(state.project.id, {
+    const result = await api.createInvitation(projectId, {
       role: rolePolicy.allowedRoles.includes(requestedRole) ? requestedRole : rolePolicy.defaultRole,
       ttl: data.get("ttl")?.toString() ?? "24h",
     });
+    if (!isCurrent()) return;
     createdInvitationSecret = result.inviteToken;
     element("created-invite-secret").textContent = createdInvitationSecret;
     element("created-invitation").hidden = false;
@@ -392,6 +446,7 @@ createInvitationForm.addEventListener("submit", async (event) => {
     renderInvitations();
     announce("Invitation created. Copy the secret now.");
   } catch (error) {
+    if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to create an invitation.";
   } finally {
     submit.disabled = false;
@@ -431,7 +486,9 @@ deviceCredentialDialog.addEventListener("cancel", (event) => event.preventDefaul
 
 element("new-session-button").addEventListener("click", openCreateDialog);
 element("empty-create-button").addEventListener("click", () => {
-  if (state.project) openCreateDialog();
+  if (selectionRetry?.type === "project") void selectProject(selectionRetry.id);
+  else if (selectionRetry?.type === "session") void selectSession(selectionRetry.id);
+  else if (state.project) openCreateDialog();
   else openCreateProjectDialog();
 });
 element("cancel-create-button").addEventListener("click", () => createDialog.close());
@@ -497,24 +554,30 @@ projectSelect.addEventListener("change", () => void selectProject(projectSelect.
 
 createForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const isCurrent = captureWorkspaceScope();
+  const projectId = state.project?.id;
   const errorNode = element("create-error");
   const submit = createForm.querySelector("button[type='submit']");
   const data = new FormData(createForm);
   errorNode.textContent = "";
   submit.disabled = true;
   try {
-    if (!state.project) throw new Error("Create a project first.");
-    const created = await api.createSession(state.project.id, {
+    if (!projectId) throw new Error("Create a project first.");
+    const created = await api.createSession(projectId, {
       name: data.get("name")?.toString() ?? "",
       mode: data.get("mode")?.toString() ?? "multi",
       idempotencyKey: createIdempotencyKey("create-session"),
     });
-    state.sessions = await api.listProjectSessions(state.project.id);
+    if (!isCurrent()) return;
+    const sessions = await api.listProjectSessions(projectId);
+    if (!isCurrent()) return;
+    state.sessions = sessions;
     renderSessionList();
     createDialog.close();
     createForm.reset();
     await selectSession(created.id);
   } catch (error) {
+    if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to create the session.";
   } finally {
     submit.disabled = false;
@@ -523,6 +586,7 @@ createForm.addEventListener("submit", async (event) => {
 
 createProjectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const isCurrent = captureWorkspaceScope();
   const errorNode = element("create-project-error");
   const submit = createProjectForm.querySelector("button[type='submit']");
   const data = new FormData(createProjectForm);
@@ -533,11 +597,15 @@ createProjectForm.addEventListener("submit", async (event) => {
       name: data.get("name")?.toString() ?? "",
       idempotencyKey: createIdempotencyKey("create-project"),
     });
-    state.projects = await api.listProjects();
+    if (!isCurrent()) return;
+    const projects = await api.listProjects();
+    if (!isCurrent()) return;
+    state.projects = projects;
     createProjectDialog.close();
     createProjectForm.reset();
     await selectProject(created.id);
   } catch (error) {
+    if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to create the project.";
   } finally {
     submit.disabled = false;
@@ -546,6 +614,7 @@ createProjectForm.addEventListener("submit", async (event) => {
 
 renameProjectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const isCurrent = captureWorkspaceScope();
   const projectId = state.project?.id;
   if (!projectId || state.project?.role !== "owner") return;
   const errorNode = element("rename-project-error");
@@ -559,13 +628,14 @@ renameProjectForm.addEventListener("submit", async (event) => {
       name,
       idempotencyKey: createIdempotencyKey("rename-project"),
     });
-    if (state.project?.id !== projectId) return;
+    if (!isCurrent() || state.project?.id !== projectId) return;
     state.project = { ...state.project, ...renamed };
     state.projects = state.projects.map((project) => project.id === projectId ? { ...project, ...renamed } : project);
     renderProjectSelect();
     renameProjectDialog.close();
     announce("Project renamed.");
   } catch (error) {
+    if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to rename the project.";
     element("rename-project-name").focus();
   } finally {
@@ -576,6 +646,7 @@ renameProjectForm.addEventListener("submit", async (event) => {
 
 renameSessionForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const isCurrent = captureWorkspaceScope();
   const sessionId = state.session?.id;
   if (!sessionId) return;
   const errorNode = element("rename-session-error");
@@ -593,11 +664,12 @@ renameSessionForm.addEventListener("submit", async (event) => {
       ...(mode === undefined ? {} : { mode }),
       idempotencyKey: createIdempotencyKey("session-settings"),
     });
-    if (state.session?.id !== sessionId) return;
+    if (!isCurrent() || state.session?.id !== sessionId) return;
     updateSessionMetadata(sessionId, renamed);
     renameSessionDialog.close();
     announce("Session updated.");
   } catch (error) {
+    if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to rename the session.";
     element("rename-session-name").focus();
   } finally {
@@ -608,6 +680,7 @@ renameSessionForm.addEventListener("submit", async (event) => {
 
 deleteCloudForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  const isCurrent = captureWorkspaceScope();
   const target = pendingCloudDeletion;
   if (!target) return;
   const submit = element("confirm-delete-cloud-button");
@@ -617,6 +690,7 @@ deleteCloudForm.addEventListener("submit", async (event) => {
   try {
     if (target.type === "session") {
       await api.deleteSession(target.id);
+      if (!isCurrent()) return;
       if (state.session?.id === target.id) {
         sync.disconnect();
         stopMemberRefresh();
@@ -626,12 +700,16 @@ deleteCloudForm.addEventListener("submit", async (event) => {
       }
       deleteCloudReturnFocus = null;
       deleteCloudDialog.close();
-      state.projects = await api.listProjects();
+      const refreshIsCurrent = captureWorkspaceScope();
+      const projects = await api.listProjects();
+      if (!refreshIsCurrent()) return;
+      state.projects = projects;
       location.hash = new URLSearchParams({ project: target.projectId }).toString();
       await selectProject(target.projectId);
       announce("Session deleted from cloud. Local copies were not changed.");
     } else {
       await api.deleteProject(target.id);
+      if (!isCurrent()) return;
       sync.disconnect();
       stopMemberRefresh();
       stopSnapshotPolling();
@@ -646,6 +724,7 @@ deleteCloudForm.addEventListener("submit", async (event) => {
       announce("Project deleted from cloud. Local copies were not changed.");
     }
   } catch (error) {
+    if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to delete the cloud copy.";
   } finally {
     submit.disabled = false;
@@ -789,16 +868,27 @@ async function restoreBrowserSession() {
 }
 
 function resetWorkspaceToAuth() {
+  authenticationGeneration += 1;
+  workspaceLoadGeneration += 1;
+  pendingMessageSend?.restore?.();
+  pendingMessageSend = null;
+  selectionRetry = null;
+  codeSyncUi.close();
   if (connectCodexDialog.open) connectCodexDialog.close();
   if (connectDshDialog.open) connectDshDialog.close();
   if (approveDshPairingDialog.open) approveDshPairingDialog.close();
   if (renameSessionDialog.open) renameSessionDialog.close();
+  if (renameProjectDialog.open) renameProjectDialog.close();
+  if (createDialog.open) createDialog.close();
+  if (createProjectDialog.open) createProjectDialog.close();
+  cancelSettingsDialog();
   if (deleteCloudDialog.open) deleteCloudDialog.close();
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
   stopDshRuntimePolling();
   selectedSessionGeneration += 1;
+  historySummaryUi.reset();
   projectSelectionGuard.invalidate();
   api.clearCredential?.();
   state.currentUser = null;
@@ -811,8 +901,11 @@ function resetWorkspaceToAuth() {
   state.snapshotRequests = [];
   state.executionRuntimes = [];
   state.devices = [];
+  messageInput.value = "";
+  codeSyncUi.updateContext();
   selectedCodexLocalRuntimeId = "";
   localSyncStatusRequestsInFlight.clear();
+  localSyncActionsInFlight.clear();
   currentDeviceName = "";
   settingsDeviceLoadGeneration += 1;
   expandedWorklogs.clear();
@@ -826,12 +919,30 @@ function resetWorkspaceToAuth() {
   setAutomaticClaimDeviceName({ force: true });
 }
 
+// Async UI responses belong to one authenticated selection, even when a user
+// leaves and returns to the same project/session before a request finishes.
+function captureWorkspaceScope() {
+  const authentication = authenticationGeneration;
+  const selection = selectedSessionGeneration;
+  const actor = state.currentUser;
+  return () => authentication === authenticationGeneration
+    && selection === selectedSessionGeneration && actor === state.currentUser;
+}
+
 async function enterWorkspace(preferredProjectId) {
+  const authentication = authenticationGeneration;
+  const load = ++workspaceLoadGeneration;
+  const selection = selectedSessionGeneration;
+  if (!state.currentUser) return;
+  const isCurrent = () => authentication === authenticationGeneration
+    && load === workspaceLoadGeneration && Boolean(state.currentUser);
   authView.hidden = true;
   workspace.hidden = false;
   element("current-username").textContent = state.currentUser.username;
   element("current-user-avatar").textContent = initials(state.currentUser.username);
-  state.projects = await api.listProjects();
+  const projects = await api.listProjects();
+  if (!isCurrent() || selection !== selectedSessionGeneration) return;
+  state.projects = projects;
   renderProjectSelect();
   if (state.projects.length) {
     const requested = new URLSearchParams(location.hash.slice(1)).get("project");
@@ -850,54 +961,93 @@ async function enterWorkspace(preferredProjectId) {
     element("new-session-button").hidden = true;
     element("owner-invitations").hidden = true;
   }
+  if (!isCurrent()) return;
   maybeOpenPendingDshPairing();
 }
 
 async function selectProject(projectId) {
+  if (!state.currentUser) return;
+  selectionRetry = null;
+  codeSyncUi.close();
+  historySummaryUi.reset();
   const selection = projectSelectionGuard.begin(projectId);
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
   stopDshRuntimePolling();
   selectedSessionGeneration += 1;
+  state.project = null;
+  state.sessions = [];
+  state.projectMembers = [];
   state.session = null;
   state.executionRuntimes = [];
   clearCreatedInvitationSecret();
-  const project = await api.getProject(projectId);
-  if (!projectSelectionGuard.isCurrent(selection)) return;
-  state.project = project;
-  state.projects = state.projects.map((item) => item.id === project.id ? { ...item, ...project } : item);
-  const [sessions, projectMembers] = await Promise.all([
-    api.listProjectSessions(projectId),
-    api.listProjectMembers(projectId),
-  ]);
-  if (!projectSelectionGuard.isCurrent(selection)) return;
-  state.sessions = sessions;
-  state.projectMembers = projectMembers;
-  renderProjectSelect();
-  renderAgentProfileControls();
   renderSessionList();
+  renderMembers();
+  renderWorkspaceContext();
   renderProjectPermissions();
-  await renderInvitationControls(selection);
-  if (!projectSelectionGuard.isCurrent(selection)) return;
-  const requestedSessionId = new URLSearchParams(location.hash.slice(1)).get("session");
-  const initial = state.sessions.find((session) => session.id === requestedSessionId) ?? state.sessions[0];
-  if (initial) {
-    await selectSession(initial.id);
-    if (!projectSelectionGuard.isCurrent(selection)) return;
-    return;
-  }
-  location.hash = new URLSearchParams({ project: projectId }).toString();
+  renderComposerPermissions();
+  void renderInvitationControls();
   sessionView.hidden = true;
   emptyState.hidden = false;
-  element("empty-state-title").textContent = "Start a shared thread.";
-  element("empty-create-button").textContent = "Create your first session";
-  renderMembers();
+  element("empty-state-title").textContent = localizer.t("Loading project…");
+  try {
+    const project = await api.getProject(projectId);
+    if (!projectSelectionGuard.isCurrent(selection)) return;
+    state.project = project;
+    codeSyncUi.updateContext();
+    state.projects = state.projects.map((item) => item.id === project.id ? { ...item, ...project } : item);
+    const [sessions, projectMembers] = await Promise.all([
+      api.listProjectSessions(projectId),
+      api.listProjectMembers(projectId),
+    ]);
+    if (!projectSelectionGuard.isCurrent(selection)) return;
+    state.sessions = sessions;
+    state.projectMembers = projectMembers;
+    renderProjectSelect();
+    renderAgentProfileControls();
+    renderSessionList();
+    renderProjectPermissions();
+    await renderInvitationControls(selection);
+    if (!projectSelectionGuard.isCurrent(selection)) return;
+    const requestedSessionId = new URLSearchParams(location.hash.slice(1)).get("session");
+    const initial = state.sessions.find((session) => session.id === requestedSessionId) ?? state.sessions[0];
+    if (initial) {
+      await selectSession(initial.id);
+      if (!projectSelectionGuard.isCurrent(selection)) return;
+      return;
+    }
+    location.hash = new URLSearchParams({ project: projectId }).toString();
+    sessionView.hidden = true;
+    emptyState.hidden = false;
+    element("empty-state-title").textContent = "Start a shared thread.";
+    element("empty-create-button").textContent = "Create your first session";
+    renderMembers();
+  } catch (error) {
+    if (!projectSelectionGuard.isCurrent(selection)) return;
+    selectionRetry = { type: "project", id: projectId };
+    element("empty-create-button").hidden = false;
+    element("empty-create-button").textContent = localizer.t("Retry");
+    element("empty-state-title").textContent = localizer.t("Unable to open this project. Select it again to retry.");
+    announce(error.message ?? localizer.t("Unable to open this project. Select it again to retry."));
+  }
 }
 
 async function selectSession(sessionId) {
+  if (!state.currentUser || !state.project) return;
+  selectionRetry = null;
+  codeSyncUi.close();
+  historySummaryUi.reset();
   if (state.session?.id !== sessionId) expandedWorklogs.clear();
   const generation = ++selectedSessionGeneration;
+  const projectId = state.project.id;
+  sync.disconnect();
+  stopMemberRefresh();
+  stopDshRuntimePolling();
+  state.session = null;
+  state.executionRuntimes = [];
+  renderComposerPermissions();
+  renderProjectPermissions();
   sendError.textContent = "";
   element("accept-invite-error").textContent = "";
   clearCreatedInvitationSecret();
@@ -908,30 +1058,43 @@ async function selectSession(sessionId) {
   state.snapshotRequests = [];
   selectedCodexLocalRuntimeId = "";
   renderSnapshotRequests();
+  downloadCodexButton.removeAttribute("aria-busy");
+  importVisibleHistoryButton.removeAttribute("aria-busy");
   downloadCodexButton.disabled = true;
-  const [session, members] = await Promise.all([
-    api.getSession(sessionId),
-    api.listMembers(sessionId),
-  ]);
-  if (generation !== selectedSessionGeneration) return;
-  state.session = { ...session, members };
-  state.executionRuntimes = [];
-  startMemberRefresh(sessionId);
-  location.hash = new URLSearchParams({ project: state.project.id, session: sessionId }).toString();
-  emptyState.hidden = true;
-  sessionView.hidden = false;
-  renderSessionHeader();
-  renderSessionList();
-  renderMembers();
-  renderComposerPermissions();
-  renderSessionDeliveryControls();
-  await refreshDshRuntimes({ sessionId, generation });
-  if (generation !== selectedSessionGeneration) return;
-  startDshRuntimePolling();
-  downloadCodexButton.disabled = false;
-  element("session-title").focus({ preventScroll: true });
-  void restoreSnapshotRequests(sessionId, generation);
-  await sync.connect(sessionId);
+  try {
+    const [session, members] = await Promise.all([
+      api.getSession(sessionId),
+      api.listMembers(sessionId),
+    ]);
+    if (generation !== selectedSessionGeneration) return;
+    state.session = { ...session, members };
+    state.executionRuntimes = [];
+    startMemberRefresh(sessionId);
+    location.hash = new URLSearchParams({ project: projectId, session: sessionId }).toString();
+    emptyState.hidden = true;
+    sessionView.hidden = false;
+    renderSessionHeader();
+    renderSessionList();
+    renderMembers();
+    renderComposerPermissions();
+    renderSessionDeliveryControls();
+    await refreshDshRuntimes({ sessionId, generation });
+    if (generation !== selectedSessionGeneration) return;
+    startDshRuntimePolling();
+    downloadCodexButton.disabled = false;
+    element("session-title").focus({ preventScroll: true });
+    void restoreSnapshotRequests(sessionId, generation);
+    await sync.connect(sessionId);
+  } catch (error) {
+    if (generation !== selectedSessionGeneration) return;
+    selectionRetry = { type: "session", id: sessionId };
+    element("empty-create-button").hidden = false;
+    element("empty-create-button").textContent = localizer.t("Retry");
+    sessionView.hidden = true;
+    emptyState.hidden = false;
+    element("empty-state-title").textContent = localizer.t("Unable to open this session. Select it again to retry.");
+    announce(error.message ?? localizer.t("Unable to open this session. Select it again to retry."));
+  }
 }
 
 function renderProjectSelect() {
@@ -958,6 +1121,7 @@ function renderProjectAgentButtons(settings = state.settings) {
 }
 
 function renderProjectPermissions() {
+  codeSyncUi.updateContext();
   const mayCreate = state.project?.role === "owner" || state.project?.role === "participant";
   element("new-session-button").hidden = !mayCreate;
   element("empty-create-button").hidden = !mayCreate;
@@ -1000,7 +1164,8 @@ function stopDshRuntimePolling() {
 
 async function refreshDshRuntimes({ sessionId = state.session?.id, generation = selectedSessionGeneration, announceFailure = false } = {}) {
   if (!sessionId || dshRuntimeLoadInFlight) return;
-  dshRuntimeLoadInFlight = true;
+  const load = {};
+  dshRuntimeLoadInFlight = load;
   try {
     const [runtimesResult, devicesResult] = await Promise.allSettled([
       api.listSessionRuntimes(sessionId),
@@ -1039,7 +1204,7 @@ async function refreshDshRuntimes({ sessionId = state.session?.id, generation = 
       element("connect-dsh-error").textContent = error?.message ?? "Unable to refresh DeepSeek Harness status.";
     }
   } finally {
-    dshRuntimeLoadInFlight = false;
+    if (dshRuntimeLoadInFlight === load) dshRuntimeLoadInFlight = false;
     if (generation === selectedSessionGeneration && state.session?.id === sessionId) {
       renderAgentProfileControls();
       renderComposerPermissions();
@@ -1073,16 +1238,18 @@ function renderDshConnectionStatus() {
 
 async function refreshMembers(sessionId) {
   if (memberRefreshInFlight || state.session?.id !== sessionId) return;
-  memberRefreshInFlight = true;
+  const isCurrent = captureWorkspaceScope();
+  memberRefreshInFlight = isCurrent;
   try {
     const members = await api.listMembers(sessionId);
-    if (state.session?.id !== sessionId) return;
+    if (!isCurrent() || state.session?.id !== sessionId) return;
     state.session = { ...state.session, members };
     renderMembers();
     renderTimeline();
     renderComposerPermissions();
     renderSessionDeliveryControls();
   } catch (error) {
+    if (!isCurrent() || state.session?.id !== sessionId) return;
     if (error?.status === 403 || error?.status === 404) {
       sync.disconnect();
       stopMemberRefresh();
@@ -1091,16 +1258,18 @@ async function refreshMembers(sessionId) {
       state.session = null;
       location.hash = "";
       announce("Your access to the open collaboration was removed.");
+      const refreshIsCurrent = captureWorkspaceScope();
       try {
         await enterWorkspace();
       } catch (refreshError) {
+        if (!refreshIsCurrent()) return;
         resetWorkspaceToAuth();
         loginError.textContent = refreshError?.message ?? "Unable to refresh your remaining projects.";
       }
     }
     // Transient presence failures retry without discarding confirmed history.
   } finally {
-    memberRefreshInFlight = false;
+    if (memberRefreshInFlight === isCurrent) memberRefreshInFlight = false;
   }
 }
 
@@ -1251,20 +1420,30 @@ function renderMembers() {
 
 async function changeProjectMemberRole(member, select) {
   if (!state.project) return;
+  const isCurrent = captureWorkspaceScope();
+  const projectId = state.project.id;
+  const sessionId = state.session?.id;
   const previousRole = member.role;
   select.disabled = true;
   try {
-    await api.setProjectMemberRole(state.project.id, member.userId, select.value);
-    state.projectMembers = await api.listProjectMembers(state.project.id);
+    await api.setProjectMemberRole(projectId, member.userId, select.value);
+    if (!isCurrent()) return;
+    const [projectMembers, sessions, members] = await Promise.all([
+      api.listProjectMembers(projectId), api.listProjectSessions(projectId),
+      sessionId ? api.listMembers(sessionId) : Promise.resolve([]),
+    ]);
+    if (!isCurrent()) return;
+    state.projectMembers = projectMembers;
     if (state.session) {
-      state.session = { ...state.session, members: await api.listMembers(state.session.id) };
+      state.session = { ...state.session, members };
       renderMembers();
       renderComposerPermissions();
     }
-    state.sessions = await api.listProjectSessions(state.project.id);
+    state.sessions = sessions;
     renderSessionList();
     announce(`${member.username} is now a ${select.value}.`);
   } catch (error) {
+    if (!isCurrent()) return;
     select.value = previousRole;
     select.disabled = false;
     announce(error.message ?? "Unable to update the project role.");
@@ -1298,6 +1477,7 @@ function renderInvitationRoleControl() {
 async function loadInvitations(selection) {
   if (selection && !projectSelectionGuard.isCurrent(selection)) return;
   if (!state.project) return;
+  const isCurrent = captureWorkspaceScope();
   const projectId = state.project.id;
   const status = element("invitation-list-status");
   const refresh = element("refresh-invitations-button");
@@ -1305,15 +1485,15 @@ async function loadInvitations(selection) {
   refresh.disabled = true;
   try {
     const invitations = await api.listInvitations(projectId);
-    if (state.project?.id !== projectId || (selection && !projectSelectionGuard.isCurrent(selection))) return;
+    if (!isCurrent() || state.project?.id !== projectId || (selection && !projectSelectionGuard.isCurrent(selection))) return;
     state.invitations = invitations.map(normalizeInvitation);
     renderInvitations();
   } catch (error) {
-    if (!selection || projectSelectionGuard.isCurrent(selection)) {
+    if (isCurrent() && (!selection || projectSelectionGuard.isCurrent(selection))) {
       status.textContent = error.message ?? "Unable to load invitations.";
     }
   } finally {
-    if (!selection || projectSelectionGuard.isCurrent(selection)) refresh.disabled = false;
+    if (isCurrent() && (!selection || projectSelectionGuard.isCurrent(selection))) refresh.disabled = false;
   }
 }
 
@@ -1353,16 +1533,18 @@ function renderInvitations() {
 
 async function revokeInvitation(invitation, button) {
   if (!state.project) return;
+  const isCurrent = captureWorkspaceScope();
   const projectId = state.project.id;
   button.disabled = true;
   element("create-invitation-error").textContent = "";
   try {
     const revoked = await api.revokeInvitation(projectId, invitation.id);
-    if (state.project?.id !== projectId) return;
+    if (!isCurrent() || state.project?.id !== projectId) return;
     state.invitations = state.invitations.map((item) => item.id === revoked.id ? revoked : item);
     renderInvitations();
     announce("Invitation revoked.");
   } catch (error) {
+    if (!isCurrent()) return;
     element("create-invitation-error").textContent = error.message ?? "Unable to revoke the invitation.";
     button.disabled = false;
   }
@@ -1441,7 +1623,9 @@ function renderTimeline({ followNewEvents = false } = {}) {
     followNewEvents,
   });
   timeline.replaceChildren();
-  const events = state.sync.events.filter(isTimelineEventVisible);
+  historySummaryUi.updateContext();
+  const events = historySummaryUi.events().filter(isTimelineEventVisible);
+  const summaryView = historySummaryUi.timeline();
   const progressByRequest = new Map();
   for (const event of events) {
     if (event.type !== "agent_progress" || !event.replyTo || !eventContent(event).trim()) continue;
@@ -1453,6 +1637,12 @@ function renderTimeline({ followNewEvents = false } = {}) {
   timelineEmpty.hidden = events.length > 0;
 
   for (const event of events) {
+    for (const version of summaryView.before.get(event.id) ?? []) {
+      const summaryItem = document.createElement("li");
+      summaryItem.append(historySummaryUi.card(version));
+      timeline.append(summaryItem);
+    }
+    if (summaryView.hidden.has(event.id)) continue;
     if (event.type === "agent_progress") continue;
     const item = document.createElement("li");
     const article = document.createElement("article");
@@ -1484,6 +1674,8 @@ function renderTimeline({ followNewEvents = false } = {}) {
     identity.className = "event-identity";
     identity.append(avatar, meta);
     header.append(identity, sequence, time);
+    const sourceControl = historySummaryUi.sourceControl(event);
+    if (sourceControl) identity.prepend(sourceControl);
     const content = eventContent(event);
     article.append(header);
     if (content) {
@@ -1676,44 +1868,52 @@ async function restoreSnapshotRequests(sessionId, generation) {
 async function createSnapshotDownload() {
   if (!state.session || downloadCodexButton.hidden) return;
   const sessionId = state.session.id;
+  const isCurrent = captureWorkspaceScope();
   const errorNode = element("snapshot-request-error");
   errorNode.textContent = "";
   downloadCodexButton.disabled = true;
   downloadCodexButton.setAttribute("aria-busy", "true");
   try {
     const request = await api.createSnapshotRequest(state.session.id, "immutable");
-    if (state.session?.id !== sessionId) return;
+    if (!isCurrent() || state.session?.id !== sessionId) return;
     state.snapshotRequests = [request, ...state.snapshotRequests];
     renderSnapshotRequests();
     announce(`Snapshot queued through sequence ${request.throughSequence}.`);
     startSnapshotPolling();
   } catch (error) {
+    if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to queue this Codex snapshot.";
   } finally {
-    downloadCodexButton.disabled = false;
-    downloadCodexButton.removeAttribute("aria-busy");
+    if (isCurrent()) {
+      downloadCodexButton.disabled = false;
+      downloadCodexButton.removeAttribute("aria-busy");
+    }
   }
 }
 
 async function createVisibleHistoryImport() {
   if (!state.session || importVisibleHistoryButton.disabled) return;
   const sessionId = state.session.id;
+  const isCurrent = captureWorkspaceScope();
   const statusNode = element("visible-history-import-status");
   statusNode.textContent = "";
   importVisibleHistoryButton.disabled = true;
   importVisibleHistoryButton.setAttribute("aria-busy", "true");
   try {
     const request = await api.createSnapshotRequest(sessionId, "visible_history_replace");
-    if (state.session?.id !== sessionId) return;
+    if (!isCurrent() || state.session?.id !== sessionId) return;
     state.snapshotRequests = [request, ...state.snapshotRequests];
     renderVisibleHistoryImportStatus();
     announce(`Visible Codex history import queued through sequence ${request.throughSequence}.`);
     startSnapshotPolling();
   } catch (error) {
+    if (!isCurrent()) return;
     statusNode.textContent = error.message ?? localizer.t("Unable to queue visible Codex history import.");
   } finally {
-    importVisibleHistoryButton.disabled = false;
-    importVisibleHistoryButton.removeAttribute("aria-busy");
+    if (isCurrent()) {
+      importVisibleHistoryButton.disabled = false;
+      importVisibleHistoryButton.removeAttribute("aria-busy");
+    }
   }
 }
 
@@ -1771,10 +1971,16 @@ function renderCodexLocalSyncControls() {
   if (!available) return;
 
   const runtimes = onlineCodexLocalRuntimes();
-  if (!runtimes.some((runtime) => runtime.id === selectedCodexLocalRuntimeId)) {
-    selectedCodexLocalRuntimeId = runtimes[0]?.id ?? "";
-  }
+  if (!selectedCodexLocalRuntimeId && runtimes.length === 1) selectedCodexLocalRuntimeId = runtimes[0].id;
+  const selectedRuntime = runtimes.find((runtime) => runtime.id === selectedCodexLocalRuntimeId);
   codexLocalRuntimeSelect.replaceChildren();
+  if (!selectedRuntime) {
+    const option = document.createElement("option");
+    option.value = selectedCodexLocalRuntimeId;
+    option.textContent = localizer.t(selectedCodexLocalRuntimeId ? "Selected device is offline" : "Choose a local Agent device");
+    option.selected = true;
+    codexLocalRuntimeSelect.append(option);
+  }
   for (const runtime of runtimes) {
     const option = document.createElement("option");
     option.value = runtime.id;
@@ -1782,21 +1988,23 @@ function renderCodexLocalSyncControls() {
     option.selected = runtime.id === selectedCodexLocalRuntimeId;
     codexLocalRuntimeSelect.append(option);
   }
-  codexLocalRuntimeField.hidden = runtimes.length < 2;
-  codexLocalRuntimeSelect.disabled = runtimes.length < 2;
+  codexLocalRuntimeField.hidden = runtimes.length < 2 && Boolean(selectedRuntime);
+  codexLocalRuntimeSelect.disabled = runtimes.length === 0 || (runtimes.length === 1 && Boolean(selectedRuntime));
 
-  if (!selectedCodexLocalRuntimeId) {
+  if (!selectedRuntime) {
     codexAutoUploadToggle.checked = false;
     codexAutoUploadToggle.disabled = true;
     uploadLocalTurnsButton.disabled = true;
-    codexLocalSyncStatus.textContent = localizer.t("No online Codex device is available.");
+    codexLocalSyncStatus.textContent = localizer.t(selectedCodexLocalRuntimeId ? "Selected device is offline"
+      : runtimes.length ? "Choose a local Agent device" : "No online Codex device is available.");
     return;
   }
 
   const requests = codexLocalSyncRequests(selectedCodexLocalRuntimeId);
   const latest = requests[0];
   const completed = requests.find((request) => request.status === "completed" && request.result);
-  const active = latest && new Set(["queued", "claimed", "importing", "compacting"]).has(latest.status);
+  const active = localSyncActionsInFlight.has(`${authenticationGeneration}:${state.session.id}:${selectedCodexLocalRuntimeId}`)
+    || (latest && new Set(["queued", "claimed", "importing", "compacting"]).has(latest.status));
   const automaticUpload = latest?.kind === "local_auto_upload_enable" && active
     ? true
     : latest?.kind === "local_auto_upload_disable" && active
@@ -1835,19 +2043,20 @@ function renderCodexLocalSyncControls() {
 async function ensureCodexLocalSyncStatus() {
   const sessionId = state.session?.id;
   const runtimeId = selectedCodexLocalRuntimeId;
-  if (!sessionId || codexLocalSyncControls.hidden || !runtimeId) return;
+  if (!sessionId || codexLocalSyncControls.hidden || !onlineCodexLocalRuntimes().some((runtime) => runtime.id === runtimeId)) return;
+  const isCurrent = captureWorkspaceScope();
   if (codexLocalSyncRequests(runtimeId).length > 0) return;
-  const key = `${sessionId}:${runtimeId}`;
+  const key = `${authenticationGeneration}:${sessionId}:${runtimeId}`;
   if (localSyncStatusRequestsInFlight.has(key)) return;
   localSyncStatusRequestsInFlight.add(key);
   try {
     const request = await api.createSnapshotRequest(sessionId, "local_sync_status", runtimeId);
-    if (state.session?.id !== sessionId) return;
+    if (!isCurrent() || state.session?.id !== sessionId) return;
     state.snapshotRequests = [request, ...state.snapshotRequests];
     renderCodexLocalSyncControls();
     startSnapshotPolling();
   } catch (error) {
-    if (state.session?.id === sessionId) {
+    if (isCurrent() && state.session?.id === sessionId && selectedCodexLocalRuntimeId === runtimeId) {
       codexLocalSyncStatus.textContent = error?.message ?? localizer.t("Unable to read local-to-cloud upload status.");
     }
   } finally {
@@ -1859,19 +2068,30 @@ async function queueCodexLocalSyncAction(kind) {
   const sessionId = state.session?.id;
   const runtimeId = selectedCodexLocalRuntimeId;
   if (!sessionId || !runtimeId || !LOCAL_SYNC_REQUEST_KINDS.has(kind) || kind === "local_sync_status") return;
+  if (codexLocalSyncControls.hidden || !onlineCodexLocalRuntimes().some((runtime) => runtime.id === runtimeId)) return;
+  const button = kind === "local_turn_upload" ? uploadLocalTurnsButton : codexAutoUploadToggle;
+  if (button.disabled) return;
+  const isCurrent = captureWorkspaceScope();
+  const key = `${authenticationGeneration}:${sessionId}:${runtimeId}`;
+  if (localSyncActionsInFlight.has(key)) return;
+  localSyncActionsInFlight.add(key);
+  let failure = "";
   codexAutoUploadToggle.disabled = true;
   uploadLocalTurnsButton.disabled = true;
   codexLocalSyncStatus.textContent = localizer.t("Reading local-to-cloud upload status…");
   try {
     const request = await api.createSnapshotRequest(sessionId, kind, runtimeId);
-    if (state.session?.id !== sessionId || selectedCodexLocalRuntimeId !== runtimeId) return;
+    if (!isCurrent() || state.session?.id !== sessionId) return;
     state.snapshotRequests = [request, ...state.snapshotRequests];
     renderCodexLocalSyncControls();
     startSnapshotPolling();
   } catch (error) {
-    if (state.session?.id === sessionId && selectedCodexLocalRuntimeId === runtimeId) {
+    failure = error?.message ?? localizer.t("Unable to update local-to-cloud upload settings.");
+  } finally {
+    localSyncActionsInFlight.delete(key);
+    if (isCurrent()) {
       renderCodexLocalSyncControls();
-      codexLocalSyncStatus.textContent = error?.message ?? localizer.t("Unable to update local-to-cloud upload settings.");
+      if (failure && selectedCodexLocalRuntimeId === runtimeId) codexLocalSyncStatus.textContent = failure;
     }
   }
 }
@@ -1945,14 +2165,20 @@ async function pollSnapshotRequests(generation) {
 }
 
 function renderComposerPermissions() {
+  if (pendingMessageSend && !pendingMessageSend()) {
+    pendingMessageSend.restore();
+    pendingMessageSend = null;
+  }
+  codeSyncUi.updateContext();
   const common = { session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase };
   const chat = canAppend({ ...common, kind: "human_chat" });
   const harness = currentProjectHarness();
   const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
   const agentAllowed = chat.allowed && resolution.runtime !== null;
   const agentReason = chat.allowed ? resolution.reason : chat.reason;
-  sendChatButton.disabled = !chat.allowed;
-  sendAgentButton.disabled = !agentAllowed;
+  const sending = Boolean(pendingMessageSend?.());
+  sendChatButton.disabled = sending || !chat.allowed;
+  sendAgentButton.disabled = sending || !agentAllowed;
   messageInput.disabled = !chat.allowed && !agentAllowed;
   element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
   const dshSelection = harness === DSH_HARNESS && resolution.runtime
@@ -1967,6 +2193,22 @@ function renderComposerPermissions() {
       : `${resolution.runtime.harness} · ${resolution.runtime.provider} · ${agentModelSelect.value}`
     : agentReason;
   renderAgentProfileControls();
+  historySummaryUi.updateContext();
+}
+
+function historySummaryExecutionProfile() {
+  if (!state.session || !state.project) return null;
+  const harness = currentProjectHarness();
+  const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
+  const runtime = resolution.runtime;
+  const advertised = state.executionRuntimes.find((candidate) => candidate.id === runtime?.id);
+  if (!runtime || advertised?.purpose === "snapshot_connector"
+    || (advertised?.userId && advertised.userId !== state.currentUser?.id)) return null;
+  try {
+    return harness === DSH_HARNESS
+      ? dshExecutionProfile(runtime, dshExecutionSelection(runtime, projectDshProfile(state.settings, state.project.id)))
+      : codexExecutionProfile(runtime, { model: agentModelSelect.value, reasoningEffort: agentEffortSelect.value });
+  } catch { return null; }
 }
 
 async function sendMessage(kind) {
@@ -1976,19 +2218,25 @@ async function sendMessage(kind) {
     messageInput.focus();
     return;
   }
+  const button = kind === "human_chat" ? sendChatButton : sendAgentButton;
+  if (button.disabled || pendingMessageSend?.()) return;
   sendError.textContent = "";
   if (kind === "agent_request" && state.settings.composer.confirmAgentRequest
     && !window.confirm("Start this Agent request with the selected harness and model?")) {
     messageInput.focus();
     return;
   }
-  const button = kind === "human_chat" ? sendChatButton : sendAgentButton;
-  const original = button.textContent;
-  button.disabled = true;
+  const isCurrent = captureWorkspaceScope();
+  const sessionId = state.session.id;
+  const draft = messageInput.value;
+  const original = [...button.childNodes];
+  isCurrent.restore = () => button.replaceChildren(...original);
+  pendingMessageSend = isCurrent;
+  renderComposerPermissions();
   button.textContent = "Sending…";
   try {
     const input = { content, idempotencyKey: createIdempotencyKey(kind) };
-    if (kind === "human_chat") await api.appendHumanChat(state.session.id, input);
+    if (kind === "human_chat") await api.appendHumanChat(sessionId, input);
     else {
       const harness = currentProjectHarness();
       const executionProfile = harness === DSH_HARNESS
@@ -2003,15 +2251,20 @@ async function sendMessage(kind) {
           model: agentModelSelect.value,
           reasoningEffort: agentEffortSelect.value,
         });
-      await api.appendAgentRequest(state.session.id, { ...input, executionProfile });
+      await api.appendAgentRequest(sessionId, { ...input, executionProfile });
     }
-    messageInput.value = "";
-    messageInput.focus();
+    if (isCurrent() && messageInput.value === draft) {
+      messageInput.value = "";
+      messageInput.focus();
+    }
   } catch (error) {
-    sendError.textContent = error.message ?? "The event was not accepted.";
+    if (isCurrent()) sendError.textContent = error.message ?? "The event was not accepted.";
   } finally {
-    button.textContent = original;
-    renderComposerPermissions();
+    if (pendingMessageSend === isCurrent) {
+      pendingMessageSend = null;
+      isCurrent.restore();
+      renderComposerPermissions();
+    }
   }
 }
 
@@ -2026,6 +2279,7 @@ async function retryAgentRequest(requestId, button) {
     ? state.sync.events.find((event) => event.type === "agent_request" && event.id === requestId)
     : undefined;
   if (!request || !state.session) return;
+  const isCurrent = captureWorkspaceScope();
   retryingAgentRequestIds.add(requestId);
   button.disabled = true;
   sendError.textContent = "";
@@ -2035,7 +2289,7 @@ async function retryAgentRequest(requestId, button) {
       retryAgentRequestInput(request, createIdempotencyKey("agent_request")),
     );
   } catch (error) {
-    sendError.textContent = error.message ?? "The event was not accepted.";
+    if (isCurrent()) sendError.textContent = error.message ?? "The event was not accepted.";
   } finally {
     retryingAgentRequestIds.delete(requestId);
     if (button.isConnected) button.disabled = false;
@@ -2247,6 +2501,7 @@ function renderDshRuntimeList() {
 }
 
 async function renameDshDevice(runtime) {
+  const isCurrent = captureWorkspaceScope();
   const next = window.prompt(localizer.t("Choose a new name for this DeepSeek Harness device."), runtime.deviceName)?.trim();
   if (!next || next === runtime.deviceName) return;
   if (next.length > 120) {
@@ -2255,20 +2510,25 @@ async function renameDshDevice(runtime) {
   }
   try {
     await api.renameDevice(runtime.deviceId, next);
+    if (!isCurrent()) return;
     await refreshDshRuntimes({ announceFailure: true });
     announce("DeepSeek Harness device renamed.");
   } catch (error) {
+    if (!isCurrent()) return;
     element("connect-dsh-error").textContent = error?.message ?? "Unable to rename the DeepSeek Harness device.";
   }
 }
 
 async function revokeDshDevice(runtime) {
+  const isCurrent = captureWorkspaceScope();
   if (!window.confirm(localizer.t(`Revoke ${runtime.deviceName}? Its DSH plugin must pair again before accepting requests.`))) return;
   try {
     await api.revokeDevice(runtime.deviceId);
+    if (!isCurrent()) return;
     await refreshDshRuntimes({ announceFailure: true });
     announce("DeepSeek Harness device access revoked.");
   } catch (error) {
+    if (!isCurrent()) return;
     element("connect-dsh-error").textContent = error?.message ?? "Unable to revoke the DeepSeek Harness device.";
   }
 }
@@ -2284,16 +2544,20 @@ function maybeOpenPendingDshPairing() {
 async function approvePendingDshPairing(event) {
   event.preventDefault();
   if (!pendingDshPairingCode || !state.currentUser) return;
+  const isCurrent = captureWorkspaceScope();
+  const pairingCode = pendingDshPairingCode;
   const submit = element("confirm-dsh-pairing-button");
   submit.disabled = true;
   element("approve-dsh-pairing-error").textContent = "";
   try {
-    await api.approveDshPairing(pendingDshPairingCode);
+    await api.approveDshPairing(pairingCode);
+    if (!isCurrent() || pendingDshPairingCode !== pairingCode) return;
     clearPendingDshPairing();
     approveDshPairingDialog.close();
     announce("DeepSeek Harness pairing approved. Waiting for the local plugin to come online.");
     openConnectDshDialog();
   } catch (error) {
+    if (!isCurrent() || pendingDshPairingCode !== pairingCode) return;
     element("approve-dsh-pairing-error").textContent = error?.message ?? "Unable to approve this DeepSeek Harness pairing.";
   } finally {
     submit.disabled = false;
@@ -2356,6 +2620,7 @@ function closeMembersPanelWithoutFocus() {
 function applyVisualSettings(settings) {
   const normalized = normalizeSettings(settings);
   const root = document.documentElement;
+  const localeChanged = root.lang !== normalized.general.locale;
   root.dataset.theme = normalized.appearance.theme;
   root.dataset.density = normalized.appearance.density;
   root.dataset.motion = normalized.appearance.motion;
@@ -2368,6 +2633,7 @@ function applyVisualSettings(settings) {
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  if (localeChanged && state.session) renderTimeline();
   updateSidebarControls();
   updateSessionContextDisclosure();
   setAutomaticClaimDeviceName();
@@ -2641,6 +2907,7 @@ function syncSettingsAgentControls({ changedCheckbox } = {}) {
 function populateSettingsForm(settings) {
   const normalized = normalizeSettings(settings);
   element("settings-locale").value = normalized.general.locale;
+  element("settings-history-summary-instructions").value = normalized.historySummaries.instructions;
   element("settings-theme").value = normalized.appearance.theme;
   element("settings-text-scale").value = String(normalized.appearance.textScalePercent);
   element("settings-density").value = normalized.appearance.density;
@@ -2679,6 +2946,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
   let next = normalizeSettings({
     ...baseSettings,
     general: { locale: element("settings-locale").value },
+    historySummaries: { instructions: element("settings-history-summary-instructions").value },
     appearance: {
       theme: element("settings-theme").value,
       textScalePercent: Number(element("settings-text-scale").value),
@@ -2737,8 +3005,42 @@ function openSettingsDialog() {
   element("settings-device-status").textContent = localizer.t("Loading this device…");
   settingsDialog.showModal();
   void loadCurrentDeviceSettings();
+  void loadHistoryContextPolicy();
   requestAnimationFrame(() => element("close-settings-button").focus());
 }
+
+async function loadHistoryContextPolicy() {
+  const generation = ++settingsHistoryPolicyGeneration;
+  const isCurrent = captureWorkspaceScope();
+  const projectId = state.project?.id;
+  const select = element("settings-history-context-mode");
+  const status = element("settings-history-context-status");
+  settingsHistoryPolicy = null;
+  select.disabled = true;
+  element("settings-history-context-retry").hidden = true;
+  status.textContent = localizer.t(projectId ? "Loading Agent context policy…" : "Choose a project to set Agent context policy.");
+  if (!projectId) return;
+  try {
+    const result = await api.getProjectContextPolicy(projectId);
+    if (!isCurrent() || generation !== settingsHistoryPolicyGeneration || !settingsDialog.open) return;
+    if (!["summary", "original"].includes(result.mode)) throw new Error("Unable to load Agent context policy.");
+    settingsHistoryPolicy = { projectId, mode: result.mode };
+    select.value = result.mode;
+    select.disabled = false;
+    status.textContent = "";
+  } catch (error) {
+    if (!isCurrent() || generation !== settingsHistoryPolicyGeneration || !settingsDialog.open) return;
+    status.textContent = localizer.t("Unable to load Agent context policy.");
+    element("settings-history-context-retry").hidden = false;
+  }
+}
+
+element("settings-history-context-retry").addEventListener("click", () => void loadHistoryContextPolicy());
+element("settings-history-summary-reset").addEventListener("click", () => {
+  element("settings-history-summary-instructions").value = DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS;
+  element("settings-history-summary-error").textContent = "";
+  updateSettingsPreviewFromForm();
+});
 
 async function loadCurrentDeviceSettings() {
   const generation = ++settingsDeviceLoadGeneration;
@@ -2762,6 +3064,8 @@ async function loadCurrentDeviceSettings() {
 
 function cancelSettingsDialog() {
   settingsDeviceLoadGeneration += 1;
+  settingsHistoryPolicyGeneration += 1;
+  settingsHistoryPolicy = null;
   applyVisualSettings(state.settings);
   settingsPreview = state.settings;
   if (settingsDialog.open) settingsDialog.close();
@@ -2831,6 +3135,18 @@ function handleSettingsControlChange(event) {
 
 async function saveSettings(event) {
   event.preventDefault();
+  const isCurrent = captureWorkspaceScope();
+  const deviceId = state.currentUser?.device_id;
+  const dialogGeneration = settingsDeviceLoadGeneration;
+  const summaryInstructions = element("settings-history-summary-instructions").value;
+  element("settings-history-summary-error").textContent = "";
+  if (!summaryInstructions.trim() || summaryInstructions.length > 4000) {
+    element("settings-history-summary-error").textContent = localizer.t("Summary instructions must contain 1 to 4000 characters.");
+    element("settings-history-summary-instructions").focus();
+    return;
+  }
+  const policy = settingsHistoryPolicy && settingsHistoryPolicy.projectId === state.project?.id
+    ? { ...settingsHistoryPolicy, nextMode: element("settings-history-context-mode").value } : null;
   const contextBytes = contextBudgetInputBytes(
     element("settings-context-budget").value,
     element("settings-context-unit").value,
@@ -2862,11 +3178,20 @@ async function saveSettings(event) {
   const permissionRequest = notificationPermissionNeeded(nextSettings.notifications)
     ? ensureNotificationPermission()
     : Promise.resolve();
+  let savingContextPolicy = false;
   try {
     await permissionRequest;
+    if (!isCurrent() || !settingsDialog.open || dialogGeneration !== settingsDeviceLoadGeneration) return;
     if (!deviceInput.disabled && nextDeviceName !== currentDeviceName) {
-      const updated = await api.renameDevice(state.currentUser.device_id, nextDeviceName);
+      const updated = await api.renameDevice(deviceId, nextDeviceName);
+      if (!isCurrent() || !settingsDialog.open || dialogGeneration !== settingsDeviceLoadGeneration) return;
       currentDeviceName = updated.name;
+    }
+    if (policy && policy.nextMode !== policy.mode) {
+      savingContextPolicy = true;
+      await api.setProjectContextPolicy(policy.projectId, policy.nextMode);
+      if (!isCurrent() || !settingsDialog.open || dialogGeneration !== settingsDeviceLoadGeneration) return;
+      savingContextPolicy = false;
     }
     settingsPreview = nextSettings;
     state.settings = settingsStore.set(settingsPreview);
@@ -2887,6 +3212,12 @@ async function saveSettings(event) {
     settingsDialog.close();
     announce(localizer.t("Settings saved."));
   } catch (error) {
+    if (!isCurrent() || !settingsDialog.open || dialogGeneration !== settingsDeviceLoadGeneration) return;
+    if (savingContextPolicy) {
+      element("settings-history-context-status").textContent = localizer.t("Unable to save Agent context policy. Retry saving settings.");
+      element("settings-history-context-mode").focus();
+      return;
+    }
     deviceStatus.textContent = error.message ?? localizer.t("Unable to rename this device.");
     if (!deviceInput.disabled) deviceInput.focus();
   } finally {
@@ -2960,9 +3291,9 @@ function renderContextDiagnostic(settings) {
   input.setAttribute("aria-invalid", "false");
   diagnostic.dataset.state = "valid";
   const connectorGuidance = enabledHarnesses.map((harness) => harness === DSH_HARNESS
-    ? "DeepSeek Harness uses the context limit configured by its GatherThread plugin instead of this browser value. Reconnect the DSH plugin after changing its local limit."
-    : "Reconnect Codex after changing this value. Codex Desktop Hooks use a separate 7 KiB capsule and continue across turns.").join(" ");
-  diagnostic.textContent = `Configured projection ceiling: ${formatBytes(result.configuredBytes)} (about ${new Intl.NumberFormat().format(approximateTokens)} tokens at four UTF-8 bytes per token). The connected model's reported window remains the hard upper bound. ${connectorGuidance}`;
+    ? "DeepSeek Harness: automatic compaction follows its native model and plugin settings, not this browser value. Oversized first imports may still exceed native limits."
+    : `Codex: use the native model window first; fallback ${formatBytes(result.configuredBytes)} (about ${new Intl.NumberFormat().format(approximateTokens)} tokens). Reconnect Codex after changing the fallback. Codex Desktop Hooks retain a separate 7 KiB transfer capsule.`).join(" ");
+  diagnostic.textContent = `Native context management. ${connectorGuidance}`;
 }
 
 function formatBytes(bytes) {

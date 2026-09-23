@@ -22,6 +22,7 @@ import type {
 
 export interface DshManagedConnector {
   readonly stopped: boolean;
+  readonly executionRuntimeId?: string | undefined;
   start(): Promise<void>;
   stop(): Promise<void>;
   localSyncStatus?(): LocalConversationSyncStatus;

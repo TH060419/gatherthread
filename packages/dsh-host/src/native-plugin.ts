@@ -1,10 +1,14 @@
 import {
   ensureProjectWorkspace,
+  HttpCollaborationClient,
+  ProjectCodeSync,
   type ProjectSummary,
   type LocalConversationSyncStatus,
   type LocalConversationUploadResult,
 } from "@gatherthread/bridge";
+import { createHash } from "node:crypto";
 import path from "node:path";
+import { DshCodeSyncController, type DshCodeSyncView } from "./code-sync-controller.js";
 import { createHttpDshCollaborationApi } from "./collaboration-api.js";
 import { managedDshSessionTitle } from "./session-title.js";
 import {
@@ -74,6 +78,8 @@ const RPC_ENDPOINTS = new Set([
   "connection/disconnect",
   "sync/set-auto-upload",
   "sync/upload",
+  "code/authorize",
+  "code/action",
 ]);
 const MAX_CATALOG_PROVIDERS = 64;
 const MAX_CATALOG_MODELS = 256;
@@ -106,6 +112,7 @@ export interface DshNativePublicState {
   readonly pairing?: DshNativePairingView;
   readonly recoverableError?: "pairing_failed" | "connection_failed";
   readonly localSync?: readonly DshNativeLocalSyncStatus[];
+  readonly codeSync?: readonly (DshCodeSyncView & { projectId: string; projectName: string })[];
 }
 
 export interface DshNativeLocalSyncStatus extends LocalConversationSyncStatus {
@@ -129,6 +136,9 @@ interface NativeOwner {
   localSyncStatuses?(): LocalConversationSyncStatus[];
   setLocalAutoUpload?(sessionId: string, enabled: boolean): Promise<LocalConversationSyncStatus>;
   uploadLocalTurns?(sessionId: string): Promise<LocalConversationUploadResult>;
+  codeSyncView?(): DshCodeSyncView;
+  authorizeCodeSync?(enabled: boolean): Promise<DshCodeSyncView>;
+  executeCodeSync?(action: string): Promise<DshCodeSyncView>;
 }
 
 interface NativeLlmLike {
@@ -216,8 +226,13 @@ export class DshNativeHostController {
   #grant: DshNativeGrant | undefined;
   #pairing: DshNativePairingIntent | undefined;
   #pairingAbort: AbortController | undefined;
+  #pairingBegin: Promise<DshNativePairingIntent> | undefined;
   #pairingTask: Promise<void> | undefined;
+  #configureTask: Promise<DshNativePublicState> | undefined;
+  #configureAbort: AbortController | undefined;
+  #disconnecting = false;
   #recoverableError: DshNativePublicState["recoverableError"];
+  #starting = false;
   #started = false;
   #disposed = false;
   #disposePromise: Promise<void> | undefined;
@@ -234,10 +249,15 @@ export class DshNativeHostController {
   }
 
   async start(): Promise<void> {
-    if (this.#started) throw new Error("GatherThread native DSH controller is already started");
+    if (this.#started || this.#starting) throw new Error("GatherThread native DSH controller is already started");
     if (this.#disposed) throw new Error("GatherThread native DSH controller is disposed");
+    this.#starting = true;
+    try {
+      const grant = await this.#credentials.load();
+      throwIfAborted(this.#abort.signal);
+      this.#grant = grant;
+    } finally { this.#starting = false; }
     this.#started = true;
-    this.#grant = await this.#credentials.load();
     if (this.#grant?.route === undefined) {
       this.#options.status.setConnection("stopped");
       return;
@@ -277,6 +297,15 @@ export class DshNativeHostController {
           projectCount: this.#projects.size,
           bindings: this.#currentBindings(this.#grant.route).slice(0, 100),
           localSync: this.#currentLocalSync().slice(0, 100),
+          codeSync: [...this.#owners].flatMap(([projectId, owner]) => {
+            if (this.#projects.get(projectId)?.role === "viewer") return [];
+            const view = owner.codeSyncView?.();
+            return view === undefined ? [] : [{
+              projectId,
+              projectName: this.#projects.get(projectId)?.name ?? projectId,
+              ...view,
+            }];
+          }).slice(0, 100),
         }),
       }),
       ...(this.#pairing === undefined ? {} : {
@@ -298,7 +327,7 @@ export class DshNativeHostController {
     if (this.#grant !== undefined) {
       throw new Error("Disconnect the current GatherThread pairing before starting another");
     }
-    if (this.#pairingTask !== undefined) {
+    if (this.#pairingAbort !== undefined || this.#pairingTask !== undefined) {
       throw new Error("A GatherThread DSH pairing is already active");
     }
     const input = exactInput(inputValue, new Set(["serverUrl", "deviceName"]));
@@ -312,19 +341,22 @@ export class DshNativeHostController {
       : AbortSignal.any([operationAbort.signal, requestSignal]);
     let intent: DshNativePairingIntent;
     try {
-      intent = await beginDshNativePairing({
+      this.#pairingBegin = beginDshNativePairing({
         serverUrl: requiredInputText(input.serverUrl, "serverUrl", 2_048),
         deviceName: requiredInputText(input.deviceName, "deviceName", 120),
         ...(this.#options.fetch === undefined ? {} : { fetch: this.#options.fetch }),
         signal: beginSignal,
       });
+      intent = await this.#pairingBegin;
     } catch (error) {
       this.#abort.signal.removeEventListener("abort", abortFromRoot);
       this.#pairingAbort = undefined;
       operationAbort.abort();
       throw error;
+    } finally {
+      this.#pairingBegin = undefined;
     }
-    if (requestSignal?.aborted === true || this.#disposed) {
+    if (beginSignal.aborted || this.#disposed || this.#disconnecting) {
       operationAbort.abort();
       this.#abort.signal.removeEventListener("abort", abortFromRoot);
       this.#pairingAbort = undefined;
@@ -354,8 +386,10 @@ export class DshNativeHostController {
   }
 
   async cancelPairing(): Promise<void> {
+    const beginning = this.#pairingBegin;
     const task = this.#pairingTask;
     this.#pairingAbort?.abort(new Error("GatherThread DSH pairing canceled"));
+    if (beginning !== undefined) await beginning.catch(() => undefined);
     if (task !== undefined) await task;
     if (!this.#disposed && this.#grant === undefined) {
       this.#recoverableError = undefined;
@@ -384,6 +418,22 @@ export class DshNativeHostController {
 
   async configure(inputValue: unknown, signal?: AbortSignal): Promise<DshNativePublicState> {
     this.#assertAvailable();
+    if (this.#configureTask !== undefined) throw new Error("GatherThread DSH configuration is already active");
+    const configureAbort = new AbortController();
+    this.#configureAbort = configureAbort;
+    const operationSignal = combineSignal(configureAbort.signal, signal);
+    const task = this.#configure(inputValue, operationSignal);
+    this.#configureTask = task;
+    try { return await task; }
+    finally {
+      if (this.#configureTask === task) {
+        this.#configureTask = undefined;
+        this.#configureAbort = undefined;
+      }
+    }
+  }
+
+  async #configure(inputValue: unknown, signal: AbortSignal): Promise<DshNativePublicState> {
     const grant = this.#requireGrant();
     const input = exactInput(inputValue, new Set(["projectId", "provider", "model"]));
     const projectId = input.projectId === undefined
@@ -404,7 +454,9 @@ export class DshNativeHostController {
     try {
       throwIfAborted(operationSignal);
       await this.#cancelProjectRefresh("GatherThread DSH model route changed");
+      throwIfAborted(operationSignal);
       this.#grant = await this.#credentials.save(nextGrant);
+      throwIfAborted(operationSignal);
       await this.#stopOwners();
       await this.#reconcileProjects(this.#grant, projects, operationSignal);
       this.#scheduleProjectRefresh();
@@ -452,17 +504,24 @@ export class DshNativeHostController {
 
   async disconnect(): Promise<DshNativePublicState> {
     this.#assertAvailable();
-    await this.cancelPairing();
-    await this.#cancelProjectRefresh("GatherThread DSH pairing disconnected");
-    await this.#stopOwners();
-    await this.#credentials.clear();
-    this.#grant = undefined;
-    this.#executionProfileRouteKey = undefined;
-    this.#executionProfiles = undefined;
-    this.#recoverableError = undefined;
-    this.#options.status.setProjectName("GatherThread / 共序");
-    this.#options.status.setConnection("stopped");
-    return this.publicState();
+    this.#disconnecting = true;
+    this.#configureAbort?.abort(new Error("GatherThread DSH configuration canceled by disconnect"));
+    try {
+      // A delayed configuration/credential write must settle before clearing the
+      // grant; otherwise it could resurrect pairing after the user disconnects.
+      await this.#configureTask?.catch(() => undefined);
+      await this.cancelPairing();
+      await this.#cancelProjectRefresh("GatherThread DSH pairing disconnected");
+      await this.#stopOwners();
+      await this.#credentials.clear();
+      this.#grant = undefined;
+      this.#executionProfileRouteKey = undefined;
+      this.#executionProfiles = undefined;
+      this.#recoverableError = undefined;
+      this.#options.status.setProjectName("GatherThread / 共序");
+      this.#options.status.setConnection("stopped");
+      return this.publicState();
+    } finally { this.#disconnecting = false; }
   }
 
   async setLocalAutoUpload(inputValue: unknown): Promise<DshNativePublicState> {
@@ -490,12 +549,33 @@ export class DshNativeHostController {
     return this.publicState();
   }
 
+  async codeSyncAction(inputValue: unknown, authorize = false): Promise<DshNativePublicState> {
+    this.#assertAvailable();
+    const input = exactInput(inputValue, new Set(authorize ? ["projectId", "enabled"] : ["projectId", "action"]));
+    const projectId = safeInputIdentifier(input.projectId, "projectId");
+    const owner = this.#owners.get(projectId);
+    if (!owner || this.#projects.get(projectId)?.role === "viewer") {
+      throw new Error("This Project is not writable on this DSH device");
+    }
+    if (authorize) {
+      if (typeof input.enabled !== "boolean" || !owner.authorizeCodeSync) throw new Error("Invalid code sync authorization");
+      await owner.authorizeCodeSync(input.enabled);
+    } else {
+      if (typeof input.action !== "string" || ![
+        "code_sync_status", "code_upload", "code_download", "code_recover",
+        "code_auto_upload_enable", "code_auto_upload_disable",
+      ].includes(input.action) || !owner.executeCodeSync) throw new Error("Invalid code sync action");
+      await owner.executeCodeSync(input.action);
+    }
+    return this.publicState();
+  }
+
   dispose(): Promise<void> {
     this.#disposePromise ??= (async () => {
       this.#disposed = true;
       this.#abort.abort(new Error("GatherThread native DSH plugin unloaded"));
       this.#pairingAbort?.abort(this.#abort.signal.reason);
-      await Promise.allSettled([this.#pairingTask, this.#projectRefreshPromise]);
+      await Promise.allSettled([this.#pairingBegin, this.#pairingTask, this.#configureTask, this.#projectRefreshPromise]);
       await this.#stopOwners();
       this.#pairing = undefined;
       this.#pairingTask = undefined;
@@ -617,10 +697,13 @@ export class DshNativeHostController {
     await this.#refreshExecutionProfiles(route, signal);
     throwIfAborted(signal);
     const nextIds = new Set(projects.map((project) => project.id));
+    const previousRoles = new Map([...this.#projects].map(([id, project]) => [id, project.role]));
     this.#projects.clear();
     for (const project of projects) this.#projects.set(project.id, { ...project });
     for (const [projectId, owner] of [...this.#owners]) {
-      if (nextIds.has(projectId)) continue;
+      // Native managers capture write capabilities when they start. Refresh a
+      // changed role in both directions without disturbing other Projects.
+      if (nextIds.has(projectId) && previousRoles.get(projectId) === this.#projects.get(projectId)?.role) continue;
       this.#owners.delete(projectId);
       this.#projectStatuses.delete(projectId);
       await owner.stop();
@@ -717,7 +800,7 @@ export class DshNativeHostController {
   }
 
   #scheduleProjectRefresh(): void {
-    if (this.#disposed || this.#grant?.route === undefined || this.#projectRefreshTimer !== undefined) return;
+    if (this.#disposed || this.#disconnecting || this.#grant?.route === undefined || this.#projectRefreshTimer !== undefined) return;
     const delay = this.#options.projectRefreshIntervalMs ?? 5_000;
     this.#projectRefreshTimer = setTimeout(() => {
       this.#projectRefreshTimer = undefined;
@@ -753,7 +836,7 @@ export class DshNativeHostController {
   }
 
   #assertAvailable(): void {
-    if (!this.#started || this.#disposed) {
+    if (!this.#started || this.#disposed || this.#disconnecting) {
       throw new Error("GatherThread native DSH controller is unavailable");
     }
   }
@@ -836,6 +919,10 @@ export function registerNativeDshRpc(
           return rpcSuccess(await controller.setLocalAutoUpload(payload));
         case "sync/upload":
           return rpcSuccess(await controller.uploadLocalTurns(payload));
+        case "code/authorize":
+          return rpcSuccess(await controller.codeSyncAction(payload, true));
+        case "code/action":
+          return rpcSuccess(await controller.codeSyncAction(payload));
         default:
           return rpcFailure("gatherthread/not-found", "GatherThread DSH action is unavailable");
       }
@@ -918,17 +1005,22 @@ async function createProductionOwner(options: {
     credential: options.grant.token,
     signal: ownerAbort.signal,
   });
+  const codeRuntimes = new Map<string, DshManagedConnector>();
   const manager = new DshProjectManager({
     config,
     api,
-    createConnector: (input) => createNativeManagedConnector({
-      input,
-      context: options.context,
-      credential: options.grant.token,
-      rootSignal: ownerAbort.signal,
-      status: options.status,
-      workspaceTitle: options.binding.projectName,
-    }),
+    createConnector: (input) => {
+      const connector = createNativeManagedConnector({
+        input,
+        context: options.context,
+        credential: options.grant.token,
+        rootSignal: ownerAbort.signal,
+        status: options.status,
+        workspaceTitle: options.binding.projectName,
+      });
+      codeRuntimes.set(input.session.id, connector);
+      return connector;
+    },
     canCreateLocalSessions: options.canCreateLocalSessions,
     discoverLocalSessions: () => nativeWorkspace.listCompletedLocalSessions(),
     subscribeToLocalSessionChanges: (listener) => nativeWorkspace.onLocalSessionSettled(listener),
@@ -939,24 +1031,64 @@ async function createProductionOwner(options: {
     ),
     onStatus: options.onStatus,
   });
+  let actor: Awaited<ReturnType<typeof api.getCurrentActor>>;
   try {
+    actor = await api.getCurrentActor();
     await manager.start();
   } catch (error) {
     ownerAbort.abort(new Error("GatherThread native DSH manager failed to start"));
     options.signal.removeEventListener("abort", abortFromRoot);
     await manager.stop();
+    nativeWorkspace.dispose();
     throw error;
   }
+  const codeSync = new DshCodeSyncController({
+    permissionPath: path.join(config.stateRoot, `code-consent-${createHash("sha256").update(actor.id).digest("hex")}.json`),
+    binding: createHash("sha256").update(JSON.stringify([
+      config.apiUrl, config.projectId, actor.id, config.workspacePath,
+    ])).digest("hex"),
+    createEngine: () => new ProjectCodeSync({
+      apiUrl: config.apiUrl,
+      token: options.grant.token,
+      projectId: config.projectId,
+      actorId: actor.id,
+      workspacePath: config.workspacePath,
+      // A custom DSH home is an isolated profile, including its code-sync state.
+      // Default profiles keep the harness-neutral state shared with Codex.
+      ...(options.dshHome === undefined ? {} : {
+        stateRoot: path.join(options.dshHome, "gatherthread-code-sync", createHash("sha256").update(config.workspacePath).digest("hex")),
+      }),
+    }),
+    api: new HttpCollaborationClient({
+      baseUrl: options.grant.apiUrl,
+      bearerToken: options.grant.token,
+      signal: ownerAbort.signal,
+    }),
+    runtimes: () => new Map([...codeRuntimes].flatMap(([id, connector]) => (
+      connector.stopped || !connector.executionRuntimeId ? [] : [[id, connector.executionRuntimeId]]
+    ))),
+    isBusy: () => nativeWorkspace.isBusy(),
+  });
+  // Invalid consent affects code sync only; existing conversation execution stays available.
+  await codeSync.start().catch(() => undefined);
+  const codeTimer = setInterval(() => { void codeSync.poll(); }, 5_000);
+  codeTimer.unref();
   let stopPromise: Promise<void> | undefined;
   return {
     localSyncStatuses: () => manager.localSyncStatuses(),
     setLocalAutoUpload: (sessionId, enabled) => manager.setLocalAutoUpload(sessionId, enabled),
     uploadLocalTurns: (sessionId) => manager.uploadLocalTurns(sessionId),
+    codeSyncView: () => codeSync.view(),
+    authorizeCodeSync: (enabled) => codeSync.authorize(enabled),
+    executeCodeSync: (action) => codeSync.execute(action),
     stop() {
       stopPromise ??= (async () => {
         options.signal.removeEventListener("abort", abortFromRoot);
+        clearInterval(codeTimer);
         ownerAbort.abort(new Error("GatherThread native DSH manager stopped"));
+        await codeSync.stop();
         await manager.stop();
+        nativeWorkspace.dispose();
       })();
       return stopPromise;
     },
@@ -987,6 +1119,7 @@ function createNativeManagedConnector(options: {
     context: options.context,
     sessionId: options.input.config.dshSessionId,
     workspacePath: options.input.config.workspacePath,
+    contextBinding: { apiUrl: options.input.config.apiUrl, projectId: options.input.config.projectId, sessionId: options.input.config.sessionId },
     provider: options.input.config.provider,
     model: options.input.config.model,
     agentPreset: DSH_NATIVE_AGENT_PRESET,
@@ -1026,6 +1159,7 @@ function createNativeManagedConnector(options: {
   let stopPromise: Promise<void> | undefined;
   return {
     get stopped() { return connector.stopped; },
+    get executionRuntimeId() { return connector.executionRuntimeId; },
     async start() { await connector.start(); },
     localSyncStatus: () => connector.localSyncStatus(),
     setLocalAutoUpload: (enabled) => connector.setLocalAutoUpload(enabled),

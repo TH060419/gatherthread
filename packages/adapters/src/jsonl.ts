@@ -1,3 +1,4 @@
+import { constants } from "node:fs";
 import { open, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -21,7 +22,7 @@ export async function tailJsonlTranscript(
 ): Promise<TailResult> {
   const authorizedPath = await resolveAuthorizedPath(transcriptPath, options.authorizedRoots);
   const metadata = await stat(authorizedPath);
-  if (!metadata.isFile()) throw new Error(`Transcript is not a file: ${authorizedPath}`);
+  if (!metadata.isFile() || metadata.nlink !== 1) throw new Error("Transcript must be a single-link regular file");
 
   const sameFile = cursor?.path === authorizedPath
     && cursor.device === metadata.dev
@@ -38,12 +39,21 @@ export async function tailJsonlTranscript(
     };
   }
 
-  const handle = await open(authorizedPath, "r");
+  const handle = await open(authorizedPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   let buffer: Buffer;
   try {
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.nlink !== 1
+      || opened.dev !== metadata.dev || opened.ino !== metadata.ino
+      || await realpath(authorizedPath) !== authorizedPath) {
+      throw new Error("Transcript changed after its authorized path was checked");
+    }
     buffer = Buffer.alloc(readLength);
     const { bytesRead } = await handle.read(buffer, 0, readLength, start);
     buffer = buffer.subarray(0, bytesRead);
+    if ((await handle.stat()).nlink !== 1 || await realpath(authorizedPath) !== authorizedPath) {
+      throw new Error("Transcript changed during its authorized read");
+    }
   } finally {
     await handle.close();
   }

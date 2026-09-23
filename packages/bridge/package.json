@@ -18,7 +18,8 @@
     }
   },
   "dependencies": {
-    "@gatherthread/adapters": "*"
+    "@gatherthread/adapters": "*",
+    "@gatherthread/protocol": "*"
   },
   "scripts": {
     "build": "tsc -b",

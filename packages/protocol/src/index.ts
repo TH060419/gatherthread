@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { codeSyncRequestKinds } from "./code-sync.js";
+export * from "./code-sync.js";
+export * from "./history-summary.js";
 
 export const sessionModes = ["solo", "multi"] as const;
 export const membershipRoles = ["owner", "participant", "viewer"] as const;
@@ -81,6 +84,16 @@ export const AgentExecutionProfileSchema = z.object({
 });
 
 export type AgentExecutionProfile = z.infer<typeof AgentExecutionProfileSchema>;
+
+export const CreateHistorySummaryInputSchema = z.object({
+  idempotency_key: IdempotencyKeySchema,
+  source_event_ids: z.array(IdSchema).min(1).max(100).refine((ids) => new Set(ids).size === ids.length, "Source IDs must be unique"),
+  execution_profile: AgentExecutionProfileSchema.extend({ runtime_id: IdSchema }).strict(),
+  instructions: z.string().trim().min(1).max(4000).optional(),
+}).strict();
+export type CreateHistorySummaryInput = z.infer<typeof CreateHistorySummaryInputSchema>;
+export const ContextPolicySchema = z.object({ mode: z.enum(["summary", "original"]) }).strict();
+export const UpdateContextPolicyInputSchema = ContextPolicySchema;
 
 const RuntimeExecutionReasoningEffortsSchema = z.array(
   z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
@@ -475,6 +488,7 @@ export const SnapshotRequestStatusSchema = z.enum(snapshotRequestStatuses);
 export type SnapshotRequestStatus = z.infer<typeof SnapshotRequestStatusSchema>;
 
 export const snapshotRequestKinds = [
+  ...codeSyncRequestKinds,
   "immutable",
   "visible_history_replace",
   "local_sync_status",
