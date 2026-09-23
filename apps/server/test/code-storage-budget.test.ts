@@ -21,7 +21,9 @@ test("disk reservations avoid request-time rescans and include failed writes unt
     const budget = new CodeStorageBudget(f.root, { clock: () => now, scanIntervalMilliseconds: 1000 });
     budget.reserve(f.repository, CODE_PROJECT_DISK_BYTES / 2);
     // A rolled-back caller does not release a reservation: Git objects may survive.
-    assert.throws(() => budget.reserve(f.repository, CODE_PROJECT_DISK_BYTES / 2), code("code_storage_quota_exceeded"));
+    // Directory stat.size differs by filesystem/OS; exceed the cap even when
+    // Windows reports zero bytes for the empty repository directory.
+    assert.throws(() => budget.reserve(f.repository, CODE_PROJECT_DISK_BYTES / 2 + 1), code("code_storage_quota_exceeded"));
     // A new entry is not read until the timed reconciliation (no hot full-tree walk).
     mkdirSync(join(f.root, "other.git"));
     writeFileSync(join(f.root, "other.git", "orphan"), "x");

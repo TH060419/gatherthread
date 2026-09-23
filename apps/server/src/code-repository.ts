@@ -200,11 +200,14 @@ export class CodeRepository {
     if (lstatSync(this.root).isSymbolicLink()) throw new ApiError(503, "code_storage_unavailable", "Code storage must be a private directory");
   }
   protected git(projectId: string, args: string[], input?: string | Buffer, extraEnv?: Record<string, string>, allowConflict = false): Buffer {
+    // Git for Windows understands NUL, while Node's \\.\nul spelling is not
+    // accepted consistently by its config and attributes file readers.
+    const gitNull = process.platform === "win32" ? "NUL" : devNull;
     const env: NodeJS.ProcessEnv = {
       PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-      GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: devNull, GIT_TERMINAL_PROMPT: "0",
-      GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: devNull,
-      GIT_CONFIG_KEY_1: "core.autocrlf", GIT_CONFIG_VALUE_1: "false", GIT_CONFIG_KEY_2: "core.attributesFile", GIT_CONFIG_VALUE_2: devNull,
+      GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: gitNull, GIT_TERMINAL_PROMPT: "0",
+      GIT_CONFIG_COUNT: "3", GIT_CONFIG_KEY_0: "core.hooksPath", GIT_CONFIG_VALUE_0: gitNull,
+      GIT_CONFIG_KEY_1: "core.autocrlf", GIT_CONFIG_VALUE_1: "false", GIT_CONFIG_KEY_2: "core.attributesFile", GIT_CONFIG_VALUE_2: gitNull,
       ...extraEnv,
     };
     const result = spawnSync("git", [`--git-dir=${this.repoPath(projectId)}`, ...args], {
