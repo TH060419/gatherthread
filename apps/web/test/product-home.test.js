@@ -138,6 +138,24 @@ test("product home documents complete connection commands", async () => {
   assert.match(html, /npm run connection:tailscale -- --url https:\/\/host\.tailnet\.ts\.net/u);
 });
 
+test("product home ends with public contact and the gatherthread.cn ICP record", async () => {
+  const [html, app, styles] = await Promise.all([
+    readFile(new URL("index.html", productRoot), "utf8"),
+    readFile(new URL("app.js", productRoot), "utf8"),
+    readFile(new URL("styles.css", productRoot), "utf8"),
+  ]);
+  const footer = html.slice(html.indexOf('<footer class="footer">'));
+
+  assert.match(footer, /data-i18n="foot\.contact">联系与反馈：/u);
+  assert.match(footer, /href="https:\/\/github\.com\/TH060419\/gatherthread\/issues"[^>]*>GitHub Issues<\/a>/u);
+  assert.match(footer, /data-i18n="foot\.icp">gatherthread\.cn 备案：/u);
+  assert.match(footer, /href="https:\/\/beian\.miit\.gov\.cn\/"[^>]*>冀ICP备2026037466号-1<\/a>/u);
+  assert.ok(footer.indexOf('data-i18n="foot.contact"') < footer.indexOf('data-i18n="foot.icp"'));
+  assert.match(app, /"foot\.contact": \{ zh: "联系与反馈：", en: "Contact & feedback:" \}/u);
+  assert.match(app, /"foot\.icp": \{ zh: "gatherthread\.cn 备案：", en: "gatherthread\.cn ICP filing:" \}/u);
+  assert.match(styles, /\.footer \{ scroll-snap-align: end; \}/u);
+});
+
 test("product home reuses the canonical application lockups", async () => {
   const applicationBrand = new URL("../brand/", import.meta.url);
   for (const asset of ["lockup-color-transparent-light.svg", "lockup-color-transparent-dark.svg"]) {

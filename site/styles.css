@@ -608,6 +608,19 @@ html[data-theme="light"] .icon-moon { opacity: 0; transform: rotate(90deg) scale
 }
 .footer-lockup { height: 18px; width: auto; }
 .copyright { font-size: 12px; color: var(--text-3); }
+.footer-contact {
+  margin-top: 24px;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.7;
+  text-align: center;
+}
+.footer-contact a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.footer-contact a:hover { color: var(--text); }
 
 /* ============ RESPONSIVE ============ */
 @media (max-width: 900px) {
