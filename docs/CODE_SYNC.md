@@ -1,8 +1,8 @@
 # Project code collaboration / 项目代码协作
 
-This is an **unreleased source-preview feature**, not part of the already published `0.1.0-alpha.6` npm artifacts. Build this checkout and use the source connector / locally packed DSH plugin when testing. No official hosted service is opened by this feature.
+Project code collaboration is included in the `0.1.0-alpha.7` Alpha candidate. It remains opt-in and does not open an official hosted service. Use the matching Codex connector and DSH plugin after npm publication, or build this checkout for private testing.
 
-这是**尚未发布的源码预览功能**。已发布的 `0.1.0-alpha.6` npm 包不包含本次修改，测试时使用当前源码连接器或本地打包的 DSH 插件。
+项目代码协作已纳入 `0.1.0-alpha.7` Alpha 候选版，仍需单独开启，也不代表官方托管服务已开放。npm 发布后请使用同版本 Codex 连接器与 DSH 插件；发布前可从当前源码构建测试。
 
 ## What is synchronized
 
@@ -21,9 +21,9 @@ The code feature never changes conversation upload preferences, Codex visible-hi
 3. Authorize a specific local workspace, using one of the two paths below. Test with a small project containing no secrets.
 4. Use **Check status** before **Upload code**. A checkpoint includes eligible files across the bound project, not only the open conversation or the last Agent's edits. Review the source directory and exclusions yourself before the first upload.
 
-### Codex (current source)
+### Codex
 
-Keep the existing trusted plugin Hooks. Add `--code-sync` to the source connection command:
+Keep the existing trusted plugin Hooks. Add `--code-sync` to the connection command:
 
 ```sh
 npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --create-workspace --plugin-hooks --code-sync
@@ -31,7 +31,7 @@ npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --cre
 
 Use your actual server URL, project ID and configured port. The token remains in the hidden terminal prompt. `--code-sync` authorizes only this bound project's source directory; it does not enable automatic upload. The connector requires reviewed Hooks so it can observe Desktop work before code operations. In the Web code dialog, select this exact Codex runtime before upload/download actions.
 
-Without `--code-sync`, existing Codex workflows are unchanged and remote code jobs fail with an actionable local-authorization error. Do not add this flag to old published connectors which do not recognize it.
+Without `--code-sync`, existing Codex workflows are unchanged and remote code jobs fail with an actionable local-authorization error. Use `0.1.0-alpha.7` or newer; older published connectors do not recognize this flag.
 
 ### DeepSeek Harness
 

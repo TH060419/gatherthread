@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 
-const VERSION = "0.1.0-alpha.6";
+const VERSION = "0.1.0-alpha.7";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const temporaryBase = process.platform === "darwin" ? "/private/tmp" : tmpdir();
 const temporaryRoot = await mkdtemp(path.join(temporaryBase, "gtdshp-"));

@@ -2,7 +2,7 @@
 
 ## Release state
 
-This guide covers the executable single-process `0.1.0-alpha.6` preview candidate. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. Supported edges are local-only loopback, private LAN HTTPS, private Tailscale Serve, and the not-yet-open invitation-only Alibaba Cloud ECS profile. The application remains on loopback in every mode.
+This guide covers the executable single-process `0.1.0-alpha.7` preview candidate. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. Supported edges are local-only loopback, private LAN HTTPS, private Tailscale Serve, and the not-yet-open invitation-only Alibaba Cloud ECS profile. The application remains on loopback in every mode.
 
 ## Private-by-default startup
 
@@ -53,7 +53,7 @@ scripts/verify-sqlite-backup.sh /secure/backups/gatherthread/collaboration-YYYYM
 
 The backup script runs `PRAGMA integrity_check`, restricts file permissions, and writes a SHA-256 checksum. Store backups encrypted on a separate failure domain. Restrict access to the service operator and record backup creation, verification, schema version, and retention expiry without recording event content.
 
-For the unreleased optional [code repository feature](CODE_SYNC.md), the same script also creates a companion `<backup.db>.code` directory. It packs immutable Git objects reachable from the **SQLite snapshot's** recorded heads, reconstructs those refs, and runs strict Git integrity checks before reporting success. Keep the database, companion directory and checksum together. A `.incomplete` marker means the backup is unusable. Node.js 24 is required; Git is additionally required when repositories exist. Do not run external Git garbage collection or mutate repository storage while this online backup runs. A custom programmatic `codeRepositoryDirectory` must be supplied as the script's third argument (or `CODE_REPOSITORY_DIRECTORY`); the default is `<absolute database path>.code`.
+For the optional [code repository feature](CODE_SYNC.md), the same script also creates a companion `<backup.db>.code` directory. It packs immutable Git objects reachable from the **SQLite snapshot's** recorded heads, reconstructs those refs, and runs strict Git integrity checks before reporting success. Keep the database, companion directory and checksum together. A `.incomplete` marker means the backup is unusable. Node.js 24 is required; Git is additionally required when repositories exist. Do not run external Git garbage collection or mutate repository storage while this online backup runs. A custom programmatic `codeRepositoryDirectory` must be supplied as the script's third argument (or `CODE_REPOSITORY_DIRECTORY`); the default is `<absolute database path>.code`.
 
 At least monthly and before a schema migration, restore the newest backup into an isolated temporary directory and run integrity, schema, application smoke, replay, and membership authorization tests. A backup without a successful restore drill is not considered recoverable.
 

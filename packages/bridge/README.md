@@ -5,7 +5,7 @@
 For Codex, prefer the standalone connector. Copy the fixed-version operating-system-specific command from the project's **Connect Codex** dialog. It needs no repository checkout, binds one GatherThread project to a safe same-name local workspace, and discovers eligible sessions automatically. Each writable session has a Desktop-owned task plus a separate `exec`-source background projection.
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.6 \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.7 \
   --url https://your-host.your-tailnet.ts.net \
   --project PROJECT_ID \
   --create-workspace \

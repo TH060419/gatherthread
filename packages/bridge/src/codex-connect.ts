@@ -105,7 +105,7 @@ const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const HELP = `GatherThread Codex connector
 
 Usage:
-  npx --yes @gatherthread/codex-connect@0.1.0-alpha.6 --url <GatherThread URL> [options]
+  npx --yes @gatherthread/codex-connect@0.1.0-alpha.7 --url <GatherThread URL> [options]
 
 Repository development / compatibility entry:
   npm run codex:connect -- --url <GatherThread URL> [options]

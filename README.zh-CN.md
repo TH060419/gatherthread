@@ -1,12 +1,12 @@
 # GatherThread
 
-> **未发布源码预览：项目代码同步。** 当前源码新增云端 Git 代码检查点：每位成员独立分支、手动/空闲时自动上传、安全下载、恢复到新目录，以及创建者审核合并。Codex 需显式添加 `--code-sync` 授权，DSH 可在插件设置中逐项目授权并操作。聊天上传与实时上下文注入不受影响，原有本地 Git 分支和暂存区不被改动。所有项目成员均可读取代码分支，Solo 不提供代码隐私隔离。详见[使用流程、边界与测试清单](docs/CODE_SYNC.md)。本次功能尚未发布到 Alpha 6 npm 包。
+> **Alpha 7：可选的项目代码协作。** 云端 Git 代码检查点支持每位成员独立分支、手动/空闲时自动上传、安全下载、恢复到新目录，以及创建者审核合并。Codex 需显式添加 `--code-sync` 授权，DSH 可在插件设置中逐项目授权并操作。聊天上传与实时上下文注入不受影响，原有本地 Git 分支和暂存区不被改动。所有项目成员均可读取代码分支，Solo 不提供代码隐私隔离。详见[使用流程、边界与测试清单](docs/CODE_SYNC.md)。
 
-> **原生上下文管理与审计修复也尚未发布。** 当前源码优先使用 Codex 原生窗口与用量，保留 DSH 自身模型及压缩设置，不再直接裁剪限额内接收的公开历史。原生压缩不是无限或无损记忆，特殊恢复仍有限制；详见 [Codex 指南](docs/CODEX_CONNECT.zh-CN.md)和 [DSH 指南](docs/DSH_CONNECT.zh-CN.md)。
+> **原生上下文管理与审计修复。** Alpha 7 优先使用 Codex 原生窗口与用量，保留 DSH 自身模型及压缩设置，不再直接裁剪限额内接收的公开历史。原生压缩不是无限或无损记忆，特殊恢复仍有限制；详见 [Codex 指南](docs/CODEX_CONNECT.zh-CN.md)和 [DSH 指南](docs/DSH_CONNECT.zh-CN.md)。
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/badge/release-0.1.0--alpha.6-0f766e.svg)](docs/releases/0.1.0-alpha.6.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/badge/release-0.1.0--alpha.7-0f766e.svg)](docs/releases/0.1.0-alpha.7.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **一个空间，汇聚众智。**
 
@@ -37,7 +37,7 @@
 
 MCP 服务器无法自行读取 host 中的完整会话。因此，根据历史重建的上下文绝不会被标记为 `provider_request`；只有本地 bridge 获得明确授权并确认捕获到原始请求时，才能上传这一保真度的上下文。上下文压缩由每个本地 Agent 自行处理，共享的规范事件日志保持完整和持久。
 
-当前未发布的源码预览还支持**手动总结部分会话历史**：只有该会话的写入者能选取公开且已完成的消息，交给自己已连接的本地 Agent 生成带作者与来源的共享总结；访者能阅读和切换视图，不能发起生成。原文永远保留，可切换查看、再次选择，也可将已有总结的正文与其他消息一起选入下一次总结。每位成员可独立设置今后从 GatherThread 网页发起的 Agent 请求默认注入“总结后内容”（默认，较精简但可能遗漏细节）或“原文”（更完整但占用更多上下文），并修改或重置自己的总结提示词；这一选择也适用于显式读取派生上下文的 MCP 工具，但不会反向改写 Codex/DSH 已有原生会话。这与原生自动压缩及本地回合自动上传开关相互独立。详见 [ADR-0027](docs/adr/0027-shared-manual-history-summaries.md)；**这部分尚未发布到 Alpha 6 npm 包。**
+Alpha 7 还支持**手动总结部分会话历史**：只有该会话的写入者能选取公开且已完成的消息，交给自己已连接的本地 Agent 生成带作者与来源的共享总结；访者能阅读和切换视图，不能发起生成。原文永远保留，可切换查看、再次选择，也可将已有总结的正文与其他消息一起选入下一次总结。每位成员可独立设置今后从 GatherThread 网页发起的 Agent 请求默认注入“总结后内容”（默认，较精简但可能遗漏细节）或“原文”（更完整但占用更多上下文），并修改或重置自己的总结提示词；这一选择也适用于显式读取派生上下文的 MCP 工具，但不会反向改写 Codex/DSH 已有原生会话。这与原生自动压缩及本地回合自动上传开关相互独立。详见 [ADR-0027](docs/adr/0027-shared-manual-history-summaries.md)。
 
 ## 仓库结构
 
@@ -105,13 +105,13 @@ npm run owner-host
 如果 `codex --version` 不可用或终端提示 `codex: command not found`，请先运行 `npm install -g @openai/codex` 安装或更新官方 Codex CLI。重新打开终端，确认 `codex plugin --help` 可用后再继续。
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.6 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.7 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
 连接器会在终端隐藏提示中读取设备 token，创建或复用本地项目，打开 Codex Desktop，并自动发现后续会话。可编辑的 GatherThread 会话会成为 Codex 任务；网页 Agent 请求在隔离的后台投影中运行，经信任的 Hooks 则把 Desktop 直接回合写回同一份规范历史。工作页为当前对话提供“本地回合自动上传至云端”开关和“立即从本地上传至云端”保底操作，Codex 插件也提供相同控制；Hook 漏记或失效时可扫描并补传已完成回合，且不会擅自重新开启自动上传。默认在每个会话首次于本地建立时导入一次经过验证、可直接阅读的原生历史快照；设置中可以关闭这次初始导入。“导入 Codex 历史”每次都会创建一个经过验证的新本地任务，公开消息不再按备用预算直接裁剪；在独立快照资源限额内，长历史由 Codex 原生压缩，后续 Hook 和上下文投递会切换到新任务。GatherThread 不覆盖或归档旧任务，请用户检查后自行归档。无论是否启用初次导入或执行手动导入，实时上下文注入都继续独立运行。本地新任务只有在首个回合成功完成后才会创建个人 Solo，访者任务始终留在本地。
 
-固定 Alpha 命令与 private 仓库测试方式见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。npm 包和 `v0.1.0-alpha.6` 引用发布后才能直接使用 registry 命令；发布前，有 private 仓库权限的协作者使用同一指南中的源码路径。
+固定 Alpha 命令与 private 仓库测试方式见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。npm 包和 `v0.1.0-alpha.7` 引用发布后才能直接使用 registry 命令；发布前，有 private 仓库权限的协作者使用同一指南中的源码路径。
 
 ## 接入 DeepSeek Harness
 
@@ -129,11 +129,11 @@ DeepSeek Harness 也使用同样清晰的三步流程：
 
 首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、按用户/项目/部署限制会话数量、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。新邀请用户的设备 Token 只展示一次，必须在关闭提示前妥善保存。
 
-`0.1.0-alpha.6` 尚未开放共序官方服务和公共 Beta。本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用；[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)已经为下一阶段部署准备好，但不代表服务器已上线。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
+`0.1.0-alpha.7` 尚未开放共序官方服务和公共 Beta。本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用；[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)已经为下一阶段部署准备好，但不代表服务器已上线。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
 
 尚未实现：主机自动故障转移、多进程 WebSocket fan-out、Agent token 级流式显示、附件对象存储、保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。
 
-更多信息请参阅 [`0.1.0-alpha.6` 说明](docs/releases/0.1.0-alpha.6.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
+更多信息请参阅 [`0.1.0-alpha.7` 说明](docs/releases/0.1.0-alpha.7.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
 
 ## 参与开发与版本治理
 
