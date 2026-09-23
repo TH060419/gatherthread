@@ -33,12 +33,13 @@ export async function assertBackupPath(path, allowMissing = false) {
 }
 
 function gitEnvironment() {
+  const nullDevice = process.platform === 'win32' ? 'NUL' : devNull
   return {
     PATH: process.env.PATH,
     ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: devNull, GIT_TERMINAL_PROMPT: '0',
-    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: devNull,
-    GIT_CONFIG_KEY_1: 'core.attributesFile', GIT_CONFIG_VALUE_1: devNull,
+    GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: nullDevice, GIT_TERMINAL_PROMPT: '0',
+    GIT_CONFIG_COUNT: '2', GIT_CONFIG_KEY_0: 'core.hooksPath', GIT_CONFIG_VALUE_0: nullDevice,
+    GIT_CONFIG_KEY_1: 'core.attributesFile', GIT_CONFIG_VALUE_1: nullDevice,
   }
 }
 
