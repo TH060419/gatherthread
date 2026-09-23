@@ -210,8 +210,11 @@ export class CodeRepository {
       GIT_CONFIG_KEY_1: "core.autocrlf", GIT_CONFIG_VALUE_1: "false", GIT_CONFIG_KEY_2: "core.attributesFile", GIT_CONFIG_VALUE_2: gitNull,
       ...extraEnv,
     };
+    // A bounded 1000-file batch can exceed 15 seconds on a busy Windows host.
+    // Keep the longer deadline limited to the two batch-write commands.
+    const timeout = args[0] === "hash-object" || args[0] === "update-index" ? 30_000 : 15_000;
     const result = spawnSync("git", [`--git-dir=${this.repoPath(projectId)}`, ...args], {
-      env, input, timeout: 15_000, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+      env, input, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
     });
     if (allowConflict && result.status === 1) throw new ApiError(409, "code_merge_conflict", "These branches conflict. Resolve the files locally and upload a new checkpoint; neither branch was changed.");
     if (result.error || result.status !== 0) throw new ApiError(503, "code_git_unavailable", "The server Git operation failed. Verify Git 2.38+ and code storage access.");
