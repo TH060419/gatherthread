@@ -105,6 +105,8 @@
                 en: "² The server uses node:sqlite — Node.js 24 or newer is required." },
     "foot.3": { zh: "³ 局域网模式要求客户端显式信任专用本地 CA，不能绕过证书警告，也不能配置路由器端口转发。",
                 en: "³ LAN mode requires clients to explicitly trust the dedicated local CA; never bypass a certificate warning or expose the port through the router." },
+    "foot.contact": { zh: "联系与反馈：", en: "Contact & feedback:" },
+    "foot.icp": { zh: "gatherthread.cn 备案：", en: "gatherthread.cn ICP filing:" },
 
     "doc.title": { zh: "GatherThread — 一个空间，汇聚众智。", en: "GatherThread — One room, many minds." },
     "nav.aria": { zh: "主导航", en: "Primary navigation" },
