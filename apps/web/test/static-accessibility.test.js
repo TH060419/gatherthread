@@ -86,6 +86,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     '<aside id="member-panel"',
     'aria-live="polite"',
     'for="token"',
+    'for="claim-display-name"',
+    'for="claim-device-name"',
     'id="send-chat-button"',
     'id="send-agent-button"',
     'id="claim-invitation-form"',
@@ -175,6 +177,15 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(main, /details\.open = live/);
   assert.match(main, /expandedWorklogs\.has\(worklogId\)/);
   assert.match(main, /details\.addEventListener\("toggle"/);
+});
+
+test("shared identity fields precede both token activation and project invitation forms", async () => {
+  const markup = await readFile(htmlPath, "utf8");
+  const name = markup.indexOf('id="claim-display-name"');
+  const device = markup.indexOf('id="claim-device-name"');
+  const tokenForm = markup.indexOf('id="login-form"');
+  const projectForm = markup.indexOf('id="claim-invitation-form"');
+  assert.ok(name > 0 && device > name && tokenForm > device && projectForm > tokenForm);
 });
 
 test("official light and dark lockups include the approved mark and outlined wordmark", async () => {

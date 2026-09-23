@@ -60,6 +60,19 @@
         </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
+        <div class="auth-identity">
+          <div class="claim-identity-grid">
+            <div>
+              <label for="claim-display-name">Display name</label>
+              <input id="claim-display-name" name="display-name" autocomplete="name" maxlength="120" aria-describedby="auth-identity-help" />
+            </div>
+            <div>
+              <label for="claim-device-name">Device name</label>
+              <input id="claim-device-name" name="device-name" autocomplete="off" maxlength="120" value="This browser" aria-describedby="auth-identity-help" />
+            </div>
+          </div>
+          <p id="auth-identity-help" class="field-help">Set both names when activating test access or joining a project. For an existing device token, leave them unchanged or edit either name.</p>
+        </div>
         <form id="login-form" novalidate>
           <label for="token">Access token</label>
           <input
@@ -70,7 +83,7 @@
             required
             aria-describedby="token-help login-error"
           />
-          <p id="token-help" class="field-help">Enter the access token issued by this owner host.</p>
+          <p id="token-help" class="field-help">Use your device access token to sign in, or a one-time test access token to create your account.</p>
           <label class="auth-remember" for="login-remember-device">
             <input id="login-remember-device" name="remember-device" type="checkbox" />
             <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
@@ -80,7 +93,7 @@
             Continue <span aria-hidden="true">→</span>
           </button>
         </form>
-        <div class="auth-divider" aria-hidden="true"><span>or join with an invitation</span></div>
+        <div class="auth-divider" aria-hidden="true"><span>or join a project with an invitation</span></div>
         <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
           <label for="claim-invite-secret">Invitation secret</label>
           <input
@@ -93,23 +106,13 @@
             required
             aria-describedby="claim-invite-help claim-invite-error"
           />
-          <p id="claim-invite-help" class="field-help">Paste the secret you received. It stays only in this tab's memory.</p>
-          <div class="claim-identity-grid">
-            <div>
-              <label for="claim-display-name">Display name</label>
-              <input id="claim-display-name" name="display-name" autocomplete="name" required maxlength="120" />
-            </div>
-            <div>
-              <label for="claim-device-name">Device name</label>
-              <input id="claim-device-name" name="device-name" autocomplete="off" required maxlength="120" value="This browser" />
-            </div>
-          </div>
+          <p id="claim-invite-help" class="field-help">A project invitation grants access only to invited projects, not the ability to create a project.</p>
           <label class="auth-remember" for="claim-remember-device">
             <input id="claim-remember-device" name="remember-device" type="checkbox" />
             <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
           </label>
           <p id="claim-invite-error" class="form-error" role="alert"></p>
-          <button class="button button-secondary button-wide" type="submit">Join workspace</button>
+          <button class="button button-secondary button-wide" type="submit">Join project</button>
         </form>
       </section>
     </main>

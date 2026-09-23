@@ -196,6 +196,14 @@ export class CollaborationService {
     return result;
   }
 
+  claimTestAccess(input: Parameters<CollaborationDatabase["claimTestAccess"]>[0]) {
+    return this.database.claimTestAccess(input);
+  }
+
+  claimTestAccessWithBrowserSession(input: Parameters<CollaborationDatabase["claimTestAccess"]>[0]) {
+    return this.database.claimTestAccess(input, { browserSession: true });
+  }
+
   claimInvitationForActor(actor: Actor, inviteToken: string) {
     const result = this.database.claimInvitationForActor(actor, inviteToken);
     if (result.event) this.publish(result.event);

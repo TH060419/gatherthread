@@ -13,6 +13,7 @@ import {
   ClaimAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
   ClaimInvitationInputSchema,
+  ClaimTestAccessInputSchema,
   ClaimSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
@@ -68,6 +69,7 @@ const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/bootstrap",
   "/v1/browser-sessions",
   "/v1/invitations/claim",
+  "/v1/test-access/claim",
   "/v1/device-authorizations/claim",
 ]);
 
@@ -395,6 +397,12 @@ export async function startCollaborationServer(
     maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
+  const publicAccountActor = (actor: Actor) => ({
+    id: actor.user_id,
+    username: actor.display_name,
+    device_id: actor.device_id,
+    can_create_projects: database.canCreateProjects(actor.user_id),
+  });
   const ephemeralCodeDirectory = options.databasePath === ":memory:" && !options.codeRepositoryDirectory
     ? mkdtempSync(join(tmpdir(), "gatherthread-code-")) : undefined;
   const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
@@ -528,10 +536,41 @@ export async function startCollaborationServer(
             secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined,
           ));
-          sendJson(response, 201, { data: result });
+          sendJson(response, 201, { data: { ...result, actor: {
+            ...result.actor,
+            can_create_projects: database.canCreateProjects(result.actor.user_id),
+          } } });
           return;
         }
-        sendJson(response, 201, { data: service.claimInvitation(input) });
+        const result = service.claimInvitation(input);
+        sendJson(response, 201, { data: { ...result, actor: {
+          ...result.actor,
+          can_create_projects: database.canCreateProjects(result.actor.user_id),
+        } } });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/test-access/claim") {
+        const input = ClaimTestAccessInputSchema.parse(await readJson(request));
+        if (request.headers["x-gatherthread-browser-session"] === "1") {
+          const { browser_session: browserSession, ...result } = service.claimTestAccessWithBrowserSession(input);
+          response.setHeader("set-cookie", serializeBrowserSessionCookie(
+            browserCookieName,
+            browserSession.token,
+            secureTransport,
+            browserSession.remembered ? browserSession.expires_at : undefined,
+          ));
+          sendJson(response, 201, { data: { ...result, actor: {
+            ...result.actor,
+            can_create_projects: true,
+          } } });
+          return;
+        }
+        const result = service.claimTestAccess(input);
+        sendJson(response, 201, { data: { ...result, actor: {
+          ...result.actor,
+          can_create_projects: true,
+        } } });
         return;
       }
 
@@ -544,7 +583,7 @@ export async function startCollaborationServer(
       if (request.method === "POST" && url.pathname === "/v1/browser-sessions") {
         const actor = database.authenticate(bearerToken(request));
         const input = CreateBrowserSessionInputSchema.parse(await readJson(request));
-        const browserSession = database.createBrowserSession(actor, input.remember_device);
+        const browserSession = database.createBrowserSession(actor, input.remember_device, input);
         response.setHeader("set-cookie", serializeBrowserSessionCookie(
           browserCookieName,
           browserSession.token,
@@ -552,7 +591,7 @@ export async function startCollaborationServer(
           browserSession.remembered ? browserSession.expires_at : undefined,
         ));
         sendJson(response, 201, { data: {
-          actor: { id: actor.user_id, username: actor.display_name, device_id: actor.device_id },
+          actor: publicAccountActor({ ...actor, display_name: input.display_name ?? actor.display_name }),
           expires_at: browserSession.expires_at,
         } });
         return;
@@ -596,11 +635,7 @@ export async function startCollaborationServer(
       };
 
       if (request.method === "GET" && url.pathname === "/v1/me") {
-        sendJson(response, 200, { data: {
-          id: actor.user_id,
-          username: actor.display_name,
-          device_id: actor.device_id,
-        } });
+        sendJson(response, 200, { data: publicAccountActor(actor) });
         return;
       }
 
