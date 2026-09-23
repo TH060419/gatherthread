@@ -27,7 +27,9 @@ test("disk reservations avoid request-time rescans and include failed writes unt
     // A new entry is not read until the timed reconciliation (no hot full-tree walk).
     mkdirSync(join(f.root, "other.git"));
     writeFileSync(join(f.root, "other.git", "orphan"), "x");
-    truncateSync(join(f.root, "other.git", "orphan"), CODE_PROJECT_DISK_BYTES);
+    // Cross the limit by a byte even on Windows, where directory stat.size
+    // can be zero rather than the positive value reported by APFS/ext4.
+    truncateSync(join(f.root, "other.git", "orphan"), CODE_PROJECT_DISK_BYTES + 1);
     assert.doesNotThrow(() => budget.reserve(f.repository, 1));
     now = 1000;
     assert.throws(() => budget.reserve(f.repository, 1), code("code_storage_quota_exceeded"));
