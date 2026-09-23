@@ -5,6 +5,7 @@ import {
   canAppend,
   canRetryFailedAgentRequest,
   createSelectionGuard,
+  emptyProjectState,
   eventContent,
   eventLabel,
   failedRequestFor,
@@ -28,6 +29,19 @@ import {
   sessionDeliveryMode,
   snapshotStatusView,
 } from "../src/domain.js";
+
+test("empty-project guidance distinguishes qualified accounts from project-invited guests", () => {
+  assert.deepEqual(emptyProjectState(true), {
+    title: "Create your first project.",
+    description: "Create a project to organize your sessions and invite collaborators.",
+    canCreateProjects: true,
+  });
+  assert.deepEqual(emptyProjectState(false), {
+    title: "No invited projects are available. Ask a project owner for an invitation.",
+    description: "Once invited, your projects will appear here. A project invitation does not let you create projects.",
+    canCreateProjects: false,
+  });
+});
 
 test("project Codex commands are cross-platform, quoted, and credential-free", () => {
   const commands = projectCodexConnectionCommands({

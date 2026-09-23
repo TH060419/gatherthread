@@ -14,6 +14,8 @@ const dshPath = fileURLToPath(new URL("../src/dsh.js", import.meta.url));
 const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.url));
 const brandLightPath = fileURLToPath(new URL("../brand/lockup-color-transparent-light.svg", import.meta.url));
 const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-dark.svg", import.meta.url));
+const aliyunGuidePath = fileURLToPath(new URL("../../../docs/ALIYUN_ECS.md", import.meta.url));
+const selfHostingGuidePath = fileURLToPath(new URL("../../../docs/SELF_HOSTING.md", import.meta.url));
 
 test("manual summaries use accessible icon entries, explicit paid confirmation and bounded settings", async () => {
   const [html, main, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
@@ -206,6 +208,27 @@ test("shared identity fields precede separate login, qualification, and project 
   assert.doesNotMatch(loginHandler, /api\.claimTestAccess\(/u);
   assert.match(activationHandler, /api\.claimTestAccess\(\{/u);
   assert.doesNotMatch(activationHandler, /api\.authenticate\(/u);
+});
+
+test("the empty-project paragraph follows account capability and restores session guidance", async () => {
+  const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  assert.match(markup, /id="empty-state-description">Create a solo room for observers or a multi room for active collaboration\./u);
+  assert.match(main, /const empty = emptyProjectState\(state\.currentUser\.can_create_projects === true\)/u);
+  assert.match(main, /element\("empty-state-description"\)\.textContent = empty\.description/u);
+  assert.match(main, /element\("empty-create-button"\)\.hidden = !empty\.canCreateProjects/u);
+  assert.match(main, /element\("empty-state-description"\)\.textContent = "Create a solo room for observers or a multi room for active collaboration\."/u);
+});
+
+test("host guides route one-use qualification codes to the activation field", async () => {
+  const [aliyun, selfHosting] = await Promise.all([
+    readFile(aliyunGuidePath, "utf8"),
+    readFile(selfHostingGuidePath, "utf8"),
+  ]);
+  for (const guide of [aliyun, selfHosting]) {
+    assert.match(guide, /`gtq_`[\s\S]*?\*\*First-time activation\*\*[\s\S]*?\*\*Test qualification code\*\*/u);
+    assert.match(guide, /`gta_`[\s\S]*?\*\*Existing account\*\*/u);
+    assert.doesNotMatch(guide, /top (?:\*\*)?Access token/u);
+  }
 });
 
 test("official light and dark lockups include the approved mark and outlined wordmark", async () => {

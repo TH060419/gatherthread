@@ -74,7 +74,7 @@ After bootstrapping the first owner, the host operator can issue one test qualif
 npm run owner-host:issue-test-access -- --ttl 7d
 ```
 
-The output contains a `grant_id`, expiry and one-use `gtq_` activation token. Send the token privately to exactly one tester; do not paste it into chat, a URL, shell command argument, issue or repository. The tester enters it in the application's top **Access token** field, sets their display and device names, and receives a distinct `gta_` device token once. They use that device token for later logins and can create their own projects. A leaked, unclaimed qualification can be revoked by metadata ID without reprinting the secret:
+The output contains a `grant_id`, expiry and one-use `gtq_` activation token. Send the token privately to exactly one tester; do not paste it into chat, a URL, shell command argument, issue or repository. On the login page, the tester sets their display and device names above the forms, selects **First-time activation** (中文：**首次使用 · 激活资格**), and enters the code in **Test qualification code** (中文：**测试资格码**). It does not belong in the existing-account device-token field. They receive a distinct `gta_` device token once, use **Existing account** to sign in later, and can create their own projects. A leaked, unclaimed qualification can be revoked by metadata ID without reprinting the secret:
 
 ```bash
 npm run owner-host:revoke-test-access -- --grant-id GRANT_ID

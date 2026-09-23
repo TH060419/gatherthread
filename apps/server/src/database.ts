@@ -981,12 +981,18 @@ export class CollaborationDatabase {
   }
 
   revokeTestAccess(grantId: string): void {
-    const row = this.sqlite.prepare("SELECT claimed_at FROM test_access_grants WHERE id = ?")
-      .get(grantId) as { claimed_at: string | null } | undefined;
-    if (!row) throw notFound("Test access grant");
-    if (row.claimed_at !== null) throw conflict("Claimed test access cannot be revoked; revoke the issued device instead");
-    this.sqlite.prepare("UPDATE test_access_grants SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
-      .run(this.now(), grantId);
+    this.transaction(() => {
+      const result = this.sqlite.prepare(`
+        UPDATE test_access_grants SET revoked_at = ?
+        WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL
+      `).run(this.now(), grantId);
+      if (Number(result.changes) === 1) return;
+      const row = this.sqlite.prepare("SELECT claimed_at FROM test_access_grants WHERE id = ?")
+        .get(grantId) as { claimed_at: string | null } | undefined;
+      if (!row) throw notFound("Test access grant");
+      if (row.claimed_at !== null) throw conflict("Claimed test access cannot be revoked; revoke the issued device instead");
+      // An already revoked grant remains revoked; preserve idempotent CLI use.
+    });
   }
 
   claimTestAccess(input: {

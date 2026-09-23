@@ -56,7 +56,7 @@ After a reviewed release containing [ADR-0028](adr/0028-separate-test-qualificat
 sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d
 ```
 
-Share the printed `gtq_` code privately with one tester. They enter it once in the top Access token field, set their own display and device names, and retain the newly issued `gta_` device token for later login. To revoke an unclaimed code, use `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID`; this does not revoke a claimed user's device. A project owner instead uses the in-app project invitation when they want to add a guest to only that project. Neither path opens public registration or grants ECS SSH access.
+Share the printed `gtq_` code privately with one tester. On the GatherThread login page, they set their display and device names above the forms, select **First-time activation** (中文：**首次使用 · 激活资格**), and enter the code once in **Test qualification code** (中文：**测试资格码**). They must not enter it in the existing-account device-token field. After activation, they retain the newly issued `gta_` device token and use **Existing account** to sign in later. To revoke an unclaimed code, use `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID`; this does not revoke a claimed user's device. A project owner instead uses the in-app project invitation when they want to add a guest to only that project. Neither path opens public registration or grants ECS SSH access.
 
 ## 5. Preflight and smoke test
 

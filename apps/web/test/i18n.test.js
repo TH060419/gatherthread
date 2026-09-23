@@ -30,6 +30,12 @@ test("English is the unchanged default and Simplified Chinese preserves product 
   assert.equal(translateUiText("Access token", "zh-CN"), "访问 token");
   assert.equal(translateUiText("Choose either an access token or a project invitation before continuing.", "zh-CN"), "请只填写访问 token 或项目邀请密钥中的一种，再继续。");
   assert.equal(translateUiText("Remember this device", "zh-CN"), "记住此设备");
+  assert.equal(translateUiText("Checking…", "zh-CN"), "正在验证…");
+  assert.equal(translateUiText("Activating…", "zh-CN"), "正在激活…");
+  assert.equal(translateUiText("Joining…", "zh-CN"), "正在加入…");
+  assert.equal(translateUiText("Create your first project.", "zh-CN"), "创建你的第一个项目。");
+  assert.equal(translateUiText("Create a project to organize your sessions and invite collaborators.", "zh-CN"), "创建项目来组织会话并邀请协作者。");
+  assert.equal(translateUiText("Once invited, your projects will appear here. A project invitation does not let you create projects.", "zh-CN"), "收到邀请后，项目会显示在这里。项目邀请不会授予创建项目的权限。");
   assert.equal(translateUiText("This device", "zh-CN"), "当前设备");
   assert.equal(translateUiText("Connect Codex", "zh-CN"), "连接 Codex");
   assert.equal(translateUiText("Conversations", "zh-CN"), "协作");

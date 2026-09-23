@@ -678,6 +678,83 @@ test("test qualification creates a full account while project invitations create
   }
 });
 
+test("a test qualification claim and revocation cannot both succeed across database connections", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-race-"));
+  const databasePath = join(directory, "test.sqlite");
+  const pepper = "unit-test-test-access-race-pepper";
+  const database = new CollaborationDatabase(databasePath, { authTokenPepper: pepper });
+  database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner laptop" });
+  const grant = database.issueTestAccess("1h");
+  database.close();
+
+  const workerSource = `
+    const { parentPort, workerData } = require("node:worker_threads");
+    (async () => {
+      const { CollaborationDatabase } = await import(workerData.moduleUrl);
+      const database = new CollaborationDatabase(workerData.databasePath, { authTokenPepper: workerData.pepper });
+      parentPort.postMessage({ ready: true });
+      parentPort.once("message", () => {
+        try {
+          if (workerData.action === "claim") {
+            database.claimTestAccess({
+              access_token: workerData.accessToken,
+              display_name: "Racing tester",
+              device_name: "Racing device",
+            });
+          } else {
+            database.revokeTestAccess(workerData.grantId);
+          }
+          parentPort.postMessage({ action: workerData.action, success: true });
+        } catch (error) {
+          parentPort.postMessage({ action: workerData.action, success: false, status: error && error.status });
+        } finally {
+          database.close();
+        }
+      });
+    })().catch((error) => parentPort.postMessage({ success: false, error: String(error) }));
+  `;
+  const makeWorker = (action: "claim" | "revoke") => new Worker(workerSource, {
+    eval: true,
+    workerData: {
+      action,
+      moduleUrl: new URL("../src/database.js", import.meta.url).href,
+      databasePath,
+      pepper,
+      accessToken: grant.access_token,
+      grantId: grant.grant_id,
+    },
+  });
+  const workers = [makeWorker("claim"), makeWorker("revoke")];
+  try {
+    await Promise.all(workers.map(workerMessage));
+    const results = workers.map((worker) => {
+      const message = workerMessage(worker);
+      worker.postMessage("go");
+      return message;
+    });
+    const [claim, revoke] = await Promise.all(results);
+    assert.equal(claim?.action, "claim");
+    assert.equal(revoke?.action, "revoke");
+    assert.notEqual(claim?.success, revoke?.success);
+    assert.equal(claim?.success === true ? revoke?.status : claim?.status, claim?.success === true ? 409 : 401);
+
+    const verification = new CollaborationDatabase(databasePath, { authTokenPepper: pepper });
+    try {
+      const row = verification.sqlite.prepare("SELECT claimed_at, revoked_at FROM test_access_grants WHERE id = ?")
+        .get(grant.grant_id) as { claimed_at: string | null; revoked_at: string | null };
+      const users = verification.sqlite.prepare("SELECT count(*) AS count FROM users").get() as { count: number };
+      assert.equal(row.claimed_at !== null, claim?.success === true);
+      assert.equal(row.revoked_at !== null, revoke?.success === true);
+      assert.equal(users.count, claim?.success === true ? 2 : 1);
+    } finally {
+      verification.close();
+    }
+  } finally {
+    for (const worker of workers) await worker.terminate();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("account capability migration preserves the first operator and existing project owners only", () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-account-capabilities-"));
   const path = join(directory, "legacy.sqlite");

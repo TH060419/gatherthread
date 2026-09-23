@@ -4,6 +4,7 @@ import {
   canRetryFailedAgentRequest,
   createIdempotencyKey,
   createSelectionGuard,
+  emptyProjectState,
   eventContent,
   eventLabel,
   failedRequestFor,
@@ -25,13 +26,13 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260829-3";
+} from "./domain.js?v=20260923-1";
 import { SessionSync } from "./realtime.js";
 import { mountCodeSync } from "./code-sync-view.js";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260923-1";
+import { createLocalizer } from "./i18n.js?v=20260923-2";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -1105,11 +1106,10 @@ async function enterWorkspace(preferredProjectId) {
     renderSessionList();
     sessionView.hidden = true;
     emptyState.hidden = false;
-    const canCreateProjects = state.currentUser.can_create_projects === true;
-    element("empty-state-title").textContent = localizer.t(canCreateProjects
-      ? "Create your first project."
-      : "No invited projects are available. Ask a project owner for an invitation.");
-    element("empty-create-button").hidden = !canCreateProjects;
+    const empty = emptyProjectState(state.currentUser.can_create_projects === true);
+    element("empty-state-title").textContent = empty.title;
+    element("empty-state-description").textContent = empty.description;
+    element("empty-create-button").hidden = !empty.canCreateProjects;
     element("empty-create-button").textContent = "Create project";
     element("new-session-button").hidden = true;
     element("owner-invitations").hidden = true;
@@ -1143,6 +1143,7 @@ async function selectProject(projectId) {
   void renderInvitationControls();
   sessionView.hidden = true;
   emptyState.hidden = false;
+  element("empty-state-description").textContent = "Create a solo room for observers or a multi room for active collaboration.";
   element("empty-state-title").textContent = localizer.t("Loading project…");
   try {
     const project = await api.getProject(projectId);
