@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { devNull } from "node:os";
 import { join } from "node:path";
 import {
@@ -15,6 +15,7 @@ import { CodeStorageBudget } from "./code-storage-budget.js";
 const MAX_PROJECT_BYTES = 256 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MAX_MUTATIONS = 4096;
+const SERVER_MERGE_ATTRIBUTES = "* conflict-marker-size=7\n";
 interface RepoRow { main_commit: string; enabled: number; charged_bytes: number }
 interface Receipt { user_id: string; operation: string; payload_hash: string; result_json: string }
 
@@ -286,6 +287,7 @@ export class CodeRepository {
       return base;
     }
     this.reserveMergeWrite(projectId, base, other);
+    this.ensureMergeAttributes(projectId);
     const output = this.git(projectId, ["merge-tree", "--write-tree", base, other], undefined, undefined, true).toString("utf8");
     const tree = output.split("\n")[0]!;
     if (!/^[a-f0-9]{40}$/u.test(tree)) throw new ApiError(503, "code_git_unavailable", "Git returned an invalid merge result");
@@ -293,6 +295,21 @@ export class CodeRepository {
     // Merges must respect the same bounded portable snapshot contract as uploads.
     this.validateSecrets(this.files(projectId, commit));
     return commit;
+  }
+  private ensureMergeAttributes(projectId: string): void {
+    // Git 2.43 honors in-tree .gitattributes during bare merge-tree. A source
+    // file can otherwise request huge conflict markers and bypass our bounded
+    // merge-object reservation. info/attributes has precedence over the tree.
+    const path = join(this.repoPath(projectId), "info", "attributes");
+    try {
+      writeFileSync(path, SERVER_MERGE_ATTRIBUTES, { encoding: "utf8", flag: "wx", mode: 0o600 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST"
+        || !lstatSync(path).isFile()
+        || readFileSync(path, "utf8") !== SERVER_MERGE_ATTRIBUTES) {
+        throw new ApiError(503, "code_git_unavailable", "The server Git merge attributes are unavailable");
+      }
+    }
   }
   private validateSecrets(files: CodeFile[]): void {
     for (const file of files) {

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -170,6 +171,9 @@ test("untrusted Git attributes cannot amplify merge conflict objects beyond the 
     const merged = repo.merge(f.owner, f.project.id, {
       branch_id: left.status.own_branch_id!, expected_main_commit: initial.commit, expected_head_commit: left.commit, idempotency_key: "owner-merge",
     });
+    const gitDirectory = join(f.directory, "code", `${createHash("sha256").update(f.project.id).digest("hex")}.git`);
+    assert.equal(readFileSync(join(gitDirectory, "info", "attributes"), "utf8"), "* conflict-marker-size=7\n",
+      "the server must override untrusted in-tree conflict marker sizes on every Git version");
     const before = repo.status(f.member, f.project.id);
     assert.throws(() => repo.update(f.member, f.project.id, {
       base_commit: right.commit, expected_main_commit: merged.commit, idempotency_key: "member-conflict",
