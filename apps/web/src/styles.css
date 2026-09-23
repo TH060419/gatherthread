@@ -4013,6 +4013,71 @@ html[lang="zh-CN"] .project-select {
   margin: 13px 0 11px;
 }
 
+.auth-entry-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  margin: 14px 0 15px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--paper) 58%, transparent);
+}
+
+.auth-entry-tab {
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.auth-entry-tab[aria-selected="true"] {
+  border-color: var(--line);
+  background: var(--paper-raised);
+  color: var(--ink);
+  box-shadow: 0 2px 8px rgba(24, 34, 45, 0.08);
+}
+
+.auth-entry-tab:focus-visible,
+.auth-project-entry > summary:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+
+.auth-entry-panel[hidden] { display: none; }
+
+.auth-project-entry {
+  margin-top: 16px;
+  padding-top: 13px;
+  border-top: 1px solid var(--line);
+}
+
+.auth-project-entry > summary {
+  width: fit-content;
+  color: var(--ink-soft);
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+
+.auth-project-entry > summary:hover {
+  color: var(--ink);
+}
+
+.auth-project-entry[open] > summary {
+  margin-bottom: 12px;
+}
+
+@media (max-width: 420px) {
+  .auth-entry-tab { font-size: 0.72rem; }
+}
+
 .auth-canonical-extension {
   position: absolute;
   z-index: -1;
@@ -4465,6 +4530,7 @@ html[lang="zh-CN"] .project-select {
 
 @media (min-width: 901px) and (max-height: 820px) {
   .login-panel {
+    overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
   }

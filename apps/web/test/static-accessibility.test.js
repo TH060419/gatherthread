@@ -161,7 +161,7 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"/);
   assert.match(main, /title\.title = session\.name/);
   assert.match(main, /element\("session-title"\)\.title = session\.name/);
-  assert.match(main, /localizer\.t\("Continue"\)/);
+  assert.match(main, /localizer\.t\("Sign in"\)/);
   assert.match(styles, /\.session-button strong \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /\.title-line h1 \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /select:not\(:disabled\):hover/);
@@ -179,16 +179,33 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(main, /details\.addEventListener\("toggle"/);
 });
 
-test("shared identity fields precede both token activation and project invitation forms", async () => {
+test("shared identity fields precede separate login, qualification, and project invitation forms", async () => {
   const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
   const name = markup.indexOf('id="claim-display-name"');
   const device = markup.indexOf('id="claim-device-name"');
+  const tabs = markup.indexOf('class="auth-entry-tabs" role="tablist"');
+  const loginTab = markup.indexOf('id="auth-login-tab"');
+  const activationTab = markup.indexOf('id="auth-activate-tab"');
   const tokenForm = markup.indexOf('id="login-form"');
+  const qualificationForm = markup.indexOf('id="claim-test-access-form"');
   const projectForm = markup.indexOf('id="claim-invitation-form"');
-  assert.ok(name > 0 && device > name && tokenForm > device && projectForm > tokenForm);
+  assert.ok(name > 0 && device > name && tabs > device && loginTab > tabs
+    && activationTab > loginTab && tokenForm > activationTab
+    && qualificationForm > tokenForm && projectForm > qualificationForm);
+  assert.match(markup, /id="auth-login-tab"[^>]*aria-selected="true"[^>]*aria-controls="auth-login-panel"/u);
+  assert.match(markup, /id="auth-activate-tab"[^>]*aria-selected="false"[^>]*aria-controls="auth-activate-panel"/u);
+  assert.match(markup, /id="auth-activate-panel"[^>]*role="tabpanel"[^>]*hidden/u);
+  assert.match(markup, /<details id="auth-project-entry"/u);
   assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
-  assert.match(main, /if \(hasAccessToken\) loginForm\.requestSubmit\(\)/u);
-  assert.match(main, /else if \(hasProjectInvitation\) claimInvitationForm\.requestSubmit\(\)/u);
+  assert.match(main, /if \(authProjectEntry\.open\)[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
+  assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  const loginHandler = main.slice(main.indexOf('loginForm.addEventListener("submit"'), main.indexOf('claimTestAccessForm.addEventListener("submit"'));
+  const activationHandler = main.slice(main.indexOf('claimTestAccessForm.addEventListener("submit"'), main.indexOf('claimInvitationForm.addEventListener("submit"'));
+  assert.match(loginHandler, /api\.authenticate\(token/u);
+  assert.doesNotMatch(loginHandler, /api\.claimTestAccess\(/u);
+  assert.match(activationHandler, /api\.claimTestAccess\(\{/u);
+  assert.doesNotMatch(activationHandler, /api\.authenticate\(/u);
 });
 
 test("official light and dark lockups include the approved mark and outlined wordmark", async () => {
@@ -395,6 +412,7 @@ test("remembered login and current-device naming remain explicit and accessible"
   ]);
   for (const id of [
     "login-remember-device",
+    "test-access-remember-device",
     "claim-remember-device",
     "settings-device",
     "settings-device-name",
@@ -403,6 +421,7 @@ test("remembered login and current-device naming remain explicit and accessible"
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /for="login-remember-device"/);
+  assert.match(html, /for="test-access-remember-device"/);
   assert.match(html, /for="claim-remember-device"/);
   assert.match(html, /for="settings-device-name"/);
   assert.match(main, /automaticDeviceName\(\)/);
