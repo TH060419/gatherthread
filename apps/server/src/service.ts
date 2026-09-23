@@ -124,7 +124,7 @@ export class CollaborationService {
   }
 
   removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
-    this.requireProjectOwner(actor, projectId);
+    this.requireProjectMembership(actor, projectId);
     this.database.removeProjectMembership(actor, projectId, userId);
   }
 

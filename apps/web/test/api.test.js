@@ -368,13 +368,27 @@ test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
     await api.deleteSession("session / one");
     await api.deleteProject("project / one");
+    await api.leaveProject("project / one", "user / me");
     assert.deepEqual(requests.map(([url, options]) => [url, options.method, options.body]), [
       ["https://gatherthread.example/v1/sessions/session%20%2F%20one", "DELETE", undefined],
       ["https://gatherthread.example/v1/projects/project%20%2F%20one", "DELETE", undefined],
+      ["https://gatherthread.example/v1/projects/project%20%2F%20one/members/user%20%2F%20me", "DELETE", undefined],
     ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("mock participants and viewers can leave their own project without deleting local work", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const projectId = "project-orbit";
+  await assert.rejects(() => api.leaveProject(projectId, api.currentUser.id), (error) => error.status === 403);
+  api.currentUser = { id: "user-maya", username: "Maya Ortiz", can_create_projects: false };
+  api.projects[0].role = "participant";
+  await assert.rejects(() => api.leaveProject(projectId, "user-jon"), (error) => error.status === 403);
+  await api.leaveProject(projectId, "user-maya");
+  assert.equal((await api.listProjects()).length, 0);
+  assert.equal((await api.listSessions()).length, 0);
 });
 
 test("mock cloud deletion allows session or project creators and clears only cloud state", async () => {

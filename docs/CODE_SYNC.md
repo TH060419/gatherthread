@@ -17,7 +17,7 @@ The code feature never changes conversation upload preferences, Codex visible-hi
 ## Start with a disposable project
 
 1. Install Git on the server and local computers (`git --version`). Server merges require Git 2.38 or newer. Node.js 24 remains required.
-2. Start GatherThread normally. As project owner, open the top-bar **Project code** icon and enable code collaboration. This creates an empty repository and uploads nothing from your computer.
+2. Start GatherThread normally. As project owner, open the top-bar **Project code** icon and enable code collaboration. This creates an empty repository and uploads nothing from your computer. The owner can later pause cloud code sync from the same dialog, even before configuring a local Agent; re-enabling restores the existing cloud branches rather than starting over.
 3. Authorize a specific local workspace, using one of the two paths below. Test with a small project containing no secrets.
 4. Use **Check status** before **Upload code**. A checkpoint includes eligible files across the bound project, not only the open conversation or the last Agent's edits. Review the source directory and exclusions yourself before the first upload.
 
@@ -54,6 +54,9 @@ An explicitly customized `DSH_HOME` isolates its private code metadata as well. 
 | Update from main / 更新主分支 | Merge main into your cloud branch | Three-way merge; conflicts require deliberate local resolution |
 | Download updates / 下载更新 | Apply your cloud branch (or main before you have a branch) locally | Local files must match the acknowledged baseline; ignored-file collisions also refuse |
 | Recover / 恢复到新目录 | Write the latest uploaded branch into a new sibling directory | Does not delete/rebind the original workspace or its native conversations |
+| Pause / 暂停云端同步 | Stop new cloud code transfers while retaining cloud Git history | Owner-only; conversation collaboration remains available, and local files are never deleted |
+
+Pausing is a server-side transfer gate, not a purge or an instruction to a local Agent to forget its existing preferences. Status and the control for disabling local automatic code upload remain available while paused; upload, download, recovery, review, merge and update cannot proceed until the owner resumes. A transfer already running on a device may have local side effects before its completion is refused, so stop active Agent/code work first and check local state afterward. If automatic source upload was enabled locally, turn it off before resuming unless you intend to use it again.
 
 After another member's work merges, first update your branch from main, then download. A stale device must not force an upload. If both local and cloud have changed, preserve the local files, recover the cloud version into a second directory, then compare/resolve locally there. The recovered copy has a separate baseline for the restored commit and automatic upload off. Explicitly connect/open that directory before uploading the combined result; the original Agent stays bound to its old directory. Automatic conflict resolution and force-push are intentionally absent.
 
@@ -94,3 +97,4 @@ It prints the new local recovery directory and exits without starting an Agent. 
 8. **Automation:** enable code auto-upload, finish a small Agent change, wait for idle/stable checks and verify the uploaded source. Disable it and confirm further edits stay local until manual upload. A large removal should stop automation rather than publish an empty tree.
 9. **Harness switch:** point both adapters to the same bound project, stop work in one before using the other. Verify source baseline and cloud branch stay the same while model selection, chat upload and context injection remain independent.
 10. **DSH/Web:** test controls in both DSH settings and GatherThread, including reconnect, local authorization revoke, project removal and wrong runtime/device targets. Check Safari, Chrome and Edge layout/focus.
+11. **Pause and resume:** before completing local configuration, pause and confirm no upload/download/review can start. Resume and verify the same main commit and member branch heads return. If local automatic source upload was previously enabled, turn it off explicitly before resuming when no further sharing is wanted.

@@ -54,9 +54,12 @@
 
       <section class="login-panel">
         <div class="auth-canonical-extension" aria-hidden="true"><span></span><span></span><span></span><span></span><i></i><i></i></div>
-        <div class="brand-lockup brand-lockup-login" role="img" aria-label="GatherThread">
-          <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
-          <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
+        <div class="auth-panel-actions">
+          <a class="brand-lockup brand-lockup-login" href="../" aria-label="GatherThread home" title="GatherThread home">
+            <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
+            <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
+          </a>
+          <button id="auth-language-button" class="auth-language-button" type="button" aria-label="Switch language / 切换语言" title="Switch language / 切换语言">中</button>
         </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
@@ -151,7 +154,7 @@
           <button id="toggle-session-rail-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Collapse session sidebar" title="Collapse session sidebar" aria-controls="session-rail" aria-expanded="true" data-tooltip>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M8.5 4.5v15"/><path d="m14 9-3 3 3 3"/></svg>
           </button>
-          <a class="wordmark" href="#" aria-label="GatherThread home">
+          <a class="wordmark" href="../" aria-label="GatherThread home">
             <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
             <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
           </a>
@@ -162,13 +165,14 @@
           <strong id="topbar-session-name" data-i18n-skip></strong>
         </div>
         <div class="account-cluster">
+          <button id="topbar-create-project-button" class="button button-primary compact-button" type="button" hidden>Create project</button>
           <div class="connection-chip" id="global-connection" role="status">
             <span class="status-dot"></span>
             <span id="global-connection-label">Connecting</span>
           </div>
           <span class="avatar" id="current-user-avatar" aria-hidden="true"></span>
           <span id="current-username" class="current-username"></span>
-          <button id="project-code-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Code collaboration" title="Code collaboration" data-tooltip aria-haspopup="dialog" aria-controls="project-code-dialog" disabled>
+          <button id="project-code-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Code collaboration" title="Code collaboration" data-tooltip aria-haspopup="dialog" aria-controls="project-code-dialog">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 7.5v9M18 7.5v1a6 6 0 0 1-6 6H6"/></svg>
           </button>
           <button id="settings-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Open Settings" title="Settings" data-tooltip aria-haspopup="dialog" aria-controls="settings-dialog">
@@ -226,6 +230,7 @@
             <button id="delete-project-button" class="text-button danger-text-button project-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
               Delete cloud project
             </button>
+            <button id="leave-project-button" class="text-button project-leave-button" type="button" aria-haspopup="dialog" aria-controls="leave-project-dialog" hidden>Leave project</button>
           </div>
           <div class="rail-heading session-heading">
             <div>
@@ -248,7 +253,7 @@
 
         <main id="main-content" class="conversation" tabindex="-1">
           <section id="empty-state" class="empty-state" hidden>
-            <p class="eyebrow">No sessions yet</p>
+            <p id="empty-state-eyebrow" class="eyebrow">No sessions yet</p>
             <h1 id="empty-state-title">Start a shared thread.</h1>
             <p id="empty-state-description">Create a solo room for observers or a multi room for active collaboration.</p>
             <button id="empty-create-button" class="button button-primary" type="button">
@@ -549,6 +554,10 @@
           <button id="close-project-code-button" class="icon-button" type="button" aria-label="Close code collaboration">×</button>
         </div>
         <p id="project-code-description" class="code-help">Share code through personal Git branches. Conversation synchronization stays separate.</p>
+        <section id="code-no-project" class="code-section" hidden>
+          <p>Create or join a project before using Git code collaboration. You can still adjust appearance and language in Settings.</p>
+          <button id="code-create-project-button" class="button button-primary compact-button" type="button">Create your first project</button>
+        </section>
         <div class="code-toolbar"><span id="code-repository-status" role="status"></span><button id="code-refresh-button" class="text-button" type="button">Refresh</button></div>
         <p id="code-error" class="form-error" role="alert"></p>
         <section id="code-confirmation" class="code-confirmation" aria-labelledby="code-confirmation-message" hidden>
@@ -561,6 +570,8 @@
           <p id="code-owner-note" class="code-help" hidden>Ask the project owner to enable code storage.</p>
         </section>
         <div id="code-enabled-content" hidden>
+          <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off Git synchronization</button><span class="code-help">Cloud branches remain stored; conversations keep syncing.</span></div>
+          <p id="code-paused-note" class="code-help" hidden>Cloud Git is off. You can still turn off an existing local automatic-upload preference below; other code transfers are paused.</p>
           <section class="code-section" aria-labelledby="code-local-title">
             <h3 id="code-local-title">This device and your branch</h3>
             <label for="code-runtime-select">Local Agent device</label>
@@ -590,6 +601,14 @@
           </section>
         </div>
       </div>
+    </dialog>
+
+    <dialog id="code-notice-dialog" class="create-dialog code-notice-dialog" aria-labelledby="code-notice-title" aria-describedby="code-notice-description">
+      <div class="dialog-heading"><h2 id="code-notice-title">About cloud Git synchronization</h2><button id="code-notice-close" class="icon-button" type="button" aria-label="Close">×</button></div>
+      <p id="code-notice-description">Git collaboration can upload local project files to this server. Uploaded files become readable by this project's members. Review your files for secrets and private data before uploading.</p>
+      <p>If you do not want to upload code, leave local automatic upload off and do not select a manual upload. The project owner can turn off Git synchronization here; conversations continue to work.</p>
+      <p class="code-help">This notice appears once in this browser. Turning off Git synchronization retains existing cloud branches and does not remove local files.</p>
+      <div class="dialog-actions"><button id="code-notice-continue" class="button button-primary" type="button">Got it</button></div>
     </dialog>
 
     <dialog id="create-session-dialog" class="create-dialog">
@@ -703,6 +722,15 @@
           <button id="cancel-delete-cloud-button" class="button button-secondary" type="button">Cancel</button>
           <button id="confirm-delete-cloud-button" class="button button-danger" type="submit">Delete from cloud</button>
         </div>
+      </form>
+    </dialog>
+
+    <dialog id="leave-project-dialog" class="create-dialog" aria-labelledby="leave-project-title" aria-describedby="leave-project-description">
+      <form id="leave-project-form" method="dialog">
+        <div class="dialog-heading"><h2 id="leave-project-title">Leave this project?</h2><button id="close-leave-project-button" class="icon-button" type="button" aria-label="Close">×</button></div>
+        <p id="leave-project-description">You will lose access to its cloud sessions and code. Your local files and Agent conversations will not be deleted. Ask the owner for a new invitation if you want to rejoin.</p>
+        <p id="leave-project-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions"><button id="cancel-leave-project-button" class="button button-secondary" type="button">Cancel</button><button id="confirm-leave-project-button" class="button button-danger" type="submit">Leave project</button></div>
       </form>
     </dialog>
 

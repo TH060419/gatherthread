@@ -21,12 +21,16 @@ export function codePermissions(context, state) {
   const enabled = Boolean(state.repository?.repository?.enabled);
   return {
     enable: idle && context?.project?.role === "owner" && !enabled,
+    disable: idle && context?.project?.role === "owner" && enabled,
     review: idle && writable && enabled && Boolean(own?.head_commit) && own.review_status === "draft"
       && own.head_commit !== state.repository.repository.main_commit,
     merge: idle && context?.project?.role === "owner" && enabled,
     update: idle && writable && enabled && Boolean(own?.head_commit),
-    local: idle && writable && enabled && Boolean(context?.sessionWritable && runtime),
+    // A paused repository still permits inspecting the local preference so it
+    // can be switched off before the owner resumes cloud synchronization.
+    local: idle && writable && Boolean(context?.sessionWritable && runtime),
     transfer: idle && writable && enabled && Boolean(context?.sessionWritable && runtime && state.local?.enabled),
+    stopAutomaticUpload: idle && writable && Boolean(context?.sessionWritable && runtime && state.local?.automatic_upload),
   };
 }
 
@@ -165,7 +169,8 @@ export function createCodeSyncController({ api, onChange = () => {}, schedule = 
 
   async function queue(kind) {
     const permissions = codePermissions(context, state);
-    if (!active || !CODE_JOB_KINDS.has(kind) || !permissions.local || (kind !== "code_sync_status" && !permissions.transfer)) return false;
+    if (!active || !CODE_JOB_KINDS.has(kind) || !permissions.local
+      || (kind !== "code_sync_status" && !(kind === "code_auto_upload_disable" ? permissions.stopAutomaticUpload : permissions.transfer))) return false;
     const version = generation;
     const sessionId = context.sessionId;
     const runtimeId = state.runtimeId;

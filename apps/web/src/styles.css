@@ -5039,14 +5039,59 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
 
 .topbar-brand-cluster {
   gap: 10px;
+  grid-column: 1;
+}
+
+.account-cluster {
+  grid-column: 3;
+  justify-self: end;
+  min-width: 0;
 }
 
 .topbar-session-context {
+  grid-column: 2;
   justify-self: center;
   max-width: min(46vw, 680px);
   gap: 8px;
   overflow: hidden;
   color: var(--ink);
+}
+
+.auth-panel-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: clamp(18px, 3vh, 34px);
+}
+
+.auth-panel-actions .brand-lockup-login { margin-bottom: 0; }
+
+.auth-language-button {
+  flex: 0 0 auto;
+  min-width: 34px;
+  min-height: 30px;
+  padding: 3px 7px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--paper-raised) 82%, transparent);
+  color: var(--ink-soft);
+  cursor: pointer;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.auth-language-button:hover,
+.auth-language-button:focus-visible {
+  color: var(--teal);
+  border-color: var(--teal);
+}
+
+.brand-lockup-login { display: inline-flex; }
+.code-pause-actions { align-items: center; }
+
+@media (max-width: 760px) {
+  #topbar-create-project-button { display: none; }
 }
 
 .topbar-session-context[hidden] {

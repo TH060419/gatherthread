@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { devNull } from "node:os";
 import { join } from "node:path";
 import {
-  CodeBranchSchema, CodeCheckpointInputSchema, CodeEnableInputSchema, CodeFilesSchema, CodeMergeInputSchema,
+  CodeBranchSchema, CodeCheckpointInputSchema, CodeDisableInputSchema, CodeEnableInputSchema, CodeFilesSchema, CodeMergeInputSchema,
   CodeReviewInputSchema, CodeUpdateInputSchema, containsCodeSyncSecret, type CodeBranch, type CodeFile,
   type CodeMutationResult, type CodeSnapshotResult, type CodeStatus,
 } from "@gatherthread/protocol";
@@ -15,7 +15,7 @@ import { CodeStorageBudget } from "./code-storage-budget.js";
 const MAX_PROJECT_BYTES = 256 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const MAX_MUTATIONS = 4096;
-interface RepoRow { main_commit: string; charged_bytes: number }
+interface RepoRow { main_commit: string; enabled: number; charged_bytes: number }
 interface Receipt { user_id: string; operation: string; payload_hash: string; result_json: string }
 
 /** Standard bare Git object storage; SQLite is the atomic ref/ACL/retry authority. */
@@ -36,6 +36,7 @@ export class CodeRepository {
       const existing = this.repo(projectId);
       if (existing) {
         this.diskBudget.reserve(this.repoPath(projectId), 64 * 1024);
+        this.database.sqlite.prepare("UPDATE code_repositories SET enabled=1 WHERE project_id=?").run(projectId);
         return existing.main_commit;
       }
       this.prepareRoot();
@@ -48,6 +49,15 @@ export class CodeRepository {
       this.database.sqlite.prepare("INSERT INTO code_repositories(project_id,main_commit,created_at) VALUES(?,?,?)")
         .run(projectId, commit, new Date().toISOString());
       return commit;
+    });
+  }
+
+  disable(actor: Actor, projectId: string, value: unknown): CodeMutationResult {
+    const input = CodeDisableInputSchema.parse(value);
+    return this.mutate(actor, projectId, "disable", input, "owner", () => {
+      const repo = this.requireRepo(projectId);
+      this.database.sqlite.prepare("UPDATE code_repositories SET enabled=0 WHERE project_id=?").run(projectId);
+      return repo.main_commit;
     });
   }
 
@@ -90,6 +100,7 @@ export class CodeRepository {
   review(actor: Actor, projectId: string, value: unknown): CodeMutationResult {
     const input = CodeReviewInputSchema.parse(value);
     return this.mutate(actor, projectId, "review", input, "writer", () => {
+      this.requireRepo(projectId);
       const branch = this.requireOwnBranch(projectId, actor.user_id);
       if (branch.head_commit !== input.head_commit) throw this.stale();
       this.diskBudget.reserve(this.repoPath(projectId), 64 * 1024);
@@ -171,11 +182,11 @@ export class CodeRepository {
     if (permission === "writer" && role === "viewer") throw forbidden("Viewers cannot upload code");
   }
   private repo(projectId: string): RepoRow | undefined {
-    return this.database.sqlite.prepare("SELECT main_commit,charged_bytes FROM code_repositories WHERE project_id=?").get(projectId) as unknown as RepoRow | undefined;
+    return this.database.sqlite.prepare("SELECT main_commit,enabled,charged_bytes FROM code_repositories WHERE project_id=?").get(projectId) as unknown as RepoRow | undefined;
   }
   private requireRepo(projectId: string): RepoRow {
     const row = this.repo(projectId);
-    if (!row) throw new ApiError(409, "code_not_enabled", "Enable project code collaboration first");
+    if (!row || row.enabled !== 1) throw new ApiError(409, "code_not_enabled", "Enable project code collaboration first");
     return row;
   }
   private branches(projectId: string): CodeBranch[] {
@@ -192,7 +203,7 @@ export class CodeRepository {
   private readStatus(actor: Actor, projectId: string): CodeStatus {
     const repo = this.repo(projectId);
     const branches = this.branches(projectId);
-    return { repository: { enabled: !!repo, main_commit: repo?.main_commit ?? null }, branches, own_branch_id: branches.find((branch) => branch.user_id === actor.user_id)?.id ?? null };
+    return { repository: { enabled: repo?.enabled === 1, main_commit: repo?.main_commit ?? null }, branches, own_branch_id: branches.find((branch) => branch.user_id === actor.user_id)?.id ?? null };
   }
   private repoPath(projectId: string): string { return join(this.root, `${createHash("sha256").update(projectId).digest("hex")}.git`); }
   private prepareRoot(): void {
@@ -292,7 +303,10 @@ export class CodeRepository {
     }
   }
   private charge(projectId: string, bytes: number): void {
-    const repo = this.requireRepo(projectId);
+    // Disable receipts still consume storage after the repository is paused.
+    // Every other mutation validates the active repository in its operation.
+    const repo = this.repo(projectId);
+    if (!repo) throw new ApiError(409, "code_not_enabled", "Enable project code collaboration first");
     const total = this.database.sqlite.prepare("SELECT COALESCE(SUM(charged_bytes),0) AS bytes FROM code_repositories").get() as { bytes: number };
     if (repo.charged_bytes + bytes > MAX_PROJECT_BYTES || total.bytes + bytes > MAX_TOTAL_BYTES) throw this.quota();
     this.database.sqlite.prepare("UPDATE code_repositories SET charged_bytes=charged_bytes+? WHERE project_id=?").run(bytes, projectId);

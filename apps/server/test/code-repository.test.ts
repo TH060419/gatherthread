@@ -79,6 +79,53 @@ test("project code branches have real Git snapshots, durable retry receipts, ind
   } finally { f.close(); }
 });
 
+test("owner can pause and resume code transfers without deleting cloud branches", () => {
+  const f = fixture();
+  try {
+    const enabled = f.repository.enable(f.owner, f.project.id, { idempotency_key: "enable-pause-test" });
+    const uploaded = f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: enabled.commit, files: [file("README.md", "retained")],
+      message: "Member checkpoint", idempotency_key: "checkpoint-pause-test",
+    });
+    assert.throws(() => f.repository.disable(f.member, f.project.id, { idempotency_key: "member-disable" }), hasCode("forbidden"));
+    const paused = f.repository.disable(f.owner, f.project.id, { idempotency_key: "owner-disable" });
+    assert.equal(paused.status.repository.enabled, false);
+    assert.equal(paused.status.repository.main_commit, enabled.commit);
+    assert.equal(paused.status.branches[0]?.head_commit, uploaded.commit);
+    assert.deepEqual(f.repository.disable(f.owner, f.project.id, { idempotency_key: "owner-disable" }), paused);
+    assert.throws(() => f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: uploaded.commit, files: [file("README.md", "blocked")],
+      message: "Blocked", idempotency_key: "checkpoint-paused",
+    }), hasCode("code_not_enabled"));
+    assert.throws(() => f.repository.snapshot(f.member, f.project.id, uploaded.status.own_branch_id!), hasCode("code_not_enabled"));
+    const resumed = f.repository.enable(f.owner, f.project.id, { idempotency_key: "owner-resume" });
+    assert.equal(resumed.status.repository.enabled, true);
+    assert.equal(resumed.status.branches[0]?.head_commit, uploaded.commit);
+    assert.equal(f.repository.snapshot(f.member, f.project.id, uploaded.status.own_branch_id!).snapshot.files[0]?.path, "README.md");
+  } finally { f.close(); }
+});
+
+test("pre-pause code repository rows migrate as enabled without losing their heads", () => {
+  const f = fixture();
+  try {
+    const enabled = f.repository.enable(f.owner, f.project.id, { idempotency_key: "legacy-enable" });
+    const uploaded = f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: enabled.commit, files: [file("source.txt", "preserved")],
+      message: "Keep source", idempotency_key: "legacy-checkpoint",
+    });
+    // Simulate the persisted schema from before the pause toggle existed.
+    f.database.sqlite.exec("ALTER TABLE code_repositories DROP COLUMN enabled");
+    const reopened = new CollaborationDatabase(f.path, { authTokenPepper: PEPPER });
+    try {
+      const migrated = new CodeRepository(reopened, join(f.directory, "code"));
+      assert.equal(migrated.status(f.owner, f.project.id).repository.enabled, true);
+      assert.equal(migrated.status(f.owner, f.project.id).branches[0]?.head_commit, uploaded.commit);
+      assert.equal(migrated.snapshot(f.member, f.project.id, uploaded.status.own_branch_id!).snapshot.files[0]?.path, "source.txt");
+      assert.deepEqual(reopened.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+    } finally { reopened.close(); }
+  } finally { f.close(); }
+});
+
 test("reviews require exact current heads and real three-way merge preserves unrelated work and refuses conflicts", () => {
   const f = fixture();
   try {
@@ -208,6 +255,13 @@ test("code jobs require exact own execution target for Codex or DSH; role and pr
     f.repository.enable(f.owner, f.project.id, { idempotency_key: "enable-project" });
     const upload = f.service.createSnapshotRequest(f.member, session.id, "code_upload", codex.id);
     f.service.claimSnapshotRequest(f.member, upload.id, codex.id);
+    f.repository.disable(f.owner, f.project.id, { idempotency_key: "pause-code-jobs" });
+    assert.throws(() => f.service.createSnapshotRequest(f.member, session.id, "code_upload", codex.id), hasCode("conflict"));
+    assert.throws(() => f.service.completeSnapshotRequest(f.member, upload.id, codex.id, { uploaded: true }), hasCode("conflict"));
+    const turnOffAutoUpload = f.service.createSnapshotRequest(f.member, session.id, "code_auto_upload_disable", dsh.id);
+    f.service.claimSnapshotRequest(f.member, turnOffAutoUpload.id, dsh.id);
+    f.service.completeSnapshotRequest(f.member, turnOffAutoUpload.id, dsh.id, { auto_upload: false });
+    f.repository.enable(f.owner, f.project.id, { idempotency_key: "resume-code-jobs" });
     const secondDevice = f.database.createDevice(f.member.user_id, "Other");
     const otherActor = f.database.authenticate(secondDevice.token);
     assert.throws(() => f.service.completeSnapshotRequest(otherActor, upload.id, codex.id, { uploaded: true }), hasCode("forbidden"));
@@ -235,6 +289,12 @@ test("HTTP code boundary returns schema-valid snapshots and has a route-scoped l
     const result = CodeMutationResultSchema.parse(upload.body.data);
     const downloaded = await request(`${path}/snapshot?branch_id=${result.status.own_branch_id}`);
     assert.equal(CodeSnapshotResultSchema.parse(downloaded.body.data).snapshot.commit, result.commit);
+    const paused = await request(`${path}/disable`, "POST", { idempotency_key: "http-disable" });
+    assert.equal(paused.status, 200);
+    assert.equal(CodeMutationResultSchema.parse(paused.body.data).status.repository.enabled, false);
+    assert.equal((await request(`${path}/snapshot?branch_id=${result.status.own_branch_id}`)).status, 409);
+    assert.equal((await request(`${path}/enable`, "POST", { idempotency_key: "http-reenable" })).status, 200);
+    assert.equal(CodeSnapshotResultSchema.parse((await request(`${path}/snapshot?branch_id=${result.status.own_branch_id}`)).body.data).snapshot.commit, result.commit);
     const bad = await request(`${path}/checkpoints`, "POST", { base_commit: result.commit, files: [file("../escape", "bad")], message: "Bad", idempotency_key: "http-bad-path" });
     assert.equal(bad.status, 400);
     const ordinary = await request(`/v1/projects`, "POST", { title: "a".repeat(300_000), idempotency_key: "ordinary-limit" });

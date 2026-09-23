@@ -880,6 +880,7 @@ export class CollaborationDatabase {
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
     this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
+    this.migrateCodeRepositoryEnableColumn();
     this.migrateDeviceCredentialColumns();
     this.migrateProjectModel();
     this.migrateAccountCapabilities();
@@ -1499,9 +1500,11 @@ export class CollaborationDatabase {
   }
 
   removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
-    this.requireProjectOwnedBy(projectId, actor.user_id);
-    if (userId === actor.user_id) throw conflict("The project owner cannot be removed");
     this.transaction(() => {
+      const actorRole = this.projectMembershipRole(projectId, actor.user_id);
+      if (!actorRole) throw notFound("Project");
+      if (actorRole === "owner" && userId === actor.user_id) throw conflict("The project owner cannot leave the project");
+      if (actorRole !== "owner" && userId !== actor.user_id) throw forbidden("Only the project owner can remove another member");
       const result = this.sqlite.prepare(`
         DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
       `).run(projectId, userId);
@@ -3267,8 +3270,11 @@ export class CollaborationDatabase {
   }
 
   private assertCodeControlEnabled(kind: SnapshotRequestKind, projectId: string): void {
-    if (isCodeSyncRequestKind(kind) && kind !== "code_sync_status"
-      && !this.sqlite.prepare("SELECT 1 FROM code_repositories WHERE project_id=?").get(projectId)) {
+    // Local status and disabling automatic upload remain available while the
+    // cloud repository is paused, so a member can turn off an existing local
+    // upload preference without first re-enabling cloud transfers.
+    if (isCodeSyncRequestKind(kind) && kind !== "code_sync_status" && kind !== "code_auto_upload_disable"
+      && !this.sqlite.prepare("SELECT 1 FROM code_repositories WHERE project_id=? AND enabled=1").get(projectId)) {
       throw conflict("Enable project code collaboration before changing local code sync");
     }
   }
@@ -3555,6 +3561,15 @@ export class CollaborationDatabase {
     }
     if (addedTokenCreatedAt) {
       this.sqlite.exec("UPDATE devices SET token_created_at = created_at WHERE token_created_at IS NULL");
+    }
+  }
+
+  private migrateCodeRepositoryEnableColumn(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(code_repositories)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("enabled")) {
+      this.sqlite.exec("ALTER TABLE code_repositories ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))");
     }
   }
 

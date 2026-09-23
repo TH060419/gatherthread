@@ -17,6 +17,21 @@ const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-d
 const aliyunGuidePath = fileURLToPath(new URL("../../../docs/ALIYUN_ECS.md", import.meta.url));
 const selfHostingGuidePath = fileURLToPath(new URL("../../../docs/SELF_HOSTING.md", import.meta.url));
 
+test("first-project empty state has a localized eyebrow and restores English when language changes", async () => {
+  const [html, main, translations] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(i18nPath, "utf8")]);
+  assert.match(html, /id="empty-state-eyebrow"/);
+  assert.match(main, /empty-state-eyebrow"\)\.textContent = "No project yet"/);
+  assert.match(main, /empty-state-title"\)\.textContent = empty\.title/);
+  assert.match(main, /localizer\.apply\(state\.settings\.general\.locale\)/);
+  assert.match(translations, /"No project yet": "还没有项目"/);
+});
+
+test("a pending browser notification permission does not block saving settings", async () => {
+  const main = await readFile(mainPath, "utf8");
+  assert.match(main, /if \(notificationPermissionNeeded\(nextSettings\.notifications\)\) void ensureNotificationPermission\(\)/);
+  assert.doesNotMatch(main, /await permissionRequest/);
+});
+
 test("manual summaries use accessible icon entries, explicit paid confirmation and bounded settings", async () => {
   const [html, main, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
   for (const id of ["history-summary-select-button", "history-summary-view-button", "history-summary-versions-button"]) {
@@ -179,6 +194,21 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(main, /details\.open = live/);
   assert.match(main, /expandedWorklogs\.has\(worklogId\)/);
   assert.match(main, /details\.addEventListener\("toggle"/);
+});
+
+test("entry navigation, empty-account project actions, and invited-member exit remain accessible", async () => {
+  const [html, main, styles, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8"), readFile(i18nPath, "utf8"),
+  ]);
+  assert.match(html, /id="auth-language-button"[^>]*aria-label="Switch language \/ 切换语言"/);
+  assert.match(html, /class="brand-lockup brand-lockup-login" href="\.\.\/"/);
+  assert.match(html, /class="wordmark" href="\.\.\/"/);
+  assert.match(html, /id="topbar-create-project-button"/);
+  assert.match(html, /id="leave-project-dialog"[^>]*aria-labelledby="leave-project-title"/);
+  assert.match(main, /await api\.leaveProject\(projectId, userId\)/);
+  assert.match(main, /event\.key !== SHARED_LANGUAGE_STORAGE_KEY/);
+  assert.match(styles, /\.account-cluster \{\s*grid-column: 3;/);
+  assert.match(i18n, /"Leave project": "退出项目"/);
 });
 
 test("shared identity fields precede separate login, qualification, and project invitation forms", async () => {
