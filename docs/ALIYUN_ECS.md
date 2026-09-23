@@ -1,6 +1,6 @@
 # Alibaba Cloud ECS deployment: 0.1.0-alpha.7 preview
 
-This profile prepares the private `0.1.0-alpha.7` preview for later server deployment. The official GatherThread service is not open yet. The application always listens on `127.0.0.1:18787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 18787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host and invite every later user with a single-use project invitation.
+This profile runs an invitation-only `0.1.0-alpha.7` preview. The application always listens on `127.0.0.1:18787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 18787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host, issue full test qualification locally, and keep project invitations separate for project-scoped guests.
 
 ## 1. Prerequisites
 
@@ -49,6 +49,14 @@ sudo deploy/aliyun-ecs/create-owner.sh \
 ```
 
 The device token is shown once. Save it immediately in a password manager; never place it in chat, an issue, logs, or a URL. On first browser login, the owner may remember the device and later rename it in settings.
+
+After a reviewed release containing [ADR-0028](adr/0028-separate-test-qualification-from-project-invitations.md) is installed, issue a one-use test qualification directly on the ECS in your own private terminal. Do not run this command through an Agent terminal whose output might enter a transcript:
+
+```sh
+sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d
+```
+
+Share the printed `gtq_` code privately with one tester. On the GatherThread login page, they set their display and device names above the forms, select **First-time activation** (中文：**首次使用 · 激活资格**), and enter the code once in **Test qualification code** (中文：**测试资格码**). They must not enter it in the existing-account device-token field. After activation, they retain the newly issued `gta_` device token and use **Existing account** to sign in later. To revoke an unclaimed code, use `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID`; this does not revoke a claimed user's device. A project owner instead uses the in-app project invitation when they want to add a guest to only that project. Neither path opens public registration or grants ECS SSH access.
 
 ## 5. Preflight and smoke test
 

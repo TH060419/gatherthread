@@ -257,6 +257,19 @@ export const ActorSchema = z.object({
 
 export type ActorIdentity = z.infer<typeof ActorSchema>;
 
+export const AccountCapabilitiesSchema = z.object({
+  can_create_projects: z.boolean(),
+});
+
+export const ClaimTestAccessInputSchema = z.object({
+  access_token: z.string().min(32).max(512),
+  display_name: z.string().trim().min(1).max(120),
+  device_name: z.string().trim().min(1).max(120),
+  remember_device: z.boolean().default(false),
+});
+
+export type ClaimTestAccessInput = z.infer<typeof ClaimTestAccessInputSchema>;
+
 export const CreateInvitationInputSchema = z.object({
   role: InvitationRoleSchema,
   ttl: InvitationTtlSchema.default("24h"),
@@ -337,6 +350,8 @@ export type UpdateDeviceInput = z.infer<typeof UpdateDeviceInputSchema>;
 
 export const CreateBrowserSessionInputSchema = z.object({
   remember_device: z.boolean().default(false),
+  display_name: z.string().trim().min(1).max(120).optional(),
+  device_name: z.string().trim().min(1).max(120).optional(),
 });
 
 export type CreateBrowserSessionInput = z.infer<typeof CreateBrowserSessionInputSchema>;

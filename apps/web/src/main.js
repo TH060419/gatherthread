@@ -4,6 +4,7 @@ import {
   canRetryFailedAgentRequest,
   createIdempotencyKey,
   createSelectionGuard,
+  emptyProjectState,
   eventContent,
   eventLabel,
   failedRequestFor,
@@ -25,13 +26,13 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260829-3";
+} from "./domain.js?v=20260923-1";
 import { SessionSync } from "./realtime.js";
 import { mountCodeSync } from "./code-sync-view.js";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260922-1";
+import { createLocalizer } from "./i18n.js?v=20260923-2";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -92,12 +93,13 @@ const sync = new SessionSync(api);
 const projectSelectionGuard = createSelectionGuard();
 const settingsStore = createSettingsStore();
 
-elementAfterReady(
-  "token-help",
-  mockEnabled
-    ? "Mock mode is enabled for this tab. Use demo-token."
-    : `Connects to ${configuredApiUrl || "this owner host"}. The token is exchanged for a secure browser session and is never stored by the page.`,
-);
+if (mockEnabled) {
+  elementAfterReady("token-help", "Mock mode is enabled for this tab. Use demo-token.");
+  elementAfterReady("test-access-help", "Mock mode is enabled for this tab. Use demo-test-access to try first-time activation.");
+} else if (configuredApiUrl) {
+  elementAfterReady("token-help", `Use your device token to sign in on ${configuredApiUrl}. The token is exchanged for a secure browser session and is never stored by the page.`);
+  elementAfterReady("test-access-help", `Use a one-time test qualification code to activate an account on ${configuredApiUrl} and receive a device token.`);
+}
 
 function elementAfterReady(id, text) {
   const node = document.getElementById(id);
@@ -150,8 +152,11 @@ const element = (id) => document.getElementById(id);
 const authView = element("auth-view");
 const workspace = element("workspace");
 const loginForm = element("login-form");
+const claimTestAccessForm = element("claim-test-access-form");
 const claimInvitationForm = element("claim-invitation-form");
 const loginError = element("login-error");
+const authProjectEntry = element("auth-project-entry");
+const authEntryTabs = [element("auth-login-tab"), element("auth-activate-tab")];
 const sessionList = element("session-list");
 const projectSelect = element("project-select");
 const sessionView = element("session-view");
@@ -311,60 +316,201 @@ sync.subscribe((snapshot) => {
 
 element("dismiss-attention-notice").addEventListener("click", hideAttentionNotice);
 
+function authenticationIdentity({ required = false } = {}) {
+  const displayName = element("claim-display-name").value.trim();
+  const deviceInput = element("claim-device-name");
+  const deviceName = deviceInput.value.trim();
+  if (required && (!displayName || !deviceName)) {
+    throw new Error("Set a display name and device name above before continuing.");
+  }
+  return { displayName, deviceName, deviceNameEdited: deviceInput.dataset.automatic === "false" };
+}
+
+let activeAuthEntry = "login";
+let authRequestInProgress = false;
+
+function setActiveAuthEntry(entry, { focus = false } = {}) {
+  if (authRequestInProgress) return;
+  activeAuthEntry = entry;
+  for (const [index, tab] of authEntryTabs.entries()) {
+    const selected = (index === 0 ? "login" : "activate") === entry;
+    tab.setAttribute("aria-selected", String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    element(tab.getAttribute("aria-controls")).hidden = !selected;
+  }
+  authProjectEntry.open = false;
+  element("token").value = "";
+  element("test-access-token").value = "";
+  element("claim-invite-secret").value = "";
+  loginError.textContent = "";
+  element("test-access-error").textContent = "";
+  element("claim-invite-error").textContent = "";
+  if (focus) element(entry === "login" ? "token" : "test-access-token").focus();
+}
+
+for (const [index, tab] of authEntryTabs.entries()) {
+  tab.addEventListener("click", () => setActiveAuthEntry(index === 0 ? "login" : "activate"));
+  tab.addEventListener("keydown", (event) => {
+    if (event.isComposing) return;
+    const nextIndex = event.key === "ArrowRight" ? (index + 1) % authEntryTabs.length
+      : event.key === "ArrowLeft" ? (index + authEntryTabs.length - 1) % authEntryTabs.length
+      : event.key === "Home" ? 0
+      : event.key === "End" ? authEntryTabs.length - 1
+      : -1;
+    if (nextIndex < 0) return;
+    event.preventDefault();
+    setActiveAuthEntry(nextIndex === 0 ? "login" : "activate");
+    authEntryTabs[nextIndex].focus();
+  });
+}
+
+authProjectEntry.addEventListener("toggle", () => {
+  if (!authProjectEntry.open) return;
+  if (authRequestInProgress) {
+    authProjectEntry.open = false;
+    return;
+  }
+  element("token").value = "";
+  element("test-access-token").value = "";
+  loginError.textContent = "";
+  element("test-access-error").textContent = "";
+});
+
+for (const id of ["claim-display-name", "claim-device-name"]) {
+  element(id).addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    if (authProjectEntry.open) {
+      if (element("claim-invite-secret").value.trim()) claimInvitationForm.requestSubmit();
+      else element("claim-invite-secret").focus();
+    } else if (activeAuthEntry === "activate") {
+      if (element("test-access-token").value.trim()) claimTestAccessForm.requestSubmit();
+      else element("test-access-token").focus();
+    } else if (element("token").value.trim()) loginForm.requestSubmit();
+    else element("token").focus();
+  });
+}
+
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (authRequestInProgress) return;
   const generation = ++authenticationGeneration;
   loginError.textContent = "";
   const data = new FormData(loginForm);
-  const token = data.get("token")?.toString() ?? "";
+  const token = data.get("token")?.toString().trim() ?? "";
+  if (!token || token.startsWith("gtq_")) {
+    loginError.textContent = localizer.t(token.startsWith("gtq_")
+      ? "Use First-time activation for a test qualification code."
+      : "Enter your device access token.");
+    element("token").focus();
+    return;
+  }
   const submit = loginForm.querySelector("button[type='submit']");
+  authRequestInProgress = true;
   submit.disabled = true;
   submit.textContent = "Checking…";
   try {
-    const actor = await api.authenticate(token, { rememberDevice: data.get("remember-device") === "on" });
+    const rememberDevice = data.get("remember-device") === "on";
+    const identity = authenticationIdentity();
+    const actor = await api.authenticate(token, {
+      rememberDevice,
+      ...(identity.displayName ? { displayName: identity.displayName } : {}),
+      ...(identity.deviceNameEdited && identity.deviceName ? { deviceName: identity.deviceName } : {}),
+    });
     if (generation !== authenticationGeneration) return;
     state.currentUser = actor;
     loginForm.reset();
+    element("claim-display-name").value = "";
+    setAutomaticClaimDeviceName({ force: true });
     await enterWorkspace();
   } catch (error) {
     if (generation !== authenticationGeneration) return;
-    loginError.textContent = error.message ?? "Unable to sign in.";
+    loginError.textContent = localizer.t(error.message ?? "Unable to sign in.");
     element("token").focus();
   } finally {
+    authRequestInProgress = false;
     submit.disabled = false;
-    submit.textContent = `${localizer.t("Continue")} →`;
+    submit.textContent = `${localizer.t("Sign in")} →`;
+  }
+});
+
+claimTestAccessForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (authRequestInProgress) return;
+  const generation = ++authenticationGeneration;
+  const data = new FormData(claimTestAccessForm);
+  const errorNode = element("test-access-error");
+  const accessToken = data.get("test-access-token")?.toString().trim() ?? "";
+  errorNode.textContent = "";
+  if (!accessToken) {
+    errorNode.textContent = localizer.t("Enter your test qualification code.");
+    element("test-access-token").focus();
+    return;
+  }
+  const submit = claimTestAccessForm.querySelector("button[type='submit']");
+  authRequestInProgress = true;
+  submit.disabled = true;
+  submit.textContent = "Activating…";
+  try {
+    const identity = authenticationIdentity({ required: true });
+    const result = await api.claimTestAccess({
+      accessToken,
+      displayName: identity.displayName,
+      deviceName: identity.deviceName,
+      rememberDevice: data.get("remember-device") === "on",
+    });
+    if (generation !== authenticationGeneration) return;
+    state.currentUser = result.actor;
+    showNewDeviceAccessToken(result.accessToken);
+    claimTestAccessForm.reset();
+    element("claim-display-name").value = "";
+    setAutomaticClaimDeviceName({ force: true });
+    await enterWorkspace();
+  } catch (error) {
+    if (generation !== authenticationGeneration) return;
+    errorNode.textContent = localizer.t(error.message ?? "Unable to activate this account.");
+    element("test-access-token").focus();
+  } finally {
+    authRequestInProgress = false;
+    submit.disabled = false;
+    submit.textContent = `${localizer.t("Activate account")} →`;
   }
 });
 
 claimInvitationForm.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (authRequestInProgress) return;
   const generation = ++authenticationGeneration;
   const data = new FormData(claimInvitationForm);
   const errorNode = element("claim-invite-error");
   const submit = claimInvitationForm.querySelector("button[type='submit']");
   errorNode.textContent = "";
+  authRequestInProgress = true;
   submit.disabled = true;
   submit.textContent = "Joining…";
   try {
+    const identity = authenticationIdentity({ required: true });
     const result = await api.claimInvitation({
       inviteToken: data.get("invite-secret")?.toString().trim() ?? "",
-      displayName: data.get("display-name")?.toString().trim() ?? "",
-      deviceName: data.get("device-name")?.toString().trim() ?? "",
+      displayName: identity.displayName,
+      deviceName: identity.deviceName,
       rememberDevice: data.get("remember-device") === "on",
     });
     if (generation !== authenticationGeneration) return;
     state.currentUser = result.actor;
     showNewDeviceAccessToken(result.accessToken);
     claimInvitationForm.reset();
+    element("claim-display-name").value = "";
     setAutomaticClaimDeviceName({ force: true });
     await enterWorkspace(result.invitation.projectId);
   } catch (error) {
     if (generation !== authenticationGeneration) return;
-    errorNode.textContent = error.message ?? "Unable to claim this invitation.";
+    errorNode.textContent = localizer.t(error.message ?? "Unable to claim this invitation.");
     element("claim-invite-secret").focus();
   } finally {
+    authRequestInProgress = false;
     submit.disabled = false;
-    submit.textContent = "Join workspace";
+    submit.textContent = localizer.t("Join project");
   }
 });
 
@@ -916,6 +1062,10 @@ function resetWorkspaceToAuth() {
   workspace.hidden = true;
   authView.hidden = false;
   loginForm.reset();
+  claimTestAccessForm.reset();
+  claimInvitationForm.reset();
+  authRequestInProgress = false;
+  setActiveAuthEntry("login");
   setAutomaticClaimDeviceName({ force: true });
 }
 
@@ -956,7 +1106,10 @@ async function enterWorkspace(preferredProjectId) {
     renderSessionList();
     sessionView.hidden = true;
     emptyState.hidden = false;
-    element("empty-state-title").textContent = "Create your first project.";
+    const empty = emptyProjectState(state.currentUser.can_create_projects === true);
+    element("empty-state-title").textContent = empty.title;
+    element("empty-state-description").textContent = empty.description;
+    element("empty-create-button").hidden = !empty.canCreateProjects;
     element("empty-create-button").textContent = "Create project";
     element("new-session-button").hidden = true;
     element("owner-invitations").hidden = true;
@@ -990,6 +1143,7 @@ async function selectProject(projectId) {
   void renderInvitationControls();
   sessionView.hidden = true;
   emptyState.hidden = false;
+  element("empty-state-description").textContent = "Create a solo room for observers or a multi room for active collaboration.";
   element("empty-state-title").textContent = localizer.t("Loading project…");
   try {
     const project = await api.getProject(projectId);
@@ -1107,6 +1261,7 @@ function renderProjectSelect() {
     projectSelect.append(option);
   }
   projectSelect.disabled = state.projects.length < 2;
+  element("new-project-button").hidden = state.currentUser?.can_create_projects !== true;
   renderProjectAgentButtons();
   renderDshConnectionStatus();
   element("delete-project-button").hidden = state.project?.role !== "owner";
@@ -1572,7 +1727,7 @@ function clearNewDeviceAccessToken() {
 }
 
 function clearSensitiveInputs() {
-  for (const id of ["token", "claim-invite-secret", "accept-invite-secret"]) {
+  for (const id of ["token", "test-access-token", "claim-invite-secret", "accept-invite-secret", "claim-display-name"]) {
     element(id).value = "";
   }
 }
@@ -2309,6 +2464,7 @@ function openCreateDialog() {
 }
 
 function openCreateProjectDialog() {
+  if (state.currentUser?.can_create_projects !== true) return;
   element("create-project-error").textContent = "";
   createProjectDialog.showModal();
   requestAnimationFrame(() => element("project-name").focus());

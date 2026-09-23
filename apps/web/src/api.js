@@ -70,12 +70,16 @@ export class HttpCollaborationApi {
     return body.data ?? body;
   }
 
-  async authenticate(token = this.token, { rememberDevice = false } = {}) {
+  async authenticate(token = this.token, { rememberDevice = false, displayName, deviceName } = {}) {
     this.token = token;
     try {
       const { actor } = await this.request("/v1/browser-sessions", {
         method: "POST",
-        body: JSON.stringify({ remember_device: rememberDevice }),
+        body: JSON.stringify({
+          remember_device: rememberDevice,
+          ...(displayName ? { display_name: displayName } : {}),
+          ...(deviceName ? { device_name: deviceName } : {}),
+        }),
       });
       this.actors.set(actor.id, actor.username);
       return actor;
@@ -396,9 +400,31 @@ export class HttpCollaborationApi {
       id: result.actor.user_id,
       username: result.actor.display_name,
       device_id: result.actor.device_id,
+      can_create_projects: result.actor.can_create_projects === true,
     };
     this.actors.set(actor.id, actor.username);
     return { actor, invitation: normalizeInvitation(result.invitation), accessToken: result.token };
+  }
+
+  async claimTestAccess({ accessToken, displayName, deviceName, rememberDevice = false }) {
+    const result = await this.request("/v1/test-access/claim", {
+      method: "POST",
+      headers: { "X-GatherThread-Browser-Session": "1" },
+      body: JSON.stringify({
+        access_token: accessToken,
+        display_name: displayName,
+        device_name: deviceName,
+        remember_device: rememberDevice,
+      }),
+    });
+    const actor = {
+      id: result.actor.user_id,
+      username: result.actor.display_name,
+      device_id: result.actor.device_id,
+      can_create_projects: result.actor.can_create_projects === true,
+    };
+    this.actors.set(actor.id, actor.username);
+    return { actor, accessToken: result.token };
   }
 
   async acceptInvitation(inviteToken) {
@@ -597,7 +623,7 @@ const users = {
 export class MockCollaborationApi {
   constructor({ latency = 90 } = {}) {
     this.latency = latency;
-    this.currentUser = users.avery;
+    this.currentUser = { ...users.avery, can_create_projects: true };
     this.listeners = new Map();
     this.idempotentEvents = new Map();
     this.projectMutations = new Map();
@@ -708,9 +734,11 @@ export class MockCollaborationApi {
     ]);
   }
 
-  async authenticate(token) {
+  async authenticate(token, { displayName, deviceName } = {}) {
     await this.#wait();
     if (token !== "demo-token") throw new ApiError("That preview token is not valid.", { status: 401, code: "unauthorized" });
+    if (displayName) this.currentUser.username = displayName;
+    if (deviceName) this.deviceName = deviceName;
     return structuredClone({ ...this.currentUser, device_id: "device-demo" });
   }
 
@@ -740,6 +768,9 @@ export class MockCollaborationApi {
 
   async createProject({ name }) {
     await this.#wait();
+    if (!this.currentUser.can_create_projects) {
+      throw new ApiError("This account can join invited projects but cannot create projects.", { status: 403, code: "forbidden" });
+    }
     const title = normalizeMockTitle(name, "Project");
     const projectId = `project-${createIdempotencyKey("new").split(":").at(-1)}`;
     const now = new Date().toISOString();
@@ -1168,8 +1199,10 @@ export class MockCollaborationApi {
       id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`,
       username: displayName.trim(),
       device_id: "device-demo",
+      can_create_projects: false,
     };
     this.currentUser = actor;
+    this.projects = this.projects.filter((project) => project.id === invitation.projectId);
     this.deviceName = deviceName.trim();
     this.credential = `mock-device-${createIdempotencyKey("token")}`;
     for (const session of this.sessions.filter((item) => item.projectId === invitation.projectId)) {
@@ -1184,6 +1217,25 @@ export class MockCollaborationApi {
       invitation: structuredClone(normalizeInvitation(invitation)),
       accessToken,
     };
+  }
+
+  async claimTestAccess({ accessToken, displayName, deviceName }) {
+    await this.#wait();
+    if (accessToken !== "demo-test-access") {
+      throw new ApiError("Test access token is invalid or unavailable.", { status: 401, code: "unauthorized" });
+    }
+    if (!displayName?.trim() || !deviceName?.trim()) {
+      throw new ApiError("Name and device name are required.", { status: 422, code: "invalid_claim" });
+    }
+    this.currentUser = {
+      id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`,
+      username: displayName.trim(),
+      device_id: "device-demo",
+      can_create_projects: true,
+    };
+    this.deviceName = deviceName.trim();
+    this.projects = [];
+    return { actor: structuredClone(this.currentUser), accessToken: `mock-device-${createIdempotencyKey("token")}` };
   }
 
   async acceptInvitation(inviteToken) {

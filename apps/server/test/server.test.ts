@@ -109,6 +109,109 @@ test("liveness and readiness endpoints remain unauthenticated and distinguish pr
   }
 });
 
+test("test access and project invitations create distinct account capabilities over HTTP", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-http-"));
+  const browserOrigin = "http://client.test";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+    allowedOrigins: [browserOrigin],
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST", body: { display_name: "Owner", device_name: "Owner laptop" },
+    });
+    assert.equal(owner.status, 201);
+    const ownerActor = running.database.authenticate(owner.body.data.token);
+    const shared = running.service.createProject(ownerActor, {
+      title: "Shared", idempotency_key: "test-access-http-shared",
+    });
+    const testAccess = running.database.issueTestAccess("1h");
+    const qualified = await api<{ data: {
+      actor: { user_id: string; device_id: string; can_create_projects: boolean };
+      token: string;
+    } }>(running.origin, "/v1/test-access/claim", {
+      method: "POST", origin: browserOrigin,
+      headers: { "x-gatherthread-browser-session": "1" },
+      body: {
+        access_token: testAccess.access_token,
+        display_name: "Qualified",
+        device_name: "Qualified laptop",
+        remember_device: false,
+      },
+    });
+    assert.equal(qualified.status, 201);
+    assert.equal(qualified.body.data.actor.can_create_projects, true);
+    const qualifiedCookie = qualified.headers.get("set-cookie")?.split(";")[0];
+    assert.ok(qualifiedCookie);
+    const ownProject = await api<{ data: { project: { id: string; role: string } } }>(running.origin, "/v1/projects", {
+      method: "POST", cookie: qualifiedCookie, origin: browserOrigin,
+      body: { title: "Qualified project", idempotency_key: "qualified-http-project" },
+    });
+    assert.equal(ownProject.status, 201);
+    assert.equal(ownProject.body.data.project.role, "owner");
+
+    const guestInvite = running.service.createProjectInvitation(ownerActor, shared.id, { role: "participant", ttl: "1h" });
+    const guest = await api<{ data: {
+      actor: { user_id: string; can_create_projects: boolean };
+      token: string;
+    } }>(running.origin, "/v1/invitations/claim", {
+      method: "POST", origin: browserOrigin,
+      headers: { "x-gatherthread-browser-session": "1" },
+      body: {
+        invite_token: guestInvite.invite_token,
+        display_name: "Guest", device_name: "Guest laptop",
+      },
+    });
+    assert.equal(guest.status, 201);
+    assert.equal(guest.body.data.actor.can_create_projects, false);
+    const guestCookie = guest.headers.get("set-cookie")?.split(";")[0];
+    assert.ok(guestCookie);
+    const guestProjects = await api<{ data: { projects: Array<{ id: string }> } }>(running.origin, "/v1/projects", {
+      cookie: guestCookie,
+    });
+    assert.deepEqual(guestProjects.body.data.projects.map((project) => project.id), [shared.id]);
+    const forbiddenProject = await api<{ error: { code: string } }>(running.origin, "/v1/projects", {
+      method: "POST", cookie: guestCookie, origin: browserOrigin,
+      body: { title: "Denied", idempotency_key: "guest-http-project-denied" },
+    });
+    assert.equal(forbiddenProject.status, 403);
+    const forbiddenLegacySession = await api<{ error: { code: string } }>(running.origin, "/v1/sessions", {
+      method: "POST", cookie: guestCookie, origin: browserOrigin,
+      body: { title: "Denied legacy project", mode: "solo", idempotency_key: "guest-http-legacy-denied" },
+    });
+    assert.equal(forbiddenLegacySession.status, 403);
+
+    const existingLogin = await api<{ data: { actor: { username: string; can_create_projects: boolean } } }>(
+      running.origin, "/v1/browser-sessions", {
+        method: "POST", token: qualified.body.data.token, origin: browserOrigin,
+        body: { display_name: "Qualified renamed", device_name: "New device label", remember_device: false },
+      },
+    );
+    assert.equal(existingLogin.status, 201);
+    assert.equal(existingLogin.body.data.actor.username, "Qualified renamed");
+    assert.equal(existingLogin.body.data.actor.can_create_projects, true);
+    assert.equal(running.service.listDevices(running.database.authenticate(qualified.body.data.token))
+      .find((device) => device.id === qualified.body.data.actor.device_id)?.name, "New device label");
+
+    const fullInvite = running.service.createProjectInvitation(ownerActor, shared.id, { role: "viewer", ttl: "1h" });
+    const accepted = await api<unknown>(running.origin, "/v1/invitations/accept", {
+      method: "POST", token: qualified.body.data.token, origin: browserOrigin,
+      body: { invite_token: fullInvite.invite_token },
+    });
+    assert.equal(accepted.status, 200);
+    const qualifiedProjects = await api<{ data: { projects: Array<{ id: string; role: string }> } }>(
+      running.origin, "/v1/projects", { token: qualified.body.data.token },
+    );
+    assert.deepEqual(new Map(qualifiedProjects.body.data.projects.map((project) => [project.id, project.role])),
+      new Map([[shared.id, "viewer"], [ownProject.body.data.project.id, "owner"]]));
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("DSH device pairing is Host-initiated, browser-approved, single-use, and CSRF protected", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-dsh-pairing-"));
   const browserOrigin = "http://127.0.0.1:4173";
@@ -837,7 +940,7 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
       "/v1/me",
       { token },
     );
-    assert.deepEqual(me.body.data, { id: "owner", username: "Owner", device_id: "owner-device" });
+    assert.deepEqual(me.body.data, { id: "owner", username: "Owner", device_id: "owner-device", can_create_projects: true });
 
     const members = await api<{ data: { members: Array<{ user_id: string; display_name: string; role: string; runtime: { model: string } | null }> } }>(
       running.origin,
@@ -930,7 +1033,7 @@ test("browser sessions survive refresh, reject CSRF writes, and revoke on logout
       "/v1/me",
       { cookie },
     );
-    assert.deepEqual(restored.body.data, { id: "owner", username: "Owner", device_id: "owner-device" });
+    assert.deepEqual(restored.body.data, { id: "owner", username: "Owner", device_id: "owner-device", can_create_projects: true });
 
     const csrfDenied = await api<{ error: { code: string } }>(running.origin, "/v1/sessions", {
       method: "POST",

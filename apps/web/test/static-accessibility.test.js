@@ -14,6 +14,8 @@ const dshPath = fileURLToPath(new URL("../src/dsh.js", import.meta.url));
 const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.url));
 const brandLightPath = fileURLToPath(new URL("../brand/lockup-color-transparent-light.svg", import.meta.url));
 const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-dark.svg", import.meta.url));
+const aliyunGuidePath = fileURLToPath(new URL("../../../docs/ALIYUN_ECS.md", import.meta.url));
+const selfHostingGuidePath = fileURLToPath(new URL("../../../docs/SELF_HOSTING.md", import.meta.url));
 
 test("manual summaries use accessible icon entries, explicit paid confirmation and bounded settings", async () => {
   const [html, main, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
@@ -86,6 +88,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     '<aside id="member-panel"',
     'aria-live="polite"',
     'for="token"',
+    'for="claim-display-name"',
+    'for="claim-device-name"',
     'id="send-chat-button"',
     'id="send-agent-button"',
     'id="claim-invitation-form"',
@@ -159,7 +163,7 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"/);
   assert.match(main, /title\.title = session\.name/);
   assert.match(main, /element\("session-title"\)\.title = session\.name/);
-  assert.match(main, /localizer\.t\("Continue"\)/);
+  assert.match(main, /localizer\.t\("Sign in"\)/);
   assert.match(styles, /\.session-button strong \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /\.title-line h1 \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /select:not\(:disabled\):hover/);
@@ -175,6 +179,56 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(main, /details\.open = live/);
   assert.match(main, /expandedWorklogs\.has\(worklogId\)/);
   assert.match(main, /details\.addEventListener\("toggle"/);
+});
+
+test("shared identity fields precede separate login, qualification, and project invitation forms", async () => {
+  const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  const name = markup.indexOf('id="claim-display-name"');
+  const device = markup.indexOf('id="claim-device-name"');
+  const tabs = markup.indexOf('class="auth-entry-tabs" role="tablist"');
+  const loginTab = markup.indexOf('id="auth-login-tab"');
+  const activationTab = markup.indexOf('id="auth-activate-tab"');
+  const tokenForm = markup.indexOf('id="login-form"');
+  const qualificationForm = markup.indexOf('id="claim-test-access-form"');
+  const projectForm = markup.indexOf('id="claim-invitation-form"');
+  assert.ok(name > 0 && device > name && tabs > device && loginTab > tabs
+    && activationTab > loginTab && tokenForm > activationTab
+    && qualificationForm > tokenForm && projectForm > qualificationForm);
+  assert.match(markup, /id="auth-login-tab"[^>]*aria-selected="true"[^>]*aria-controls="auth-login-panel"/u);
+  assert.match(markup, /id="auth-activate-tab"[^>]*aria-selected="false"[^>]*aria-controls="auth-activate-panel"/u);
+  assert.match(markup, /id="auth-activate-panel"[^>]*role="tabpanel"[^>]*hidden/u);
+  assert.match(markup, /<details id="auth-project-entry"/u);
+  assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
+  assert.match(main, /if \(authProjectEntry\.open\)[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
+  assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  const loginHandler = main.slice(main.indexOf('loginForm.addEventListener("submit"'), main.indexOf('claimTestAccessForm.addEventListener("submit"'));
+  const activationHandler = main.slice(main.indexOf('claimTestAccessForm.addEventListener("submit"'), main.indexOf('claimInvitationForm.addEventListener("submit"'));
+  assert.match(loginHandler, /api\.authenticate\(token/u);
+  assert.doesNotMatch(loginHandler, /api\.claimTestAccess\(/u);
+  assert.match(activationHandler, /api\.claimTestAccess\(\{/u);
+  assert.doesNotMatch(activationHandler, /api\.authenticate\(/u);
+});
+
+test("the empty-project paragraph follows account capability and restores session guidance", async () => {
+  const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  assert.match(markup, /id="empty-state-description">Create a solo room for observers or a multi room for active collaboration\./u);
+  assert.match(main, /const empty = emptyProjectState\(state\.currentUser\.can_create_projects === true\)/u);
+  assert.match(main, /element\("empty-state-description"\)\.textContent = empty\.description/u);
+  assert.match(main, /element\("empty-create-button"\)\.hidden = !empty\.canCreateProjects/u);
+  assert.match(main, /element\("empty-state-description"\)\.textContent = "Create a solo room for observers or a multi room for active collaboration\."/u);
+});
+
+test("host guides route one-use qualification codes to the activation field", async () => {
+  const [aliyun, selfHosting] = await Promise.all([
+    readFile(aliyunGuidePath, "utf8"),
+    readFile(selfHostingGuidePath, "utf8"),
+  ]);
+  for (const guide of [aliyun, selfHosting]) {
+    assert.match(guide, /`gtq_`[\s\S]*?\*\*First-time activation\*\*[\s\S]*?\*\*Test qualification code\*\*/u);
+    assert.match(guide, /`gta_`[\s\S]*?\*\*Existing account\*\*/u);
+    assert.doesNotMatch(guide, /top (?:\*\*)?Access token/u);
+  }
 });
 
 test("official light and dark lockups include the approved mark and outlined wordmark", async () => {
@@ -381,6 +435,7 @@ test("remembered login and current-device naming remain explicit and accessible"
   ]);
   for (const id of [
     "login-remember-device",
+    "test-access-remember-device",
     "claim-remember-device",
     "settings-device",
     "settings-device-name",
@@ -389,6 +444,7 @@ test("remembered login and current-device naming remain explicit and accessible"
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /for="login-remember-device"/);
+  assert.match(html, /for="test-access-remember-device"/);
   assert.match(html, /for="claim-remember-device"/);
   assert.match(html, /for="settings-device-name"/);
   assert.match(main, /automaticDeviceName\(\)/);

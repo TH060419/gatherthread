@@ -31,3 +31,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0025](0025-opt-in-git-backed-code-checkpoints.md) | Separate Git-backed code checkpoints from conversation synchronization | proposed / source preview | 2026-09-22 |
 | [0026](0026-native-first-context-management.md) | Separate native context management from synchronization transport bounds | proposed / source preview | 2026-09-22 |
 | [0027](0027-shared-manual-history-summaries.md) | Add shared manual summaries and derived Agent context | proposed / source preview | 2026-09-23 |
+| [0028](0028-separate-test-qualification-from-project-invitations.md) | Separate test qualification from project invitations | proposed | 2026-09-23 |

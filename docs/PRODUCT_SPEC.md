@@ -6,7 +6,7 @@ Enable multiple people to collaborate on an agent-assisted project while each pe
 
 ## Browser entry flow
 
-Opening a GatherThread deployment at `/` presents the bilingual product home. Its primary action opens the existing login and collaboration application at same-origin `/app/`; authenticated users continue into their workspace and signed-out users see the established device-token or invitation flow. Existing root links carrying `?api=...`, `?mock=1`, `#project`, `#session`, `#dsh-pair`, `#settings-*`, or `#main-content` are forwarded to `/app/` without changing their query or fragment. The product home does not read credentials or replace the application's authentication, invitation, Cookie, API, realtime, accessibility, or responsive behavior.
+Opening a GatherThread deployment at `/` presents the bilingual product home. Its primary action opens the existing login and collaboration application at same-origin `/app/`; authenticated users continue into their workspace and signed-out users see separate device-token, test-qualification and project-invitation paths. Existing root links carrying `?api=...`, `?mock=1`, `#project`, `#session`, `#dsh-pair`, `#settings-*`, or `#main-content` are forwarded to `/app/` without changing their query or fragment. The product home does not read credentials or replace the application's authentication, invitation, Cookie, API, realtime, accessibility, or responsive behavior.
 
 ## Project collaboration boundary
 
@@ -93,9 +93,11 @@ The first implementation uses bounded authenticated checkpoint APIs over actual 
 
 ## Identity, invitations, and devices
 
-Public registration is disabled. The deployment operator creates the first identity locally. A project owner may create a single-use project invitation for `participant` or `viewer`. Expiry choices are one hour, 24 hours, and seven days, with 24 hours as the default.
+Public registration is disabled. The deployment operator creates the first identity locally and may privately issue a single-use, expiring test-qualification token. Claiming that token creates an independent account that can create its own projects; each created project gives that account its project-local `owner` membership. A project owner may separately create a single-use project invitation for `participant` or `viewer`. Expiry choices are one hour, 24 hours, and seven days, with 24 hours as the project-invitation default and seven days as the test-qualification default.
 
-A new collaborator claims an invitation to create their own server identity and first device credential atomically. An existing authenticated user can accept an invitation without receiving a new credential. An inviter never handles another user's device credential. Each additional device uses its own ten-minute, single-use authorization and receives an independently revocable token.
+A new collaborator claiming only a project invitation creates a guest account and first device credential atomically. This guest can work only in projects to which it has been invited, within each project's role, and cannot create an independent project. An already qualified authenticated user can accept a project invitation without losing its ability to create projects or receiving a new credential. The account identity is separate from every project role: the same qualified account may own one project and be a participant or viewer in another. An inviter never handles another user's device credential. Each additional device uses its own ten-minute, single-use authorization and receives an independently revocable token.
+
+The test-qualification token is an activation secret, not a reusable login credential. After either first-time claim, the recipient receives a distinct device access token once and uses it for later login. Display name and device name appear above both claim paths; an existing device-token holder may edit either at login. A guest with no remaining invited project sees a non-creating empty state. See [ADR-0028](adr/0028-separate-test-qualification-from-project-invitations.md).
 
 ## First-release deployment
 

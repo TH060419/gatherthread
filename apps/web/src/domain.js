@@ -6,6 +6,20 @@ export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing"
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
 export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.7";
 
+export function emptyProjectState(canCreateProjects) {
+  return canCreateProjects
+    ? {
+      title: "Create your first project.",
+      description: "Create a project to organize your sessions and invite collaborators.",
+      canCreateProjects: true,
+    }
+    : {
+      title: "No invited projects are available. Ask a project owner for an invitation.",
+      description: "Once invited, your projects will appear here. A project invitation does not let you create projects.",
+      canCreateProjects: false,
+    };
+}
+
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 const DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_VISIBLE_HISTORY_SYNC = "first-connect";

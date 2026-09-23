@@ -21,6 +21,8 @@
     "start": "node apps/server/dist/src/cli.js start",
     "owner-host": "node --env-file-if-exists=.env scripts/self-host.mjs start",
     "owner-host:init": "node --env-file-if-exists=.env scripts/self-host.mjs init",
+    "owner-host:issue-test-access": "node --env-file-if-exists=.env scripts/self-host.mjs issue-test-access",
+    "owner-host:revoke-test-access": "node --env-file-if-exists=.env scripts/self-host.mjs revoke-test-access",
     "connection:local": "node scripts/configure-connection.mjs local",
     "connection:lan": "node scripts/configure-connection.mjs lan",
     "connection:tailscale": "node scripts/configure-connection.mjs tailscale",

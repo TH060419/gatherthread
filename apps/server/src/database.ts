@@ -146,6 +146,16 @@ export interface ClaimInvitationWithBrowserSessionResult extends ClaimInvitation
   browser_session: BrowserSessionIssue;
 }
 
+export interface ClaimTestAccessResult {
+  actor: Actor;
+  token: string;
+  device: DeviceRecord;
+}
+
+export interface ClaimTestAccessWithBrowserSessionResult extends ClaimTestAccessResult {
+  browser_session: BrowserSessionIssue;
+}
+
 export interface AcceptInvitationResult {
   actor: Actor;
   invitation: InvitationRecord | ProjectInvitationRecord;
@@ -321,7 +331,8 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  can_create_projects INTEGER NOT NULL DEFAULT 0 CHECK (can_create_projects IN (0, 1))
 ) STRICT;
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
@@ -534,6 +545,17 @@ CREATE TABLE IF NOT EXISTS project_invitation_audit (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS project_invitation_audit_project_idx
   ON project_invitation_audit(project_id, created_at, id);
+CREATE TABLE IF NOT EXISTS test_access_grants (
+  id TEXT PRIMARY KEY,
+  token_digest TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  claimed_at TEXT,
+  claimed_by_user_id TEXT REFERENCES users(id),
+  claimed_by_device_id TEXT REFERENCES devices(id),
+  CHECK (claimed_at IS NULL OR (claimed_by_user_id IS NOT NULL AND claimed_by_device_id IS NOT NULL))
+) STRICT;
 CREATE TABLE IF NOT EXISTS device_authorizations (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -589,6 +611,10 @@ function issueDeviceToken(): string {
 
 function issueInvitationToken(): string {
   return `gti_${randomBytes(32).toString("base64url")}`;
+}
+
+function issueTestAccessToken(): string {
+  return `gtq_${randomBytes(32).toString("base64url")}`;
 }
 
 function issueDeviceAuthorizationToken(): string {
@@ -856,6 +882,7 @@ export class CollaborationDatabase {
     this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
     this.migrateDeviceCredentialColumns();
     this.migrateProjectModel();
+    this.migrateAccountCapabilities();
     this.migrateRuntimePurposeColumn();
     this.migrateRuntimeExecutionProfilesColumn();
     this.migrateEventActorDisplayNameColumn();
@@ -905,7 +932,7 @@ export class CollaborationDatabase {
   }): { actor: Actor; token: string } {
     const count = this.sqlite.prepare("SELECT count(*) AS count FROM users").get() as unknown as CountRow;
     if (count.count !== 0) throw conflict("Bootstrap is available only for an empty database");
-    return this.createIdentity(input);
+    return this.createIdentity({ ...input, can_create_projects: true });
   }
 
   createIdentity(input: {
@@ -913,20 +940,107 @@ export class CollaborationDatabase {
     display_name: string;
     device_id?: string | undefined;
     device_name: string;
+    can_create_projects?: boolean | undefined;
   }): { actor: Actor; token: string } {
     const userId = input.user_id ?? randomUUID();
     const deviceId = input.device_id ?? randomUUID();
     const token = issueDeviceToken();
     const createdAt = this.now();
     this.transaction(() => {
-      this.sqlite.prepare("INSERT INTO users(id, display_name, created_at) VALUES (?, ?, ?)")
-        .run(userId, input.display_name, createdAt);
+      this.sqlite.prepare("INSERT INTO users(id, display_name, created_at, can_create_projects) VALUES (?, ?, ?, ?)")
+        .run(userId, input.display_name, createdAt, input.can_create_projects ? 1 : 0);
       this.sqlite.prepare(`
         INSERT INTO devices(id, user_id, name, token_hash, created_at, token_created_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(deviceId, userId, input.device_name, this.tokenDigest(token), createdAt, createdAt);
     });
     return { actor: { user_id: userId, display_name: input.display_name, device_id: deviceId }, token };
+  }
+
+  canCreateProjects(userId: string): boolean {
+    const row = this.sqlite.prepare("SELECT can_create_projects FROM users WHERE id = ?")
+      .get(userId) as { can_create_projects: number } | undefined;
+    if (!row) throw unauthorized("Account is unavailable");
+    return row.can_create_projects === 1;
+  }
+
+  issueTestAccess(ttl: InvitationTtl = "7d"): { grant_id: string; access_token: string; expires_at: string } {
+    const ttlMs = INVITATION_TTL_MS[ttl];
+    if (ttlMs === undefined) throw new ApiError(400, "invalid_ttl", "Test access TTL must be 1h, 24h, or 7d");
+    const count = this.sqlite.prepare("SELECT count(*) AS count FROM users").get() as unknown as CountRow;
+    if (count.count === 0) throw conflict("Bootstrap the first owner before issuing test access");
+    const grantId = randomUUID();
+    const accessToken = issueTestAccessToken();
+    const createdAt = this.clock();
+    const expiresAt = new Date(createdAt.getTime() + ttlMs).toISOString();
+    this.sqlite.prepare(`
+      INSERT INTO test_access_grants(id, token_digest, created_at, expires_at)
+      VALUES (?, ?, ?, ?)
+    `).run(grantId, this.tokenDigest(accessToken), createdAt.toISOString(), expiresAt);
+    return { grant_id: grantId, access_token: accessToken, expires_at: expiresAt };
+  }
+
+  revokeTestAccess(grantId: string): void {
+    this.transaction(() => {
+      const result = this.sqlite.prepare(`
+        UPDATE test_access_grants SET revoked_at = ?
+        WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL
+      `).run(this.now(), grantId);
+      if (Number(result.changes) === 1) return;
+      const row = this.sqlite.prepare("SELECT claimed_at FROM test_access_grants WHERE id = ?")
+        .get(grantId) as { claimed_at: string | null } | undefined;
+      if (!row) throw notFound("Test access grant");
+      if (row.claimed_at !== null) throw conflict("Claimed test access cannot be revoked; revoke the issued device instead");
+      // An already revoked grant remains revoked; preserve idempotent CLI use.
+    });
+  }
+
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }): ClaimTestAccessResult;
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }, options: { browserSession: true }): ClaimTestAccessWithBrowserSessionResult;
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }, options: { browserSession?: boolean } = {}): ClaimTestAccessResult | ClaimTestAccessWithBrowserSessionResult {
+    const timestamp = this.now();
+    return this.transaction(() => {
+      const row = this.sqlite.prepare(`
+        SELECT id FROM test_access_grants
+        WHERE token_digest = ? AND revoked_at IS NULL AND claimed_at IS NULL AND expires_at > ?
+      `).get(this.tokenDigest(input.access_token), timestamp) as { id: string } | undefined;
+      if (!row) throw unauthorized("Test access token is invalid or unavailable");
+      const userId = randomUUID();
+      const deviceId = randomUUID();
+      const token = issueDeviceToken();
+      this.sqlite.prepare(`
+        INSERT INTO users(id, display_name, created_at, can_create_projects) VALUES (?, ?, ?, 1)
+      `).run(userId, input.display_name, timestamp);
+      this.sqlite.prepare(`
+        INSERT INTO devices(id, user_id, name, token_hash, created_at, token_created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(deviceId, userId, input.device_name, this.tokenDigest(token), timestamp, timestamp);
+      const claimed = this.sqlite.prepare(`
+        UPDATE test_access_grants SET claimed_at = ?, claimed_by_user_id = ?, claimed_by_device_id = ?
+        WHERE id = ? AND revoked_at IS NULL AND claimed_at IS NULL AND expires_at > ?
+      `).run(timestamp, userId, deviceId, row.id, timestamp);
+      if (Number(claimed.changes) !== 1) throw unauthorized("Test access token is invalid or unavailable");
+      const actor = { user_id: userId, display_name: input.display_name, device_id: deviceId };
+      const result: ClaimTestAccessResult = { actor, token, device: this.getDeviceForUser(userId, deviceId) };
+      return options.browserSession
+        ? { ...result, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device === true) }
+        : result;
+    });
   }
 
   createDevice(
@@ -985,9 +1099,21 @@ export class CollaborationDatabase {
     return { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id };
   }
 
-  createBrowserSession(actor: Actor, rememberDevice = false): BrowserSessionIssue {
+  createBrowserSession(
+    actor: Actor,
+    rememberDevice = false,
+    profile: { display_name?: string | undefined; device_name?: string | undefined } = {},
+  ): BrowserSessionIssue {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
+      if (profile.display_name !== undefined) {
+        this.sqlite.prepare("UPDATE users SET display_name = ? WHERE id = ?")
+          .run(profile.display_name, actor.user_id);
+      }
+      if (profile.device_name !== undefined) {
+        this.sqlite.prepare("UPDATE devices SET name = ? WHERE id = ? AND user_id = ?")
+          .run(profile.device_name, actor.device_id, actor.user_id);
+      }
       return this.insertBrowserSession(actor, this.clock(), rememberDevice);
     });
   }
@@ -1219,6 +1345,9 @@ export class CollaborationDatabase {
           throw idempotencyConflict("Project creation retry does not match the original request");
         }
         return this.projectCreationResult(existing);
+      }
+      if (!this.canCreateProjects(actor.user_id)) {
+        throw forbidden("This account can join invited projects but cannot create projects");
       }
       if (this.sqlite.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId)) {
         throw idempotencyConflict("Project ID already exists with another operation");
@@ -1962,6 +2091,9 @@ export class CollaborationDatabase {
         const project = this.sqlite.prepare("SELECT id FROM projects WHERE id = ?")
           .get(projectId);
         if (!project) {
+          if (!this.canCreateProjects(actor.user_id)) {
+            throw forbidden("This account can join invited projects but cannot create projects");
+          }
           this.sqlite.prepare(`
             INSERT INTO projects(id, owner_user_id, title, state, creation_idempotency_key, created_at, updated_at)
             VALUES (?, ?, ?, 'active', ?, ?, ?)
@@ -3424,6 +3556,23 @@ export class CollaborationDatabase {
     if (addedTokenCreatedAt) {
       this.sqlite.exec("UPDATE devices SET token_created_at = created_at WHERE token_created_at IS NULL");
     }
+  }
+
+  private migrateAccountCapabilities(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (columns.has("can_create_projects")) return;
+    this.transaction(() => {
+      this.sqlite.exec("ALTER TABLE users ADD COLUMN can_create_projects INTEGER NOT NULL DEFAULT 0 CHECK (can_create_projects IN (0, 1))");
+      // Preserve the bootstrap operator and everyone who already owns a project.
+      // Other legacy invitation-only identities become project-scoped guests.
+      this.sqlite.exec(`
+        UPDATE users SET can_create_projects = 1
+        WHERE id = (SELECT id FROM users ORDER BY created_at, rowid LIMIT 1)
+           OR id IN (SELECT owner_user_id FROM projects)
+      `);
+    });
   }
 
   private migrateProjectModel(): void {

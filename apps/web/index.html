@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260922-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260923-1" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -60,57 +60,88 @@
         </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
-        <form id="login-form" novalidate>
-          <label for="token">Access token</label>
-          <input
-            id="token"
-            name="token"
-            type="password"
-            autocomplete="current-password"
-            required
-            aria-describedby="token-help login-error"
-          />
-          <p id="token-help" class="field-help">Enter the access token issued by this owner host.</p>
-          <label class="auth-remember" for="login-remember-device">
-            <input id="login-remember-device" name="remember-device" type="checkbox" />
-            <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
-          </label>
-          <p id="login-error" class="form-error" role="alert"></p>
-          <button class="button button-primary button-wide" type="submit">
-            Continue <span aria-hidden="true">→</span>
-          </button>
-        </form>
-        <div class="auth-divider" aria-hidden="true"><span>or join with an invitation</span></div>
-        <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
-          <label for="claim-invite-secret">Invitation secret</label>
-          <input
-            id="claim-invite-secret"
-            name="invite-secret"
-            type="password"
-            autocomplete="off"
-            autocapitalize="none"
-            spellcheck="false"
-            required
-            aria-describedby="claim-invite-help claim-invite-error"
-          />
-          <p id="claim-invite-help" class="field-help">Paste the secret you received. It stays only in this tab's memory.</p>
+        <div class="auth-identity">
           <div class="claim-identity-grid">
             <div>
               <label for="claim-display-name">Display name</label>
-              <input id="claim-display-name" name="display-name" autocomplete="name" required maxlength="120" />
+              <input id="claim-display-name" name="display-name" autocomplete="name" maxlength="120" aria-describedby="auth-identity-help" />
             </div>
             <div>
               <label for="claim-device-name">Device name</label>
-              <input id="claim-device-name" name="device-name" autocomplete="off" required maxlength="120" value="This browser" />
+              <input id="claim-device-name" name="device-name" autocomplete="off" maxlength="120" value="This browser" aria-describedby="auth-identity-help" />
             </div>
           </div>
-          <label class="auth-remember" for="claim-remember-device">
-            <input id="claim-remember-device" name="remember-device" type="checkbox" />
-            <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
-          </label>
-          <p id="claim-invite-error" class="form-error" role="alert"></p>
-          <button class="button button-secondary button-wide" type="submit">Join workspace</button>
-        </form>
+          <p id="auth-identity-help" class="field-help">Set both names for first-time activation or a project invitation. Existing accounts can leave them unchanged.</p>
+        </div>
+        <div class="auth-entry-tabs" role="tablist" aria-label="Account access">
+          <button id="auth-login-tab" class="auth-entry-tab" type="button" role="tab" aria-selected="true" aria-controls="auth-login-panel" tabindex="0">Existing account</button>
+          <button id="auth-activate-tab" class="auth-entry-tab" type="button" role="tab" aria-selected="false" aria-controls="auth-activate-panel" tabindex="-1">First-time activation</button>
+        </div>
+        <div id="auth-login-panel" class="auth-entry-panel" role="tabpanel" aria-labelledby="auth-login-tab">
+          <form id="login-form" novalidate>
+            <label for="token">Device access token</label>
+            <input
+              id="token"
+              name="token"
+              type="password"
+              autocomplete="current-password"
+              required
+              aria-describedby="token-help login-error"
+            />
+            <p id="token-help" class="field-help">Use the device token issued when you first activated your account.</p>
+            <label class="auth-remember" for="login-remember-device">
+              <input id="login-remember-device" name="remember-device" type="checkbox" />
+              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+            </label>
+            <p id="login-error" class="form-error" role="alert"></p>
+            <button class="button button-primary button-wide" type="submit">Sign in <span aria-hidden="true">→</span></button>
+          </form>
+        </div>
+        <div id="auth-activate-panel" class="auth-entry-panel" role="tabpanel" aria-labelledby="auth-activate-tab" hidden>
+          <form id="claim-test-access-form" novalidate>
+            <label for="test-access-token">Test qualification code</label>
+            <input
+              id="test-access-token"
+              name="test-access-token"
+              type="password"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              required
+              aria-describedby="test-access-help test-access-error"
+            />
+            <p id="test-access-help" class="field-help">Enter your one-time code to activate an account and receive your own device token.</p>
+            <label class="auth-remember" for="test-access-remember-device">
+              <input id="test-access-remember-device" name="remember-device" type="checkbox" />
+              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+            </label>
+            <p id="test-access-error" class="form-error" role="alert"></p>
+            <button class="button button-primary button-wide" type="submit">Activate account <span aria-hidden="true">→</span></button>
+          </form>
+        </div>
+        <details id="auth-project-entry" class="auth-project-entry">
+          <summary>Have a project invitation?</summary>
+          <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
+            <label for="claim-invite-secret">Invitation secret</label>
+            <input
+              id="claim-invite-secret"
+              name="invite-secret"
+              type="password"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              required
+              aria-describedby="claim-invite-help claim-invite-error"
+            />
+            <p id="claim-invite-help" class="field-help">A project invitation grants access only to invited projects, not the ability to create a project.</p>
+            <label class="auth-remember" for="claim-remember-device">
+              <input id="claim-remember-device" name="remember-device" type="checkbox" />
+              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+            </label>
+            <p id="claim-invite-error" class="form-error" role="alert"></p>
+            <button class="button button-secondary button-wide" type="submit">Join project</button>
+          </form>
+        </details>
       </section>
     </main>
 
@@ -219,7 +250,7 @@
           <section id="empty-state" class="empty-state" hidden>
             <p class="eyebrow">No sessions yet</p>
             <h1 id="empty-state-title">Start a shared thread.</h1>
-            <p>Create a solo room for observers or a multi room for active collaboration.</p>
+            <p id="empty-state-description">Create a solo room for observers or a multi room for active collaboration.</p>
             <button id="empty-create-button" class="button button-primary" type="button">
               Create your first session
             </button>
@@ -1018,6 +1049,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260918-1"></script>
+    <script type="module" src="./src/main.js?v=20260923-2"></script>
   </body>
 </html>

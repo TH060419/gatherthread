@@ -4,6 +4,15 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+### Added
+
+- Separate operator-issued, single-use Alpha test qualification from project invitations. A qualified account can create projects; an invitation-only guest can work only in invited projects and cannot create one through current or compatibility APIs.
+- Let the operator issue or revoke unclaimed test qualifications locally, and let users set their own display and device names above either first-use login path. Existing device-token login can update those names without changing project permissions.
+
+### Migration and compatibility
+
+- Existing device credentials and project memberships remain valid. The first account and existing project owners retain project-creation permission; existing invite-only accounts without an owned project become project-scoped guests. The activation token is not reusable for login: its recipient receives a separate device token.
+
 ## [0.1.0-alpha.7] - 2026-09-23
 
 ### Added

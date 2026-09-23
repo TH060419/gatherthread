@@ -633,6 +633,7 @@ test("new-user invitation claim requests a browser session without retaining the
       deviceName: "Work laptop",
     });
     assert.equal(claimed.actor.username, "New User");
+    assert.equal(claimed.actor.can_create_projects, false);
     assert.equal(claimed.invitation.status, "claimed");
     assert.equal(claimed.accessToken, "new-device-token");
     assert.equal(api.token, "");
@@ -651,6 +652,38 @@ test("new-user invitation claim requests a browser session without retaining the
   }
 });
 
+test("test access activation uses a separate route and returns only the new device credential once", async () => {
+  const originalFetch = globalThis.fetch;
+  const qualificationCode = ["fixture", "qualification", "code"].join("-");
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return new Response(JSON.stringify({ data: {
+      actor: { user_id: "qualified", display_name: "Qualified", device_id: "qualified-device", can_create_projects: true },
+      token: "new-qualified-device-token",
+    } }), { status: 201, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const result = await api.claimTestAccess({
+      accessToken: qualificationCode,
+      displayName: "Qualified", deviceName: "Work laptop", rememberDevice: true,
+    });
+    assert.equal(result.actor.can_create_projects, true);
+    assert.equal(result.accessToken, "new-qualified-device-token");
+    assert.equal(api.token, "");
+    assert.equal(captured.url, "https://gatherthread.example/v1/test-access/claim");
+    assert.equal(captured.options.headers.Authorization, undefined);
+    assert.equal(captured.options.headers["X-GatherThread-Browser-Session"], "1");
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      access_token: qualificationCode,
+      display_name: "Qualified", device_name: "Work laptop", remember_device: true,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("browser login sends the remember-device choice without retaining the bearer", async () => {
   const originalFetch = globalThis.fetch;
   let captured;
@@ -663,8 +696,12 @@ test("browser login sends the remember-device choice without retaining the beare
   };
   try {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    await api.authenticate("device-token", { rememberDevice: true });
-    assert.deepEqual(JSON.parse(captured.options.body), { remember_device: true });
+    await api.authenticate("device-token", {
+      rememberDevice: true, displayName: "Alice renamed", deviceName: "Office Mac",
+    });
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      remember_device: true, display_name: "Alice renamed", device_name: "Office Mac",
+    });
     assert.equal(captured.options.headers.Authorization, "Bearer device-token");
     assert.equal(api.token, "");
   } finally {

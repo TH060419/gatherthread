@@ -28,7 +28,14 @@ test("English is the unchanged default and Simplified Chinese preserves product 
   assert.equal(translateUiText("Settings", "en"), "Settings");
   assert.equal(translateUiText("Settings", "zh-CN"), "设置");
   assert.equal(translateUiText("Access token", "zh-CN"), "访问 token");
+  assert.equal(translateUiText("Choose either an access token or a project invitation before continuing.", "zh-CN"), "请只填写访问 token 或项目邀请密钥中的一种，再继续。");
   assert.equal(translateUiText("Remember this device", "zh-CN"), "记住此设备");
+  assert.equal(translateUiText("Checking…", "zh-CN"), "正在验证…");
+  assert.equal(translateUiText("Activating…", "zh-CN"), "正在激活…");
+  assert.equal(translateUiText("Joining…", "zh-CN"), "正在加入…");
+  assert.equal(translateUiText("Create your first project.", "zh-CN"), "创建你的第一个项目。");
+  assert.equal(translateUiText("Create a project to organize your sessions and invite collaborators.", "zh-CN"), "创建项目来组织会话并邀请协作者。");
+  assert.equal(translateUiText("Once invited, your projects will appear here. A project invitation does not let you create projects.", "zh-CN"), "收到邀请后，项目会显示在这里。项目邀请不会授予创建项目的权限。");
   assert.equal(translateUiText("This device", "zh-CN"), "当前设备");
   assert.equal(translateUiText("Connect Codex", "zh-CN"), "连接 Codex");
   assert.equal(translateUiText("Conversations", "zh-CN"), "协作");
@@ -52,6 +59,23 @@ test("English is the unchanged default and Simplified Chinese preserves product 
     translateUiText("Connects to https://example.test. The token is exchanged for a secure browser session and is never stored by the page.", "zh-CN"),
     "用于连接 https://example.test。token 会被交换为安全的浏览器会话，且不会被页面存储。",
   );
+  assert.equal(
+    translateUiText("Use a device token to sign in, or a one-time test access token to create an account on https://example.test. The token is exchanged for a secure browser session and is never stored by the page.", "zh-CN"),
+    "使用设备 token 登录，或使用一次性测试资格 token 在 https://example.test 创建账号。token 会被交换为安全的浏览器会话，且不会被页面存储。",
+  );
+  for (const [source, expected] of [
+    [
+      "Use your device token to sign in on https://example.test. The token is exchanged for a secure browser session and is never stored by the page.",
+      "使用设备令牌登录 https://example.test。令牌会被交换为安全的浏览器会话，且不会被页面存储。",
+    ],
+    [
+      "Use a one-time test qualification code to activate an account on https://example.test and receive a device token.",
+      "使用一次性测试资格码在 https://example.test 激活账号，并获取设备令牌。",
+    ],
+  ]) {
+    assert.equal(translateUiText(source, "en"), source);
+    assert.equal(translateUiText(source, "zh-CN"), expected);
+  }
   assert.match(
     translateUiText("Your device token is requested by a hidden CLI prompt and is not included in any command. This page only copies commands and cannot launch local Codex. Keep the connector running for Web requests and plugin MCP tools. Direct Desktop turn sync additionally requires --plugin-hooks plus explicit review and trust of the plugin Hooks.", "zh-CN"),
     /Hooks（钩子）/,

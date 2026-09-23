@@ -52,6 +52,7 @@ The same-origin API is rooted at `/v1`.
 - Errors use `{ "error": { "code": string, "message": string, "details"?: JSON } }` with an appropriate HTTP status.
 - JSON responses are `no-store`. Bodies and JSON structure are bounded before reaching business logic.
 - Browser authentication is exchanged into an opaque `HttpOnly; SameSite=Strict` cookie. HTTPS adds `Secure` and the `__Host-` prefix.
+- Account identity responses include `can_create_projects`, an account-wide capability distinct from each project's `owner`/`participant`/`viewer` membership. Existing device-token login may optionally change that authenticated user's display name and current device label; it never changes the capability.
 - Connectors use an HTTP bearer credential kept in the connector process. Credentials never belong in URLs, WebSocket query strings, page storage, MCP arguments, logs, or canonical events.
 - Cookie-authenticated writes require an allowed `Origin`. Bearer-authenticated connectors remain device- and role-scoped.
 - Retryable mutations carry a stable `idempotency_key`. An exact same-actor retry returns the original result; a changed actor, operation, target, or canonical payload conflicts.
@@ -62,9 +63,10 @@ The same-origin API is rooted at `/v1`.
 |---|---|---|
 | `/health/live`, `/health/ready` | Process liveness and dependency readiness | Keep liveness independent from readiness; never disclose secrets or database contents. |
 | `/v1/bootstrap`, `/v1/browser-sessions`, `/v1/me` | First-owner bootstrap and browser session exchange | Bootstrap remains explicitly configured and loopback-bound; browser credentials are cleared from page memory after exchange. |
+| `/v1/test-access/claim` | Single-use operator-issued test qualification | Unauthenticated but origin/rate-limited; atomically creates an account with project-creation capability and a separate device token. An opt-in browser-session header issues a Cookie in the same transaction. Tokens are issued/revoked only by local host commands and are never reusable login credentials. |
 | `/v1/devices`, `/v1/device-authorizations` | Device naming, authorization, rotation, and revocation | Revocation invalidates related runtimes, tickets, and sessions immediately. |
-| `/v1/projects`, `/v1/projects/:id/*` | Projects, project sessions, members, invitations, and audit | Project ownership and membership are rechecked server-side. |
-| `/v1/sessions`, `/v1/sessions/:id/*` | Session metadata, members, events, local turns, snapshots, and Agent requests | Session ACL, mode, creator, visibility, quotas, and current head are authoritative. |
+| `/v1/projects`, `/v1/projects/:id/*` | Projects, project sessions, members, invitations, and audit | Account qualification gates new project creation; project ownership and membership are rechecked server-side. A project invitation alone does not grant account qualification. |
+| `/v1/sessions`, `/v1/sessions/:id/*` | Session metadata, members, events, local turns, snapshots, and Agent requests | Session ACL, mode, creator, visibility, quotas, and current head are authoritative. The legacy create-without-project path cannot create a project for a guest. |
 | `/v1/runtimes` | Runtime registration and heartbeat | Purpose, device, user, project/session access, harness, provider, and model are bound and validated. |
 | `/v1/dsh-pairings` | Browser-approved DSH pairing | Pairing is short-lived, one-use, origin-bound, and does not expose the long-lived credential to the browser URL or logs. |
 | `/v1/realtime-ticket`, `/v1/ws` | One-use session-scoped realtime subscription | The socket is transport, not durable truth; clients replay from their last contiguous cursor. |

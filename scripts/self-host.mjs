@@ -4,8 +4,8 @@ import { ensureLocalOwnerHostEnvironment } from "./local-env.mjs";
 
 const mode = process.argv[2] ?? "start";
 const forwardedArguments = process.argv.slice(3);
-if (!new Set(["start", "init", "bootstrap"]).has(mode)) {
-  process.stderr.write("Usage: node scripts/self-host.mjs [start|init|bootstrap] [CLI options]\n");
+if (!new Set(["start", "init", "bootstrap", "issue-test-access", "revoke-test-access"]).has(mode)) {
+  process.stderr.write("Usage: node scripts/self-host.mjs [start|init|bootstrap|issue-test-access|revoke-test-access] [CLI options]\n");
   process.exit(2);
 }
 
@@ -36,7 +36,7 @@ if (built.signal) {
 } else if (built.code !== 0) {
   process.exitCode = built.code;
 } else {
-  const command = mode === "start" ? "start" : "bootstrap";
+  const command = mode === "init" ? "bootstrap" : mode;
   const result = await run(process.execPath, ["apps/server/dist/src/cli.js", command, ...forwardedArguments]);
   if (result.signal) process.kill(process.pid, result.signal);
   else process.exitCode = result.code;
