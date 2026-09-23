@@ -76,6 +76,7 @@ interface CodexThreadTokenUsage {
   /** Active-context tokens from `last`, or the conservative legacy `total` fallback. */
   totalTokens: number;
   fingerprint?: string;
+  turnId?: string;
 }
 
 interface PendingRequest {
@@ -101,6 +102,8 @@ interface CodexAppServerState {
   contextUsageSource: "fallback_estimate" | "app_server" | "unknown_after_compaction";
   /** Numeric native observation identity, retained across resume/reconnect. */
   contextUsageFingerprint?: string;
+  /** A different native turn may replace the estimate; same-turn reports may lag injections. */
+  contextUsageTurnId?: string;
   /** Derived shared-history view used by the hidden execution task only. */
   historyContextFingerprint?: string;
   /** A completed but unusable compaction must not be repeated by polling. */
@@ -1019,9 +1022,11 @@ export class CodexAppServerClient {
       const totalTokens = currentContextTokens(usage);
       if (threadId && typeof modelContextWindow === "number" && Number.isSafeInteger(modelContextWindow) && modelContextWindow > 0
         && typeof totalTokens === "number" && Number.isSafeInteger(totalTokens) && totalTokens >= 0) {
+        const turnId = objectString(message.params, "turnId");
         this.#threadTokenUsage.set(threadId, {
           modelContextWindow, totalTokens,
-          fingerprint: nativeContextFingerprint(threadId, objectString(message.params, "turnId"), usage),
+          fingerprint: nativeContextFingerprint(threadId, turnId, usage),
+          ...(turnId === undefined ? {} : { turnId }),
         });
       }
     }
@@ -1546,9 +1551,15 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         next.estimatedContextTokens = observed?.totalTokens ?? history.estimatedTokens;
         next.contextUsageSource = observed ? "app_server" : compacted ? "unknown_after_compaction" : "fallback_estimate";
         delete next.contextUsageFingerprint;
+        delete next.contextUsageTurnId;
         delete next.contextRecovery;
-        if (observed) next.contextUsageFingerprint = observationFingerprint(candidateThreadId, observed);
-        else if (initialObserved) next.contextUsageFingerprint = observationFingerprint(candidateThreadId, initialObserved);
+        if (observed) {
+          next.contextUsageFingerprint = observationFingerprint(candidateThreadId, observed);
+          if (observed.turnId !== undefined) next.contextUsageTurnId = observed.turnId;
+        } else if (initialObserved) {
+          next.contextUsageFingerprint = observationFingerprint(candidateThreadId, initialObserved);
+          if (initialObserved.turnId !== undefined) next.contextUsageTurnId = initialObserved.turnId;
+        }
         next.cloudCursor = Math.max(next.cloudCursor, throughSequence);
         next.desktopDeliveryCursor = throughSequence;
         next.desktopProjectionCursor = throughSequence;
@@ -1884,10 +1895,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           if (!recoveredItemIds?.has(itemId)) {
             await this.#client.injectItems(state.threadId, [responseMessage(rendered.role, injectionText, itemId)]);
           }
-          if (!this.#applyObservedContextUsage(state)) {
-            state.estimatedContextTokens += estimateTokens(injectionText);
-            if (state.contextUsageSource !== "unknown_after_compaction") state.contextUsageSource = "fallback_estimate";
-          }
+          this.#accountInjectedTokens(state, estimateTokens(injectionText));
           if (state.desktopProjectionJournal) state.desktopProjectionJournal.nextChunk = index + 1;
           await this.#saveState(state, false);
         }
@@ -2150,7 +2158,10 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         ? "app_server"
         : state.contextUsageSource === "unknown_after_compaction" ? "unknown_after_compaction" : "fallback_estimate";
       const observedUsage = this.#client.getThreadTokenUsage(state.threadId);
-      if (observedUsage) state.contextUsageFingerprint = observationFingerprint(state.threadId, observedUsage);
+      if (observedUsage) {
+        state.contextUsageFingerprint = observationFingerprint(state.threadId, observedUsage);
+        if (observedUsage.turnId !== undefined) state.contextUsageTurnId = observedUsage.turnId;
+      }
       state.cloudCursor = Math.max(state.cloudCursor, input.request.sequence);
       state.coveredThroughSequence = input.request.sequence;
       state.lastInjectedSequence = input.request.sequence;
@@ -2528,10 +2539,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         await this.#saveState(state);
       }
       await this.#client.injectItems(state.threadId, [responseMessage(rendered.role, injectionText)]);
-      if (!this.#applyObservedContextUsage(state)) {
-        state.estimatedContextTokens += incomingTokens;
-        if (state.contextUsageSource !== "unknown_after_compaction") state.contextUsageSource = "fallback_estimate";
-      }
+      this.#accountInjectedTokens(state, incomingTokens);
       if (persistState && state.projectionJournal) {
         state.projectionJournal.nextChunk = index + 1;
         await this.#saveState(state);
@@ -2573,7 +2581,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     const previousUsageFingerprint = state.contextUsageFingerprint;
     await this.#client.compactThread(state.threadId);
     state.compactionGeneration += 1;
-    if (!this.#applyObservedContextUsage(state)) {
+    if (!this.#applyObservedContextUsage(state, true)) {
       // Keep the prior conservative upper estimate. A completion says native
       // compaction succeeded, but does not establish a new token count.
       state.contextUsageSource = "unknown_after_compaction";
@@ -2605,23 +2613,41 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       || observed.totalTokens >= Math.floor(observed.modelContextWindow * this.#contextHighWatermark)) {
       throw new Error("Native context recovery is waiting for fresh token usage from Codex App Server; automatic compaction and rebuild are paused, and reconnecting with the same usage will not resume them");
     }
-    if (recovery.threadId === state.threadId) this.#applyObservedContextUsage(state);
+    if (recovery.threadId === state.threadId) this.#applyObservedContextUsage(state, true);
     delete state.contextRecovery;
     if (persistState) await this.#saveState(state);
   }
 
-  #applyObservedContextUsage(state: CodexAppServerState): boolean {
+  #accountInjectedTokens(state: CodexAppServerState, incomingTokens: number): void {
+    // A usage notification delivered after inject_items may describe an earlier
+    // chunk. Keep acknowledged items in the estimate until a distinct native
+    // turn or explicit compaction establishes a safe replacement.
+    this.#applyObservedContextUsage(state);
+    state.estimatedContextTokens += incomingTokens;
+    if (state.contextUsageSource !== "unknown_after_compaction") state.contextUsageSource = "fallback_estimate";
+  }
+
+  #applyObservedContextUsage(state: CodexAppServerState, afterCompaction = false): boolean {
     const observed = this.#client.getThreadTokenUsage(state.threadId);
     if (!observed) return false;
     const fingerprint = observationFingerprint(state.threadId, observed);
     // Resume may replay the exact same last-turn usage after a restart. Do
     // not erase any unobserved items appended since that observation.
     if (state.contextUsageFingerprint === fingerprint) return false;
+    const isNewTurn = !state.projectionJournal && !state.desktopProjectionJournal
+      && observed.turnId !== undefined
+      && state.contextUsageTurnId !== undefined
+      && observed.turnId !== state.contextUsageTurnId;
+    const preserveInjectedEstimate = !afterCompaction && state.contextUsageSource === "fallback_estimate"
+      && !isNewTurn;
     state.contextUsageFingerprint = fingerprint;
+    if (observed.turnId !== undefined) state.contextUsageTurnId = observed.turnId;
     state.contextWindowTokens = observed.modelContextWindow;
     state.contextWindowSource = "app_server";
-    state.estimatedContextTokens = observed.totalTokens;
-    state.contextUsageSource = "app_server";
+    state.estimatedContextTokens = preserveInjectedEstimate
+      ? Math.max(state.estimatedContextTokens, observed.totalTokens)
+      : observed.totalTokens;
+    state.contextUsageSource = preserveInjectedEstimate ? "fallback_estimate" : "app_server";
     return true;
   }
 
@@ -2746,7 +2772,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       sidecar: temporary.sidecar,
     };
     delete state.contextUsageFingerprint;
+    delete state.contextUsageTurnId;
     if (temporary.contextUsageFingerprint) state.contextUsageFingerprint = temporary.contextUsageFingerprint;
+    if (temporary.contextUsageTurnId) state.contextUsageTurnId = temporary.contextUsageTurnId;
     delete state.rebuild;
     delete state.projectionJournal;
     await this.#saveState(state);
@@ -2975,6 +3003,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       if (modelChanged) {
         state.estimatedContextTokens = 0;
         delete state.contextUsageFingerprint;
+        delete state.contextUsageTurnId;
       }
     }
     await this.#saveState(state, false);
@@ -3476,6 +3505,7 @@ function isCodexAppServerState(value: unknown): value is CodexAppServerState {
     && Number.isSafeInteger(value.estimatedContextTokens)
     && (value.contextUsageSource === "fallback_estimate" || value.contextUsageSource === "app_server" || value.contextUsageSource === "unknown_after_compaction")
     && (value.contextUsageFingerprint === undefined || (typeof value.contextUsageFingerprint === "string" && /^[a-f0-9]{64}$/u.test(value.contextUsageFingerprint)))
+    && (value.contextUsageTurnId === undefined || (typeof value.contextUsageTurnId === "string" && value.contextUsageTurnId.length > 0 && value.contextUsageTurnId.length <= 512))
     && (value.historyContextFingerprint === undefined || (typeof value.historyContextFingerprint === "string"
       && /^(?:[a-f0-9]{64}|generation:[A-Za-z0-9._:-]{1,128})$/u.test(value.historyContextFingerprint)))
     && (value.contextRecovery === undefined || (isObject(value.contextRecovery)

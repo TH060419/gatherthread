@@ -2965,6 +2965,7 @@ async function accountingFixture(t: TestContext, options: {
   estimated?: number;
   resumeUsage?: AccountingUsage;
   injectionUsage?: AccountingUsage;
+  injectionUsageAfter?: number;
   compactUsage?: AccountingUsage;
 }) {
   const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-native-context-accounting-")));
@@ -2983,6 +2984,7 @@ import { appendFile, readFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 let resumed = false;
 let injected = false;
+let injectionCount = 0;
 function usage(value, threadId = "old-thread") { if (value) send({ method: "thread/tokenUsage/updated", params: { threadId, turnId: value.turnId, tokenUsage: value } }); }
 function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
 for await (const line of createInterface({ input: process.stdin })) {
@@ -3002,7 +3004,10 @@ for await (const line of createInterface({ input: process.stdin })) {
     send({ id: message.id, result: {} });
   } else {
     send({ id: message.id, result: {} });
-    if (message.method === "thread/inject_items" && !injected) { usage(settings.injectionUsage); injected = true; }
+    if (message.method === "thread/inject_items" && !injected) {
+      injectionCount += 1;
+      if (injectionCount >= (settings.injectionUsageAfter ?? 1)) { usage(settings.injectionUsage); injected = true; }
+    }
   }
 }
 `);
@@ -3064,6 +3069,7 @@ test("identical native usage after reconnect preserves estimates, while a new tu
 test("an old native report never erases subsequently injected unobserved bytes", async (t) => {
   const fixture = await accountingFixture(t, {
     injectionUsage: { modelContextWindow: 128_000, total: { totalTokens: 500 } },
+    injectionUsageAfter: 2,
   });
   await fixture.executor.projectCanonicalEvents([
     canonical(3, "human_chat", { text: "x".repeat(40_000) }, "user-2"),
@@ -3072,6 +3078,11 @@ test("an old native report never erases subsequently injected unobserved bytes",
   assert.ok(saved.estimatedContextTokens > 10_000);
   assert.equal(saved.contextUsageSource, "fallback_estimate");
   assert.equal((await fixture.captured()).filter((entry) => entry.method === "thread/compact/start").length, 0);
+  await fixture.executor.projectCanonicalEvents([
+    canonical(4, "human_chat", { text: "next event" }, "user-2"),
+  ], registeredRuntime("old-thread"));
+  const later = JSON.parse(await readFile(fixture.statePath, "utf8"));
+  assert.ok(later.estimatedContextTokens >= saved.estimatedContextTokens);
 });
 
 test("native compact uses fresh post-compact usage and genuine small windows remain safe", async (t) => {
@@ -3282,7 +3293,10 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   ], runtime);
   const state = JSON.parse(await readFile(statePath, "utf8"));
   assert.equal(state.contextWindowTokens, 4096);
-  assert.equal(state.contextUsageSource, "app_server");
+  // The native window is observed, but a report emitted near an injection
+  // cannot prove that it includes every acknowledged chunk.
+  assert.equal(state.contextWindowSource, "app_server");
+  assert.equal(state.contextUsageSource, "fallback_estimate");
   const captures = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
   const compactCount = captures.filter((message) => message.method === "thread/compact/start").length;
   assert.ok(compactCount >= 1);
