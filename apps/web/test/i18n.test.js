@@ -57,6 +57,19 @@ test("English is the unchanged default and Simplified Chinese preserves product 
     translateUiText("Use a device token to sign in, or a one-time test access token to create an account on https://example.test. The token is exchanged for a secure browser session and is never stored by the page.", "zh-CN"),
     "使用设备 token 登录，或使用一次性测试资格 token 在 https://example.test 创建账号。token 会被交换为安全的浏览器会话，且不会被页面存储。",
   );
+  for (const [source, expected] of [
+    [
+      "Use your device token to sign in on https://example.test. The token is exchanged for a secure browser session and is never stored by the page.",
+      "使用设备令牌登录 https://example.test。令牌会被交换为安全的浏览器会话，且不会被页面存储。",
+    ],
+    [
+      "Use a one-time test qualification code to activate an account on https://example.test and receive a device token.",
+      "使用一次性测试资格码在 https://example.test 激活账号，并获取设备令牌。",
+    ],
+  ]) {
+    assert.equal(translateUiText(source, "en"), source);
+    assert.equal(translateUiText(source, "zh-CN"), expected);
+  }
   assert.match(
     translateUiText("Your device token is requested by a hidden CLI prompt and is not included in any command. This page only copies commands and cannot launch local Codex. Keep the connector running for Web requests and plugin MCP tools. Direct Desktop turn sync additionally requires --plugin-hooks plus explicit review and trust of the plugin Hooks.", "zh-CN"),
     /Hooks（钩子）/,
