@@ -4,6 +4,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+## [0.1.0-alpha.7] - 2026-09-23
+
 ### Added
 
 - Opt-in project code collaboration backed by standard bare Git storage, with per-member branches, bounded source checkpoints, review requests, owner-approved three-way merges and safe updates from main.
@@ -14,7 +16,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 ### Safety and current limits
 
 - Code sync does not change an existing local Git branch, index or remote. Credentials, harness state, symlinks and unsafe paths are excluded or rejected. Stale devices cannot overwrite another uploaded version; automatic upload pauses on large deletions or an interrupted download.
-- This source preview is not yet published to npm. It uses one branch per member/project, not automatic task worktrees or a public Git smart-HTTP service. Concurrent Agents must not write the same directory. Only uploaded, eligible source files can be recovered.
+- This Alpha uses one branch per member/project, not automatic task worktrees or a public Git smart-HTTP service. Concurrent Agents must not write the same directory. Only uploaded, eligible source files can be recovered.
 - Shared summaries are explicitly lossy and never delete canonical source messages. Source selection, generated prompts, ancestry validation and derived reads have independent resource limits; oversized input fails instead of being silently shortened. Native Codex/DSH automatic compaction remains separate.
 
 ### Audit fixes
@@ -183,6 +185,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - Alibaba Cloud deployment is intended for a small, invitation-only beta and requires operator-managed domain, filing, security-group, monitoring, and restore checks.
 - Public npm scope ownership, public plugin-directory distribution, and remote OAuth 2.1/PKCE MCP remain release follow-ups.
 
+[0.1.0-alpha.7]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.7
 [0.1.0-alpha.6]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.5
 [0.1.0-alpha.4]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.4

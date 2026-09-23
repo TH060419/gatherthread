@@ -2,9 +2,9 @@
 
 The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
 
-The current source checkout also adds optional **project code** upload/download/recovery in DSH settings. It requires a locally built plugin and separate per-project consent; automatic code upload defaults off. See [Project code collaboration](CODE_SYNC.md). Existing alpha.6 npm artifacts do not contain this unreleased feature.
+The `0.1.0-alpha.7` plugin adds optional **project code** upload/download/recovery in DSH settings, with separate per-project consent. Automatic code upload defaults off. See [Project code collaboration](CODE_SYNC.md).
 
-> Alpha preview: `0.1.0-alpha.6` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
+> Alpha preview: `0.1.0-alpha.7` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
 
 ## Normal four-step setup
 
@@ -19,7 +19,7 @@ npm install --global pnpm@10
 Then add the fixed GatherThread plugin to the DSH Web profile:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.6
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.7
 ```
 
 ### 2. Open DSH
@@ -46,7 +46,7 @@ From a private source checkout:
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.6.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.7.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -64,9 +64,9 @@ Do not add `--offline` unless the complete dependency metadata is already cached
 
 DSH uses its configured provider quota. `Insufficient Balance` or `QUOTA` means the selected DSH model account cannot run the turn; it is not a GatherThread synchronization failure.
 
-The unreleased source preview also lets a session writer select completed public messages in GatherThread Web and ask their **own connected DSH Agent** to make an attributed shared summary. Originals and earlier versions remain available. The per-user project setting defaults to summarized context for **future Web-triggered Agent requests**, or can use original text. A summary-aware Web turn uses a GatherThread-owned DSH execution Session with the same workspace and validated native tool preset; ordinary sessions without summaries retain the existing native path. The original DSH conversation, its local turns, and native compaction are not rewritten. Remote Agent replies appear there as clearly labelled plugin relay quotations, not as fabricated DSH-local model turns; this preserves the native Agent's next turn number. The canonical GatherThread event still retains its original actor and type. If the compatible native surface or preset inheritance cannot be verified, the summarized turn fails visibly instead of silently injecting the originals. Summaries are lossy and prompt instructions are not a security sandbox for workspace tools or files. See [ADR-0027](adr/0027-shared-manual-history-summaries.md).
+`0.1.0-alpha.7` also lets a session writer select completed public messages in GatherThread Web and ask their **own connected DSH Agent** to make an attributed shared summary. Originals and earlier versions remain available. The per-user project setting defaults to summarized context for **future Web-triggered Agent requests**, or can use original text. A summary-aware Web turn uses a GatherThread-owned DSH execution Session with the same workspace and validated native tool preset; ordinary sessions without summaries retain the existing native path. The original DSH conversation, its local turns, and native compaction are not rewritten. Remote Agent replies appear there as clearly labelled plugin relay quotations, not as fabricated DSH-local model turns; this preserves the native Agent's next turn number. The canonical GatherThread event still retains its original actor and type. If the compatible native surface or preset inheritance cannot be verified, the summarized turn fails visibly instead of silently injecting the originals. Summaries are lossy and prompt instructions are not a security sandbox for workspace tools or files. See [ADR-0027](adr/0027-shared-manual-history-summaries.md).
 
-## Context and long histories (unreleased source fix)
+## Context and long histories
 
 The plugin preserves redacted public cloud messages in the native conversation, rather than cutting each incoming message to 64 KiB. This does not enlarge the server's event limits or remove outgoing upload/redaction limits. Cursor advancement still waits for durable native append/flush.
 

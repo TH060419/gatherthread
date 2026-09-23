@@ -4,7 +4,7 @@
 
 This document defines the first-release security boundary for the collaboration server, browser client, MCP surface, local bridge, transcript adapters, and operational tooling.
 
-The repository contains an executable single-process `0.1.0-alpha.6` server and owner-host tooling. Automated checks cover core contracts, but passing `npm run release:verify` does not certify a host, network policy, operating system, filing status, backup location, or Internet-facing deployment. Public ingress is prepared only through the documented invitation-only Alibaba Cloud ECS profile and still requires operator preflight and monitoring; no official hosted service is open in this Alpha.
+The repository contains an executable single-process `0.1.0-alpha.7` server and owner-host tooling. Automated checks cover core contracts, but passing `npm run release:verify` does not certify a host, network policy, operating system, filing status, backup location, or Internet-facing deployment. Public ingress is prepared only through the documented invitation-only Alibaba Cloud ECS profile and still requires operator preflight and monitoring; no official hosted service is open in this Alpha.
 
 ## Assets and trust boundaries
 
@@ -105,7 +105,7 @@ Logs may contain request ID, hashed user or session identifier, event type, sequ
 
 The connector strips GatherThread credentials from the Codex child environment and never writes them to hook configuration, process arguments, native threads, registry, or spool. Local projection state, outbox, registry, and spool files are written atomically with mode `0600`; containing directories and the Unix socket path must be private. These files can contain local or shared conversation content even when they contain no bearer token, so host-account and disk protection remain required.
 
-Native context compaction is a model operation, not authorization to publish more data or a lossless archive. The unreleased native-first fix separates model-window estimates from bounded RPC/Hook/snapshot resources, keeps the canonical log unchanged, and never marks clipped visible messages as a successful compact. A failed required native compact cannot commit a new snapshot binding. Provider errors and missing capacity metadata remain fail-closed boundaries; an unknown token count is not zero usage.
+Native context compaction is a model operation, not authorization to publish more data or a lossless archive. The native-first implementation separates model-window estimates from bounded RPC/Hook/snapshot resources, keeps the canonical log unchanged, and never marks clipped visible messages as a successful compact. A failed required native compact cannot commit a new snapshot binding. Provider errors and missing capacity metadata remain fail-closed boundaries; an unknown token count is not zero usage.
 
 Transcript discovery and tailing accept only single-link regular files inside the authorized canonical roots. A hard link inside a permitted directory is not permission to publish its external target. Open-file identity and canonical path checks also guard replacement during the read.
 
@@ -123,7 +123,7 @@ The DSH plugin stores its server cursor, projected-event IDs, local-turn outbox,
 
 The native pairing slot is reserved before its first network request. Configuration is single-flight, and disconnect cancels/drains in-flight configuration before clearing local credentials. Actions cannot race initial credential restoration. Project-role changes recreate only the affected native owner so cached capabilities cannot survive a downgrade or block a later valid upgrade.
 
-## Opt-in code synchronization (unreleased source preview)
+## Opt-in code synchronization
 
 Code collaboration adds source files and Git objects as protected assets. The owner enables the project repository, and each local user separately authorizes one bound workspace (`--code-sync` with reviewed Codex Hooks, or DSH project consent). Automatic code upload defaults off and is independent from local-turn upload. All project readers can inspect every code branch; Solo restrictions are not source-code privacy.
 

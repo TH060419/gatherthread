@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 import { pathToFileURL } from "node:url";
 
-const PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.6";
+const PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.7";
 
 export function resolveMcpLauncherInvocation(
   platform = process.platform,
