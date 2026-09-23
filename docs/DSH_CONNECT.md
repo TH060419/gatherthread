@@ -2,6 +2,8 @@
 
 The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
 
+The current source checkout also adds optional **project code** upload/download/recovery in DSH settings. It requires a locally built plugin and separate per-project consent; automatic code upload defaults off. See [Project code collaboration](CODE_SYNC.md). Existing alpha.6 npm artifacts do not contain this unreleased feature.
+
 > Alpha preview: `0.1.0-alpha.6` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
 
 ## Normal four-step setup
@@ -61,6 +63,16 @@ Do not add `--offline` unless the complete dependency metadata is already cached
 - Web Agent requests target the exact selected DSH device and one provider/model/reasoning profile that runtime advertised. Unsupported values are not offered and fail closed if submitted. Legacy and non-advertising routes keep the connection's fixed model; no request silently falls back to Codex.
 
 DSH uses its configured provider quota. `Insufficient Balance` or `QUOTA` means the selected DSH model account cannot run the turn; it is not a GatherThread synchronization failure.
+
+The unreleased source preview also lets a session writer select completed public messages in GatherThread Web and ask their **own connected DSH Agent** to make an attributed shared summary. Originals and earlier versions remain available. The per-user project setting defaults to summarized context for **future Web-triggered Agent requests**, or can use original text. A summary-aware Web turn uses a GatherThread-owned DSH execution Session with the same workspace and validated native tool preset; ordinary sessions without summaries retain the existing native path. The original DSH conversation, its local turns, and native compaction are not rewritten. Remote Agent replies appear there as clearly labelled plugin relay quotations, not as fabricated DSH-local model turns; this preserves the native Agent's next turn number. The canonical GatherThread event still retains its original actor and type. If the compatible native surface or preset inheritance cannot be verified, the summarized turn fails visibly instead of silently injecting the originals. Summaries are lossy and prompt instructions are not a security sandbox for workspace tools or files. See [ADR-0027](adr/0027-shared-manual-history-summaries.md).
+
+## Context and long histories (unreleased source fix)
+
+The plugin preserves redacted public cloud messages in the native conversation, rather than cutting each incoming message to 64 KiB. This does not enlarge the server's event limits or remove outgoing upload/redaction limits. Cursor advancement still waits for durable native append/flush.
+
+During normal turns, DSH manages its own context and automatic compaction using the selected provider/model metadata and native compaction configuration. GatherThread does not replace those settings, including for non-DeepSeek providers. The browser's Codex fallback budget does not apply to DSH. Keep native automatic compaction enabled if desired; a model name or an advertised window is not a guarantee that the provider accepts that much input.
+
+DSH `0.1.2-rc.1` has a first-import limitation: its automatic pre-step compaction requires a prior native request header. A newly imported history can already exceed the model window before that first native request. Its manual compactor also submits a bounded model request; it cannot reliably rescue an arbitrarily oversized prefix. If the provider rejects the context, the original cloud/native records remain available. Use DSH's native compact control where the input fits, or explicitly select a suitable configured model and retry. GatherThread does not silently choose another model, prune the cloud log, or run a paid summary during background polling. Fully automatic staged compaction for this case remains a compatibility follow-up, not a supported guarantee. [ADR-0026](adr/0026-native-first-context-management.md) records the boundary.
 
 ## Troubleshooting
 

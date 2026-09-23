@@ -4,7 +4,7 @@ import { getEventListeners } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import {
   CodexAppServerClient,
   CodexAppServerExecutor,
@@ -18,6 +18,81 @@ import {
   type CollaborationApi,
   type RegisteredRuntime,
 } from "../src/index.js";
+
+test("shared summaries rebuild only hidden Codex model context and original mode restores source", async (t) => {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gt-summary-codex-")));
+  const statePath = path.join(directory, "state.json");
+  const capturePath = path.join(directory, "rpc.jsonl");
+  const fake = path.join(directory, "fake.mjs");
+  await writeFile(fake, `
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+let next = 0;
+const send = value => process.stdout.write(JSON.stringify(value) + "\\n");
+for await (const line of createInterface({ input: process.stdin })) {
+ const message = JSON.parse(line);
+ if (message.method === "initialized") continue;
+ appendFileSync(process.env.CAPTURE, JSON.stringify(message) + "\\n");
+ if (message.method === "thread/start") send({id:message.id,result:{thread:{id:"hidden-"+(++next)}}});
+ else if (message.method === "turn/start") {
+  const turn = {id:"turn-"+next+"-"+message.id,status:"completed",items:[{type:"agentMessage",text:"answer",phase:"final_answer"}]};
+  send({id:message.id,result:{turn}});
+  send({method:"turn/completed",params:{threadId:message.params.threadId,turn}});
+ } else send({id:message.id,result:{}});
+}
+`);
+  const client = new CodexAppServerClient({ command: process.execPath, commandArgs: [fake], cwd: directory,
+    env: { ...process.env, CAPTURE: capturePath } });
+  t.after(() => client.dispose());
+  const executor = new CodexAppServerExecutor({ client, workspacePath: directory, statePath,
+    threadName: "hidden summary test", model: "gpt-test", threadSource: "exec" });
+  const runtime = registeredRuntime("local");
+  const raw = canonical(1, "human_chat", { text: "VERBATIM_ORIGINAL_ONLY" });
+  const summaryRequest = canonical(2, "agent_request", { content: "GENERATION_SOURCE_COPY", history_summary: {} });
+  const summaryResponse = canonical(3, "agent_response", { text: "CONCISE_SHARED_SUMMARY" });
+  await executor.projectCanonicalEvents([raw, summaryRequest, summaryResponse], runtime);
+  const passiveState = JSON.parse(await readFile(statePath, "utf8"));
+  const passive = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+    .filter((message) => message.params?.threadId === passiveState.threadId);
+  assert.doesNotMatch(JSON.stringify(passive), /GENERATION_SOURCE_COPY/,
+    "passive Codex projection must not duplicate the selected source prompt");
+  assert.equal(passiveState.sidecar.find((entry: any) => entry.eventId === summaryRequest.id)?.disposition, "summary_control");
+  await executor.execute({ request: canonical(4, "agent_request", { text: "continue" }),
+    canonicalHistory: [raw, summaryRequest, summaryResponse], runtime,
+    historyContext: { view: "summary", through_sequence: 3, items: [{ kind: "summary", event_id: "event-3",
+      sequence: 1, actor_user_id: "user-1", content: "CONCISE_SHARED_SUMMARY", source_event_ids: [raw.id] }] } });
+  const summarizedState = JSON.parse(await readFile(statePath, "utf8"));
+  const rpc = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  const selected = rpc.filter((message) => message.params?.threadId === summarizedState.threadId);
+  assert.match(JSON.stringify(selected), /CONCISE_SHARED_SUMMARY/);
+  assert.doesNotMatch(JSON.stringify(selected), /VERBATIM_ORIGINAL_ONLY|GENERATION_SOURCE_COPY/);
+  assert.ok(rpc.filter((message) => message.method === "thread/start").every((message) =>
+    message.params.threadSource === "exec" && message.params.ephemeral === true));
+
+  await executor.execute({ request: canonical(5, "agent_request", { text: "use originals" }),
+    canonicalHistory: [raw, summaryRequest, summaryResponse], runtime,
+    historyContext: { view: "original", through_sequence: 4, items: [{ kind: "original", event_id: raw.id,
+      sequence: 1, actor_user_id: raw.actorId, content: "VERBATIM_ORIGINAL_ONLY" }] } });
+  const originalState = JSON.parse(await readFile(statePath, "utf8"));
+  assert.notEqual(originalState.threadId, summarizedState.threadId);
+  const restored = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+    .filter((message) => message.params?.threadId === originalState.threadId);
+  assert.match(JSON.stringify(restored), /VERBATIM_ORIGINAL_ONLY/);
+  assert.doesNotMatch(JSON.stringify(restored), /CONCISE_SHARED_SUMMARY|GENERATION_SOURCE_COPY/);
+
+  const generation = canonical(6, "agent_request", {
+    content: "ONLY_SELECTED_RECORDS_FOR_NEW_SUMMARY", history_summary: { version: 1 },
+  });
+  await executor.execute({ request: generation,
+    canonicalHistory: [raw, summaryRequest, summaryResponse], runtime,
+    historyContext: { view: "summary", through_sequence: 5, items: [] } });
+  const generationState = JSON.parse(await readFile(statePath, "utf8"));
+  assert.notEqual(generationState.threadId, originalState.threadId);
+  const isolated = (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line))
+    .filter((message) => message.params?.threadId === generationState.threadId);
+  assert.match(JSON.stringify(isolated), /ONLY_SELECTED_RECORDS_FOR_NEW_SUMMARY/);
+  assert.doesNotMatch(JSON.stringify(isolated), /VERBATIM_ORIGINAL_ONLY|CONCISE_SHARED_SUMMARY|GENERATION_SOURCE_COPY/);
+});
 
 test("Codex executor passively skips requests targeted to another exact runtime or provider", async () => {
   const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gatherthread-codex-routing-")));
@@ -43,11 +118,74 @@ test("Codex executor passively skips requests targeted to another exact runtime 
   assert.equal(await executor.shouldExecute(targeted({ runtime_id: runtime.id, provider: runtime.provider }), runtime), true);
 });
 
-test("visible-history import is deterministic, creates an empty-session marker, and compacts to its budget", () => {
+test("source sync activity probe reads native state and treats unknown or active runs as busy", async () => {
+  const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-code-activity-")));
+  const statePath = path.join(workspacePath, "state.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  const originalState = await readFile(statePath, "utf8");
+  let status = "active";
+  const executor = new CodexAppServerExecutor({
+    client: { readThread: async () => ({ id: "old-thread", status, turns: [] }), close: async () => undefined } as unknown as CodexAppServerClient,
+    workspacePath, statePath, threadName: "Code status only", model: "gpt-test",
+  });
+  assert.equal(await executor.isLocalRunActive(), true);
+  status = "unknown";
+  assert.equal(await executor.isLocalRunActive(), true);
+  status = "idle";
+  assert.equal(await executor.isLocalRunActive(), false);
+  status = "notLoaded";
+  assert.equal(await executor.isLocalRunActive(), false);
+  assert.equal(await readFile(statePath, "utf8"), originalState);
+});
+
+test("source sync refuses unfinished native turns even when the thread is not loaded", async () => {
+  const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-code-turn-activity-")));
+  const statePath = path.join(workspacePath, "state.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  let turnStatus = "inProgress";
+  const executor = new CodexAppServerExecutor({
+    client: { readThread: async () => ({
+      id: "old-thread", status: "notLoaded", turns: [{ id: "local-turn", status: turnStatus, items: [] }],
+    }), close: async () => undefined } as unknown as CodexAppServerClient,
+    workspacePath, statePath, threadName: "Code status only", model: "gpt-test",
+  });
+  assert.equal(await executor.isLocalRunActive(), true);
+  turnStatus = "unknown";
+  assert.equal(await executor.isLocalRunActive(), true);
+  for (turnStatus of ["completed", "failed", "interrupted"]) assert.equal(await executor.isLocalRunActive(), false);
+});
+
+test("source sync activity retains durable uncertain runs and fails closed for a missing binding", async () => {
+  const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-code-durable-activity-")));
+  const statePath = path.join(workspacePath, "state.json");
+  const executor = new CodexAppServerExecutor({
+    client: { readThread: async () => ({ id: "old-thread", status: "idle", turns: [] }), close: async () => undefined } as unknown as CodexAppServerClient,
+    workspacePath, statePath, threadName: "Code status only", model: "gpt-test",
+  });
+  assert.equal(await executor.isLocalRunActive(), true);
+  for (const journal of [
+    { hookDrafts: { "local-turn": { threadId: "old-thread", turnId: "local-turn", requestPayload: { text: "unfinished" } } } },
+    { executionJournal: { "request-1": { requestId: "request-1", status: "prepared" } } },
+    { executionJournal: { "request-1": { requestId: "request-1", status: "started", turnId: "turn-1" } } },
+  ]) {
+    await writeFile(statePath, JSON.stringify({ ...projectionState(workspacePath), ...journal }));
+    assert.equal(await executor.isLocalRunActive(), true);
+  }
+});
+
+test("visible-history import is deterministic and preserves full history beyond the context window", () => {
   const empty = buildVisibleHistoryImport([], 1, 4_096);
   assert.equal(empty.messages.length, 2);
   assert.match(empty.messages[0]?.text ?? "", /empty shared session/i);
   assert.equal(empty.compacted, false);
+
+  const withSummary = buildVisibleHistoryImport([
+    canonical(1, "human_chat", { text: "SOURCE_ORIGINAL" }),
+    canonical(2, "agent_request", { content: "DUPLICATED_SELECTION_PROMPT", history_summary: { version: 1 } }),
+    canonical(3, "agent_response", { text: "GENERATED_SHARED_SUMMARY" }),
+  ], 3, 4_096);
+  assert.match(JSON.stringify(withSummary.messages), /SOURCE_ORIGINAL|GENERATED_SHARED_SUMMARY/);
+  assert.doesNotMatch(JSON.stringify(withSummary.messages), /DUPLICATED_SELECTION_PROMPT/);
 
   const events = Array.from({ length: 80 }, (_, index) => canonical(
     index + 1,
@@ -58,10 +196,94 @@ test("visible-history import is deterministic, creates an empty-session marker, 
   const first = buildVisibleHistoryImport(events, 80, 4_096);
   const second = buildVisibleHistoryImport(events, 80, 4_096);
   assert.equal(first.digest, second.digest);
-  assert.equal(first.compacted, true);
-  assert.ok(first.estimatedTokens < Math.floor(4_096 * 0.8));
-  assert.match(first.messages[0]?.text ?? "", /compacted/i);
+  assert.equal(first.compacted, false);
+  assert.ok(first.estimatedTokens > Math.floor(4_096 * 0.8));
+  assert.equal(first.messages.length, events.length);
+  assert.match(first.messages[0]?.text ?? "", /0: history/);
   assert.match(first.messages.at(-1)?.text ?? "", /79:/);
+});
+
+test("visible-history import retains old text and the end of an oversized recent message", () => {
+  const recent = `recent-start ${"甲🙂".repeat(12_000)} recent-end`;
+  const history = buildVisibleHistoryImport([
+    canonical(1, "human_chat", { text: "old-public-text" }),
+    canonical(2, "agent_response", { text: recent }),
+  ], 2, 4_096);
+  assert.equal(history.messages.length, 2);
+  assert.match(history.messages[0]?.text ?? "", /old-public-text/);
+  assert.ok(history.messages[1]?.text.endsWith(recent));
+  assert.equal(history.compacted, false);
+});
+
+test("visible-history resource ceiling rejects oversized JSON before importing or switching binding", async () => {
+  const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-visible-resource-limit-")));
+  const statePath = path.join(workspacePath, "state.json");
+  const original = JSON.stringify(projectionState(workspacePath));
+  await writeFile(statePath, original);
+  let imports = 0;
+  const executor = new CodexAppServerExecutor({
+    client: { close: async () => undefined } as unknown as CodexAppServerClient,
+    workspacePath, statePath, threadName: "Resource ceiling", model: "gpt-test",
+    desktopHookOnly: true, gatherThreadSessionId: "session-1",
+    visibleHistoryImporter: async () => { imports += 1; throw new Error("oversized snapshot unexpectedly reached native importer"); },
+  });
+  // JSON escaping, not just text bytes, counts against the resource ceiling.
+  await assert.rejects(executor.importVisibleHistorySnapshot([
+    canonical(3, "human_chat", { text: '"'.repeat(4 * 1024 * 1024) }),
+  ], 3), /visible history.*8 MiB/i);
+  assert.equal(imports, 0);
+  assert.equal(await readFile(statePath, "utf8"), original);
+});
+
+test("large visible snapshots compact natively and preserve the old binding on native failure or known-full usage", async () => {
+  for (const outcome of ["ready", "failed", "full", "unknown"]) {
+    const fails = outcome === "failed";
+    const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-visible-native-compact-")));
+    const statePath = path.join(workspacePath, "state.json");
+    const original = JSON.stringify({ ...projectionState(workspacePath), contextWindowTokens: 4096 });
+    await writeFile(statePath, original);
+    let compactions = 0;
+    const archived: string[] = [];
+    const executor = new CodexAppServerExecutor({
+      client: {
+        readThread: async (id: string) => ({ id, projectId: "project-1", status: "idle", turns: [completedTurn("imported", null, "full", "history")] }),
+        setThreadName: async () => undefined,
+        findProjectIdForRoot: async () => "project-1",
+        compactThread: async () => { compactions += 1; if (fails) throw new Error("native compact failed"); },
+        getThreadTokenUsage: () => compactions > 0 && !fails && outcome !== "unknown"
+          ? { modelContextWindow: 4096, totalTokens: outcome === "full" ? 3500 : 300 } : undefined,
+        archiveThread: async (id: string) => { archived.push(id); },
+        unsubscribeThread: async () => undefined,
+        close: async () => undefined,
+      } as unknown as CodexAppServerClient,
+      workspacePath, statePath, threadName: "Native import", model: "gpt-test",
+      contextWindowTokens: 4096, desktopHookOnly: true, gatherThreadSessionId: "session-1",
+      visibleHistoryImporter: async ({ history }) => {
+        assert.match(history.messages[0]?.text ?? "", /old-public-text/);
+        assert.match(history.messages.at(-1)?.text ?? "", /recent-end$/);
+        return { threadId: "candidate" };
+      },
+    });
+    const operation = executor.importVisibleHistorySnapshot([
+      canonical(1, "human_chat", { text: "old-public-text" }),
+      canonical(2, "agent_response", { text: `${"history ".repeat(4000)}recent-end` }),
+    ], 2);
+    if (fails || outcome === "full") {
+      await assert.rejects(operation, fails ? /native compact failed/ : /context.*high-water/i);
+      assert.equal(await readFile(statePath, "utf8"), original);
+      assert.deepEqual(archived, ["candidate"]);
+    } else {
+      const result = await operation;
+      assert.equal(result.compacted, true);
+      const saved = JSON.parse(await readFile(statePath, "utf8"));
+      assert.equal(saved.threadId, "candidate");
+      assert.equal(saved.contextUsageSource, outcome === "unknown" ? "unknown_after_compaction" : "app_server");
+      if (outcome === "unknown") assert.ok(saved.estimatedContextTokens > 9000);
+      else assert.equal(saved.estimatedContextTokens, 300);
+      assert.deepEqual(archived, []);
+    }
+    assert.equal(compactions, 1);
+  }
 });
 
 test("visible-history import gives a metadata-only new session a local user marker", () => {
@@ -108,6 +330,7 @@ test("visible-history manual import switches to a verified new task and leaves t
     findProjectIdForRoot: async () => "project-1",
     setThreadProject: async () => true,
     compactThread: async (threadId: string) => { calls.push(`compact:${threadId}`); },
+    getThreadTokenUsage: () => undefined,
     deleteThread: async (threadId: string) => { calls.push(`delete:${threadId}`); },
     archiveThread: async (threadId: string) => { calls.push(`archive:${threadId}`); },
     unsubscribeThread: async () => undefined,
@@ -197,6 +420,7 @@ test("manual visible-history import creates a new task without taking the Deskto
     findProjectIdForRoot: async () => "project-1",
     setThreadProject: async () => true,
     compactThread: async () => undefined,
+    getThreadTokenUsage: () => undefined,
     deleteThread: async () => {
       oldTaskMutations += 1;
       throw new Error("thread old-thread already has an active writer");
@@ -1473,6 +1697,84 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   assert.equal(lifecycle.some((event) => event.method === "thread/inject_items" && event.threadId === "old-thread"), false);
 });
 
+test("native compaction rejects failed, interrupted and terminal error races without waiting for timeout", async (t) => {
+  for (const failure of ["failed", "interrupted", "error"]) {
+    const directory = await mkdtemp(path.join(tmpdir(), "gt-compact-native-failure-"));
+    const fakeCodex = path.join(directory, "fake.mjs");
+    await writeFile(fakeCodex, `
+import { createInterface } from "node:readline";
+function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
+for await (const line of createInterface({ input: process.stdin })) {
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  if (message.method !== "thread/compact/start") { send({ id: message.id, result: {} }); continue; }
+  send({ method: "item/started", params: { threadId: "thread-1", turnId: "compact-turn", item: { type: "contextCompaction" } } });
+  if (process.env.FAILURE === "error") send({ method: "error", params: {
+    threadId: "thread-1", turnId: "compact-turn", willRetry: false, error: { message: "native compact rejected" },
+  } });
+  else send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "compact-turn", status: process.env.FAILURE } } });
+  // The completion precedes the start-RPC reply, as in a fast native failure.
+  setTimeout(() => send({ id: message.id, result: {} }), 20);
+}
+`);
+    const client = new CodexAppServerClient({
+      command: process.execPath, commandArgs: [fakeCodex], cwd: directory,
+      env: { ...process.env, FAILURE: failure }, turnTimeoutMs: 300,
+    });
+    t.after(() => client.dispose());
+    await assert.rejects(client.compactThread("thread-1"), failure === "error" ? /native compact rejected/ : new RegExp(failure));
+  }
+});
+
+test("native compaction terminal failure does not wait for a missing start RPC reply", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gt-compact-missing-ack-"));
+  const fakeCodex = path.join(directory, "fake.mjs");
+  await writeFile(fakeCodex, `
+import { createInterface } from "node:readline";
+for await (const line of createInterface({ input: process.stdin })) {
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  if (message.method === "thread/compact/start") {
+    process.stdout.write(JSON.stringify({ method: "error", params: {
+      threadId: "thread-1", turnId: "compact-turn", willRetry: false, error: { message: "terminal native failure without RPC ack" },
+    } }) + "\\n");
+  } else process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+}
+`);
+  const client = new CodexAppServerClient({
+    command: process.execPath, commandArgs: [fakeCodex], cwd: directory,
+    requestTimeoutMs: 250, turnTimeoutMs: 300,
+  });
+  t.after(() => client.dispose());
+  await assert.rejects(client.compactThread("thread-1"), /terminal native failure without RPC ack/);
+});
+
+test("native compaction ignores unrelated and retryable errors and accepts completion before the RPC reply", async (t) => {
+  const directory = await mkdtemp(path.join(tmpdir(), "gt-compact-native-success-"));
+  const fakeCodex = path.join(directory, "fake.mjs");
+  await writeFile(fakeCodex, `
+import { createInterface } from "node:readline";
+function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
+for await (const line of createInterface({ input: process.stdin })) {
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  if (message.method === "thread/compact/start") {
+    send({ method: "item/started", params: { threadId: "thread-1", turnId: "compact-turn", item: { type: "contextCompaction" } } });
+    for (const params of [
+      { threadId: "other-thread", turnId: "compact-turn", willRetry: false },
+      { threadId: "thread-1", turnId: "other-turn", willRetry: false },
+      { threadId: "thread-1", turnId: "compact-turn", willRetry: true },
+    ]) send({ method: "error", params: { ...params, error: { message: "must ignore" } } });
+    send({ method: "item/completed", params: { threadId: "thread-1", turnId: "compact-turn", item: { type: "contextCompaction" } } });
+  }
+  send({ id: message.id, result: {} });
+}
+`);
+  const client = new CodexAppServerClient({ command: process.execPath, commandArgs: [fakeCodex], cwd: directory, turnTimeoutMs: 300 });
+  t.after(() => client.dispose());
+  await client.compactThread("thread-1");
+});
+
 test("close during pending turn and compact starts rejects cleanly without unhandled completions", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-close-pending-"));
   const capturePath = path.join(directory, "capture.jsonl");
@@ -2656,6 +2958,211 @@ test("unknown local-turn commit survives downgrade and resolves idempotently bef
   assert.equal(await executor.shouldExecute(committed.requestEvent, runtime), false);
 });
 
+type AccountingUsage = { turnId?: string; modelContextWindow: number; total: { totalTokens: number }; last?: { totalTokens: number } };
+
+async function accountingFixture(t: TestContext, options: {
+  window?: number;
+  estimated?: number;
+  resumeUsage?: AccountingUsage;
+  injectionUsage?: AccountingUsage;
+  compactUsage?: AccountingUsage;
+}) {
+  const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-native-context-accounting-")));
+  const statePath = path.join(workspacePath, "state.json");
+  const capturePath = path.join(workspacePath, "capture.jsonl");
+  const settingsPath = path.join(workspacePath, "accounting.json");
+  const fakeCodex = path.join(workspacePath, "fake.mjs");
+  await writeFile(statePath, JSON.stringify({
+    ...projectionState(workspacePath),
+    contextWindowTokens: options.window ?? 128_000,
+    estimatedContextTokens: options.estimated ?? 0,
+  }));
+  await writeFile(settingsPath, JSON.stringify(options));
+  await writeFile(fakeCodex, `
+import { appendFile, readFile } from "node:fs/promises";
+import { createInterface } from "node:readline";
+let resumed = false;
+let injected = false;
+function usage(value, threadId = "old-thread") { if (value) send({ method: "thread/tokenUsage/updated", params: { threadId, turnId: value.turnId, tokenUsage: value } }); }
+function send(value) { process.stdout.write(JSON.stringify(value) + "\\n"); }
+for await (const line of createInterface({ input: process.stdin })) {
+  const settings = JSON.parse(await readFile(process.env.ACCOUNTING_PATH, "utf8"));
+  const message = JSON.parse(line);
+  await appendFile(process.env.CAPTURE, JSON.stringify(message) + "\\n");
+  if (message.method === "initialized") continue;
+  if (message.method === "thread/start") send({ id: message.id, result: { thread: { id: "rebuild-" + message.id } } });
+  else if (message.method === "thread/read") send({ id: message.id, result: { thread: { id: message.params.threadId, status: { type: "idle" }, turns: [] } } });
+  else if (message.method === "thread/resume") {
+    send({ id: message.id, result: { thread: { id: "old-thread" } } });
+    if (!resumed) usage(settings.resumeUsage);
+    resumed = true;
+  } else if (message.method === "thread/compact/start") {
+    usage(settings.compactUsage, message.params.threadId);
+    send({ method: "item/completed", params: { threadId: message.params.threadId, item: { type: "contextCompaction" } } });
+    send({ id: message.id, result: {} });
+  } else {
+    send({ id: message.id, result: {} });
+    if (message.method === "thread/inject_items" && !injected) { usage(settings.injectionUsage); injected = true; }
+  }
+}
+`);
+  const client = new CodexAppServerClient({
+    command: process.execPath, commandArgs: [fakeCodex], cwd: workspacePath,
+    env: { ...process.env, ACCOUNTING_PATH: settingsPath, CAPTURE: capturePath },
+  });
+  t.after(() => client.dispose());
+  const executor = new CodexAppServerExecutor({
+    client, workspacePath, statePath, threadName: "Accounting", model: "gpt-test",
+    contextWindowTokens: options.window ?? 128_000,
+  });
+  return {
+    executor, statePath,
+    setResumeUsage: (resumeUsage: AccountingUsage) => writeFile(settingsPath, JSON.stringify({ ...options, resumeUsage })),
+    captured: async () => (await readFile(capturePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line)),
+  };
+}
+
+test("native large windows use last context usage, not cumulative tokens or a 4096-token ceiling", async (t) => {
+  const fixture = await accountingFixture(t, {
+    resumeUsage: { modelContextWindow: 262_144, total: { totalTokens: 2_000_000 }, last: { totalTokens: 100 } },
+  });
+  await fixture.executor.projectCanonicalEvents([
+    canonical(3, "human_chat", { text: "x".repeat(70_000) }, "user-2"),
+  ], registeredRuntime("old-thread"));
+  // Reloading fallback token estimates must not erase an observed native window.
+  await fixture.executor.projectCanonicalEvents([
+    canonical(4, "human_chat", { text: "native-window-after-reload" }, "user-2"),
+  ], registeredRuntime("old-thread"));
+  const saved = JSON.parse(await readFile(fixture.statePath, "utf8"));
+  assert.equal((await fixture.captured()).filter((entry) => entry.method === "thread/compact/start").length, 0);
+  assert.equal(saved.contextWindowTokens, 262_144);
+  assert.equal(saved.contextWindowSource, "app_server");
+  assert.equal(saved.contextUsageSource, "fallback_estimate");
+  assert.ok(saved.estimatedContextTokens > 23_000 && saved.estimatedContextTokens < 30_000);
+});
+
+test("identical native usage after reconnect preserves estimates, while a new turn with equal tokens resets them", async (t) => {
+  const usage = { turnId: "native-turn-1", modelContextWindow: 128_000, total: { totalTokens: 10_000 }, last: { totalTokens: 100 } };
+  const fixture = await accountingFixture(t, { resumeUsage: usage });
+  for (const sequence of [3, 4]) {
+    await fixture.executor.projectCanonicalEvents([
+      canonical(sequence, "human_chat", { text: "x".repeat(5000) }, "user-2"),
+    ], registeredRuntime("old-thread"));
+  }
+  const before = JSON.parse(await readFile(fixture.statePath, "utf8"));
+  assert.ok(before.estimatedContextTokens > 3400);
+  assert.match(before.contextUsageFingerprint, /^[a-f0-9]{64}$/);
+  await fixture.setResumeUsage({ ...usage, turnId: "native-turn-2" });
+  await fixture.executor.projectCanonicalEvents([
+    canonical(5, "human_chat", { text: "small new delta" }, "user-2"),
+  ], registeredRuntime("old-thread"));
+  const after = JSON.parse(await readFile(fixture.statePath, "utf8"));
+  assert.ok(after.estimatedContextTokens > 100 && after.estimatedContextTokens < 200);
+  assert.notEqual(after.contextUsageFingerprint, before.contextUsageFingerprint);
+});
+
+test("an old native report never erases subsequently injected unobserved bytes", async (t) => {
+  const fixture = await accountingFixture(t, {
+    injectionUsage: { modelContextWindow: 128_000, total: { totalTokens: 500 } },
+  });
+  await fixture.executor.projectCanonicalEvents([
+    canonical(3, "human_chat", { text: "x".repeat(40_000) }, "user-2"),
+  ], registeredRuntime("old-thread"));
+  const saved = JSON.parse(await readFile(fixture.statePath, "utf8"));
+  assert.ok(saved.estimatedContextTokens > 10_000);
+  assert.equal(saved.contextUsageSource, "fallback_estimate");
+  assert.equal((await fixture.captured()).filter((entry) => entry.method === "thread/compact/start").length, 0);
+});
+
+test("native compact uses fresh post-compact usage and genuine small windows remain safe", async (t) => {
+  const fixture = await accountingFixture(t, {
+    window: 4096, estimated: 3000,
+    compactUsage: { modelContextWindow: 4096, total: { totalTokens: 2_000_000 }, last: { totalTokens: 200 } },
+  });
+  await fixture.executor.projectCanonicalEvents([
+    canonical(3, "human_chat", { text: "x".repeat(2000) }, "user-2"),
+  ], registeredRuntime("old-thread"));
+  const saved = JSON.parse(await readFile(fixture.statePath, "utf8"));
+  assert.equal(saved.compactionGeneration, 1);
+  assert.ok(saved.estimatedContextTokens > 850 && saved.estimatedContextTokens < 950);
+  assert.equal(saved.contextWindowSource, "app_server");
+  assert.equal(saved.contextUsageSource, "fallback_estimate");
+  assert.equal((await fixture.captured()).filter((entry) => entry.method === "thread/inject_items").length, 1);
+});
+
+test("native compact with unknown or still-full usage fails safely without injecting or inventing 15 percent", async (t) => {
+  for (const compactUsage of [undefined, { modelContextWindow: 4096, total: { totalTokens: 3500 } }, { modelContextWindow: 4096, total: { totalTokens: 3000 } }]) {
+    const fixture = await accountingFixture(t, {
+      window: 4096, estimated: 3000,
+      resumeUsage: { modelContextWindow: 4096, total: { totalTokens: 3000 } },
+      ...(compactUsage === undefined ? {} : { compactUsage }),
+    });
+    await assert.rejects(fixture.executor.projectCanonicalEvents([
+      canonical(3, "human_chat", { text: "x".repeat(2000) }, "user-2"),
+    ], registeredRuntime("old-thread")), /context|usage/i);
+    const saved = JSON.parse(await readFile(fixture.statePath, "utf8"));
+    assert.equal(saved.estimatedContextTokens, compactUsage?.total.totalTokens ?? 3000);
+    assert.equal(saved.contextUsageSource, compactUsage?.total.totalTokens === 3500 ? "app_server" : "unknown_after_compaction");
+    assert.equal(saved.lastInjectedSequence, 2);
+    assert.equal((await fixture.captured()).filter((entry) => entry.method === "thread/inject_items").length, 0);
+  }
+});
+
+test("unknown compact usage pauses repeated projection and reconciliation without clearing real injection journals", async (t) => {
+  for (const partial of [false, true]) {
+    const fixture = await accountingFixture(t, { window: 4096, estimated: partial ? 0 : 3000 });
+    const event = canonical(3, "human_chat", { text: "x".repeat(partial ? 40_000 : 2000) }, "user-2");
+    const runtime = registeredRuntime("old-thread");
+    await assert.rejects(fixture.executor.projectCanonicalEvents([event], runtime), /fresh context usage/);
+    const saved = JSON.parse(await readFile(fixture.statePath, "utf8"));
+    assert.equal(saved.contextUsageSource, "unknown_after_compaction");
+    if (partial) assert.equal(saved.projectionJournal.nextChunk, 1);
+    else assert.equal(saved.projectionJournal, undefined, "compaction alone is not an uncertain injection");
+    let reads = 0;
+    const api = { readEvents: async () => { reads += 1; return { events: [event], nextSequence: 3, hasMore: false }; } } as unknown as CollaborationApi;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await assert.rejects(fixture.executor.projectCanonicalEvents([event], runtime), /waiting for fresh.*usage/i);
+      if (partial) await assert.rejects(fixture.executor.synchronizeLocalTurns(api, runtime), /waiting for fresh.*usage/i);
+      else await fixture.executor.synchronizeLocalTurns(api, runtime);
+    }
+    const after = JSON.parse(await readFile(fixture.statePath, "utf8"));
+    assert.deepEqual(after.projectionJournal, saved.projectionJournal);
+    assert.equal(reads, 0);
+    const captured = await fixture.captured();
+    assert.equal(captured.filter((entry) => entry.method === "thread/compact/start").length, 1);
+    assert.equal(captured.filter((entry) => entry.method === "thread/start").length, 0);
+    if (!partial) {
+      await fixture.setResumeUsage({ turnId: "recovered-native-turn", modelContextWindow: 4096, total: { totalTokens: 100 } });
+      await fixture.executor.projectCanonicalEvents([event], runtime);
+      const recovered = JSON.parse(await readFile(fixture.statePath, "utf8"));
+      assert.equal(recovered.contextRecovery, undefined);
+      assert.equal(recovered.lastInjectedSequence, 3);
+      assert.equal((await fixture.captured()).filter((entry) => entry.method === "thread/compact/start").length, 1);
+    }
+  }
+});
+
+test("unknown compaction inside a rebuild persists a recovery stop instead of paying for another rebuild", async (t) => {
+  const fixture = await accountingFixture(t, { window: 4096 });
+  const original = JSON.parse(await readFile(fixture.statePath, "utf8"));
+  original.projectionJournal = { eventId: "event-3", sequence: 3, nextChunk: 0, totalChunks: 6 };
+  await writeFile(fixture.statePath, JSON.stringify(original));
+  const event = canonical(3, "human_chat", { text: "x".repeat(40_000) }, "user-2");
+  const api = { readEvents: async () => ({ events: [event], nextSequence: 3, hasMore: false }) } as unknown as CollaborationApi;
+  const runtime = registeredRuntime("old-thread");
+  await assert.rejects(fixture.executor.synchronizeLocalTurns(api, runtime), /fresh context usage/);
+  const saved = JSON.parse(await readFile(fixture.statePath, "utf8"));
+  assert.equal(saved.threadId, "old-thread");
+  assert.equal(saved.contextRecovery.threadId, saved.rebuild.threadId);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    await assert.rejects(fixture.executor.synchronizeLocalTurns(api, runtime), /waiting for fresh.*usage/i);
+  }
+  const captured = await fixture.captured();
+  assert.equal(captured.filter((entry) => entry.method === "thread/start").length, 1);
+  assert.equal(captured.filter((entry) => entry.method === "thread/compact/start").length, 1);
+  assert.deepEqual(JSON.parse(await readFile(fixture.statePath, "utf8")).projectionJournal, original.projectionJournal);
+});
+
 test("4096-token projection splits and compacts before any chunk can cross the high-water budget", async (t) => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-small-context-"));
   const workspacePath = await realpath(directory);
@@ -2680,6 +3187,9 @@ for await (const line of lines) {
   else if (message.method === "thread/resume") respond(message.id, { thread: { id: "old-thread" } });
   else if (message.method === "thread/compact/start") {
     respond(message.id, {});
+    process.stdout.write(JSON.stringify({ method: "thread/tokenUsage/updated", params: {
+      threadId: "old-thread", turnId: "compact-" + message.id, tokenUsage: { modelContextWindow: 4096, last: { totalTokens: 500 } },
+    } }) + "\\n");
     process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: "old-thread", item: { type: "contextCompaction" } } }) + "\\n");
   } else respond(message.id, {});
 }
@@ -2735,14 +3245,21 @@ for await (const line of lines) {
   else if (message.method === "thread/read") respond(message.id, { thread: { id: "old-thread", status: { type: "idle" }, turns: [] } });
   else if (message.method === "thread/resume") respond(message.id, { thread: { id: "old-thread" } });
   else if (message.method === "thread/compact/start") {
-    respond(message.id, {});
+    // This case verifies that an observed native usage report controls the
+    // following projection. Emit it before the RPC acknowledgement; a later
+    // asynchronous report is intentionally allowed to leave the current
+    // persisted state on its conservative fallback until the next operation.
+    process.stdout.write(JSON.stringify({ method: "thread/tokenUsage/updated", params: {
+      threadId: "old-thread", turnId: "compact-" + message.id, tokenUsage: { modelContextWindow: 4096, last: { totalTokens: 500 } },
+    } }) + "\\n");
     process.stdout.write(JSON.stringify({ method: "item/completed", params: { threadId: "old-thread", item: { type: "contextCompaction" } } }) + "\\n");
+    respond(message.id, {});
   } else if (message.method === "thread/inject_items") {
     injections += 1;
-    respond(message.id, {});
     process.stdout.write(JSON.stringify({ method: "thread/tokenUsage/updated", params: {
-      threadId: "old-thread", tokenUsage: { modelContextWindow: 4096, total: { totalTokens: injections === 1 ? 3500 : 700 } },
+      threadId: "old-thread", turnId: "injected-" + message.id, tokenUsage: { modelContextWindow: 4096, total: { totalTokens: injections === 1 ? 3500 : 700 } },
     } }) + "\\n");
+    respond(message.id, {});
   } else respond(message.id, {});
 }
 function respond(id, result) { process.stdout.write(JSON.stringify({ id, result }) + "\\n"); }
@@ -3033,9 +3550,11 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   let completedResult: unknown;
   let rejectCompletion = false;
   let failedSnapshots = 0;
-  const job = { id: "snapshot-job-hidden", sessionId: "session-1", throughSequence: 3, status: "pending" as const };
+  const job = { id: "snapshot-job-hidden", kind: "immutable" as const, sessionId: "session-1", throughSequence: 3, status: "pending" as const };
   const api = {
-    listSnapshotRequests: async (status: string) => status === "pending" ? [job] : [],
+    listSnapshotRequests: async (status: string) => status === "pending"
+      ? [job, { ...job, id: "code-job-not-a-conversation", kind: "code_upload" }]
+      : [],
     registerRuntime: async () => ({ ...registeredRuntime("snapshot-local"), purpose: "snapshot_connector" as const }),
     claimSnapshotRequest: async () => ({ ...job, status: "claimed" as const }),
     readEvents: async () => ({
@@ -3343,6 +3862,9 @@ for await (const line of lines) {
     respond(message.id, {});
   } else if (message.method === "thread/compact/start") {
     respond(message.id, {});
+    process.stdout.write(JSON.stringify({ method: "thread/tokenUsage/updated", params: {
+      threadId: message.params.threadId, turnId: "compact-" + message.id, tokenUsage: { modelContextWindow: 4096, last: { totalTokens: 500 } },
+    } }) + "\\n");
     process.stdout.write(JSON.stringify({
       method: "item/completed",
       params: { threadId: message.params.threadId, turnId: "compact-turn", item: { id: "compact-1", type: "contextCompaction" } },

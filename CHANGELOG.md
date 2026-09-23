@@ -4,6 +4,32 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+### Added
+
+- Opt-in project code collaboration backed by standard bare Git storage, with per-member branches, bounded source checkpoints, review requests, owner-approved three-way merges and safe updates from main.
+- Independent local code-upload consent and automatic-upload preference for Codex and the native DSH plugin. Manual upload, clean download and recovery into a new sibling directory are available through exact-runtime control jobs; DSH also exposes them in its settings panel.
+- A compact Web code dialog with source-change review, stale-version checks, bilingual recovery guidance and explicit runtime selection. Conversation upload, native-history import and context injection remain independent.
+- Writer-initiated shared history summaries from selected public messages or earlier completed summaries, using the writer's own local Agent. The Web workspace preserves raw history and older versions, provides a compact/original switch, and offers per-user project context policy (summary by default) and customizable/resettable instructions. The derived context API and MCP read are separate from canonical replay.
+
+### Safety and current limits
+
+- Code sync does not change an existing local Git branch, index or remote. Credentials, harness state, symlinks and unsafe paths are excluded or rejected. Stale devices cannot overwrite another uploaded version; automatic upload pauses on large deletions or an interrupted download.
+- This source preview is not yet published to npm. It uses one branch per member/project, not automatic task worktrees or a public Git smart-HTTP service. Concurrent Agents must not write the same directory. Only uploaded, eligible source files can be recovered.
+- Shared summaries are explicitly lossy and never delete canonical source messages. Source selection, generated prompts, ancestry validation and derived reads have independent resource limits; oversized input fails instead of being silently shortened. Native Codex/DSH automatic compaction remains separate.
+
+### Audit fixes
+
+- Reject known credentials consistently before local source upload and server Git persistence; reject malformed Unicode and filesystem aliases of private state.
+- Preserve automatic-upload stability checks through the final inventory, treat incomplete Codex work conservatively, and recover from transient code locks or lost acknowledgements without interrupting conversation sync.
+- Support bounded maximum-size file inventories and long portable filenames without breaking local state or temporary-file creation.
+- Reject hard-linked transcript files and recheck file identity inside authorized roots.
+- Serialize native DSH pairing/configuration, prevent late configuration from restoring a disconnected pairing, and refresh native permissions when project roles change.
+- Bound MCP HTTP/stdio input and batch processing, validate JSON-RPC IDs before tool dispatch, and describe manual Codex history import accurately as a new, non-idempotent local task.
+- Fence stale Web authentication/project/session responses, preserve newly edited drafts, prevent duplicate sends and require exact local-upload device selection. Bind review confirmations to their precise preview and reject cross-origin browser API overrides before forwarding credentials.
+- Prefer Codex native model capacity and fresh last-request usage instead of a fixed 4K window or cumulative token spending; distinguish native compaction from text clipping. Preserve complete accepted incoming DSH public messages without altering native compaction/model preferences or outgoing privacy limits.
+- Preserve Codex bindings when required native compaction fails or still exceeds the safe budget. Persist a recovery pause when no usable fresh usage is available, preventing repeated background compaction/rebuild; this exceptional pause has no reset control in the preview and cannot be bypassed by reconnecting with the same usage or changing the model.
+- Clarify native context management and Codex's fallback-only estimate in both UI languages. Native compaction can use model quota; first oversized DSH imports remain subject to the pinned native engine's limitations.
+
 ## [0.1.0-alpha.6] - 2026-09-22
 
 ### Added

@@ -3,6 +3,8 @@ import type {
   CanonicalEvent,
   CommitLocalTurnInput,
   CommitLocalTurnResult,
+  CreateHistorySummaryInput,
+  HistoryContext,
   JsonValue,
   MembershipRole,
   ReplayResponse,
@@ -62,6 +64,14 @@ export class CollaborationService {
   getProject(actor: Actor, projectId: string) {
     const role = this.requireProjectMembership(actor, projectId);
     return { project: this.database.requireProject(projectId), role };
+  }
+
+  getProjectContextPolicy(actor: Actor, projectId: string) {
+    return this.database.getProjectContextPolicy(actor, projectId);
+  }
+
+  setProjectContextPolicy(actor: Actor, projectId: string, mode: "summary" | "original") {
+    return this.database.setProjectContextPolicy(actor, projectId, mode);
   }
 
   listProjects(actor: Actor) {
@@ -299,6 +309,16 @@ export class CollaborationService {
       ...replay,
       events: replay.events.map((event) => this.minimizeEventForActor(actor, role, event)),
     };
+  }
+
+  createHistorySummary(actor: Actor, sessionId: string, input: CreateHistorySummaryInput): CanonicalEvent {
+    const event = this.database.createHistorySummary(actor, sessionId, input);
+    this.publish(event);
+    return event;
+  }
+
+  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number): HistoryContext {
+    return this.database.readHistoryContext(actor, sessionId, view, throughSequence);
   }
 
   registerRuntime(actor: Actor, input: Parameters<CollaborationDatabase["registerRuntime"]>[1]): RuntimeRecord {

@@ -73,7 +73,9 @@ export interface CodexThreadReadResult {
 
 interface CodexThreadTokenUsage {
   modelContextWindow: number;
+  /** Active-context tokens from `last`, or the conservative legacy `total` fallback. */
   totalTokens: number;
+  fingerprint?: string;
 }
 
 interface PendingRequest {
@@ -93,8 +95,20 @@ interface CodexAppServerState {
   desktopProjectGeneration: number;
   model: string;
   contextWindowTokens: number;
+  /** Kept separately because an observed window remains valid while usage is estimated. */
+  contextWindowSource?: "configured" | "app_server";
   estimatedContextTokens: number;
-  contextUsageSource: "fallback_estimate" | "app_server";
+  contextUsageSource: "fallback_estimate" | "app_server" | "unknown_after_compaction";
+  /** Numeric native observation identity, retained across resume/reconnect. */
+  contextUsageFingerprint?: string;
+  /** Derived shared-history view used by the hidden execution task only. */
+  historyContextFingerprint?: string;
+  /** A completed but unusable compaction must not be repeated by polling. */
+  contextRecovery?: {
+    threadId: string;
+    usageFingerprint?: string;
+    previousUsageFingerprint?: string;
+  };
   cloudCursor: number;
   /** Last canonical sequence delivered through native history or a completed trusted Hook turn. */
   desktopDeliveryCursor: number;
@@ -175,7 +189,7 @@ interface ProjectionSidecarEntry {
   digest: string;
   chunks: number;
   role: "user" | "assistant";
-  disposition: "injected" | "connector_turn" | "local_turn" | "local_runtime_output";
+  disposition: "injected" | "connector_turn" | "local_turn" | "local_runtime_output" | "summary_control";
 }
 
 interface LocalTurnBinding {
@@ -369,6 +383,7 @@ const DEFAULT_THREAD_START_TIMEOUT_MS = 60_000;
 const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1_000;
 const DEFAULT_MAX_MESSAGE_BYTES = 16 * 1024 * 1024;
 const DEFAULT_MAX_PROMPT_BYTES = 8 * 1024 * 1024;
+const MAX_VISIBLE_HISTORY_IMPORT_BYTES = 8 * 1024 * 1024;
 const DEFAULT_MAX_INJECTION_ITEM_BYTES = 64 * 1024;
 const DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const MIN_CONTEXT_WINDOW_TOKENS = 4_096;
@@ -546,6 +561,7 @@ export class CodexAppServerClient {
     onItemCompleted?: (item: unknown) => Promise<void> | void;
   }): Promise<{ turnId: string; items: unknown[]; modelContextWindow?: number; totalTokens?: number }> {
     await this.start();
+    this.#threadTokenUsage.delete(input.threadId);
     let resolveCompletion: ((value: unknown) => void) | undefined;
     let rejectCompletion: ((error: Error) => void) | undefined;
     const completion = new Promise<unknown>((resolve, reject) => {
@@ -571,7 +587,7 @@ export class CodexAppServerClient {
       if (notification.method === "thread/tokenUsage/updated") {
         const usage = objectValue(notification.params, "tokenUsage");
         const context = usage?.modelContextWindow;
-        const total = objectValue(usage, "total")?.totalTokens;
+        const total = currentContextTokens(usage);
         if (typeof context === "number" && Number.isSafeInteger(context) && context > 0) modelContextWindow = context;
         if (typeof total === "number" && Number.isSafeInteger(total) && total >= 0) totalTokens = total;
         return;
@@ -632,6 +648,9 @@ export class CodexAppServerClient {
   }
 
   async injectItems(threadId: string, items: readonly unknown[]): Promise<void> {
+    // A cached pre-injection report cannot account for these new items. Only
+    // a subsequent native notification may replace the caller's byte estimate.
+    this.#threadTokenUsage.delete(threadId);
     await this.request("thread/inject_items", { threadId, items });
   }
 
@@ -682,6 +701,7 @@ export class CodexAppServerClient {
 
   async compactThread(threadId: string): Promise<void> {
     await this.start();
+    this.#threadTokenUsage.delete(threadId);
     let resolveCompletion: (() => void) | undefined;
     let rejectCompletion: ((error: Error) => void) | undefined;
     const completion = new Promise<void>((resolve, reject) => {
@@ -694,17 +714,39 @@ export class CodexAppServerClient {
     void completion.catch(() => undefined);
     const timer = setTimeout(() => rejectCompletion?.(new Error("Codex App Server compaction timed out")), this.#options.turnTimeoutMs);
     timer.unref();
+    let expectedTurnId: string | undefined;
     const listener = (notification: JsonRpcNotification) => {
-      if (notification.method !== "item/completed" || !isObject(notification.params)) return;
+      if (!isObject(notification.params)) return;
       if (notification.params.threadId !== threadId) return;
+      const turn = objectValue(notification.params, "turn");
+      const turnId = objectString(notification.params, "turnId") ?? objectString(turn, "id");
+      if (expectedTurnId && turnId && turnId !== expectedTurnId) return;
       const item = objectValue(notification.params, "item");
-      if (objectString(item, "type") === "contextCompaction") resolveCompletion?.();
+      const isCompaction = objectString(item, "type") === "contextCompaction";
+      if (notification.method === "turn/started" || (notification.method === "item/started" && isCompaction)) {
+        expectedTurnId ??= turnId;
+      }
+      if (notification.method === "error" && notification.params.willRetry !== true) {
+        const detail = objectString(objectValue(notification.params, "error"), "message");
+        rejectCompletion?.(new Error(`Codex App Server compaction failed${detail ? `: ${safeText(detail)}` : ""}`));
+      } else if (notification.method === "turn/completed") {
+        const status = objectString(turn, "status");
+        if (status === "failed" || status === "interrupted") {
+          const detail = objectString(objectValue(turn, "error"), "message");
+          rejectCompletion?.(new Error(`Codex App Server compaction ${status}${detail ? `: ${safeText(detail)}` : ""}`));
+        }
+      } else if (notification.method === "item/completed" && isCompaction) {
+        resolveCompletion?.();
+      }
     };
     const failureListener = (error: Error) => rejectCompletion?.(error);
     this.#notifications.add(listener);
     this.#failureListeners.add(failureListener);
     try {
-      await this.request("thread/compact/start", { threadId });
+      const started = this.request("thread/compact/start", { threadId });
+      // A native failure must surface even if the start-RPC reply is lost.
+      // A successful completion still waits for the start acknowledgement.
+      await Promise.race([started, completion.then(() => started)]);
       await completion;
     } finally {
       clearTimeout(timer);
@@ -974,10 +1016,13 @@ export class CodexAppServerClient {
       const threadId = objectString(message.params, "threadId");
       const usage = objectValue(message.params, "tokenUsage");
       const modelContextWindow = usage?.modelContextWindow;
-      const totalTokens = objectValue(usage, "total")?.totalTokens ?? objectValue(usage, "last")?.totalTokens;
+      const totalTokens = currentContextTokens(usage);
       if (threadId && typeof modelContextWindow === "number" && Number.isSafeInteger(modelContextWindow) && modelContextWindow > 0
         && typeof totalTokens === "number" && Number.isSafeInteger(totalTokens) && totalTokens >= 0) {
-        this.#threadTokenUsage.set(threadId, { modelContextWindow, totalTokens });
+        this.#threadTokenUsage.set(threadId, {
+          modelContextWindow, totalTokens,
+          fingerprint: nativeContextFingerprint(threadId, objectString(message.params, "turnId"), usage),
+        });
       }
     }
     for (const listener of this.#notifications) listener(message as unknown as JsonRpcNotification);
@@ -1469,12 +1514,25 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         if (candidate.status === "active" || candidate.turns.length === 0) {
           throw new Error("Codex visible history import did not create a complete, idle native turn");
         }
-        let compacted = history.compacted;
-        if (history.estimatedTokens >= Math.floor(this.#contextWindowTokens * this.#contextHighWatermark)) {
+        let observed = this.#client.getThreadTokenUsage(candidateThreadId);
+        const initialObserved = observed;
+        const candidateWindow = observed?.modelContextWindow ?? this.#contextWindowTokens;
+        const nativeWindowObserved = observed !== undefined;
+        let compacted = false;
+        if (history.estimatedTokens >= Math.floor(candidateWindow * this.#contextHighWatermark)) {
+          const beforeCompaction = observed;
           await this.#client.compactThread(candidateThreadId);
           compacted = true;
+          observed = this.#client.getThreadTokenUsage(candidateThreadId);
+          if (observed && beforeCompaction
+            && observationFingerprint(candidateThreadId, observed) === observationFingerprint(candidateThreadId, beforeCompaction)) {
+            observed = undefined;
+          }
           candidate = await this.#client.readThread(candidateThreadId);
           if (candidate.turns.length === 0) throw new Error("Codex compaction removed the imported native history");
+          if (observed && observed.totalTokens >= Math.floor(observed.modelContextWindow * this.#contextHighWatermark)) {
+            throw new Error("Native compaction left the visible history candidate above its context high-water mark; the current task binding remains unchanged");
+          }
         }
 
         const next = previous === undefined
@@ -1483,11 +1541,14 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         const previousThreadId = previous?.threadId;
         next.threadId = candidateThreadId;
         next.threadName = candidateThreadName;
-        next.contextWindowTokens = this.#contextWindowTokens;
-        next.estimatedContextTokens = compacted
-          ? Math.floor(this.#contextWindowTokens * 0.15)
-          : history.estimatedTokens;
-        next.contextUsageSource = "fallback_estimate";
+        next.contextWindowTokens = observed?.modelContextWindow ?? candidateWindow;
+        next.contextWindowSource = observed || nativeWindowObserved ? "app_server" : "configured";
+        next.estimatedContextTokens = observed?.totalTokens ?? history.estimatedTokens;
+        next.contextUsageSource = observed ? "app_server" : compacted ? "unknown_after_compaction" : "fallback_estimate";
+        delete next.contextUsageFingerprint;
+        delete next.contextRecovery;
+        if (observed) next.contextUsageFingerprint = observationFingerprint(candidateThreadId, observed);
+        else if (initialObserved) next.contextUsageFingerprint = observationFingerprint(candidateThreadId, initialObserved);
         next.cloudCursor = Math.max(next.cloudCursor, throughSequence);
         next.desktopDeliveryCursor = throughSequence;
         next.desktopProjectionCursor = throughSequence;
@@ -1798,6 +1859,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           await this.#saveState(state, false);
           continue;
         }
+        this.#applyObservedContextUsage(state);
         const rendered = renderProjectionEvent(event);
         const chunks = splitUtf8(rendered.text, this.#safeInjectionChunkBytes(state));
         const journal = state.desktopProjectionJournal;
@@ -1822,13 +1884,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           if (!recoveredItemIds?.has(itemId)) {
             await this.#client.injectItems(state.threadId, [responseMessage(rendered.role, injectionText, itemId)]);
           }
-          const observed = this.#client.getThreadTokenUsage(state.threadId);
-          if (observed) {
-            state.contextWindowTokens = observed.modelContextWindow;
-            state.estimatedContextTokens = observed.totalTokens;
-            state.contextUsageSource = "app_server";
-          } else {
+          if (!this.#applyObservedContextUsage(state)) {
             state.estimatedContextTokens += estimateTokens(injectionText);
+            if (state.contextUsageSource !== "unknown_after_compaction") state.contextUsageSource = "fallback_estimate";
           }
           if (state.desktopProjectionJournal) state.desktopProjectionJournal.nextChunk = index + 1;
           await this.#saveState(state, false);
@@ -1961,10 +2019,42 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       }
     }
     const executionProfile = executionProfileForRequest(input.request, this.#model);
+    let effectiveHistory = input.canonicalHistory;
+    if (input.historyContext !== undefined && this.#threadSource === "exec") {
+      const summaryRequest = objectValue(input.request.payload, "history_summary") !== undefined;
+      const context = input.historyContext;
+      if (context.through_sequence !== input.request.sequence - 1) {
+        throw new Error("Shared history context is not frozen at the current request boundary");
+      }
+      const fingerprint = summaryRequest ? `generation:${input.request.id}` : createHash("sha256")
+        .update(JSON.stringify([context.view, context.items.filter((item) => item.kind === "summary")
+          .map((item) => [item.event_id, item.source_event_ids])])).digest("hex");
+      // A changed fold must actually remove the superseded text from model
+      // context. Rebuild ONLY the connector-owned hidden task, never Desktop's
+      // visible conversation or its single writer. Native compaction stays on.
+      if ((summaryRequest || context.items.some((item) => item.kind === "summary") || state.historyContextFingerprint)
+        && state.historyContextFingerprint !== fingerprint) {
+        state = await this.#replaceExternallyClaimedExecutionProjection(state);
+        state.historyContextFingerprint = fingerprint;
+        await this.#saveState(state);
+        rebuildingExternallyClaimedProjection = true;
+      }
+      const byId = new Map(input.canonicalHistory.map((event) => [event.id, event]));
+      effectiveHistory = summaryRequest ? [] : context.items.map((item): CanonicalEvent => {
+        const original = byId.get(item.event_id);
+        if (item.kind === "original") {
+          if (!original) throw new Error("Shared context refers to unavailable canonical history");
+          return original;
+        }
+        return { id: item.event_id, sessionId: input.request.sessionId, sequence: item.sequence,
+          type: "agent_response", actorId: item.actor_user_id, timestamp: original?.timestamp ?? input.request.timestamp,
+          payload: { text: `[GatherThread derived summary; lossy; source events: ${item.source_event_ids?.join(", ")}]\n${item.content}` } };
+      });
+    }
     try {
       await this.#setManagedThreadName(state.threadId, this.#threadName);
       const afterSequence = state.lastInjectedSequence;
-      const history = input.canonicalHistory
+      const history = effectiveHistory
         .filter((event) => event.sequence > afterSequence && event.sequence < input.request.sequence)
         .sort((left, right) => left.sequence - right.sequence);
       for (const event of history) {
@@ -2050,12 +2140,17 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         maxToolOutputBytes: this.#maxToolOutputBytes,
       }));
       state.contextWindowTokens = turn.modelContextWindow ?? state.contextWindowTokens;
+      if (turn.modelContextWindow !== undefined) state.contextWindowSource = "app_server";
       state.estimatedContextTokens = turn.totalTokens ?? (
         state.estimatedContextTokens
         + estimateTokens(renderedRequest.text)
         + estimateTokens(JSON.stringify(executionEvents))
       );
-      if (turn.modelContextWindow !== undefined && turn.totalTokens !== undefined) state.contextUsageSource = "app_server";
+      state.contextUsageSource = turn.modelContextWindow !== undefined && turn.totalTokens !== undefined
+        ? "app_server"
+        : state.contextUsageSource === "unknown_after_compaction" ? "unknown_after_compaction" : "fallback_estimate";
+      const observedUsage = this.#client.getThreadTokenUsage(state.threadId);
+      if (observedUsage) state.contextUsageFingerprint = observationFingerprint(state.threadId, observedUsage);
       state.cloudCursor = Math.max(state.cloudCursor, input.request.sequence);
       state.coveredThroughSequence = input.request.sequence;
       state.lastInjectedSequence = input.request.sequence;
@@ -2117,6 +2212,19 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       const state = await this.#loadStateFromDisk(workspacePath);
       if (!state) throw new Error("Codex local conversation is not initialized");
       return this.#localSyncStatus(state, await this.#countUploadableLocalTurns(state));
+    });
+  }
+
+  isLocalRunActive(): Promise<boolean> {
+    return this.#withStateWriter(async () => {
+      const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+      const state = await this.#loadStateFromDisk(workspacePath);
+      if (!state) return true;
+      if (Object.keys(state.hookDrafts).length > 0
+        || Object.values(state.executionJournal).some((entry) => entry.status === "prepared" || entry.status === "started")) return true;
+      const thread = await this.#client.readThread(state.threadId);
+      return (thread.status !== "idle" && thread.status !== "notLoaded")
+        || thread.turns.some((turn) => !["completed", "failed", "interrupted"].includes(turn.status));
     });
   }
 
@@ -2327,7 +2435,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     return {
       version: 3, transport: "app-server", gatherThreadSessionId: sessionId, workspacePath,
       threadId, threadName: this.#threadName, desktopProjectGeneration: 0, model: this.#model,
-      contextWindowTokens: this.#contextWindowTokens, estimatedContextTokens: 0, contextUsageSource: "fallback_estimate",
+      contextWindowTokens: this.#contextWindowTokens, contextWindowSource: "configured", estimatedContextTokens: 0, contextUsageSource: "fallback_estimate",
       cloudCursor: 0, desktopDeliveryCursor: 0, desktopProjectionCursor: 0,
       projectionGeneration: 1, compactionGeneration: 0,
       coveredThroughSequence: 0, lastInjectedSequence: 0, sidecar: [],
@@ -2367,6 +2475,18 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     persistState = true,
     honorExistingProjection = true,
   ): Promise<CodexAppServerState> {
+    // Summary generation is a control request containing selected source JSON,
+    // not another ordinary Desktop conversation message. Its actual Agent
+    // execution is routed to the isolated hidden task below. Advancing the
+    // cursor here avoids duplicating the quoted sources in visible history.
+    if (event.type === "agent_request" && objectValue(event.payload, "history_summary") !== undefined) {
+      state.lastInjectedSequence = event.sequence;
+      state.coveredThroughSequence = event.sequence;
+      state.cloudCursor = Math.max(state.cloudCursor, event.sequence);
+      state.sidecar.push(sidecarEntry(event, 0, projectionRole(event), "summary_control"));
+      if (persistState) await this.#saveState(state);
+      return state;
+    }
     const localBinding = honorExistingProjection && Object.values(state.localTurnBindings).find((binding) =>
       binding.requestEventId === event.id || binding.responseEventId === event.id,
     );
@@ -2391,36 +2511,26 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       if (persistState) await this.#saveState(state);
       return state;
     }
+    await this.#ensureContextRecoveryReady(state, persistState);
     const rendered = renderProjectionEvent(event);
     const chunks = splitUtf8(rendered.text, this.#safeInjectionChunkBytes(state));
     if (persistState) {
       if (state.projectionJournal) throw new Error("Codex projection has an uncertain prior injection and requires rebuild");
-      state.projectionJournal = { eventId: event.id, sequence: event.sequence, nextChunk: 0, totalChunks: chunks.length };
-      await this.#saveState(state);
     }
     for (let index = 0; index < chunks.length; index += 1) {
       const injectionText = chunkLabel(chunks[index] as string, index, chunks.length);
       const incomingTokens = estimateTokens(injectionText);
-      state = await this.#compactBeforeHighWater(
-        state,
-        incomingTokens,
-        persistState,
-        MIN_CONTEXT_WINDOW_TOKENS,
-      );
-      const highWater = Math.floor(
-        Math.min(state.contextWindowTokens, MIN_CONTEXT_WINDOW_TOKENS) * this.#contextHighWatermark,
-      );
-      if (state.estimatedContextTokens + incomingTokens >= highWater) {
-        throw new Error("Canonical projection chunk cannot fit below the configured context high-water mark after compaction");
+      state = await this.#compactBeforeHighWater(state, incomingTokens, persistState);
+      if (persistState && !state.projectionJournal) {
+        // Compaction alone does not make an injection uncertain. Begin its
+        // write-ahead journal only when an actual item write is about to run.
+        state.projectionJournal = { eventId: event.id, sequence: event.sequence, nextChunk: index, totalChunks: chunks.length };
+        await this.#saveState(state);
       }
       await this.#client.injectItems(state.threadId, [responseMessage(rendered.role, injectionText)]);
-      const observed = this.#client.getThreadTokenUsage(state.threadId);
-      if (observed) {
-        state.contextWindowTokens = observed.modelContextWindow;
-        state.estimatedContextTokens = observed.totalTokens;
-        state.contextUsageSource = "app_server";
-      } else {
+      if (!this.#applyObservedContextUsage(state)) {
         state.estimatedContextTokens += incomingTokens;
+        if (state.contextUsageSource !== "unknown_after_compaction") state.contextUsageSource = "fallback_estimate";
       }
       if (persistState && state.projectionJournal) {
         state.projectionJournal.nextChunk = index + 1;
@@ -2437,6 +2547,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   }
 
   #safeInjectionChunkBytes(state: CodexAppServerState): number {
+    // Preserve the physical chunk layout used by existing persisted journals.
+    // This is a transport/recovery bound, not the runtime context window or a
+    // claim that native compaction reduces usage to 15 percent.
     const conservativeWindowTokens = Math.min(state.contextWindowTokens, MIN_CONTEXT_WINDOW_TOKENS);
     const highWaterTokens = Math.floor(conservativeWindowTokens * this.#contextHighWatermark);
     const compactedTokens = Math.floor(conservativeWindowTokens * 0.15);
@@ -2451,24 +2564,65 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     state: CodexAppServerState,
     incomingTokens: number,
     persistState = true,
-    maximumContextWindowTokens = state.contextWindowTokens,
   ): Promise<CodexAppServerState> {
-    const observed = this.#client.getThreadTokenUsage(state.threadId);
-    if (observed) {
-      state.contextWindowTokens = observed.modelContextWindow;
-      state.estimatedContextTokens = observed.totalTokens;
-      state.contextUsageSource = "app_server";
-    }
-    const effectiveContextWindowTokens = Math.min(state.contextWindowTokens, maximumContextWindowTokens);
-    const highWater = Math.floor(effectiveContextWindowTokens * this.#contextHighWatermark);
+    await this.#ensureContextRecoveryReady(state, persistState);
+    this.#applyObservedContextUsage(state);
+    const highWater = Math.floor(state.contextWindowTokens * this.#contextHighWatermark);
     if (state.estimatedContextTokens + incomingTokens < highWater) return state;
     await this.#assertThreadNotActive(state.threadId);
+    const previousUsageFingerprint = state.contextUsageFingerprint;
     await this.#client.compactThread(state.threadId);
     state.compactionGeneration += 1;
-    state.estimatedContextTokens = Math.floor(effectiveContextWindowTokens * 0.15);
-    state.contextUsageSource = "fallback_estimate";
+    if (!this.#applyObservedContextUsage(state)) {
+      // Keep the prior conservative upper estimate. A completion says native
+      // compaction succeeded, but does not establish a new token count.
+      state.contextUsageSource = "unknown_after_compaction";
+    }
+    if (state.estimatedContextTokens + incomingTokens >= Math.floor(state.contextWindowTokens * this.#contextHighWatermark)) {
+      state.contextRecovery = {
+        threadId: state.threadId,
+        ...(state.contextUsageFingerprint === undefined ? {} : { usageFingerprint: state.contextUsageFingerprint }),
+        ...(previousUsageFingerprint === undefined ? {} : { previousUsageFingerprint }),
+      };
+      if (persistState) await this.#saveState(state);
+      throw new Error(state.contextUsageSource === "unknown_after_compaction"
+        ? "Native compaction completed without fresh context usage; cannot safely fit the pending projection"
+        : "Canonical projection cannot fit below the native context high-water mark after compaction");
+    }
     if (persistState) await this.#saveState(state);
     return state;
+  }
+
+  async #ensureContextRecoveryReady(state: CodexAppServerState, persistState = true): Promise<void> {
+    const recovery: CodexAppServerState["contextRecovery"] = state.contextRecovery ?? (state.contextUsageSource === "unknown_after_compaction"
+      ? { threadId: state.threadId, ...(state.contextUsageFingerprint === undefined ? {} : { usageFingerprint: state.contextUsageFingerprint }) }
+      : undefined);
+    if (!recovery) return;
+    const observed = this.#client.getThreadTokenUsage(recovery.threadId);
+    const fingerprint = observed && observationFingerprint(recovery.threadId, observed);
+    if (!observed || fingerprint === recovery.usageFingerprint
+      || fingerprint === recovery.previousUsageFingerprint
+      || observed.totalTokens >= Math.floor(observed.modelContextWindow * this.#contextHighWatermark)) {
+      throw new Error("Native context recovery is waiting for fresh token usage from Codex App Server; automatic compaction and rebuild are paused, and reconnecting with the same usage will not resume them");
+    }
+    if (recovery.threadId === state.threadId) this.#applyObservedContextUsage(state);
+    delete state.contextRecovery;
+    if (persistState) await this.#saveState(state);
+  }
+
+  #applyObservedContextUsage(state: CodexAppServerState): boolean {
+    const observed = this.#client.getThreadTokenUsage(state.threadId);
+    if (!observed) return false;
+    const fingerprint = observationFingerprint(state.threadId, observed);
+    // Resume may replay the exact same last-turn usage after a restart. Do
+    // not erase any unobserved items appended since that observation.
+    if (state.contextUsageFingerprint === fingerprint) return false;
+    state.contextUsageFingerprint = fingerprint;
+    state.contextWindowTokens = observed.modelContextWindow;
+    state.contextWindowSource = "app_server";
+    state.estimatedContextTokens = observed.totalTokens;
+    state.contextUsageSource = "app_server";
+    return true;
   }
 
   async #assertThreadNotActive(threadId: string): Promise<void> {
@@ -2499,6 +2653,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   async #replaceExternallyClaimedExecutionProjection(
     state: CodexAppServerState,
   ): Promise<CodexAppServerState> {
+    await this.#ensureContextRecoveryReady(state);
     const unresolvedExecution = Object.values(state.executionJournal).some((entry) =>
       entry.status === "prepared" || entry.status === "started",
     );
@@ -2533,6 +2688,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     throughSequence: number,
     runtimeId: string,
   ): Promise<CodexAppServerState> {
+    await this.#ensureContextRecoveryReady(state);
     if (Object.keys(state.hookDrafts).length > 0) {
       throw new Error("Codex desktop turn is active; reconciliation rebuild is queued until its Stop hook completes");
     }
@@ -2557,12 +2713,22 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     const rebuild = state.rebuild;
     await this.#setManagedThreadName(rebuild.threadId, `${this.#threadName} · rebuilding`);
     let temporary: CodexAppServerState = { ...state, threadId: rebuild.threadId, lastInjectedSequence: rebuild.lastInjectedSequence, estimatedContextTokens: rebuild.estimatedContextTokens, compactionGeneration: rebuild.compactionGeneration, sidecar: [] };
-    for (const event of history.events.filter((item) => item.sequence > temporary.lastInjectedSequence)) {
-      temporary = await this.#projectEvent(temporary, event, runtimeId, false, false, false);
-      rebuild.lastInjectedSequence = temporary.lastInjectedSequence;
-      rebuild.estimatedContextTokens = temporary.estimatedContextTokens;
-      rebuild.compactionGeneration = temporary.compactionGeneration;
-      await this.#saveState({ ...state, rebuild });
+    try {
+      for (const event of history.events.filter((item) => item.sequence > temporary.lastInjectedSequence)) {
+        temporary = await this.#projectEvent(temporary, event, runtimeId, false, false, false);
+        rebuild.lastInjectedSequence = temporary.lastInjectedSequence;
+        rebuild.estimatedContextTokens = temporary.estimatedContextTokens;
+        rebuild.compactionGeneration = temporary.compactionGeneration;
+        await this.#saveState({ ...state, rebuild });
+      }
+    } catch (error) {
+      if (temporary.contextRecovery) {
+        // The candidate has its own usage identity. Keep the original binding
+        // and any genuinely uncertain injection journal intact while paused.
+        state.contextRecovery = temporary.contextRecovery;
+        await this.#saveState(state);
+      }
+      throw error;
     }
     await this.#setManagedThreadName(rebuild.threadId, this.#threadName);
     state = {
@@ -2570,12 +2736,17 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       threadId: rebuild.threadId,
       projectionGeneration: rebuild.generation,
       compactionGeneration: rebuild.compactionGeneration,
+      contextWindowTokens: temporary.contextWindowTokens,
+      contextWindowSource: hasNativeContextWindow(temporary) ? "app_server" : "configured",
+      contextUsageSource: temporary.contextUsageSource,
       estimatedContextTokens: rebuild.estimatedContextTokens,
       cloudCursor: throughSequence,
       coveredThroughSequence: throughSequence,
       lastInjectedSequence: temporary.lastInjectedSequence,
       sidecar: temporary.sidecar,
     };
+    delete state.contextUsageFingerprint;
+    if (temporary.contextUsageFingerprint) state.contextUsageFingerprint = temporary.contextUsageFingerprint;
     delete state.rebuild;
     delete state.projectionJournal;
     await this.#saveState(state);
@@ -2724,8 +2895,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       }
       throw new Error("Codex projection state belongs to a different model; reset or rebuild the session explicitly");
     }
-    if (parsed.contextUsageSource !== "app_server" && parsed.contextWindowTokens !== this.#contextWindowTokens) {
+    if (!hasNativeContextWindow(parsed) && parsed.contextWindowTokens !== this.#contextWindowTokens) {
       parsed.contextWindowTokens = this.#contextWindowTokens;
+      parsed.contextWindowSource = "configured";
       await this.#saveState(parsed, false);
     }
     return parsed;
@@ -2779,8 +2951,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       }
       throw new Error("Codex projection state belongs to a different model; reset or rebuild the session explicitly");
     }
-    if (parsed.contextUsageSource !== "app_server" && parsed.contextWindowTokens !== this.#contextWindowTokens) {
+    if (!hasNativeContextWindow(parsed) && parsed.contextWindowTokens !== this.#contextWindowTokens) {
       parsed.contextWindowTokens = this.#contextWindowTokens;
+      parsed.contextWindowSource = "configured";
       await this.#saveState(parsed, false);
     }
     return parsed;
@@ -2789,16 +2962,20 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   async #migrateDesktopConnectorProfile(state: CodexAppServerState): Promise<CodexAppServerState> {
     const modelChanged = state.model !== this.#model;
     const contextChanged = state.contextWindowTokens !== this.#contextWindowTokens;
-    if (!modelChanged && (!contextChanged || state.contextUsageSource === "app_server")) return state;
+    if (!modelChanged && (!contextChanged || hasNativeContextWindow(state))) return state;
 
     // The visible task is owned by Codex Desktop and chooses its actual model
     // per turn. This field is only the connector default, so changing it must
     // never replace, resume, or mutate the Desktop-owned native task.
     state.model = this.#model;
-    if (modelChanged || state.contextUsageSource !== "app_server") {
+    if (modelChanged || !hasNativeContextWindow(state)) {
       state.contextWindowTokens = this.#contextWindowTokens;
+      state.contextWindowSource = "configured";
       state.contextUsageSource = "fallback_estimate";
-      if (modelChanged) state.estimatedContextTokens = 0;
+      if (modelChanged) {
+        state.estimatedContextTokens = 0;
+        delete state.contextUsageFingerprint;
+      }
     }
     await this.#saveState(state, false);
     return state;
@@ -2836,7 +3013,6 @@ class CodexExternalHistoryImporter {
     const sourcePath = path.join(projectDirectory, `${sessionId}.jsonl`);
     const environment = this.#options.env ?? process.env;
     const codexHome = path.resolve(environment.CODEX_HOME?.trim() || path.join(homedir(), ".codex"));
-    await mkdir(projectDirectory, { recursive: true, mode: 0o700 });
     let parentUuid: string | null = null;
     const records = input.history.messages.map((message) => {
       const uuid = randomUUID();
@@ -2857,7 +3033,10 @@ class CodexExternalHistoryImporter {
       parentUuid = uuid;
       return JSON.stringify(record);
     });
-    await writeFile(sourcePath, `${records.join("\n")}\n`, { mode: 0o600 });
+    const serialized = `${records.join("\n")}\n`;
+    assertVisibleHistoryResourceBudget(serialized);
+    await mkdir(projectDirectory, { recursive: true, mode: 0o700 });
+    await writeFile(sourcePath, serialized, { mode: 0o600 });
     const client = new CodexAppServerClient({
       command: this.#options.command,
       ...(this.#options.commandArgs === undefined ? {} : { commandArgs: this.#options.commandArgs }),
@@ -2992,6 +3171,8 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
     return {
       localSessionId: `gatherthread-codex:${this.#options.mappingId}:${input.sessionKey}`,
       executor,
+      isLocalRunActive: async () => await executor.isLocalRunActive()
+        || (desktop !== undefined && await desktop.isLocalRunActive()),
       ...(desktop === undefined ? {} : {
         adoptLocalConversation: (localConversationId: string) =>
           desktop.adoptDesktopThread(input.session.id, localConversationId),
@@ -3081,7 +3262,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
       ...(await api.listSnapshotRequests("pending", 20)),
       ...(await api.listSnapshotRequests("claimed", 20)),
     ].filter((job, index, all) =>
-      job.kind !== "visible_history_replace"
+      job.kind === "immutable"
       && visibleSessionIds.has(job.sessionId)
       && all.findIndex((candidate) => candidate.id === job.id) === index,
     );
@@ -3291,8 +3472,17 @@ function isCodexAppServerState(value: unknown): value is CodexAppServerState {
     && Number(value.desktopProjectGeneration) >= 0
     && typeof value.model === "string"
     && Number.isSafeInteger(value.contextWindowTokens)
+    && (value.contextWindowSource === undefined || value.contextWindowSource === "configured" || value.contextWindowSource === "app_server")
     && Number.isSafeInteger(value.estimatedContextTokens)
-    && (value.contextUsageSource === "fallback_estimate" || value.contextUsageSource === "app_server")
+    && (value.contextUsageSource === "fallback_estimate" || value.contextUsageSource === "app_server" || value.contextUsageSource === "unknown_after_compaction")
+    && (value.contextUsageFingerprint === undefined || (typeof value.contextUsageFingerprint === "string" && /^[a-f0-9]{64}$/u.test(value.contextUsageFingerprint)))
+    && (value.historyContextFingerprint === undefined || (typeof value.historyContextFingerprint === "string"
+      && /^(?:[a-f0-9]{64}|generation:[A-Za-z0-9._:-]{1,128})$/u.test(value.historyContextFingerprint)))
+    && (value.contextRecovery === undefined || (isObject(value.contextRecovery)
+      && (value.contextRecovery.threadId === value.threadId || value.contextRecovery.threadId === objectValue(value, "rebuild")?.threadId)
+      && typeof value.contextRecovery.threadId === "string" && value.contextRecovery.threadId.length > 0
+      && (value.contextRecovery.usageFingerprint === undefined || (typeof value.contextRecovery.usageFingerprint === "string" && /^[a-f0-9]{64}$/u.test(value.contextRecovery.usageFingerprint)))
+      && (value.contextRecovery.previousUsageFingerprint === undefined || (typeof value.contextRecovery.previousUsageFingerprint === "string" && /^[a-f0-9]{64}$/u.test(value.contextRecovery.previousUsageFingerprint)))))
     && Number.isSafeInteger(value.cloudCursor)
     && Number.isSafeInteger(value.desktopDeliveryCursor)
     && Number(value.desktopDeliveryCursor) >= 0
@@ -3557,7 +3747,7 @@ function renderProjectionEvent(
 export function buildVisibleHistoryImport(
   events: readonly CanonicalEvent[],
   throughSequence: number,
-  contextWindowTokens: number,
+  _contextWindowTokens: number,
 ): VisibleHistoryImport {
   const ordered = events
     .filter((event) => event.sequence <= throughSequence)
@@ -3588,10 +3778,12 @@ export function buildVisibleHistoryImport(
     ];
     return { digest, messages, estimatedTokens: visibleImportTokens(messages), compacted: false };
   }
-  const messages: VisibleHistoryImportMessage[] = ordered.map((event) => {
-    const rendered = renderProjectionEvent(event);
-    return { role: rendered.role, text: rendered.text, timestamp: event.timestamp };
-  });
+  const messages: VisibleHistoryImportMessage[] = ordered
+    .filter((event) => event.type !== "agent_request" || objectValue(event.payload, "history_summary") === undefined)
+    .map((event) => {
+      const rendered = renderProjectionEvent(event);
+      return { role: rendered.role, text: rendered.text, timestamp: event.timestamp };
+    });
   if (!messages.some((message) => message.role === "user")) {
     messages.unshift({
       role: "user",
@@ -3599,37 +3791,16 @@ export function buildVisibleHistoryImport(
       timestamp: ordered[0]?.timestamp ?? new Date(0).toISOString(),
     });
   }
-  const highWaterTokens = Math.max(512, Math.floor(contextWindowTokens * 0.8));
-  const fullTokens = visibleImportTokens(messages);
-  if (fullTokens < highWaterTokens) {
-    return { digest, messages, estimatedTokens: fullTokens, compacted: false };
+  // Visible history is an archive, not a hand-written substitute for native
+  // model compaction. Retain every message or explicitly refuse the import.
+  assertVisibleHistoryResourceBudget(JSON.stringify(messages));
+  return { digest, messages, estimatedTokens: visibleImportTokens(messages), compacted: false };
+}
+
+function assertVisibleHistoryResourceBudget(serialized: string): void {
+  if (Buffer.byteLength(serialized) > MAX_VISIBLE_HISTORY_IMPORT_BYTES) {
+    throw new Error("Visible history exceeds the 8 MiB JSON resource limit; the current task binding remains unchanged");
   }
-  const summary: VisibleHistoryImportMessage = {
-    role: "user",
-    text: `[GatherThread automatic compact]\nEarlier visible history was compacted before import to fit the configured Codex context window. Canonical realtime synchronization remains authoritative. Snapshot through sequence #${throughSequence}.`,
-    timestamp: ordered[0]?.timestamp ?? new Date(0).toISOString(),
-  };
-  const retained: VisibleHistoryImportMessage[] = [];
-  let retainedTokens = visibleImportTokens([summary]);
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index] as VisibleHistoryImportMessage;
-    const incoming = visibleImportTokens([message]);
-    if (retained.length > 0 && retainedTokens + incoming >= highWaterTokens) break;
-    if (retained.length === 0 && retainedTokens + incoming >= highWaterTokens) {
-      const maximumBytes = Math.max(256, (highWaterTokens - retainedTokens - 64) * 3);
-      retained.unshift({ ...message, text: splitUtf8(message.text, maximumBytes)[0] ?? "" });
-      break;
-    }
-    retained.unshift(message);
-    retainedTokens += incoming;
-  }
-  const compactedMessages = [summary, ...retained];
-  return {
-    digest,
-    messages: compactedMessages,
-    estimatedTokens: visibleImportTokens(compactedMessages),
-    compacted: true,
-  };
 }
 
 function visibleImportTokens(messages: readonly VisibleHistoryImportMessage[]): number {
@@ -3753,6 +3924,34 @@ function chunkLabel(value: string, index: number, count: number): string {
 
 function estimateTokens(value: string): number {
   return Math.ceil(Buffer.byteLength(value) / 3) + 32;
+}
+
+function currentContextTokens(usage: Record<string, unknown> | undefined): unknown {
+  // `total` is cumulative across turns; `last` is the active context usage.
+  // The cumulative fallback is only for older App Servers without `last`.
+  return objectValue(usage, "last")?.totalTokens ?? objectValue(usage, "total")?.totalTokens;
+}
+
+function nativeContextFingerprint(threadId: string, turnId: string | undefined, usage: Record<string, unknown> | undefined): string {
+  const fields = ["totalTokens", "inputTokens", "outputTokens", "cachedInputTokens", "reasoningOutputTokens"];
+  const counts = (key: string) => fields.map((field) => {
+    const value = objectValue(usage, key)?.[field];
+    return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
+  });
+  return createHash("sha256").update(JSON.stringify([
+    threadId, turnId ?? null, usage?.modelContextWindow, counts("last"), counts("total"),
+  ])).digest("hex");
+}
+
+function observationFingerprint(threadId: string, observed: CodexThreadTokenUsage): string {
+  return observed.fingerprint ?? createHash("sha256")
+    .update(JSON.stringify([threadId, observed.modelContextWindow, observed.totalTokens]))
+    .digest("hex");
+}
+
+function hasNativeContextWindow(state: CodexAppServerState): boolean {
+  return state.contextWindowSource === "app_server"
+    || (state.contextWindowSource === undefined && state.contextUsageSource === "app_server");
 }
 
 function boundExecutionEvents(events: readonly TranscriptEvent[]): TranscriptEvent[] {

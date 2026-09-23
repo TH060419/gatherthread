@@ -220,6 +220,127 @@ test("native controller pairs, configures one project owner, and resumes it afte
   assert.equal(ownerStops.length, 2);
 });
 
+test("native actions stay unavailable until credential restoration settles", async () => {
+  const credentials = credentialsFixture(unboundGrant);
+  const reading = deferred<void>();
+  const releaseRead = deferred<void>();
+  const originalRead = credentials.service.readRecord;
+  credentials.service.readRecord = async (key) => {
+    const captured = await originalRead(key);
+    reading.resolve();
+    await releaseRead.promise;
+    return captured;
+  };
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service }, status: status(), workspacePath: "/readonly/workspace",
+  });
+  const starting = controller.start();
+  try {
+    await reading.promise;
+    await assert.rejects(controller.disconnect(), /unavailable/);
+    await assert.rejects(controller.start(), /already started/);
+    releaseRead.resolve();
+    await starting;
+    await controller.disconnect();
+    assert.equal(controller.publicState().authorization, "unpaired");
+    assert.equal(credentials.records.has(DSH_NATIVE_CREDENTIAL_KEY), false);
+  } finally { releaseRead.resolve(); await starting; await controller.dispose(); }
+});
+
+test("disconnect invalidates in-flight configuration before it can restore a saved pairing", async () => {
+  const credentials = credentialsFixture(unboundGrant);
+  const validating = deferred<void>();
+  const releaseValidation = deferred<void>();
+  let ownerStarts = 0;
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service }, status: status(), workspacePath: "/readonly/workspace",
+    listProjects: async () => [{ id: "project-1", name: "Project One", role: "owner", state: "active", sessionCount: 0 }],
+    validateModel: async () => { validating.resolve(); await releaseValidation.promise; },
+    resolveWorkspace: async () => "/readonly/workspace",
+    createOwner: async () => { ownerStarts += 1; return { async stop() {} }; },
+  });
+  await controller.start();
+  try {
+    const configuring = controller.configure({ provider: "custom-provider", model: "model-one" });
+    const rejected = assert.rejects(configuring, /cancel|disconnect|unavailable|abort/iu);
+    await validating.promise;
+    const disconnecting = controller.disconnect();
+    releaseValidation.resolve();
+    await Promise.all([rejected, disconnecting]);
+    assert.equal(controller.publicState().authorization, "unpaired");
+    assert.equal(credentials.records.has(DSH_NATIVE_CREDENTIAL_KEY), false);
+    assert.equal(ownerStarts, 0);
+  } finally { releaseValidation.resolve(); await controller.dispose(); }
+});
+
+test("pairing startup reserves its slot before the first network response", async () => {
+  const credentials = credentialsFixture();
+  const firstRequest = deferred<void>();
+  const releaseRequest = deferred<void>();
+  const pairing = pairingFetch();
+  let requests = 0;
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service }, status: status(), workspacePath: "/readonly/workspace",
+    fetch: (async (input, init) => {
+      if (String(input).endsWith("/dsh-pairings")) {
+        requests += 1;
+        firstRequest.resolve();
+        await releaseRequest.promise;
+      }
+      return pairing.run(input, init);
+    }) as typeof fetch,
+  });
+  await controller.start();
+  try {
+    const input = { serverUrl: "https://gatherthread.example", deviceName: "DSH Mac" };
+    const first = controller.startPairing(input);
+    await firstRequest.promise;
+    const second = controller.startPairing(input);
+    const rejected = assert.rejects(second, /already active/);
+    releaseRequest.resolve();
+    await Promise.all([first, rejected]);
+    await controller.whenPairingSettled();
+    assert.equal(requests, 1);
+    assert.equal(credentials.calls.write, 1);
+  } finally { releaseRequest.resolve(); await controller.dispose(); }
+});
+
+test("project role changes restart only the affected owner to refresh native write capabilities", async () => {
+  const credentials = credentialsFixture({
+    ...unboundGrant, route: { provider: "custom-provider", model: "model-one" },
+  });
+  let role: "viewer" | "participant" = "viewer";
+  const starts: string[] = [];
+  const stops: string[] = [];
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service }, status: status(), workspacePath: "/readonly/workspace",
+    listProjects: async () => [
+      { id: "changing", name: "Changing", role, state: "active", sessionCount: 1 },
+      { id: "stable", name: "Stable", role: "owner", state: "active", sessionCount: 1 },
+    ],
+    validateModel: async () => undefined,
+    resolveWorkspace: async () => "/readonly/workspace",
+    createOwner: async (_grant, binding) => {
+      starts.push(binding.projectId);
+      return { async stop() { stops.push(binding.projectId); } };
+    },
+  });
+  await controller.start();
+  try {
+    assert.deepEqual(starts, ["changing", "stable"]);
+    await controller.refreshProjects();
+    assert.equal(starts.length, 2, "an unchanged role must not restart a running project");
+    role = "participant";
+    await controller.refreshProjects();
+    assert.deepEqual(starts, ["changing", "stable", "changing"]);
+    assert.deepEqual(stops, ["changing"]);
+    role = "viewer";
+    await controller.refreshProjects();
+    assert.deepEqual(starts, ["changing", "stable", "changing", "changing"]);
+    assert.deepEqual(stops, ["changing", "changing"]);
+  } finally { await controller.dispose(); }
+});
+
 test("native settings RPC controls automatic and manual upload for one DSH conversation", async () => {
   const routedGrant: DshNativeGrant = {
     ...unboundGrant,
@@ -312,6 +433,65 @@ test("native settings RPC controls automatic and manual upload for one DSH conve
 
   await disposeRpc();
   await controller.dispose();
+});
+
+test("native code RPC requires project opt-in, rejects arbitrary paths and hides viewer controls", async () => {
+  const credentials = credentialsFixture({
+    ...unboundGrant, route: { provider: "deepseek-official", model: "deepseek-chat" },
+  });
+  let handler: ((endpoint: string, payload: unknown, signal: AbortSignal) => Promise<unknown>) | undefined;
+  const context = {
+    credentials: credentials.service,
+    connection: { rpc: { handle(_channel: string, value: typeof handler) {
+      handler = value;
+      return async () => undefined;
+    } } },
+  };
+  const invoked: string[] = [];
+  const consent = new Map<string, boolean>();
+  const controller = new DshNativeHostController({
+    context, status: status(), workspacePath: "/readonly/workspace",
+    listExecutionProfiles: deepseekChatExecutionProfiles,
+    listProjects: async () => [
+      { id: "project-own", name: "Own", role: "owner", state: "active", sessionCount: 1 },
+      { id: "project-read", name: "Read", role: "viewer", state: "active", sessionCount: 1 },
+    ],
+    resolveWorkspace: async () => "/readonly/workspace",
+    createOwner: async (_grant, binding) => {
+      const view = () => ({ authorized: consent.get(binding.projectId) === true });
+      return {
+        codeSyncView: view,
+        async authorizeCodeSync(enabled: boolean) {
+          consent.set(binding.projectId, enabled);
+          invoked.push(`consent:${binding.projectId}:${enabled}`);
+          return view();
+        },
+        async executeCodeSync(action: string) {
+          invoked.push(`action:${binding.projectId}:${action}`);
+          return view();
+        },
+        async stop() {},
+      };
+    },
+  });
+  await controller.start();
+  const disposeRpc = registerNativeDshRpc(context, controller);
+  const invoke = async (endpoint: string, payload: unknown) => await handler!(endpoint, payload, new AbortController().signal) as { ok: boolean };
+  try {
+    assert.deepEqual(controller.publicState().codeSync, [{ projectId: "project-own", projectName: "Own", authorized: false }]);
+    assert.equal((await invoke("code/authorize", { projectId: "project-own", enabled: true })).ok, true);
+    assert.equal((await invoke("code/action", { projectId: "project-own", action: "code_upload" })).ok, true);
+    for (const payload of [
+      { projectId: "project-read", action: "code_upload" },
+      { projectId: "unknown-project", action: "code_upload" },
+      { projectId: "project-own", action: "code_upload", workspace: "/arbitrary" },
+      { projectId: "project-own", action: "shell" },
+    ]) assert.equal((await invoke("code/action", payload)).ok, false);
+    assert.equal((await invoke("code/authorize", { projectId: "project-read", enabled: true })).ok, false);
+    assert.equal((await invoke("code/authorize", { projectId: "project-own", enabled: "true" })).ok, false);
+    assert.deepEqual(invoked, ["consent:project-own:true", "action:project-own:code_upload"]);
+    assert.doesNotMatch(JSON.stringify(controller.publicState()), /gta_fixture|\/readonly/u);
+  } finally { await disposeRpc(); await controller.dispose(); }
 });
 
 test("one paired route reconciles every active accessible project and isolates project failure", async () => {

@@ -26,6 +26,8 @@ Alpha status never permits silent reinterpretation of persisted data, identity, 
 | DSH native plugin RPC and persisted state | Public Alpha package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
 | Browser entry routes and legacy deep-link forwarding | Public Alpha | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
 | Stable Web control IDs and accessible names | Internal versioned | `apps/web/index.html`, `apps/web/test/static-accessibility.test.js` | Web event bindings, accessibility, browser tests |
+| Opt-in code repository snapshots, review and merge | Public Alpha, unreleased source preview | `packages/protocol/src/code-sync.ts`, `apps/server/src/code-repository.ts` | Web, shared local code-sync module, Codex, DSH |
+| Shared manual history summaries and derived context | Public Alpha, unreleased source preview | `packages/protocol/src/history-summary.ts`, `apps/server/src/database.ts` | Web, bridge, MCP, Codex, DSH |
 
 When this document conflicts with the schemas or tested implementation, stop and resolve the discrepancy in the same PR. Do not silently choose whichever behavior is more convenient.
 
@@ -67,6 +69,7 @@ The same-origin API is rooted at `/v1`.
 | `/v1/dsh-pairings` | Browser-approved DSH pairing | Pairing is short-lived, one-use, origin-bound, and does not expose the long-lived credential to the browser URL or logs. |
 | `/v1/realtime-ticket`, `/v1/ws` | One-use session-scoped realtime subscription | The socket is transport, not durable truth; clients replay from their last contiguous cursor. |
 | `/v1/snapshot-requests` | Requester-private immutable snapshots and visible-history imports | Jobs are bounded control-plane records, not canonical events; runtime purpose controls claim authority. |
+| `/v1/sessions/:id/history-summaries`, `/v1/sessions/:id/context`, `/v1/projects/:id/context-policy` | Explicit local-Agent summary generation, derived context reads and per-user project preference | History remains append-only; source IDs, exact initiating-user execution runtime, current write permission, source size and claim completion are server-validated. Context reads are not canonical replay cursors. |
 
 The exact request and response schemas are in `packages/protocol/src/index.ts`; route tests in `apps/server/test/server.test.ts` are the executable compatibility suite.
 
@@ -113,7 +116,20 @@ Snapshot requests are requester-private control-plane records with frozen `throu
 - `snapshot_connector` jobs create immutable read-only local snapshots and cannot claim Agent requests or publish local turns.
 - Each manual Codex history import creates and verifies a new writable local task. The `visible_history_replace` operation retains its Alpha wire name for compatibility, switches the binding and Hook allowlist after verification, and leaves the previous task untouched for the user to archive. The private registry marks that previous task `local_only`, so its later prompts cannot enter first-prompt discovery or create cloud state.
 - Empty-session visibility markers and compact summaries are local-only. Realtime context injection remains independent from snapshot/import policy.
+- Visible Codex imports preserve public message bodies, subject to a separate bounded serialized snapshot size. An oversized resource is rejected before import, not shortened and marked complete. Native compaction, when required, must succeed before the new binding is committed. A summary is not a lossless copy or canonical history.
 - New snapshot kinds or changed claim authority require protocol, ACL, quota, bridge, integration, and security tests.
+
+## Project code boundary (unreleased)
+
+`/v1/projects/:id/code` is independent from canonical conversation events. GET returns repository enablement/main commit, bounded member-branch metadata and the current actor's branch ID. Owner-only `POST /enable` explicitly creates storage. `POST /checkpoints` accepts a complete bounded portable file set, expected base commit and idempotency key; actor identity and branch ownership come from authentication. `GET /snapshot?branch_id=main|BRANCH_ID` reads a current branch tree. `POST /review`, owner-only `POST /merge` and `POST /update` enforce expected heads. A mismatch or merge conflict never force-moves main or another member's branch. Normal cookie Origin, bearer device, project role and revoked-device checks remain.
+
+Authoritative shapes and 1,000-file / 2-MiB-file / 8-MiB-snapshot limits are in `code-sync.ts`. Only the checkpoint-upload route has an increased bounded body budget; event and authentication limits are not widened. SQLite owns atomic heads and retry receipts; immutable Git objects are stored before acknowledgement. Backups require both stores.
+
+The private snapshot-job protocol adds `code_sync_status`, `code_upload`, `code_download`, `code_recover`, `code_auto_upload_enable` and `code_auto_upload_disable`. These target one exact same-user execution runtime (Codex or DSH), never a snapshot worker, arbitrary directory or fallback device. Local code authorization is separately required and cannot be granted by these jobs. Results contain only bounded status/commit/count metadata and a recovery directory basename, never absolute paths or credentials.
+
+DSH native RPC adds `code/authorize {projectId,enabled}` and `code/action {projectId,action}`. Optional `codeSync` public-state entries are project-scoped. Consent is private, versioned and bound to the exact user/project/server/workspace. Packaged native controller and client upgrade together; existing conversation `sync/*` semantics do not change.
+
+Source visibility is project-wide, not Solo-scoped. A member branch is not a privacy boundary or per-Agent lock. Native conversation bindings, realtime context injection and the original local Git repository remain untouched. See [CODE_SYNC.md](CODE_SYNC.md) and [ADR-0025](adr/0025-opt-in-git-backed-code-checkpoints.md).
 
 ## MCP and local relay boundaries
 
@@ -123,14 +139,17 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - Internal runtime registration, claim, progress, completion, and credential handling are not exposed to an arbitrary model through the user MCP.
 - The local connector relay is protected by a per-run capability and current-user filesystem permissions. Its endpoint or named pipe is not authorization by itself.
 - Ambiguous routing across multiple connector registrations fails closed.
+- HTTP/stdio MCP messages default to 1 MiB, with at most 128 requests per batch and bounded JSON depth/node count; oversized inputs are rejected before any batch member executes. Valid batches and silent notifications remain supported. Manual visible-history import creates a new native task and is explicitly non-idempotent.
 - Renaming or removing an MCP tool/resource, parameter, URI, or result field is a Public Alpha interface change.
 
 ## Codex and DSH native boundaries
 
 - Codex Hooks are limited to reviewed `UserPromptSubmit` and `Stop` definitions. Hook payloads, output limits, registry purpose, and workspace path checks are security contracts.
 - Codex Desktop projection, background execution, and snapshot tasks have separate purposes and single-writer rules. Never mutate an active or ambiguously owned native task.
+- Native context capacity and transport bounds are separate. Codex context accounting uses fresh last-request usage, not cumulative lifetime billing; a reported model window takes precedence over a fallback estimate. Ordinary native automatic compaction remains enabled according to the user's harness configuration. GatherThread must not overwrite that configuration or label local truncation as native compaction. See [ADR-0026](adr/0026-native-first-context-management.md).
 - DSH uses public session append/flush and Agent services, durable projected-event IDs, echo suppression, and an outgoing outbox. Only allowlisted assistant output and redacted tool data may leave DSH.
 - DSH model selection uses exact metadata advertised by the connected runtime. A GatherThread request may temporarily select one declared model and effort for its own DSH turn; it must not persistently rewrite DSH-native selection for later local turns.
+- Native DSH pairing/configuration is single-flight. Disconnect drains canceled configuration writes before clearing its credential, and a project-role change refreshes only that project's native owner and permissions.
 - Persistent connector and DSH state must carry a version. A state change needs atomic migration or a safe, actionable refusal; never guess at an old structure.
 - Upstream version support is explicit. An unsupported Codex App Server or DSH Host API must fail safely and preserve local/cloud data.
 
@@ -140,6 +159,7 @@ Web HTML IDs, form names, accessible labels, dialog relationships, and the separ
 
 - `/` is the product home and `/app/` is the authenticated application. Root operational links containing `?api=...`, `?mock=1`, `#project`, `#session`, `#dsh-pair`, `#settings-*`, or `#main-content` must preserve their query and fragment when forwarded to `/app/`.
 - The product home and application must share one origin while retaining separate style and script entry points. Do not move authentication, API, WebSocket, Cookie, or invitation behavior into the product home.
+- A browser API override must remain on that same origin and cannot contain URL credentials. Reject an invalid override before sending login/device credentials; development uses a same-origin proxy. Explicit Node/connector server selection is separate.
 - Preserve them during visual-only changes or update every consumer and accessibility test in the same PR.
 - All user and Agent Markdown is untrusted. Keep URL filtering, escaped raw HTML, code-fence protection, bounded parsing, and bundled KaTeX limits intact.
 - Bilingual copy must be updated in English and Simplified Chinese without translating product names, user content, provider/model identifiers, or opaque IDs.

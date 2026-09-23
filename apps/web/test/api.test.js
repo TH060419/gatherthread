@@ -3,6 +3,28 @@ import assert from "node:assert/strict";
 
 import { ApiError, HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
 
+test("browser API overrides cannot send credentials to another origin", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLocation = globalThis.location;
+  const requests = [];
+  globalThis.location = new URL("https://gatherthread.example/app/");
+  globalThis.fetch = async (url) => { requests.push(url); return Response.json({ data: { id: "u1", username: "User" } }); };
+  try {
+    for (const baseUrl of ["https://external.invalid", "//external.invalid", "https://user:password@gatherthread.example", "http://gatherthread.example"]) {
+      const api = new HttpCollaborationApi({ baseUrl });
+      await assert.rejects(api.authenticate("fixture-browser-secret"), (error) => error.code === "invalid_api_origin");
+      assert.equal(api.token, "");
+    }
+    assert.equal(requests.length, 0);
+    await new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" }).restoreSession();
+    assert.deepEqual(requests, ["https://gatherthread.example/v1/me"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+  }
+});
+
 test("mock authentication derives the user from a token", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   await assert.rejects(() => api.authenticate("wrong"), (error) => {

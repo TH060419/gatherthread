@@ -15,6 +15,21 @@ const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.ur
 const brandLightPath = fileURLToPath(new URL("../brand/lockup-color-transparent-light.svg", import.meta.url));
 const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-dark.svg", import.meta.url));
 
+test("manual summaries use accessible icon entries, explicit paid confirmation and bounded settings", async () => {
+  const [html, main, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
+  for (const id of ["history-summary-select-button", "history-summary-view-button", "history-summary-versions-button"]) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*aria-label="[^"]+"[^>]*title="[^"]+"[^>]*>[\\s\\S]*?<svg[^>]*aria-hidden="true"`));
+  }
+  assert.match(html, /id="history-summary-confirm-dialog"[^>]*aria-labelledby="history-summary-confirm-title"[^>]*aria-describedby="history-summary-confirm-warning"/);
+  assert.match(html, /id="history-summary-status"[^>]*role="alert"/);
+  assert.match(html, /id="settings-history-summary-instructions"[^>]*maxlength="4000"/);
+  assert.match(html, /id="settings-history-context-mode" disabled/);
+  assert.match(html, /may consume model quota.*Only the selected records.*does not guarantee sandbox isolation/u);
+  assert.match(html, /Display toggles do not change your Agent context policy/u);
+  assert.match(styles, /\.history-summary-confirm-dialog > div \{ padding: 24px;/u);
+  assert.match(main, /if \(localeChanged && state\.session\) renderTimeline\(\)/u);
+});
+
 const brandedIconHashes = new Map([
   ["android-chrome-192x192.png", "f94f61adcee6cf206813081db0d286bbfde7f49445fcdb3f2c9da4f8892c2fce"],
   ["android-chrome-512x512.png", "d1f713c5434387b9ae0dcc5a25c9846bb2e6b9d9d9bd449627a634f295a6a0b8"],
@@ -377,7 +392,7 @@ test("remembered login and current-device naming remain explicit and accessible"
   assert.match(html, /for="claim-remember-device"/);
   assert.match(html, /for="settings-device-name"/);
   assert.match(main, /automaticDeviceName\(\)/);
-  assert.match(main, /api\.renameDevice\(state\.currentUser\.device_id/);
+  assert.match(main, /api\.renameDevice\(deviceId/);
   assert.match(api, /remember_device: rememberDevice/);
   assert.doesNotMatch(main, /localStorage.*device/i);
 });
@@ -499,6 +514,16 @@ test("custom numeric settings use spinner-free digit inputs", async () => {
   assert.match(styles, /\.numeric-setting-context label \{[\s\S]*?grid-template-columns: minmax\(64px, 1fr\) 100px;/);
 });
 
+test("context numeric controls fit the settings column without horizontal overflow", async () => {
+  const styles = await readFile(stylesPath, "utf8");
+  const settingsColumn = styles.match(/\.settings-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(\d+px, (\d+)px\);/);
+  const contextColumns = styles.match(/\.numeric-setting-context \{[^}]*grid-template-columns: minmax\((\d+)(?:px)?, 1fr\) minmax\((\d+)px, 0\.85fr\);/);
+  const numericGap = styles.match(/\.numeric-setting \{[^}]*gap: (\d+)px;/);
+  assert.ok(settingsColumn && contextColumns && numericGap, "Numeric grid sizing must remain explicit.");
+  assert.ok(Number(contextColumns[1]) + Number(contextColumns[2]) + Number(numericGap[1]) <= Number(settingsColumn[1]),
+    "The preset, exact value, unit, and gap must fit inside the settings control column.");
+});
+
 test("custom Codex models explain that access must already be configured", async () => {
   const [html, i18n] = await Promise.all([readFile(htmlPath, "utf8"), readFile(i18nPath, "utf8")]);
   const explanation = "This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.";
@@ -607,7 +632,7 @@ test("a failed Agent response is shown as a failure with an explicit retry", asy
   assert.match(main, /event-agent_response-failed/);
   assert.match(main, /setAttribute\("data-action", "retry-agent-request"\)/);
   assert.match(main, /retryAgentRequestInput\(/);
-  assert.match(main, /api\.appendAgentRequest\(state\.session\.id/);
+  assert.match(main, /api\.appendAgentRequest\(sessionId/);
   assert.match(main, /closest\("button\[data-action='retry-agent-request'\]"\)/);
   assert.match(main, /retryingAgentRequestIds\.has\(request\.id\)/);
   assert.match(main, /retryingAgentRequestIds\.add\(requestId\)/);

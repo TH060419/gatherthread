@@ -13,7 +13,7 @@ import type {
   ConnectorStateStore,
   DshAppendEventInput,
 } from "./types.js";
-import type { CommitLocalTurnInput, CompleteAgentRequestInput } from "@gatherthread/bridge";
+import { parseHistoryContext, type CommitLocalTurnInput, type CompleteAgentRequestInput } from "@gatherthread/bridge";
 
 export class MemoryConnectorStateStore implements ConnectorStateStore {
   #state: ConnectorState | undefined;
@@ -184,7 +184,7 @@ function parseActiveRequest(value: unknown): NonNullable<ConnectorState["activeR
   const active = requiredObject(value, "state.activeRequest");
   exactKeys(
     active,
-    new Set(["requestId", "requestSequence", "dshFromSequence", "dshToSequence", "promptDigest", "claimAttempt"]),
+    new Set(["requestId", "requestSequence", "dshFromSequence", "dshToSequence", "promptDigest", "claimAttempt", "contextExecution"]),
     "state.activeRequest",
   );
   const parsed = {
@@ -198,11 +198,28 @@ function parseActiveRequest(value: unknown): NonNullable<ConnectorState["activeR
     ...(active.claimAttempt === undefined ? {} : {
       claimAttempt: positiveInteger(active.claimAttempt, "state.activeRequest.claimAttempt"),
     }),
+    ...(active.contextExecution === undefined ? {} : {
+      contextExecution: parseContextExecution(active.contextExecution, Number(active.requestSequence) - 1),
+    }),
   };
   if (parsed.dshToSequence !== undefined && parsed.dshToSequence < parsed.dshFromSequence) {
     throw new Error("state.activeRequest.dshToSequence cannot precede dshFromSequence");
   }
   return parsed;
+}
+
+function parseContextExecution(value: unknown, throughSequence: number) {
+  const input = requiredObject(value, "state.activeRequest.contextExecution");
+  exactKeys(input, new Set(["sessionId", "historyContext", "selectedOnly"]), "state.activeRequest.contextExecution");
+  const sessionId = safeString(input.sessionId, "state.activeRequest.contextExecution.sessionId", 128);
+  if (!/^gatherthread-execution-[a-f0-9]{32}$/.test(sessionId) || typeof input.selectedOnly !== "boolean") {
+    throw new Error("Invalid DSH isolated context execution state");
+  }
+  const historyContext = parseHistoryContext(input.historyContext, undefined, throughSequence);
+  if (input.selectedOnly && historyContext.items.length !== 0) {
+    throw new Error("Selected-only DSH summary execution cannot include other shared history");
+  }
+  return { sessionId, historyContext, selectedOnly: input.selectedOnly };
 }
 
 function parseOutboxOperation(value: unknown, index: number): ConnectorOutboxOperation {

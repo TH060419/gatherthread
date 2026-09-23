@@ -10,14 +10,18 @@ User tools:
 - `collaboration_list_project_sessions`
 - `collaboration_list_sessions`
 - `collaboration_read_history`
+- `collaboration_read_context`
 - `collaboration_append_chat`
 - `collaboration_request_agent`
 - `collaboration_get_connection_status`
+- `collaboration_get_local_sync_status`
 - `collaboration_set_local_auto_upload`
 - `collaboration_upload_local_turns`
 - `collaboration_import_codex_history`
 
 The three local controls are routed only through the capability-protected connector transport. They can change a bound conversation's automatic upload preference, recover completed local turns after a missed Hook, or import Codex Desktop-visible history as a new local task after explicit user confirmation. The previous task is left for the user to archive. They do not expose the connector credential, and visible-history import leaves realtime canonical context injection enabled.
+
+Visible-history import is not an idempotent tool: another deliberate invocation can create another local task. A lost response is not permission to blindly repeat it.
 
 Internal runtime tools, unavailable in the user profile:
 
@@ -28,7 +32,19 @@ Internal runtime tools, unavailable in the user profile:
 
 Resources include `collaboration://projects`, one session-list resource per visible project, `collaboration://sessions`, and one incremental history URI per visible session. Project tools preserve grouping and roles; canonical history remains session-scoped and accepts `after_sequence` and `limit` query parameters.
 
+## Summary-aware public context
+
+Use `collaboration_read_context` with `session_id` to read the authenticated user's project context policy (initially `summary`). Its optional `view` is an explicit `summary` or `original` override; omitting it preserves a user's saved policy. It is a read-only user tool available through both the private local connector and the developer-preview HTTP client, independent of the local Agent harness.
+
+The result is `{ view, through_sequence, items }`. Each item contains `kind`, `event_id`, `sequence`, `actor_user_id`, and `content`. A summary also lists its complete `source_event_ids`. Summary view uses already completed, server-selected summaries in place of covered public messages and retains uncovered public text. This read starts no Agent run and does not compact, delete, or replace content already injected into a native Agent conversation. Summaries are lossy; use the originals to verify exact details.
+
+`view: "original"` returns the original public conversation text, not the complete canonical event stream. `collaboration_read_history` and history resources still return exact canonical events with their existing `after_sequence`, `limit`, cursor, and pagination semantics. A context `through_sequence` describes the derived read's boundary and is not a replacement replay cursor. Internal execution clients may additionally fence a read with `readContext(sessionId, view, throughSequence)`; that fence is not a model-facing MCP argument.
+
+Malformed arguments, unauthorized sessions, invalid context responses, resource limits, and older servers/connectors without the context API fail explicitly. The tool never silently substitutes raw history while claiming it is a summary. Context responses are limited to 256 KiB without clipping; use explicit paginated canonical history when a derived read exceeds that bound. Local calls retain the private capability and project/session routing checks; view selection does not bypass server membership permissions.
+
 `createMcpHttpHandler` implements stateless JSON-RPC POST handling, batches, notifications, content-type validation, and explicit Origin allowlisting. An HTTP request with an Origin is rejected unless that origin was configured. Authentication and actor identity remain server-derived through the injected API client; MCP inputs cannot supply an actor username.
+
+HTTP bodies and stdio lines default to a 1 MiB limit. The HTTP adapter counts actual streamed bytes and accepts an optional positive `maxMessageBytes` override. Both transports reject batches over 128 requests, JSON deeper than 64 levels or larger than 50,000 nodes before dispatch; accepted batch requests execute sequentially. Invalid JSON-RPC identifiers never dispatch tools. An embedding HTTP host must still enforce request authentication, connection/read deadlines and rate limits; this library handler is not a public unauthenticated server.
 
 Snapshot uploads and visible text are redacted before transport. A `harness_transcript` upload replaces its native local-session identifier with a SHA-256 fingerprint before append. Exact `provider_request` capture is disabled by default and requires explicit service authorization, `exact_provider_request=true`, an observed-by value of `harness_hook` or `authorized_proxy`, and a runtime ID. Reconstructed content must use `canonical_history` or `harness_transcript`.
 

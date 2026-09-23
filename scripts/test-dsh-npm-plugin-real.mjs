@@ -12,6 +12,7 @@ import {
   readdir,
   realpath,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createServer as createNetServer } from "node:net";
@@ -463,6 +464,8 @@ async function main() {
     mockLlm = await startMockLlm(modelKey);
     environment.DEEPSEEK_API_KEY = modelKey;
     environment.DEEPSEEK_BASE_URL = mockLlm.origin;
+    const longPublicHistory = `NATIVE_HISTORY_BEGIN\n${"canonical context ".repeat(4_500)}\nNATIVE_HISTORY_TAIL`;
+    assert.ok(Buffer.byteLength(longPublicHistory, "utf8") > 64 * 1_024);
 
     const collaborationPort = await freePort();
     const collaborationOrigin = `http://127.0.0.1:${String(collaborationPort)}`;
@@ -507,7 +510,7 @@ async function main() {
       body: {
         idempotency_key: "dsh-npm-real-session-seed",
         type: "human_chat",
-        payload: { text: "First Project seed" },
+        payload: { text: `First Project seed\n${longPublicHistory}` },
       },
     });
     await requestData(collaboration.origin, "/v1/projects", {
@@ -535,7 +538,7 @@ async function main() {
       body: {
         idempotency_key: "dsh-npm-real-session-2-seed",
         type: "human_chat",
-        payload: { text: "Second Project seed" },
+        payload: { text: `Second Project seed\n${longPublicHistory}` },
       },
     });
     const browserSession = await requestData(collaboration.origin, "/v1/browser-sessions", {
@@ -585,6 +588,7 @@ async function main() {
     });
     const browserContext = await browser.newContext({ viewport: { width: 1280, height: 860 }, locale: "zh-CN" });
     const page = await browserContext.newPage();
+    page.on("dialog", (dialog) => void dialog.accept());
     await page.goto(launchUrl, { waitUntil: "load" });
     await dismissOnboarding(page);
     await page.getByRole("button", { name: /^(设置|Settings)$/u }).click();
@@ -673,6 +677,7 @@ async function main() {
     await page.waitForTimeout(1_000);
     const secondWorkspaceText = await page.locator("body").innerText();
     assert.match(secondWorkspaceText, /DSH npm second session · 共序 · MULTI/u, secondWorkspaceText);
+    assert.equal(mockLlm.requests.length, 0, "passive long-history projection must not invoke a model or compactor");
 
     await page.locator('button[aria-label="新建会话"]:visible').first().click();
     const nativeComposer = page.locator('[contenteditable="true"][data-placeholder]:visible').first();
@@ -813,12 +818,120 @@ async function main() {
     await section.waitFor({ timeout: 30_000 });
     await section.click();
     await panel.waitFor({ state: "visible", timeout: 30_000 });
+
+    // Exercise code collaboration through the shipped native and Web controls.
+    // Both source and private sync state stay inside this isolated DSH_HOME.
+    const codeProjectId = "dsh-npm-real-project";
+    const codeRoot = path.join(root, "GatherThread Projects", "DSH npm real project");
+    const codeApiPath = `/v1/projects/${codeProjectId}/code`;
+    await access(codeRoot);
+    await writeFile(path.join(codeRoot, "README.md"), "DSH_NATIVE_CODE_V1\n");
+    await writeFile(path.join(codeRoot, ".gitignore"), ".env\nnode_modules/\n");
+    await writeFile(path.join(codeRoot, ".env"), "LOCAL_ONLY=fixture-private-value\n");
+    const nativeCodeState = async () => {
+      const result = await rawHttp({
+        port, pathname: "/gatherthread/status/get", method: "POST", host: parsedLaunch.host,
+        cookie: dshCookie, origin: parsedLaunch.origin,
+        body: { type: "client-request", rpcId: randomUUID(), method: "status/get", payload: {} },
+      });
+      assert.equal(result.status, 200);
+      const payload = JSON.parse(result.body);
+      assert.equal(payload.result?.ok, true);
+      return payload.result.value.codeSync?.find((project) => project.projectId === codeProjectId);
+    };
+    assert.equal((await nativeCodeState()).authorized, false, "pairing does not authorize source upload");
+    const codeSection = panel.getByRole("region", { name: "项目代码同步", exact: true });
+    const nativeCodeControls = codeSection.locator("details").filter({
+      has: page.locator("summary", { hasText: /^DSH npm real project$/u }),
+    });
+    await nativeCodeControls.locator("summary").click();
+    assert.equal(await nativeCodeControls.getByRole("button", { name: "上传代码", exact: true }).isDisabled(), true);
+    await gatherthreadPage.goto(`${collaboration.origin}/#project=${codeProjectId}&session=dsh-npm-real-session`, { waitUntil: "load" });
+    await gatherthreadPage.locator("#workspace:not([hidden])").waitFor({ timeout: 30_000 });
+    await gatherthreadPage.locator("#project-code-button").click();
+    await gatherthreadPage.locator("#project-code-dialog[open]").waitFor({ timeout: 30_000 });
+    assert.equal((await gatherthreadPage.locator("#code-project-name").textContent())?.trim(), "DSH npm real project");
+    await gatherthreadPage.locator("#code-enable-button").click();
+    await gatherthreadPage.locator("#code-confirm-accept").click();
+    await gatherthreadPage.locator("#code-enabled-content").waitFor({ state: "visible", timeout: 30_000 });
+    await nativeCodeControls.getByLabel("允许此 DSH 同步该项目代码", { exact: true }).click();
+    await waitUntil("native code authorization and initial status", async () => {
+      const state = await nativeCodeState();
+      return state?.authorized && state.status?.enabled ? state : undefined;
+    });
+    await nativeCodeControls.getByRole("button", { name: "上传代码", exact: true }).click();
+    const cloudCode = async () => (await requestData(collaboration.origin, codeApiPath, { token: owner.token })).data;
+    const nativeCheckpoint = await waitUntil("native manual source upload", async () => {
+      const status = await cloudCode();
+      return status.branches.find((branch) => branch.id === status.own_branch_id);
+    });
+    const sourceSnapshot = async () => (await requestData(collaboration.origin, `${codeApiPath}/snapshot?branch_id=${encodeURIComponent(nativeCheckpoint.id)}`, { token: owner.token })).data.snapshot;
+    let source = await sourceSnapshot();
+    assert.deepEqual(source.files.map((file) => file.path).sort(), [".gitignore", "README.md"]);
+    assert.equal(Buffer.from(source.files.find((file) => file.path === "README.md").content_base64, "base64").toString(), "DSH_NATIVE_CODE_V1\n");
+    assert.equal((await nativeCodeState()).status.automatic_upload, false);
+    await access(path.join(dshHome, "gatherthread-code-sync"));
+
+    await nativeCodeControls.getByLabel("空闲时自动上传本地代码至云端", { exact: true }).click();
+    await waitUntil("native auto source opt-in", async () => (await nativeCodeState())?.status?.automatic_upload === true);
+    await writeFile(path.join(codeRoot, "README.md"), "DSH_IDLE_AUTO_CODE_V2\n");
+    await waitUntil("settled native automatic source upload", async () => {
+      const snapshot = await sourceSnapshot();
+      return snapshot.commit !== nativeCheckpoint.head_commit && snapshot.files.some((file) => file.path === "README.md"
+        && Buffer.from(file.content_base64, "base64").toString() === "DSH_IDLE_AUTO_CODE_V2\n");
+    }, 45_000);
+    await nativeCodeControls.getByLabel("空闲时自动上传本地代码至云端", { exact: true }).click();
+    await waitUntil("native automatic source disabled", async () => (await nativeCodeState())?.status?.automatic_upload === false);
+
+    const codeRuntimes = (await requestData(collaboration.origin, "/v1/sessions/dsh-npm-real-session/runtimes", { token: owner.token })).data.runtimes;
+    // This endpoint returns only this user's execution runtimes; purpose is not
+    // part of its deliberately narrow public DTO.
+    const codeRuntime = codeRuntimes.find((runtime) => runtime.harness === "deepseek-harness" && runtime.status === "online");
+    assert.ok(codeRuntime);
+    await gatherthreadPage.locator("#code-runtime-select").selectOption(codeRuntime.id);
+    await waitUntil("Web exact DSH device source status", async () => !(await gatherthreadPage.locator("#code-upload-button").isDisabled()));
+    await writeFile(path.join(codeRoot, "README.md"), "DSH_WEB_DEVICE_CODE_V3\n");
+    const codeRequest = gatherthreadPage.waitForRequest((request) => {
+      if (request.method() !== "POST") return false;
+      try { return request.postDataJSON()?.kind === "code_upload"; } catch { return false; }
+    });
+    await gatherthreadPage.locator("#code-upload-button").click();
+    await gatherthreadPage.locator("#code-confirm-accept").click();
+    const codePayload = (await codeRequest).postDataJSON();
+    assert.equal(codePayload.target_runtime_id, codeRuntime.id, "Web must target exactly the selected DSH execution runtime");
+    await waitUntil("Web source upload completed by real DSH", async () => {
+      const snapshot = await sourceSnapshot();
+      return snapshot.files.some((file) => file.path === "README.md"
+        && Buffer.from(file.content_base64, "base64").toString() === "DSH_WEB_DEVICE_CODE_V3\n");
+    }, 45_000);
+
+    const requestsBeforeRecovery = mockLlm.requests.length;
+    const originalSource = await readFile(path.join(codeRoot, "README.md"), "utf8");
+    await nativeCodeControls.getByRole("button", { name: "恢复到新目录", exact: true }).click();
+    const recoveredCode = await waitUntil("native recovery new-folder receipt", async () => {
+      const state = await nativeCodeState();
+      return state?.status?.recovery_directory ? state.status : undefined;
+    });
+    assert.equal(recoveredCode.local_status_unknown, true);
+    assert.equal(path.basename(recoveredCode.recovery_directory), recoveredCode.recovery_directory);
+    const recoveredRoot = path.join(path.dirname(codeRoot), recoveredCode.recovery_directory);
+    assert.equal(await readFile(path.join(recoveredRoot, "README.md"), "utf8"), originalSource);
+    assert.equal(await readFile(path.join(codeRoot, "README.md"), "utf8"), originalSource);
+    assert.equal(mockLlm.requests.length, requestsBeforeRecovery, "code recovery never invokes the model");
+    await nativeCodeControls.getByLabel("允许此 DSH 同步该项目代码", { exact: true }).click();
+    await waitUntil("native code consent revoked", async () => (await nativeCodeState())?.authorized === false);
+    await gatherthreadPage.locator("#close-project-code-button").click();
+
     const pairedDom = await panel.textContent() ?? "";
     assertAbsent(pairedDom, [owner.token, pepper, modelKey, grantSecret, root, dshHome], "DSH Client DOM");
     assertAbsent(`${host.stdout}\n${host.stderr}`, [owner.token, pepper, modelKey, grantSecret], "DSH Host output");
     assert.doesNotMatch(pairedDom, /authorization|bearer|headers|stack/iu);
     assert.equal((await readdir(workspace)).length, 0, "the read-only workspace must remain unchanged");
     assert.ok(mockLlm.requests.some((request) => JSON.stringify(request.messages).includes("WEB_DSH_REQUEST")));
+    const projectedRequest = mockLlm.requests.find((request) => JSON.stringify(request.messages).includes("WEB_DSH_REQUEST"));
+    const projectedText = JSON.stringify(projectedRequest.messages);
+    assert.ok(projectedText.includes("NATIVE_HISTORY_BEGIN"), "the real native model request must retain the history start");
+    assert.ok(projectedText.includes("NATIVE_HISTORY_TAIL"), "the real native model request must retain the history tail beyond 64 KiB");
 
     await panel.getByRole("button", { name: "断开此 DSH 的本地配对", exact: true }).click();
     await panel.getByRole("button", { name: "登录并配对", exact: true }).waitFor({ timeout: 30_000 });
@@ -852,7 +965,7 @@ async function main() {
       command: "npx @deepseek-ai/dsh@0.1.2-rc.1 web",
       pluginMechanism: "dsh plugin --profile web add <package>",
       profile: "web",
-      lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "writable-native-session", "native-cloud-adoption", "web-request", "progress", "final", "reload", "disconnect", "remove"],
+      lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "writable-native-session", "native-full-history", "native-cloud-adoption", "web-request", "progress", "final", "reload", "native-code-consent", "native-code-upload", "native-code-auto-upload", "web-exact-device-code-upload", "native-code-recovery", "code-consent-revocation", "disconnect", "remove"],
       realDshHome: false,
       networkDownloads: false,
       credentialStore: {
