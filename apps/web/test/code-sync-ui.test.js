@@ -21,9 +21,10 @@ class Node {
   replaceChildren(...children) { this.children = children; }
   showModal() { this.open = true; }
   close() { this.open = false; this.dispatch("close"); }
+  click() { return this.dispatch("click"); }
 }
 
-function setup() {
+function setup({ seenNotice = true } = {}) {
   const nodes = new Map();
   const el = (id) => { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); };
   const doc = { getElementById: el, createElement: () => new Node(), activeElement: new Node() };
@@ -41,13 +42,61 @@ function setup() {
     mutateProjectCode: async (...args) => { mutations.push(args); return { status }; },
   };
   let context = { project: { id: "p1", name: "Project", role: "owner" }, userId: "u1", sessionId: "s1", runtimes: [] };
-  const ui = mountCodeSync({ document: doc, api, localizer: { t: (text) => text }, getContext: () => context });
+  const storageValues = new Map(seenNotice ? [["gatherthread.code-notice.v1", "seen"]] : []);
+  const storage = { getItem: (key) => storageValues.get(key) ?? null, setItem: (key, value) => storageValues.set(key, value) };
+  const ui = mountCodeSync({ document: doc, api, localizer: { t: (text) => text }, getContext: () => context, storage });
   return { el, ui, status, mutations,
     changeContext: (next) => { context = next; ui.updateContext(); },
     setSnapshotHead: (value) => { snapshotHead = value; },
     viewChanges: () => el("code-branch-list").children[0].children[1].dispatch("click"),
   };
 }
+
+test("the Git notice appears once per browser before opening code controls", async () => {
+  const app = setup({ seenNotice: false });
+  app.el("project-code-button").click();
+  assert.equal(app.el("code-notice-dialog").open, true);
+  assert.equal(app.el("project-code-dialog").open, false);
+  app.el("code-notice-close").click();
+  app.el("project-code-button").click();
+  assert.equal(app.el("code-notice-dialog").open, true, "dismissal does not mark the notice read");
+  app.el("code-notice-continue").click();
+  assert.equal(app.el("project-code-dialog").open, true);
+  app.ui.close();
+  app.el("project-code-button").click();
+  assert.equal(app.el("code-notice-dialog").open, false);
+  assert.equal(app.el("project-code-dialog").open, true);
+  app.ui.close();
+});
+
+test("Git panel guides accounts without projects and owner can pause syncing", async () => {
+  const app = setup();
+  app.changeContext({ project: null, userId: "u1", canCreateProjects: true, runtimes: [] });
+  app.el("project-code-button").click();
+  assert.equal(app.el("project-code-dialog").open, true);
+  assert.equal(app.el("code-no-project").hidden, false);
+  assert.equal(app.el("code-create-project-button").hidden, false);
+  app.ui.close();
+  app.changeContext({ project: { id: "p1", name: "Project", role: "owner" }, userId: "u1", sessionId: "s1", runtimes: [] });
+  app.el("project-code-button").click();
+  await tick();
+  const pending = app.el("code-disable-active-button").click();
+  app.el("code-confirm-accept").click();
+  await pending;
+  assert.equal(app.mutations[0][1], "disable");
+  app.ui.close();
+});
+
+test("paused Git keeps local automatic-upload stop control reachable", async () => {
+  const app = setup();
+  app.status.repository.enabled = false;
+  app.el("project-code-button").click();
+  await tick();
+  assert.equal(app.el("code-enabled-content").hidden, false);
+  assert.equal(app.el("code-paused-note").hidden, false);
+  assert.equal(app.el("code-disable-active-button").disabled, true);
+  app.ui.close();
+});
 
 test("a refreshed preview cancels pending approval even for the same branch", async () => {
   const app = setup();

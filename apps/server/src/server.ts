@@ -754,7 +754,7 @@ export async function startCollaborationServer(
         }
         if (request.method === "POST" && parts.length === 5) {
           const actions = {
-            enable: codeRepository.enable.bind(codeRepository), checkpoints: codeRepository.checkpoint.bind(codeRepository),
+            enable: codeRepository.enable.bind(codeRepository), disable: codeRepository.disable.bind(codeRepository), checkpoints: codeRepository.checkpoint.bind(codeRepository),
             review: codeRepository.review.bind(codeRepository), merge: codeRepository.merge.bind(codeRepository), update: codeRepository.update.bind(codeRepository),
           };
           const action = Object.hasOwn(actions, parts[4]!) ? actions[parts[4] as keyof typeof actions] : undefined;

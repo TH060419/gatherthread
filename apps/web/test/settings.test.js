@@ -17,6 +17,7 @@ import {
   projectDshProfile,
   projectEnabledHarnesses,
   SETTINGS_STORAGE_KEY,
+  SHARED_LANGUAGE_STORAGE_KEY,
   withProjectAgentHarness,
   withProjectCodexProfile,
   withProjectDshProfile,
@@ -221,8 +222,10 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
   const updated = store.set({ ...store.get(), general: { locale: "zh-CN" } });
   assert.equal(updated.general.locale, "zh-CN");
   assert.equal(JSON.parse(data.get(SETTINGS_STORAGE_KEY)).general.locale, "zh-CN");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
   assert.doesNotMatch(data.get(SETTINGS_STORAGE_KEY), /token|cookie|password|secret/i);
   assert.equal(store.reset().general.locale, "en");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "en");
 
   const broken = createSettingsStore({ getItem: () => "{broken", setItem: () => { throw new Error("blocked"); } });
   assert.deepEqual(broken.get(), structuredClone(DEFAULT_SETTINGS));
@@ -265,4 +268,33 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: () => {},
   }).get();
   assert.equal(customizedTextScale.appearance.textScalePercent, 110);
+});
+
+test("homepage, login, and workspace share one validated language preference", () => {
+  const data = new Map([[SETTINGS_STORAGE_KEY, JSON.stringify({
+    version: 12,
+    general: { locale: "zh-CN" },
+    appearance: { theme: "dark" },
+  })]]);
+  const storage = {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  };
+  const store = createSettingsStore(storage);
+  assert.equal(store.get().general.locale, "zh-CN", "existing workspace preference migrates to the shared key");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
+
+  data.set(SHARED_LANGUAGE_STORAGE_KEY, "en");
+  assert.equal(store.get().general.locale, "en", "a change from another tab is reflected without overwriting other settings");
+  assert.equal(store.get().appearance.theme, "dark");
+
+  const updated = store.set({ ...store.get(), general: { locale: "zh-CN" } });
+  assert.equal(updated.general.locale, "zh-CN");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
+  assert.equal(JSON.parse(data.get(SETTINGS_STORAGE_KEY)).general.locale, "zh-CN");
+
+  data.set(SHARED_LANGUAGE_STORAGE_KEY, "invalid");
+  assert.equal(createSettingsStore(storage).get().general.locale, "zh-CN", "invalid shared values cannot override a valid workspace choice");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
 });

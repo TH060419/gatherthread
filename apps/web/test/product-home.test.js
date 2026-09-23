@@ -104,6 +104,16 @@ test("product home uses the application's bilingual session terminology", async 
   assert.match(app, /"sessions\.multi\.h3": \{ zh: "Multi · 协作会话", en: "Multi" \}/u);
 });
 
+test("product home uses the shared workspace language and follows changes from another tab", async () => {
+  const app = await readFile(new URL("app.js", productRoot), "utf8");
+  assert.match(app, /localStorage\.getItem\("gt-lang"\)/u);
+  assert.match(app, /localStorage\.getItem\("gatherthread\.settings\.v1"\)/u);
+  assert.match(app, /savedLanguage === "zh" \|\| savedLanguage === "en"/u);
+  assert.match(app, /window\.addEventListener\("storage", function \(event\)/u);
+  assert.match(app, /event\.key === "gt-lang"/u);
+  assert.match(app, /applyLang\(event\.newValue, false, false\)/u);
+});
+
 test("product home release label matches the repository package version", async () => {
   const [html, app, packageSource] = await Promise.all([
     readFile(new URL("index.html", productRoot), "utf8"),

@@ -181,6 +181,11 @@ export class HttpCollaborationApi {
     this.sessionHeads.clear();
   }
 
+  async leaveProject(projectId, userId) {
+    await this.request(`/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, { method: "DELETE" });
+    this.sessionHeads.clear();
+  }
+
   async getProject(projectId) {
     const { project, role } = await this.request(`/v1/projects/${encodeURIComponent(projectId)}`);
     return {
@@ -197,7 +202,7 @@ export class HttpCollaborationApi {
   }
 
   async mutateProjectCode(projectId, operation, input) {
-    if (!["enable", "review", "merge", "update"].includes(operation)) throw new Error("Unknown code operation.");
+    if (!["enable", "disable", "review", "merge", "update"].includes(operation)) throw new Error("Unknown code operation.");
     return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code/${operation}`, {
       method: "POST",
       body: JSON.stringify(input),
@@ -821,6 +826,16 @@ export class MockCollaborationApi {
     }
   }
 
+  async leaveProject(projectId, userId) {
+    await this.#wait();
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project || !this.currentUser || this.currentUser.id !== userId || project.role === "owner") {
+      throw new ApiError("Only invited members can leave their own project.", { status: 403, code: "forbidden" });
+    }
+    this.projects = this.projects.filter((item) => item.id !== projectId);
+    this.sessions = this.sessions.filter((item) => item.projectId !== projectId);
+  }
+
   async getProject(projectId) {
     await this.#wait();
     const project = this.projects.find((item) => item.id === projectId);
@@ -842,7 +857,7 @@ export class MockCollaborationApi {
 
   async mutateProjectCode(projectId, operation, input) {
     const project = await this.getProject(projectId);
-    if (project.role === "viewer" || (["enable", "merge"].includes(operation) && project.role !== "owner")) {
+    if ((project.role === "viewer" && operation !== "disable") || (["enable", "disable", "merge"].includes(operation) && project.role !== "owner")) {
       throw new ApiError("Forbidden", { status: 403, code: "forbidden" });
     }
     const key = `code:${projectId}:${input.idempotency_key}`;
@@ -850,7 +865,10 @@ export class MockCollaborationApi {
     if (prior) return structuredClone(prior);
     let status = await this.getProjectCode(projectId);
     if (operation === "enable") {
-      status = { repository: { enabled: true, main_commit: "1".repeat(40) }, branches: [], own_branch_id: null };
+      status = { ...status, repository: { enabled: true, main_commit: status.repository.main_commit ?? "1".repeat(40) } };
+    } else if (operation === "disable") {
+      if (!status.repository.enabled) throw new ApiError("Code storage is already off", { status: 409, code: "code_not_enabled" });
+      status = { ...status, repository: { ...status.repository, enabled: false } };
     } else {
       const own = status.branches.find((branch) => branch.id === status.own_branch_id);
       const selected = status.branches.find((branch) => branch.id === input.branch_id);

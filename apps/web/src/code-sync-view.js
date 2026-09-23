@@ -1,4 +1,5 @@
 import { codeErrorText, codeRuntimeChoices, createCodeSyncController } from "./code-sync.js";
+import { codeNoticeStorage, hasSeenCodeNotice, markCodeNoticeSeen } from "./code-notice.js";
 
 const ACTIVE_JOBS = new Set(["queued", "claimed", "importing", "compacting"]);
 const shortCommit = (value) => typeof value === "string" ? value.slice(0, 9) : "—";
@@ -26,9 +27,10 @@ export function codeFilePreview(file) {
   return new TextDecoder().decode(Uint8Array.from(raw, (char) => char.charCodeAt(0))).slice(0, 12000);
 }
 
-export function mountCodeSync({ document: doc, api, localizer, getContext, mockEnabled = false }) {
+export function mountCodeSync({ document: doc, api, localizer, getContext, mockEnabled = false, storage = codeNoticeStorage() }) {
   const el = (id) => doc.getElementById(id);
   const dialog = el("project-code-dialog");
+  const noticeDialog = el("code-notice-dialog");
   const trigger = el("project-code-button");
   const t = (text) => localizer.t(text);
   let returnFocus;
@@ -59,7 +61,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   function render(state) {
     const { context, repository, permissions, local, job } = state;
     if (pendingConfirmation && pendingConfirmation.route !== routeKey(state)) finishConfirmation(false);
-    trigger.disabled = !context?.project;
+    trigger.disabled = false;
     if (viewProjectId !== context?.project?.id) {
       finishConfirmation(false);
       viewProjectId = context?.project?.id;
@@ -70,15 +72,29 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     }
     el("code-project-name").textContent = context?.project?.name ?? "";
     el("code-error").textContent = state.error ? t(state.error) : "";
+    const noProject = !context?.project;
+    el("code-no-project").hidden = !noProject;
+    el("code-create-project-button").hidden = !context?.canCreateProjects;
+    el("code-refresh-button").disabled = noProject || state.loading || state.busy;
+    if (noProject) {
+      el("code-enable-section").hidden = true;
+      el("code-enabled-content").hidden = true;
+      el("code-repository-status").textContent = "";
+      return;
+    }
     const enabled = repository?.repository?.enabled === true;
+    const hasStoredRepository = Boolean(repository?.repository?.main_commit);
     el("code-repository-status").textContent = t(state.loading ? "Reading code status…" : !repository ? "Code status unavailable" : enabled ? "Git code storage enabled" : "Code storage is not enabled");
-    el("code-refresh-button").disabled = state.loading || state.busy;
     el("code-enable-section").hidden = !repository || enabled;
     el("code-enable-button").hidden = context?.project?.role !== "owner";
     el("code-enable-button").disabled = !permissions.enable;
     el("code-owner-note").hidden = context?.project?.role === "owner";
-    el("code-enabled-content").hidden = !enabled;
-    if (!enabled) return;
+    el("code-enabled-content").hidden = !hasStoredRepository;
+    el("code-pause-actions").hidden = !enabled;
+    el("code-paused-note").hidden = enabled;
+    el("code-disable-active-button").hidden = context?.project?.role !== "owner";
+    el("code-disable-active-button").disabled = !permissions.disable;
+    if (!hasStoredRepository) return;
     const runtimes = codeRuntimeChoices(context);
     const select = el("code-runtime-select");
     const options = [{ value: "", label: t("Choose a local Agent device") }, ...runtimes.map((runtime) => {
@@ -109,6 +125,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     else if (!runtimes.some((runtime) => runtime.id === state.runtimeId)) status = "Selected device is offline";
     else if (state.busy || ACTIVE_JOBS.has(job?.status)) status = "Code operation queued or running on the selected device…";
     else if (!local) status = "Local code status is not available. Refresh to retry.";
+    else if (!enabled) status = "Cloud Git is off. You can still turn off an existing local automatic-upload preference below; other code transfers are paused.";
     else if (!local.enabled) status = "Enable code access in the local connector first, then reconnect and refresh.";
     else if (local.local_status_unknown) status = "Original workspace status is unknown. The cloud copy was restored to a new folder.";
     else if (job?.kind === "code_recover") status = "Recovery copy created. Open the new folder locally to continue.";
@@ -124,14 +141,15 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
       ...(local.recovery_directory ? [`${t("Recovery folder")}: ${local.recovery_directory}`] : []),
     ].join(" · ") : "";
     el("code-auto-upload-toggle").checked = local?.automatic_upload === true;
-    el("code-auto-upload-toggle").disabled = !permissions.transfer;
-    for (const id of ["code-upload-button", "code-download-button", "code-recover-button"]) el(id).disabled = !permissions.transfer;
+    el("code-auto-upload-toggle").disabled = !permissions.transfer && !permissions.stopAutomaticUpload;
+    el("code-upload-button").disabled = !permissions.transfer;
+    for (const id of ["code-download-button", "code-recover-button"]) el(id).disabled = !permissions.transfer;
     el("code-review-button").disabled = !permissions.review;
     el("code-update-button").disabled = !permissions.update || own?.head_commit === repository.repository.main_commit;
     el("code-main-commit").textContent = `main · ${shortCommit(repository.repository.main_commit)}`;
     el("code-branches-empty").hidden = repository.branches.length > 0;
     const list = el("code-branch-list");
-    const branchSignature = JSON.stringify([repository.branches, repository.own_branch_id, state.busy, context?.members]);
+    const branchSignature = JSON.stringify([repository.branches, repository.own_branch_id, state.busy, enabled, context?.members]);
     if (list.dataset.branches !== branchSignature) {
       list.replaceChildren(...repository.branches.map((branch) => {
         const row = doc.createElement("li");
@@ -148,7 +166,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
         review.type = "button";
         review.className = "text-button";
         review.textContent = t("View changes");
-        review.disabled = state.busy;
+        review.disabled = state.busy || !enabled;
         review.addEventListener("click", () => void showPreview(branch.id));
         row.append(copy, review);
         return row;
@@ -206,10 +224,28 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   }
   trigger.addEventListener("click", () => {
     updateContext();
-    if (!controller.getState().context?.project) return;
     returnFocus = doc.activeElement;
+    if (controller.getState().context?.project && !hasSeenCodeNotice(storage)) {
+      noticeDialog.showModal();
+    } else {
+      dialog.showModal();
+      controller.open();
+    }
+  });
+  el("code-notice-close").addEventListener("click", () => noticeDialog.close());
+  el("code-notice-continue").addEventListener("click", () => {
+    markCodeNoticeSeen(storage);
+    noticeDialog.close();
+    if (!controller.getState().context?.project) return;
     dialog.showModal();
     controller.open();
+  });
+  noticeDialog.addEventListener("close", () => {
+    if (!dialog.open) returnFocus?.isConnected && returnFocus.focus({ preventScroll: true });
+  });
+  el("code-create-project-button").addEventListener("click", () => {
+    dialog.close();
+    doc.getElementById("new-project-button")?.click?.();
   });
   el("close-project-code-button").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => {
@@ -227,6 +263,9 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   el("code-confirm-cancel").addEventListener("click", () => finishConfirmation(false));
   el("code-enable-button").addEventListener("click", async () => {
     if (await confirm(t("Enable Git storage for this project? Uploaded code will be readable by every project member. No local files are uploaded until you authorize a connector and choose an upload action."))) void controller.mutate("enable");
+  });
+  el("code-disable-active-button").addEventListener("click", async () => {
+    if (await confirm(t("Turn off Git synchronization for this project? Existing cloud branches stay stored and can be re-enabled later. Local files and conversation sync are unchanged."))) void controller.mutate("disable");
   });
   el("code-upload-button").addEventListener("click", async () => {
     if (await confirm(t("Upload selected local project files to your cloud branch? All project members can read them. Check exclusions and credentials before continuing."))) void controller.queue("code_upload");
@@ -253,6 +292,6 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   });
   return {
     updateContext,
-    close() { if (dialog.open) dialog.close(); controller.close(); },
+    close() { if (noticeDialog.open) noticeDialog.close(); if (dialog.open) dialog.close(); controller.close(); },
   };
 }

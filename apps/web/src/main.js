@@ -69,6 +69,7 @@ import {
   CONTEXT_BUDGET_MIN_BYTES,
   contextBudgetToTokenCeiling,
   createSettingsStore,
+  SHARED_LANGUAGE_STORAGE_KEY,
   DEFAULT_SETTINGS,
   effectiveContextBudget,
   normalizeCodexProfile,
@@ -189,6 +190,8 @@ const renameProjectDialog = element("rename-project-dialog");
 const renameProjectForm = element("rename-project-form");
 const deleteCloudDialog = element("delete-cloud-dialog");
 const deleteCloudForm = element("delete-cloud-form");
+const leaveProjectDialog = element("leave-project-dialog");
+const leaveProjectForm = element("leave-project-form");
 const connectCodexDialog = element("connect-codex-dialog");
 const connectCodexButton = element("connect-codex-button");
 const connectDshDialog = element("connect-dsh-dialog");
@@ -221,6 +224,7 @@ const codeSyncUi = mountCodeSync({
   getContext: () => ({
     project: state.project,
     userId: state.currentUser?.id,
+    canCreateProjects: state.currentUser?.can_create_projects === true,
     sessionId: state.session?.id,
     sessionWritable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
     runtimes: state.executionRuntimes,
@@ -258,6 +262,17 @@ let attentionNoticeTimer;
 let connectionNoticeState = INITIAL_CONNECTION_NOTICE_STATE;
 
 applyVisualSettings(state.settings);
+element("auth-language-button").addEventListener("click", () => {
+  const locale = state.settings.general.locale === "zh-CN" ? "en" : "zh-CN";
+  state.settings = settingsStore.set({ ...state.settings, general: { locale } });
+  applyVisualSettings(state.settings);
+});
+window.addEventListener("storage", (event) => {
+  if (event.key !== SHARED_LANGUAGE_STORAGE_KEY) return;
+  state.settings = settingsStore.get();
+  applyVisualSettings(state.settings);
+  if (settingsDialog.open) populateSettingsForm(state.settings);
+});
 setAutomaticClaimDeviceName({ force: true });
 element("claim-device-name").addEventListener("input", () => {
   element("claim-device-name").dataset.automatic = "false";
@@ -640,6 +655,7 @@ element("empty-create-button").addEventListener("click", () => {
 element("cancel-create-button").addEventListener("click", () => createDialog.close());
 element("dialog-cancel-button").addEventListener("click", () => createDialog.close());
 element("new-project-button").addEventListener("click", openCreateProjectDialog);
+element("topbar-create-project-button").addEventListener("click", openCreateProjectDialog);
 element("cancel-create-project-button").addEventListener("click", () => createProjectDialog.close());
 element("dialog-cancel-project-button").addEventListener("click", () => createProjectDialog.close());
 element("rename-project-button").addEventListener("click", openRenameProjectDialog);
@@ -659,6 +675,44 @@ renameSessionDialog.addEventListener("close", () => {
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
 });
 element("delete-project-button").addEventListener("click", () => openDeleteCloudDialog("project"));
+element("leave-project-button").addEventListener("click", () => {
+  if (!state.project || !["participant", "viewer"].includes(state.project.role)) return;
+  element("leave-project-error").textContent = "";
+  leaveProjectDialog.showModal();
+  requestAnimationFrame(() => element("cancel-leave-project-button").focus());
+});
+element("close-leave-project-button").addEventListener("click", () => leaveProjectDialog.close());
+element("cancel-leave-project-button").addEventListener("click", () => leaveProjectDialog.close());
+leaveProjectForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const projectId = state.project?.id;
+  const userId = state.currentUser?.id;
+  if (!projectId || !userId || !["participant", "viewer"].includes(state.project.role)) return;
+  const submit = element("confirm-leave-project-button");
+  submit.disabled = true;
+  element("leave-project-error").textContent = "";
+  try {
+    await api.leaveProject(projectId, userId);
+    if (state.project?.id !== projectId) return;
+    leaveProjectDialog.close();
+    codeSyncUi.close();
+    sync.disconnect();
+    stopMemberRefresh();
+    stopSnapshotPolling();
+    stopDshRuntimePolling();
+    selectedSessionGeneration += 1;
+    projectSelectionGuard.invalidate();
+    state.project = null;
+    state.session = null;
+    history.replaceState(null, "", `${location.pathname}${location.search}`);
+    await enterWorkspace();
+    announce("You left the project. Local files and Agent conversations were not changed.");
+  } catch (error) {
+    element("leave-project-error").textContent = error.message ?? "Unable to leave this project.";
+  } finally {
+    submit.disabled = false;
+  }
+});
 element("delete-session-button").addEventListener("click", () => openDeleteCloudDialog("session"));
 element("close-delete-cloud-button").addEventListener("click", () => deleteCloudDialog.close());
 element("cancel-delete-cloud-button").addEventListener("click", () => deleteCloudDialog.close());
@@ -1029,6 +1083,7 @@ function resetWorkspaceToAuth() {
   if (createProjectDialog.open) createProjectDialog.close();
   cancelSettingsDialog();
   if (deleteCloudDialog.open) deleteCloudDialog.close();
+  if (leaveProjectDialog.open) leaveProjectDialog.close();
   sync.disconnect();
   stopMemberRefresh();
   stopSnapshotPolling();
@@ -1103,14 +1158,18 @@ async function enterWorkspace(preferredProjectId) {
   } else {
     state.sessions = [];
     state.project = null;
+    renderProjectSelect();
+    codeSyncUi.updateContext();
     renderSessionList();
     sessionView.hidden = true;
     emptyState.hidden = false;
     const empty = emptyProjectState(state.currentUser.can_create_projects === true);
+    element("empty-state-eyebrow").textContent = "No project yet";
     element("empty-state-title").textContent = empty.title;
     element("empty-state-description").textContent = empty.description;
     element("empty-create-button").hidden = !empty.canCreateProjects;
     element("empty-create-button").textContent = "Create project";
+    localizer.apply(state.settings.general.locale);
     element("new-session-button").hidden = true;
     element("owner-invitations").hidden = true;
   }
@@ -1143,6 +1202,7 @@ async function selectProject(projectId) {
   void renderInvitationControls();
   sessionView.hidden = true;
   emptyState.hidden = false;
+  element("empty-state-eyebrow").textContent = "No sessions yet";
   element("empty-state-description").textContent = "Create a solo room for observers or a multi room for active collaboration.";
   element("empty-state-title").textContent = localizer.t("Loading project…");
   try {
@@ -1176,6 +1236,7 @@ async function selectProject(projectId) {
     emptyState.hidden = false;
     element("empty-state-title").textContent = "Start a shared thread.";
     element("empty-create-button").textContent = "Create your first session";
+    localizer.apply(state.settings.general.locale);
     renderMembers();
   } catch (error) {
     if (!projectSelectionGuard.isCurrent(selection)) return;
@@ -1253,6 +1314,12 @@ async function selectSession(sessionId) {
 
 function renderProjectSelect() {
   projectSelect.replaceChildren();
+  if (!state.projects.length) {
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = localizer.t("No projects yet");
+    projectSelect.append(placeholder);
+  }
   for (const project of state.projects) {
     const option = document.createElement("option");
     option.value = project.id;
@@ -1266,6 +1333,8 @@ function renderProjectSelect() {
   renderDshConnectionStatus();
   element("delete-project-button").hidden = state.project?.role !== "owner";
   element("rename-project-button").hidden = state.project?.role !== "owner";
+  element("leave-project-button").hidden = !["participant", "viewer"].includes(state.project?.role);
+  element("topbar-create-project-button").hidden = !!state.project || state.currentUser?.can_create_projects !== true;
   renderWorkspaceContext();
 }
 
@@ -1282,6 +1351,7 @@ function renderProjectPermissions() {
   element("empty-create-button").hidden = !mayCreate;
   element("delete-project-button").hidden = state.project?.role !== "owner";
   element("rename-project-button").hidden = state.project?.role !== "owner";
+  element("leave-project-button").hidden = !["participant", "viewer"].includes(state.project?.role);
 }
 
 function startMemberRefresh(sessionId) {
@@ -2789,6 +2859,7 @@ function applyVisualSettings(settings) {
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  element("auth-language-button").textContent = normalized.general.locale === "zh-CN" ? "EN" : "中";
   if (localeChanged && state.session) renderTimeline();
   updateSidebarControls();
   updateSessionContextDisclosure();
@@ -3331,12 +3402,11 @@ async function saveSettings(event) {
   const submit = event.submitter;
   if (submit) submit.disabled = true;
   const nextSettings = readSettingsForm(settingsPreview);
-  const permissionRequest = notificationPermissionNeeded(nextSettings.notifications)
-    ? ensureNotificationPermission()
-    : Promise.resolve();
+  // Browser permission UI may remain pending (notably in embedded browsers).
+  // It must not block saving unrelated workspace preferences.
+  if (notificationPermissionNeeded(nextSettings.notifications)) void ensureNotificationPermission();
   let savingContextPolicy = false;
   try {
-    await permissionRequest;
     if (!isCurrent() || !settingsDialog.open || dialogGeneration !== settingsDeviceLoadGeneration) return;
     if (!deviceInput.disabled && nextDeviceName !== currentDeviceName) {
       const updated = await api.renameDevice(deviceId, nextDeviceName);

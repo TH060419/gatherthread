@@ -89,6 +89,33 @@ test("local operations target the selected runtime and stay separate from conver
   controller.close();
 });
 
+test("paused Git still permits switching off an existing local automatic-upload preference", async () => {
+  const paused = structuredClone(repository);
+  paused.repository.enabled = false;
+  const commands = [];
+  const api = {
+    getProjectCode: async () => paused,
+    listSnapshotRequests: async () => [],
+    createSnapshotRequest: async (sessionId, kind, targetRuntimeId) => {
+      commands.push({ sessionId, kind, targetRuntimeId });
+      return { id: kind, kind, status: "queued" };
+    },
+    getSnapshotRequest: async (id) => ({ id, kind: id, status: "completed", result: { enabled: true, automatic_upload: id !== "code_auto_upload_disable" } }),
+  };
+  const controller = createCodeSyncController({ api });
+  controller.setContext(context()); controller.open(); await tick();
+  await controller.selectRuntime("r1"); await tick();
+  assert.equal(controller.getState().permissions.transfer, false);
+  assert.equal(controller.getState().permissions.stopAutomaticUpload, true);
+  assert.equal(await controller.queue("code_upload"), false);
+  assert.equal(await controller.queue("code_auto_upload_enable"), false);
+  assert.equal(await controller.queue("code_auto_upload_disable"), true);
+  await tick();
+  assert.equal(controller.getState().local.automatic_upload, false);
+  assert.deepEqual(commands.map(({ kind }) => kind), ["code_sync_status", "code_auto_upload_disable"]);
+  controller.close();
+});
+
 test("stale code job cannot update a switched session, and pending jobs resume without duplicate writes", async () => {
   let resolveJob;
   let writes = 0;
@@ -194,11 +221,12 @@ test("mock preview supports enable, exact code controls, review and merge withou
   assert.deepEqual(await api.replayEvents("session-orbit", { afterSequence: 0 }), original);
 });
 
-test("code dialog has named icon/close controls, separate consent and a safe review surface", async () => {
+test("code dialog has named controls, a one-time notice, and a safe review surface", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   const view = await readFile(new URL("../src/code-sync-view.js", import.meta.url), "utf8");
   assert.match(html, /id="project-code-button"[^>]*aria-label="Code collaboration"[^>]*aria-controls="project-code-dialog"/);
   assert.match(html, /id="project-code-dialog"[^>]*aria-labelledby="project-code-title"/);
+  assert.match(html, /id="code-notice-dialog"[^>]*aria-labelledby="code-notice-title"[^>]*aria-describedby="code-notice-description"/);
   assert.match(html, /id="code-error"[^>]*role="alert"/);
   assert.match(html, /id="code-auto-upload-toggle"[^>]*disabled/);
   assert.match(html, /Off by default/);

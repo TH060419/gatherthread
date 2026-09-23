@@ -2,6 +2,7 @@ import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.j
 
 export const SETTINGS_VERSION = 12;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
+export const SHARED_LANGUAGE_STORAGE_KEY = "gt-lang";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 
@@ -334,8 +335,18 @@ export function createSettingsStore(storage = globalThis.localStorage) {
   } catch {
     current = normalizeSettings(DEFAULT_SETTINGS);
   }
+  const sharedLocale = readSharedLocale(storage);
+  if (sharedLocale) {
+    current = { ...current, general: { ...current.general, locale: sharedLocale } };
+  } else {
+    writeSharedLocale(storage, current.general.locale);
+  }
   return {
     get() {
+      const latestSharedLocale = readSharedLocale(storage);
+      if (latestSharedLocale && latestSharedLocale !== current.general.locale) {
+        current = { ...current, general: { ...current.general, locale: latestSharedLocale } };
+      }
       return structuredClone(current);
     },
     set(next) {
@@ -345,6 +356,7 @@ export function createSettingsStore(storage = globalThis.localStorage) {
       } catch {
         // UI preferences remain usable for this tab when browser storage is unavailable.
       }
+      writeSharedLocale(storage, current.general.locale);
       return structuredClone(current);
     },
     reset() {
@@ -354,9 +366,29 @@ export function createSettingsStore(storage = globalThis.localStorage) {
       } catch {
         // Reset still applies to this tab.
       }
+      writeSharedLocale(storage, current.general.locale);
       return structuredClone(current);
     },
   };
+}
+
+function readSharedLocale(storage) {
+  try {
+    const sharedLanguage = storage?.getItem?.(SHARED_LANGUAGE_STORAGE_KEY);
+    if (sharedLanguage === "zh") return "zh-CN";
+    if (sharedLanguage === "en") return "en";
+  } catch {
+    // Restricted browser storage keeps the current in-tab setting usable.
+  }
+  return null;
+}
+
+function writeSharedLocale(storage, locale) {
+  try {
+    storage?.setItem?.(SHARED_LANGUAGE_STORAGE_KEY, locale === "zh-CN" ? "zh" : "en");
+  } catch {
+    // Restricted browser storage keeps the current in-tab setting usable.
+  }
 }
 
 function migrateStoredSettings(input) {

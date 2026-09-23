@@ -117,7 +117,17 @@
   };
 
   var lang = "zh";
-  try { lang = localStorage.getItem("gt-lang") || "zh"; } catch (e) {}
+  try {
+    var savedLanguage = localStorage.getItem("gt-lang");
+    if (savedLanguage === "zh" || savedLanguage === "en") {
+      lang = savedLanguage;
+    } else {
+      // Preserve an existing workspace choice when this is the first home-page visit.
+      var savedSettings = JSON.parse(localStorage.getItem("gatherthread.settings.v1") || "null");
+      if (savedSettings && savedSettings.general && savedSettings.general.locale === "en") lang = "en";
+      if (savedSettings && savedSettings.general && savedSettings.general.locale === "zh-CN") lang = "zh";
+    }
+  } catch (e) {}
 
   var title = document.getElementById("heroTitle");
   var themeToggle = document.getElementById("themeToggle");
@@ -152,7 +162,8 @@
   }
 
   /* ---------- Language ---------- */
-  function applyLang(next, replayTitle) {
+  function applyLang(next, replayTitle, persist) {
+    if (next !== "zh" && next !== "en") return;
     lang = next;
     root.setAttribute("lang", next === "zh" ? "zh-CN" : "en");
     document.querySelectorAll("[data-i18n]").forEach(function (el) {
@@ -170,11 +181,19 @@
     themeToggle.setAttribute("title", I18N["theme.aria"][next]);
     langToggle.textContent = next === "zh" ? "EN" : "中";
     renderTitle(replayTitle);
-    try { localStorage.setItem("gt-lang", next); } catch (e) {}
+    if (persist !== false) {
+      try { localStorage.setItem("gt-lang", next); } catch (e) {}
+    }
   }
 
   langToggle.addEventListener("click", function () {
     applyLang(lang === "zh" ? "en" : "zh", true);
+  });
+
+  window.addEventListener("storage", function (event) {
+    if (event.key === "gt-lang" && (event.newValue === "zh" || event.newValue === "en")) {
+      applyLang(event.newValue, false, false);
+    }
   });
 
   /* ---------- Theme toggle ---------- */

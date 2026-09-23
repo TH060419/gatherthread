@@ -67,6 +67,7 @@ export const CodeFilesSchema = z.array(CodeFileSchema).max(CODE_SYNC_MAX_FILES).
   }
 });
 export const CodeEnableInputSchema = z.object({ idempotency_key: Key }).strict();
+export const CodeDisableInputSchema = z.object({ idempotency_key: Key }).strict();
 export const CodeCheckpointInputSchema = z.object({
   base_commit: Commit.nullable(), files: CodeFilesSchema,
   message: z.string().trim().min(1).max(300).regex(/^[^\u0000-\u001f\u007f]+$/u), idempotency_key: Key,

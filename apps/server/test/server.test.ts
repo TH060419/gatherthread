@@ -1562,6 +1562,43 @@ test("project membership removal closes realtime immediately without leaking a c
   }
 });
 
+test("participants and viewers can leave an invited project but cannot remove others or the owner", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-self-leave-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"), authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST", body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    const project = await api<{ data: { project: { id: string } } }>(running.origin, "/v1/projects", {
+      method: "POST", token: owner.body.data.token,
+      body: { title: "Shared", idempotency_key: "self-leave-project" },
+    });
+    const projectId = project.body.data.project.id;
+    const participant = running.database.createIdentity({ user_id: "participant", display_name: "Participant", device_id: "participant-device", device_name: "Phone" });
+    const viewer = running.database.createIdentity({ user_id: "viewer", display_name: "Viewer", device_id: "viewer-device", device_name: "Tablet" });
+    for (const [actor, role] of [[participant, "participant"], [viewer, "viewer"]] as const) {
+      const invitation = running.service.createProjectInvitation(
+        running.database.authenticate(owner.body.data.token), projectId, { role, ttl: "1h" },
+      );
+      running.service.claimInvitationForActor(actor.actor, invitation.invite_token);
+    }
+    const path = (id: string) => `/v1/projects/${projectId}/members/${id}`;
+    assert.equal((await api(running.origin, path(viewer.actor.user_id), { method: "DELETE", token: participant.token, body: {} })).status, 403);
+    assert.equal((await api(running.origin, path(owner.body.data.actor.user_id), { method: "DELETE", token: participant.token, body: {} })).status, 403);
+    assert.equal((await api(running.origin, path(owner.body.data.actor.user_id), { method: "DELETE", token: owner.body.data.token, body: {} })).status, 409);
+    assert.equal((await api(running.origin, path(participant.actor.user_id), { method: "DELETE", token: participant.token, body: {} })).status, 204);
+    assert.equal((await api(running.origin, path(viewer.actor.user_id), { method: "DELETE", token: viewer.token, body: {} })).status, 204);
+    assert.equal((await api(running.origin, `/v1/projects/${projectId}`, { token: participant.token })).status, 404);
+    assert.equal((await api(running.origin, `/v1/projects/${projectId}`, { token: viewer.token })).status, 404);
+    assert.equal((await api(running.origin, `/v1/projects/${projectId}`, { token: owner.body.data.token })).status, 200);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("HTTP exposes idempotent local turns and snapshot request control-plane", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-sync-http-"));
   const running = await startCollaborationServer({
