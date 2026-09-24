@@ -356,6 +356,13 @@ export const CreateBrowserSessionInputSchema = z.object({
 
 export type CreateBrowserSessionInput = z.infer<typeof CreateBrowserSessionInputSchema>;
 
+export const ActivateRememberedAccountInputSchema = z.object({
+  display_name: z.string().trim().min(1).max(120),
+  device_name: z.string().trim().min(1).max(120),
+});
+
+export type ActivateRememberedAccountInput = z.infer<typeof ActivateRememberedAccountInputSchema>;
+
 export const ClaimDeviceAuthorizationInputSchema = z.object({
   authorization_token: z.string().min(32).max(512),
   device_id: IdSchema.optional(),

@@ -231,7 +231,7 @@ test("shared identity fields precede separate login, qualification, and project 
   assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
   assert.match(main, /if \(authProjectEntry\.open\)[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
   assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
-  assert.match(main, /else if \(element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(rememberedAccountSelect\.value \|\| element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
   const loginHandler = main.slice(main.indexOf('loginForm.addEventListener("submit"'), main.indexOf('claimTestAccessForm.addEventListener("submit"'));
   const activationHandler = main.slice(main.indexOf('claimTestAccessForm.addEventListener("submit"'), main.indexOf('claimInvitationForm.addEventListener("submit"'));
   assert.match(loginHandler, /api\.authenticate\(token/u);
@@ -465,6 +465,10 @@ test("remembered login and current-device naming remain explicit and accessible"
   ]);
   for (const id of [
     "login-remember-device",
+    "remembered-account-control",
+    "remembered-account-select",
+    "forget-remembered-account",
+    "auth-request-test-access",
     "test-access-remember-device",
     "claim-remember-device",
     "settings-device",
@@ -480,6 +484,10 @@ test("remembered login and current-device naming remain explicit and accessible"
   assert.match(main, /automaticDeviceName\(\)/);
   assert.match(main, /api\.renameDevice\(deviceId/);
   assert.match(api, /remember_device: rememberDevice/);
+  assert.match(main, /api\.activateRememberedAccount\(rememberedId/);
+  assert.match(main, /api\.forgetRememberedAccount\(id\)/);
+  assert.match(html, /issues\/new\?template=test-access\.yml/);
+  assert.doesNotMatch(html, /test-access-email|application-email/);
   assert.doesNotMatch(main, /localStorage.*device/i);
 });
 

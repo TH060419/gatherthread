@@ -75,6 +75,12 @@ export const CodeCheckpointInputSchema = z.object({
 export const CodeReviewInputSchema = z.object({ head_commit: Commit, idempotency_key: Key }).strict();
 export const CodeMergeInputSchema = z.object({ branch_id: BranchId, expected_main_commit: Commit, expected_head_commit: Commit, idempotency_key: Key }).strict();
 export const CodeUpdateInputSchema = z.object({ base_commit: Commit, expected_main_commit: Commit, idempotency_key: Key }).strict();
+export const CodeClearBranchInputSchema = z.object({ expected_head_commit: Commit, idempotency_key: Key }).strict();
+export const CodeClearProjectInputSchema = z.object({
+  expected_main_commit: Commit,
+  expected_branches: z.array(z.object({ branch_id: BranchId, head_commit: Commit }).strict()).max(128),
+  idempotency_key: Key,
+}).strict();
 export const CodeBranchSchema = z.object({
   id: BranchId, name: z.string().max(80), user_id: z.string().max(128), head_commit: Commit,
   review_status: z.enum(["draft", "requested", "merged"]),
@@ -84,12 +90,24 @@ export const CodeStatusSchema = z.object({
   branches: z.array(CodeBranchSchema).max(128), own_branch_id: BranchId.nullable(),
 }).strict();
 export const CodeMutationResultSchema = z.object({ status: CodeStatusSchema, commit: Commit }).strict();
+export const CodeClearResultSchema = z.object({ status: CodeStatusSchema, released_bytes: z.number().int().nonnegative() }).strict();
+export const CodeStorageSummarySchema = z.object({
+  limit_bytes: z.number().int().positive(), used_bytes: z.number().int().nonnegative(),
+  projects: z.array(z.object({
+    project_id: z.string().max(128), project_title: z.string().max(200), repository_enabled: z.boolean(),
+    main_commit: Commit, main_bytes: z.number().int().nonnegative(),
+    own_branch_id: BranchId.nullable(), own_branch_head_commit: Commit.nullable(), own_branch_bytes: z.number().int().nonnegative(),
+    branch_count: z.number().int().nonnegative(), can_clear_project: z.boolean(),
+  }).strict()),
+}).strict();
 export const CodeSnapshotResultSchema = z.object({ snapshot: z.object({
   branch_id: z.union([z.literal("main"), BranchId]), commit: Commit, files: CodeFilesSchema,
 }).strict() }).strict();
 export type CodeStatus = z.infer<typeof CodeStatusSchema>;
 export type CodeBranch = z.infer<typeof CodeBranchSchema>;
 export type CodeMutationResult = z.infer<typeof CodeMutationResultSchema>;
+export type CodeClearResult = z.infer<typeof CodeClearResultSchema>;
+export type CodeStorageSummary = z.infer<typeof CodeStorageSummarySchema>;
 export type CodeSnapshotResult = z.infer<typeof CodeSnapshotResultSchema>;
 export type CodeCheckpointInput = z.infer<typeof CodeCheckpointInputSchema>;
 export type CodeMergeInput = z.infer<typeof CodeMergeInputSchema>;

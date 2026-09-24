@@ -99,6 +99,29 @@ export class HttpCollaborationApi {
     }
   }
 
+  async listRememberedAccounts() {
+    try {
+      const { accounts } = await this.request("/v1/remembered-accounts");
+      return accounts;
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) return [];
+      throw error;
+    }
+  }
+
+  async activateRememberedAccount(id, { displayName, deviceName }) {
+    const { actor } = await this.request(`/v1/remembered-accounts/${encodeURIComponent(id)}/activate`, {
+      method: "POST",
+      body: JSON.stringify({ display_name: displayName, device_name: deviceName }),
+    });
+    this.actors.set(actor.id, actor.username);
+    return actor;
+  }
+
+  async forgetRememberedAccount(id) {
+    await this.request(`/v1/remembered-accounts/${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
   async logout() {
     try {
       await this.request("/v1/browser-sessions/current", { method: "DELETE" });
@@ -199,6 +222,24 @@ export class HttpCollaborationApi {
 
   async getProjectCode(projectId) {
     return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code`);
+  }
+
+  async getCodeStorage() {
+    return this.request("/v1/code-storage");
+  }
+
+  async clearOwnCodeBranch(projectId, input) {
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code/clear-branch`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async clearProjectCode(projectId, input) {
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code/clear-project`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
   }
 
   async mutateProjectCode(projectId, operation, input) {
@@ -629,6 +670,7 @@ export class MockCollaborationApi {
   constructor({ latency = 90 } = {}) {
     this.latency = latency;
     this.currentUser = { ...users.avery, can_create_projects: true };
+    this.rememberedAccounts = [];
     this.listeners = new Map();
     this.idempotentEvents = new Map();
     this.projectMutations = new Map();
@@ -739,17 +781,42 @@ export class MockCollaborationApi {
     ]);
   }
 
-  async authenticate(token, { displayName, deviceName } = {}) {
+  async authenticate(token, { rememberDevice = false, displayName, deviceName } = {}) {
     await this.#wait();
     if (token !== "demo-token") throw new ApiError("That preview token is not valid.", { status: 401, code: "unauthorized" });
     if (displayName) this.currentUser.username = displayName;
     if (deviceName) this.deviceName = deviceName;
+    if (rememberDevice) {
+      this.rememberedAccounts = [{ id: "mock-remembered-account", display_name: this.currentUser.username,
+        device_name: this.deviceName ?? "This browser" }];
+    }
     return structuredClone({ ...this.currentUser, device_id: "device-demo" });
   }
 
   async restoreSession() {
     await this.#wait();
     return null;
+  }
+
+  async listRememberedAccounts() {
+    await this.#wait();
+    return structuredClone(this.rememberedAccounts);
+  }
+
+  async activateRememberedAccount(id, { displayName, deviceName }) {
+    await this.#wait();
+    const account = this.rememberedAccounts.find((entry) => entry.id === id);
+    if (!account) throw new ApiError("No remembered account is available in this preview.", { status: 401, code: "unauthorized" });
+    this.currentUser.username = displayName;
+    this.deviceName = deviceName;
+    account.display_name = displayName;
+    account.device_name = deviceName;
+    return structuredClone({ ...this.currentUser, device_id: "device-demo" });
+  }
+
+  async forgetRememberedAccount(id) {
+    await this.#wait();
+    this.rememberedAccounts = this.rememberedAccounts.filter((entry) => entry.id !== id);
   }
 
   async logout() {
@@ -853,6 +920,55 @@ export class MockCollaborationApi {
     return structuredClone(this.codeRepositories.get(projectId) ?? {
       repository: { enabled: false, main_commit: null }, branches: [], own_branch_id: null,
     });
+  }
+
+  async getCodeStorage() {
+    const projects = [];
+    for (const project of this.projects) {
+      const status = await this.getProjectCode(project.id);
+      const own = status.branches.find((branch) => branch.id === status.own_branch_id);
+      projects.push({
+        project_id: project.id,
+        project_title: project.name,
+        repository_enabled: status.repository.enabled,
+        main_commit: status.repository.main_commit,
+        main_bytes: status.repository.main_commit ? 1024 : 0,
+        own_branch_id: status.own_branch_id,
+        own_branch_head_commit: own?.head_commit ?? null,
+        own_branch_bytes: own ? 1024 : 0,
+        branch_count: status.branches.length,
+        can_clear_project: project.role === "owner",
+      });
+    }
+    return { limit_bytes: 128 * 1024 * 1024,
+      used_bytes: projects.reduce((total, project) => total + project.own_branch_bytes + (project.can_clear_project ? project.main_bytes : 0), 0),
+      projects };
+  }
+
+  async clearOwnCodeBranch(projectId, input) {
+    const status = await this.getProjectCode(projectId);
+    const branch = status.branches.find((item) => item.id === status.own_branch_id);
+    if (!branch || branch.head_commit !== input.expected_head_commit) throw new ApiError("Cloud branch changed", { status: 409, code: "conflict" });
+    status.branches = status.branches.filter((item) => item.id !== branch.id);
+    status.own_branch_id = null;
+    this.codeRepositories.set(projectId, structuredClone(status));
+    return { status, released_bytes: 1024 };
+  }
+
+  async clearProjectCode(projectId, input) {
+    const project = await this.getProject(projectId);
+    if (project.role !== "owner") throw new ApiError("Forbidden", { status: 403, code: "forbidden" });
+    const status = await this.getProjectCode(projectId);
+    if (status.repository.main_commit !== input.expected_main_commit
+      || JSON.stringify(status.branches.map((branch) => ({ branch_id: branch.id, head_commit: branch.head_commit })).sort((a, b) => a.branch_id.localeCompare(b.branch_id)))
+        !== JSON.stringify([...input.expected_branches].sort((a, b) => a.branch_id.localeCompare(b.branch_id)))) {
+      throw new ApiError("Cloud repository changed", { status: 409, code: "conflict" });
+    }
+    status.repository = { enabled: false, main_commit: null };
+    status.branches = [];
+    status.own_branch_id = null;
+    this.codeRepositories.set(projectId, structuredClone(status));
+    return { status, released_bytes: 2048 };
   }
 
   async mutateProjectCode(projectId, operation, input) {

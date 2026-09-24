@@ -1217,8 +1217,9 @@ test("remembered browser sessions persist for 30 days and the current device can
       body: { remember_device: true },
     });
     assert.equal(opened.status, 201);
-    const setCookie = opened.headers.get("set-cookie") ?? "";
+    const setCookie = opened.headers.getSetCookie().find((value) => value.startsWith("gatherthread_session=")) ?? "";
     assert.match(setCookie, /; Max-Age=2592000; Expires=[^;]+ GMT$/);
+    assert.ok(opened.headers.getSetCookie().some((value) => value.startsWith("gatherthread_remembered=gtr_")));
     const remaining = Date.parse(opened.body.data.expires_at) - Date.now();
     assert.ok(remaining > 29 * 24 * 60 * 60 * 1_000);
     assert.ok(remaining <= 30 * 24 * 60 * 60 * 1_000);
@@ -1248,6 +1249,87 @@ test("remembered browser sessions persist for 30 days and the current device can
     });
     assert.equal(invalid.status, 400);
     assert.equal(invalid.body.error.code, "validation_error");
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("remembered account chooser survives logout, requires origin for activation, and supports explicit forget", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-remembered-accounts-http-"));
+  const browserOrigin = "http://client.test";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+    allowedOrigins: [browserOrigin],
+  }, 0);
+  const cookies = (headers: Headers): string[] => headers.getSetCookie()
+    .map((value) => value.split(";", 1)[0])
+    .filter((value): value is string => Boolean(value));
+  const vault = (items: string[]) => items.find((value) => value.startsWith("gatherthread_remembered=")) ?? "";
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST", body: { display_name: "Owner", device_name: "Owner laptop" },
+    });
+    const member = running.database.createIdentity({ display_name: "Member", device_name: "Member laptop" });
+    const ownerLogin = await api(running.origin, "/v1/browser-sessions", {
+      method: "POST", token: owner.body.data.token, origin: browserOrigin,
+      body: { remember_device: true },
+    });
+    assert.equal(ownerLogin.status, 201);
+    const ownerCookies = cookies(ownerLogin.headers);
+    assert.equal(ownerCookies.length, 2);
+    const memberLogin = await api(running.origin, "/v1/browser-sessions", {
+      method: "POST", token: member.token, cookie: vault(ownerCookies), origin: browserOrigin,
+      body: { remember_device: true },
+    });
+    assert.equal(memberLogin.status, 201);
+    const memberCookies = cookies(memberLogin.headers);
+    const listed = await api<{ data: { accounts: Array<{ id: string; display_name: string; device_name: string }> } }>(
+      running.origin, "/v1/remembered-accounts", { cookie: vault(memberCookies) },
+    );
+    assert.equal(listed.status, 200);
+    assert.deepEqual(new Set(listed.body.data.accounts.map((account) => account.display_name)), new Set(["Owner", "Member"]));
+
+    const ownerChoice = listed.body.data.accounts.find((account) => account.display_name === "Owner");
+    assert.ok(ownerChoice);
+    const denied = await api(running.origin, `/v1/remembered-accounts/${ownerChoice.id}/activate`, {
+      method: "POST", cookie: vault(memberCookies),
+      body: { display_name: "Owner", device_name: "Owner laptop" },
+    });
+    assert.equal(denied.status, 403);
+    const logout = await api(running.origin, "/v1/browser-sessions/current", {
+      method: "DELETE", cookie: memberCookies.join("; "), origin: browserOrigin,
+    });
+    assert.equal(logout.status, 204);
+    assert.equal((await api(running.origin, "/v1/me", { cookie: memberCookies[0] ?? "" })).status, 401);
+    assert.equal((await api(running.origin, "/v1/remembered-accounts", { cookie: vault(memberCookies) })).status, 200);
+
+    const activated = await api<{ data: { actor: { username: string } } }>(
+      running.origin, `/v1/remembered-accounts/${ownerChoice.id}/activate`, {
+        method: "POST", cookie: vault(memberCookies), origin: browserOrigin,
+        body: { display_name: "Owner updated", device_name: "Mac updated" },
+      },
+    );
+    assert.equal(activated.status, 201);
+    assert.equal(activated.body.data.actor.username, "Owner updated");
+    const activatedCookies = cookies(activated.headers);
+    assert.equal(activatedCookies.length, 2);
+    assert.equal((await api(running.origin, "/v1/remembered-accounts", { cookie: vault(memberCookies) })).status, 401);
+    const updatedList = await api<typeof listed.body>(running.origin, "/v1/remembered-accounts", {
+      cookie: vault(activatedCookies),
+    });
+    assert.equal(updatedList.body.data.accounts.find((account) => account.id === ownerChoice.id)?.device_name, "Mac updated");
+
+    const forgot = await api(running.origin, `/v1/remembered-accounts/${ownerChoice.id}`, {
+      method: "DELETE", cookie: vault(activatedCookies), origin: browserOrigin,
+    });
+    assert.equal(forgot.status, 204);
+    const finalList = await api<typeof listed.body>(running.origin, "/v1/remembered-accounts", {
+      cookie: vault(cookies(forgot.headers)),
+    });
+    assert.deepEqual(finalList.body.data.accounts.map((account) => account.display_name), ["Member"]);
   } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });

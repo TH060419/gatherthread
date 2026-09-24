@@ -25,6 +25,37 @@ test("browser API overrides cannot send credentials to another origin", async ()
   }
 });
 
+test("cloud Git quota and cleanup use cookie-authenticated endpoints with explicit CAS inputs", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return Response.json({ data: { projects: [], limit_bytes: 134217728, used_bytes: 0 } });
+  };
+  try {
+    const api = new HttpCollaborationApi();
+    await api.getCodeStorage();
+    await api.clearOwnCodeBranch("p / 1", { expected_head_commit: "a".repeat(40), idempotency_key: "clear-one" });
+    await api.clearProjectCode("p / 1", {
+      expected_main_commit: "b".repeat(40), expected_branches: [], idempotency_key: "clear-all",
+    });
+    assert.deepEqual(requests.map(({ url, options }) => [url, options.method ?? "GET"]), [
+      ["/v1/code-storage", "GET"],
+      ["/v1/projects/p%20%2F%201/code/clear-branch", "POST"],
+      ["/v1/projects/p%20%2F%201/code/clear-project", "POST"],
+    ]);
+    assert.ok(requests.every(({ options }) => options.credentials === "include" && !options.headers.Authorization));
+    assert.deepEqual(JSON.parse(requests[1].options.body), {
+      expected_head_commit: "a".repeat(40), idempotency_key: "clear-one",
+    });
+    assert.deepEqual(JSON.parse(requests[2].options.body), {
+      expected_main_commit: "b".repeat(40), expected_branches: [], idempotency_key: "clear-all",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("mock authentication derives the user from a token", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   await assert.rejects(() => api.authenticate("wrong"), (error) => {
@@ -33,6 +64,20 @@ test("mock authentication derives the user from a token", async () => {
     return true;
   });
   assert.equal((await api.authenticate("demo-token")).username, "Avery Chen");
+});
+
+test("mock remembered account remains selectable after logout and can be forgotten", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  await api.authenticate("demo-token", { rememberDevice: true, displayName: "Avery", deviceName: "Safari" });
+  await api.logout();
+  assert.deepEqual(await api.listRememberedAccounts(), [{
+    id: "mock-remembered-account", display_name: "Avery", device_name: "Safari",
+  }]);
+  assert.equal((await api.activateRememberedAccount("mock-remembered-account", {
+    displayName: "Avery Chen", deviceName: "Mac",
+  })).username, "Avery Chen");
+  await api.forgetRememberedAccount("mock-remembered-account");
+  assert.deepEqual(await api.listRememberedAccounts(), []);
 });
 
 test("append is idempotent and chat never fabricates an agent response", async () => {
@@ -717,6 +762,36 @@ test("browser login sends the remember-device choice without retaining the beare
       remember_device: true, display_name: "Alice renamed", device_name: "Office Mac",
     });
     assert.equal(captured.options.headers.Authorization, "Bearer device-token");
+    assert.equal(api.token, "");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("remembered accounts are listed, selected and forgotten without exposing a device token to JavaScript", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const responses = [
+    new Response(JSON.stringify({ data: { accounts: [{ id: "saved-1", username: "Alice", device_name: "Mac", display_name: "Alice" }] } }), { status: 200 }),
+    new Response(JSON.stringify({ data: { actor: { id: "u1", username: "Alice B", device_id: "d1" } } }), { status: 200 }),
+    new Response(null, { status: 204 }),
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return responses.shift();
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.listRememberedAccounts())[0].device_name, "Mac");
+    assert.equal((await api.activateRememberedAccount("saved-1", { displayName: "Alice B", deviceName: "Laptop" })).username, "Alice B");
+    await api.forgetRememberedAccount("saved-1");
+    assert.deepEqual(requests.map(({ url, options }) => [options.method ?? "GET", url]), [
+      ["GET", "https://gatherthread.example/v1/remembered-accounts"],
+      ["POST", "https://gatherthread.example/v1/remembered-accounts/saved-1/activate"],
+      ["DELETE", "https://gatherthread.example/v1/remembered-accounts/saved-1"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[1].options.body), { display_name: "Alice B", device_name: "Laptop" });
+    assert.ok(requests.every(({ options }) => options.credentials === "include" && options.headers.Authorization === undefined));
     assert.equal(api.token, "");
   } finally {
     globalThis.fetch = originalFetch;

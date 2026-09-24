@@ -4,7 +4,7 @@ GatherThread keeps one selected cloud project connected to Codex Desktop through
 
 For optional **project code** upload/download/recovery, use the `0.1.0-alpha.7` connector with the separate `--code-sync` opt-in; follow [Project code collaboration](CODE_SYNC.md). This is independent of conversation/history synchronization.
 
-> Alpha preview: `0.1.0-alpha.7` is prepared for private repository testing. The npm package and fixed Git ref commands work after they are published. Until then, use the source-checkout path below.
+> Invitation-only Alpha: the hosted server is at `https://gatherthread.cn`. The fixed `v0.1.0-alpha.7` Git ref exists; the `npx` command additionally requires the matching npm package to be published. If it is unavailable, use the source-checkout path below. Test access is requested only through a [GitHub Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml); never post a token in an Issue.
 
 ## Normal three-step setup
 
@@ -49,9 +49,9 @@ The connector asks for your device token in a hidden terminal prompt. Keep the t
 
 Codex Desktop opens the verified local workspace. In GatherThread, the member panel changes to **Agent online**. New and existing writable sessions are discovered automatically.
 
-## Private-repository test before npm publication
+## Source-checkout fallback when the npm package is unavailable
 
-A collaborator with repository access can test the complete local experience now:
+A collaborator with repository access can test the complete local experience with the current source:
 
 ```bash
 git clone https://github.com/TH060419/gatherthread.git
@@ -65,7 +65,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-Use the server URL and project ID displayed by the local Web app. The fixed plugin commands above become available when the private `v0.1.0-alpha.7` ref exists. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
+Use the server URL and project ID displayed by the Web app; for the hosted Alpha, the URL is `https://gatherthread.cn`. The fixed `v0.1.0-alpha.7` plugin ref is available, while the connector package still requires npm publication for `npx`. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
 
 ## What synchronizes
 

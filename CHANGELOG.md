@@ -8,6 +8,20 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 - Separate operator-issued, single-use Alpha test qualification from project invitations. A qualified account can create projects; an invitation-only guest can work only in invited projects and cannot create one through current or compatibility APIs.
 - Let the operator issue or revoke unclaimed test qualifications locally, and let users set their own display and device names above either first-use login path. Existing device-token login can update those names without changing project permissions.
+- Keep accounts whose browser explicitly chose **Remember this device** in a local sign-in chooser, with editable last-used display and device names. Signing out ends the active session but leaves the remembered account available; **Forget this account** removes its shortcut.
+- Show a blocking, in-page cloud Git notice the first time a browser device enters the workspace, before code controls are used. It explains project-only collaboration, member-wide branch visibility, local opt-in, disablement, and cleanup without requesting browser notification permission.
+- Add a 128 MiB per-user logical active cloud-code quota alongside the 256 MiB project and 1 GiB deployment caps, plus role-scoped Settings cleanup: members can clear their own branch and project owners can also clear all cloud Git data for their project. Local Git is never deleted.
+- Add an Issue-only Alpha access request entry in the product home, bilingual README, and GitHub Issue template; no server-side applicant form or personal-profile collection is introduced.
+
+### Changed
+
+- Make the product home server-first for the invitation-only `gatherthread.cn` Alpha, describe optional cloud Git, and publish GitHub Issues plus `coolhezi@sjtu.edu.cn` as contact paths. Keep public registration and public Beta closed.
+- Refresh current setup and operations guides to distinguish the live invitation-only service from the separately reviewed release/tag/package lifecycle. Historical release notes remain unchanged.
+
+### Security and privacy
+
+- Test-access Issues must not contain emails, credentials, qualification codes, device tokens, or private transcripts. Approved codes are delivered only through a private channel, never in the public Issue.
+- Cloud Git cleanup revokes API access and releases active logical quota, but physical Git objects and earlier backups remain until separate operator-approved retention cleanup. The ECS backup has a paired Git-object companion that must rotate and restore with SQLite; cleanup is not immediate secure erasure of every copy.
 
 ### Migration and compatibility
 

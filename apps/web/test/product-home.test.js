@@ -15,7 +15,7 @@ test("product home enters the same-origin app and preserves operational deep lin
 
   assert.match(html, /<script src="boot\.js"><\/script>/u);
   assert.doesNotMatch(html, /<script>(?:.|\n)*?<\/script>/u);
-  assert.equal((html.match(/href="\.\/app\/"/gu) ?? []).length, 3);
+  assert.equal((html.match(/href="\.\/app\/"/gu) ?? []).length, 4);
   assert.match(html, /data-i18n="nav\.app">进入共序/u);
   assert.match(html, /data-i18n="hero\.cta1">开始使用/u);
   assert.match(html, /data-i18n="final\.cta1">打开登录页/u);
@@ -114,38 +114,34 @@ test("product home uses the shared workspace language and follows changes from a
   assert.match(app, /applyLang\(event\.newValue, false, false\)/u);
 });
 
-test("product home release label matches the repository package version", async () => {
-  const [html, app, packageSource] = await Promise.all([
+test("product home labels the current invitation-only preview without claiming Unreleased features shipped in alpha.7", async () => {
+  const [html, app] = await Promise.all([
     readFile(new URL("index.html", productRoot), "utf8"),
     readFile(new URL("app.js", productRoot), "utf8"),
-    readFile(new URL("../package.json", productRoot), "utf8"),
   ]);
-  const version = JSON.parse(packageSource).version.toUpperCase();
-  assert.match(html, new RegExp(`\\[ ${version.replaceAll(".", "\\.")} · ALPHA 预览版 \\]`, "u"));
-  assert.match(app, new RegExp(`\\[ ${version.replaceAll(".", "\\.")} · ALPHA PREVIEW \\]`, "u"));
+  assert.match(html, /\[ ALPHA 预览版 · 邀请制测试 \]/u);
+  assert.match(app, /\[ ALPHA PREVIEW · BY INVITATION \]/u);
+  assert.doesNotMatch(html, /0\.1\.0-alpha\.7/u);
 });
 
-test("product home reports clipboard failures without false success", async () => {
-  const [html, app, styles] = await Promise.all([
+test("product home points to Issue-only access without collecting applicant information", async () => {
+  const [html, app] = await Promise.all([
     readFile(new URL("index.html", productRoot), "utf8"),
     readFile(new URL("app.js", productRoot), "utf8"),
-    readFile(new URL("styles.css", productRoot), "utf8"),
   ]);
-  assert.match(html, /id="copyStatus" role="status" aria-live="polite" aria-atomic="true"/u);
-  assert.match(styles, /\.sr-only\s*\{[\s\S]*?clip:\s*rect\(0, 0, 0, 0\)/u);
-  assert.match(app, /"copy\.success": \{ zh: "命令已复制", en: "Command copied" \}/u);
-  assert.match(app, /announceCopyStatus\(I18N\["copy\.success"\]\[lang\]\)/u);
-  assert.match(app, /announceCopyStatus\(I18N\["copy\.failed"\]\[lang\]\)/u);
-  assert.match(app, /writeText\(text\)\.then\(done, failed\)/u);
-  assert.match(app, /if \(copied\) done\(\);\s*else failed\(\);/u);
-  assert.doesNotMatch(app, /writeText\(text\)\.then\(done, done\)/u);
+  const issueLink = /https:\/\/github\.com\/TH060419\/gatherthread\/issues\/new\?template=test-access\.yml/gu;
+  assert.ok((html.match(issueLink) ?? []).length >= 2);
+  assert.match(html, /请勿在公开 Issue 中留下邮箱、令牌或其他个人信息/u);
+  assert.match(app, /"connect\.c2\.link"/u);
+  assert.doesNotMatch(html, /<form[^>]*test-access/u);
 });
 
-test("product home documents complete connection commands", async () => {
+test("product home leads with the hosted server while keeping local Agents local", async () => {
   const html = await readFile(new URL("index.html", productRoot), "utf8");
-  assert.match(html, /npm run connection:local/u);
-  assert.match(html, /npm run lan:start/u);
-  assert.match(html, /npm run connection:tailscale -- --url https:\/\/host\.tailnet\.ts\.net/u);
+  assert.match(html, /当前 Alpha 在 gatherthread\.cn 邀请制测试/u);
+  assert.match(html, /你的 Agent 与工作目录仍留在自己的设备上/u);
+  assert.match(html, /data-i18n="connect\.c3\.h3">连接本地 Agent/u);
+  assert.doesNotMatch(html, /npm run connection:local/u);
 });
 
 test("product home ends with public contact and the gatherthread.cn ICP record", async () => {

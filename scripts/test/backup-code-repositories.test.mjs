@@ -56,6 +56,47 @@ test('managed Git backup uses SQLite snapshot heads even when live branches adva
   } finally { f.close() }
 })
 
+test('a pre-clear SQLite snapshot still backs up old heads, while a post-clear restore exposes only the new root', async () => {
+  const f = fixture()
+  try {
+    const before = join(f.directory, 'before-clear.db')
+    await sqliteSnapshot(f.databasePath, before)
+    const oldBranch = f.first.status.own_branch_id
+    const oldCommit = f.first.commit
+    const oldStatus = f.repository.status(f.owner, f.project.id)
+    const cleared = f.repository.clearProject(f.owner, f.project.id, {
+      expected_main_commit: oldStatus.repository.main_commit,
+      expected_branches: [{ branch_id: oldBranch, head_commit: oldCommit }],
+      idempotency_key: 'clear-before-backup',
+    })
+    assert.equal(cleared.status.repository.enabled, false)
+    assert.deepEqual(await backupCodeRepositories(f.databasePath, before), { repositories: 1 })
+    assert.deepEqual(await verifyCodeBackup(before), { repositories: 1 })
+    const restoredBeforeDb = new CollaborationDatabase(before, { authTokenPepper: pepper })
+    try {
+      const restoredBefore = new CodeRepository(restoredBeforeDb, `${before}.code`)
+      assert.equal(restoredBefore.snapshot(f.owner, f.project.id, oldBranch).snapshot.commit, oldCommit)
+    } finally { restoredBeforeDb.close() }
+
+    const after = join(f.directory, 'after-clear.db')
+    await sqliteSnapshot(f.databasePath, after)
+    assert.deepEqual(await backupCodeRepositories(f.databasePath, after), { repositories: 1 })
+    assert.deepEqual(await verifyCodeBackup(after), { repositories: 1 })
+    const restoredAfterDb = new CollaborationDatabase(after, { authTokenPepper: pepper })
+    try {
+      const restoredAfter = new CodeRepository(restoredAfterDb, `${after}.code`)
+      assert.equal(restoredAfter.status(f.owner, f.project.id).branches.length, 0)
+      assert.equal(restoredAfter.storageSummary(f.owner).used_bytes, 0)
+      assert.equal(restoredAfter.enable(f.owner, f.project.id, { idempotency_key: 'resume-after-clear' }).commit,
+        cleared.status.repository.main_commit)
+      assert.deepEqual(restoredAfter.snapshot(f.owner, f.project.id, 'main').snapshot.files, [])
+      assert.throws(() => restoredAfter.snapshot(f.owner, f.project.id, oldBranch))
+    } finally { restoredAfterDb.close() }
+    const afterGit = join(`${after}.code`, `${createHash('sha256').update(f.project.id).digest('hex')}.git`)
+    assert.notEqual(spawnSync('git', [`--git-dir=${afterGit}`, 'cat-file', '-e', oldCommit], { encoding: 'utf8' }).status, 0)
+  } finally { f.close() }
+})
+
 const posixEntryTools = process.platform !== 'win32'
   && spawnSync('bash', ['--version']).status === 0 && spawnSync('sqlite3', ['--version']).status === 0
 test('backup and verify POSIX entry scripts create complete companion storage and reject corrupted code', {
