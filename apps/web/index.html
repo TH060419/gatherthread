@@ -63,7 +63,21 @@
         </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
-        <div class="auth-identity">
+        <nav id="auth-entry-chooser" class="auth-entry-chooser" aria-label="Choose how to enter">
+          <p class="field-help">Choose one way to enter. You can come back and switch at any time.</p>
+          <button id="auth-select-login" class="auth-entry-choice" type="button" aria-controls="auth-login-panel">
+            <span><strong>Existing account · sign in</strong><small>Use a device access token or choose an account remembered by this browser.</small></span><span aria-hidden="true">→</span>
+          </button>
+          <button id="auth-select-activate" class="auth-entry-choice" type="button" aria-controls="auth-activate-panel">
+            <span><strong>First-time use · activate access</strong><small>Enter a one-time test qualification code to receive your own device token.</small></span><span aria-hidden="true">→</span>
+          </button>
+          <button id="auth-select-invitation" class="auth-entry-choice" type="button" aria-controls="auth-invitation-panel">
+            <span><strong>Only have a project invitation?</strong><small>Join the invited project. This does not grant permission to create projects.</small></span><span aria-hidden="true">→</span>
+          </button>
+          <p class="auth-request-access">No test code yet? Apply through a GitHub Issue. You may add a reason and how you heard about GatherThread; email is optional and recommended only if you are comfortable sharing it publicly for private code delivery. Issues are public. If you prefer not to publish your email, after approval send the Issue link privately to coolhezi@sjtu.edu.cn.</p>
+          <a class="auth-request-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access on GitHub</a>
+        </nav>
+        <div id="auth-identity" class="auth-identity" hidden>
           <div class="claim-identity-grid">
             <div>
               <label for="claim-display-name">Display name</label>
@@ -76,20 +90,6 @@
           </div>
           <p id="auth-identity-help" class="field-help">Set both names for first-time activation or a project invitation. Existing accounts can leave them unchanged.</p>
         </div>
-        <nav id="auth-entry-chooser" class="auth-entry-chooser" aria-label="Choose how to enter">
-          <p class="field-help">Choose one way to enter. You can come back and switch at any time.</p>
-          <button id="auth-select-login" class="auth-entry-choice" type="button" aria-controls="auth-login-panel">
-            <span><strong>Existing account · sign in</strong><small>Use a device access token or choose an account remembered by this browser.</small></span><span aria-hidden="true">→</span>
-          </button>
-          <button id="auth-select-activate" class="auth-entry-choice" type="button" aria-controls="auth-activate-panel">
-            <span><strong>First-time use · activate access</strong><small>Enter a one-time test qualification code to receive your own device token.</small></span><span aria-hidden="true">→</span>
-          </button>
-          <button id="auth-select-invitation" class="auth-entry-choice" type="button" aria-controls="auth-invitation-panel">
-            <span><strong>Only have a project invitation?</strong><small>Join the invited project. This does not grant permission to create projects.</small></span><span aria-hidden="true">→</span>
-          </button>
-          <p class="auth-request-access">No test code yet? Apply through a GitHub Issue and tell us what you want to test and how you heard about GatherThread. Email is optional. Issues are public; if you prefer not to share your email there, send the Issue link privately after approval.</p>
-          <a class="auth-request-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access on GitHub</a>
-        </nav>
         <section id="auth-login-panel" class="auth-entry-panel" aria-labelledby="auth-login-heading" hidden>
           <button class="text-button auth-entry-back" type="button">← Back</button>
           <h3 id="auth-login-heading">Existing account · sign in</h3>
@@ -145,7 +145,7 @@
             <p id="test-access-error" class="form-error" role="alert"></p>
             <button class="button button-primary button-wide" type="submit">Activate account <span aria-hidden="true">→</span></button>
           </form>
-          <p class="auth-request-access">No code yet? You can include an optional reason, how you heard about GatherThread, and an email for private code delivery.</p>
+          <p class="auth-request-access">No code yet? The public request Issue accepts an optional reason, discovery source, and email. Include an email only if you are comfortable sharing it publicly for private code delivery.</p>
           <a class="auth-request-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access</a>
         </section>
         <section id="auth-invitation-panel" class="auth-entry-panel" aria-labelledby="auth-invitation-heading" hidden>
@@ -1042,6 +1042,8 @@ codex plugin add gatherthread@gatherthread</code>
               <div id="code-storage-manage" class="code-storage-manage" hidden>
                 <button id="code-storage-back" class="text-button" type="button">← Back to storage overview</button>
                 <h4 id="code-storage-manage-title" tabindex="-1">Choose cloud data to clear</h4>
+                <p id="code-storage-manage-status" class="field-help" role="status" aria-live="polite">Loading cloud Git storage…</p>
+                <p id="code-storage-error" class="form-error" role="alert"></p>
                 <p class="field-help">Members can clear only their own branch; owners can also clear the whole project repository. This removes cloud access to those refs but does not change local files. Old objects and backups remain until separate operator cleanup, so physical disk use may not drop immediately.</p>
                 <div id="code-storage-projects" class="code-storage-projects"></div>
                 <button id="code-storage-review" class="button button-secondary" type="button" disabled>Review selected cleanup</button>
@@ -1050,7 +1052,6 @@ codex plugin add gatherthread@gatherthread</code>
                   <button id="code-storage-confirm" class="button button-danger" type="button">Delete selected cloud data</button>
                   <button id="code-storage-cancel" class="button button-secondary" type="button">Cancel</button>
                 </div>
-                <p id="code-storage-error" class="form-error" role="alert"></p>
               </div>
             </section>
 
@@ -1144,6 +1145,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260924-1"></script>
+    <script type="module" src="./src/main.js?v=20260924-2"></script>
   </body>
 </html>

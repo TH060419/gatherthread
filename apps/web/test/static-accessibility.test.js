@@ -223,8 +223,9 @@ test("entry navigation, empty-account project actions, and invited-member exit r
   assert.match(i18n, /"Leave project": "退出项目"/);
 });
 
-test("shared identity fields precede a compact choice screen and separate access forms", async () => {
+test("entry choices precede shared identity fields and separate access forms", async () => {
   const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  const identity = markup.indexOf('id="auth-identity"');
   const name = markup.indexOf('id="claim-display-name"');
   const device = markup.indexOf('id="claim-device-name"');
   const chooser = markup.indexOf('id="auth-entry-chooser"');
@@ -234,15 +235,19 @@ test("shared identity fields precede a compact choice screen and separate access
   const tokenForm = markup.indexOf('id="login-form"');
   const qualificationForm = markup.indexOf('id="claim-test-access-form"');
   const projectForm = markup.indexOf('id="claim-invitation-form"');
-  assert.ok(name > 0 && device > name && chooser > device && loginChoice > chooser
+  assert.ok(chooser > 0 && loginChoice > chooser
     && activationChoice > loginChoice && invitationChoice > activationChoice
-    && tokenForm > invitationChoice && qualificationForm > tokenForm && projectForm > qualificationForm);
+    && identity > invitationChoice && name > identity && device > name
+    && tokenForm > device && qualificationForm > tokenForm && projectForm > qualificationForm);
+  assert.match(markup, /id="auth-identity"[^>]*hidden/u);
   assert.match(markup, /id="auth-select-login"[^>]*aria-controls="auth-login-panel"/u);
   assert.match(markup, /id="auth-select-activate"[^>]*aria-controls="auth-activate-panel"/u);
   assert.match(markup, /id="auth-select-invitation"[^>]*aria-controls="auth-invitation-panel"/u);
   assert.match(markup, /id="auth-login-panel"[^>]*hidden/u);
   assert.match(markup, /id="auth-activate-panel"[^>]*hidden/u);
   assert.match(markup, /id="auth-invitation-panel"[^>]*hidden/u);
+  assert.match(main, /authIdentity\.hidden = entry === "choose"/u);
+  assert.match(main, /entry === "activate" \|\| entry === "invitation" \? "claim-display-name"/u);
   assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
   assert.match(main, /activeAuthEntry === "invitation"[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
   assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
@@ -257,22 +262,35 @@ test("shared identity fields precede a compact choice screen and separate access
 });
 
 test("Alpha access copy allows optional reasons, discovery channel, and public email with private-delivery guidance", async () => {
-  const [template, readme, security, markup] = await Promise.all([
+  const [template, readme, security, contributing, markup] = await Promise.all([
     readFile(fileURLToPath(new URL("../../../.github/ISSUE_TEMPLATE/test-access.yml", import.meta.url)), "utf8"),
     readFile(fileURLToPath(new URL("../../../README.md", import.meta.url)), "utf8"),
     readFile(fileURLToPath(new URL("../../../docs/SECURITY.md", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../CONTRIBUTING.md", import.meta.url)), "utf8"),
     readFile(htmlPath, "utf8"),
   ]);
   assert.match(template, /id: reason[\s\S]*?required: false/u);
   assert.match(template, /id: discovery[\s\S]*?required: false/u);
   assert.match(template, /id: email[\s\S]*?required: false/u);
-  for (const text of [template, readme, security, markup]) {
+  for (const text of [template, readme, security, contributing, markup]) {
     assert.doesNotMatch(text, /must not post an email|do not post your email|请勿在公开 Issue 中留下邮箱/u);
   }
   assert.match(template, /Issues in this repository are public[\s\S]*coolhezi@sjtu\.edu\.cn/u);
-  assert.match(readme, /Email is optional and recommended[\s\S]*coolhezi@sjtu\.edu\.cn/u);
-  assert.match(security, /may optionally provide an email address/u);
-  assert.match(markup, /Email is optional\. Issues are public/u);
+  assert.match(readme, /Email is optional and recommended only if you are comfortable sharing it publicly/u);
+  assert.match(security, /requested only through the dedicated public GitHub Issue template[\s\S]*email is recommended only/u);
+  assert.match(contributing, /Alpha test-access applications are a separate public workflow[\s\S]*email is recommended only/u);
+  assert.match(markup, /email is optional and recommended only if you are comfortable sharing it publicly[\s\S]*Issues are public/u);
+});
+
+test("Cloud Git cleanup loading and error statuses are visible and announced in the management view", async () => {
+  const markup = await readFile(htmlPath, "utf8");
+  const manageStart = markup.indexOf('id="code-storage-manage"');
+  const status = markup.indexOf('id="code-storage-manage-status"');
+  const error = markup.indexOf('id="code-storage-error"');
+  const projects = markup.indexOf('id="code-storage-projects"');
+  assert.ok(manageStart > 0 && status > manageStart && error > status && projects > error);
+  assert.match(markup, /id="code-storage-manage-status"[^>]*role="status"[^>]*aria-live="polite"/u);
+  assert.match(markup, /id="code-storage-error"[^>]*role="alert"/u);
 });
 
 test("the empty-project paragraph follows account capability and restores session guidance", async () => {

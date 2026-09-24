@@ -29,11 +29,11 @@ import {
 } from "./domain.js?v=20260923-1";
 import { SessionSync } from "./realtime.js";
 import { mountCodeSync } from "./code-sync-view.js?v=20260924-1";
-import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-1";
+import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-2";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260924-1";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260924-2";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -160,6 +160,7 @@ const loginError = element("login-error");
 const rememberedAccountSelect = element("remembered-account-select");
 const forgetRememberedAccountButton = element("forget-remembered-account");
 const authEntryChooser = element("auth-entry-chooser");
+const authIdentity = element("auth-identity");
 const authEntryChoices = [
   { entry: "login", button: element("auth-select-login"), panel: element("auth-login-panel") },
   { entry: "activate", button: element("auth-select-activate"), panel: element("auth-activate-panel") },
@@ -444,6 +445,7 @@ function setActiveAuthEntry(entry, { focus = false } = {}) {
   if (authRequestInProgress) return;
   activeAuthEntry = entry;
   authEntryChooser.hidden = entry !== "choose";
+  authIdentity.hidden = entry === "choose";
   for (const choice of authEntryChoices) choice.panel.hidden = choice.entry !== entry;
   element("token").value = "";
   element("test-access-token").value = "";
@@ -454,7 +456,8 @@ function setActiveAuthEntry(entry, { focus = false } = {}) {
   if (focus) {
     const targetId = entry === "choose" ? "auth-select-login"
       : entry === "login" ? rememberedAccountSelect.value ? "remembered-account-select" : "token"
-        : entry === "activate" ? "test-access-token" : "claim-invite-secret";
+        : entry === "activate" || entry === "invitation" ? "claim-display-name"
+          : "claim-invite-secret";
     element(targetId).focus();
   }
 }
