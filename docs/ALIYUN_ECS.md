@@ -77,7 +77,7 @@ sudo ls -lh /var/backups/gatherthread
 curl -fsS http://127.0.0.1:18787/health/ready
 ```
 
-The database is `/var/lib/gatherthread/collaboration.sqlite`; configuration and the credential pepper are in `/etc/gatherthread/gatherthread.env`. Daily backup sets are retained for 14 days. If cloud Git repositories exist, each SQLite backup has a matching `.db.code` companion: verify, move off-host, restore, and eventually rotate them together. The updated backup unit calls `scripts/prune-sqlite-backups.sh` to retire complete sets; an old installed unit will not gain this behavior by changing `/opt/gatherthread/current` alone. Copy encrypted backup sets and the pepper separately to another failure domain, or device credentials cannot be verified after total host loss.
+The database is `/var/lib/gatherthread/collaboration.sqlite`; configuration and the credential pepper are in `/etc/gatherthread/gatherthread.env`. The daily backup unit prunes eligible complete top-level sets with `-mtime +14` after a successful backup; this does not guarantee a strict 14-day maximum or cover restore-drill, incomplete, or off-host copies. If cloud Git repositories exist, each SQLite backup has a matching `.db.code` companion: verify, move off-host, restore, and eventually rotate them together. The updated backup unit calls `scripts/prune-sqlite-backups.sh` to retire eligible sets; an old installed unit will not gain this behavior by changing `/opt/gatherthread/current` alone. Copy encrypted backup sets and the pepper separately to another failure domain, or device credentials cannot be verified after total host loss. Set and verify expiry for every copy location before stating a fixed retention period.
 
 ## 7. Upgrade and rollback
 

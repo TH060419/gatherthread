@@ -124,14 +124,26 @@ test("product home labels the current invitation-only preview without claiming U
   assert.doesNotMatch(html, /0\.1\.0-alpha\.7/u);
 });
 
-test("product home points to Issue-only access without collecting applicant information", async () => {
+test("product home exposes canonical and bilingual social discovery metadata", async () => {
+  const html = await readFile(new URL("index.html", productRoot), "utf8");
+  assert.match(html, /<link rel="canonical" href="https:\/\/gatherthread\.cn\/">/u);
+  assert.match(html, /<title>GatherThread 共序 \| 多人本地 AI Agent 协作工作区<\/title>/u);
+  assert.match(html, /name="description" content="GatherThread 共序是面向多人和各自本地 AI Agent 的协作工作区/u);
+  assert.match(html, /property="og:title" content="GatherThread 共序 \| Local AI Agent Collaboration"/u);
+  assert.match(html, /property="og:description" content="Self-hostable collaboration for teams using local AI coding agents/u);
+  assert.match(html, /property="og:url" content="https:\/\/gatherthread\.cn\/"/u);
+  assert.match(html, /name="twitter:card" content="summary"/u);
+});
+
+test("product home points to Issue-only access and labels the optional email as public", async () => {
   const [html, app] = await Promise.all([
     readFile(new URL("index.html", productRoot), "utf8"),
     readFile(new URL("app.js", productRoot), "utf8"),
   ]);
   const issueLink = /https:\/\/github\.com\/TH060419\/gatherthread\/issues\/new\?template=test-access\.yml/gu;
   assert.ok((html.match(issueLink) ?? []).length >= 2);
-  assert.match(html, /请勿在公开 Issue 中留下邮箱、令牌或其他个人信息/u);
+  assert.match(html, /邮箱选填且会公开/u);
+  assert.match(app, /Email is optional and public/u);
   assert.match(app, /"connect\.c2\.link"/u);
   assert.doesNotMatch(html, /<form[^>]*test-access/u);
 });
