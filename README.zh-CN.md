@@ -1,8 +1,10 @@
 # GatherThread
 
+**GatherThread（共序）** 是面向多人联机协作、各自使用本地 AI 编程 Agent 的开源、可自托管工作区。Codex Desktop 与 DeepSeek Harness 可以接入同一项目的有序历史和共享上下文：会话按参与者标注、可重放并实时同步，Solo/Multi 模式有明确的角色权限。每位成员保留自己的本地 Agent 和凭据；Git 代码检查点需单独主动授权，不是默认上传。
+
 > **Alpha 7：可选的项目代码协作。** 云端 Git 代码检查点支持每位成员独立分支、手动/空闲时自动上传、安全下载、恢复到新目录，以及创建者审核合并。Codex 需显式添加 `--code-sync` 授权，DSH 可在插件设置中逐项目授权并操作。聊天上传与实时上下文注入不受影响，原有本地 Git 分支和暂存区不被改动。所有项目成员均可读取代码分支，Solo 不提供代码隐私隔离。详见[使用流程、边界与测试清单](docs/CODE_SYNC.md)。
 
-> **Unreleased 源码更新：云端代码配额与清理。** 每用户有效云端代码快照限额为 128 MiB；成员可在设置中清理自己的云端分支，项目创建者还可选择清理整个项目的云端 Git。清理个人分支不会撤销已合入共享 `main` 的代码；任何云端清理都不会改动本地 Git 或 Agent 文件。它会撤销云端访问并释放逻辑配额，但物理 Git 对象和旧备份需另行按运维保留策略清理。详见[代码协作指南](docs/CODE_SYNC.md)。
+> **Alpha 7：云端代码配额与清理。** 每用户有效云端代码快照限额为 128 MiB；成员可在设置中清理自己的云端分支，项目创建者还可选择清理整个项目的云端 Git。清理个人分支不会撤销已合入共享 `main` 的代码；任何云端清理都不会改动本地 Git 或 Agent 文件。它会撤销云端访问并释放逻辑配额，但物理 Git 对象和旧备份需另行按运维保留策略清理。详见[代码协作指南](docs/CODE_SYNC.md)。
 
 > **原生上下文管理与审计修复。** Alpha 7 优先使用 Codex 原生窗口与用量，保留 DSH 自身模型及压缩设置，不再直接裁剪限额内接收的公开历史。原生压缩不是无限或无损记忆，特殊恢复仍有限制；详见 [Codex 指南](docs/CODEX_CONNECT.zh-CN.md)和 [DSH 指南](docs/DSH_CONNECT.zh-CN.md)。
 
@@ -12,17 +14,17 @@
 
 **一个空间，汇聚众智。**
 
-**GatherThread** 让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。它不绑定具体 Agent harness，每位协作者都可以保留自己熟悉的本地 Agent 和工作方式。
+**GatherThread** 不绑定具体 Agent harness，每位协作者都可以保留自己熟悉的本地 Agent、模型选择和工作方式。
 
 > **邀请制 Alpha 测试。** [gatherthread.cn](https://gatherthread.cn/) 已进行小规模服务器测试，尚未开放公众注册或公共 Beta。每位测试者需要一次性测试资格码来激活账号；仅凭项目邀请，只能进入被邀请的项目。本机、局域网和 Tailscale 自托管方式仍可使用。
 
-已记住账号快捷登录、首次进入工作区的云端 Git 须知，以及个人云端代码配额与清理，目前属于 **Unreleased 源码改动**。在新版本经过审核并部署前，服务器 Alpha 可能仍运行上一版本。
+服务器当前运行源码，以及 Git 标签、npm 包和 GitHub Release 的对应状态，请查看[发布记录索引](docs/releases/README.md)。仓库 `main` 分支可能包含尚未部署的改动。
 
 ## 申请 Alpha 测试资格
 
-**[在 GitHub 发起 Alpha 测试申请 Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml)**。申请仅通过 Issue 发起，不提供邮件表单，也无需填写申请理由或其他个人资料。仓库保持 private 期间，只有已有仓库访问权限的人能使用这个入口；仓库由所有者转为 public 后，公众才能发起申请。请勿在公开 Issue 中填写邮箱、真实姓名、电话、学校、单位、设备信息，或发布资格码、设备 Token 与任何密钥。
+**[在 GitHub 发起 Alpha 测试申请 Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml)**。源码仓库现已公开，但服务器账号仍须经维护者审核并取得一次性测试资格码才能激活；申请仅通过 Issue 发起，不提供邮件表单，也不会在服务器建立申请人资料。模板可选填申请理由、希望测试的内容、了解 GatherThread 的渠道，以及用于私下接收资格码的邮箱。邮箱选填；若不介意在公开 Issue 中展示，建议填写，方便获批后通过邮件私下发送资格码。若不愿公开邮箱，可在获批后将 Issue 链接私信发送至 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，再通过邮件私下接收资格码。请勿发布资格码、设备 Token、密码、密钥或私有代码。
 
-维护者审核后会在 Issue 中回复结果与后续步骤。资格码是一次性秘密，绝不在公开 Issue 中发送。如获批准且需要私密投递，申请者可主动将 Issue 链接发至 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)；邮件仅用于私密联系，不替代 Issue 申请。拿到资格码后，打开[服务器登录页](https://gatherthread.cn/app/)，先填写自己的用户名与设备名，再在“首次使用 · 激活资格”中输入资格码。请妥善保存随后另行签发的设备 Token，供以后登录使用。已有资格的用户也可以邀请访客加入某个项目，但项目邀请不会赋予访客创建新项目的资格。
+维护者会在公开 Issue 中回复审核结果与后续步骤，但绝不公开发送资格码。拿到私下发送的资格码后，打开[服务器登录页](https://gatherthread.cn/app/)，先填写自己的用户名与设备名，再在“首次使用 · 激活资格”中输入资格码。请妥善保存随后另行签发的设备 Token，供以后登录使用。已有资格的用户也可以邀请访客加入某个项目，但项目邀请不会赋予访客创建新项目的资格。
 
 使用疑问、缺陷和非敏感反馈，请[提交 GitHub Issue](https://github.com/TH060419/gatherthread/issues)；安全问题请私下联系 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，不要附上凭据或未脱敏的私人会话。
 
@@ -148,7 +150,7 @@ DeepSeek Harness 使用四步流程：
 
 尚未实现：主机自动故障转移、多进程 WebSocket fan-out、Agent token 级流式显示、附件对象存储、保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。
 
-更多信息请参阅 [`0.1.0-alpha.7` 说明](docs/releases/0.1.0-alpha.7.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
+更多信息请参阅[文档索引](docs/README.md)、[`0.1.0-alpha.7` 说明](docs/releases/0.1.0-alpha.7.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
 
 ## 参与开发与版本治理
 

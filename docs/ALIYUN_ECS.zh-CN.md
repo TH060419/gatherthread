@@ -77,7 +77,7 @@ sudo ls -lh /var/backups/gatherthread
 curl -fsS http://127.0.0.1:18787/health/ready
 ```
 
-数据库位于 `/var/lib/gatherthread/collaboration.sqlite`；环境与 Pepper 位于 `/etc/gatherthread/gatherthread.env`。每日完整备份组保留 14 天。若使用云端 Git，SQLite 备份须与同名 `.db.code` 目录一起校验、异地保存、恢复和轮换。新版备份单元调用 `scripts/prune-sqlite-backups.sh` 清理成组的过期备份；仅切换 `/opt/gatherthread/current` 不会更新已安装的 systemd 单元。备份组和 Pepper 必须分别加密保存到另一故障域，否则服务器丢失后设备凭据无法继续验证。
+数据库位于 `/var/lib/gatherthread/collaboration.sqlite`；环境与 Pepper 位于 `/etc/gatherthread/gatherthread.env`。每日备份任务仅在成功后使用 `-mtime +14` 清理符合条件的顶层完整备份组，不能保证严格的 14 天上限，也不覆盖恢复演练、不完整或异地副本。若使用云端 Git，SQLite 备份须与同名 `.db.code` 目录一起校验、异地保存、恢复和轮换。新版备份单元调用 `scripts/prune-sqlite-backups.sh` 清理符合条件的备份组；仅切换 `/opt/gatherthread/current` 不会更新已安装的 systemd 单元。备份组和 Pepper 必须分别加密保存到另一故障域，否则服务器丢失后设备凭据无法继续验证。在对外声明固定保留期限前，须为所有副本位置设置并验证到期清理。
 
 ## 7. 升级与回滚
 

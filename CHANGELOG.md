@@ -4,6 +4,11 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Prepared public-repository documentation and discoverability updates: bilingual README introductions, documentation/release indexes, private security-reporting policy, product-home metadata, and clearer Alpha access guidance. This does not itself deploy the hosted site or publish a new package.
+- The npm Alpha 7 packages were published separately and were not rebuilt when the Git tag moved to the verified server source.
+
+## [0.1.0-alpha.7] - 2026-09-24
+
 ### Added
 
 - Separate operator-issued, single-use Alpha test qualification from project invitations. A qualified account can create projects; an invitation-only guest can work only in invited projects and cannot create one through current or compatibility APIs.
@@ -20,29 +25,29 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Security and privacy
 
-- Test-access Issues must not contain emails, credentials, qualification codes, device tokens, or private transcripts. Approved codes are delivered only through a private channel, never in the public Issue.
+- Test-access Issues may include an applicant email only when that applicant is comfortable publishing it. Credentials, qualification codes, device tokens, private transcripts, and private source must never be posted; approved codes are delivered only through a private channel.
 - Cloud Git cleanup revokes API access and releases active logical quota, but physical Git objects and earlier backups remain until separate operator-approved retention cleanup. The ECS backup has a paired Git-object companion that must rotate and restore with SQLite; cleanup is not immediate secure erasure of every copy.
 
 ### Migration and compatibility
 
 - Existing device credentials and project memberships remain valid. The first account and existing project owners retain project-creation permission; existing invite-only accounts without an owned project become project-scoped guests. The activation token is not reusable for login: its recipient receives a separate device token.
 
-## [0.1.0-alpha.7] - 2026-09-23
+### Initial Alpha 7 preview (2026-09-23)
 
-### Added
+#### Added
 
 - Opt-in project code collaboration backed by standard bare Git storage, with per-member branches, bounded source checkpoints, review requests, owner-approved three-way merges and safe updates from main.
 - Independent local code-upload consent and automatic-upload preference for Codex and the native DSH plugin. Manual upload, clean download and recovery into a new sibling directory are available through exact-runtime control jobs; DSH also exposes them in its settings panel.
 - A compact Web code dialog with source-change review, stale-version checks, bilingual recovery guidance and explicit runtime selection. Conversation upload, native-history import and context injection remain independent.
 - Writer-initiated shared history summaries from selected public messages or earlier completed summaries, using the writer's own local Agent. The Web workspace preserves raw history and older versions, provides a compact/original switch, and offers per-user project context policy (summary by default) and customizable/resettable instructions. The derived context API and MCP read are separate from canonical replay.
 
-### Safety and current limits
+#### Safety and current limits
 
 - Code sync does not change an existing local Git branch, index or remote. Credentials, harness state, symlinks and unsafe paths are excluded or rejected. Stale devices cannot overwrite another uploaded version; automatic upload pauses on large deletions or an interrupted download.
 - This Alpha uses one branch per member/project, not automatic task worktrees or a public Git smart-HTTP service. Concurrent Agents must not write the same directory. Only uploaded, eligible source files can be recovered.
 - Shared summaries are explicitly lossy and never delete canonical source messages. Source selection, generated prompts, ancestry validation and derived reads have independent resource limits; oversized input fails instead of being silently shortened. Native Codex/DSH automatic compaction remains separate.
 
-### Audit fixes
+#### Audit fixes
 
 - Reject known credentials consistently before local source upload and server Git persistence; reject malformed Unicode and filesystem aliases of private state.
 - Preserve automatic-upload stability checks through the final inventory, treat incomplete Codex work conservatively, and recover from transient code locks or lost acknowledgements without interrupting conversation sync.
@@ -208,10 +213,10 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - Alibaba Cloud deployment is intended for a small, invitation-only beta and requires operator-managed domain, filing, security-group, monitoring, and restore checks.
 - Public npm scope ownership, public plugin-directory distribution, and remote OAuth 2.1/PKCE MCP remain release follow-ups.
 
-[0.1.0-alpha.7]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.7
+[0.1.0-alpha.7]: docs/releases/0.1.0-alpha.7.md
 [0.1.0-alpha.6]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.5
-[0.1.0-alpha.4]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.4
-[0.1.0-alpha.3]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.3
+[0.1.0-alpha.4]: docs/releases/0.1.0-alpha.4.md
+[0.1.0-alpha.3]: docs/releases/0.1.0-alpha.3.md
 [0.1.0-alpha.2]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.2
-[0.1.0-alpha.1]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.1
+[0.1.0-alpha.1]: docs/releases/0.1.0-alpha.1.md
