@@ -64,6 +64,7 @@ const ZH_CN = Object.freeze({
   "Leave project": "退出项目",
   "Leave this project?": "退出此项目？",
   "Remove member": "移除成员",
+  "Role for {name}": "{name}的角色",
   "Remove {name} from project": "将{name}从项目中移除",
   "Resolve this member's cloud Git branch": "处理此成员的云端 Git 分支",
   "Choose what happens to the cloud branch…": "请选择如何处理云端分支…",
@@ -791,6 +792,10 @@ export function translateUiText(source, locale) {
 
 export function memberRemovalAriaLabel(memberName, translate) {
   return translate("Remove {name} from project").replace("{name}", () => memberName);
+}
+
+export function memberRoleAriaLabel(memberName, translate) {
+  return translate("Role for {name}").replace("{name}", () => memberName);
 }
 
 export function createLocalizer(documentObject = globalThis.document) {

@@ -45,6 +45,7 @@ test("manual summaries use accessible icon entries, explicit paid confirmation a
   assert.match(html, /Display toggles do not change your Agent context policy/u);
   assert.match(styles, /\.history-summary-confirm-dialog > div \{ padding: 24px;/u);
   assert.match(main, /if \(localeChanged && state\.session\) renderTimeline\(\)/u);
+  assert.match(main, /if \(localeChanged && state\.project\) renderMembers\(\)/u);
 });
 
 const brandedIconHashes = new Map([
@@ -209,6 +210,7 @@ test("entry navigation, empty-account project actions, and invited-member exit r
   assert.match(main, /await api\.removeProjectMember\(projectId, userId, branch \?/);
   assert.match(main, /branch_resolution: resolution, expected_branch_head_commit: branch\.head_commit/);
   assert.match(main, /removeButton\.setAttribute\("aria-label", memberRemovalAriaLabel\(member\.username, localizer\.t\)\)/);
+  assert.match(main, /roleSelect\.setAttribute\("aria-label", memberRoleAriaLabel\(member\.username, localizer\.t\)\)/);
   assert.match(main, /event\.key !== SHARED_LANGUAGE_STORAGE_KEY/);
   assert.match(styles, /\.account-cluster \{\s*grid-column: 3;/);
   assert.match(i18n, /"Leave project": "退出项目"/);

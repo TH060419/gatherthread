@@ -1,12 +1,35 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { memberRemovalAriaLabel, translateUiText } from "../src/i18n.js";
+import { memberRemovalAriaLabel, memberRoleAriaLabel, translateUiText } from "../src/i18n.js";
 
 test("remove-member accessible name preserves names and follows the active language", () => {
   const name = "Maya $& · 玛雅";
   assert.equal(memberRemovalAriaLabel(name, (source) => translateUiText(source, "en")), `Remove ${name} from project`);
   assert.equal(memberRemovalAriaLabel(name, (source) => translateUiText(source, "zh-CN")), `将${name}从项目中移除`);
+  assert.equal(memberRoleAriaLabel(name, (source) => translateUiText(source, "en")), `Role for ${name}`);
+  assert.equal(memberRoleAriaLabel(name, (source) => translateUiText(source, "zh-CN")), `${name}的角色`);
+});
+
+test("member controls regain localized accessible names after an in-page language switch", () => {
+  const name = "Maya $& · 玛雅";
+  let locale = "en";
+  const attributes = new Map();
+  const renderMember = () => {
+    const translate = (source) => translateUiText(source, locale);
+    attributes.set("role", memberRoleAriaLabel(name, translate));
+    attributes.set("remove", memberRemovalAriaLabel(name, translate));
+  };
+  renderMember();
+  assert.equal(attributes.get("remove"), `Remove ${name} from project`);
+  locale = "zh-CN";
+  renderMember();
+  assert.equal(attributes.get("role"), `${name}的角色`);
+  assert.equal(attributes.get("remove"), `将${name}从项目中移除`);
+  locale = "en";
+  renderMember();
+  assert.equal(attributes.get("role"), `Role for ${name}`);
+  assert.equal(attributes.get("remove"), `Remove ${name} from project`);
 });
 
 test("manual summary controls, shared quota boundaries and context policy are bilingual", () => {

@@ -33,7 +33,7 @@ import { mountCodeStorageSettings } from "./code-storage-settings.js";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel } from "./i18n.js?v=20260923-2";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260923-2";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -1787,7 +1787,7 @@ function renderMembers() {
     if (state.project?.role === "owner" && member.role !== "owner") {
       const roleSelect = document.createElement("select");
       roleSelect.className = "member-role-select";
-      roleSelect.setAttribute("aria-label", `Role for ${member.username}`);
+      roleSelect.setAttribute("aria-label", memberRoleAriaLabel(member.username, localizer.t));
       for (const value of ["participant", "viewer"]) {
         const option = document.createElement("option");
         option.value = value;
@@ -3047,6 +3047,7 @@ function applyVisualSettings(settings) {
   localizer.apply(normalized.general.locale);
   element("auth-language-button").textContent = normalized.general.locale === "zh-CN" ? "EN" : "中";
   if (localeChanged && state.session) renderTimeline();
+  if (localeChanged && state.project) renderMembers();
   updateSidebarControls();
   updateSessionContextDisclosure();
   setAutomaticClaimDeviceName();
