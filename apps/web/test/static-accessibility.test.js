@@ -17,6 +17,13 @@ const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-d
 const aliyunGuidePath = fileURLToPath(new URL("../../../docs/ALIYUN_ECS.md", import.meta.url));
 const selfHostingGuidePath = fileURLToPath(new URL("../../../docs/SELF_HOSTING.md", import.meta.url));
 
+test("Cloud Git subviews move keyboard focus to focusable headings", async () => {
+  const html = await readFile(htmlPath, "utf8");
+  assert.match(html, /id="code-local-title" tabindex="-1"/);
+  assert.match(html, /id="code-team-title" tabindex="-1"/);
+  assert.match(html, /id="code-enabled-home"[^>]*aria-label="Cloud Git settings"/);
+});
+
 test("first-project empty state has a localized eyebrow and restores English when language changes", async () => {
   const [html, main, translations] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(i18nPath, "utf8")]);
   assert.match(html, /id="empty-state-eyebrow"/);
@@ -216,33 +223,74 @@ test("entry navigation, empty-account project actions, and invited-member exit r
   assert.match(i18n, /"Leave project": "退出项目"/);
 });
 
-test("shared identity fields precede separate login, qualification, and project invitation forms", async () => {
+test("entry choices precede shared identity fields and separate access forms", async () => {
   const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  const identity = markup.indexOf('id="auth-identity"');
   const name = markup.indexOf('id="claim-display-name"');
   const device = markup.indexOf('id="claim-device-name"');
-  const tabs = markup.indexOf('class="auth-entry-tabs" role="tablist"');
-  const loginTab = markup.indexOf('id="auth-login-tab"');
-  const activationTab = markup.indexOf('id="auth-activate-tab"');
+  const chooser = markup.indexOf('id="auth-entry-chooser"');
+  const loginChoice = markup.indexOf('id="auth-select-login"');
+  const activationChoice = markup.indexOf('id="auth-select-activate"');
+  const invitationChoice = markup.indexOf('id="auth-select-invitation"');
   const tokenForm = markup.indexOf('id="login-form"');
   const qualificationForm = markup.indexOf('id="claim-test-access-form"');
   const projectForm = markup.indexOf('id="claim-invitation-form"');
-  assert.ok(name > 0 && device > name && tabs > device && loginTab > tabs
-    && activationTab > loginTab && tokenForm > activationTab
-    && qualificationForm > tokenForm && projectForm > qualificationForm);
-  assert.match(markup, /id="auth-login-tab"[^>]*aria-selected="true"[^>]*aria-controls="auth-login-panel"/u);
-  assert.match(markup, /id="auth-activate-tab"[^>]*aria-selected="false"[^>]*aria-controls="auth-activate-panel"/u);
-  assert.match(markup, /id="auth-activate-panel"[^>]*role="tabpanel"[^>]*hidden/u);
-  assert.match(markup, /<details id="auth-project-entry"/u);
+  assert.ok(chooser > 0 && loginChoice > chooser
+    && activationChoice > loginChoice && invitationChoice > activationChoice
+    && identity > invitationChoice && name > identity && device > name
+    && tokenForm > device && qualificationForm > tokenForm && projectForm > qualificationForm);
+  assert.match(markup, /id="auth-identity"[^>]*hidden/u);
+  assert.match(markup, /id="auth-select-login"[^>]*aria-controls="auth-login-panel"/u);
+  assert.match(markup, /id="auth-select-activate"[^>]*aria-controls="auth-activate-panel"/u);
+  assert.match(markup, /id="auth-select-invitation"[^>]*aria-controls="auth-invitation-panel"/u);
+  assert.match(markup, /id="auth-login-panel"[^>]*hidden/u);
+  assert.match(markup, /id="auth-activate-panel"[^>]*hidden/u);
+  assert.match(markup, /id="auth-invitation-panel"[^>]*hidden/u);
+  assert.match(main, /authIdentity\.hidden = entry === "choose"/u);
+  assert.match(main, /entry === "activate" \|\| entry === "invitation" \? "claim-display-name"/u);
   assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
-  assert.match(main, /if \(authProjectEntry\.open\)[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
+  assert.match(main, /activeAuthEntry === "invitation"[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
   assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
-  assert.match(main, /else if \(rememberedAccountSelect\.value \|\| element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(activeAuthEntry === "login"\) \{[\s\S]*?if \(rememberedAccountSelect\.value \|\| element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  assert.match(main, /authView\.hidden = false;[\s\S]*?setActiveAuthEntry\("choose"\)/u);
   const loginHandler = main.slice(main.indexOf('loginForm.addEventListener("submit"'), main.indexOf('claimTestAccessForm.addEventListener("submit"'));
   const activationHandler = main.slice(main.indexOf('claimTestAccessForm.addEventListener("submit"'), main.indexOf('claimInvitationForm.addEventListener("submit"'));
   assert.match(loginHandler, /api\.authenticate\(token/u);
   assert.doesNotMatch(loginHandler, /api\.claimTestAccess\(/u);
   assert.match(activationHandler, /api\.claimTestAccess\(\{/u);
   assert.doesNotMatch(activationHandler, /api\.authenticate\(/u);
+});
+
+test("Alpha access copy allows optional reasons, discovery channel, and public email with private-delivery guidance", async () => {
+  const [template, readme, security, contributing, markup] = await Promise.all([
+    readFile(fileURLToPath(new URL("../../../.github/ISSUE_TEMPLATE/test-access.yml", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../README.md", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../docs/SECURITY.md", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../CONTRIBUTING.md", import.meta.url)), "utf8"),
+    readFile(htmlPath, "utf8"),
+  ]);
+  assert.match(template, /id: reason[\s\S]*?required: false/u);
+  assert.match(template, /id: discovery[\s\S]*?required: false/u);
+  assert.match(template, /id: email[\s\S]*?required: false/u);
+  for (const text of [template, readme, security, contributing, markup]) {
+    assert.doesNotMatch(text, /must not post an email|do not post your email|请勿在公开 Issue 中留下邮箱/u);
+  }
+  assert.match(template, /Issues in this repository are public[\s\S]*coolhezi@sjtu\.edu\.cn/u);
+  assert.match(readme, /Email is optional and recommended only if you are comfortable sharing it publicly/u);
+  assert.match(security, /requested only through the dedicated public GitHub Issue template[\s\S]*email is recommended only/u);
+  assert.match(contributing, /Alpha test-access applications are a separate public workflow[\s\S]*email is recommended only/u);
+  assert.match(markup, /email is optional and recommended only if you are comfortable sharing it publicly[\s\S]*Issues are public/u);
+});
+
+test("Cloud Git cleanup loading and error statuses are visible and announced in the management view", async () => {
+  const markup = await readFile(htmlPath, "utf8");
+  const manageStart = markup.indexOf('id="code-storage-manage"');
+  const status = markup.indexOf('id="code-storage-manage-status"');
+  const error = markup.indexOf('id="code-storage-error"');
+  const projects = markup.indexOf('id="code-storage-projects"');
+  assert.ok(manageStart > 0 && status > manageStart && error > status && projects > error);
+  assert.match(markup, /id="code-storage-manage-status"[^>]*role="status"[^>]*aria-live="polite"/u);
+  assert.match(markup, /id="code-storage-error"[^>]*role="alert"/u);
 });
 
 test("the empty-project paragraph follows account capability and restores session guidance", async () => {
@@ -473,7 +521,7 @@ test("remembered login and current-device naming remain explicit and accessible"
     "remembered-account-control",
     "remembered-account-select",
     "forget-remembered-account",
-    "auth-request-test-access",
+    "auth-entry-chooser",
     "test-access-remember-device",
     "claim-remember-device",
     "settings-device",

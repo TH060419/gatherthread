@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260923-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260924-1" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -63,7 +63,21 @@
         </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
-        <div class="auth-identity">
+        <nav id="auth-entry-chooser" class="auth-entry-chooser" aria-label="Choose how to enter">
+          <p class="field-help">Choose one way to enter. You can come back and switch at any time.</p>
+          <button id="auth-select-login" class="auth-entry-choice" type="button" aria-controls="auth-login-panel">
+            <span><strong>Existing account · sign in</strong><small>Use a device access token or choose an account remembered by this browser.</small></span><span aria-hidden="true">→</span>
+          </button>
+          <button id="auth-select-activate" class="auth-entry-choice" type="button" aria-controls="auth-activate-panel">
+            <span><strong>First-time use · activate access</strong><small>Enter a one-time test qualification code to receive your own device token.</small></span><span aria-hidden="true">→</span>
+          </button>
+          <button id="auth-select-invitation" class="auth-entry-choice" type="button" aria-controls="auth-invitation-panel">
+            <span><strong>Only have a project invitation?</strong><small>Join the invited project. This does not grant permission to create projects.</small></span><span aria-hidden="true">→</span>
+          </button>
+          <p class="auth-request-access">No test code yet? Apply through a GitHub Issue. You may add a reason and how you heard about GatherThread; email is optional and recommended only if you are comfortable sharing it publicly for private code delivery. Issues are public. If you prefer not to publish your email, after approval send the Issue link privately to coolhezi@sjtu.edu.cn.</p>
+          <a class="auth-request-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access on GitHub</a>
+        </nav>
+        <div id="auth-identity" class="auth-identity" hidden>
           <div class="claim-identity-grid">
             <div>
               <label for="claim-display-name">Display name</label>
@@ -76,11 +90,9 @@
           </div>
           <p id="auth-identity-help" class="field-help">Set both names for first-time activation or a project invitation. Existing accounts can leave them unchanged.</p>
         </div>
-        <div class="auth-entry-tabs" role="tablist" aria-label="Account access">
-          <button id="auth-login-tab" class="auth-entry-tab" type="button" role="tab" aria-selected="true" aria-controls="auth-login-panel" tabindex="0">Existing account</button>
-          <button id="auth-activate-tab" class="auth-entry-tab" type="button" role="tab" aria-selected="false" aria-controls="auth-activate-panel" tabindex="-1">First-time activation</button>
-        </div>
-        <div id="auth-login-panel" class="auth-entry-panel" role="tabpanel" aria-labelledby="auth-login-tab">
+        <section id="auth-login-panel" class="auth-entry-panel" aria-labelledby="auth-login-heading" hidden>
+          <button class="text-button auth-entry-back" type="button">← Back</button>
+          <h3 id="auth-login-heading">Existing account · sign in</h3>
           <form id="login-form" novalidate>
             <div id="remembered-account-control" class="remembered-account-control" hidden>
               <label for="remembered-account-select">Remembered accounts on this browser</label>
@@ -109,8 +121,10 @@
             <p id="login-error" class="form-error" role="alert"></p>
             <button class="button button-primary button-wide" type="submit">Sign in <span aria-hidden="true">→</span></button>
           </form>
-        </div>
-        <div id="auth-activate-panel" class="auth-entry-panel" role="tabpanel" aria-labelledby="auth-activate-tab" hidden>
+        </section>
+        <section id="auth-activate-panel" class="auth-entry-panel" aria-labelledby="auth-activate-heading" hidden>
+          <button class="text-button auth-entry-back" type="button">← Back</button>
+          <h3 id="auth-activate-heading">First-time use · activate access</h3>
           <form id="claim-test-access-form" novalidate>
             <label for="test-access-token">Test qualification code</label>
             <input
@@ -131,14 +145,12 @@
             <p id="test-access-error" class="form-error" role="alert"></p>
             <button class="button button-primary button-wide" type="submit">Activate account <span aria-hidden="true">→</span></button>
           </form>
-        </div>
-        <details id="auth-request-test-access" class="auth-project-entry">
-          <summary>Need a test qualification code?</summary>
-          <p class="field-help">Apply through a GitHub Issue. Describe what you would like to test; do not post your email, access tokens, private code or other secrets in a public Issue. Codes are shared privately after review.</p>
-          <a class="button button-secondary button-wide" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access on GitHub</a>
-        </details>
-        <details id="auth-project-entry" class="auth-project-entry">
-          <summary>Have a project invitation?</summary>
+          <p class="auth-request-access">No code yet? The public request Issue accepts an optional reason, discovery source, and email. Include an email only if you are comfortable sharing it publicly for private code delivery.</p>
+          <a class="auth-request-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access</a>
+        </section>
+        <section id="auth-invitation-panel" class="auth-entry-panel" aria-labelledby="auth-invitation-heading" hidden>
+          <button class="text-button auth-entry-back" type="button">← Back</button>
+          <h3 id="auth-invitation-heading">Join an invited project</h3>
           <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
             <label for="claim-invite-secret">Invitation secret</label>
             <input
@@ -159,7 +171,7 @@
             <p id="claim-invite-error" class="form-error" role="alert"></p>
             <button class="button button-secondary button-wide" type="submit">Join project</button>
           </form>
-        </details>
+        </section>
       </section>
     </main>
 
@@ -585,10 +597,19 @@
           <p id="code-owner-note" class="code-help" hidden>Ask the project owner to enable code storage.</p>
         </section>
         <div id="code-enabled-content" hidden>
-          <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off Git synchronization</button><span class="code-help">Cloud branches remain stored; conversations keep syncing.</span></div>
-          <p id="code-paused-note" class="code-help" hidden>Cloud Git is off. You can still turn off an existing local automatic-upload preference below; other code transfers are paused.</p>
-          <section class="code-section" aria-labelledby="code-local-title">
-            <h3 id="code-local-title">This device and your branch</h3>
+          <section id="code-enabled-home" class="code-overview" aria-label="Cloud Git settings">
+            <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off Git synchronization</button><span class="code-help">Cloud branches remain stored; conversations keep syncing.</span></div>
+            <p id="code-paused-note" class="code-help" hidden>Cloud Git is off. Conversations still sync. Resume code sharing here; local automatic upload can be turned off under device sync.</p>
+            <p class="code-help">Choose what you want to do. Uploaded code is visible to every project member and is used only for this project's collaboration.</p>
+            <div class="code-navigation-list">
+              <button id="code-open-device-view" class="code-navigation-card" type="button" aria-controls="code-device-view"><span><strong>This device · sync &amp; recovery</strong><small>Choose an Agent device, upload or download code, and manage automatic upload.</small></span><span aria-hidden="true">→</span></button>
+              <button id="code-open-branches-view" class="code-navigation-card" type="button" aria-controls="code-branches-view"><span><strong>Project branches · review</strong><small>Inspect member branches, update yours from main, or review changes for merging.</small></span><span aria-hidden="true">→</span></button>
+            </div>
+            <p class="code-help">To clear cloud data, open Settings → Cloud Git → Storage &amp; cleanup. Clearing cloud data does not change local Git.</p>
+          </section>
+          <section id="code-device-view" class="code-section" aria-labelledby="code-local-title" hidden>
+            <button id="code-back-device-view" class="text-button code-view-back" type="button">← Back to code settings</button>
+            <h3 id="code-local-title" tabindex="-1">This device and your branch</h3>
             <label for="code-runtime-select">Local Agent device</label>
             <select id="code-runtime-select" aria-describedby="code-device-help"></select>
             <p id="code-device-help" class="code-help">Choose the exact device to transfer files. Changing Agent does not change your cloud branch.</p>
@@ -603,8 +624,9 @@
             </div>
             <details class="code-recovery"><summary>Recover missing local files</summary><p class="code-help">Restore the last uploaded version into a new local folder. Existing files stay untouched. Open that folder or reconnect explicitly to continue; unuploaded changes cannot be recovered.</p><button id="code-recover-button" class="button button-secondary compact-button" type="button" disabled>Restore to a new folder</button></details>
           </section>
-          <section class="code-section" aria-labelledby="code-team-title">
-            <div class="code-toolbar"><h3 id="code-team-title">Project branches</h3><span id="code-main-commit" class="code-commit" data-i18n-skip></span></div>
+          <section id="code-branches-view" class="code-section" aria-labelledby="code-team-title" hidden>
+            <button id="code-back-branches-view" class="text-button code-view-back" type="button">← Back to code settings</button>
+            <div class="code-toolbar"><h3 id="code-team-title" tabindex="-1">Project branches</h3><span id="code-main-commit" class="code-commit" data-i18n-skip></span></div>
             <p class="code-help">Each member uploads to their own branch. Review changes before merging; conflicts never overwrite another member's work.</p>
             <div class="code-actions"><button id="code-review-button" class="button button-secondary compact-button" type="button" disabled>Request review of my branch</button><button id="code-update-button" class="button button-secondary compact-button" type="button" disabled>Merge main into my cloud branch</button></div>
             <ul id="code-branch-list" class="code-branch-list" aria-label="Project branches"></ul>
@@ -622,7 +644,6 @@
       <div class="dialog-heading"><h2 id="code-notice-title">About cloud Git collaboration</h2></div>
       <p id="code-notice-description">Cloud Git stores project code on this server so project members can share, review and merge it. Uploaded code is readable by every member of that project. It is used for that project's collaboration, not for developing GatherThread or other unrelated purposes. Review files for secrets before upload.</p>
       <p>Code upload is optional and automatic upload starts off. You can turn off cloud Git for a project; its conversations still work, but code sharing and recovery through the server are then unavailable. Turning it off alone retains existing cloud branches until they are cleared in Settings.</p>
-      <p class="code-help">This notice appears when this device first enters the workspace. It does not request browser notification permission.</p>
       <div class="dialog-actions"><button id="code-notice-continue" class="button button-primary" type="button">Got it</button></div>
     </dialog>
 
@@ -1010,19 +1031,28 @@ codex plugin add gatherthread@gatherthread</code>
 
             <section id="settings-code-storage" class="settings-section" aria-labelledby="settings-code-storage-title">
               <div class="settings-section-heading">
-                <div><p class="eyebrow">Cloud Git</p><h3 id="settings-code-storage-title">Storage &amp; cleanup</h3></div>
+                <div><p class="eyebrow">Cloud Git</p><h3 id="settings-code-storage-title" tabindex="-1">Storage &amp; cleanup</h3></div>
                 <button id="code-storage-refresh" class="text-button" type="button">Refresh</button>
               </div>
-              <p id="code-storage-summary" class="field-help" role="status" aria-live="polite">Loading cloud Git storage…</p>
-              <p class="field-help">Select projects with cloud Git data. Members can clear only their own branch; owners can also clear an entire project's cloud repository. Your local Git files and history are not changed. This releases your logical current-head quota and removes cloud access to cleared refs, but old objects and backups remain until separate operator-approved retention cleanup; physical disk capacity is not immediately reclaimed.</p>
-              <div id="code-storage-projects" class="code-storage-projects"></div>
-              <button id="code-storage-review" class="button button-secondary" type="button" disabled>Review selected cleanup</button>
-              <div id="code-storage-confirmation" class="code-storage-confirmation" hidden>
-                <p id="code-storage-confirmation-text"></p>
-                <button id="code-storage-confirm" class="button button-danger" type="button">Delete selected cloud data</button>
-                <button id="code-storage-cancel" class="button button-secondary" type="button">Cancel</button>
+              <div id="code-storage-overview">
+                <p id="code-storage-summary" class="field-help" role="status" aria-live="polite">Loading cloud Git storage…</p>
+                <p class="field-help">View your quota and choose when to remove cloud copies. Your local Git history is always left alone.</p>
+                <button id="code-storage-open" class="button button-secondary" type="button">Manage cloud Git data</button>
               </div>
-              <p id="code-storage-error" class="form-error" role="alert"></p>
+              <div id="code-storage-manage" class="code-storage-manage" hidden>
+                <button id="code-storage-back" class="text-button" type="button">← Back to storage overview</button>
+                <h4 id="code-storage-manage-title" tabindex="-1">Choose cloud data to clear</h4>
+                <p id="code-storage-manage-status" class="field-help" role="status" aria-live="polite">Loading cloud Git storage…</p>
+                <p id="code-storage-error" class="form-error" role="alert"></p>
+                <p class="field-help">Members can clear only their own branch; owners can also clear the whole project repository. This removes cloud access to those refs but does not change local files. Old objects and backups remain until separate operator cleanup, so physical disk use may not drop immediately.</p>
+                <div id="code-storage-projects" class="code-storage-projects"></div>
+                <button id="code-storage-review" class="button button-secondary" type="button" disabled>Review selected cleanup</button>
+                <div id="code-storage-confirmation" class="code-storage-confirmation" hidden>
+                  <p id="code-storage-confirmation-text"></p>
+                  <button id="code-storage-confirm" class="button button-danger" type="button">Delete selected cloud data</button>
+                  <button id="code-storage-cancel" class="button button-secondary" type="button">Cancel</button>
+                </div>
+              </div>
             </section>
 
             <section id="settings-agents" class="settings-section" aria-labelledby="settings-agents-title">
@@ -1115,6 +1145,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260923-2"></script>
+    <script type="module" src="./src/main.js?v=20260924-2"></script>
   </body>
 </html>

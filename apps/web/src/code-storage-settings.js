@@ -18,12 +18,39 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
   let busy = false;
   let userId = null;
   let selectionRevision = 0;
+  el("code-storage-overview").hidden = false;
+  el("code-storage-manage").hidden = true;
 
   function current() {
     return dialog.open && getUserId() === userId;
   }
 
   function translate(value) { return localizer.t(value); }
+
+  function quotaLabel(result) {
+    return `${translate("My logical cloud Git quota")}: ${bytesLabel(result.used_bytes)} / ${bytesLabel(result.limit_bytes)}`;
+  }
+
+  function openCleanup() {
+    if (busy) return;
+    el("code-storage-overview").hidden = true;
+    el("code-storage-manage").hidden = false;
+    el("code-storage-manage-title").focus({ preventScroll: true });
+    void load();
+  }
+
+  function returnToOverview() {
+    if (busy) return;
+    selectionRevision += 1;
+    plan = null;
+    selections.clear();
+    el("code-storage-confirmation").hidden = true;
+    el("code-storage-error").textContent = "";
+    el("code-storage-review").disabled = true;
+    el("code-storage-manage").hidden = true;
+    el("code-storage-overview").hidden = false;
+    el("settings-code-storage-title").focus({ preventScroll: true });
+  }
 
   function invalidatePlan() {
     selectionRevision += 1;
@@ -94,13 +121,16 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
     el("code-storage-confirmation").hidden = true;
     el("code-storage-error").textContent = "";
     loaded = null;
+    el("code-storage-manage-status").textContent = translate("Loading cloud Git storage…");
+    projectsNode.replaceChildren();
     el("code-storage-summary").textContent = translate("Loading cloud Git storage…");
     el("code-storage-review").disabled = true;
     try {
       const result = await api.getCodeStorage();
       if (!current() || generation !== thisGeneration) return;
       loaded = result;
-      el("code-storage-summary").textContent = `${translate("My logical cloud Git quota")}: ${bytesLabel(result.used_bytes)} / ${bytesLabel(result.limit_bytes)}`;
+      el("code-storage-summary").textContent = quotaLabel(result);
+      el("code-storage-manage-status").textContent = quotaLabel(result);
       renderProjects([...(result.projects ?? []), ...(result.detached_branches ?? []).map((branch) => ({
         ...branch, detached: true, repository_enabled: false, main_commit: null, main_bytes: 0,
         own_branch_id: "detached", branch_count: 1, can_clear_project: false,
@@ -108,7 +138,9 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
       }))]);
     } catch (error) {
       if (!current() || generation !== thisGeneration) return;
-      el("code-storage-summary").textContent = translate("Unable to load cloud Git storage.");
+      const failure = translate("Unable to load cloud Git storage.");
+      el("code-storage-summary").textContent = failure;
+      el("code-storage-manage-status").textContent = failure;
       el("code-storage-error").textContent = error.message ?? translate("Try refreshing.");
     }
   }
@@ -120,6 +152,8 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
     const picked = [...selections.values()];
     busy = true;
     el("code-storage-review").disabled = true;
+    el("code-storage-back").disabled = true;
+    el("code-storage-manage-status").textContent = translate("Checking selected cloud Git branches…");
     el("code-storage-error").textContent = "";
     try {
       const nextPlan = [];
@@ -154,10 +188,17 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
       el("code-storage-confirmation-text").textContent = `${translate("You are about to clear cloud Git data for")}: ${nextPlan.map(({ project, action }) => `${project.project_title} (${translate(action === "project" ? "entire project" : "my branch")})`).join(", ")}. ${translate("Local Git is unchanged. Other members lose cloud access if you clear an entire project. Old objects and backups remain until separate operator cleanup; physical disk use is not immediately reduced.")}`;
       el("code-storage-confirmation").hidden = false;
     } catch (error) {
-      if (current() && generation === thisGeneration) el("code-storage-error").textContent = error.message ?? translate("Unable to review cleanup.");
+      if (current() && generation === thisGeneration) {
+        el("code-storage-manage-status").textContent = translate("Unable to review cleanup.");
+        el("code-storage-error").textContent = error.message ?? translate("Unable to review cleanup.");
+      }
     } finally {
       busy = false;
+      el("code-storage-back").disabled = false;
       el("code-storage-review").disabled = !current() || selections.size === 0;
+      if (current() && !el("code-storage-error").textContent && loaded) {
+        el("code-storage-manage-status").textContent = quotaLabel(loaded);
+      }
     }
   }
 
@@ -170,6 +211,8 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
     busy = true;
     el("code-storage-confirm").disabled = true;
     el("code-storage-cancel").disabled = true;
+    el("code-storage-back").disabled = true;
+    el("code-storage-manage-status").textContent = translate("Clearing selected cloud Git data…");
     let completed = 0;
     try {
       for (const item of approvedPlan) {
@@ -181,7 +224,7 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
       }
       if (current() && generation === thisGeneration) {
         await load({ afterConfirmedAction: true });
-        if (current()) el("code-storage-error").textContent = translate("Selected cloud Git references were cleared. Local Git is unchanged.");
+        if (current()) el("code-storage-manage-status").textContent = translate("Selected cloud Git references were cleared. Local Git is unchanged.");
       }
     } catch (error) {
       if (current() && generation === thisGeneration) {
@@ -192,13 +235,23 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
       busy = false;
       el("code-storage-confirm").disabled = false;
       el("code-storage-cancel").disabled = false;
+      el("code-storage-back").disabled = false;
       el("code-storage-confirmation").hidden = true;
     }
   }
 
+  el("code-storage-open").addEventListener("click", openCleanup);
+  el("code-storage-back").addEventListener("click", returnToOverview);
   el("code-storage-refresh").addEventListener("click", () => void load());
   el("code-storage-review").addEventListener("click", () => void review());
   el("code-storage-confirm").addEventListener("click", () => void confirm());
   el("code-storage-cancel").addEventListener("click", invalidatePlan);
-  return { load, cancel() { generation += 1; plan = null; selections.clear(); } };
+  return { load, cancel() {
+    generation += 1;
+    plan = null;
+    selections.clear();
+    el("code-storage-confirmation").hidden = true;
+    el("code-storage-manage").hidden = true;
+    el("code-storage-overview").hidden = false;
+  } };
 }

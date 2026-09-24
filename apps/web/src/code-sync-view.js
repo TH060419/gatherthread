@@ -42,6 +42,13 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   const controller = createCodeSyncController({ api, onChange: render, pollMs: mockEnabled ? 120 : 1800 });
   const routeKey = (state) => JSON.stringify([state.context?.project?.id, state.context?.sessionId, state.context?.userId, state.runtimeId]);
 
+  function showCodeView(view, focusId) {
+    el("code-enabled-home").hidden = view !== "overview";
+    el("code-device-view").hidden = view !== "device";
+    el("code-branches-view").hidden = view !== "branches";
+    if (focusId) el(focusId).focus({ preventScroll: true });
+  }
+
   function finishConfirmation(accepted) {
     const pending = pendingConfirmation;
     pendingConfirmation = null;
@@ -66,6 +73,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     if (viewProjectId !== context?.project?.id) {
       finishConfirmation(false);
       viewProjectId = context?.project?.id;
+      showCodeView("overview");
       previewGeneration += 1;
       reviewed = null;
       el("code-review-preview").hidden = true;
@@ -225,6 +233,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   }
   trigger.addEventListener("click", () => {
     updateContext();
+    showCodeView("overview");
     returnFocus = doc.activeElement;
     dialog.showModal();
     controller.open();
@@ -239,9 +248,14 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     dialog.close();
     doc.getElementById("new-project-button")?.click?.();
   });
+  el("code-open-device-view").addEventListener("click", () => showCodeView("device", "code-local-title"));
+  el("code-open-branches-view").addEventListener("click", () => showCodeView("branches", "code-team-title"));
+  el("code-back-device-view").addEventListener("click", () => showCodeView("overview", "code-open-device-view"));
+  el("code-back-branches-view").addEventListener("click", () => showCodeView("overview", "code-open-branches-view"));
   el("close-project-code-button").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => {
     finishConfirmation(false);
+    showCodeView("overview");
     previewGeneration += 1;
     controller.close();
     returnFocus?.isConnected && returnFocus.focus({ preventScroll: true });

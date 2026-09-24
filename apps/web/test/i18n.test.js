@@ -32,6 +32,25 @@ test("member controls regain localized accessible names after an in-page languag
   assert.equal(attributes.get("remove"), `Remove ${name} from project`);
 });
 
+test("staged sign-in and Cloud Git navigation are localized without the irrelevant notice sentence", () => {
+  for (const [source, expected] of [
+    ["Choose how to enter", "选择进入方式"],
+    ["Existing account · sign in", "已有账号 · 登录"],
+    ["First-time use · activate access", "首次使用 · 激活资格"],
+    ["Only have a project invitation?", "只有项目邀请？"],
+    ["← Back", "← 返回"],
+    ["Cloud Git settings", "云端 Git 设置"],
+    ["This device · sync & recovery", "本设备 · 同步与恢复"],
+    ["Project branches · review", "项目分支 · 审核"],
+    ["Manage cloud Git data", "管理云端 Git 数据"],
+    ["Back to storage overview", "返回存储概览"],
+  ]) {
+    assert.equal(translateUiText(source, "en"), source);
+    assert.equal(translateUiText(source, "zh-CN"), expected);
+  }
+  assert.equal(translateUiText("This notice appears when this device first enters the workspace. It does not request browser notification permission.", "zh-CN"), "This notice appears when this device first enters the workspace. It does not request browser notification permission.");
+});
+
 test("manual summary controls, shared quota boundaries and context policy are bilingual", () => {
   const cases = [
     ["Select history to summarize", "选择历史生成摘要"],
