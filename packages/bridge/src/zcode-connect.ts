@@ -330,6 +330,10 @@ async function readSecret(label: string): Promise<string> {
         continue;
       }
       secret += character;
+      if (secret.length > 1024) {
+        process.stdin.setRawMode(false);
+        throw new Error("The entered device access token exceeds 1024 characters");
+      }
     }
   }
   process.stdin.setRawMode(false);

@@ -145,6 +145,8 @@ export interface ZcodeExecutorOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
+  /** Injectable turn runner; defaults to the real protocol turn runner. */
+  turnRunner?: ZcodeTurnRunner;
 }
 
 export interface ZcodeTurnRunnerOptions {
@@ -184,9 +186,9 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
   #deactivated = false;
   #activeTurns = 0;
 
-  constructor(options: ZcodeExecutorOptions, runTurn: ZcodeTurnRunner = runZcodeProtocolTurn) {
+  constructor(options: ZcodeExecutorOptions, runTurn?: ZcodeTurnRunner) {
     this.#options = { ...options, shareToolEvents: options.shareToolEvents === true };
-    this.#runTurn = runTurn;
+    this.#runTurn = runTurn ?? options.turnRunner ?? runZcodeProtocolTurn;
   }
 
   /**
@@ -205,8 +207,13 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
     if (request.actorId !== runtime.userId) return false;
     // Legacy requests without an execution profile belong to the server's
     // Codex compatibility target, never to ZCode; ambiguity must not claim.
-    const requested = requestedHarness(request);
-    return requested === "zcode";
+    // A malformed profile is not ours either: refusing silently (instead of
+    // throwing) keeps the shared polling cursor advancing past the event.
+    try {
+      return requestedHarness(request) === "zcode";
+    } catch {
+      return false;
+    }
   }
 
   async execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
@@ -522,12 +529,28 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
       if (options.resumeSessionId !== undefined && sessionId !== options.resumeSessionId) {
         throw new Error("ZCode resumed an unexpected native session");
       }
-      if (created.protocol !== undefined) {
-        const protocol = isRecord(created.protocol) ? created.protocol : {};
-        if (protocol.name !== "ZCode Protocol" || protocol.version !== 1) {
-          throw new Error(
-            `ZCode app-server speaks ${String(protocol.name)} version ${String(protocol.version)}; this connector requires ZCode Protocol version 1`,
-          );
+      // Fail closed on the declared protocol: a server that does not name
+      // itself ZCode Protocol version 1 is never executed against.
+      if (!isRecord(created.protocol)) {
+        throw new Error(
+          "ZCode app-server did not declare its protocol; this connector requires ZCode Protocol version 1",
+        );
+      }
+      const protocol = created.protocol;
+      if (protocol.name !== "ZCode Protocol" || protocol.version !== 1) {
+        throw new Error(
+          `ZCode app-server speaks ${String(protocol.name)} version ${String(protocol.version)}; this connector requires ZCode Protocol version 1`,
+        );
+      }
+
+      // A resumed conversation already contains its prior messages. Deliveries
+      // repeating any of those identities are replay, never this request's
+      // fresh output, and must not publish as its progress.
+      const replayedMessageIds = new Set<string>();
+      for (const entry of Array.isArray(created.messages) ? created.messages : []) {
+        const info = isRecord(entry) && isRecord(entry.info) ? entry.info : {};
+        for (const key of ["messageId", "id"] as const) {
+          if (typeof info[key] === "string") replayedMessageIds.add(info[key]);
         }
       }
 
@@ -536,6 +559,10 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
       let completedResponse: string | undefined;
       let failure: { code?: string; message: string } | undefined;
       let settled = false;
+      // Auxiliary replay window: projections are accepted only from the
+      // moment the send request is written. Anything delivered between
+      // subscribe and then predates this request.
+      let acceptProjections = false;
 
       connection.setTurnHandlers({
         onSessionEvent: (event: ZcodeProtocolEvent) => {
@@ -545,7 +572,6 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
               if (!settled) {
                 settled = true;
                 completedResponse = parsed.finalResponse;
-
               }
               return;
             }
@@ -556,14 +582,26 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
                   ...(parsed.errorCode === undefined ? {} : { code: parsed.errorCode }),
                   message: parsed.errorMessage ?? "ZCode turn failed",
                 };
-
               }
               return;
             }
+            if (!acceptProjections) return;
+            if (parsed.eventType === "message.upserted" && isRecord(event.payload)) {
+              // The delivery envelope wraps the schema fields one level down.
+              const inner = isRecord(event.payload.payload) ? event.payload.payload : event.payload;
+              const identity = typeof inner.messageId === "string"
+                ? inner.messageId
+                : typeof inner.id === "string" ? inner.id : undefined;
+              if (identity !== undefined && replayedMessageIds.has(identity)) return;
+            }
             for (const shareable of parsed.events) {
               if (shareable.kind === "assistant" && shareable.content && !settled) {
-                // Assistant text before completion is public commentary.
-                await options.onTurnEvent(shareable);
+                // Assistant text before completion is public commentary,
+                // bounded client-side to the server's event payload budget.
+                await options.onTurnEvent({
+                  ...shareable,
+                  content: shareable.content.slice(0, 32_000),
+                });
               } else if (shareable.kind === "tool_call" || shareable.kind === "tool_result") {
                 await options.onTurnEvent(shareable);
               }
@@ -581,6 +619,11 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
         deliveryKind: "desktop-continuous",
       }, options.timeoutMs);
 
+      // Accept projections from the moment the send request is written: any
+      // event the server produces for this request arrives after the write,
+      // while anything delivered between subscribe and here (for example a
+      // replayed history snapshot on resume) predates it and stays ignored.
+      acceptProjections = true;
       const sent = await connection.request("session/send", {
         sessionId,
         content: options.prompt,

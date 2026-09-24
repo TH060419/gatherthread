@@ -11,10 +11,12 @@ import {
   pendingZcodeLocalSessionId,
   probeZcodeCli,
   probeZcodeProtocol,
+  refreshProjectSessionPermissions,
   resolveZcodeCommand,
   renderZcodePrompt,
   runZcodeProtocolTurn,
   saveZcodeState,
+  withoutGatherThreadCredentialEnvironment,
   ZcodeProjectHarness,
   ZcodeSessionExecutor,
   type AppendEventInput,
@@ -272,7 +274,10 @@ test("ZCode shouldExecute only claims requests explicitly targeted at zcode", ()
     ...runtime,
     userId: "user-2",
   }), false);
-  assert.throws(() => executor.shouldExecute(request({ execution_profile: { harness: "bad\nharness" } }), runtime), /invalid target harness/);
+  // A malformed profile is silently not ours: refusing must never surface as
+  // a throw that would wedge the shared polling cursor in front of the event.
+  assert.equal(executor.shouldExecute(request({ execution_profile: { harness: "bad\nharness" } }), runtime), false);
+  assert.equal(executor.shouldExecute(request({ execution_profile: { harness: "a\u0000b" } }), runtime), false);
 });
 
 test("ZCode tool sharing is opt-in, allowlisted, and bounded", async () => {
@@ -329,6 +334,17 @@ test("ZCode prompt rendering quotes shared history as untrusted data with the re
   assert.ok(requestIndex > prompt.indexOf("[seq 1] human_chat"));
   assert.ok(requestIndex > prompt.indexOf("[seq 4] tool_call"));
   assert.ok(prompt.endsWith("Answer the current request. Reply with the final answer text only."));
+});
+
+test("the ZCode child environment strips every GatherThread credential variable", () => {
+  const stripped = withoutGatherThreadCredentialEnvironment({
+    GATHERTHREAD_TOKEN: "secret-token",
+    gatherthread_api_url: "https://example.internal",
+    GATHERTHREAD_AUTH_TOKEN_PEPPER: "pepper",
+    PATH: "C:\Windows",
+    HOME: "/home/tester",
+  });
+  assert.deepEqual(Object.keys(stripped).sort(), ["HOME", "PATH"]);
 });
 
 test("ZCode CLI capability probe refuses builds without the app-server subcommand", async () => {
@@ -642,3 +658,225 @@ function executionInput() {
     runtime: runtimeValue(),
   };
 }
+
+test("the shared permission refresh with retain/preserve lists never disables live bindings", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-refresh-"));
+  const statePath = path.join(root, "state.json");
+  const harness = new ZcodeProjectHarness({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    workspacePath: root,
+    provider: "GLM Account",
+    model: "default",
+    turnRunner: async () => ({ nativeSessionId: "sess_refresh_1", finalResponse: "final result text" }),
+  });
+  // The audited failure sequence: the connector's first successful refresh
+  // runs reconcileProjectSessionPermissions before any session is managed.
+  const refresh = await refreshProjectSessionPermissions({
+    loadSessions: async () => [{ id: "session-1", mode: "multi", role: "owner" }],
+    actorUserId: "user-1",
+    managed: new Map(),
+    harness,
+  });
+  assert.equal(refresh.status, "updated");
+  const binding = harness.createSessionBinding({
+    session: { id: "session-1", mode: "multi" },
+    sessionKey: "key-1",
+    statePath,
+  });
+  const result = await binding.executor.execute(executionInput());
+  assert.equal(result.events.at(-1)?.content, "final result text");
+  await harness.close();
+  await rm(root, { recursive: true, force: true });
+});
+
+test("deactivation honors retain/preserve lists and only removes excluded sessions", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-retain-"));
+  const harness = new ZcodeProjectHarness({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    workspacePath: root,
+    provider: "GLM Account",
+    model: "default",
+    turnRunner: async () => ({ nativeSessionId: "sess_retain_1", finalResponse: "final result text" }),
+  });
+  const kept = harness.createSessionBinding({
+    session: { id: "session-keep", mode: "multi" },
+    sessionKey: "keep-key",
+    statePath: path.join(root, "keep.json"),
+  });
+  const dropped = harness.createSessionBinding({
+    session: { id: "session-drop", mode: "multi" },
+    sessionKey: "drop-key",
+    statePath: path.join(root, "drop.json"),
+  });
+
+  // Read-only reconciliation: keep both alive.
+  await harness.deactivateExecutionBindings({
+    retainSessionIds: ["session-keep"],
+    preserveSessionIds: ["session-drop"],
+  });
+  await kept.executor.execute({
+    ...executionInput(),
+    runtime: { ...runtimeValue(), sessionId: "session-keep" },
+  });
+
+  // session-drop fell out of every allowlist: only it is deactivated.
+  await harness.deactivateExecutionBindings({
+    retainSessionIds: ["session-keep"],
+    preserveSessionIds: ["session-keep"],
+  });
+  await assert.rejects(
+    dropped.executor.execute({
+      ...executionInput(),
+      runtime: { ...runtimeValue(), sessionId: "session-drop" },
+    }),
+    /deactivated/,
+  );
+  await kept.executor.execute({
+    ...executionInput(),
+    runtime: { ...runtimeValue(), sessionId: "session-keep" },
+  });
+  await harness.close();
+  await assert.rejects(
+    kept.executor.execute({
+      ...executionInput(),
+      runtime: { ...runtimeValue(), sessionId: "session-keep" },
+    }),
+    /deactivated/,
+  );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("a malformed execution profile advances the polling cursor instead of wedging the session", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-wedge-"));
+  const api = new FakeApi();
+  api.history.push(
+    canonicalEvent({
+      sequence: 2,
+      type: "agent_request",
+      payload: { content: "poison", execution_profile: { harness: "bad\nharness" } },
+    }),
+    canonicalEvent({ sequence: 3, type: "agent_request", payload: { content: "real request", execution_profile: { harness: "zcode" } } }),
+  );
+  const bridge = new LocalBridge({
+    api,
+    cursorStore: new MemoryCursorStore(),
+    runtime: {
+      sessionId: "session-1",
+      deviceId: "device-1",
+      harness: "zcode",
+      provider: "GLM Account",
+      model: "default",
+      localSessionId: pendingZcodeLocalSessionId("key-1"),
+      captureFidelity: "harness_transcript",
+    },
+    transcriptRoots: {},
+  });
+  await bridge.connect();
+  const executor = fakeExecutor(path.join(root, "state.json"), {
+    turns: [{ outcome: { nativeSessionId: "sess_after_wedge", finalResponse: "answered after the malformed request" } }],
+  });
+  const outcome = await bridge.processPendingAgentRequests(executor);
+  assert.equal(outcome.examined, 2, "both events must be examined");
+  assert.equal(outcome.claimed, 1, "the valid request behind the malformed one must be claimed");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("protocol probes and turns fail closed on structurally wrong servers", async () => {
+  await withFakeAppServer(
+    `let buffer = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => { buffer += chunk; let i; while ((i = buffer.indexOf("\\n")) >= 0) { const line = buffer.slice(0, i); buffer = buffer.slice(i + 1); if (!line.trim()) continue; const message = JSON.parse(line); if (message.method === "session/list") { process.stdout.write(JSON.stringify({ id: message.id, result: { nope: true } }) + "\\n"); } else if (message.id !== undefined) { process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n"); } } });`,
+    async (commandSpec, directory) => {
+      await assert.rejects(
+        probeZcodeProtocol(commandSpec, { cwd: directory, timeoutMs: 5000 }),
+        /did not answer session\/list/,
+      );
+    },
+  );
+
+  // A turn against a server whose session/create omits the protocol
+  // declaration must refuse instead of executing.
+  await withFakeAppServer(
+    `let buffer = ""; let eventSeq = 0; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => { buffer += chunk; let i; while ((i = buffer.indexOf("\\n")) >= 0) { const line = buffer.slice(0, i); buffer = buffer.slice(i + 1); if (!line.trim()) continue; let message; try { message = JSON.parse(line); } catch { continue; } if (message.method === "session/requestRuntimePreferences") { process.stdout.write(JSON.stringify({ id: message.id, result: { nativeSearchEnhancementsEnabled: false } }) + "\\n"); continue; } if (message.method === "session/create") { process.stdout.write(JSON.stringify({ id: message.id, result: { session: { sessionId: "sess_noproto_1" } } }) + "\\n"); continue; } if (message.id !== undefined) { process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n"); } } });`,
+    async (commandSpec, directory) => {
+      await assert.rejects(
+        runZcodeProtocolTurn({
+          spec: commandSpec,
+          workspacePath: directory,
+          resumeSessionId: undefined,
+          prompt: "hello",
+          timeoutMs: 10_000,
+          maxOutputBytes: 1_000_000,
+          signal: undefined,
+          onTurnEvent: () => undefined,
+        }),
+        /did not declare its protocol/,
+      );
+    },
+  );
+});
+
+test("projection events delivered before our send are ignored as replay", async () => {
+  // The fake emits a replayed message.upserted while answering subscribe —
+  // before the connector's session/send resolves. It must never surface as
+  // this request's progress.
+  const script = `
+let buffer = "";
+let eventSeq = 0;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    let message;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message.method === "session/requestRuntimePreferences") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { nativeSearchEnhancementsEnabled: false } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/resume") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {
+        session: { sessionId: "sess_replay_1" },
+        protocol: { name: "ZCode Protocol", version: 1 },
+        messages: [{ info: { messageId: "replayed" } }],
+      } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/subscribe") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { eventSeq: 0, events: [], sessionId: message.params.sessionId } }) + "\\n");
+      process.stdout.write(JSON.stringify({ method: "session/event", params: { deliveryKind: "desktop-continuous", eventId: "replay", type: "message.upserted", payload: { messageId: "replayed", content: "replayed old answer" } } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/send") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { accepted: true, sessionId: message.params.sessionId } }) + "\\n");
+      process.stdout.write(JSON.stringify({ method: "session/event", params: { deliveryKind: "desktop-continuous", eventId: "fresh", type: "message.upserted", payload: { messageId: "fresh", content: "fresh commentary" } } }) + "\\n");
+      process.stdout.write(JSON.stringify({ method: "session/event", params: { deliveryKind: "desktop-continuous", eventId: "done", type: "turn.completed", payload: { response: "fresh final answer" } } }) + "\\n");
+      continue;
+    }
+    if (message.id !== undefined) {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+    }
+  }
+});
+`;
+  await withFakeAppServer(script, async (commandSpec, directory) => {
+    const surfaced: string[] = [];
+    const outcome = await runZcodeProtocolTurn({
+      spec: commandSpec,
+      workspacePath: directory,
+      resumeSessionId: "sess_replay_1",
+      prompt: "hello",
+      timeoutMs: 10_000,
+      maxOutputBytes: 1_000_000,
+      signal: undefined,
+      onTurnEvent: async (event) => {
+        if (event.kind === "assistant") surfaced.push(event.content ?? "");
+      },
+    });
+    assert.equal(outcome.finalResponse, "fresh final answer");
+    assert.deepEqual(surfaced, ["fresh commentary"]);
+  });
+});

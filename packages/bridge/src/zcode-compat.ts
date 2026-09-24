@@ -118,8 +118,12 @@ async function fromPath(
   platform: NodeJS.Platform,
 ): Promise<ZcodeCommandSpec | undefined> {
   const accessMode = platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK;
+  // Windows: accept only real executables. Node spawns with shell:false, and
+  // since CVE-2024-27980 it refuses .bat/.cmd shims outright, so a .cmd shim
+  // found on PATH would fail later with an opaque EINVAL; the desktop-bundle
+  // and --zcode-command paths remain the supported Windows alternatives.
   const executableNames = platform === "win32"
-    ? [`${command}.exe`, `${command}.cmd`, `${command}.bat`]
+    ? [`${command}.exe`]
     : [command];
   for (const directory of (env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
     for (const executableName of executableNames) {
@@ -187,7 +191,9 @@ export async function probeZcodeCli(
   if (!version) throw new Error("ZCode CLI --version produced no usable output");
   return {
     version,
-    supportsAppServer: /(?:^|\s)app-server(?:\s|$)/.test(helpOutput),
+    // Anchored to a line start so prose mentions of "app-server" inside
+    // option descriptions cannot satisfy the capability check.
+    supportsAppServer: /(?:^|\r?\n)[ \t]*app-server(?:\s|$)/.test(helpOutput),
     supportsPromptMode: helpOutput.includes("--prompt") || helpOutput.includes("-p,"),
     supportsResume: helpOutput.includes("--resume"),
   };

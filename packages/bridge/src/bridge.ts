@@ -135,8 +135,16 @@ export class LocalBridge {
         throw new Error("Collaboration API returned an event for a different session");
       }
       if (event.type === "agent_request") {
-        const shouldExecute = event.actorId === runtime.userId
-          && (executor.shouldExecute === undefined || await executor.shouldExecute(event, runtime));
+        let shouldExecute = event.actorId === runtime.userId;
+        if (shouldExecute && executor.shouldExecute !== undefined) {
+          try {
+            shouldExecute = await executor.shouldExecute(event, runtime);
+          } catch {
+            // A malformed or unreadable request profile must never wedge the
+            // polling cursor: treat it as not ours and keep advancing past it.
+            shouldExecute = false;
+          }
+        }
         if (shouldExecute) {
           try {
             const result = await this.processAgentRequest(event, executor);

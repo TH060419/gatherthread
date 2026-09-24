@@ -13,6 +13,7 @@ import type {
   ProjectHarnessSessionBinding,
 } from "./project-harness.js";
 import type { SessionSummary } from "./types.js";
+import type { ZcodeTurnRunner } from "./zcode-executor.js";
 
 export interface ZcodeProjectHarnessOptions {
   probe: ZcodeCliProbe;
@@ -29,6 +30,8 @@ export interface ZcodeProjectHarnessOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
+  /** Injectable turn runner; defaults to the real protocol turn runner. */
+  turnRunner?: ZcodeTurnRunner;
 }
 
 interface KnownSessionIdentity {
@@ -47,8 +50,7 @@ export class ZcodeProjectHarness implements ProjectHarnessAdapter {
   readonly descriptor: ProjectHarnessDescriptor;
   readonly #options: ZcodeProjectHarnessOptions;
   readonly #known = new Map<string, KnownSessionIdentity>();
-  readonly #executors = new Set<ZcodeSessionExecutor>();
-  #deactivated = false;
+  readonly #bindings = new Map<string, Set<ZcodeSessionExecutor>>();
 
   constructor(options: ZcodeProjectHarnessOptions) {
     this.#options = options;
@@ -90,9 +92,14 @@ export class ZcodeProjectHarness implements ProjectHarnessAdapter {
       ...(this.#options.timeoutMs === undefined ? {} : { timeoutMs: this.#options.timeoutMs }),
       ...(this.#options.maxOutputBytes === undefined ? {} : { maxOutputBytes: this.#options.maxOutputBytes }),
       ...(this.#options.signal === undefined ? {} : { signal: this.#options.signal }),
+      ...(this.#options.turnRunner === undefined ? {} : { turnRunner: this.#options.turnRunner }),
     });
-    if (this.#deactivated) executor.deactivate();
-    this.#executors.add(executor);
+    let executors = this.#bindings.get(input.session.id);
+    if (executors === undefined) {
+      executors = new Set();
+      this.#bindings.set(input.session.id, executors);
+    }
+    executors.add(executor);
     return {
       executor,
       localSessionId: known?.localSessionId
@@ -101,21 +108,36 @@ export class ZcodeProjectHarness implements ProjectHarnessAdapter {
   }
 
   /**
-   * Revocation, removal, role downgrade, and shutdown abort every in-flight
-   * headless child and refuse later publication of its result. In-flight
-   * turns surface as bounded failures instead of committing after the
-   * binding lost its authorization.
+   * Reconciles execution bindings with current write eligibility, mirroring
+   * the shared retain/preserve contract: only sessions absent from both the
+   * retained and the preserved allowlists are deactivated. The project
+   * refresh loop calls this on every cycle, so a missing or unconditional
+   * implementation would permanently disable the whole harness after the
+   * first successful refresh. Revocation, removal, role downgrade, and
+   * shutdown therefore reach this through lists that exclude the revoked
+   * session, and full shutdown closes with no retained ids at all. A
+   * deactivated executor aborts its in-flight headless child and refuses
+   * later publication; in-flight turns surface as bounded failures instead
+   * of committing after the binding lost its authorization.
    */
-  async deactivateExecutionBindings(): Promise<void> {
-    this.#deactivated = true;
-    for (const executor of this.#executors) {
-      executor.deactivate();
+  async deactivateExecutionBindings(input: {
+    retainSessionIds?: readonly string[];
+    preserveSessionIds?: readonly string[];
+  } = {}): Promise<void> {
+    const retained = new Set(input.retainSessionIds ?? []);
+    const preserved = new Set(input.preserveSessionIds ?? []);
+    for (const [sessionId, executors] of [...this.#bindings]) {
+      if (retained.has(sessionId) || preserved.has(sessionId)) continue;
+      for (const executor of executors) {
+        executor.deactivate();
+      }
+      this.#bindings.delete(sessionId);
     }
   }
 
   async close(): Promise<void> {
     await this.deactivateExecutionBindings();
-    this.#executors.clear();
+    this.#bindings.clear();
   }
 
   /**

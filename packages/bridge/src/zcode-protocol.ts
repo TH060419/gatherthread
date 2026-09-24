@@ -285,11 +285,18 @@ export async function openZcodeProtocolConnection(options: ZcodeProtocolRunOptio
   }
   const child = spawn(options.spec.command, [...options.spec.baseArgs, "app-server"], {
     cwd: options.cwd,
-    env: withoutGatherThreadCredentials(process.env),
+    env: withoutGatherThreadCredentialEnvironment(process.env),
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
   });
+  if (!child.stdout || !child.stderr || !child.stdin) {
+    throw new Error("ZCode app-server child must be spawned with piped stdio");
+  }
+  // A write racing a child exit surfaces as EPIPE on stdin; the connection
+  // already fails its pending requests through the close handler, so the
+  // stream error itself must not crash the connector process.
+  child.stdin.once("error", () => undefined);
   const connection = new ZcodeProtocolConnection(child, {
     maxOutputBytes: options.maxOutputBytes ?? PROTOCOL_MAX_OUTPUT_BYTES,
   });
@@ -302,7 +309,12 @@ export async function openZcodeProtocolConnection(options: ZcodeProtocolRunOptio
 
 /**
  * Structured live handshake used at preflight: proves the resolved CLI starts
- * an app-server that answers on the expected protocol name and version.
+ * an app-server that answers on the expected surface. The `session/list`
+ * round trip fails closed on the one structural marker every compatible
+ * server returns (`sessions`); the protocol name and version are enforced
+ * fail-closed at `session/create` time, which is where the upstream server
+ * actually declares them. A server that declares a protocol here is still
+ * validated strictly.
  */
 export async function probeZcodeProtocol(
   spec: ZcodeCommandSpec,
@@ -318,9 +330,13 @@ export async function probeZcodeProtocol(
       // `session/list` is the cheapest stateless request that exercises the
       // full envelope round trip without creating native state.
       const result = await connection.request("session/list", {}, options.timeoutMs ?? PROTOCOL_SPAWN_TIMEOUT_MS);
+      if (!Array.isArray(result.sessions)) {
+        throw new Error(
+          "ZCode app-server did not answer session/list with a session list; the resolved CLI does not speak the ZCode Protocol. Upgrade ZCode or point --zcode-command at a compatible build.",
+        );
+      }
       const protocolName = ZCODE_PROTOCOL_NAME;
       const protocolVersion = ZCODE_PROTOCOL_VERSION;
-      // Older or newer servers must be reviewed before use.
       if (result.protocol !== undefined) {
         const protocol = isRecord(result.protocol) ? result.protocol : {};
         const name = typeof protocol.name === "string" ? protocol.name : protocolName;
@@ -335,6 +351,21 @@ export async function probeZcodeProtocol(
       return { protocolName, protocolVersion };
     },
   ).finally(() => undefined);
+}
+
+/**
+ * Strips the fixed GatherThread credential list plus every `GATHERTHREAD_*`
+ * variable from a child environment. The prefix sweep means a future
+ * credential-shaped variable cannot leak into the model-driven ZCode child
+ * just because someone forgot to extend the fixed list.
+ */
+export function withoutGatherThreadCredentialEnvironment(
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const stripped = withoutGatherThreadCredentials(env);
+  return Object.fromEntries(
+    Object.entries(stripped).filter(([key]) => !/^gatherthread_/i.test(key)),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
