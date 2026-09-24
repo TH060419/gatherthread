@@ -127,8 +127,8 @@ test("product home labels the current invitation-only preview without claiming U
 test("product home exposes canonical and bilingual social discovery metadata", async () => {
   const html = await readFile(new URL("index.html", productRoot), "utf8");
   assert.match(html, /<link rel="canonical" href="https:\/\/gatherthread\.cn\/">/u);
-  assert.match(html, /<title>GatherThread 共序 \| 多人本地 AI Agent 协作工作区<\/title>/u);
-  assert.match(html, /name="description" content="GatherThread 共序是面向多人和各自本地 AI Agent 的协作工作区/u);
+  assert.match(html, /<title>GatherThread 共序 \| 本地 AI Agent 多人联机协作<\/title>/u);
+  assert.match(html, /name="description" content="GatherThread 共序是面向多人联机协作、各自使用本地 AI Agent 的开源工作区/u);
   assert.match(html, /property="og:title" content="GatherThread 共序 \| Local AI Agent Collaboration"/u);
   assert.match(html, /property="og:description" content="Self-hostable collaboration for teams using local AI coding agents/u);
   assert.match(html, /property="og:url" content="https:\/\/gatherthread\.cn\/"/u);

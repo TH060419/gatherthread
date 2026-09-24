@@ -47,7 +47,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - This Alpha uses one branch per member/project, not automatic task worktrees or a public Git smart-HTTP service. Concurrent Agents must not write the same directory. Only uploaded, eligible source files can be recovered.
 - Shared summaries are explicitly lossy and never delete canonical source messages. Source selection, generated prompts, ancestry validation and derived reads have independent resource limits; oversized input fails instead of being silently shortened. Native Codex/DSH automatic compaction remains separate.
 
-### Audit fixes
+#### Audit fixes
 
 - Reject known credentials consistently before local source upload and server Git persistence; reject malformed Unicode and filesystem aliases of private state.
 - Preserve automatic-upload stability checks through the final inventory, treat incomplete Codex work conservatively, and recover from transient code locks or lost acknowledgements without interrupting conversation sync.

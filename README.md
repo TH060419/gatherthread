@@ -6,7 +6,7 @@
 
 **One room, many minds.**
 
-**GatherThread** is an open-source, self-hostable collaboration workspace for teams using their own local AI coding agents. Codex Desktop and DeepSeek Harness connect to the same ordered project history and shared context: conversations are attributable, replayable, and delivered live across role-based Solo and Multi sessions. Each person keeps their local Agent and credentials; Git-backed code checkpoints are a separate, opt-in feature. The collaboration layer remains harness-neutral rather than requiring everyone to use one Agent or model.
+**GatherThread** is an open-source, self-hostable workspace for real-time online collaboration among people using their own local AI coding agents. Codex Desktop and DeepSeek Harness connect to the same ordered project history and shared context: conversations are attributable, replayable, and delivered live across role-based Solo and Multi sessions. Each person keeps their local Agent and credentials; Git-backed code checkpoints are a separate, opt-in feature. The collaboration layer remains harness-neutral rather than requiring everyone to use one Agent or model.
 
 > **Invitation-only Alpha.** [gatherthread.cn](https://gatherthread.cn/) is running a small hosted Alpha. Public registration and the public Beta are not open. Each tester needs a one-use test qualification to activate an account; a project invitation alone grants access only to that project. The local, LAN, and Tailscale self-hosting options remain available.
 
