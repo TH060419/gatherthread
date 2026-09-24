@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { WebSocket } from "ws";
 import { startCollaborationServer } from "../src/server.js";
+import { CodeRepository } from "../src/code-repository.js";
 
 interface IdentityResponse {
   data: { actor: { user_id: string; device_id: string }; token: string };
@@ -1255,6 +1256,50 @@ test("remembered browser sessions persist for 30 days and the current device can
   }
 });
 
+test("legacy remembered sessions adopt only through an origin-checked explicit write", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-legacy-remembered-"));
+  const browserOrigin = "http://client.test";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"), allowedOrigins: [browserOrigin],
+    authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST", body: { display_name: "Owner", device_name: "Laptop" },
+    });
+    const opened = await api(running.origin, "/v1/browser-sessions", {
+      method: "POST", token: owner.body.data.token, origin: browserOrigin,
+      body: { remember_device: true },
+    });
+    const sessionCookie = opened.headers.getSetCookie().find((value) => value.startsWith("gatherthread_session="))?.split(";", 1)[0];
+    assert.ok(sessionCookie);
+    running.database.sqlite.prepare("DELETE FROM remembered_browsers").run();
+    const vaultCount = () => (running.database.sqlite.prepare("SELECT COUNT(*) AS count FROM remembered_browsers")
+      .get() as { count: number }).count;
+    const anonymousGet = await api(running.origin, "/v1/me", { cookie: sessionCookie });
+    assert.equal(anonymousGet.status, 200);
+    assert.equal(anonymousGet.headers.getSetCookie().length, 0);
+    assert.equal(vaultCount(), 0);
+    const crossSiteGet = await api(running.origin, "/v1/me", { cookie: sessionCookie, origin: "http://attacker.test" });
+    assert.equal(crossSiteGet.status, 403);
+    assert.equal(vaultCount(), 0);
+    const denied = await api(running.origin, "/v1/remembered-accounts/adopt-current-session", {
+      method: "POST", cookie: sessionCookie, body: {},
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(vaultCount(), 0);
+    const adopted = await api(running.origin, "/v1/remembered-accounts/adopt-current-session", {
+      method: "POST", cookie: sessionCookie, origin: browserOrigin, body: {},
+    });
+    assert.equal(adopted.status, 200);
+    assert.equal(vaultCount(), 1);
+    assert.ok(adopted.headers.getSetCookie().some((value) => value.startsWith("gatherthread_remembered=")));
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("remembered account chooser survives logout, requires origin for activation, and supports explicit forget", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-remembered-accounts-http-"));
   const browserOrigin = "http://client.test";
@@ -1330,6 +1375,40 @@ test("remembered account chooser survives logout, requires origin for activation
       cookie: vault(cookies(forgot.headers)),
     });
     assert.deepEqual(finalList.body.data.accounts.map((account) => account.display_name), ["Member"]);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a failed optional remembered-account write does not consume a one-use claim without delivering its device token", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-claim-remember-failure-"));
+  const browserOrigin = "http://client.test";
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"), authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true, allowedOrigins: [browserOrigin],
+  }, 0);
+  try {
+    const owner = running.database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner laptop" });
+    const project = running.service.createProject(owner.actor, { title: "Project", idempotency_key: "remember-failure-project" });
+    const invitation = running.service.createProjectInvitation(owner.actor, project.id, { role: "participant" });
+    const qualification = running.database.issueTestAccess("1h");
+    running.database.sqlite.exec(`CREATE TRIGGER fail_remembered_account_insert
+      BEFORE INSERT ON remembered_accounts BEGIN SELECT RAISE(FAIL, 'injected remembered-account failure'); END`);
+    for (const [path, credential] of [
+      ["/v1/test-access/claim", { access_token: qualification.access_token }],
+      ["/v1/invitations/claim", { invite_token: invitation.invite_token }],
+    ] as const) {
+      const claimed = await api<IdentityResponse>(running.origin, path, {
+        method: "POST", origin: browserOrigin, headers: { "x-gatherthread-browser-session": "1" },
+        body: { ...credential, display_name: "Claimant", device_name: "Claimant laptop", remember_device: true },
+      });
+      assert.equal(claimed.status, 201);
+      assert.ok(claimed.body.data.token);
+      assert.equal(running.database.authenticate(claimed.body.data.token).user_id, claimed.body.data.actor.user_id);
+      assert.ok(claimed.headers.getSetCookie().some((value) => value.startsWith("gatherthread_session=")));
+      assert.equal(claimed.headers.getSetCookie().some((value) => value.startsWith("gatherthread_remembered=")), false);
+    }
   } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });
@@ -1675,6 +1754,75 @@ test("participants and viewers can leave an invited project but cannot remove ot
     assert.equal((await api(running.origin, `/v1/projects/${projectId}`, { token: participant.token })).status, 404);
     assert.equal((await api(running.origin, `/v1/projects/${projectId}`, { token: viewer.token })).status, 404);
     assert.equal((await api(running.origin, `/v1/projects/${projectId}`, { token: owner.body.data.token })).status, 200);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("both member-removal APIs block unresolved branches and legacy detached branches are self-clearable", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-branch-removal-http-"));
+  const codeDirectory = join(directory, "code");
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"), codeRepositoryDirectory: codeDirectory,
+    authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = running.database.bootstrapIdentity({ display_name: "Owner", device_name: "Laptop" });
+    const member = running.database.createIdentity({ display_name: "Member", device_name: "Laptop" });
+    const outsider = running.database.createIdentity({ display_name: "Outsider", device_name: "Laptop" });
+    const project = running.service.createProject(owner.actor, { title: "Shared code", idempotency_key: "http-branch-project" });
+    const invitation = running.service.createProjectInvitation(owner.actor, project.id, { role: "participant" });
+    running.service.claimInvitationForActor(member.actor, invitation.invite_token);
+    const session = running.service.createSession(owner.actor, {
+      project_id: project.id, session_id: "http-branch-session", title: "Shared session", mode: "multi",
+      idempotency_key: "http-branch-session-create",
+    }).session;
+    const repository = new CodeRepository(running.database, codeDirectory);
+    const initial = repository.enable(owner.actor, project.id, { idempotency_key: "http-branch-enable" });
+    const upload = repository.checkpoint(member.actor, project.id, {
+      base_commit: initial.commit, files: [{ path: "README.md", content_base64: Buffer.from("branch data").toString("base64"), executable: false }],
+      message: "Member branch", idempotency_key: "http-branch-upload",
+    });
+    const projectPath = `/v1/projects/${project.id}/members/${member.actor.user_id}`;
+    const sessionPath = `/v1/sessions/${session.id}/members/${member.actor.user_id}`;
+    assert.equal((await api(running.origin, projectPath, { method: "DELETE", token: member.token, body: {} })).status, 409);
+    assert.equal((await api(running.origin, sessionPath, {
+      method: "DELETE", token: owner.token, body: { idempotency_key: "legacy-unresolved" },
+    })).status, 409);
+    assert.equal(running.database.projectMembershipRole(project.id, member.actor.user_id), "participant");
+    assert.equal((await api(running.origin, projectPath, { method: "DELETE", token: member.token,
+      body: { branch_resolution: "delete", expected_branch_head_commit: initial.commit },
+    })).status, 409);
+    assert.equal((await api(running.origin, sessionPath, { method: "DELETE", token: owner.token,
+      body: { idempotency_key: "legacy-resolved", branch_resolution: "delete", expected_branch_head_commit: upload.commit },
+    })).status, 200);
+    assert.equal(running.database.projectMembershipRole(project.id, member.actor.user_id), null);
+    assert.equal(repository.storageSummary(member.actor).used_bytes, 0);
+    const repeat = await api(running.origin, sessionPath, { method: "DELETE", token: owner.token,
+      body: { idempotency_key: "legacy-resolved", branch_resolution: "delete", expected_branch_head_commit: upload.commit },
+    });
+    assert.equal(repeat.status, 200);
+
+    // A pre-upgrade orphan is still visible only to its former owner and can be cleared with CAS.
+    const invitedAgain = running.service.createProjectInvitation(owner.actor, project.id, { role: "participant" });
+    running.service.claimInvitationForActor(member.actor, invitedAgain.invite_token);
+    const second = repository.checkpoint(member.actor, project.id, {
+      base_commit: initial.commit, files: [{ path: "old.txt", content_base64: Buffer.from("old branch").toString("base64"), executable: false }],
+      message: "Legacy branch", idempotency_key: "http-legacy-upload",
+    });
+    running.database.sqlite.prepare("DELETE FROM project_memberships WHERE project_id=? AND user_id=?")
+      .run(project.id, member.actor.user_id);
+    const summary = await api<{ data: { detached_branches: Array<{ project_id: string }> } }>(running.origin, "/v1/code-storage", { token: member.token });
+    assert.equal(summary.body.data.detached_branches[0]?.project_id, project.id);
+    const clearPath = `/v1/code-storage/detached-branches/${project.id}/clear`;
+    assert.equal((await api(running.origin, clearPath, { method: "POST", token: outsider.token,
+      body: { expected_head_commit: second.commit, idempotency_key: "outsider-clear" },
+    })).status, 404);
+    assert.equal((await api(running.origin, clearPath, { method: "POST", token: member.token,
+      body: { expected_head_commit: second.commit, idempotency_key: "member-clear" },
+    })).status, 200);
+    assert.equal(repository.storageSummary(member.actor).used_bytes, 0);
   } finally {
     await running.close();
     rmSync(directory, { recursive: true, force: true });

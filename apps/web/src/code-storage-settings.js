@@ -101,7 +101,11 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
       if (!current() || generation !== thisGeneration) return;
       loaded = result;
       el("code-storage-summary").textContent = `${translate("My logical cloud Git quota")}: ${bytesLabel(result.used_bytes)} / ${bytesLabel(result.limit_bytes)}`;
-      renderProjects(result.projects ?? []);
+      renderProjects([...(result.projects ?? []), ...(result.detached_branches ?? []).map((branch) => ({
+        ...branch, detached: true, repository_enabled: false, main_commit: null, main_bytes: 0,
+        own_branch_id: "detached", branch_count: 1, can_clear_project: false,
+        project_title: `${branch.project_title} (${translate("former member")})`,
+      }))]);
     } catch (error) {
       if (!current() || generation !== thisGeneration) return;
       el("code-storage-summary").textContent = translate("Unable to load cloud Git storage.");
@@ -120,6 +124,13 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
     try {
       const nextPlan = [];
       for (const { project, action } of picked) {
+        if (project.detached) {
+          nextPlan.push({ project, action: "detached", input: {
+            expected_head_commit: project.own_branch_head_commit,
+            idempotency_key: createIdempotencyKey("clear-detached-branch"),
+          } });
+          continue;
+        }
         const status = await api.getProjectCode(project.project_id);
         if (!current() || generation !== thisGeneration) return;
         if (action === "project") {
@@ -163,6 +174,7 @@ export function mountCodeStorageSettings({ document, api, localizer, getUserId }
     try {
       for (const item of approvedPlan) {
         if (item.action === "project") await api.clearProjectCode(item.project.project_id, item.input);
+        else if (item.action === "detached") await api.clearDetachedCodeBranch(item.project.project_id, item.input);
         else await api.clearOwnCodeBranch(item.project.project_id, item.input);
         completed += 1;
         if (getUserId() !== thisUserId) return;

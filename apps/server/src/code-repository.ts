@@ -29,6 +29,8 @@ export class CodeRepository {
     this.diskBudget = new CodeStorageBudget(root);
   }
 
+  repairAfterMembershipRemoval(projectId: string): void { this.repairRefs(projectId); }
+
   status(actor: Actor, projectId: string): CodeStatus {
     this.authorize(actor, projectId);
     return this.readStatus(actor, projectId);
@@ -43,6 +45,8 @@ export class CodeRepository {
         JOIN project_memberships m ON m.project_id=r.project_id WHERE m.user_id=?`)
         .all(actor.user_id) as Array<{ project_id: string }>;
       for (const row of visible) this.hydrateProjectUsage(row.project_id);
+      // A former member's branch remains charged until it is explicitly cleared.
+      this.hydrateUserUsage(actor.user_id);
       const rows = sql.prepare(`
         SELECT p.id AS project_id, p.title AS project_title, p.owner_user_id, r.enabled, r.main_commit,
           r.main_logical_bytes AS main_bytes, b.id AS own_branch_id, b.head_commit AS own_branch_head_commit,
@@ -63,9 +67,14 @@ export class CodeRepository {
         own_branch_head_commit: row.own_branch_head_commit, own_branch_bytes: row.own_branch_bytes,
         branch_count: row.branch_count, can_clear_project: row.owner_user_id === actor.user_id,
       }));
+      const detachedBranches = sql.prepare(`SELECT b.project_id,p.title AS project_title,
+        b.head_commit AS own_branch_head_commit,b.logical_bytes AS own_branch_bytes
+        FROM code_branches b JOIN projects p ON p.id=b.project_id
+        WHERE b.user_id=? AND NOT EXISTS (SELECT 1 FROM project_memberships m
+          WHERE m.project_id=b.project_id AND m.user_id=b.user_id)
+        ORDER BY p.title,p.id`).all(actor.user_id) as CodeStorageSummary["detached_branches"];
       const result: CodeStorageSummary = { limit_bytes: MAX_USER_CODE_BYTES,
-        used_bytes: projects.reduce((sum, project) => sum + project.own_branch_bytes + (project.can_clear_project ? project.main_bytes : 0), 0),
-        projects };
+        used_bytes: this.userUsageBytes(actor.user_id), projects, detached_branches: detachedBranches };
       sql.exec("COMMIT");
       return result;
     } catch (error) { if (sql.isTransaction) sql.exec("ROLLBACK"); throw error; }
@@ -201,6 +210,40 @@ export class CodeRepository {
         .run(projectId, actor.user_id);
       return released;
     }, undefined, "actor");
+  }
+
+  clearDetachedBranch(actor: Actor, projectId: string, value: unknown): { released_bytes: number } {
+    const input = CodeClearBranchInputSchema.parse(value);
+    this.database.assertActiveDevice(actor);
+    const sql = this.database.sqlite;
+    sql.exec("BEGIN IMMEDIATE");
+    try {
+      if (this.database.projectMembershipRole(projectId, actor.user_id)) throw notFound("Detached cloud branch");
+      const operation = "clear_detached_branch";
+      const hash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
+      const receipt = sql.prepare("SELECT * FROM code_mutations WHERE project_id=? AND idempotency_key=?")
+        .get(projectId, input.idempotency_key) as unknown as Receipt | undefined;
+      if (receipt) {
+        if (receipt.user_id !== actor.user_id || receipt.operation !== operation || receipt.payload_hash !== hash) throw idempotencyConflict();
+        if (receipt.invalidated_at !== null) throw new ApiError(409, "code_data_cleared", "Cloud code data was cleared; refresh before retrying");
+        sql.exec("COMMIT");
+        return JSON.parse(receipt.result_json) as { released_bytes: number };
+      }
+      const branch = sql.prepare("SELECT head_commit FROM code_branches WHERE project_id=? AND user_id=?")
+        .get(projectId, actor.user_id) as { head_commit: string } | undefined;
+      if (!branch) throw notFound("Detached cloud branch");
+      if (branch.head_commit !== input.expected_head_commit) throw this.stale();
+      this.hydrateUserUsage(actor.user_id);
+      const result = { released_bytes: this.ownBranchBytes(projectId, actor.user_id) };
+      sql.prepare("DELETE FROM code_branches WHERE project_id=? AND user_id=?").run(projectId, actor.user_id);
+      sql.prepare("UPDATE code_mutations SET invalidated_at=? WHERE project_id=? AND user_id=? AND invalidated_at IS NULL")
+        .run(new Date().toISOString(), projectId, actor.user_id);
+      sql.prepare("INSERT INTO code_mutations(project_id,idempotency_key,user_id,operation,payload_hash,result_json) VALUES(?,?,?,?,?,?)")
+        .run(projectId, input.idempotency_key, actor.user_id, operation, hash, JSON.stringify(result));
+      sql.exec("COMMIT");
+      this.repairRefs(projectId);
+      return result;
+    } catch (error) { if (sql.isTransaction) sql.exec("ROLLBACK"); throw error; }
   }
 
   clearProject(actor: Actor, projectId: string, value: unknown): CodeClearResult {
@@ -355,14 +398,13 @@ export class CodeRepository {
   private hydrateUserUsage(userId: string): void {
     const sql = this.database.sqlite;
     const branches = sql.prepare(`SELECT b.project_id,b.id,b.head_commit FROM code_branches b
-      JOIN project_memberships m ON m.project_id=b.project_id AND m.user_id=b.user_id
       WHERE b.user_id=? AND b.logical_bytes=-1`).all(userId) as Array<{ project_id: string; id: string; head_commit: string }>;
     for (const branch of branches) {
       sql.prepare("UPDATE code_branches SET logical_bytes=? WHERE project_id=? AND id=?")
         .run(this.headBytes(branch.project_id, branch.head_commit), branch.project_id, branch.id);
     }
     const mains = sql.prepare(`SELECT r.project_id,r.main_commit FROM code_repositories r
-      JOIN projects p ON p.id=r.project_id JOIN project_memberships m ON m.project_id=p.id AND m.user_id=p.owner_user_id
+      JOIN projects p ON p.id=r.project_id
       WHERE p.owner_user_id=? AND r.main_logical_bytes=-1`).all(userId) as Array<{ project_id: string; main_commit: string }>;
     for (const main of mains) {
       sql.prepare("UPDATE code_repositories SET main_logical_bytes=? WHERE project_id=?")
@@ -394,15 +436,19 @@ export class CodeRepository {
     if (!row || row.main_logical_bytes < 0) throw new ApiError(503, "code_storage_unavailable", "Code usage has not been reconciled");
     return row.main_logical_bytes;
   }
-  private assertUserQuota(userId: string, delta: number): void {
+  private userUsageBytes(userId: string): number {
     const sql = this.database.sqlite;
     const own = sql.prepare(`SELECT COALESCE(SUM(b.logical_bytes),0) AS bytes FROM code_branches b
-      JOIN project_memberships m ON m.project_id=b.project_id AND m.user_id=b.user_id WHERE b.user_id=?`)
+      WHERE b.user_id=?`)
       .get(userId) as { bytes: number };
     const mains = sql.prepare(`SELECT COALESCE(SUM(r.main_logical_bytes),0) AS bytes FROM code_repositories r
-      JOIN projects p ON p.id=r.project_id JOIN project_memberships m ON m.project_id=p.id AND m.user_id=p.owner_user_id
+      JOIN projects p ON p.id=r.project_id
       WHERE p.owner_user_id=?`).get(userId) as { bytes: number };
-    if (own.bytes < 0 || mains.bytes < 0 || own.bytes + mains.bytes + delta > MAX_USER_CODE_BYTES) throw this.quota();
+    if (own.bytes < 0 || mains.bytes < 0) throw new ApiError(503, "code_storage_unavailable", "Code usage has not been reconciled");
+    return own.bytes + mains.bytes;
+  }
+  private assertUserQuota(userId: string, delta: number): void {
+    if (this.userUsageBytes(userId) + delta > MAX_USER_CODE_BYTES) throw this.quota();
   }
   private repoPath(projectId: string): string { return join(this.root, `${createHash("sha256").update(projectId).digest("hex")}.git`); }
   private prepareRoot(): void {

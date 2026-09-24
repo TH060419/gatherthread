@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { CodeClearResultSchema, CodeFilesSchema, CodeMutationResultSchema, CodeSnapshotResultSchema, CodeStatusSchema,
   CodeStorageSummarySchema, type CodeFile } from "@gatherthread/protocol";
-import { CodeRepository } from "../src/code-repository.js";
+import { CodeRepository, MAX_USER_CODE_BYTES } from "../src/code-repository.js";
 import { CollaborationDatabase } from "../src/database.js";
 import { CollaborationService } from "../src/service.js";
 import { ApiError } from "../src/errors.js";
@@ -75,7 +75,10 @@ test("project code branches have real Git snapshots, durable retry receipts, ind
     f.service.setProjectMembership(f.owner, f.project.id, f.member.user_id, "viewer");
     assert.throws(() => f.repository.checkpoint(f.member, f.project.id, input), hasCode("forbidden"));
     assert.doesNotThrow(() => f.repository.snapshot(f.member, f.project.id, branchId));
-    f.service.removeProjectMembership(f.owner, f.project.id, f.member.user_id);
+    assert.throws(() => f.service.removeProjectMembership(f.owner, f.project.id, f.member.user_id), hasCode("code_branch_resolution_required"));
+    f.service.removeProjectMembership(f.owner, f.project.id, f.member.user_id, {
+      branch_resolution: "delete", expected_branch_head_commit: uploaded.commit,
+    });
     assert.throws(() => f.repository.snapshot(f.member, f.project.id, branchId), hasCode("not_found"));
     f.service.deleteProject(f.owner, f.project.id);
     assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM code_branches").get() as { count: number }).count, 0);
@@ -145,6 +148,77 @@ test("cloud code storage summary attributes own branches and owner main; branch 
     }), hasCode("code_data_cleared"));
     f.service.setProjectMembership(f.owner, f.project.id, f.member.user_id, "viewer");
     assert.equal(f.repository.status(f.member, f.project.id).own_branch_id, null);
+  } finally { f.close(); }
+});
+
+test("a branch retained after project removal still counts against its original user's cloud Git quota", () => {
+  const f = fixture();
+  try {
+    const enabled = f.repository.enable(f.owner, f.project.id, { idempotency_key: "orphan-quota-enable" });
+    f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: enabled.commit, files: [file("member.txt", "retained cloud code")],
+      message: "Member upload", idempotency_key: "orphan-quota-upload",
+    });
+    // Simulate an orphan produced by a release before branch-aware removal.
+    f.database.sqlite.prepare("DELETE FROM project_memberships WHERE project_id=? AND user_id=?")
+      .run(f.project.id, f.member.user_id);
+    f.database.sqlite.prepare("UPDATE code_branches SET logical_bytes=-1 WHERE project_id=? AND user_id=?")
+      .run(f.project.id, f.member.user_id);
+    const detached = CodeStorageSummarySchema.parse(f.repository.storageSummary(f.member));
+    assert.equal(detached.used_bytes, Buffer.byteLength("retained cloud code"));
+    assert.equal(detached.detached_branches[0]?.project_id, f.project.id);
+    assert.equal(detached.detached_branches[0]?.own_branch_bytes, Buffer.byteLength("retained cloud code"));
+    assert.equal((f.database.sqlite.prepare("SELECT logical_bytes AS bytes FROM code_branches WHERE project_id=? AND user_id=?")
+      .get(f.project.id, f.member.user_id) as { bytes: number }).bytes, Buffer.byteLength("retained cloud code"));
+    f.database.sqlite.prepare("UPDATE code_branches SET logical_bytes=? WHERE project_id=? AND user_id=?")
+      .run(MAX_USER_CODE_BYTES, f.project.id, f.member.user_id);
+    const secondProject = f.service.createProject(f.owner, { title: "Second", idempotency_key: "orphan-quota-second" });
+    const invitation = f.service.createProjectInvitation(f.owner, secondProject.id, { role: "participant" });
+    f.service.claimInvitationForActor(f.member, invitation.invite_token);
+    const second = f.repository.enable(f.owner, secondProject.id, { idempotency_key: "orphan-quota-second-enable" });
+    assert.throws(() => f.repository.checkpoint(f.member, secondProject.id, {
+      base_commit: second.commit, files: [file("new.txt", "new data")],
+      message: "Another upload", idempotency_key: "orphan-quota-second-upload",
+    }), hasCode("code_storage_quota_exceeded"));
+    const result = f.repository.clearDetachedBranch(f.member, f.project.id, {
+      expected_head_commit: detached.detached_branches[0]!.own_branch_head_commit,
+      idempotency_key: "orphan-explicit-clear",
+    });
+    assert.equal(result.released_bytes, MAX_USER_CODE_BYTES);
+    assert.deepEqual(f.repository.clearDetachedBranch(f.member, f.project.id, {
+      expected_head_commit: detached.detached_branches[0]!.own_branch_head_commit,
+      idempotency_key: "orphan-explicit-clear",
+    }), result);
+    assert.equal(f.repository.storageSummary(f.member).used_bytes, 0);
+  } finally { f.close(); }
+});
+
+test("leaving with a cloud branch requires an explicit exact-head decision; reviewed main pays after merge", () => {
+  const f = fixture();
+  try {
+    const initial = f.repository.enable(f.owner, f.project.id, { idempotency_key: "leave-enable" });
+    const upload = f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: initial.commit, files: [file("member.txt", "member data")],
+      message: "Member contribution", idempotency_key: "leave-upload",
+    });
+    const disposition = { branch_resolution: "merged_to_main" as const, expected_branch_head_commit: upload.commit };
+    assert.throws(() => f.service.removeProjectMembership(f.member, f.project.id, f.member.user_id), hasCode("code_branch_resolution_required"));
+    assert.throws(() => f.service.removeProjectMembership(f.member, f.project.id, f.member.user_id, disposition), hasCode("code_review_required"));
+    assert.throws(() => f.service.removeProjectMembership(f.member, f.project.id, f.member.user_id, {
+      branch_resolution: "delete", expected_branch_head_commit: initial.commit,
+    }), hasCode("code_stale_head"));
+    assert.equal(f.database.projectMembershipRole(f.project.id, f.member.user_id), "participant");
+    f.repository.review(f.member, f.project.id, { head_commit: upload.commit, idempotency_key: "leave-review" });
+    f.repository.merge(f.owner, f.project.id, {
+      branch_id: upload.status.own_branch_id!, expected_main_commit: initial.commit,
+      expected_head_commit: upload.commit, idempotency_key: "leave-merge",
+    });
+    f.service.removeProjectMembership(f.member, f.project.id, f.member.user_id, disposition);
+    assert.equal(f.database.projectMembershipRole(f.project.id, f.member.user_id), null);
+    assert.equal((f.database.sqlite.prepare("SELECT COUNT(*) AS count FROM code_branches WHERE project_id=? AND user_id=?")
+      .get(f.project.id, f.member.user_id) as { count: number }).count, 0);
+    assert.equal(f.repository.storageSummary(f.member).used_bytes, 0);
+    assert.equal(f.repository.storageSummary(f.owner).used_bytes, Buffer.byteLength("member data"));
   } finally { f.close(); }
 });
 

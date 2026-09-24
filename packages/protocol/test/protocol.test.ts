@@ -8,6 +8,7 @@ import {
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
   CreateBrowserSessionInputSchema,
+  ActivateRememberedAccountInputSchema,
   CreateSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
@@ -182,6 +183,9 @@ test("invitation inputs allow only fixed TTLs and participant/viewer roles", () 
   }).remember_device, false);
   assert.equal(CreateBrowserSessionInputSchema.parse({}).remember_device, false);
   assert.equal(CreateBrowserSessionInputSchema.parse({ remember_device: true }).remember_device, true);
+  assert.equal(ActivateRememberedAccountInputSchema.safeParse({
+    display_name: "Invitee", device_name: "Laptop", unexpected: true,
+  }).success, false);
 });
 
 test("public invitation records never contain a token digest", () => {

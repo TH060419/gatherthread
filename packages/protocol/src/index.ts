@@ -359,7 +359,7 @@ export type CreateBrowserSessionInput = z.infer<typeof CreateBrowserSessionInput
 export const ActivateRememberedAccountInputSchema = z.object({
   display_name: z.string().trim().min(1).max(120),
   device_name: z.string().trim().min(1).max(120),
-});
+}).strict();
 
 export type ActivateRememberedAccountInput = z.infer<typeof ActivateRememberedAccountInputSchema>;
 

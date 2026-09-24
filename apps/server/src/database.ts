@@ -47,6 +47,11 @@ export interface Actor {
   device_id: string;
 }
 
+export interface BranchRemovalDecision {
+  branch_resolution?: "delete" | "merged_to_main" | undefined;
+  expected_branch_head_commit?: string | undefined;
+}
+
 export interface SessionRecord {
   id: string;
   project_id: string;
@@ -1670,27 +1675,43 @@ export class CollaborationDatabase {
     });
   }
 
-  removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
+  removeProjectMembership(actor: Actor, projectId: string, userId: string, decision: BranchRemovalDecision = {}): void {
     this.transaction(() => {
-      const actorRole = this.projectMembershipRole(projectId, actor.user_id);
-      if (!actorRole) throw notFound("Project");
-      if (actorRole === "owner" && userId === actor.user_id) throw conflict("The project owner cannot leave the project");
-      if (actorRole !== "owner" && userId !== actor.user_id) throw forbidden("Only the project owner can remove another member");
-      const result = this.sqlite.prepare(`
-        DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
-      `).run(projectId, userId);
-      if (Number(result.changes) === 0) throw notFound("Project membership");
-      this.sqlite.prepare(`
-        DELETE FROM memberships
-        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-          AND role != 'owner'
-      `).run(userId, projectId);
-      this.sqlite.prepare(`
-        UPDATE runtimes SET status = 'revoked'
-        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-      `).run(userId, projectId);
-      this.touchProject(projectId);
+      this.removeProjectMemberInsideTransaction(actor, projectId, userId, decision);
     });
+  }
+
+  private removeProjectMemberInsideTransaction(actor: Actor, projectId: string, userId: string, decision: BranchRemovalDecision): void {
+    const actorRole = this.projectMembershipRole(projectId, actor.user_id);
+    if (!actorRole) throw notFound("Project");
+    if (actorRole === "owner" && userId === actor.user_id) throw conflict("The project owner cannot leave the project");
+    if (actorRole !== "owner" && userId !== actor.user_id) throw forbidden("Only the project owner can remove another member");
+    if (!this.projectMembershipRole(projectId, userId)) throw notFound("Project membership");
+    const branch = this.sqlite.prepare("SELECT head_commit,review_status FROM code_branches WHERE project_id=? AND user_id=?")
+      .get(projectId, userId) as { head_commit: string; review_status: string } | undefined;
+    if (branch) {
+      if (!decision.branch_resolution || !decision.expected_branch_head_commit) {
+        throw new ApiError(409, "code_branch_resolution_required", "Choose whether to delete the cloud branch or merge its reviewed head to main before leaving");
+      }
+      if (branch.head_commit !== decision.expected_branch_head_commit) {
+        throw new ApiError(409, "code_stale_head", "Cloud branch changed; refresh and choose again");
+      }
+      if (decision.branch_resolution === "merged_to_main" && branch.review_status !== "merged") {
+        throw new ApiError(409, "code_review_required", "The owner must review and merge this exact branch head to main first");
+      }
+      this.sqlite.prepare("DELETE FROM code_branches WHERE project_id=? AND user_id=?").run(projectId, userId);
+      this.sqlite.prepare("UPDATE code_mutations SET invalidated_at=? WHERE project_id=? AND user_id=? AND invalidated_at IS NULL")
+        .run(this.now(), projectId, userId);
+    } else if (decision.branch_resolution || decision.expected_branch_head_commit) {
+      throw new ApiError(409, "code_stale_head", "Cloud branch was already removed; refresh before leaving");
+    }
+    this.sqlite.prepare("DELETE FROM project_memberships WHERE project_id=? AND user_id=? AND role != 'owner'")
+      .run(projectId, userId);
+    this.sqlite.prepare(`DELETE FROM memberships WHERE user_id=? AND session_id IN
+      (SELECT id FROM sessions WHERE project_id=?) AND role != 'owner'`).run(userId, projectId);
+    this.sqlite.prepare(`UPDATE runtimes SET status='revoked' WHERE user_id=? AND session_id IN
+      (SELECT id FROM sessions WHERE project_id=?)`).run(userId, projectId);
+    this.touchProject(projectId);
   }
 
   listProjectSessions(projectId: string, userId: string): SessionListItem[] {
@@ -2481,25 +2502,17 @@ export class CollaborationDatabase {
     });
   }
 
-  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string): CanonicalEvent {
+  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string,
+    decision: BranchRemovalDecision = {}): CanonicalEvent {
     return this.transaction(() => {
       const existing = this.findByIdempotencyKey(sessionId, idempotencyKey);
-      const payload = { action: "removed", user_id: userId } satisfies JsonValue;
+      const payload = { action: "removed", user_id: userId,
+        ...(decision.branch_resolution ? { branch_resolution: decision.branch_resolution } : {}),
+        ...(decision.expected_branch_head_commit ? { expected_branch_head_commit: decision.expected_branch_head_commit } : {}),
+      } satisfies JsonValue;
       if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "membership_change", payload);
       const session = this.requireSession(sessionId);
-      const result = this.sqlite.prepare(`
-        DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
-      `).run(session.project_id, userId);
-      if (Number(result.changes) === 0) throw notFound("Membership");
-      this.sqlite.prepare(`
-        DELETE FROM memberships WHERE user_id = ?
-          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-          AND role != 'owner'
-      `).run(userId, session.project_id);
-      this.sqlite.prepare(`
-        UPDATE runtimes SET status = 'revoked' WHERE user_id = ?
-          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-      `).run(userId, session.project_id);
+      this.removeProjectMemberInsideTransaction(actor, session.project_id, userId, decision);
       return this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "membership_change",

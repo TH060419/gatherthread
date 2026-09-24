@@ -56,6 +56,11 @@ import { CollaborationService } from "./service.js";
 import { CodeRepository } from "./code-repository.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
+const BranchRemovalDecisionSchema = z.object({
+  branch_resolution: z.enum(["delete", "merged_to_main"]).optional(),
+  expected_branch_head_commit: z.string().regex(/^[a-f0-9]{40}$/u).optional(),
+}).strict().refine((value) => Boolean(value.branch_resolution) === Boolean(value.expected_branch_head_commit),
+  "Branch decision and exact head must be provided together");
 const DEFAULT_REPLAY_LIMIT = 50;
 const MAX_REPLAY_LIMIT = 500;
 const MAX_REPLAY_BYTES = 768 * 1024;
@@ -466,6 +471,16 @@ export async function startCollaborationServer(
     ));
   };
 
+  const rememberAfterOneUseClaim = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
+    try {
+      rememberAfterLogin(request, response, actor);
+    } catch {
+      // The claim and its unique device credential have already committed. Optional
+      // quick-login storage must not hide that credential behind an HTTP 500.
+      console.warn("Optional remembered-account registration failed after a one-use claim");
+    }
+  };
+
   const closeRealtimeWithoutMembership = (): void => {
     for (const [socket, state] of sockets) {
       if (state.sessionId !== null && database.membershipRole(state.sessionId, state.actor.user_id) === null) {
@@ -577,7 +592,7 @@ export async function startCollaborationServer(
             secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined,
           ));
-          if (input.remember_device) rememberAfterLogin(request, response, result.actor);
+          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
           sendJson(response, 201, { data: { ...result, actor: {
             ...result.actor,
             can_create_projects: database.canCreateProjects(result.actor.user_id),
@@ -602,7 +617,7 @@ export async function startCollaborationServer(
             secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined,
           ));
-          if (input.remember_device) rememberAfterLogin(request, response, result.actor);
+          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
           sendJson(response, 201, { data: { ...result, actor: {
             ...result.actor,
             can_create_projects: true,
@@ -724,13 +739,18 @@ export async function startCollaborationServer(
       };
 
       if (request.method === "GET" && url.pathname === "/v1/me") {
-        if (authentication.rememberedBrowserSession
-          && !database.rememberedBrowserHasAccount(
-            rememberedBrowserCookieValue(request, rememberedCookieName) ?? "", actor,
-          )) {
-          rememberAfterLogin(request, response, actor);
-        }
         sendJson(response, 200, { data: publicAccountActor(actor) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/remembered-accounts/adopt-current-session") {
+        z.object({}).strict().parse(await readAuthenticatedJson());
+        if (authentication.kind !== "browser_session" || !authentication.rememberedBrowserSession) {
+          throw new ApiError(403, "remembered_session_required", "Only a remembered browser session can be adopted");
+        }
+        const existing = rememberedBrowserCookieValue(request, rememberedCookieName) ?? "";
+        if (!database.rememberedBrowserHasAccount(existing, actor)) rememberAfterLogin(request, response, actor);
+        sendJson(response, 200, { data: { adopted: true } });
         return;
       }
 
@@ -831,6 +851,12 @@ export async function startCollaborationServer(
         sendJson(response, 200, { data: codeRepository.storageSummary(actor) });
         return;
       }
+      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "code-storage"
+        && parts[2] === "detached-branches" && parts[3] && parts[4] === "clear" && parts.length === 5) {
+        const result = codeRepository.clearDetachedBranch(actor, parts[3], await readAuthenticatedJson());
+        sendJson(response, 200, { data: result });
+        return;
+      }
 
       const projectId = parts[0] === "v1" && parts[1] === "projects" ? parts[2] : undefined;
       if (projectId && parts[3] === "context-policy" && parts.length === 4 && request.method === "GET") {
@@ -911,8 +937,9 @@ export async function startCollaborationServer(
       }
 
       if (projectId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        await readAuthenticatedJson();
-        service.removeProjectMembership(actor, projectId, parts[4]);
+        const decision = BranchRemovalDecisionSchema.parse(await readAuthenticatedJson());
+        service.removeProjectMembership(actor, projectId, parts[4], decision);
+        codeRepository.repairAfterMembershipRemoval(projectId);
         closeRealtimeWithoutMembership();
         response.writeHead(204).end();
         return;
@@ -1013,8 +1040,10 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        const input = z.object({ idempotency_key: IdempotencyKeySchema }).parse(await readAuthenticatedJson());
-        const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key);
+        const input = BranchRemovalDecisionSchema.and(z.object({ idempotency_key: IdempotencyKeySchema })).parse(await readAuthenticatedJson());
+        const projectId = database.requireSession(sessionId).project_id;
+        const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key, input);
+        codeRepository.repairAfterMembershipRemoval(projectId);
         closeRealtimeWithoutMembership();
         sendJson(response, 200, { data: { event } });
         return;

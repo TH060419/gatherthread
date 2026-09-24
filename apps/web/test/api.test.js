@@ -17,7 +17,8 @@ test("browser API overrides cannot send credentials to another origin", async ()
     }
     assert.equal(requests.length, 0);
     await new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" }).restoreSession();
-    assert.deepEqual(requests, ["https://gatherthread.example/v1/me"]);
+    assert.deepEqual(requests, ["https://gatherthread.example/v1/me",
+      "https://gatherthread.example/v1/remembered-accounts/adopt-current-session"]);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalLocation === undefined) delete globalThis.location;
@@ -402,7 +403,7 @@ test("HTTP project rename uses the project PATCH contract", async () => {
   }
 });
 
-test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
+test("HTTP cloud deletion uses explicit branch decisions for member removal", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -417,7 +418,7 @@ test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
     assert.deepEqual(requests.map(([url, options]) => [url, options.method, options.body]), [
       ["https://gatherthread.example/v1/sessions/session%20%2F%20one", "DELETE", undefined],
       ["https://gatherthread.example/v1/projects/project%20%2F%20one", "DELETE", undefined],
-      ["https://gatherthread.example/v1/projects/project%20%2F%20one/members/user%20%2F%20me", "DELETE", undefined],
+      ["https://gatherthread.example/v1/projects/project%20%2F%20one/members/user%20%2F%20me", "DELETE", "{}"],
     ]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -806,6 +807,9 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
       status: 200,
       headers: { "content-type": "application/json" },
     }),
+    new Response(JSON.stringify({ data: { adopted: true } }), {
+      status: 200, headers: { "content-type": "application/json" },
+    }),
     new Response(null, { status: 204 }),
     new Response(JSON.stringify({ error: { code: "unauthorized", message: "Unauthorized" } }), {
       status: 401,
@@ -823,6 +827,7 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
     assert.equal(await api.restoreSession(), null);
     assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
       ["GET", "https://gatherthread.example/v1/me"],
+      ["POST", "https://gatherthread.example/v1/remembered-accounts/adopt-current-session"],
       ["DELETE", "https://gatherthread.example/v1/browser-sessions/current"],
       ["GET", "https://gatherthread.example/v1/me"],
     ]);
@@ -831,6 +836,22 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("optional remembered-session adoption failure does not log out a restored session", async () => {
+  const originalFetch = globalThis.fetch;
+  const paths = [];
+  globalThis.fetch = async (url) => {
+    paths.push(String(url));
+    return paths.length === 1
+      ? Response.json({ data: { id: "u1", username: "Alice", device_id: "d1" } })
+      : Response.json({ error: { code: "remembered_session_required", message: "Not remembered" } }, { status: 403 });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.restoreSession()).username, "Alice");
+    assert.equal(paths.length, 2);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("realtime ticket is carried by WebSocket subprotocol and never placed in the URL", async () => {

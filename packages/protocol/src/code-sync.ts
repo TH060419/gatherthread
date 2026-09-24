@@ -93,6 +93,10 @@ export const CodeMutationResultSchema = z.object({ status: CodeStatusSchema, com
 export const CodeClearResultSchema = z.object({ status: CodeStatusSchema, released_bytes: z.number().int().nonnegative() }).strict();
 export const CodeStorageSummarySchema = z.object({
   limit_bytes: z.number().int().positive(), used_bytes: z.number().int().nonnegative(),
+  detached_branches: z.array(z.object({
+    project_id: z.string().max(128), project_title: z.string().max(200),
+    own_branch_head_commit: Commit, own_branch_bytes: z.number().int().nonnegative(),
+  }).strict()),
   projects: z.array(z.object({
     project_id: z.string().max(128), project_title: z.string().max(200), repository_enabled: z.boolean(),
     main_commit: Commit, main_bytes: z.number().int().nonnegative(),

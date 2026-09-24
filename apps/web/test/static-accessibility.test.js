@@ -205,7 +205,9 @@ test("entry navigation, empty-account project actions, and invited-member exit r
   assert.match(html, /class="wordmark" href="\.\.\/"/);
   assert.match(html, /id="topbar-create-project-button"/);
   assert.match(html, /id="leave-project-dialog"[^>]*aria-labelledby="leave-project-title"/);
-  assert.match(main, /await api\.leaveProject\(projectId, userId\)/);
+  assert.match(html, /id="leave-project-branch-resolution"[^>]*required/);
+  assert.match(main, /await api\.removeProjectMember\(projectId, userId, branch \?/);
+  assert.match(main, /branch_resolution: resolution, expected_branch_head_commit: branch\.head_commit/);
   assert.match(main, /event\.key !== SHARED_LANGUAGE_STORAGE_KEY/);
   assert.match(styles, /\.account-cluster \{\s*grid-column: 3;/);
   assert.match(i18n, /"Leave project": "退出项目"/);

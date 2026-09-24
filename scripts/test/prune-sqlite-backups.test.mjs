@@ -10,7 +10,8 @@ const oldTime = new Date(Date.now() - 17 * 24 * 60 * 60 * 1000);
 
 function old(path) { utimesSync(path, oldTime, oldTime); }
 
-test("backup retention prunes old SQLite and Git companions together but preserves young and incomplete backups", () => {
+test("backup retention prunes old SQLite and Git companions together but preserves young and incomplete backups",
+  { skip: process.platform === "win32" ? "The ECS retention script requires POSIX sh" : false }, () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-prune-test-"));
   const make = (stem, { age = "old", incomplete = false } = {}) => {
     const db = join(directory, `${stem}.db`);

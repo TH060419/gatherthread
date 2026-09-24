@@ -2668,6 +2668,18 @@ time,
   text-transform: capitalize;
 }
 
+.member-remove-button {
+  display: block;
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 0.67rem;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .member-copy strong {
   font-size: 0.8rem;
 }

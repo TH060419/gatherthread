@@ -744,6 +744,11 @@
       <form id="leave-project-form" method="dialog">
         <div class="dialog-heading"><h2 id="leave-project-title">Leave this project?</h2><button id="close-leave-project-button" class="icon-button" type="button" aria-label="Close">×</button></div>
         <p id="leave-project-description">You will lose access to its cloud sessions and code. Your local files and Agent conversations will not be deleted. Ask the owner for a new invitation if you want to rejoin.</p>
+        <div id="leave-project-branch-choice" class="field" hidden>
+          <label for="leave-project-branch-resolution">Resolve this member's cloud Git branch</label>
+          <select id="leave-project-branch-resolution" required></select>
+          <p id="leave-project-branch-note" class="field-help"></p>
+        </div>
         <p id="leave-project-error" class="form-error" role="alert"></p>
         <div class="dialog-actions"><button id="cancel-leave-project-button" class="button button-secondary" type="button">Cancel</button><button id="confirm-leave-project-button" class="button button-danger" type="submit">Leave project</button></div>
       </form>

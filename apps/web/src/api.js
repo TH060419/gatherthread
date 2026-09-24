@@ -92,6 +92,13 @@ export class HttpCollaborationApi {
     try {
       const actor = await this.request("/v1/me");
       this.actors.set(actor.id, actor.username);
+      try {
+        await this.request("/v1/remembered-accounts/adopt-current-session", {
+          method: "POST", body: JSON.stringify({}),
+        });
+      } catch {
+        // Optional legacy quick-login migration must not prevent session restore.
+      }
       return actor;
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) return null;
@@ -205,7 +212,13 @@ export class HttpCollaborationApi {
   }
 
   async leaveProject(projectId, userId) {
-    await this.request(`/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, { method: "DELETE" });
+    await this.removeProjectMember(projectId, userId, {});
+  }
+
+  async removeProjectMember(projectId, userId, decision = {}) {
+    await this.request(`/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, {
+      method: "DELETE", body: JSON.stringify(decision),
+    });
     this.sessionHeads.clear();
   }
 
@@ -226,6 +239,12 @@ export class HttpCollaborationApi {
 
   async getCodeStorage() {
     return this.request("/v1/code-storage");
+  }
+
+  async clearDetachedCodeBranch(projectId, input) {
+    return this.request(`/v1/code-storage/detached-branches/${encodeURIComponent(projectId)}/clear`, {
+      method: "POST", body: JSON.stringify(input),
+    });
   }
 
   async clearOwnCodeBranch(projectId, input) {
@@ -903,6 +922,20 @@ export class MockCollaborationApi {
     this.sessions = this.sessions.filter((item) => item.projectId !== projectId);
   }
 
+  async removeProjectMember(projectId, userId) {
+    await this.#wait();
+    const project = this.projects.find((item) => item.id === projectId);
+    if (this.currentUser?.id === userId) return this.leaveProject(projectId, userId);
+    if (!project || project.role !== "owner") {
+      throw new ApiError("Only the owner can remove another member.", { status: 403, code: "forbidden" });
+    }
+    for (const session of this.sessions.filter((item) => item.projectId === projectId)) {
+      session.members = session.members.filter((member) => member.userId !== userId);
+    }
+    const code = this.codeRepositories.get(projectId);
+    if (code) code.branches = code.branches.filter((branch) => branch.user_id !== userId);
+  }
+
   async getProject(projectId) {
     await this.#wait();
     const project = this.projects.find((item) => item.id === projectId);
@@ -940,10 +973,12 @@ export class MockCollaborationApi {
         can_clear_project: project.role === "owner",
       });
     }
-    return { limit_bytes: 128 * 1024 * 1024,
+    return { limit_bytes: 128 * 1024 * 1024, detached_branches: [],
       used_bytes: projects.reduce((total, project) => total + project.own_branch_bytes + (project.can_clear_project ? project.main_bytes : 0), 0),
       projects };
   }
+
+  async clearDetachedCodeBranch() { throw new ApiError("No detached branch in preview.", { status: 404, code: "not_found" }); }
 
   async clearOwnCodeBranch(projectId, input) {
     const status = await this.getProjectCode(projectId);

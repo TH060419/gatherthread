@@ -773,26 +773,90 @@ renameSessionDialog.addEventListener("close", () => {
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
 });
 element("delete-project-button").addEventListener("click", () => openDeleteCloudDialog("project"));
-element("leave-project-button").addEventListener("click", () => {
-  if (!state.project || !["participant", "viewer"].includes(state.project.role)) return;
+let pendingMemberRemoval = null;
+let memberRemovalGeneration = 0;
+async function openMemberRemovalDialog(userId, username, isSelf) {
+  if (!state.project || !userId) return;
+  const projectId = state.project.id;
+  const generation = ++memberRemovalGeneration;
+  pendingMemberRemoval = { projectId, userId, isSelf, branch: null };
+  element("leave-project-title").textContent = isSelf ? localizer.t("Leave this project?")
+    : `${localizer.t("Remove member")}: ${username}?`;
+  element("leave-project-description").textContent = isSelf
+    ? localizer.t("You will lose access to cloud sessions and code. Local files and Agent conversations stay on your device.")
+    : `${username}: ${localizer.t("This member will lose access to cloud sessions and code. Their local files and Agent conversations stay on their device.")}`;
+  element("confirm-leave-project-button").textContent = localizer.t(isSelf ? "Leave project" : "Remove member");
   element("leave-project-error").textContent = "";
+  element("leave-project-branch-choice").hidden = true;
+  element("confirm-leave-project-button").disabled = true;
   leaveProjectDialog.showModal();
-  requestAnimationFrame(() => element("cancel-leave-project-button").focus());
+  try {
+    const status = await api.getProjectCode(projectId);
+    if (generation !== memberRemovalGeneration || !leaveProjectDialog.open || state.project?.id !== projectId) return;
+    const branch = status.branches.find((item) => item.user_id === userId) ?? null;
+    pendingMemberRemoval.branch = branch;
+    const choice = element("leave-project-branch-resolution");
+    choice.replaceChildren();
+    element("leave-project-branch-choice").hidden = !branch;
+    if (branch) {
+      choice.add(new Option(localizer.t("Choose what happens to the cloud branch…"), ""));
+      if (branch.review_status === "merged") choice.add(new Option(localizer.t("Owner merged this branch to main; remove the branch"), "merged_to_main"));
+      choice.add(new Option(localizer.t("Delete this member's cloud branch without merging"), "delete"));
+      choice.value = "";
+      element("leave-project-branch-note").textContent = branch.review_status === "merged"
+        ? localizer.t("Choose explicitly. Main keeps the reviewed work and counts against the owner's quota; removing the branch releases this member's quota.")
+        : localizer.t("To preserve this work, ask the owner to review and merge it to main before leaving. Otherwise choose deletion. Local Git is unchanged; backups follow their retention period.");
+    }
+    element("confirm-leave-project-button").disabled = Boolean(branch);
+    requestAnimationFrame(() => element(branch ? "leave-project-branch-resolution" : "cancel-leave-project-button").focus());
+  } catch (error) {
+    if (generation === memberRemovalGeneration && leaveProjectDialog.open) {
+      element("leave-project-error").textContent = error.message ?? localizer.t("Unable to check cloud branches.");
+    }
+  }
+}
+element("leave-project-button").addEventListener("click", () => {
+  if (state.project && state.currentUser && ["participant", "viewer"].includes(state.project.role)) {
+    void openMemberRemovalDialog(state.currentUser.id, state.currentUser.username, true);
+  }
+});
+element("leave-project-branch-resolution").addEventListener("change", () => {
+  element("confirm-leave-project-button").disabled = Boolean(pendingMemberRemoval?.branch)
+    && !element("leave-project-branch-resolution").value;
 });
 element("close-leave-project-button").addEventListener("click", () => leaveProjectDialog.close());
 element("cancel-leave-project-button").addEventListener("click", () => leaveProjectDialog.close());
+leaveProjectDialog.addEventListener("close", () => { memberRemovalGeneration += 1; pendingMemberRemoval = null; });
 leaveProjectForm.addEventListener("submit", async (event) => {
   event.preventDefault();
-  const projectId = state.project?.id;
-  const userId = state.currentUser?.id;
-  if (!projectId || !userId || !["participant", "viewer"].includes(state.project.role)) return;
+  const context = pendingMemberRemoval;
+  if (!context || state.project?.id !== context.projectId) return;
+  const { projectId, userId, isSelf, branch } = context;
+  const resolution = element("leave-project-branch-resolution").value;
+  if (branch && !resolution) return;
   const submit = element("confirm-leave-project-button");
   submit.disabled = true;
   element("leave-project-error").textContent = "";
   try {
-    await api.leaveProject(projectId, userId);
+    await api.removeProjectMember(projectId, userId, branch ? {
+      branch_resolution: resolution, expected_branch_head_commit: branch.head_commit,
+    } : {});
     if (state.project?.id !== projectId) return;
     leaveProjectDialog.close();
+    if (!isSelf) {
+      const [members, sessions, sessionMembers] = await Promise.all([
+        api.listProjectMembers(projectId), api.listProjectSessions(projectId),
+        state.session ? api.listMembers(state.session.id) : Promise.resolve([]),
+      ]);
+      if (state.project?.id !== projectId) return;
+      state.projectMembers = members;
+      state.sessions = sessions;
+      if (state.session) state.session = { ...state.session, members: sessionMembers };
+      renderMembers();
+      renderSessionList();
+      announce(localizer.t("Member removed. Their local Git was not changed."));
+      return;
+    }
     codeSyncUi.close();
     sync.disconnect();
     stopMemberRefresh();
@@ -806,9 +870,10 @@ leaveProjectForm.addEventListener("submit", async (event) => {
     await enterWorkspace();
     announce("You left the project. Local files and Agent conversations were not changed.");
   } catch (error) {
-    element("leave-project-error").textContent = error.message ?? "Unable to leave this project.";
+    element("leave-project-error").textContent = error.message ?? "Unable to remove this member.";
   } finally {
-    submit.disabled = false;
+    submit.disabled = !leaveProjectDialog.open || Boolean(pendingMemberRemoval?.branch)
+      && !element("leave-project-branch-resolution").value;
   }
 });
 element("delete-session-button").addEventListener("click", () => openDeleteCloudDialog("session"));
@@ -1732,6 +1797,13 @@ function renderMembers() {
       }
       roleSelect.addEventListener("change", () => void changeProjectMemberRole(member, roleSelect));
       details.append(roleSelect);
+      const removeButton = document.createElement("button");
+      removeButton.type = "button";
+      removeButton.className = "member-remove-button";
+      removeButton.textContent = localizer.t("Remove member");
+      removeButton.setAttribute("aria-label", `Remove ${member.username} from project`);
+      removeButton.addEventListener("click", () => void openMemberRemovalDialog(member.userId, member.username, false));
+      details.append(removeButton);
     } else {
       const role = document.createElement("small");
       role.textContent = member.role;

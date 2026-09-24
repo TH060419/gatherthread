@@ -22,7 +22,7 @@ class Node {
   dispatch(type) { this.listeners.get(type)?.({ target: this }); }
 }
 
-function fixture({ owner = true } = {}) {
+function fixture({ owner = true, detached = false } = {}) {
   const nodes = new Map();
   const el = (id) => {
     if (!nodes.has(id)) nodes.set(id, new Node());
@@ -41,6 +41,8 @@ function fixture({ owner = true } = {}) {
   };
   const api = {
     async getCodeStorage() { return { limit_bytes: 128 * 1024 * 1024, used_bytes: hasData ? 4096 : 0,
+      detached_branches: hasData && detached ? [{ project_id: "old", project_title: "Old project",
+        own_branch_head_commit: "d".repeat(40), own_branch_bytes: 4096 }] : [],
       projects: hasData ? [{ project_id: "p1", project_title: "Project", repository_enabled: true,
         main_commit: code.repository.main_commit, main_bytes: 2048, own_branch_id: "branch-1",
         own_branch_head_commit: code.branches[0].head_commit, own_branch_bytes: 2048,
@@ -48,6 +50,7 @@ function fixture({ owner = true } = {}) {
     async getProjectCode() { return structuredClone(code); },
     async clearProjectCode(...args) { calls.push(["project", ...args]); hasData = false; },
     async clearOwnCodeBranch(...args) { calls.push(["own", ...args]); hasData = false; },
+    async clearDetachedCodeBranch(...args) { calls.push(["detached", ...args]); hasData = false; },
   };
   let userId = "u1";
   const ui = mountCodeStorageSettings({ document: { getElementById: el, createElement: () => new Node() },
@@ -96,4 +99,21 @@ test("ordinary member can select only their own cloud branch", async () => {
   await tick();
   assert.equal(app.calls[0][0], "own");
   assert.equal(app.calls[0][2].expected_head_commit, "b".repeat(40));
+});
+
+test("former member can explicitly review and clear only their own detached branch", async () => {
+  const app = fixture({ detached: true });
+  await app.ui.load();
+  const row = app.el("code-storage-projects").children[1];
+  const checkbox = row.children[0].children[0];
+  checkbox.checked = true;
+  checkbox.dispatch("change");
+  app.el("code-storage-review").dispatch("click");
+  await tick();
+  assert.equal(app.calls.length, 0);
+  app.el("code-storage-confirm").dispatch("click");
+  await tick();
+  assert.equal(app.calls[0][0], "detached");
+  assert.equal(app.calls[0][1], "old");
+  assert.equal(app.calls[0][2].expected_head_commit, "d".repeat(40));
 });
