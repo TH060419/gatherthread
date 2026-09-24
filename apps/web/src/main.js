@@ -28,12 +28,12 @@ import {
   snapshotStatusView,
 } from "./domain.js?v=20260923-1";
 import { SessionSync } from "./realtime.js";
-import { mountCodeSync } from "./code-sync-view.js";
-import { mountCodeStorageSettings } from "./code-storage-settings.js";
+import { mountCodeSync } from "./code-sync-view.js?v=20260924-1";
+import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-1";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260923-2";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260924-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -159,8 +159,12 @@ const claimInvitationForm = element("claim-invitation-form");
 const loginError = element("login-error");
 const rememberedAccountSelect = element("remembered-account-select");
 const forgetRememberedAccountButton = element("forget-remembered-account");
-const authProjectEntry = element("auth-project-entry");
-const authEntryTabs = [element("auth-login-tab"), element("auth-activate-tab")];
+const authEntryChooser = element("auth-entry-chooser");
+const authEntryChoices = [
+  { entry: "login", button: element("auth-select-login"), panel: element("auth-login-panel") },
+  { entry: "activate", button: element("auth-select-activate"), panel: element("auth-activate-panel") },
+  { entry: "invitation", button: element("auth-select-invitation"), panel: element("auth-invitation-panel") },
+];
 const sessionList = element("session-list");
 const projectSelect = element("project-select");
 const sessionView = element("session-view");
@@ -347,7 +351,7 @@ function authenticationIdentity({ required = false } = {}) {
   return { displayName, deviceName, deviceNameEdited: deviceInput.dataset.automatic === "false" };
 }
 
-let activeAuthEntry = "login";
+let activeAuthEntry = "choose";
 let authRequestInProgress = false;
 let rememberedAccounts = [];
 let rememberedAccountsGeneration = 0;
@@ -439,63 +443,41 @@ forgetRememberedAccountButton.addEventListener("click", async () => {
 function setActiveAuthEntry(entry, { focus = false } = {}) {
   if (authRequestInProgress) return;
   activeAuthEntry = entry;
-  for (const [index, tab] of authEntryTabs.entries()) {
-    const selected = (index === 0 ? "login" : "activate") === entry;
-    tab.setAttribute("aria-selected", String(selected));
-    tab.tabIndex = selected ? 0 : -1;
-    element(tab.getAttribute("aria-controls")).hidden = !selected;
-  }
-  authProjectEntry.open = false;
+  authEntryChooser.hidden = entry !== "choose";
+  for (const choice of authEntryChoices) choice.panel.hidden = choice.entry !== entry;
   element("token").value = "";
   element("test-access-token").value = "";
   element("claim-invite-secret").value = "";
   loginError.textContent = "";
   element("test-access-error").textContent = "";
   element("claim-invite-error").textContent = "";
-  if (focus) element(entry === "login" && rememberedAccountSelect.value
-    ? "remembered-account-select" : entry === "login" ? "token" : "test-access-token").focus();
-}
-
-for (const [index, tab] of authEntryTabs.entries()) {
-  tab.addEventListener("click", () => setActiveAuthEntry(index === 0 ? "login" : "activate"));
-  tab.addEventListener("keydown", (event) => {
-    if (event.isComposing) return;
-    const nextIndex = event.key === "ArrowRight" ? (index + 1) % authEntryTabs.length
-      : event.key === "ArrowLeft" ? (index + authEntryTabs.length - 1) % authEntryTabs.length
-      : event.key === "Home" ? 0
-      : event.key === "End" ? authEntryTabs.length - 1
-      : -1;
-    if (nextIndex < 0) return;
-    event.preventDefault();
-    setActiveAuthEntry(nextIndex === 0 ? "login" : "activate");
-    authEntryTabs[nextIndex].focus();
-  });
-}
-
-authProjectEntry.addEventListener("toggle", () => {
-  if (!authProjectEntry.open) return;
-  if (authRequestInProgress) {
-    authProjectEntry.open = false;
-    return;
+  if (focus) {
+    const targetId = entry === "choose" ? "auth-select-login"
+      : entry === "login" ? rememberedAccountSelect.value ? "remembered-account-select" : "token"
+        : entry === "activate" ? "test-access-token" : "claim-invite-secret";
+    element(targetId).focus();
   }
-  element("token").value = "";
-  element("test-access-token").value = "";
-  loginError.textContent = "";
-  element("test-access-error").textContent = "";
-});
+}
+
+for (const choice of authEntryChoices) choice.button.addEventListener("click", () => setActiveAuthEntry(choice.entry, { focus: true }));
+for (const button of document.querySelectorAll(".auth-entry-back")) {
+  button.addEventListener("click", () => setActiveAuthEntry("choose", { focus: true }));
+}
 
 for (const id of ["claim-display-name", "claim-device-name"]) {
   element(id).addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.isComposing) return;
     event.preventDefault();
-    if (authProjectEntry.open) {
+    if (activeAuthEntry === "invitation") {
       if (element("claim-invite-secret").value.trim()) claimInvitationForm.requestSubmit();
       else element("claim-invite-secret").focus();
     } else if (activeAuthEntry === "activate") {
       if (element("test-access-token").value.trim()) claimTestAccessForm.requestSubmit();
       else element("test-access-token").focus();
-    } else if (rememberedAccountSelect.value || element("token").value.trim()) loginForm.requestSubmit();
-    else element("token").focus();
+    } else if (activeAuthEntry === "login") {
+      if (rememberedAccountSelect.value || element("token").value.trim()) loginForm.requestSubmit();
+      else element("token").focus();
+    } else element("auth-select-login").focus();
   });
 }
 
@@ -1289,7 +1271,7 @@ function resetWorkspaceToAuth() {
   claimTestAccessForm.reset();
   claimInvitationForm.reset();
   authRequestInProgress = false;
-  setActiveAuthEntry("login");
+  setActiveAuthEntry("choose");
   setAutomaticClaimDeviceName({ force: true });
 }
 

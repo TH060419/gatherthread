@@ -48,7 +48,10 @@ function setup({ seenNotice = true } = {}) {
   return { el, ui, status, mutations,
     changeContext: (next) => { context = next; ui.updateContext(); },
     setSnapshotHead: (value) => { snapshotHead = value; },
-    viewChanges: () => el("code-branch-list").children[0].children[1].dispatch("click"),
+    viewChanges: () => {
+      el("code-open-branches-view").dispatch("click");
+      return el("code-branch-list").children[0].children[1].dispatch("click");
+    },
   };
 }
 
@@ -85,6 +88,12 @@ test("Git panel guides accounts without projects and owner can pause syncing", a
   app.changeContext({ project: { id: "p1", name: "Project", role: "owner" }, userId: "u1", sessionId: "s1", runtimes: [] });
   app.el("project-code-button").click();
   await tick();
+  assert.equal(app.el("code-enabled-home").hidden, false);
+  assert.equal(app.el("code-device-view").hidden, true);
+  app.el("code-open-device-view").dispatch("click");
+  assert.equal(app.el("code-device-view").hidden, false);
+  app.el("code-back-device-view").dispatch("click");
+  assert.equal(app.el("code-enabled-home").hidden, false);
   const pending = app.el("code-disable-active-button").click();
   app.el("code-confirm-accept").click();
   await pending;
@@ -100,6 +109,9 @@ test("paused Git keeps local automatic-upload stop control reachable", async () 
   assert.equal(app.el("code-enabled-content").hidden, false);
   assert.equal(app.el("code-paused-note").hidden, false);
   assert.equal(app.el("code-disable-active-button").disabled, true);
+  app.el("code-open-device-view").dispatch("click");
+  assert.equal(app.el("code-device-view").hidden, false);
+  assert.ok(app.el("code-auto-upload-toggle"));
   app.ui.close();
 });
 

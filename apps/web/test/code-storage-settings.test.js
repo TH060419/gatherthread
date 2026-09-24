@@ -17,6 +17,7 @@ class Node {
   }
   addEventListener(type, listener) { this.listeners.set(type, listener); }
   setAttribute() {}
+  focus() {}
   append(...children) { this.children.push(...children); }
   replaceChildren(...children) { this.children = children; }
   dispatch(type) { this.listeners.get(type)?.({ target: this }); }
@@ -58,9 +59,16 @@ function fixture({ owner = true, detached = false } = {}) {
   return { ui, el, calls, changeUser(value) { userId = value; } };
 }
 
+async function openCleanup(app) {
+  app.el("code-storage-open").dispatch("click");
+  await tick();
+}
+
 test("owner explicitly reviews whole-project cleanup with all branch heads before deletion", async () => {
   const app = fixture();
   await app.ui.load();
+  assert.equal(app.el("code-storage-manage").hidden, true);
+  await openCleanup(app);
   const [row] = app.el("code-storage-projects").children;
   const checkbox = row.children[0].children[0];
   const action = row.children[1];
@@ -87,6 +95,7 @@ test("owner explicitly reviews whole-project cleanup with all branch heads befor
 test("ordinary member can select only their own cloud branch", async () => {
   const app = fixture({ owner: false });
   await app.ui.load();
+  await openCleanup(app);
   const [row] = app.el("code-storage-projects").children;
   const checkbox = row.children[0].children[0];
   const action = row.children[1];
@@ -104,6 +113,7 @@ test("ordinary member can select only their own cloud branch", async () => {
 test("former member can explicitly review and clear only their own detached branch", async () => {
   const app = fixture({ detached: true });
   await app.ui.load();
+  await openCleanup(app);
   const row = app.el("code-storage-projects").children[1];
   const checkbox = row.children[0].children[0];
   checkbox.checked = true;

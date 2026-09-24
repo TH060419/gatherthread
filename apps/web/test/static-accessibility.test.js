@@ -216,33 +216,56 @@ test("entry navigation, empty-account project actions, and invited-member exit r
   assert.match(i18n, /"Leave project": "退出项目"/);
 });
 
-test("shared identity fields precede separate login, qualification, and project invitation forms", async () => {
+test("shared identity fields precede a compact choice screen and separate access forms", async () => {
   const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
   const name = markup.indexOf('id="claim-display-name"');
   const device = markup.indexOf('id="claim-device-name"');
-  const tabs = markup.indexOf('class="auth-entry-tabs" role="tablist"');
-  const loginTab = markup.indexOf('id="auth-login-tab"');
-  const activationTab = markup.indexOf('id="auth-activate-tab"');
+  const chooser = markup.indexOf('id="auth-entry-chooser"');
+  const loginChoice = markup.indexOf('id="auth-select-login"');
+  const activationChoice = markup.indexOf('id="auth-select-activate"');
+  const invitationChoice = markup.indexOf('id="auth-select-invitation"');
   const tokenForm = markup.indexOf('id="login-form"');
   const qualificationForm = markup.indexOf('id="claim-test-access-form"');
   const projectForm = markup.indexOf('id="claim-invitation-form"');
-  assert.ok(name > 0 && device > name && tabs > device && loginTab > tabs
-    && activationTab > loginTab && tokenForm > activationTab
-    && qualificationForm > tokenForm && projectForm > qualificationForm);
-  assert.match(markup, /id="auth-login-tab"[^>]*aria-selected="true"[^>]*aria-controls="auth-login-panel"/u);
-  assert.match(markup, /id="auth-activate-tab"[^>]*aria-selected="false"[^>]*aria-controls="auth-activate-panel"/u);
-  assert.match(markup, /id="auth-activate-panel"[^>]*role="tabpanel"[^>]*hidden/u);
-  assert.match(markup, /<details id="auth-project-entry"/u);
+  assert.ok(name > 0 && device > name && chooser > device && loginChoice > chooser
+    && activationChoice > loginChoice && invitationChoice > activationChoice
+    && tokenForm > invitationChoice && qualificationForm > tokenForm && projectForm > qualificationForm);
+  assert.match(markup, /id="auth-select-login"[^>]*aria-controls="auth-login-panel"/u);
+  assert.match(markup, /id="auth-select-activate"[^>]*aria-controls="auth-activate-panel"/u);
+  assert.match(markup, /id="auth-select-invitation"[^>]*aria-controls="auth-invitation-panel"/u);
+  assert.match(markup, /id="auth-login-panel"[^>]*hidden/u);
+  assert.match(markup, /id="auth-activate-panel"[^>]*hidden/u);
+  assert.match(markup, /id="auth-invitation-panel"[^>]*hidden/u);
   assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
-  assert.match(main, /if \(authProjectEntry\.open\)[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
+  assert.match(main, /activeAuthEntry === "invitation"[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
   assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
-  assert.match(main, /else if \(rememberedAccountSelect\.value \|\| element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(activeAuthEntry === "login"\) \{[\s\S]*?if \(rememberedAccountSelect\.value \|\| element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  assert.match(main, /authView\.hidden = false;[\s\S]*?setActiveAuthEntry\("choose"\)/u);
   const loginHandler = main.slice(main.indexOf('loginForm.addEventListener("submit"'), main.indexOf('claimTestAccessForm.addEventListener("submit"'));
   const activationHandler = main.slice(main.indexOf('claimTestAccessForm.addEventListener("submit"'), main.indexOf('claimInvitationForm.addEventListener("submit"'));
   assert.match(loginHandler, /api\.authenticate\(token/u);
   assert.doesNotMatch(loginHandler, /api\.claimTestAccess\(/u);
   assert.match(activationHandler, /api\.claimTestAccess\(\{/u);
   assert.doesNotMatch(activationHandler, /api\.authenticate\(/u);
+});
+
+test("Alpha access copy allows optional reasons, discovery channel, and public email with private-delivery guidance", async () => {
+  const [template, readme, security, markup] = await Promise.all([
+    readFile(fileURLToPath(new URL("../../../.github/ISSUE_TEMPLATE/test-access.yml", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../README.md", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../docs/SECURITY.md", import.meta.url)), "utf8"),
+    readFile(htmlPath, "utf8"),
+  ]);
+  assert.match(template, /id: reason[\s\S]*?required: false/u);
+  assert.match(template, /id: discovery[\s\S]*?required: false/u);
+  assert.match(template, /id: email[\s\S]*?required: false/u);
+  for (const text of [template, readme, security, markup]) {
+    assert.doesNotMatch(text, /must not post an email|do not post your email|请勿在公开 Issue 中留下邮箱/u);
+  }
+  assert.match(template, /Issues in this repository are public[\s\S]*coolhezi@sjtu\.edu\.cn/u);
+  assert.match(readme, /Email is optional and recommended[\s\S]*coolhezi@sjtu\.edu\.cn/u);
+  assert.match(security, /may optionally provide an email address/u);
+  assert.match(markup, /Email is optional\. Issues are public/u);
 });
 
 test("the empty-project paragraph follows account capability and restores session guidance", async () => {
@@ -473,7 +496,7 @@ test("remembered login and current-device naming remain explicit and accessible"
     "remembered-account-control",
     "remembered-account-select",
     "forget-remembered-account",
-    "auth-request-test-access",
+    "auth-entry-chooser",
     "test-access-remember-device",
     "claim-remember-device",
     "settings-device",

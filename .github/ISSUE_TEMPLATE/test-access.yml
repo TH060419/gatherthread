@@ -5,13 +5,44 @@ body:
   - type: markdown
     attributes:
       value: |
-        无需填写申请理由或其他个人资料。请勿在公开 Issue 中留下邮箱、姓名、电话、单位、设备信息、资格码、设备 Token 或任何密钥。维护者会在这里回复申请结果和后续步骤，绝不会在公开 Issue 中发布资格码。如获批准且需要私密投递，申请者可主动将本 Issue 链接发至 coolhezi@sjtu.edu.cn；邮箱只用于私密联系，不替代 Issue 申请。
+        本仓库 Issue 是公开的。你可以填写申请理由、希望测试的内容、了解 GatherThread 的渠道，以及愿意公开的邮箱；填写邮箱有助于通过邮件私下发送获批后的资格码。请勿发布资格码、设备访问 Token、密码、密钥或私有代码。维护者会在此 Issue 回复审核结果，但不会公开发布资格码。如果你不想在公开 Issue 中填写邮箱，可在申请获批后将 Issue 链接私信发送至 coolhezi@sjtu.edu.cn，以便通过邮件私下回复资格码。
 
-        No reason or personal profile is required. Do not post email, name, phone number, organization, device details, qualification codes, device tokens, or secrets in this public Issue. A maintainer will reply here with the decision and next steps; codes are never posted in Issues. If approved and private delivery is needed, you may voluntarily email this Issue link to coolhezi@sjtu.edu.cn. Email is for private contact, not a substitute application channel.
+        Issues in this repository are public. You may include your reason for applying, what you want to test, how you heard about GatherThread, and an email address you are comfortable sharing publicly. Providing an email is recommended if you would like an approved code delivered privately by email. Never post qualification codes, device access tokens, passwords, keys, or private source code. The maintainer will reply here with the decision, but codes are never published in Issues. If you prefer not to share your email publicly, after approval privately email the Issue link to coolhezi@sjtu.edu.cn so the code can be sent to you by email.
+  - type: textarea
+    id: reason
+    attributes:
+      label: 申请理由与希望测试的内容 / Why do you want to join and what would you like to test?
+      description: 选填。简要说明你的使用场景或希望验证的功能即可。 / Optional. Briefly describe your use case or the feature you want to evaluate.
+      placeholder: 我希望测试…… / I would like to test…
+    validations:
+      required: false
+  - type: dropdown
+    id: discovery
+    attributes:
+      label: 你从哪里了解到 GatherThread？ / How did you hear about GatherThread?
+      description: 选填。 / Optional.
+      options:
+        - GitHub
+        - Friend or colleague / 朋友或同事推荐
+        - Social media / 社交媒体
+        - Search / 搜索
+        - Other / 其他
+        - Prefer not to say / 暂不说明
+    validations:
+      required: false
+  - type: input
+    id: email
+    attributes:
+      label: Email for private qualification-code delivery (optional) / 用于私下接收资格码的邮箱（选填）
+      description: Issue 内容公开。若愿意公开邮箱，可填写以便审核通过后邮件发送资格码；若介意公开，请在获批后把 Issue 链接私信到 coolhezi@sjtu.edu.cn。 / Issues are public. Include an email if you are comfortable sharing it and want approved codes sent privately; otherwise, after approval, privately email the Issue link to coolhezi@sjtu.edu.cn.
+      placeholder: you@example.com
+    validations:
+      required: false
   - type: textarea
     id: request
     attributes:
-      label: 申请 / Request
-      value: 我希望参加 GatherThread Alpha 测试。 / I would like to join the GatherThread Alpha test.
+      label: 确认申请 / Confirm your request
+      description: 保留默认内容即可提交，也可以补充说明。 / You can keep the default text or add a note.
+      value: 我希望申请 GatherThread Alpha 测试资格。 / I would like to request GatherThread Alpha test access.
     validations:
       required: true
