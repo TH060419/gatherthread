@@ -18,13 +18,13 @@
 
 > **邀请制 Alpha 测试。** [gatherthread.cn](https://gatherthread.cn/) 已进行小规模服务器测试，尚未开放公众注册或公共 Beta。每位测试者需要一次性测试资格码来激活账号；仅凭项目邀请，只能进入被邀请的项目。本机、局域网和 Tailscale 自托管方式仍可使用。
 
-当前邀请制服务器运行的源码提交是 `52aac1a5ffda`，现已由 `v0.1.0-alpha.7` Git 标签标识；它包含记住账号快捷登录、首次进入工作区的云端 Git 须知，以及个人云端代码配额与清理。移动 Git 标签不会重建此前已发布的 Alpha 7 npm 包；目前仍没有 Alpha 7 GitHub Release。
+服务器当前运行源码，以及 Git 标签、npm 包和 GitHub Release 的对应状态，请查看[发布记录索引](docs/releases/README.md)。仓库 `main` 分支可能包含尚未部署的改动。
 
 ## 申请 Alpha 测试资格
 
-**[在 GitHub 发起 Alpha 测试申请 Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml)**。源码仓库现已公开，但服务器账号仍须经维护者审核并取得一次性测试资格码才能激活；申请仅通过 Issue 发起，不提供邮件表单，也不会在服务器建立申请人资料。模板可选填申请理由、希望测试的内容、了解 GatherThread 的渠道，以及愿意公开的邮箱。Issue 内容公开；只有在愿意公开邮箱时才填写，填写后便于获批时通过邮件私下发送资格码。请勿发布资格码、设备 Token、密码、密钥或私有代码。
+**[在 GitHub 发起 Alpha 测试申请 Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml)**。源码仓库现已公开，但服务器账号仍须经维护者审核并取得一次性测试资格码才能激活；申请仅通过 Issue 发起，不提供邮件表单，也不会在服务器建立申请人资料。模板可选填申请理由、希望测试的内容、了解 GatherThread 的渠道，以及用于私下接收资格码的邮箱。邮箱选填；若不介意在公开 Issue 中展示，建议填写，方便获批后通过邮件私下发送资格码。若不愿公开邮箱，可在获批后将 Issue 链接私信发送至 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，再通过邮件私下接收资格码。请勿发布资格码、设备 Token、密码、密钥或私有代码。
 
-维护者审核后会在 Issue 中回复结果与后续步骤。资格码是一次性秘密，绝不在公开 Issue 中发送。若不愿在 Issue 公开邮箱，申请获批后可主动将 Issue 链接发至 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，再通过邮件私下接收资格码；邮件仅用于私密联系，不替代 Issue 申请。拿到资格码后，打开[服务器登录页](https://gatherthread.cn/app/)，先填写自己的用户名与设备名，再在“首次使用 · 激活资格”中输入资格码。请妥善保存随后另行签发的设备 Token，供以后登录使用。已有资格的用户也可以邀请访客加入某个项目，但项目邀请不会赋予访客创建新项目的资格。
+维护者会在公开 Issue 中回复审核结果与后续步骤，但绝不公开发送资格码。拿到私下发送的资格码后，打开[服务器登录页](https://gatherthread.cn/app/)，先填写自己的用户名与设备名，再在“首次使用 · 激活资格”中输入资格码。请妥善保存随后另行签发的设备 Token，供以后登录使用。已有资格的用户也可以邀请访客加入某个项目，但项目邀请不会赋予访客创建新项目的资格。
 
 使用疑问、缺陷和非敏感反馈，请[提交 GitHub Issue](https://github.com/TH060419/gatherthread/issues)；安全问题请私下联系 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，不要附上凭据或未脱敏的私人会话。
 

@@ -34,14 +34,14 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Initial Alpha 7 preview (2026-09-23)
 
-### Added
+#### Added
 
 - Opt-in project code collaboration backed by standard bare Git storage, with per-member branches, bounded source checkpoints, review requests, owner-approved three-way merges and safe updates from main.
 - Independent local code-upload consent and automatic-upload preference for Codex and the native DSH plugin. Manual upload, clean download and recovery into a new sibling directory are available through exact-runtime control jobs; DSH also exposes them in its settings panel.
 - A compact Web code dialog with source-change review, stale-version checks, bilingual recovery guidance and explicit runtime selection. Conversation upload, native-history import and context injection remain independent.
 - Writer-initiated shared history summaries from selected public messages or earlier completed summaries, using the writer's own local Agent. The Web workspace preserves raw history and older versions, provides a compact/original switch, and offers per-user project context policy (summary by default) and customizable/resettable instructions. The derived context API and MCP read are separate from canonical replay.
 
-### Safety and current limits
+#### Safety and current limits
 
 - Code sync does not change an existing local Git branch, index or remote. Credentials, harness state, symlinks and unsafe paths are excluded or rejected. Stale devices cannot overwrite another uploaded version; automatic upload pauses on large deletions or an interrupted download.
 - This Alpha uses one branch per member/project, not automatic task worktrees or a public Git smart-HTTP service. Concurrent Agents must not write the same directory. Only uploaded, eligible source files can be recovered.

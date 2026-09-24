@@ -1,6 +1,6 @@
 # GatherThread documentation
 
-This index separates current product contracts, operator guidance, connection guides, and point-in-time release records. The hosted Alpha 7 source is identified by the server archive as commit `52aac1a5ffda` and by the aligned Git tag. Later `main` changes may still be undeployed; do not infer live state from the branch tip alone.
+This index separates current product contracts, operator guidance, connection guides, and point-in-time release records. See the [release record index](releases/README.md) for current hosted-source, Git-tag, npm-package, and GitHub Release status. Later `main` changes may still be undeployed; do not infer live state from the branch tip alone.
 
 ## Product and system contracts
 

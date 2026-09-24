@@ -26,8 +26,8 @@ Alpha status never permits silent reinterpretation of persisted data, identity, 
 | DSH native plugin RPC and persisted state | Public Alpha package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
 | Browser entry routes and legacy deep-link forwarding | Public Alpha | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
 | Stable Web control IDs and accessible names | Internal versioned | `apps/web/index.html`, `apps/web/test/static-accessibility.test.js` | Web event bindings, accessibility, browser tests |
-| Opt-in code repository snapshots, review and merge | Public Alpha, unreleased source preview | `packages/protocol/src/code-sync.ts`, `apps/server/src/code-repository.ts` | Web, shared local code-sync module, Codex, DSH |
-| Shared manual history summaries and derived context | Public Alpha, unreleased source preview | `packages/protocol/src/history-summary.ts`, `apps/server/src/database.ts` | Web, bridge, MCP, Codex, DSH |
+| Opt-in code repository snapshots, review and merge | Public Alpha, Alpha 7 | `packages/protocol/src/code-sync.ts`, `apps/server/src/code-repository.ts` | Web, shared local code-sync module, Codex, DSH |
+| Shared manual history summaries and derived context | Public Alpha, Alpha 7 | `packages/protocol/src/history-summary.ts`, `apps/server/src/database.ts` | Web, bridge, MCP, Codex, DSH |
 
 When this document conflicts with the schemas or tested implementation, stop and resolve the discrepancy in the same PR. Do not silently choose whichever behavior is more convenient.
 

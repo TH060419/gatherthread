@@ -5,9 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        本仓库 Issue 是公开的。你可以填写申请理由、希望测试的内容、了解 GatherThread 的渠道，以及愿意公开的邮箱；填写邮箱有助于通过邮件私下发送获批后的资格码。请勿发布资格码、设备访问 Token、密码、密钥或私有代码。维护者会在此 Issue 回复审核结果，但不会公开发布资格码。如果你不想在公开 Issue 中填写邮箱，可在申请获批后将 Issue 链接私信发送至 coolhezi@sjtu.edu.cn，以便通过邮件私下回复资格码。
+        本仓库 Issue 是公开的。你可以填写申请理由、希望测试的内容、了解 GatherThread 的渠道，以及愿意公开的邮箱。邮箱选填；若愿意公开，建议填写，便于获批后通过邮件私下发送资格码。请勿发布资格码、设备访问 Token、密码、密钥或私有代码。维护者会在此 Issue 回复审核结果，但不会公开发布资格码。如果你不想在公开 Issue 中填写邮箱，可在申请获批后将 Issue 链接私信发送至 coolhezi@sjtu.edu.cn，以便通过邮件私下回复资格码。
 
-        Issues in this repository are public. You may include your reason for applying, what you want to test, how you heard about GatherThread, and an email address you are comfortable sharing publicly. Providing an email is recommended if you would like an approved code delivered privately by email. Never post qualification codes, device access tokens, passwords, keys, or private source code. The maintainer will reply here with the decision, but codes are never published in Issues. If you prefer not to share your email publicly, after approval privately email the Issue link to coolhezi@sjtu.edu.cn so the code can be sent to you by email.
+        Issues in this repository are public. You may include your reason for applying, what you want to test, how you heard about GatherThread, and an email address you are comfortable sharing publicly. Email is optional; if you are comfortable sharing it publicly, we recommend including it so an approved qualification code can be delivered privately by email. Never post qualification codes, device access tokens, passwords, keys, or private source code. The maintainer will reply here with the review result, but codes are never published in Issues. If you prefer not to share your email publicly, after approval privately email the Issue link to coolhezi@sjtu.edu.cn so the code can be sent to you by email.
   - type: textarea
     id: reason
     attributes:
