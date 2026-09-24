@@ -9,9 +9,11 @@ cd apps/web
 npm run dev
 ```
 
-Start the API with `GATHERTHREAD_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173` and enter an access token from the owner host. The development server proxies same-origin `/v1` and `/health` requests to `GATHERTHREAD_WEB_API_ORIGIN` (default `http://127.0.0.1:8787`).
+Start the API with `GATHERTHREAD_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173` for the product home and choose **Get Started** to enter the application at `/app/`. Enter an access token from the owner host there. The development server proxies same-origin `/v1` and `/health` requests to `GATHERTHREAD_WEB_API_ORIGIN` (default `http://127.0.0.1:18787`).
 
-For the isolated mock preview, explicitly open `http://127.0.0.1:4173/?mock=1` and sign in with `demo-token`.
+Browser API requests are restricted to the page's origin before any credential is sent. Legacy `?api=...` links are still forwarded to `/app/`, but an external or credential-bearing API URL is rejected. To use another deployment, open that deployment's own `/app/`; development continues to use the same-origin proxy above.
+
+For the isolated mock preview, explicitly open `http://127.0.0.1:4173/app/?mock=1` and sign in with `demo-token`. Legacy root `?mock=1`, project/session fragments, and DSH pairing fragments are forwarded to `/app/` with their query and fragment preserved.
 
 ```bash
 npm test
@@ -32,6 +34,7 @@ The static build is written to `apps/web/dist`.
 - distinct `claimInvitation(...)` and `acceptInvitation(...)` methods for new and existing users
 - `replayEvents(sessionId, { afterSequence, limit })`
 - distinct `appendHumanChat(...)` and `appendAgentRequest(...)` methods
+- `createHistorySummary(...)` for explicit, selected-history Agent requests, plus per-user/project `getProjectContextPolicy(...)` and `setProjectContextPolicy(...)`
 - `createSnapshotRequest(sessionId)` and `getSnapshotRequest(requestId)` for one-way Codex downloads
 - `openRealtime({ sessionId, afterSequence, onEvent, onState })`
 
@@ -55,6 +58,9 @@ PATCH /v1/sessions/:id
 GET  /v1/sessions/:id/members
 GET  /v1/sessions/:id/events?after_sequence=N&limit=100
 POST /v1/sessions/:id/events
+POST /v1/sessions/:id/history-summaries
+GET  /v1/projects/:id/context-policy
+PUT  /v1/projects/:id/context-policy
 POST /v1/sessions/:id/snapshot-requests  {}
 GET  /v1/snapshot-requests?session_id=:session_id&limit=40
 GET  /v1/snapshot-requests/:request_id
@@ -92,6 +98,14 @@ New projects start with no sessions. Owners may create `solo` or `multi`; partic
 - Each click creates an independent frozen snapshot through the server-returned `through_sequence`. A queued request means the server is waiting for a local snapshot connector; it does not mean a local task already exists.
 - The UI polls only the individual in-memory request IDs and renders queued, claimed, importing, compacting, completed, and failed states. Failed requests retry by creating a new snapshot. Completed records show the local task or thread name returned in `result`.
 - Live sessions normalize connector state into Synced, Offline with an optional pending count, Reconciling, Rebuilding, or Local fork. A runtime with `purpose: snapshot_connector` never enables the agent execution control.
+
+### Manual history summaries
+
+Session writers can select 1–100 loaded public messages or completed summaries, then explicitly confirm generation with their own currently selected online Agent, exact runtime, model, and effort. Pending/failed messages and generated summary prompts cannot be selected. The serialized source limit is 20 KiB with no truncation; an uncertain transport retry preserves the same idempotency key. A new retry or regeneration is offered only after a definitive rejection or terminal response, never automatically.
+
+Summaries are shared, lossy derived Markdown. The default display folds the newest whole non-overlapping versions at their first original source; every original and older version remains available. Selected earlier summaries expand to their original ancestry for overlap handling. Per-card/global display switches do not change Agent context injection or delete history. Readers may inspect all versions; only session writers may regenerate, using their own Agent.
+
+Settings expose summary instructions (browser preference, shared on generation; never enter secrets) and a separate server-backed context policy scoped to the current user/project. Summary mode reduces context but may lose details; original mode includes the original public messages and uses more context. This applies to future Agent requests started from the GatherThread Web app and explicit MCP context reads. It does not rewrite a running turn, remove existing Codex Desktop task history, or replace history already injected into ordinary DSH sessions. Already-loaded history remains managed by native automatic compaction. Generation still uses the writer's selected local Agent and may consume model quota. Only selected records are supplied as its shared-history context; this is not a guarantee of sandbox isolation from local tools or files.
 
 ## Server integration notes
 

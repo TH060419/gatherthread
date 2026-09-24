@@ -6,11 +6,27 @@ import type {
   CommitLocalTurnResult,
   CompleteAgentRequestInput,
   CurrentActor,
+  HistoryContext,
   ReadEventsResult,
   SessionSummary,
 } from "@gatherthread/bridge";
 
 export type DshHarnessName = "deepseek-harness";
+
+/** One exact DSH route advertised to GatherThread by a dynamic native runtime. */
+export interface DshRuntimeExecutionProfile {
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEfforts?: readonly string[];
+  readonly defaultReasoningEffort?: string;
+}
+
+/** Exact per-request route installed only while one GatherThread prompt runs. */
+export interface DshExecutionSelection {
+  readonly provider: string;
+  readonly model: string;
+  readonly reasoningEffort?: string;
+}
 
 export interface DshRuntimeRegistration {
   sessionId: string;
@@ -21,6 +37,7 @@ export interface DshRuntimeRegistration {
   localSessionId: string;
   captureFidelity: "harness_transcript";
   capabilities: readonly string[];
+  executionProfiles?: readonly DshRuntimeExecutionProfile[];
   purpose: "execution";
 }
 
@@ -39,6 +56,7 @@ export type DshAppendEventInput = Omit<AppendEventInput, "runtime">;
 export interface DshCollaborationApi {
   listProjectSessions(projectId: string): Promise<SessionSummary[]>;
   readEvents(sessionId: string, afterSequence: number, limit?: number): Promise<ReadEventsResult>;
+  readContext?(sessionId: string, view?: HistoryContext["view"], throughSequence?: number): Promise<HistoryContext>;
   registerRuntime(input: DshRuntimeRegistration): Promise<DshRegisteredRuntime>;
   heartbeatRuntime(runtimeId: string): Promise<DshRegisteredRuntime>;
   claimAgentRequest(
@@ -90,6 +108,8 @@ export interface DshSessionEventRecord {
   readonly seq: number;
   readonly time: number;
   readonly data: unknown;
+  /** Internal live-event routing only; never inferred from message text. */
+  readonly sourceSessionId?: string;
 }
 
 export type DshAgentStatus = "running" | "idle";
@@ -126,16 +146,32 @@ export interface DshCanonicalProjection {
   readonly model?: string;
 }
 
+export interface DshContextExecutionInput {
+  readonly requestId: string;
+  readonly requestSequence: number;
+  readonly historyContext: HistoryContext;
+  readonly selectedOnly: boolean;
+  /** Recovery must find the already-durable execution Session and context marker. */
+  readonly resume?: boolean;
+}
+
+export interface DshContextExecutionState {
+  sessionId: string;
+  historyContext: HistoryContext;
+  selectedOnly: boolean;
+}
+
 export interface DshHostFacade {
   readonly sessionId: string;
   open(): Promise<"created" | "resumed">;
-  currentSequence(): number;
-  snapshotFrom(sequence: number): readonly DshSessionEventRecord[];
+  currentSequence(executionSessionId?: string): number;
+  snapshotFrom(sequence: number, executionSessionId?: string): readonly DshSessionEventRecord[];
+  prepareContextExecution?(input: DshContextExecutionInput): Promise<{ sessionId: string; fromSequence: number }>;
   projectCanonicalEvents(events: readonly DshCanonicalProjection[]): Promise<void>;
   flush(): Promise<void>;
-  prompt(text: string): Promise<DshPromptResult>;
+  prompt(text: string, selection?: DshExecutionSelection, executionSessionId?: string): Promise<DshPromptResult>;
   onSessionEvent(listener: (event: DshSessionEventRecord) => void): () => void;
-  onStatus(listener: (status: DshAgentStatus) => void): () => void;
+  onStatus(listener: (status: DshAgentStatus, sourceSessionId?: string) => void): () => void;
   dispose(): Promise<void>;
 }
 
@@ -179,6 +215,9 @@ export interface ConnectorActiveRequest {
   dshFromSequence: number;
   dshToSequence?: number;
   promptDigest: string;
+  claimAttempt?: number;
+  /** Separate sequence domain; it must never advance the native upload cursor. */
+  contextExecution?: DshContextExecutionState;
 }
 
 export type ConnectorOutboxOperation =

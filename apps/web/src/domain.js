@@ -4,7 +4,21 @@ export const INVITATION_ROLES = Object.freeze(["participant", "viewer"]);
 export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
 export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
-export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.5";
+export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.7";
+
+export function emptyProjectState(canCreateProjects) {
+  return canCreateProjects
+    ? {
+      title: "Create your first project.",
+      description: "Create a project to organize your sessions and invite collaborators.",
+      canCreateProjects: true,
+    }
+    : {
+      title: "No invited projects are available. Ask a project owner for an invitation.",
+      description: "Once invited, your projects will appear here. A project invitation does not let you create projects.",
+      canCreateProjects: false,
+    };
+}
 
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 const DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS = 128_000;
@@ -129,7 +143,8 @@ export function normalizeSnapshotRequest(payload) {
     result?.thread_id,
   ].find((value) => typeof value === "string" && value.length > 0) ?? "";
   const kind = ["immutable", "visible_history_replace", "local_sync_status", "local_auto_upload_enable",
-    "local_auto_upload_disable", "local_turn_upload"].includes(request.kind)
+    "local_auto_upload_disable", "local_turn_upload", "code_sync_status", "code_upload", "code_download",
+    "code_recover", "code_auto_upload_enable", "code_auto_upload_disable"].includes(request.kind)
     ? request.kind
     : "immutable";
   return {
@@ -142,6 +157,7 @@ export function normalizeSnapshotRequest(payload) {
     createdAt: request.created_at ?? request.createdAt ?? new Date().toISOString(),
     localTaskName,
     result,
+    failureCode: typeof failure === "object" && failure !== null ? failure.code ?? "" : "",
     failureMessage: typeof failure === "string" ? failure : failure?.message ?? "",
   };
 }
@@ -294,6 +310,55 @@ export function pendingAgentRequests(events) {
     && typeof event.id === "string"
     && !answeredRequestIds.has(event.id),
   );
+}
+
+/**
+ * An `agent_response` that reports a failed execution rather than an answer. The
+ * server raises one when it gives up on a request no runtime could finish, and a
+ * harness raises one when its own execution terminates. Both belong in the
+ * timeline as a failure, not as an ordinary reply that happens to read oddly.
+ */
+export function isFailedAgentResponse(event) {
+  return event?.type === "agent_response" && event?.payload?.status === "failed";
+}
+
+/** The original request a response points at, when it is still in the timeline. */
+export function failedRequestFor(events, responseEvent) {
+  const requestId = responseEvent?.replyTo
+    ?? responseEvent?.reply_to_event_id
+    ?? responseEvent?.payload?.reply_to_event_id;
+  if (typeof requestId !== "string" || requestId.length === 0) return undefined;
+  return (events ?? []).find((event) => event?.type === "agent_request" && event.id === requestId);
+}
+
+/** A retry is a new request by the original author, never an impersonation. */
+export function canRetryFailedAgentRequest(request, currentUser) {
+  return typeof request?.actor?.id === "string"
+    && typeof currentUser?.id === "string"
+    && request.actor.id === currentUser.id;
+}
+
+/**
+ * The append input that re-runs a failed request against the exact target it
+ * originally named. Replaying the recorded profile keeps runtime selection exact
+ * and fail-closed: a retry can never quietly land on a different harness,
+ * device, provider, or model than the user chose.
+ */
+export function retryAgentRequestInput(request, idempotencyKey) {
+  const content = eventContent(request);
+  const profile = request?.payload?.execution_profile;
+  if (profile === null || typeof profile !== "object") return { content, idempotencyKey };
+  return {
+    content,
+    idempotencyKey,
+    executionProfile: {
+      harness: profile.harness,
+      ...(profile.provider === undefined ? {} : { provider: profile.provider }),
+      model: profile.model,
+      ...(profile.reasoning_effort === undefined ? {} : { reasoningEffort: profile.reasoning_effort }),
+      ...(profile.runtime_id === undefined ? {} : { runtimeId: profile.runtime_id }),
+    },
+  };
 }
 
 export function isTimelineEventVisible(event) {

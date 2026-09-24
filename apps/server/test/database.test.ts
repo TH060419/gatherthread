@@ -614,6 +614,224 @@ test("project creation leaves the project empty until the owner creates a sessio
   }
 });
 
+test("test qualification creates a full account while project invitations create project-scoped guests", () => {
+  const f = fixture();
+  try {
+    const grant = f.database.issueTestAccess("1h");
+    assert.match(grant.access_token, /^gtq_/);
+    assert.equal(JSON.stringify(f.database.sqlite.prepare("SELECT * FROM test_access_grants").all()).includes(grant.access_token), false);
+    const qualified = f.database.claimTestAccess({
+      access_token: grant.access_token,
+      display_name: "Qualified",
+      device_name: "Qualified laptop",
+      remember_device: true,
+    }, { browserSession: true });
+    assert.equal(f.database.canCreateProjects(qualified.actor.user_id), true);
+    assert.deepEqual(f.database.authenticateBrowserSession(qualified.browser_session.token).actor, qualified.actor);
+    assert.throws(() => f.database.claimTestAccess({
+      access_token: grant.access_token, display_name: "Replay", device_name: "Replay device",
+    }), (error: unknown) => error instanceof ApiError && error.status === 401);
+    assert.throws(() => f.database.revokeTestAccess(grant.grant_id),
+      (error: unknown) => error instanceof ApiError && error.status === 409);
+
+    const revoked = f.database.issueTestAccess("1h");
+    f.database.revokeTestAccess(revoked.grant_id);
+    assert.throws(() => f.database.claimTestAccess({
+      access_token: revoked.access_token, display_name: "Revoked", device_name: "Revoked device",
+    }), (error: unknown) => error instanceof ApiError && error.status === 401);
+
+    const shared = f.service.createProject(f.owner, {
+      title: "Shared", idempotency_key: "qualification-shared",
+    });
+    const guestInvite = f.service.createProjectInvitation(f.owner, shared.id, { role: "participant", ttl: "1h" });
+    const guest = f.service.claimInvitation({
+      invite_token: guestInvite.invite_token,
+      display_name: "Guest",
+      device_name: "Guest laptop",
+    }).actor;
+    assert.equal(f.database.canCreateProjects(guest.user_id), false);
+    assert.deepEqual(f.service.listProjects(guest).map((project) => project.id), [shared.id]);
+    assert.throws(() => f.service.createProject(guest, {
+      title: "Not allowed", idempotency_key: "guest-project-denied",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.createSession(guest, {
+      title: "Legacy bypass", mode: "solo", idempotency_key: "guest-legacy-denied",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    const guestSolo = f.service.createSession(guest, {
+      project_id: shared.id, title: "Inside invitation", mode: "solo", idempotency_key: "guest-solo-allowed",
+    }).session;
+    assert.equal(guestSolo.owner_user_id, guest.user_id);
+
+    const owned = f.service.createProject(qualified.actor, {
+      title: "Qualified's project", idempotency_key: "qualified-project",
+    });
+    assert.equal(owned.role, "owner");
+    const qualifiedInvite = f.service.createProjectInvitation(f.owner, shared.id, { role: "viewer", ttl: "1h" });
+    f.service.claimInvitationForActor(qualified.actor, qualifiedInvite.invite_token);
+    assert.deepEqual(
+      new Map(f.service.listProjects(qualified.actor).map((project) => [project.id, project.role])),
+      new Map([[shared.id, "viewer"], [owned.id, "owner"]]),
+    );
+    assert.equal(f.service.listProjects(guest).some((project) => project.id === owned.id), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("a test qualification claim and revocation cannot both succeed across database connections", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-race-"));
+  const databasePath = join(directory, "test.sqlite");
+  const pepper = "unit-test-test-access-race-pepper";
+  const database = new CollaborationDatabase(databasePath, { authTokenPepper: pepper });
+  database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner laptop" });
+  const grant = database.issueTestAccess("1h");
+  database.close();
+
+  const workerSource = `
+    const { parentPort, workerData } = require("node:worker_threads");
+    (async () => {
+      const { CollaborationDatabase } = await import(workerData.moduleUrl);
+      const database = new CollaborationDatabase(workerData.databasePath, { authTokenPepper: workerData.pepper });
+      parentPort.postMessage({ ready: true });
+      parentPort.once("message", () => {
+        try {
+          if (workerData.action === "claim") {
+            database.claimTestAccess({
+              access_token: workerData.accessToken,
+              display_name: "Racing tester",
+              device_name: "Racing device",
+            });
+          } else {
+            database.revokeTestAccess(workerData.grantId);
+          }
+          parentPort.postMessage({ action: workerData.action, success: true });
+        } catch (error) {
+          parentPort.postMessage({ action: workerData.action, success: false, status: error && error.status });
+        } finally {
+          database.close();
+        }
+      });
+    })().catch((error) => parentPort.postMessage({ success: false, error: String(error) }));
+  `;
+  const makeWorker = (action: "claim" | "revoke") => new Worker(workerSource, {
+    eval: true,
+    workerData: {
+      action,
+      moduleUrl: new URL("../src/database.js", import.meta.url).href,
+      databasePath,
+      pepper,
+      accessToken: grant.access_token,
+      grantId: grant.grant_id,
+    },
+  });
+  const workers = [makeWorker("claim"), makeWorker("revoke")];
+  try {
+    await Promise.all(workers.map(workerMessage));
+    const results = workers.map((worker) => {
+      const message = workerMessage(worker);
+      worker.postMessage("go");
+      return message;
+    });
+    const [claim, revoke] = await Promise.all(results);
+    assert.equal(claim?.action, "claim");
+    assert.equal(revoke?.action, "revoke");
+    assert.notEqual(claim?.success, revoke?.success);
+    assert.equal(claim?.success === true ? revoke?.status : claim?.status, claim?.success === true ? 409 : 401);
+
+    const verification = new CollaborationDatabase(databasePath, { authTokenPepper: pepper });
+    try {
+      const row = verification.sqlite.prepare("SELECT claimed_at, revoked_at FROM test_access_grants WHERE id = ?")
+        .get(grant.grant_id) as { claimed_at: string | null; revoked_at: string | null };
+      const users = verification.sqlite.prepare("SELECT count(*) AS count FROM users").get() as { count: number };
+      assert.equal(row.claimed_at !== null, claim?.success === true);
+      assert.equal(row.revoked_at !== null, revoke?.success === true);
+      assert.equal(users.count, claim?.success === true ? 2 : 1);
+    } finally {
+      verification.close();
+    }
+  } finally {
+    for (const worker of workers) await worker.terminate();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("account capability migration preserves the first operator and existing project owners only", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-account-capabilities-"));
+  const path = join(directory, "legacy.sqlite");
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE users (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL) STRICT;
+    CREATE TABLE projects (
+      id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL,
+      state TEXT NOT NULL, creation_idempotency_key TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (owner_user_id, creation_idempotency_key)
+    ) STRICT;
+    INSERT INTO users VALUES ('operator', 'Operator', '2026-01-01T00:00:00.000Z');
+    INSERT INTO users VALUES ('guest', 'Guest', '2026-01-02T00:00:00.000Z');
+    INSERT INTO users VALUES ('creator', 'Creator', '2026-01-03T00:00:00.000Z');
+    INSERT INTO projects VALUES ('existing-project', 'creator', 'Existing', 'active', 'existing-key',
+      '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z');
+  `);
+  legacy.close();
+  const database = new CollaborationDatabase(path, { authTokenPepper: "migration-test-pepper" });
+  try {
+    assert.equal(database.canCreateProjects("operator"), true);
+    assert.equal(database.canCreateProjects("creator"), true);
+    assert.equal(database.canCreateProjects("guest"), false);
+  } finally {
+    database.close();
+  }
+  try {
+    const reopened = new CollaborationDatabase(path, { authTokenPepper: "migration-test-pepper" });
+    try { assert.equal(reopened.canCreateProjects("guest"), false); }
+    finally { reopened.close(); }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("test qualification expiry and browser-session failure cannot leak or half-create an account", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-atomic-"));
+  let instant = new Date("2026-01-01T00:00:00.000Z");
+  const database = new CollaborationDatabase(join(directory, "test.sqlite"), {
+    authTokenPepper: "unit-test-auth-token-pepper",
+    clock: () => instant,
+  });
+  try {
+    database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner laptop" });
+    const grant = database.issueTestAccess("1h");
+    database.sqlite.exec(`
+      CREATE TRIGGER fail_test_access_browser_session
+      BEFORE INSERT ON browser_sessions
+      BEGIN SELECT RAISE(ABORT, 'simulated browser session failure'); END;
+    `);
+    assert.throws(() => database.claimTestAccess({
+      access_token: grant.access_token, display_name: "Tester", device_name: "Test browser",
+    }, { browserSession: true }));
+    const afterFailure = database.sqlite.prepare("SELECT claimed_at FROM test_access_grants WHERE id = ?")
+      .get(grant.grant_id) as { claimed_at: string | null };
+    assert.equal(afterFailure.claimed_at, null);
+    assert.equal((database.sqlite.prepare("SELECT count(*) AS count FROM users").get() as { count: number }).count, 1);
+    database.sqlite.exec("DROP TRIGGER fail_test_access_browser_session");
+    const claimed = database.claimTestAccess({
+      access_token: grant.access_token, display_name: "Tester", device_name: "Test browser",
+    }, { browserSession: true });
+    assert.equal(database.canCreateProjects(claimed.actor.user_id), true);
+
+    const expired = database.issueTestAccess("1h");
+    instant = new Date("2026-01-01T01:00:00.001Z");
+    assert.throws(() => database.claimTestAccess({
+      access_token: expired.access_token, display_name: "Late", device_name: "Late browser",
+    }), (error: unknown) => error instanceof ApiError && error.status === 401);
+    assert.equal((database.sqlite.prepare("SELECT count(*) AS count FROM users").get() as { count: number }).count, 2);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("cloud deletion is creator-scoped, cascades server history, and leaves unrelated projects intact", () => {
   const f = fixture();
   try {
@@ -865,6 +1083,416 @@ test("only the initiating user's runtime can claim and complete an agent request
   }
 });
 
+/**
+ * A claim-lease fixture: one `multi` session with `member` as a participant, a
+ * request from `member`, and two `member` runtimes on two devices. `nowMs` is
+ * mutable so a test can advance the clock past a claim lease without sleeping.
+ */
+function claimLeaseFixture(nowMs: { value: number }) {
+  const f = fixture({ clock: () => new Date(nowMs.value) });
+  const { session } = f.service.createSession(f.owner, {
+    session_id: "lease-session",
+    idempotency_key: "create-lease-0001",
+    mode: "multi",
+    title: "Lease work",
+  });
+  f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "lease-member-0001");
+  const secondDevice = f.database.createDevice(f.member.user_id, "Member second device", "member-device-lease-2");
+  const secondActor = { ...f.member, device_id: secondDevice.device_id };
+  const first = f.service.registerRuntime(f.member, {
+    runtime_id: "runtime-lease-1",
+    session_id: session.id,
+    device_id: f.member.device_id,
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5",
+    local_session_id: "local-lease-1",
+    capture_fidelity: "harness_transcript",
+  });
+  const second = f.service.registerRuntime(secondActor, {
+    runtime_id: "runtime-lease-2",
+    session_id: session.id,
+    device_id: secondActor.device_id,
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5",
+    local_session_id: "local-lease-2",
+    capture_fidelity: "harness_transcript",
+  });
+  const request = (idempotencyKey: string) => f.service.appendEvent(f.member, session.id, {
+    idempotency_key: idempotencyKey,
+    type: "agent_request",
+    visibility: "session",
+    payload: {
+      prompt: "do the work",
+      execution_profile: {
+        harness: "codex",
+        provider: "openai",
+        model: "gpt-5",
+        runtime_id: first.id,
+      },
+    },
+  });
+  /**
+   * Keep both devices present across a clock jump. Runtime presence and claim
+   * liveness are separate questions: a device that is up and heartbeating can
+   * still be holding a claim whose execution has wedged, which is the case
+   * exact-runtime reclaim exists to recover from.
+   */
+  const keepAlive = () => {
+    f.service.heartbeatRuntime(f.member, first.id);
+    f.service.heartbeatRuntime(secondActor, second.id);
+  };
+  return { f, sessionId: session.id, secondActor, first, second, request, keepAlive };
+}
+
+/** Comfortably past any claim lease the server would choose for itself. */
+const PAST_LEASE_MS = 10 * 60_000;
+
+test("an abandoned exact-runtime claim can only be reclaimed by that runtime", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-lease-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // The claiming device never comes back. Its lease has to lapse, or the
+    // request is stuck forever and no other runtime may answer it.
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.throws(
+      () => f.service.claimAgentRequest(secondActor, sessionId, event.id, second.id),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+      "an exact target must not silently move to another runtime",
+    );
+    const takeover = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id);
+    assert.equal(takeover.status, "claimed");
+    assert.equal(takeover.runtime_id, first.id);
+    assert.equal(takeover.attempt_count, 2);
+    assert.equal(
+      f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "agent-response-lease-0001", { text: "done" }, undefined, undefined, 2)
+        .reply_to_event_id,
+      event.id,
+      "the current exact-runtime attempt owns the completion",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a runtime with a live claim cannot reclaim another lapsed request", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const lapsed = request("agent-request-lease-slot-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, lapsed.id, first.id).status, "claimed");
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    const live = request("agent-request-lease-slot-0002");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, live.id, first.id).status, "claimed");
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, sessionId, lapsed.id, first.id),
+      (error: unknown) => error instanceof ApiError && error.code === "runtime_busy",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("expired and superseded claim attempts cannot publish progress or completion", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-lease-fence-0001");
+    const firstClaim = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id);
+    assert.equal(firstClaim.attempt_count, 1);
+    assert.equal(f.service.appendEvent(f.member, sessionId, {
+      type: "tool_call",
+      visibility: "session",
+      idempotency_key: "tool-current-attempt-0001",
+      reply_to_event_id: event.id,
+      runtime_id: first.id,
+      claim_attempt: 1,
+      payload: { tool_name: "shell", tool_call_id: "call-1", arguments: {} },
+    }).reply_to_event_id, event.id);
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "progress-expired-0001", { content: "stale" }, undefined, undefined, 1),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    const secondClaim = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id);
+    assert.equal(secondClaim.attempt_count, 2);
+    assert.throws(
+      () => f.service.appendEvent(f.member, sessionId, {
+        type: "tool_result",
+        visibility: "session",
+        idempotency_key: "tool-stale-attempt-0001",
+        reply_to_event_id: event.id,
+        runtime_id: first.id,
+        claim_attempt: 1,
+        payload: { tool_call_id: "call-1", result: "stale" },
+      }),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.equal(f.service.appendEvent(f.member, sessionId, {
+      type: "tool_result",
+      visibility: "session",
+      idempotency_key: "tool-current-attempt-0002",
+      reply_to_event_id: event.id,
+      runtime_id: first.id,
+      claim_attempt: 2,
+      payload: { tool_call_id: "call-1", result: "current" },
+    }).reply_to_event_id, event.id);
+    assert.throws(
+      () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "complete-stale-0001", { text: "stale" }, undefined, undefined, 1),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.equal(
+      f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "complete-current-0001", { text: "done" }, undefined, undefined, 2).reply_to_event_id,
+      event.id,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("request-linked Agent responses can only use the dedicated fenced completion path", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-completion-path-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count, 1);
+    const appendResponse = (
+      actor: typeof f.member,
+      runtimeId: string,
+      claimAttempt: number,
+      key: string,
+    ) => f.service.appendEvent(actor, sessionId, {
+      type: "agent_response",
+      visibility: "session",
+      idempotency_key: key,
+      reply_to_event_id: event.id,
+      runtime_id: runtimeId,
+      claim_attempt: claimAttempt,
+      payload: { text: "must not bypass completeAgentRequest" },
+    });
+    assert.throws(
+      () => appendResponse(f.member, first.id, 1, "generic-response-current-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.throws(
+      () => appendResponse(secondActor, second.id, 1, "generic-response-wrong-runtime-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.throws(
+      () => appendResponse(f.member, first.id, 1, "generic-response-expired-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count, 2);
+    assert.throws(
+      () => appendResponse(f.member, first.id, 1, "generic-response-superseded-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.throws(
+      () => appendResponse(f.member, first.id, 2, "generic-response-reclaimed-0001"),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+    assert.equal(
+      f.service.completeAgentRequest(
+        f.member,
+        sessionId,
+        event.id,
+        first.id,
+        "dedicated-response-current-0001",
+        { text: "allowed" },
+        undefined,
+        undefined,
+        2,
+      ).reply_to_event_id,
+      event.id,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a lapsed claim no longer wedges the runtime that was holding it", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const abandoned = request("agent-request-lease-0002");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, abandoned.id, first.id).status, "claimed");
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    // One runtime may hold one active claim. A claim nobody is working on is not
+    // active, so the device that came back must be free for the next request.
+    const next = request("agent-request-lease-0003");
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, next.id, first.id).status,
+      "claimed",
+      "an abandoned claim must not consume the runtime's single active slot",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a claim that keeps reporting progress is never taken over", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, secondActor, first, second, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-lease-0004");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    for (let step = 1; step <= 3; step += 1) {
+      nowMs.value += PAST_LEASE_MS / 3;
+      f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, `progress-lease-000${String(step)}`, {
+        content: `step ${String(step)}`,
+      });
+    }
+    // Three half-lease steps is far past one lease, but every step proved the
+    // claimant is still working, so the claim is alive rather than abandoned.
+    keepAlive();
+    assert.throws(
+      () => f.service.claimAgentRequest(secondActor, sessionId, event.id, second.id),
+      (error: unknown) => error instanceof ApiError && error.code === "conflict",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("a request fails visibly instead of ping-ponging between runtimes forever", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-lease-0005");
+    f.service.appendEvent(f.member, sessionId, {
+      type: "human_chat",
+      visibility: "session",
+      idempotency_key: `agent-claim-abandoned:${event.id}`,
+      payload: { content: "pre-existing client-controlled collision" },
+    });
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // Every runtime that picks the request up dies the same way. Automatic
+    // recovery has to run out somewhere, and has to say so when it does.
+    const published: string[] = [];
+    const unsubscribe = f.service.onEvent((candidate) => published.push(candidate.id));
+    const holders = [[f.member, first.id]] as const;
+    let bounded = false;
+    for (let round = 0; round < 10; round += 1) {
+      const [actor, runtimeId] = holders[round % holders.length]!;
+      nowMs.value += PAST_LEASE_MS;
+      keepAlive();
+      try {
+        f.service.claimAgentRequest(actor, sessionId, event.id, runtimeId);
+      } catch (error) {
+        assert.ok(error instanceof ApiError && error.code === "agent_request_failed", `unexpected ${String(error)}`);
+        bounded = true;
+        break;
+      }
+    }
+    assert.ok(bounded, "automatic recovery must run out rather than execute forever");
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, sessionId, event.id, first.id),
+      (error: unknown) => error instanceof ApiError && error.code === "agent_request_failed",
+      "an exhausted request must stay failed rather than be re-dispatched again",
+    );
+    const failure = f.service.replay(f.member, sessionId, 0, 100).events
+      .find((candidate) => candidate.type === "agent_response" && candidate.reply_to_event_id === event.id);
+    assert.ok(failure, "the timeline must carry a canonical failure response");
+    assert.equal((failure.payload as { status?: string }).status, "failed");
+    assert.ok(published.includes(failure.id), "terminal failure must be published to live subscribers");
+    unsubscribe();
+  } finally {
+    f.close();
+  }
+});
+
+test("a database written before claim leases migrates its claims into recoverable ones", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const lease = claimLeaseFixture(nowMs);
+  const path = join(lease.f.directory, "test.sqlite");
+  const event = lease.request("agent-request-migration-0001");
+  assert.equal(lease.f.service.claimAgentRequest(lease.f.member, lease.sessionId, event.id, lease.first.id).status, "claimed");
+  lease.f.database.close();
+
+  // Put the claim table back into exactly the shape the previous release wrote,
+  // so reopening exercises the migration rather than the fresh schema.
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    PRAGMA foreign_keys = OFF;
+    DROP TABLE agent_request_claims;
+    CREATE TABLE agent_request_claims (
+      request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+      runtime_id TEXT NOT NULL REFERENCES runtimes(id),
+      claimed_at TEXT NOT NULL,
+      completed_at TEXT,
+      status TEXT NOT NULL CHECK (status IN ('claimed', 'completed'))
+    ) STRICT;
+  `);
+  legacy.prepare(`
+    INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, completed_at, status)
+    VALUES (?, ?, ?, NULL, 'claimed')
+  `).run(event.id, lease.first.id, "2026-09-20T00:00:00.000Z");
+  legacy.close();
+
+  const reopened = new CollaborationDatabase(path, { authTokenPepper: "unit-test-auth-token-pepper" });
+  try {
+    const service = new CollaborationService(reopened);
+    nowMs.value += PAST_LEASE_MS;
+    service.heartbeatRuntime(lease.f.member, lease.first.id);
+    service.heartbeatRuntime(lease.secondActor, lease.second.id);
+    // The migrated row carries no lease, so nothing is renewing it. It must read
+    // as recoverable rather than keep holding the request — and the runtime —
+    // for ever, which is exactly what the previous release did.
+    const takeover = service.claimAgentRequest(lease.f.member, lease.sessionId, event.id, lease.first.id);
+    assert.equal(takeover.status, "claimed");
+    assert.equal(takeover.runtime_id, lease.first.id);
+  } finally {
+    reopened.close();
+    rmSync(lease.f.directory, { recursive: true, force: true });
+  }
+});
+
+test("a database written before dynamic execution profiles migrates legacy runtimes as fixed routes", () => {
+  const f = fixture();
+  const path = join(f.directory, "test.sqlite");
+  const session = f.service.createSession(f.owner, {
+    session_id: "legacy-runtime-profile-session",
+    idempotency_key: "legacy-runtime-profile-create",
+    mode: "solo",
+    title: "Legacy runtime profile",
+  }).session;
+  const runtime = f.service.registerRuntime(f.owner, {
+    runtime_id: "legacy-runtime-profile",
+    session_id: session.id,
+    device_id: f.owner.device_id,
+    harness: "deepseek-harness",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    local_session_id: "legacy-runtime-local",
+    capture_fidelity: "harness_transcript",
+  });
+  f.database.close();
+
+  const legacy = new DatabaseSync(path);
+  legacy.exec("ALTER TABLE runtimes DROP COLUMN execution_profiles_json");
+  legacy.close();
+
+  const reopened = new CollaborationDatabase(path, { authTokenPepper: "unit-test-auth-token-pepper" });
+  try {
+    const columns = (reopened.sqlite.prepare("PRAGMA table_info(runtimes)").all() as Array<{ name: string }>)
+      .map((column) => column.name);
+    assert.ok(columns.includes("execution_profiles_json"));
+    assert.equal(reopened.getRuntime(runtime.id).execution_profiles, undefined);
+  } finally {
+    reopened.close();
+    rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
 test("DeepSeek Harness claims honor the exact Web-selected runtime and model without changing Codex claims", () => {
   const f = fixture();
   try {
@@ -950,6 +1578,145 @@ test("DeepSeek Harness claims honor the exact Web-selected runtime and model wit
     });
     assert.throws(
       () => f.service.claimAgentRequest(f.member, session.id, ambiguous.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("DeepSeek Harness dynamic execution profiles accept only exact advertised model and reasoning selections", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "dsh-dynamic-routing",
+      idempotency_key: "create-dsh-dynamic-routing",
+      mode: "multi",
+      title: "DSH dynamic routing",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "dsh-dynamic-member");
+    const runtime = f.service.registerRuntime(f.member, {
+      runtime_id: "dsh-dynamic-runtime",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      local_session_id: "dsh-dynamic-local",
+      capture_fidelity: "harness_transcript",
+      execution_profiles: [{
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        reasoning_efforts: ["low", "high"],
+        default_reasoning_effort: "low",
+      }, {
+        provider: "deepseek-official",
+        model: "deepseek-reasoner",
+        reasoning_efforts: ["high", "max"],
+        default_reasoning_effort: "high",
+      }],
+    });
+    assert.equal(runtime.execution_profiles?.length, 2);
+
+    const accepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use another advertised model",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-reasoner",
+          reasoning_effort: "max",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(f.service.claimAgentRequest(f.member, session.id, accepted.id, runtime.id).runtime_id, runtime.id);
+    f.service.completeAgentRequest(
+      f.member, session.id, accepted.id, runtime.id, "dsh-dynamic-complete", { content: "done" },
+    );
+
+    for (const [suffix, profile] of [["model", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-unadvertised",
+      reasoning_effort: "low",
+      runtime_id: runtime.id,
+    }], ["effort", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoning_effort: "max",
+      runtime_id: runtime.id,
+    }], ["runtime", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoning_effort: "low",
+    }]] as const) {
+      const rejected = f.service.appendEvent(f.member, session.id, {
+        idempotency_key: `dsh-dynamic-rejected-${suffix}`,
+        type: "agent_request",
+        visibility: "session",
+        payload: { content: "Reject unsupported route", execution_profile: profile },
+      });
+      assert.throws(
+        () => f.service.claimAgentRequest(f.member, session.id, rejected.id, runtime.id),
+        (error: unknown) => error instanceof ApiError && error.status === 409,
+      );
+    }
+
+    const downgraded = f.service.registerRuntime(f.member, {
+      runtime_id: runtime.id,
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      local_session_id: "dsh-dynamic-local",
+      capture_fidelity: "harness_transcript",
+    });
+    assert.equal(downgraded.execution_profiles, undefined, "re-registration must not retain stale capabilities");
+    const legacyAccepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-legacy-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Retain the legacy fixed-model route",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-v4-flash",
+          reasoning_effort: "legacy-adapter-value",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, legacyAccepted.id, runtime.id).runtime_id,
+      runtime.id,
+    );
+    f.service.completeAgentRequest(
+      f.member, session.id, legacyAccepted.id, runtime.id, "dsh-dynamic-legacy-complete", { content: "done" },
+    );
+    const legacyWrongModel = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-legacy-wrong-model",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Do not retain stale dynamic models",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-reasoner",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, legacyWrongModel.id, runtime.id),
       (error: unknown) => error instanceof ApiError && error.status === 409,
     );
   } finally {

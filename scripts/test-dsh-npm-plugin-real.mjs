@@ -12,6 +12,7 @@ import {
   readdir,
   realpath,
   rm,
+  writeFile,
 } from "node:fs/promises";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createServer as createNetServer } from "node:net";
@@ -77,8 +78,47 @@ function runProcess(command, args, options) {
   }), path.basename(command));
 }
 
+/**
+ * Run the npm CLI without assuming a POSIX launcher.
+ *
+ * `spawn("npm", ...)` fails with ENOENT on Windows, where npm is only reachable
+ * as `npm.cmd`, and Node no longer resolves `.cmd`/`.bat` shims for a
+ * `shell: false` spawn. Resolve an argument-preserving CLI entry instead: the
+ * path npm exports to its own lifecycle scripts, then the one shipped beside the
+ * running Node. If neither exists the gate refuses rather than falling back to a
+ * shell that would reparse the arguments.
+ */
+async function runNpm(args, options = { cwd: ROOT, env: process.env }) {
+  const npmCli = process.env.npm_execpath?.trim();
+  if (npmCli) return runProcess(process.execPath, [npmCli, ...args], options);
+  if (process.platform === "win32") {
+    // Prefer the CLI entry the Windows Node installer ships beside the running
+    // binary. Launching it through `process.execPath` keeps every argument
+    // intact, where a `cmd /c` string would be re-parsed by the shell.
+    const bundled = path.join(
+      path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js",
+    );
+    try {
+      await access(bundled);
+      return await runProcess(process.execPath, [bundled, ...args], options);
+    } catch {
+      // Fall through to the shell shim.
+    }
+    // Refuse rather than shell-reparse. A `cmd /c` command line would
+    // reinterpret any argument carrying spaces or metacharacters, and silently
+    // running something other than what this gate asked for is worse than
+    // stopping with something the operator can act on.
+    throw new Error(
+      "Unable to locate the npm CLI without a shell on Windows. "
+      + "Run this gate through an npm script (which sets npm_execpath), or install "
+      + "Node with its bundled npm.",
+    );
+  }
+  return await runProcess("npm", args, options);
+}
+
 async function npmCacheRoot() {
-  const result = await runProcess("npm", ["config", "get", "cache"], { cwd: ROOT, env: process.env });
+  const result = await runNpm(["config", "get", "cache"]);
   if (result.code !== 0 || !path.isAbsolute(result.stdout.trim())) {
     throw new Error("Unable to resolve the local npm cache without network access");
   }
@@ -372,7 +412,7 @@ async function main() {
   let browser;
   let grantSecret = "";
   try {
-    const packed = await runProcess("npm", ["pack", "--ignore-scripts", "--json", "--pack-destination", artifacts], {
+    const packed = await runNpm(["pack", "--ignore-scripts", "--json", "--pack-destination", artifacts], {
       cwd: PACKAGE_ROOT,
       env: environment,
     });
@@ -424,6 +464,8 @@ async function main() {
     mockLlm = await startMockLlm(modelKey);
     environment.DEEPSEEK_API_KEY = modelKey;
     environment.DEEPSEEK_BASE_URL = mockLlm.origin;
+    const longPublicHistory = `NATIVE_HISTORY_BEGIN\n${"canonical context ".repeat(4_500)}\nNATIVE_HISTORY_TAIL`;
+    assert.ok(Buffer.byteLength(longPublicHistory, "utf8") > 64 * 1_024);
 
     const collaborationPort = await freePort();
     const collaborationOrigin = `http://127.0.0.1:${String(collaborationPort)}`;
@@ -468,7 +510,7 @@ async function main() {
       body: {
         idempotency_key: "dsh-npm-real-session-seed",
         type: "human_chat",
-        payload: { text: "First Project seed" },
+        payload: { text: `First Project seed\n${longPublicHistory}` },
       },
     });
     await requestData(collaboration.origin, "/v1/projects", {
@@ -496,7 +538,7 @@ async function main() {
       body: {
         idempotency_key: "dsh-npm-real-session-2-seed",
         type: "human_chat",
-        payload: { text: "Second Project seed" },
+        payload: { text: `Second Project seed\n${longPublicHistory}` },
       },
     });
     const browserSession = await requestData(collaboration.origin, "/v1/browser-sessions", {
@@ -546,6 +588,7 @@ async function main() {
     });
     const browserContext = await browser.newContext({ viewport: { width: 1280, height: 860 }, locale: "zh-CN" });
     const page = await browserContext.newPage();
+    page.on("dialog", (dialog) => void dialog.accept());
     await page.goto(launchUrl, { waitUntil: "load" });
     await dismissOnboarding(page);
     await page.getByRole("button", { name: /^(设置|Settings)$/u }).click();
@@ -627,11 +670,14 @@ async function main() {
     await firstProjectEntry.click();
     await page.waitForTimeout(1_000);
     const firstWorkspaceText = await page.locator("body").innerText();
-    assert.match(firstWorkspaceText, /DSH npm real session/u, firstWorkspaceText);
+    // The GatherThread marker has to survive DSH's own title clipping and reach
+    // the session rail, which is the only place it is visible to the operator.
+    assert.match(firstWorkspaceText, /DSH npm real session · 共序 · MULTI/u, firstWorkspaceText);
     await secondProjectEntry.click();
     await page.waitForTimeout(1_000);
     const secondWorkspaceText = await page.locator("body").innerText();
-    assert.match(secondWorkspaceText, /DSH npm second session/u, secondWorkspaceText);
+    assert.match(secondWorkspaceText, /DSH npm second session · 共序 · MULTI/u, secondWorkspaceText);
+    assert.equal(mockLlm.requests.length, 0, "passive long-history projection must not invoke a model or compactor");
 
     await page.locator('button[aria-label="新建会话"]:visible').first().click();
     const nativeComposer = page.locator('[contenteditable="true"][data-placeholder]:visible').first();
@@ -722,10 +768,21 @@ async function main() {
       harness: "deepseek-harness",
       provider: "deepseek-official",
       model: "deepseek-v4-flash",
+      reasoning_effort: "high",
       runtime_id: selectedRuntime.id,
     });
     const outputs = completed.events.filter((event) => event.reply_to_event_id === completed.request.id);
-    assert.deepEqual(outputs.map((event) => event.type), ["agent_progress", "agent_progress", "agent_response"]);
+    assert.deepEqual(outputs.map((event) => event.type), [
+      "agent_progress",
+      "agent_progress",
+      "agent_progress",
+      "agent_response",
+    ]);
+    assert.equal(
+      outputs.filter((event) => event.type === "agent_progress" && event.payload?.phase === "activity").length,
+      1,
+      "a burst of durable DSH events should produce one bounded activity renewal",
+    );
     assert.equal(new Set(outputs.map((event) => event.id)).size, outputs.length);
     assert.ok(outputs.every((event) => event.runtime_provenance?.runtime_id === selectedRuntime.id));
     assert.equal(JSON.stringify(completed.events).includes("PRIVATE_NPM_WEB_REASONING"), false);
@@ -746,7 +803,14 @@ async function main() {
 
     const credentialPath = path.join(dshHome, ".credentials.yaml");
     const credentialText = await readFile(credentialPath, "utf8");
-    assert.equal((await lstat(credentialPath)).mode & 0o777, 0o600);
+    // Windows synthesises a fixed 0o666 for every file, so the mode is only
+    // meaningful where the filesystem stores one. Content and containment are
+    // asserted on every platform, and the reported result says which of the two
+    // this run actually checked.
+    const credentialModeVerified = process.platform !== "win32";
+    if (credentialModeVerified) {
+      assert.equal((await lstat(credentialPath)).mode & 0o777, 0o600);
+    }
     assert.match(credentialText, /gatherthread-dsh-host\/default/u);
     grantSecret = credentialText.match(/gta_[A-Za-z0-9_-]+/u)?.[0] ?? "";
     assert.ok(grantSecret, "the fixture DSH grant was not written to the official credential store");
@@ -754,12 +818,120 @@ async function main() {
     await section.waitFor({ timeout: 30_000 });
     await section.click();
     await panel.waitFor({ state: "visible", timeout: 30_000 });
+
+    // Exercise code collaboration through the shipped native and Web controls.
+    // Both source and private sync state stay inside this isolated DSH_HOME.
+    const codeProjectId = "dsh-npm-real-project";
+    const codeRoot = path.join(root, "GatherThread Projects", "DSH npm real project");
+    const codeApiPath = `/v1/projects/${codeProjectId}/code`;
+    await access(codeRoot);
+    await writeFile(path.join(codeRoot, "README.md"), "DSH_NATIVE_CODE_V1\n");
+    await writeFile(path.join(codeRoot, ".gitignore"), ".env\nnode_modules/\n");
+    await writeFile(path.join(codeRoot, ".env"), "LOCAL_ONLY=fixture-private-value\n");
+    const nativeCodeState = async () => {
+      const result = await rawHttp({
+        port, pathname: "/gatherthread/status/get", method: "POST", host: parsedLaunch.host,
+        cookie: dshCookie, origin: parsedLaunch.origin,
+        body: { type: "client-request", rpcId: randomUUID(), method: "status/get", payload: {} },
+      });
+      assert.equal(result.status, 200);
+      const payload = JSON.parse(result.body);
+      assert.equal(payload.result?.ok, true);
+      return payload.result.value.codeSync?.find((project) => project.projectId === codeProjectId);
+    };
+    assert.equal((await nativeCodeState()).authorized, false, "pairing does not authorize source upload");
+    const codeSection = panel.getByRole("region", { name: "项目代码同步", exact: true });
+    const nativeCodeControls = codeSection.locator("details").filter({
+      has: page.locator("summary", { hasText: /^DSH npm real project$/u }),
+    });
+    await nativeCodeControls.locator("summary").click();
+    assert.equal(await nativeCodeControls.getByRole("button", { name: "上传代码", exact: true }).isDisabled(), true);
+    await gatherthreadPage.goto(`${collaboration.origin}/#project=${codeProjectId}&session=dsh-npm-real-session`, { waitUntil: "load" });
+    await gatherthreadPage.locator("#workspace:not([hidden])").waitFor({ timeout: 30_000 });
+    await gatherthreadPage.locator("#project-code-button").click();
+    await gatherthreadPage.locator("#project-code-dialog[open]").waitFor({ timeout: 30_000 });
+    assert.equal((await gatherthreadPage.locator("#code-project-name").textContent())?.trim(), "DSH npm real project");
+    await gatherthreadPage.locator("#code-enable-button").click();
+    await gatherthreadPage.locator("#code-confirm-accept").click();
+    await gatherthreadPage.locator("#code-enabled-content").waitFor({ state: "visible", timeout: 30_000 });
+    await nativeCodeControls.getByLabel("允许此 DSH 同步该项目代码", { exact: true }).click();
+    await waitUntil("native code authorization and initial status", async () => {
+      const state = await nativeCodeState();
+      return state?.authorized && state.status?.enabled ? state : undefined;
+    });
+    await nativeCodeControls.getByRole("button", { name: "上传代码", exact: true }).click();
+    const cloudCode = async () => (await requestData(collaboration.origin, codeApiPath, { token: owner.token })).data;
+    const nativeCheckpoint = await waitUntil("native manual source upload", async () => {
+      const status = await cloudCode();
+      return status.branches.find((branch) => branch.id === status.own_branch_id);
+    });
+    const sourceSnapshot = async () => (await requestData(collaboration.origin, `${codeApiPath}/snapshot?branch_id=${encodeURIComponent(nativeCheckpoint.id)}`, { token: owner.token })).data.snapshot;
+    let source = await sourceSnapshot();
+    assert.deepEqual(source.files.map((file) => file.path).sort(), [".gitignore", "README.md"]);
+    assert.equal(Buffer.from(source.files.find((file) => file.path === "README.md").content_base64, "base64").toString(), "DSH_NATIVE_CODE_V1\n");
+    assert.equal((await nativeCodeState()).status.automatic_upload, false);
+    await access(path.join(dshHome, "gatherthread-code-sync"));
+
+    await nativeCodeControls.getByLabel("空闲时自动上传本地代码至云端", { exact: true }).click();
+    await waitUntil("native auto source opt-in", async () => (await nativeCodeState())?.status?.automatic_upload === true);
+    await writeFile(path.join(codeRoot, "README.md"), "DSH_IDLE_AUTO_CODE_V2\n");
+    await waitUntil("settled native automatic source upload", async () => {
+      const snapshot = await sourceSnapshot();
+      return snapshot.commit !== nativeCheckpoint.head_commit && snapshot.files.some((file) => file.path === "README.md"
+        && Buffer.from(file.content_base64, "base64").toString() === "DSH_IDLE_AUTO_CODE_V2\n");
+    }, 45_000);
+    await nativeCodeControls.getByLabel("空闲时自动上传本地代码至云端", { exact: true }).click();
+    await waitUntil("native automatic source disabled", async () => (await nativeCodeState())?.status?.automatic_upload === false);
+
+    const codeRuntimes = (await requestData(collaboration.origin, "/v1/sessions/dsh-npm-real-session/runtimes", { token: owner.token })).data.runtimes;
+    // This endpoint returns only this user's execution runtimes; purpose is not
+    // part of its deliberately narrow public DTO.
+    const codeRuntime = codeRuntimes.find((runtime) => runtime.harness === "deepseek-harness" && runtime.status === "online");
+    assert.ok(codeRuntime);
+    await gatherthreadPage.locator("#code-runtime-select").selectOption(codeRuntime.id);
+    await waitUntil("Web exact DSH device source status", async () => !(await gatherthreadPage.locator("#code-upload-button").isDisabled()));
+    await writeFile(path.join(codeRoot, "README.md"), "DSH_WEB_DEVICE_CODE_V3\n");
+    const codeRequest = gatherthreadPage.waitForRequest((request) => {
+      if (request.method() !== "POST") return false;
+      try { return request.postDataJSON()?.kind === "code_upload"; } catch { return false; }
+    });
+    await gatherthreadPage.locator("#code-upload-button").click();
+    await gatherthreadPage.locator("#code-confirm-accept").click();
+    const codePayload = (await codeRequest).postDataJSON();
+    assert.equal(codePayload.target_runtime_id, codeRuntime.id, "Web must target exactly the selected DSH execution runtime");
+    await waitUntil("Web source upload completed by real DSH", async () => {
+      const snapshot = await sourceSnapshot();
+      return snapshot.files.some((file) => file.path === "README.md"
+        && Buffer.from(file.content_base64, "base64").toString() === "DSH_WEB_DEVICE_CODE_V3\n");
+    }, 45_000);
+
+    const requestsBeforeRecovery = mockLlm.requests.length;
+    const originalSource = await readFile(path.join(codeRoot, "README.md"), "utf8");
+    await nativeCodeControls.getByRole("button", { name: "恢复到新目录", exact: true }).click();
+    const recoveredCode = await waitUntil("native recovery new-folder receipt", async () => {
+      const state = await nativeCodeState();
+      return state?.status?.recovery_directory ? state.status : undefined;
+    });
+    assert.equal(recoveredCode.local_status_unknown, true);
+    assert.equal(path.basename(recoveredCode.recovery_directory), recoveredCode.recovery_directory);
+    const recoveredRoot = path.join(path.dirname(codeRoot), recoveredCode.recovery_directory);
+    assert.equal(await readFile(path.join(recoveredRoot, "README.md"), "utf8"), originalSource);
+    assert.equal(await readFile(path.join(codeRoot, "README.md"), "utf8"), originalSource);
+    assert.equal(mockLlm.requests.length, requestsBeforeRecovery, "code recovery never invokes the model");
+    await nativeCodeControls.getByLabel("允许此 DSH 同步该项目代码", { exact: true }).click();
+    await waitUntil("native code consent revoked", async () => (await nativeCodeState())?.authorized === false);
+    await gatherthreadPage.locator("#close-project-code-button").click();
+
     const pairedDom = await panel.textContent() ?? "";
     assertAbsent(pairedDom, [owner.token, pepper, modelKey, grantSecret, root, dshHome], "DSH Client DOM");
     assertAbsent(`${host.stdout}\n${host.stderr}`, [owner.token, pepper, modelKey, grantSecret], "DSH Host output");
     assert.doesNotMatch(pairedDom, /authorization|bearer|headers|stack/iu);
     assert.equal((await readdir(workspace)).length, 0, "the read-only workspace must remain unchanged");
     assert.ok(mockLlm.requests.some((request) => JSON.stringify(request.messages).includes("WEB_DSH_REQUEST")));
+    const projectedRequest = mockLlm.requests.find((request) => JSON.stringify(request.messages).includes("WEB_DSH_REQUEST"));
+    const projectedText = JSON.stringify(projectedRequest.messages);
+    assert.ok(projectedText.includes("NATIVE_HISTORY_BEGIN"), "the real native model request must retain the history start");
+    assert.ok(projectedText.includes("NATIVE_HISTORY_TAIL"), "the real native model request must retain the history tail beyond 64 KiB");
 
     await panel.getByRole("button", { name: "断开此 DSH 的本地配对", exact: true }).click();
     await panel.getByRole("button", { name: "登录并配对", exact: true }).waitFor({ timeout: 30_000 });
@@ -770,7 +942,13 @@ async function main() {
     await browser.close();
     browser = undefined;
     const exit = await stopDsh(host);
-    assert.equal(exit.code, 0);
+    // Windows has no POSIX signals, so the shutdown kill surfaces as a null
+    // exit code carrying a signal instead of a graceful zero.
+    if (process.platform === "win32") {
+      assert.ok(exit.code === 0 || exit.signal !== null, `unexpected DSH shutdown: ${JSON.stringify(exit)}`);
+    } else {
+      assert.equal(exit.code, 0);
+    }
     host = undefined;
 
     const removed = await runProcess(process.execPath, [
@@ -787,10 +965,15 @@ async function main() {
       command: "npx @deepseek-ai/dsh@0.1.2-rc.1 web",
       pluginMechanism: "dsh plugin --profile web add <package>",
       profile: "web",
-      lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "writable-native-session", "native-cloud-adoption", "web-request", "progress", "final", "reload", "disconnect", "remove"],
+      lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "writable-native-session", "native-full-history", "native-cloud-adoption", "web-request", "progress", "final", "reload", "native-code-consent", "native-code-upload", "native-code-auto-upload", "web-exact-device-code-upload", "native-code-recovery", "code-consent-revocation", "disconnect", "remove"],
       realDshHome: false,
       networkDownloads: false,
-      credentialStore: { official: true, mode: "0600", clearedBeforeRemove: true },
+      credentialStore: {
+        official: true,
+        mode: credentialModeVerified ? "0600" : null,
+        modeVerified: credentialModeVerified,
+        clearedBeforeRemove: true,
+      },
     })}\n`);
   } finally {
     await browser?.close().catch(() => undefined);

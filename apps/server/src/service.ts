@@ -3,6 +3,8 @@ import type {
   CanonicalEvent,
   CommitLocalTurnInput,
   CommitLocalTurnResult,
+  CreateHistorySummaryInput,
+  HistoryContext,
   JsonValue,
   MembershipRole,
   ReplayResponse,
@@ -11,7 +13,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import { CollaborationDatabase, type Actor, type RuntimeRecord, type SessionRecord } from "./database.js";
-import { conflict, forbidden, notFound } from "./errors.js";
+import { agentRequestFailed, conflict, forbidden, notFound } from "./errors.js";
 import { redactJson } from "./redaction.js";
 
 type EventListener = (event: CanonicalEvent) => void;
@@ -64,6 +66,14 @@ export class CollaborationService {
     return { project: this.database.requireProject(projectId), role };
   }
 
+  getProjectContextPolicy(actor: Actor, projectId: string) {
+    return this.database.getProjectContextPolicy(actor, projectId);
+  }
+
+  setProjectContextPolicy(actor: Actor, projectId: string, mode: "summary" | "original") {
+    return this.database.setProjectContextPolicy(actor, projectId, mode);
+  }
+
   listProjects(actor: Actor) {
     this.database.assertActiveDevice(actor);
     return this.database.listProjects(actor.user_id);
@@ -114,7 +124,7 @@ export class CollaborationService {
   }
 
   removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
-    this.requireProjectOwner(actor, projectId);
+    this.requireProjectMembership(actor, projectId);
     this.database.removeProjectMembership(actor, projectId, userId);
   }
 
@@ -159,6 +169,7 @@ export class CollaborationService {
         harness: runtime.harness,
         provider: runtime.provider,
         model: runtime.model,
+        ...(runtime.execution_profiles === undefined ? {} : { execution_profiles: runtime.execution_profiles }),
         status: runtime.status,
         last_seen_at: runtime.last_seen_at,
       }));
@@ -183,6 +194,14 @@ export class CollaborationService {
     const result = this.database.claimInvitation(input, { browserSession: true });
     if (result.event) this.publish(result.event);
     return result;
+  }
+
+  claimTestAccess(input: Parameters<CollaborationDatabase["claimTestAccess"]>[0]) {
+    return this.database.claimTestAccess(input);
+  }
+
+  claimTestAccessWithBrowserSession(input: Parameters<CollaborationDatabase["claimTestAccess"]>[0]) {
+    return this.database.claimTestAccess(input, { browserSession: true });
   }
 
   claimInvitationForActor(actor: Actor, inviteToken: string) {
@@ -300,6 +319,16 @@ export class CollaborationService {
     };
   }
 
+  createHistorySummary(actor: Actor, sessionId: string, input: CreateHistorySummaryInput): CanonicalEvent {
+    const event = this.database.createHistorySummary(actor, sessionId, input);
+    this.publish(event);
+    return event;
+  }
+
+  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number): HistoryContext {
+    return this.database.readHistoryContext(actor, sessionId, view, throughSequence);
+  }
+
   registerRuntime(actor: Actor, input: Parameters<CollaborationDatabase["registerRuntime"]>[1]): RuntimeRecord {
     if ((input.purpose ?? "execution") === "snapshot_connector") this.requireMembership(actor, input.session_id);
     else this.requireWrite(actor, input.session_id);
@@ -312,7 +341,12 @@ export class CollaborationService {
 
   claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string) {
     this.requireWrite(actor, sessionId);
-    return this.database.claimAgentRequest(actor, sessionId, requestEventId, runtimeId);
+    const outcome = this.database.claimAgentRequest(actor, sessionId, requestEventId, runtimeId);
+    if ("failed" in outcome) {
+      if (outcome.event !== undefined) this.publish(outcome.event);
+      throw agentRequestFailed();
+    }
+    return outcome.claim;
   }
 
   appendAgentProgress(
@@ -324,6 +358,7 @@ export class CollaborationService {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     const { session } = this.requireWrite(actor, sessionId);
     if (session.state !== "active") throw conflict("Archived sessions do not accept agent progress");
@@ -336,6 +371,7 @@ export class CollaborationService {
       redactJson(payload),
       observedModel,
       observedReasoningEffort,
+      claimAttempt,
     );
     this.publish(event);
     return event;
@@ -350,6 +386,7 @@ export class CollaborationService {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     const { session } = this.requireWrite(actor, sessionId);
     if (session.state !== "active") throw conflict("Archived sessions do not accept agent responses");
@@ -362,6 +399,7 @@ export class CollaborationService {
       redactJson(payload),
       observedModel,
       observedReasoningEffort,
+      claimAttempt,
     );
     this.publish(event);
     return event;

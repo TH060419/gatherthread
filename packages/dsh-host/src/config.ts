@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
 import { prospectiveRealPath, secureDirectoryChain } from "./path-security.js";
+import type { DshRuntimeExecutionProfile } from "./types.js";
 
 const CONFIG_KEYS = new Set([
   "enabled",
@@ -66,6 +67,8 @@ export interface EnabledDshHostConfig {
   pollLimit: number;
   shareToolEvents: boolean;
   dshSessionId: string;
+  /** Native-only, exact routes discovered from DSH's public LLM catalog. */
+  executionProfiles?: readonly DshRuntimeExecutionProfile[];
 }
 
 export interface EnabledDshProjectHostConfig {
@@ -87,6 +90,8 @@ export interface EnabledDshProjectHostConfig {
   maxConcurrentSessions: number;
   retryBaseMs: number;
   retryMaxMs: number;
+  /** Native-only, exact routes copied into each Session runtime registration. */
+  executionProfiles?: readonly DshRuntimeExecutionProfile[];
 }
 
 export type DshHostConfig =

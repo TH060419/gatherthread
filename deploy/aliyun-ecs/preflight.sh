@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-release_version="0.1.0-alpha.5"
+release_version="0.1.0-alpha.7"
 domain="${1:-}"
 [[ "$domain" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$ ]] || {
   printf '%s\n' "Usage: sudo deploy/aliyun-ecs/preflight.sh gatherthread.example.com" >&2
@@ -26,14 +26,14 @@ check "GatherThread systemd service is active" systemctl is-active --quiet gathe
 check "Caddy systemd service is active" systemctl is-active --quiet caddy.service
 check "daily backup timer is active" systemctl is-active --quiet gatherthread-backup.timer
 check "Caddy configuration is valid" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-check "loopback liveness responds" curl --fail --silent --show-error http://127.0.0.1:8787/health/live
+check "loopback liveness responds" curl --fail --silent --show-error http://127.0.0.1:18787/health/live
 check "loopback readiness confirms WAL, foreign keys, and writes" bash -c \
-  "curl --fail --silent --show-error http://127.0.0.1:8787/health/ready | grep -Eq '\"journal_mode\":\"wal\".*\"foreign_keys\":true.*\"writable\":true'"
+  "curl --fail --silent --show-error http://127.0.0.1:18787/health/ready | grep -Eq '\"journal_mode\":\"wal\".*\"foreign_keys\":true.*\"writable\":true'"
 check "public HTTPS readiness succeeds" curl --fail --silent --show-error --max-time 15 "https://$domain/health/ready"
 check "public HTTPS sends HSTS" bash -c \
   "curl --fail --silent --show-error --head --max-time 15 https://$domain/health/live | tr -d '\r' | grep -Eiq '^strict-transport-security:'"
 check "application does not listen on a non-loopback address" bash -c \
-  "! ss -H -ltn 'sport = :8787' | awk '{ print \$4 }' | grep -Ev '^(127\\.0\\.0\\.1|\\[::1\\]):8787$' | grep -q ."
+  "! ss -H -ltn 'sport = :18787' | awk '{ print \$4 }' | grep -Ev '^(127\\.0\\.0\\.1|\\[::1\\]):18787$' | grep -q ."
 check "HTTPS is listening" bash -c "ss -H -ltn 'sport = :443' | grep -q ."
 check "private database directory is mode 0700" bash -c \
   "[[ \$(stat -c '%a' /var/lib/gatherthread) == 700 ]]"

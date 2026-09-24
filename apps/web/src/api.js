@@ -36,7 +36,19 @@ export class HttpCollaborationApi {
   }
 
   async request(path, options = {}) {
-    const response = await fetch(`${this.baseUrl}${path}`, {
+    const target = `${this.baseUrl}${path}`;
+    // A shared ?api= link must never redirect a browser-entered credential to
+    // another origin. Development uses the same-origin loopback proxy too.
+    if (globalThis.location?.href) {
+      const url = new URL(target, globalThis.location.href);
+      if (url.origin !== globalThis.location.origin || url.username || url.password
+        || !["http:", "https:"].includes(url.protocol)) {
+        throw new ApiError("Open this server's GatherThread application to sign in. Browser API requests must use the same origin.", {
+          status: 400, code: "invalid_api_origin",
+        });
+      }
+    }
+    const response = await fetch(target, {
       ...options,
       credentials: "include",
       headers: {
@@ -58,12 +70,16 @@ export class HttpCollaborationApi {
     return body.data ?? body;
   }
 
-  async authenticate(token = this.token, { rememberDevice = false } = {}) {
+  async authenticate(token = this.token, { rememberDevice = false, displayName, deviceName } = {}) {
     this.token = token;
     try {
       const { actor } = await this.request("/v1/browser-sessions", {
         method: "POST",
-        body: JSON.stringify({ remember_device: rememberDevice }),
+        body: JSON.stringify({
+          remember_device: rememberDevice,
+          ...(displayName ? { display_name: displayName } : {}),
+          ...(deviceName ? { device_name: deviceName } : {}),
+        }),
       });
       this.actors.set(actor.id, actor.username);
       return actor;
@@ -165,6 +181,11 @@ export class HttpCollaborationApi {
     this.sessionHeads.clear();
   }
 
+  async leaveProject(projectId, userId) {
+    await this.request(`/v1/projects/${encodeURIComponent(projectId)}/members/${encodeURIComponent(userId)}`, { method: "DELETE" });
+    this.sessionHeads.clear();
+  }
+
   async getProject(projectId) {
     const { project, role } = await this.request(`/v1/projects/${encodeURIComponent(projectId)}`);
     return {
@@ -174,6 +195,23 @@ export class HttpCollaborationApi {
       role,
       updatedAt: project.updated_at,
     };
+  }
+
+  async getProjectCode(projectId) {
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code`);
+  }
+
+  async mutateProjectCode(projectId, operation, input) {
+    if (!["enable", "disable", "review", "merge", "update"].includes(operation)) throw new Error("Unknown code operation.");
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code/${operation}`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    });
+  }
+
+  async getProjectCodeSnapshot(projectId, branchId) {
+    const query = new URLSearchParams({ branch_id: branchId });
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code/snapshot?${query}`);
   }
 
   async listProjectSessions(projectId) {
@@ -271,11 +309,23 @@ export class HttpCollaborationApi {
     return runtimes.map((runtime) => ({
       id: runtime.id,
       deviceId: runtime.device_id,
+      ...(runtime.user_id === undefined ? {} : { userId: runtime.user_id }),
+      ...(runtime.purpose === undefined ? {} : { purpose: runtime.purpose }),
       harness: runtime.harness,
       provider: runtime.provider,
       model: runtime.model,
       status: runtime.status,
       lastSeenAt: runtime.last_seen_at,
+      ...(Array.isArray(runtime.execution_profiles) ? {
+        executionProfiles: runtime.execution_profiles.map((profile) => ({
+          provider: profile.provider,
+          model: profile.model,
+          reasoningEfforts: profile.reasoning_efforts ?? [],
+          ...(profile.default_reasoning_effort === undefined ? {} : {
+            defaultReasoningEffort: profile.default_reasoning_effort,
+          }),
+        })),
+      } : {}),
     }));
   }
 
@@ -355,9 +405,31 @@ export class HttpCollaborationApi {
       id: result.actor.user_id,
       username: result.actor.display_name,
       device_id: result.actor.device_id,
+      can_create_projects: result.actor.can_create_projects === true,
     };
     this.actors.set(actor.id, actor.username);
     return { actor, invitation: normalizeInvitation(result.invitation), accessToken: result.token };
+  }
+
+  async claimTestAccess({ accessToken, displayName, deviceName, rememberDevice = false }) {
+    const result = await this.request("/v1/test-access/claim", {
+      method: "POST",
+      headers: { "X-GatherThread-Browser-Session": "1" },
+      body: JSON.stringify({
+        access_token: accessToken,
+        display_name: displayName,
+        device_name: deviceName,
+        remember_device: rememberDevice,
+      }),
+    });
+    const actor = {
+      id: result.actor.user_id,
+      username: result.actor.display_name,
+      device_id: result.actor.device_id,
+      can_create_projects: result.actor.can_create_projects === true,
+    };
+    this.actors.set(actor.id, actor.username);
+    return { actor, accessToken: result.token };
   }
 
   async acceptInvitation(inviteToken) {
@@ -413,6 +485,30 @@ export class HttpCollaborationApi {
 
   appendAgentRequest(sessionId, input) {
     return this.#append(sessionId, "agent_request", input);
+  }
+
+  async createHistorySummary(sessionId, input) {
+    const { historySummaryExecutionWire } = await import("./history-summaries.js");
+    const { event } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/history-summaries`, {
+      method: "POST",
+      body: JSON.stringify({
+        idempotency_key: input.idempotencyKey,
+        source_event_ids: input.sourceEventIds,
+        execution_profile: historySummaryExecutionWire(input.executionProfile),
+        ...(input.instructions === undefined ? {} : { instructions: input.instructions }),
+      }),
+    });
+    return this.#event(event);
+  }
+
+  getProjectContextPolicy(projectId) {
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/context-policy`);
+  }
+
+  setProjectContextPolicy(projectId, mode) {
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/context-policy`, {
+      method: "PUT", body: JSON.stringify({ mode }),
+    });
   }
 
   #append(sessionId, type, input) {
@@ -501,6 +597,8 @@ export class HttpCollaborationApi {
       sessionId: event.session_id,
       sequence: event.sequence,
       type: event.type,
+      visibility: event.visibility,
+      idempotencyKey: event.idempotency_key,
       actor: { id: event.actor_user_id, username },
       createdAt: event.created_at,
       replyTo: event.reply_to_event_id ?? null,
@@ -530,13 +628,15 @@ const users = {
 export class MockCollaborationApi {
   constructor({ latency = 90 } = {}) {
     this.latency = latency;
-    this.currentUser = users.avery;
+    this.currentUser = { ...users.avery, can_create_projects: true };
     this.listeners = new Map();
     this.idempotentEvents = new Map();
     this.projectMutations = new Map();
     this.invitations = new Map();
     this.snapshotRequests = new Map();
     this.localAutomaticUpload = new Map();
+    this.codeRepositories = new Map();
+    this.codeAutomaticUpload = new Map();
     this.credential = "";
     this.deviceName = "Safari · macOS";
     this.dshDeviceName = "DeepSeek Harness · macOS";
@@ -639,9 +739,11 @@ export class MockCollaborationApi {
     ]);
   }
 
-  async authenticate(token) {
+  async authenticate(token, { displayName, deviceName } = {}) {
     await this.#wait();
     if (token !== "demo-token") throw new ApiError("That preview token is not valid.", { status: 401, code: "unauthorized" });
+    if (displayName) this.currentUser.username = displayName;
+    if (deviceName) this.deviceName = deviceName;
     return structuredClone({ ...this.currentUser, device_id: "device-demo" });
   }
 
@@ -671,6 +773,9 @@ export class MockCollaborationApi {
 
   async createProject({ name }) {
     await this.#wait();
+    if (!this.currentUser.can_create_projects) {
+      throw new ApiError("This account can join invited projects but cannot create projects.", { status: 403, code: "forbidden" });
+    }
     const title = normalizeMockTitle(name, "Project");
     const projectId = `project-${createIdempotencyKey("new").split(":").at(-1)}`;
     const now = new Date().toISOString();
@@ -721,6 +826,16 @@ export class MockCollaborationApi {
     }
   }
 
+  async leaveProject(projectId, userId) {
+    await this.#wait();
+    const project = this.projects.find((item) => item.id === projectId);
+    if (!project || !this.currentUser || this.currentUser.id !== userId || project.role === "owner") {
+      throw new ApiError("Only invited members can leave their own project.", { status: 403, code: "forbidden" });
+    }
+    this.projects = this.projects.filter((item) => item.id !== projectId);
+    this.sessions = this.sessions.filter((item) => item.projectId !== projectId);
+  }
+
   async getProject(projectId) {
     await this.#wait();
     const project = this.projects.find((item) => item.id === projectId);
@@ -731,6 +846,53 @@ export class MockCollaborationApi {
   async listProjectSessions(projectId) {
     await this.#wait();
     return this.sessions.filter((session) => session.projectId === projectId).map((session) => this.#summary(session));
+  }
+
+  async getProjectCode(projectId) {
+    await this.getProject(projectId);
+    return structuredClone(this.codeRepositories.get(projectId) ?? {
+      repository: { enabled: false, main_commit: null }, branches: [], own_branch_id: null,
+    });
+  }
+
+  async mutateProjectCode(projectId, operation, input) {
+    const project = await this.getProject(projectId);
+    if ((project.role === "viewer" && operation !== "disable") || (["enable", "disable", "merge"].includes(operation) && project.role !== "owner")) {
+      throw new ApiError("Forbidden", { status: 403, code: "forbidden" });
+    }
+    const key = `code:${projectId}:${input.idempotency_key}`;
+    const prior = this.projectMutations.get(key);
+    if (prior) return structuredClone(prior);
+    let status = await this.getProjectCode(projectId);
+    if (operation === "enable") {
+      status = { ...status, repository: { enabled: true, main_commit: status.repository.main_commit ?? "1".repeat(40) } };
+    } else if (operation === "disable") {
+      if (!status.repository.enabled) throw new ApiError("Code storage is already off", { status: 409, code: "code_not_enabled" });
+      status = { ...status, repository: { ...status.repository, enabled: false } };
+    } else {
+      const own = status.branches.find((branch) => branch.id === status.own_branch_id);
+      const selected = status.branches.find((branch) => branch.id === input.branch_id);
+      if (!status.repository.enabled || (operation === "review" && own?.head_commit !== input.head_commit)
+        || (operation === "merge" && (selected?.head_commit !== input.expected_head_commit || status.repository.main_commit !== input.expected_main_commit))) {
+        throw new ApiError("Conflict", { status: 409, code: "conflict" });
+      }
+      if (operation === "review") own.review_status = "requested";
+      if (operation === "merge") { status.repository.main_commit = selected.head_commit; selected.review_status = "merged"; }
+      if (operation === "update" && own) { own.head_commit = status.repository.main_commit; own.review_status = "draft"; }
+    }
+    this.codeRepositories.set(projectId, structuredClone(status));
+    const result = { status, commit: status.repository.main_commit };
+    this.projectMutations.set(key, structuredClone(result));
+    return result;
+  }
+
+  async getProjectCodeSnapshot(projectId, branchId) {
+    const status = await this.getProjectCode(projectId);
+    const commit = branchId === "main" ? status.repository.main_commit : status.branches.find((branch) => branch.id === branchId)?.head_commit;
+    if (!commit) throw new ApiError("Not found", { status: 404, code: "not_found" });
+    return { snapshot: { branch_id: branchId, commit, files: commit === "1".repeat(40) ? [] : [
+      { path: "README.md", content_base64: btoa("# Example project\n\nShared code checkpoint.\n"), executable: false },
+    ] } };
   }
 
   async listProjectMembers(projectId) {
@@ -888,6 +1050,20 @@ export class MockCollaborationApi {
         model: "deepseek-v4-flash",
         status: "online",
         lastSeenAt: new Date().toISOString(),
+        executionProfiles: [
+          {
+            provider: "deepseek-official",
+            model: "deepseek-v4-flash",
+            reasoningEfforts: ["low", "high", "max"],
+            defaultReasoningEffort: "max",
+          },
+          {
+            provider: "deepseek-official",
+            model: "deepseek-v4",
+            reasoningEfforts: ["low", "high", "max"],
+            defaultReasoningEffort: "max",
+          },
+        ],
       }]),
     ];
   }
@@ -918,6 +1094,30 @@ export class MockCollaborationApi {
     const request = this.snapshotRequests.get(requestId);
     if (!request) throw new ApiError("Snapshot request not found.", { status: 404, code: "not_found" });
     request.pollCount += 1;
+    if (request.kind.startsWith("code_")) {
+      request.status = request.pollCount === 1 ? "claimed" : "completed";
+      if (request.status === "completed" && !request.result) {
+        const projectId = this.#findSession(request.sessionId).projectId;
+        const status = this.codeRepositories.get(projectId);
+        const key = `${projectId}:${request.targetRuntimeId}`;
+        if (request.kind === "code_auto_upload_enable") this.codeAutomaticUpload.set(key, true);
+        if (request.kind === "code_auto_upload_disable") this.codeAutomaticUpload.set(key, false);
+        if (request.kind === "code_upload" && status && !status.own_branch_id) {
+          status.own_branch_id = "branch-demo";
+          status.branches.push({ id: "branch-demo", name: "gt/avery", user_id: this.currentUser.id, head_commit: "2".repeat(40), review_status: "draft" });
+        }
+        const own = status?.branches.find((branch) => branch.id === status.own_branch_id);
+        request.result = {
+          kind: request.kind, enabled: true, automatic_upload: this.codeAutomaticUpload.get(key) ?? false,
+          local_changes: own ? 0 : 1, file_count: 1, excluded_count: 0,
+          base_commit: own?.head_commit ?? status?.repository.main_commit ?? null,
+          cloud_commit: own?.head_commit ?? status?.repository.main_commit ?? null,
+          branch_id: own?.id ?? null, needs_download: false,
+          ...(request.kind === "code_recover" ? { recovery_directory: "gatherthread-recovery-demo" } : {}),
+        };
+      }
+      return structuredClone(request);
+    }
     const localControl = new Set([
       "local_sync_status",
       "local_auto_upload_enable",
@@ -1017,8 +1217,10 @@ export class MockCollaborationApi {
       id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`,
       username: displayName.trim(),
       device_id: "device-demo",
+      can_create_projects: false,
     };
     this.currentUser = actor;
+    this.projects = this.projects.filter((project) => project.id === invitation.projectId);
     this.deviceName = deviceName.trim();
     this.credential = `mock-device-${createIdempotencyKey("token")}`;
     for (const session of this.sessions.filter((item) => item.projectId === invitation.projectId)) {
@@ -1033,6 +1235,25 @@ export class MockCollaborationApi {
       invitation: structuredClone(normalizeInvitation(invitation)),
       accessToken,
     };
+  }
+
+  async claimTestAccess({ accessToken, displayName, deviceName }) {
+    await this.#wait();
+    if (accessToken !== "demo-test-access") {
+      throw new ApiError("Test access token is invalid or unavailable.", { status: 401, code: "unauthorized" });
+    }
+    if (!displayName?.trim() || !deviceName?.trim()) {
+      throw new ApiError("Name and device name are required.", { status: 422, code: "invalid_claim" });
+    }
+    this.currentUser = {
+      id: `user-${createIdempotencyKey("mock").split(":").at(-1)}`,
+      username: displayName.trim(),
+      device_id: "device-demo",
+      can_create_projects: true,
+    };
+    this.deviceName = deviceName.trim();
+    this.projects = [];
+    return { actor: structuredClone(this.currentUser), accessToken: `mock-device-${createIdempotencyKey("token")}` };
   }
 
   async acceptInvitation(inviteToken) {
@@ -1172,6 +1393,36 @@ export class MockCollaborationApi {
     return request;
   }
 
+  async createHistorySummary(sessionId, input) {
+    const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
+    if (existing) return structuredClone(existing);
+    const { historyWireEvents, historySummaryExecutionWire } = await import("./history-summaries.js");
+    const { selectHistorySummarySources, historySummarySourceJson, buildHistorySummaryPrompt } = await import("./history-summary-policy.js");
+    historySummaryExecutionWire(input.executionProfile);
+    let sources;
+    try { sources = selectHistorySummarySources(historyWireEvents(this.events.get(sessionId) ?? []), input.sourceEventIds); }
+    catch (error) { throw new ApiError(error.message, { status: 400, code: error.code }); }
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(historySummarySourceJson(sources)));
+    const marker = { version: 1, source_event_ids: sources.map((event) => event.id),
+      source_digest: [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
+    return this.appendAgentRequest(sessionId, { ...input,
+      content: buildHistorySummaryPrompt(sources, input.instructions), historySummary: marker });
+  }
+
+  async getProjectContextPolicy(projectId) {
+    await this.#wait();
+    this.contextPolicies ??= new Map();
+    return { mode: this.contextPolicies.get(`${this.currentUser.id}:${projectId}`) ?? "summary" };
+  }
+
+  async setProjectContextPolicy(projectId, mode) {
+    await this.#wait();
+    if (!["summary", "original"].includes(mode)) throw new ApiError("Invalid context policy.", { status: 400 });
+    this.contextPolicies ??= new Map();
+    this.contextPolicies.set(`${this.currentUser.id}:${projectId}`, mode);
+    return { mode };
+  }
+
   async openRealtime({ sessionId, afterSequence, onEvent, onState }) {
     await this.#wait();
     this.#findSession(sessionId);
@@ -1205,13 +1456,14 @@ export class MockCollaborationApi {
       actor: this.currentUser,
       idempotencyKey: input.idempotencyKey,
       executionProfile: input.executionProfile,
+      historySummary: input.historySummary,
     });
     this.idempotentEvents.set(`${sessionId}:${input.idempotencyKey}`, event);
     this.#publish(sessionId, event);
     return structuredClone(event);
   }
 
-  #makeEvent(sessionId, type, { content, actor, idempotencyKey, provenance, replyTo = null, executionProfile }) {
+  #makeEvent(sessionId, type, { content, actor, idempotencyKey, provenance, replyTo = null, executionProfile, historySummary }) {
     const bucket = this.events.get(sessionId) ?? [];
     const event = {
       id: `evt-${sessionId}-${bucket.length + 1}`,
@@ -1225,6 +1477,7 @@ export class MockCollaborationApi {
       replyTo,
       payload: {
         content,
+        ...(historySummary ? { history_summary: historySummary } : {}),
         ...(type === "agent_request" && executionProfile ? {
           execution_profile: {
             harness: executionProfile.harness,

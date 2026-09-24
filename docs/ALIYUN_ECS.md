@@ -1,26 +1,26 @@
-# Alibaba Cloud ECS deployment: 0.1.0-alpha.5 preview
+# Alibaba Cloud ECS deployment: 0.1.0-alpha.7 preview
 
-This profile prepares the private `0.1.0-alpha.5` preview for later server deployment. The official GatherThread service is not open yet. The application always listens on `127.0.0.1:8787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 8787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host and invite every later user with a single-use project invitation.
+This profile runs an invitation-only `0.1.0-alpha.7` preview. The application always listens on `127.0.0.1:18787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 18787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host, issue full test qualification locally, and keep project invitations separate for project-scoped guests.
 
 ## 1. Prerequisites
 
 - An Alibaba Cloud mainland-China ECS instance with a fixed public IPv4 address and Ubuntu 22.04 or 24.04. The supported starting profile is at least 2 vCPU and 2 GiB memory, with separate capacity headroom for the database and backups.
 - A verified domain with an A record for the ECS public IP.
 - Complete the required ICP filing before opening a Web service on a mainland-China instance. Alibaba Cloud states that a domain pointing to a mainland server must be filed through the actual access provider regardless of port or use; follow the current [Alibaba Cloud filing guide](https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/icp-filing-application-overview) and the rules for the filing owner's province.
-- Security-group ingress: TCP 22 from fixed administrator addresses only, TCP 80/443 for intended users, and no rule for 8787. See the [Alibaba Cloud ECS security-group guide](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups).
-- A local `v0.1.0-alpha.5` preview commit or archive that has passed `npm run release:verify`.
+- Security-group ingress: TCP 22 from fixed administrator addresses only, TCP 80/443 for intended users, and no rule for 18787. See the [Alibaba Cloud ECS security-group guide](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups).
+- A local `v0.1.0-alpha.7` preview commit or archive that has passed `npm run release:verify`.
 
 Before filing approval, system installation and loopback checks may be prepared, but do not point the domain at the instance or open public Web ingress.
 
 ## 2. Upload the candidate
 
-Upload the candidate archive as `/tmp/gatherthread-0.1.0-alpha.5.tar.gz`, then run on the ECS host:
+Upload the candidate archive as `/tmp/gatherthread-0.1.0-alpha.7.tar.gz`, then run on the ECS host:
 
 ```sh
-sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-alpha.5
-sudo tar -xzf /tmp/gatherthread-0.1.0-alpha.5.tar.gz \
-  -C /opt/gatherthread/releases/0.1.0-alpha.5 --strip-components=1
-cd /opt/gatherthread/releases/0.1.0-alpha.5
+sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-alpha.7
+sudo tar -xzf /tmp/gatherthread-0.1.0-alpha.7.tar.gz \
+  -C /opt/gatherthread/releases/0.1.0-alpha.7 --strip-components=1
+cd /opt/gatherthread/releases/0.1.0-alpha.7
 ```
 
 After a Git tag exists, the exact tag may instead be cloned into the same path. The installer deliberately rejects temporary source paths and mismatched release metadata.
@@ -50,6 +50,14 @@ sudo deploy/aliyun-ecs/create-owner.sh \
 
 The device token is shown once. Save it immediately in a password manager; never place it in chat, an issue, logs, or a URL. On first browser login, the owner may remember the device and later rename it in settings.
 
+After a reviewed release containing [ADR-0028](adr/0028-separate-test-qualification-from-project-invitations.md) is installed, issue a one-use test qualification directly on the ECS in your own private terminal. Do not run this command through an Agent terminal whose output might enter a transcript:
+
+```sh
+sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d
+```
+
+Share the printed `gtq_` code privately with one tester. On the GatherThread login page, they set their display and device names above the forms, select **First-time activation** (中文：**首次使用 · 激活资格**), and enter the code once in **Test qualification code** (中文：**测试资格码**). They must not enter it in the existing-account device-token field. After activation, they retain the newly issued `gta_` device token and use **Existing account** to sign in later. To revoke an unclaimed code, use `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID`; this does not revoke a claimed user's device. A project owner instead uses the in-app project invitation when they want to add a guest to only that project. Neither path opens public registration or grants ECS SSH access.
+
 ## 5. Preflight and smoke test
 
 ```sh
@@ -66,7 +74,7 @@ Every preflight check must pass: candidate version, systemd, Caddy, loopback liv
 sudo systemctl status gatherthread caddy gatherthread-backup.timer
 sudo journalctl -u gatherthread -f
 sudo ls -lh /var/backups/gatherthread
-curl -fsS http://127.0.0.1:8787/health/ready
+curl -fsS http://127.0.0.1:18787/health/ready
 ```
 
 The database is `/var/lib/gatherthread/collaboration.sqlite`; configuration and the credential pepper are in `/etc/gatherthread/gatherthread.env`. Daily backups are retained for 14 days. Copy encrypted database backups and the pepper separately to another failure domain, or device credentials cannot be verified after total host loss.
@@ -84,4 +92,4 @@ Restore is an operator-approved destructive procedure. Follow [OPERATIONS.md](OP
 
 ## Alpha limitations
 
-This is one Node.js process with one SQLite database. It has no automatic failover, horizontal scaling, public registration, attachment storage, automated content-retention worker, token-level Agent streaming, or abandoned-claim recovery. Keep any later preview small and invitation-only, and alert on ECS disk/memory pressure, certificate expiry, service exit, backup failure, and database-integrity failure.
+This is one Node.js process with one SQLite database. It has no automatic failover, horizontal scaling, public registration, attachment storage, automated content-retention worker, or token-level Agent streaming. Keep any later preview small and invitation-only, and alert on ECS disk/memory pressure, certificate expiry, service exit, backup failure, and database-integrity failure.

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { redactText, redactValue } from "@gatherthread/adapters";
-import { isSessionWritableBy } from "@gatherthread/bridge";
+import { isSessionWritableBy, parseHistoryContext } from "@gatherthread/bridge";
+import { historySummaryMarker } from "@gatherthread/protocol";
 import {
   buildDshCanonicalPrompt,
   buildDshRequestPrompt,
@@ -24,9 +25,12 @@ import type {
   DshConnectorLifecycleState,
   DshConnectorLifecycleUpdate,
   DshExecutionGate,
+  DshExecutionSelection,
+  DshContextExecutionState,
   DshHostFacade,
   DshMappedEvent,
   DshRegisteredRuntime,
+  DshRuntimeExecutionProfile,
   DshSessionEventRecord,
 } from "./types.js";
 import type { SessionSummary } from "@gatherthread/bridge";
@@ -60,6 +64,8 @@ export interface DshPollResult {
   completed: number;
 }
 
+const LIVE_PROGRESS_MIN_INTERVAL_MS = 60_000;
+
 /**
  * One project/session binding and one DSH write owner. The connector is not a
  * replacement for GatherThread's bridge: it is an opt-in Host-side runner with
@@ -85,11 +91,17 @@ export class DshHostConnector {
   #pollPromise: Promise<DshPollResult> | undefined;
   #localSyncControlPromise: Promise<void> | undefined;
   #heartbeatPromise: Promise<void> | undefined;
+  #liveProgressPromise: Promise<void> = Promise.resolve();
+  #lastLiveProgressKey: string | undefined;
+  #lastLiveProgressAt = 0;
   #stopPromise: Promise<void> | undefined;
   #backgroundFatalError: Error | undefined;
   readonly #lifecycleAbort = new AbortController();
   #listenerDisposers: Array<() => void> = [];
   #activeStatuses: DshAgentStatus[] = [];
+  #activeExecutionSelection: DshExecutionSelection | undefined;
+  #summaryScanSequence = 0;
+  #hasSummaryHistory = false;
   #liveEventSequences = new Set<number>();
   #session: SessionSummary | undefined;
   #visibleState: DshConnectorLifecycleState = "connecting";
@@ -117,6 +129,10 @@ export class DshHostConnector {
 
   get stopped(): boolean {
     return this.#stopped;
+  }
+
+  get executionRuntimeId(): string | undefined {
+    return this.#stopped ? undefined : this.#runtime?.id;
   }
 
   localSyncStatus(): LocalConversationSyncStatus {
@@ -183,8 +199,20 @@ export class DshHostConnector {
     this.#notifyLifecycle("connecting");
     this.#listenerDisposers.push(this.#host.onSessionEvent((event) => {
       const active = this.#state?.activeRequest;
+      if (active?.contextExecution !== undefined && event.sourceSessionId !== active.contextExecution.sessionId) return;
       if (active !== undefined && event.seq >= active.dshFromSequence) {
         this.#liveEventSequences.add(event.seq);
+        this.#queueLiveProgress(
+          `dsh-live-${String(event.seq)}`,
+          {
+            content: "DeepSeek Harness produced durable work for the active request.",
+            phase: "activity",
+            status: "running",
+            dsh_event_sequence: event.seq,
+            capture_fidelity: "harness_transcript",
+            source_harness: "deepseek-harness",
+          },
+        );
       }
       if (active === undefined
         && event.type === "turn/end"
@@ -199,9 +227,12 @@ export class DshHostConnector {
         });
       }
     }));
-    this.#listenerDisposers.push(this.#host.onStatus((status) => {
-      if (this.#state?.activeRequest === undefined) return;
-      if (this.#activeStatuses.at(-1) !== status) this.#activeStatuses.push(status);
+    this.#listenerDisposers.push(this.#host.onStatus((status, sourceSessionId) => {
+      const active = this.#state?.activeRequest;
+      if (active === undefined || (active.contextExecution !== undefined && sourceSessionId !== active.contextExecution.sessionId)) return;
+      if (this.#activeStatuses.at(-1) !== status) {
+        this.#activeStatuses.push(status);
+      }
       this.#notifyLifecycle(status);
     }));
 
@@ -235,15 +266,19 @@ export class DshHostConnector {
           "canonical_history_projection",
           "bidirectional_local_turns",
         ],
+        ...(this.#config.executionProfiles === undefined ? {} : {
+          executionProfiles: cloneExecutionProfiles(this.#config.executionProfiles),
+        }),
         purpose: "execution",
       });
       this.#assertRuntime(this.#runtime);
       this.#notifyLifecycle("idle");
       if (options.schedule !== false) this.#scheduleHeartbeat();
-      await this.#flushOutbox(this.#requireState().automaticUpload);
-      await this.#finalizeDeliveredRequest();
       if (this.#state.activeRequest !== undefined) {
         await this.#withExecutionPermit(() => this.#recoverActiveRequest());
+      } else {
+        await this.#flushOutbox(this.#requireState().automaticUpload);
+        await this.#finalizeDeliveredRequest();
       }
       if (options.runImmediately !== false) await this.pollOnce();
       if (this.#backgroundFatalError !== undefined) throw this.#backgroundFatalError;
@@ -330,12 +365,12 @@ export class DshHostConnector {
 
   async #poll(): Promise<DshPollResult> {
     const state = this.#requireState();
-    await this.#flushOutbox(state.automaticUpload);
-    await this.#finalizeDeliveredRequest();
     if (state.activeRequest !== undefined) {
       await this.#withExecutionPermit(() => this.#recoverActiveRequest());
       return { scanned: 0, claimed: 0, completed: 1 };
     }
+    await this.#flushOutbox(state.automaticUpload);
+    await this.#finalizeDeliveredRequest();
 
     if (state.automaticUpload) {
       await this.#captureLocalTurns();
@@ -360,7 +395,7 @@ export class DshHostConnector {
         const profile = requestedDshProfile(event);
         if (profile === undefined
           || event.actorId !== this.#requireRuntime().userId
-          || (profile.runtimeId !== undefined && profile.runtimeId !== this.#requireRuntime().id)) {
+          || !this.#profileTargetsThisRuntime(profile)) {
           passive.push(event);
           continue;
         }
@@ -374,17 +409,12 @@ export class DshHostConnector {
         if (manualUploadRequired) {
           return { scanned, claimed: 0, completed: 0 };
         }
-        if (profile.provider !== undefined && profile.provider !== this.#config.provider) {
-          throw new Error("DeepSeek Harness Agent request provider does not match the configured Host binding");
-        }
-        if (profile.model !== this.#config.model) {
-          throw new Error("DeepSeek Harness Agent request model does not match the configured Host binding");
-        }
-        // The alpha server has no claim-abandon or lease-expiry API. Capacity
-        // and this connector's lifecycle therefore gate the entire
-        // claim -> prompt -> durable settlement transaction.
+        const selection = this.#resolveExecutionSelection(profile);
+        // Capacity and this connector's lifecycle gate the entire
+        // claim -> prompt -> durable settlement transaction. A lease now bounds
+        // how long a request stays ours if this process stops making progress.
         const outcome = await this.#withExecutionPermit(
-          () => this.#executeRequest(event),
+          () => this.#executeRequest(event, selection),
         );
         return {
           scanned,
@@ -411,6 +441,7 @@ export class DshHostConnector {
 
   async #executeRequest(
     request: DshCanonicalEvent,
+    selection: DshExecutionSelection,
   ): Promise<{ claimed: boolean; completed: boolean }> {
     if (this.#stopped) throw new Error("DSH connector stopped before claiming an Agent request");
     const state = this.#requireState();
@@ -433,23 +464,89 @@ export class DshHostConnector {
     }
 
     const prompt = buildDshRequestPrompt(request);
-    const baseline = this.#host.currentSequence();
+    const context = await this.#contextForRequest(request);
+    const prepared = context === undefined ? undefined : await this.#host.prepareContextExecution!({
+      requestId: request.id, requestSequence: request.sequence, ...context,
+    });
+    const baseline = this.#host.currentSequence(prepared?.sessionId);
+    if (prepared !== undefined && prepared.fromSequence !== baseline) throw new Error("DSH context preparation returned an inconsistent sequence");
     state.activeRequest = {
       requestId: request.id,
       requestSequence: request.sequence,
       dshFromSequence: baseline,
       promptDigest: digest(prompt),
+      claimAttempt: claim.attemptCount ?? 1,
+      ...(prepared === undefined || context === undefined ? {} : {
+        contextExecution: { sessionId: prepared.sessionId, ...context },
+      }),
     };
     this.#activeStatuses = [];
+    this.#activeExecutionSelection = selection;
     this.#liveEventSequences.clear();
     await this.#stateStore.save(state);
-    const result = await this.#host.prompt(prompt);
+    const result = await this.#host.prompt(prompt, selection, prepared?.sessionId);
     if (result.fromSequence !== baseline || result.toSequence < result.fromSequence) {
       throw new Error("DSH Host prompt returned an inconsistent durable event range");
     }
+    await this.#liveProgressPromise;
     this.#assertLiveEventsDurable(result);
-    await this.#settleActiveRequest(result.events, result.toSequence);
+    await this.#settleActiveRequest(result.events, result.toSequence, selection);
     return { claimed: true, completed: true };
+  }
+
+  async #contextForRequest(request: DshCanonicalEvent): Promise<Omit<DshContextExecutionState, "sessionId"> | undefined> {
+    const payload = asObject(request.payload);
+    const selectedOnly = payload?.history_summary !== undefined;
+    if (selectedOnly && !historySummaryMarker({
+      id: request.id, sequence: request.sequence, type: request.type,
+      actor_user_id: request.actorId, payload: request.payload,
+    })) throw new Error("GatherThread history summary request has invalid source metadata");
+    if (selectedOnly) this.#hasSummaryHistory = true;
+    // Preserve the user's original native workspace/context for sessions that
+    // have never requested a summary, including old servers without /context.
+    // Once a summary exists, both modes use a frozen isolated projection so a
+    // switch back to originals cannot leave hidden prior summaries in context.
+    if (!selectedOnly && !await this.#sessionHasSummaryBefore(request.sequence)) return undefined;
+    if (!selectedOnly && this.#api.readContext === undefined) {
+      throw new Error("GatherThread summarized context is unavailable; update the connector before continuing");
+    }
+    if (this.#host.prepareContextExecution === undefined) {
+      throw new Error("DSH isolated context execution is unavailable; refusing to run a summary-aware request in native history");
+    }
+    const received = selectedOnly
+      ? { view: "original" as const, through_sequence: request.sequence - 1, items: [] }
+      : parseHistoryContext(await this.#api.readContext!(this.#config.sessionId, undefined, request.sequence - 1), undefined, request.sequence - 1);
+    // Apply the same existing secret redaction as passive native projection
+    // before either local durable state or the isolated model surface sees it.
+    const historyContext = { ...received, items: received.items.map((item) => ({ ...item, content: redactText(item.content) })) };
+    return { historyContext, selectedOnly };
+  }
+
+  async #sessionHasSummaryBefore(requestSequence: number): Promise<boolean> {
+    if (this.#hasSummaryHistory) return true;
+    const through = requestSequence - 1;
+    let scanned = 0;
+    while (this.#summaryScanSequence < through) {
+      const cursor = this.#summaryScanSequence;
+      const page = await this.#api.readEvents(this.#config.sessionId, cursor, this.#config.pollLimit);
+      this.#validatePage(page.events, cursor);
+      for (const event of page.events) {
+        if (event.sequence > through) break;
+        if (++scanned > 10_000) throw new Error("DSH summary-context capability scan exceeds 10000 events; refusing an ambiguous native run");
+        this.#summaryScanSequence = event.sequence;
+        if (event.type === "agent_request" && asObject(event.payload)?.history_summary !== undefined) {
+          this.#hasSummaryHistory = true;
+          return true;
+        }
+      }
+      if (!page.hasMore || page.nextSequence >= through || page.events.some((event) => event.sequence > through)) {
+        this.#summaryScanSequence = through;
+        break;
+      }
+      if (page.nextSequence <= cursor) throw new Error("GatherThread replay did not advance while checking summary context");
+      this.#summaryScanSequence = Math.max(this.#summaryScanSequence, page.nextSequence);
+    }
+    return false;
   }
 
   async #recoverActiveRequest(): Promise<void> {
@@ -457,6 +554,50 @@ export class DshHostConnector {
     const state = this.#requireState();
     const active = state.activeRequest;
     if (active === undefined) return;
+    let claim;
+    try {
+      claim = await this.#api.claimAgentRequest(
+        this.#config.sessionId,
+        active.requestId,
+        this.#requireRuntime().id,
+      );
+    } catch (error) {
+      if (!isTerminalClaimConflict(error)) throw error;
+      state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
+      if (active.dshToSequence !== undefined && active.contextExecution === undefined) {
+        state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
+      }
+      delete state.activeRequest;
+      this.#activeStatuses = [];
+      this.#activeExecutionSelection = undefined;
+      this.#liveEventSequences.clear();
+      await this.#stateStore.save(state);
+      return;
+    }
+    if (claim.status === "completed" && active.dshToSequence !== undefined) {
+      state.outbox = [];
+      await this.#stateStore.save(state);
+      await this.#finalizeDeliveredRequest();
+      return;
+    }
+    if (!claim.claimed) {
+      throw new Error("Active GatherThread request no longer has a recoverable claim");
+    }
+    const claimAttempt = claim.attemptCount ?? active.claimAttempt ?? 1;
+    active.claimAttempt = claimAttempt;
+    if (active.dshToSequence !== undefined) {
+      state.outbox = state.outbox.map((operation) => {
+        if ((operation.kind === "progress" || operation.kind === "complete")
+          && operation.requestId === active.requestId) {
+          return { ...operation, input: { ...operation.input, claimAttempt } };
+        }
+        if (operation.kind === "append" && operation.input.replyTo === active.requestId) {
+          return { ...operation, input: { ...operation.input, claimAttempt } };
+        }
+        return operation;
+      });
+    }
+    await this.#stateStore.save(state);
     if (active.dshToSequence !== undefined) {
       await this.#flushOutbox();
       await this.#finalizeDeliveredRequest();
@@ -468,15 +609,34 @@ export class DshHostConnector {
       throw new Error("Active GatherThread request is unavailable during DSH resume");
     }
     const prompt = buildDshRequestPrompt(request);
+    const profile = requestedDshProfile(request);
+    if (profile === undefined) {
+      throw new Error("Active GatherThread request lost its DeepSeek Harness execution profile");
+    }
+    if (!this.#profileTargetsThisRuntime(profile)) {
+      throw new Error("Active GatherThread request no longer targets this exact DSH runtime");
+    }
+    const selection = this.#resolveExecutionSelection(profile);
+    this.#activeExecutionSelection = selection;
     const legacyPrompt = buildDshCanonicalPrompt(history, request, this.#requireRuntime().id);
     if (digest(prompt) !== active.promptDigest && digest(legacyPrompt) !== active.promptDigest) {
       throw new Error("Active GatherThread request changed during DSH resume");
     }
 
-    const recovered = this.#host.snapshotFrom(active.dshFromSequence);
+    const execution = active.contextExecution;
+    if (execution !== undefined) {
+      if (this.#host.prepareContextExecution === undefined) throw new Error("DSH isolated context recovery is unavailable");
+      const prepared = await this.#host.prepareContextExecution({
+        requestId: request.id, requestSequence: request.sequence,
+        historyContext: execution.historyContext, selectedOnly: execution.selectedOnly, resume: true,
+      });
+      if (prepared.sessionId !== execution.sessionId) throw new Error("DSH isolated context recovery returned another Session");
+    }
+
+    const recovered = this.#host.snapshotFrom(active.dshFromSequence, execution?.sessionId);
     const settlement = turnSettlement(recovered);
     if (settlement === "completed") {
-      await this.#settleActiveRequest(recovered, this.#host.currentSequence());
+      await this.#settleActiveRequest(recovered, this.#host.currentSequence(execution?.sessionId), selection);
       return;
     }
     if (settlement !== undefined && settlement !== "interrupted") {
@@ -489,7 +649,7 @@ export class DshHostConnector {
     const continuation = settlement === "interrupted"
       ? "Continue the interrupted GatherThread request using the DSH Session context already restored by the Host. Return only the public final answer."
       : prompt;
-    const baseline = this.#host.currentSequence();
+    const baseline = this.#host.currentSequence(execution?.sessionId);
     state.activeRequest = {
       ...active,
       dshFromSequence: baseline,
@@ -497,17 +657,19 @@ export class DshHostConnector {
     this.#activeStatuses = [];
     this.#liveEventSequences.clear();
     await this.#stateStore.save(state);
-    const result = await this.#host.prompt(continuation);
+    const result = await this.#host.prompt(continuation, selection, execution?.sessionId);
     if (result.fromSequence !== baseline || result.toSequence < result.fromSequence) {
       throw new Error("DSH Host recovery prompt returned an inconsistent durable event range");
     }
+    await this.#liveProgressPromise;
     this.#assertLiveEventsDurable(result);
-    await this.#settleActiveRequest(result.events, result.toSequence);
+    await this.#settleActiveRequest(result.events, result.toSequence, selection);
   }
 
   async #settleActiveRequest(
     durableEvents: readonly DshSessionEventRecord[],
     toSequence: number,
+    selection: DshExecutionSelection,
   ): Promise<void> {
     const state = this.#requireState();
     const active = state.activeRequest;
@@ -522,10 +684,57 @@ export class DshHostConnector {
     }
     if (state.outbox.length > 0) throw new Error("DSH connector outbox was not empty before settlement");
     state.activeRequest = { ...active, dshToSequence: toSequence };
-    state.outbox = this.#outboxFor(mapped, this.#activeStatuses, active.requestId);
+    state.outbox = this.#outboxFor(
+      mapped,
+      this.#activeStatuses,
+      active.requestId,
+      active.claimAttempt ?? 1,
+      selection,
+    );
     await this.#stateStore.save(state);
     await this.#flushOutbox();
     await this.#finalizeDeliveredRequest();
+  }
+
+  #queueLiveProgress(idSuffix: string, payload: Record<string, unknown>): void {
+    const active = this.#state?.activeRequest;
+    const runtime = this.#runtime;
+    if (active === undefined || runtime === undefined) return;
+    const requestId = active.requestId;
+    const claimAttempt = active.claimAttempt ?? 1;
+    const progressKey = `${requestId}:${String(claimAttempt)}`;
+    const now = Date.now();
+    if (this.#lastLiveProgressKey === progressKey
+      && now - this.#lastLiveProgressAt < LIVE_PROGRESS_MIN_INTERVAL_MS) {
+      return;
+    }
+    this.#lastLiveProgressKey = progressKey;
+    this.#lastLiveProgressAt = now;
+    const idempotencyKey = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${idSuffix}`;
+    this.#liveProgressPromise = this.#liveProgressPromise
+      .then(async () => {
+        const current = this.#state?.activeRequest;
+        if (current?.requestId !== requestId || (current.claimAttempt ?? 1) !== claimAttempt) return;
+        const selection = this.#activeExecutionSelection;
+        if (selection === undefined) return;
+        await this.#api.appendAgentProgress(this.#config.sessionId, requestId, {
+          runtimeId: runtime.id,
+          claimAttempt,
+          idempotencyKey,
+          payload,
+          observedModel: selection.model,
+          ...(selection.reasoningEffort === undefined ? {} : {
+            observedReasoningEffort: selection.reasoningEffort,
+          }),
+        });
+      })
+      .catch((error: unknown) => {
+        if (this.#lastLiveProgressKey === progressKey) {
+          this.#lastLiveProgressKey = undefined;
+          this.#lastLiveProgressAt = 0;
+        }
+        this.#onBackgroundError?.(publicError(error));
+      });
   }
 
   async #projectCanonicalBatch(
@@ -537,8 +746,19 @@ export class DshHostConnector {
     const runtime = this.#requireRuntime();
     const projections: DshCanonicalProjection[] = [];
     for (const event of events) {
-      if (event.sequence > throughSequence || event.runtime?.runtimeId === runtime.id) continue;
-      const content = boundedPublicText(extractPublicText(event.payload));
+      if (event.type === "agent_request" && asObject(event.payload)?.history_summary !== undefined) {
+        this.#hasSummaryHistory = true;
+        // This control prompt contains the selected original texts. Showing it
+        // as a normal user bubble would inject those originals again into the
+        // user's untouched native conversation. Its final summary is projected.
+        continue;
+      }
+      if (event.sequence > throughSequence || (event.runtime?.runtimeId === runtime.id
+        && asObject(event.payload)?.context_execution !== "isolated")) continue;
+      // Server-accepted history is projected in full. Native DSH owns its
+      // context/compaction policy; the local-upload byte cap must not silently
+      // discard incoming history, and passive projection must not wake a model.
+      const content = redactText(extractPublicText(event.payload)).trim();
       if (!content) continue;
       if (event.type === "human_chat" || event.type === "agent_request") {
         projections.push({
@@ -624,6 +844,8 @@ export class DshHostConnector {
     events: readonly DshMappedEvent[],
     statuses: readonly DshAgentStatus[],
     requestId: string,
+    claimAttempt: number,
+    selection: DshExecutionSelection,
   ): ConnectorOutboxOperation[] {
     const runtime = this.#requireRuntime();
     const prefix = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}`;
@@ -636,6 +858,7 @@ export class DshHostConnector {
         requestId,
         input: {
           runtimeId: runtime.id,
+          claimAttempt,
           idempotencyKey,
           payload: {
             content: status === "running"
@@ -646,7 +869,10 @@ export class DshHostConnector {
             capture_fidelity: "harness_transcript",
             source_harness: "deepseek-harness",
           },
-          observedModel: this.#config.model,
+          observedModel: selection.model,
+          ...(selection.reasoningEffort === undefined ? {} : {
+            observedReasoningEffort: selection.reasoningEffort,
+          }),
         },
       });
     }
@@ -682,7 +908,11 @@ export class DshHostConnector {
             payload: redactValue(payload),
             replyTo: requestId,
             runtimeId: runtime.id,
-            observedModel: this.#config.model,
+            claimAttempt,
+            observedModel: selection.model,
+            ...(selection.reasoningEffort === undefined ? {} : {
+              observedReasoningEffort: selection.reasoningEffort,
+            }),
           },
         });
       }
@@ -696,6 +926,7 @@ export class DshHostConnector {
       requestId,
       input: {
         runtimeId: runtime.id,
+        claimAttempt,
         idempotencyKey: completionKey,
         payload: {
           text: final.content,
@@ -703,8 +934,12 @@ export class DshHostConnector {
           source_harness: "deepseek-harness",
           source_timestamp: final.timestamp,
           dsh_event_sequence: final.sequence,
+          ...(this.#requireState().activeRequest?.contextExecution === undefined ? {} : { context_execution: "isolated" }),
         },
-        observedModel: this.#config.model,
+        observedModel: selection.model,
+        ...(selection.reasoningEffort === undefined ? {} : {
+          observedReasoningEffort: selection.reasoningEffort,
+        }),
       },
     });
     return operations;
@@ -758,13 +993,15 @@ export class DshHostConnector {
     const active = state.activeRequest;
     if (active?.dshToSequence === undefined || state.outbox.length > 0) return;
     state.serverCursor = Math.max(state.serverCursor, active.requestSequence);
-    state.projectionCursor = Math.max(state.projectionCursor, active.requestSequence);
-    state.publishedDshSequence = Math.max(
-      state.publishedDshSequence,
-      active.dshToSequence,
-    );
+    if (active.contextExecution === undefined) {
+      state.projectionCursor = Math.max(state.projectionCursor, active.requestSequence);
+      state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
+    }
+    // Isolated results have their own sequence domain. Canonical replay will
+    // display their request/answer in the original native Session separately.
     delete state.activeRequest;
     this.#activeStatuses = [];
+    this.#activeExecutionSelection = undefined;
     this.#liveEventSequences.clear();
     await this.#stateStore.save(state);
   }
@@ -862,9 +1099,53 @@ export class DshHostConnector {
       || runtime.model !== this.#config.model
       || runtime.localSessionId !== this.#config.dshSessionId
       || runtime.captureFidelity !== "harness_transcript"
+      || !sameExecutionProfiles(runtime.executionProfiles, this.#config.executionProfiles)
       || runtime.purpose !== "execution") {
       throw new Error("GatherThread returned an incompatible DSH runtime registration");
     }
+  }
+
+  #resolveExecutionSelection(profile: {
+    provider?: string;
+    model: string;
+    reasoningEffort?: string;
+  }): DshExecutionSelection {
+    const provider = profile.provider ?? this.#config.provider;
+    const advertised = this.#config.executionProfiles;
+    if (advertised === undefined) {
+      if (provider !== this.#config.provider) {
+        throw new Error("DeepSeek Harness Agent request provider does not match the configured Host binding");
+      }
+      if (profile.model !== this.#config.model) {
+        throw new Error("DeepSeek Harness Agent request model does not match the configured Host binding");
+      }
+      if (profile.reasoningEffort !== undefined) {
+        throw new Error("DeepSeek Harness fixed runtime did not advertise reasoning effort selection");
+      }
+      return { provider, model: profile.model };
+    }
+    const route = advertised.find((candidate) => (
+      candidate.provider === provider && candidate.model === profile.model
+    ));
+    if (route === undefined) {
+      throw new Error("DeepSeek Harness Agent request provider/model was not advertised by this runtime");
+    }
+    const reasoningEffort = profile.reasoningEffort ?? route.defaultReasoningEffort;
+    if (reasoningEffort !== undefined
+      && !route.reasoningEfforts?.includes(reasoningEffort)) {
+      throw new Error("DeepSeek Harness Agent request reasoning effort was not advertised for this model");
+    }
+    return {
+      provider,
+      model: profile.model,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    };
+  }
+
+  #profileTargetsThisRuntime(profile: { runtimeId?: string }): boolean {
+    const runtimeId = profile.runtimeId;
+    if (runtimeId !== undefined) return runtimeId === this.#requireRuntime().id;
+    return this.#config.executionProfiles === undefined;
   }
 
   #validatePage(events: readonly DshCanonicalEvent[], afterSequence: number): void {
@@ -976,6 +1257,28 @@ function turnSettlement(events: readonly DshSessionEventRecord[]): string | unde
 
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+function cloneExecutionProfiles(
+  profiles: readonly DshRuntimeExecutionProfile[],
+): DshRuntimeExecutionProfile[] {
+  return profiles.map((profile) => ({
+    provider: profile.provider,
+    model: profile.model,
+    ...(profile.reasoningEfforts === undefined ? {} : {
+      reasoningEfforts: [...profile.reasoningEfforts],
+    }),
+    ...(profile.defaultReasoningEffort === undefined ? {} : {
+      defaultReasoningEffort: profile.defaultReasoningEffort,
+    }),
+  }));
+}
+
+function sameExecutionProfiles(
+  actual: readonly DshRuntimeExecutionProfile[] | undefined,
+  expected: readonly DshRuntimeExecutionProfile[] | undefined,
+): boolean {
+  return JSON.stringify(actual ?? null) === JSON.stringify(expected ?? null);
 }
 
 function publicError(error: unknown): Error {
@@ -1103,6 +1406,13 @@ function boundedPublicText(value: string): string {
     else high = middle - 1;
   }
   return `${redacted.slice(0, low)}${suffix}`;
+}
+
+function outboxBelongsToRequest(operation: ConnectorOutboxOperation, requestId: string): boolean {
+  if (operation.kind === "progress" || operation.kind === "complete") {
+    return operation.requestId === requestId;
+  }
+  return operation.kind === "append" && operation.input.replyTo === requestId;
 }
 
 function sessionTimestamp(value: number): string {

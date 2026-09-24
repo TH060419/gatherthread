@@ -338,10 +338,12 @@ async function waitForAllowedCodexHookEvent(
   return false;
 }
 
+type CodexHookThreadPurpose = "execution" | "snapshot_connector" | "background_execution" | "local_only";
+
 interface CodexHookRegistry {
   version: 1;
   workspacePath: string;
-  threads: Record<string, "execution" | "snapshot_connector" | "background_execution">;
+  threads: Record<string, CodexHookThreadPurpose>;
   discoverUnregistered?: boolean;
   hookSource?: "disabled" | CodexHookSource;
 }
@@ -352,9 +354,9 @@ export async function updateCodexHookRegistry(input: {
   registryPath: string;
   workspacePath: string;
   clearThreads?: boolean;
-  add?: Record<string, "execution" | "snapshot_connector" | "background_execution">;
+  add?: Record<string, CodexHookThreadPurpose>;
   remove?: readonly string[];
-  removePurpose?: "execution" | "snapshot_connector" | "background_execution";
+  removePurpose?: CodexHookThreadPurpose;
   discoverUnregistered?: boolean;
   hookSource?: "disabled" | CodexHookSource;
 }): Promise<void> {
@@ -373,9 +375,9 @@ async function updateCodexHookRegistryFile(input: {
   registryPath: string;
   workspacePath: string;
   clearThreads?: boolean;
-  add?: Record<string, "execution" | "snapshot_connector" | "background_execution">;
+  add?: Record<string, CodexHookThreadPurpose>;
   remove?: readonly string[];
-  removePurpose?: "execution" | "snapshot_connector" | "background_execution";
+  removePurpose?: CodexHookThreadPurpose;
   discoverUnregistered?: boolean;
   hookSource?: "disabled" | CodexHookSource;
 }): Promise<void> {
@@ -874,7 +876,7 @@ function isHookRegistry(value: unknown): value is CodexHookRegistry {
   if (input.hookSource !== undefined
     && input.hookSource !== "disabled" && input.hookSource !== "project" && input.hookSource !== "plugin") return false;
   return Object.values(input.threads as Record<string, unknown>).every((purpose) =>
-    purpose === "execution" || purpose === "snapshot_connector" || purpose === "background_execution",
+    purpose === "execution" || purpose === "snapshot_connector" || purpose === "background_execution" || purpose === "local_only",
   );
 }
 

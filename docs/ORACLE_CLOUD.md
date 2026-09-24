@@ -1,6 +1,6 @@
 # Experimental Oracle Always Free deployment
 
-This legacy alternative is retained for reference only. The current private Alpha targets Alibaba Cloud ECS, and the official GatherThread service is not open yet. If this path is revived later, it keeps the GatherThread process on `127.0.0.1:8787` and places Caddy in front on public ports 80/443. It does **not** create an anonymous public service: GatherThread device credentials, one-use invitations, project roles, exact browser origins, secure cookies, one-use WebSocket tickets, and application rate limits still apply.
+This legacy alternative is retained for reference only. The current private Alpha targets Alibaba Cloud ECS, and the official GatherThread service is not open yet. If this path is revived later, it keeps the GatherThread process on `127.0.0.1:18787` and places Caddy in front on public ports 80/443. It does **not** create an anonymous public service: GatherThread device credentials, one-use invitations, project roles, exact browser origins, secure cookies, one-use WebSocket tickets, and application rate limits still apply.
 
 Direct Internet ingress expands the supported private Tailscale alpha threat boundary. The installer therefore requires an explicit `--acknowledge-experimental-public-ingress` flag. Do not use this path for sensitive or regulated data until the deployment has completed an external security review, restore drill, and multi-user field test.
 
@@ -11,7 +11,7 @@ In the Oracle Cloud Console, choose the home region carefully and create:
 - One Ubuntu 24.04 Ampere A1 VM. Start with 1 OCPU and 6 GB memory; GatherThread itself is light, while source builds benefit from the memory.
 - A 50 GB boot volume and one instance public IPv4 address. An ephemeral address remains attached while the instance exists; use a reserved address only after the Console cost estimate still shows zero for the intended account and region.
 - A public subnet with an Internet gateway.
-- Stateful ingress rules for TCP 80 and 443 from `0.0.0.0/0`, plus TCP 22 only from the administrator's current public IP. Do not add port 8787.
+- Stateful ingress rules for TCP 80 and 443 from `0.0.0.0/0`, plus TCP 22 only from the administrator's current public IP. Do not add port 18787.
 - An SSH public key generated and retained locally.
 
 Always Free compute is available only in the tenancy's home region and capacity can be temporarily unavailable. Confirm that every selected resource is labelled **Always Free eligible**, the estimated monthly cost is zero, and billing alerts are enabled before creation. For testers in mainland China, compare reachability and latency to candidate nearby regions before committing the tenancy's home region; routes vary by ISP and the home-region choice controls where Always Free compute can be created. Oracle may reclaim idle Always Free compute, so this evaluation is not an SLA-backed production deployment.
@@ -44,7 +44,7 @@ Run the complete host and public-path check:
 sudo /opt/gatherthread/app/deploy/oracle-free/preflight.sh gatherthread.example.com
 ```
 
-The preflight must show that the app listens only on loopback, local and public `/health` return SQLite `wal`, Caddy and the backup timer are active, and private paths have restrictive permissions. Also test from a second network that `https://gatherthread.example.com` opens while `http://PUBLIC_IP:8787` does not connect.
+The preflight must show that the app listens only on loopback, local and public `/health` return SQLite `wal`, Caddy and the backup timer are active, and private paths have restrictive permissions. Also test from a second network that `https://gatherthread.example.com` opens while `http://PUBLIC_IP:18787` does not connect.
 
 ## 4. Create the first owner
 
@@ -76,4 +76,4 @@ sudo systemctl start gatherthread-backup.service
 sudo ls -l /var/backups/gatherthread
 ```
 
-Oracle security lists and the instance firewall are separate layers. Keep both minimal, retain an SSH recovery path before changing either, and never publish the application port 8787.
+Oracle security lists and the instance firewall are separate layers. Keep both minimal, retain an SSH recovery path before changing either, and never publish the application port 18787.

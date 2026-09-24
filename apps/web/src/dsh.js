@@ -1,7 +1,7 @@
 export const DSH_HARNESS = "deepseek-harness";
 export const CODEX_HARNESS = "codex";
 export const DSH_NPM_VERSION = "0.1.2-rc.1";
-export const GATHERTHREAD_DSH_PLUGIN_VERSION = "0.1.0-alpha.5";
+export const GATHERTHREAD_DSH_PLUGIN_VERSION = "0.1.0-alpha.7";
 export const DSH_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
 export const DSH_VERSION_COMMAND = "npx @deepseek-ai/dsh --version";
 export const DSH_PINNED_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
@@ -21,7 +21,17 @@ export function normalizeExecutionRuntime(value) {
   const status = ["online", "offline", "revoked"].includes(value.status) ? value.status : null;
   const lastSeenAt = safeDate(value.lastSeenAt ?? value.last_seen_at);
   if (!id || !deviceId || !harness || !provider || !model || !status || !lastSeenAt) return null;
-  return { id, deviceId, harness, provider, model, status, lastSeenAt };
+  const executionProfiles = normalizeExecutionProfiles(value.executionProfiles ?? value.execution_profiles);
+  return {
+    id,
+    deviceId,
+    harness,
+    provider,
+    model,
+    status,
+    lastSeenAt,
+    ...(executionProfiles.length > 0 ? { executionProfiles } : {}),
+  };
 }
 
 export function normalizeDshRuntime(value) {
@@ -58,11 +68,15 @@ export function resolveDshRuntime(runtimes, devices, profile) {
   const choices = dshRuntimeChoices(runtimes, devices);
   const online = choices.filter((runtime) => runtime.status === "online");
   if (profile) {
-    const selected = choices.find((runtime) => runtime.deviceId === profile.deviceId
-      && runtime.provider === profile.provider
-      && runtime.model === profile.model);
+    const runtimeId = safeId(profile.runtimeId ?? profile.runtime_id);
+    const selected = runtimeId
+      ? choices.find((runtime) => runtime.id === runtimeId)
+      : choices.find((runtime) => runtime.deviceId === profile.deviceId
+        && runtime.provider === profile.provider
+        && runtime.model === profile.model);
     if (selected?.status === "online") return { runtime: selected, choices, reason: "" };
     if (selected) return { runtime: null, choices, reason: "The selected DeepSeek Harness runtime is offline." };
+    return { runtime: null, choices, reason: "The selected DeepSeek Harness runtime is unavailable." };
   }
   if (online.length === 1) return { runtime: online[0], choices, reason: "" };
   if (online.length === 0) {
@@ -103,17 +117,93 @@ export function codexExecutionProfile(runtime, { model, reasoningEffort }) {
   };
 }
 
-export function dshExecutionProfile(runtime) {
+export function dshExecutionSelection(runtime, requested) {
   const normalized = normalizeDshRuntime(runtime);
   if (!normalized || normalized.status !== "online") {
     throw new Error("A matching online DeepSeek Harness runtime is required.");
   }
+  const profiles = normalized.executionProfiles ?? [];
+  if (profiles.length === 0) {
+    return {
+      provider: normalized.provider,
+      model: normalized.model,
+      reasoningEfforts: [],
+      defaultReasoningEffort: undefined,
+      reasoningEffort: undefined,
+    };
+  }
+  const requestedProvider = safeText(requested?.provider, 80);
+  const requestedModel = safeText(requested?.model, 160);
+  const selected = profiles.find((profile) => profile.provider === requestedProvider && profile.model === requestedModel)
+    ?? profiles.find((profile) => profile.provider === normalized.provider && profile.model === normalized.model)
+    ?? profiles[0];
+  const requestedEffort = safeText(requested?.reasoningEffort ?? requested?.effort, 80);
+  const reasoningEffort = selected.reasoningEfforts.includes(requestedEffort)
+    ? requestedEffort
+    : selected.defaultReasoningEffort ?? selected.reasoningEfforts[0];
+  return {
+    ...selected,
+    reasoningEffort,
+  };
+}
+
+export function dshExecutionProfile(runtime, selection) {
+  const normalized = normalizeDshRuntime(runtime);
+  if (!normalized || normalized.status !== "online") {
+    throw new Error("A matching online DeepSeek Harness runtime is required.");
+  }
+  const profiles = normalized.executionProfiles ?? [];
+  if (profiles.length === 0) {
+    return {
+      harness: DSH_HARNESS,
+      provider: normalized.provider,
+      model: normalized.model,
+      runtimeId: normalized.id,
+    };
+  }
+  const requestedProvider = safeText(selection?.provider, 80);
+  const requestedModel = safeText(selection?.model, 160);
+  const selected = profiles.find((profile) => profile.provider === requestedProvider && profile.model === requestedModel);
+  if (!selected) throw new Error("Choose an advertised DeepSeek Harness execution profile.");
+  const requestedEffort = safeText(selection?.reasoningEffort ?? selection?.effort, 80);
+  if (requestedEffort && !selected.reasoningEfforts.includes(requestedEffort)) {
+    throw new Error("Choose an advertised DeepSeek Harness reasoning effort.");
+  }
+  const reasoningEffort = requestedEffort || selected.defaultReasoningEffort || selected.reasoningEfforts[0];
   return {
     harness: DSH_HARNESS,
-    provider: normalized.provider,
-    model: normalized.model,
+    provider: selected.provider,
+    model: selected.model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
     runtimeId: normalized.id,
   };
+}
+
+function normalizeExecutionProfiles(value) {
+  if (!Array.isArray(value)) return [];
+  const unique = new Map();
+  for (const candidate of value.slice(0, 32)) {
+    if (!isObject(candidate)) continue;
+    const provider = safeText(candidate.provider, 80);
+    const model = safeText(candidate.model, 160);
+    if (!provider || !model) continue;
+    const reasoningEfforts = Array.isArray(candidate.reasoningEfforts ?? candidate.reasoning_efforts)
+      ? [...new Set((candidate.reasoningEfforts ?? candidate.reasoning_efforts)
+        .map((effort) => safeText(effort, 80)).filter(Boolean))].slice(0, 16)
+      : [];
+    const advertisedDefault = safeText(
+      candidate.defaultReasoningEffort ?? candidate.default_reasoning_effort,
+      80,
+    );
+    const defaultReasoningEffort = reasoningEfforts.includes(advertisedDefault) ? advertisedDefault : undefined;
+    unique.set(`${provider}\u0000${model}`, {
+      provider,
+      model,
+      reasoningEfforts,
+      ...(defaultReasoningEffort ? { defaultReasoningEffort } : {}),
+    });
+  }
+  return [...unique.values()];
 }
 
 export function dshPairingCodeFromHash(hash) {

@@ -1,6 +1,6 @@
 # Oracle Always Free 公网试用部署
 
-这套方案面向小规模、仅凭邀请加入的公网测试：GatherThread 仍只监听 `127.0.0.1:8787`，由 Caddy 在公网 `80/443` 端口提供 HTTPS 和 WebSocket。它不会把产品变成匿名公共服务；设备凭据、一次性邀请、项目权限、精确浏览器 Origin、安全 Cookie、一次性 WebSocket ticket 和应用限流仍然生效。
+这套方案面向小规模、仅凭邀请加入的公网测试：GatherThread 仍只监听 `127.0.0.1:18787`，由 Caddy 在公网 `80/443` 端口提供 HTTPS 和 WebSocket。它不会把产品变成匿名公共服务；设备凭据、一次性邀请、项目权限、精确浏览器 Origin、安全 Cookie、一次性 WebSocket ticket 和应用限流仍然生效。
 
 直接接入互联网扩大了当前 Tailscale 私有 Alpha 的威胁边界，因此安装器必须显式传入 `--acknowledge-experimental-public-ingress`。在完成外部安全审查、恢复演练和多人实测前，不要用这套试用部署承载敏感或受监管数据。
 
@@ -11,7 +11,7 @@
 - 一台 Ubuntu 24.04 Ampere A1 虚拟机。可先使用 1 OCPU、6 GB 内存；GatherThread 运行负载不高，但源码构建需要一定内存。
 - 50 GB 启动卷和一个实例公网 IPv4 地址。临时公网地址会在实例存在期间保持绑定；只有当控制台确认该账号与区域的费用估算仍为零时，才改用保留地址。
 - 带互联网网关的公共子网。
-- 有状态入站规则：TCP 80、443 允许 `0.0.0.0/0`；TCP 22 只允许管理员当前的公网 IP。不要开放 8787。
+- 有状态入站规则：TCP 80、443 允许 `0.0.0.0/0`；TCP 22 只允许管理员当前的公网 IP。不要开放 18787。
 - 在本地生成并妥善保管的 SSH 公钥。
 
 Always Free 计算资源只能在租户主区域中创建，而且可能暂时没有可用容量。创建前确认每项资源都明确标注 **Always Free eligible**、月度费用估算为零，并启用费用提醒。面向中国大陆测试者时，确定主区域前应实测到周边候选区域的可达性和延迟；不同运营商的路由可能不同，而主区域决定了 Always Free 计算资源可以创建在哪里。Oracle 还可能回收长期空闲的免费计算实例，因此该方案适合早期试用，不是带 SLA 的正式生产托管。
@@ -44,7 +44,7 @@ sudo deploy/oracle-free/install.sh \
 sudo /opt/gatherthread/app/deploy/oracle-free/preflight.sh gatherthread.example.com
 ```
 
-预检必须确认：应用仅监听回环地址；本机和公网 `/health` 都返回 SQLite `wal`；Caddy 与备份定时器均已运行；私有目录权限正确。还要从另一条网络验证 `https://gatherthread.example.com` 可以打开，而 `http://公网IP:8787` 无法连接。
+预检必须确认：应用仅监听回环地址；本机和公网 `/health` 都返回 SQLite `wal`；Caddy 与备份定时器均已运行；私有目录权限正确。还要从另一条网络验证 `https://gatherthread.example.com` 可以打开，而 `http://公网IP:18787` 无法连接。
 
 ## 4. 创建首位创建者
 
@@ -76,4 +76,4 @@ sudo systemctl start gatherthread-backup.service
 sudo ls -l /var/backups/gatherthread
 ```
 
-Oracle 安全列表与虚拟机自身防火墙是两层独立控制。两层都应保持最小开放范围；修改前保留可用的 SSH 恢复路径；任何情况下都不要发布应用端口 8787。
+Oracle 安全列表与虚拟机自身防火墙是两层独立控制。两层都应保持最小开放范围；修改前保留可用的 SSH 恢复路径；任何情况下都不要发布应用端口 18787。

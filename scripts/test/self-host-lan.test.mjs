@@ -24,6 +24,16 @@ test("LAN proxy keeps the application on loopback behind exact HTTPS", () => {
   assert.match(caddyfile, /reverse_proxy http:\/\/127\.0\.0\.1:8787/);
 });
 
+test("LAN proxy uses the high unprivileged application port by default", () => {
+  const result = assertLanProxyConfiguration({
+    NODE_ENV: "production",
+    GATHERTHREAD_SERVER_HOST: "127.0.0.1",
+    GATHERTHREAD_PUBLIC_BASE_URL: "https://192.168.50.20:8443",
+    GATHERTHREAD_TLS_TERMINATED_BY_PROXY: "true",
+  });
+  assert.equal(result.target, "http://127.0.0.1:18787");
+});
+
 test("LAN hostname resolves only to a private bind address", async () => {
   const url = new URL("https://gatherthread.home.arpa:8443");
   const address = await resolveLanBindAddress(url, async () => [

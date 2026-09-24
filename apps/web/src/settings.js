@@ -1,5 +1,8 @@
-export const SETTINGS_VERSION = 10;
+import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
+
+export const SETTINGS_VERSION = 12;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
+export const SHARED_LANGUAGE_STORAGE_KEY = "gt-lang";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 
@@ -61,6 +64,7 @@ export const DEFAULT_SETTINGS = deepFreeze({
     confirmAgentRequest: false,
     autoScroll: true,
   },
+  historySummaries: { instructions: DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS },
   notifications: {
     agentCompleted: false,
     connectionLost: true,
@@ -82,6 +86,7 @@ export function normalizeSettings(input) {
   const notifications = isObject(source.notifications) ? source.notifications : {};
   const agents = isObject(source.agents) ? source.agents : {};
   const general = isObject(source.general) ? source.general : {};
+  const summaryInstructions = source.historySummaries?.instructions;
   const visibleHistorySync = sync.visibleHistorySync === "every-connect" || sync.visibleHistorySync === "every-update"
     ? "first-connect"
     : sync.visibleHistorySync;
@@ -143,6 +148,10 @@ export function normalizeSettings(input) {
       enterBehavior: oneOf(composer.enterBehavior, ["newline", "send_chat", "request_agent"], DEFAULT_SETTINGS.composer.enterBehavior),
       confirmAgentRequest: composer.confirmAgentRequest === true,
       autoScroll: composer.autoScroll !== false,
+    },
+    historySummaries: {
+      instructions: typeof summaryInstructions === "string" && summaryInstructions.trim()
+        && summaryInstructions.length <= 4000 ? summaryInstructions : DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS,
     },
     notifications: {
       agentCompleted: notifications.agentCompleted === true,
@@ -326,8 +335,18 @@ export function createSettingsStore(storage = globalThis.localStorage) {
   } catch {
     current = normalizeSettings(DEFAULT_SETTINGS);
   }
+  const sharedLocale = readSharedLocale(storage);
+  if (sharedLocale) {
+    current = { ...current, general: { ...current.general, locale: sharedLocale } };
+  } else {
+    writeSharedLocale(storage, current.general.locale);
+  }
   return {
     get() {
+      const latestSharedLocale = readSharedLocale(storage);
+      if (latestSharedLocale && latestSharedLocale !== current.general.locale) {
+        current = { ...current, general: { ...current.general, locale: latestSharedLocale } };
+      }
       return structuredClone(current);
     },
     set(next) {
@@ -337,6 +356,7 @@ export function createSettingsStore(storage = globalThis.localStorage) {
       } catch {
         // UI preferences remain usable for this tab when browser storage is unavailable.
       }
+      writeSharedLocale(storage, current.general.locale);
       return structuredClone(current);
     },
     reset() {
@@ -346,9 +366,29 @@ export function createSettingsStore(storage = globalThis.localStorage) {
       } catch {
         // Reset still applies to this tab.
       }
+      writeSharedLocale(storage, current.general.locale);
       return structuredClone(current);
     },
   };
+}
+
+function readSharedLocale(storage) {
+  try {
+    const sharedLanguage = storage?.getItem?.(SHARED_LANGUAGE_STORAGE_KEY);
+    if (sharedLanguage === "zh") return "zh-CN";
+    if (sharedLanguage === "en") return "en";
+  } catch {
+    // Restricted browser storage keeps the current in-tab setting usable.
+  }
+  return null;
+}
+
+function writeSharedLocale(storage, locale) {
+  try {
+    storage?.setItem?.(SHARED_LANGUAGE_STORAGE_KEY, locale === "zh-CN" ? "zh" : "en");
+  } catch {
+    // Restricted browser storage keeps the current in-tab setting usable.
+  }
 }
 
 function migrateStoredSettings(input) {
@@ -396,12 +436,25 @@ function migrateStoredSettings(input) {
 function normalizeDshProfile(profile) {
   if (!isObject(profile)) return null;
   const deviceId = typeof profile.deviceId === "string" ? profile.deviceId.trim() : "";
+  const runtimeIdSource = profile.runtimeId ?? profile.id;
+  const runtimeId = typeof runtimeIdSource === "string" ? runtimeIdSource.trim() : "";
   const provider = typeof profile.provider === "string" ? profile.provider.trim() : "";
   const model = typeof profile.model === "string" ? profile.model.trim() : "";
+  const effort = typeof (profile.effort ?? profile.reasoningEffort) === "string"
+    ? (profile.effort ?? profile.reasoningEffort).trim()
+    : "";
   if (!DEVICE_ID_PATTERN.test(deviceId) || !DSH_PROVIDER_PATTERN.test(provider) || !DSH_MODEL_PATTERN.test(model)) {
     return null;
   }
-  return { deviceId, provider, model };
+  if (runtimeId && !DEVICE_ID_PATTERN.test(runtimeId)) return null;
+  if (effort && !DSH_PROVIDER_PATTERN.test(effort)) return null;
+  return {
+    deviceId,
+    ...(runtimeId ? { runtimeId } : {}),
+    provider,
+    model,
+    ...(effort ? { effort } : {}),
+  };
 }
 
 function defaultProjectAgentProfile(settings) {

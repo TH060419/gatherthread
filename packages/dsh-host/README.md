@@ -19,7 +19,7 @@ The package does not install a DSH runtime dependency.
 After `@gatherthread/dsh-host` is published, the ordinary three-step path is:
 
 ```text
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.5
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.7
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
 ```
@@ -98,12 +98,19 @@ bounded exponential delay.
 
 Every eligible Session has its own DSH Session id, HTTP abort scope, connector
 state file, runtime identity, heartbeat, canonical cursor and durable outbox.
-The project gate bounds the whole claim-to-settlement operation. This is
-required because the current GatherThread alpha has no claim-abandon or claim
-lease-expiry API. Removing or downgrading a Session cancels its queued permit
-before it can claim a request. Existing single-Session configuration remains
+The project gate bounds the whole claim-to-settlement operation. Claims are
+leased and renewed by accepted progress, so a Session that stops producing work
+releases its request for the exact recorded runtime to reclaim; the gate still bounds this
+connector's own concurrency while it holds one. Removing or downgrading a Session
+cancels its queued permit before it can claim a request. Existing single-Session configuration remains
 valid when `bindingMode` is omitted; both modes resolve the real current actor
 before applying Solo permissions.
+
+During an active prompt, newly durable DSH Host events queue a rate-limited,
+generic progress marker; event bursts coalesce. The marker carries no event text,
+reasoning, headers, or private stream data, but renews the exact claim attempt. Progress, completion,
+and request-linked tool outbox entries are rebound to the renewed attempt after a
+crash recovery, while stale attempts remain fenced by the server.
 
 The installed native plugin stores one account-level model route and reconciles
 every active Project visible to the paired GatherThread identity. Adding a
@@ -111,6 +118,14 @@ Project starts its isolated manager without another pairing step. Archiving a
 Project or revoking access stops only that Project manager; its local workspace
 and DSH Session history are retained. A failure in one Project does not stop
 healthy peers, and discovery retries periodically.
+
+For a `deepseek-official` route, the plugin also advertises the exact models and
+reasoning efforts returned by DSH's public LLM catalog. The GatherThread work
+page may select one advertised combination for an individual Agent request.
+That selection is installed only on the borrowed Agent while the request runs
+and is removed in `finally`; it does not rewrite DSH Web's saved model choice.
+Unsupported combinations fail closed. Older plugins and non-DeepSeek routes
+retain the account route's fixed provider and model.
 
 An existing schema-v1 single-Project pairing keeps its device credential when
 the plugin is upgraded, but deliberately drops the old model binding. The user

@@ -7,6 +7,9 @@ if [[ -z "$backup_path" || ! -f "$backup_path" ]]; then
   exit 64
 fi
 command -v sqlite3 >/dev/null || { echo "sqlite3 is required" >&2; exit 69; }
+command -v node >/dev/null || { echo "Node.js 24 or newer is required" >&2; exit 69; }
+script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+node "$script_directory/backup-code-repositories.mjs" --verify "$backup_path"
 
 integrity="$(sqlite3 "$backup_path" 'PRAGMA integrity_check;')"
 if [[ "$integrity" != "ok" ]]; then

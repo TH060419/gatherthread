@@ -29,7 +29,7 @@ test("Oracle installer requires an explicit public-ingress acknowledgement", asy
 test("Oracle reverse proxy and service retain the loopback security boundary", async () => {
   const caddyfile = await deploymentFile("Caddyfile.in");
   const service = await deploymentFile("gatherthread.service.in");
-  assert.match(caddyfile, /reverse_proxy 127\.0\.0\.1:8787/);
+  assert.match(caddyfile, /reverse_proxy 127\.0\.0\.1:18787/);
   assert.doesNotMatch(caddyfile, /reverse_proxy 0\.0\.0\.0/);
   assert.match(service, /^User=gatherthread$/m);
   assert.match(service, /^ProtectSystem=strict$/m);

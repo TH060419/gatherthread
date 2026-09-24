@@ -2,7 +2,7 @@
 import { spawn } from "node:child_process";
 
 const host = process.env.GATHERTHREAD_SERVER_HOST?.trim() || "127.0.0.1";
-const rawPort = process.env.GATHERTHREAD_SERVER_PORT ?? "8787";
+const rawPort = process.env.GATHERTHREAD_SERVER_PORT ?? "18787";
 const publicBaseUrl = process.env.GATHERTHREAD_PUBLIC_BASE_URL?.trim();
 
 if (process.env.NODE_ENV !== "production") {

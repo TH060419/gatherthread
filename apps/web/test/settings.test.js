@@ -17,6 +17,7 @@ import {
   projectDshProfile,
   projectEnabledHarnesses,
   SETTINGS_STORAGE_KEY,
+  SHARED_LANGUAGE_STORAGE_KEY,
   withProjectAgentHarness,
   withProjectCodexProfile,
   withProjectDshProfile,
@@ -33,7 +34,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 10);
+  assert.equal(normalized.version, 12);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -77,8 +78,10 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
   let settings = withProjectAgentHarness(DEFAULT_SETTINGS, "project-alpha", "deepseek-harness");
   settings = withProjectDshProfile(settings, "project-alpha", {
     deviceId: "dsh-device-1",
+    runtimeId: "runtime-dsh-1",
     provider: "My Provider",
     model: "CaseSensitive/Model-X",
+    effort: "high",
     token: "must-not-survive",
   });
   assert.equal(projectAgentHarness(settings, "project-alpha"), "deepseek-harness");
@@ -86,8 +89,10 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
   assert.equal(projectAgentHarness(settings, "project-beta"), "deepseek-harness");
   assert.deepEqual(projectDshProfile(settings, "project-alpha"), {
     deviceId: "dsh-device-1",
+    runtimeId: "runtime-dsh-1",
     provider: "My Provider",
     model: "CaseSensitive/Model-X",
+    effort: "high",
   });
   assert.equal(projectDshProfile(settings, "project-beta"), null);
   assert.doesNotMatch(JSON.stringify(settings), /must-not-survive|token/i);
@@ -97,6 +102,32 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
     provider: "provider",
     model: "bad\nmodel",
   }), /connected DeepSeek Harness runtime/);
+});
+
+test("legacy DSH project profiles migrate without inventing runtime ids or reasoning values", () => {
+  const migrated = normalizeSettings({
+    version: 10,
+    agents: {
+      activeHarness: "deepseek-harness",
+      enabledHarnesses: ["deepseek-harness"],
+      projectProfiles: {
+        "project-alpha": {
+          harness: "deepseek-harness",
+          enabledHarnesses: ["deepseek-harness"],
+          dsh: {
+            deviceId: "dsh-device-legacy",
+            provider: "Legacy Provider",
+            model: "Legacy/Model",
+          },
+        },
+      },
+    },
+  });
+  assert.deepEqual(projectDshProfile(migrated, "project-alpha"), {
+    deviceId: "dsh-device-legacy",
+    provider: "Legacy Provider",
+    model: "Legacy/Model",
+  });
 });
 
 test("project connection shortcuts are ordered, multi-select, and always keep one default Agent", () => {
@@ -127,7 +158,7 @@ test("legacy flat Codex project profiles migrate without changing their model or
       },
     },
   });
-  assert.equal(migrated.version, 10);
+  assert.equal(migrated.version, 12);
   assert.equal(projectAgentHarness(migrated, "project-alpha"), "codex");
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex"]);
   assert.deepEqual(projectCodexProfile(migrated, "project-alpha"), { model: "Legacy/Model", effort: "high" });
@@ -153,7 +184,7 @@ test("version 6 connection shortcuts become the default for newly opened project
     setItem: () => {},
     removeItem: () => {},
   }).get();
-  assert.equal(migrated.version, 10);
+  assert.equal(migrated.version, 12);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
 });
@@ -191,8 +222,10 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
   const updated = store.set({ ...store.get(), general: { locale: "zh-CN" } });
   assert.equal(updated.general.locale, "zh-CN");
   assert.equal(JSON.parse(data.get(SETTINGS_STORAGE_KEY)).general.locale, "zh-CN");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
   assert.doesNotMatch(data.get(SETTINGS_STORAGE_KEY), /token|cookie|password|secret/i);
   assert.equal(store.reset().general.locale, "en");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "en");
 
   const broken = createSettingsStore({ getItem: () => "{broken", setItem: () => { throw new Error("blocked"); } });
   assert.deepEqual(broken.get(), structuredClone(DEFAULT_SETTINGS));
@@ -207,7 +240,7 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 10);
+  assert.equal(migrated.version, 12);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");
@@ -235,4 +268,33 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: () => {},
   }).get();
   assert.equal(customizedTextScale.appearance.textScalePercent, 110);
+});
+
+test("homepage, login, and workspace share one validated language preference", () => {
+  const data = new Map([[SETTINGS_STORAGE_KEY, JSON.stringify({
+    version: 12,
+    general: { locale: "zh-CN" },
+    appearance: { theme: "dark" },
+  })]]);
+  const storage = {
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  };
+  const store = createSettingsStore(storage);
+  assert.equal(store.get().general.locale, "zh-CN", "existing workspace preference migrates to the shared key");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
+
+  data.set(SHARED_LANGUAGE_STORAGE_KEY, "en");
+  assert.equal(store.get().general.locale, "en", "a change from another tab is reflected without overwriting other settings");
+  assert.equal(store.get().appearance.theme, "dark");
+
+  const updated = store.set({ ...store.get(), general: { locale: "zh-CN" } });
+  assert.equal(updated.general.locale, "zh-CN");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
+  assert.equal(JSON.parse(data.get(SETTINGS_STORAGE_KEY)).general.locale, "zh-CN");
+
+  data.set(SHARED_LANGUAGE_STORAGE_KEY, "invalid");
+  assert.equal(createSettingsStore(storage).get().general.locale, "zh-CN", "invalid shared values cannot override a valid workspace choice");
+  assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
 });

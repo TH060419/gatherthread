@@ -35,6 +35,7 @@ const state: ConnectorState = {
     requestSequence: 9,
     dshFromSequence: 35,
     promptDigest: "a".repeat(64),
+    claimAttempt: 2,
   },
   outbox: [{
     id: "operation-1",
@@ -42,6 +43,7 @@ const state: ConnectorState = {
     requestId: "request-1",
     input: {
       runtimeId: "runtime-1",
+      claimAttempt: 2,
       idempotencyKey: "device:request:complete",
       payload: { text: "safe" },
     },
@@ -56,6 +58,31 @@ test("memory state is cloned and schema validated", async () => {
   assert.deepEqual(loaded, state);
   loaded!.binding.sessionId = "mutated";
   assert.equal((await store.load())?.binding.sessionId, "session-1");
+});
+
+test("frozen DSH context stays in the private active request, is bounded, and validates the exact request fence", async () => {
+  const contextExecution = {
+    sessionId: `gatherthread-execution-${"a".repeat(32)}`, selectedOnly: false,
+    historyContext: { view: "summary" as const, through_sequence: 8, items: [
+      { kind: "summary" as const, event_id: "summary-8", sequence: 1, actor_user_id: "user-1", content: "PUBLIC_FROZEN_DECISION", source_event_ids: ["source-1", "source-3"] },
+    ] },
+  };
+  const contextual = { ...state, activeRequest: { ...state.activeRequest!, contextExecution } };
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "gatherthread-dsh-context-state-")));
+  const filename = path.join(root, "state.json");
+  const store = new FileConnectorStateStore(filename);
+  await store.save(contextual);
+  assert.deepEqual(await store.load(), contextual);
+  if (process.platform !== "win32") assert.equal((await stat(filename)).mode & 0o777, 0o600);
+  for (const bad of [
+    { ...contextExecution, sessionId: "some-unrelated-native-session" },
+    { ...contextExecution, selectedOnly: true },
+    { ...contextExecution, historyContext: { ...contextExecution.historyContext, through_sequence: 7 } },
+    { ...contextExecution, historyContext: { ...contextExecution.historyContext, items: [{ ...contextExecution.historyContext.items[0]!, content: "x".repeat(256 * 1024) }] } },
+  ]) assert.throws(() => validateConnectorState({ ...contextual, activeRequest: { ...state.activeRequest!, contextExecution: bad } }), /context|Context|256|Selected/);
+  const settled = { ...contextual }; delete (settled as ConnectorState).activeRequest;
+  await store.save(settled);
+  assert.doesNotMatch(await readFile(filename, "utf8"), /PUBLIC_FROZEN_DECISION/);
 });
 
 test("legacy state resets only its native projection cursor for safe history backfill", () => {

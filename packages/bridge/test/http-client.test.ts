@@ -19,7 +19,7 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
     { data: { event: wireEvent("e2", 2) } },
     { data: { runtime: wireRuntime() } },
     { data: { runtime: wireRuntime() } },
-    { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed" } },
+    { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed", attempt_count: 2 } },
     { data: { event: wireEvent("progress-1", 3, wireProvenance()) } },
     { data: { event: wireEvent("response-1", 3, wireProvenance()) } },
     { data: {
@@ -71,16 +71,24 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   const runtime = await client.registerRuntime(runtimeRegistration());
   assert.equal(runtime.id, "runtime-1");
   assert.equal(runtime.purpose, "execution");
+  assert.deepEqual(runtime.executionProfiles, [{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    reasoningEfforts: ["low", "high"],
+    defaultReasoningEffort: "low",
+  }]);
   assert.equal((await client.heartbeatRuntime(runtime.id)).id, "runtime-1");
-  assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).claimed, true);
+  assert.equal((await client.claimAgentRequest("s1", "request-1", runtime.id)).attemptCount, 2);
   const progress = await client.appendAgentProgress("s1", "request-1", {
     runtimeId: runtime.id,
+    claimAttempt: 2,
     idempotencyKey: "progress-key-0001",
     payload: { content: "Checking files" },
   });
   assert.equal(progress.runtime?.captureFidelity, "harness_transcript");
   const completed = await client.completeAgentRequest("s1", "request-1", {
     runtimeId: runtime.id,
+    claimAttempt: 2,
     idempotencyKey: "complete-key-0001",
     payload: { text: "done" },
   });
@@ -150,12 +158,25 @@ test("HTTP client matches the collaboration server v1 wire contract", async () =
   });
   assert.equal(JSON.parse(String(requests[8]?.init.body)).capture_fidelity, "harness_transcript");
   assert.equal(JSON.parse(String(requests[8]?.init.body)).purpose, "execution");
+  assert.deepEqual(JSON.parse(String(requests[8]?.init.body)).execution_profiles, [{
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    reasoning_efforts: ["low", "high"],
+    default_reasoning_effort: "low",
+  }]);
   assert.equal(requests[0]?.init.headers && new Headers(requests[0].init.headers).get("authorization"), "Bearer secret-token");
   assert.equal(requests[0]?.init.redirect, "error");
   assert.deepEqual(JSON.parse(String(requests[11]?.init.body)), {
     runtime_id: "runtime-1",
+    claim_attempt: 2,
     idempotency_key: "progress-key-0001",
     payload: { content: "Checking files" },
+  });
+  assert.deepEqual(JSON.parse(String(requests[12]?.init.body)), {
+    runtime_id: "runtime-1",
+    claim_attempt: 2,
+    idempotency_key: "complete-key-0001",
+    payload: { text: "done" },
   });
   assert.deepEqual(JSON.parse(String(requests[13]?.init.body)), {
     local_turn_id: "codex-local-1",
@@ -194,6 +215,71 @@ test("HTTP client redacts its bearer credential from server errors", async () =>
     assert.equal(error.code, "unauthorized");
     assert.equal(error.message, "Collaboration API 401: rejected [REDACTED]");
     return true;
+  });
+});
+
+test("HTTP client rejects a malformed present claim attempt instead of treating it as legacy", async () => {
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async () => Response.json({
+      data: {
+        request_event_id: "request-1",
+        runtime_id: "runtime-1",
+        status: "claimed",
+        attempt_count: "2",
+      },
+    }),
+  });
+  await assert.rejects(
+    client.claimAgentRequest("session-1", "request-1", "runtime-1"),
+    /claim\.attempt_count/,
+  );
+});
+
+test("HTTP client rejects malformed advertised runtime execution profiles", async () => {
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async () => Response.json({ data: { runtime: {
+      ...wireRuntime(),
+      execution_profiles: [{
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        reasoning_efforts: ["low"],
+        default_reasoning_effort: "high",
+      }],
+    } } }),
+  });
+  await assert.rejects(client.registerRuntime(runtimeRegistration()), /default_reasoning_effort/u);
+});
+
+test("HTTP client carries the claim attempt on request-linked tool events", async () => {
+  let requestBody: unknown;
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1",
+    bearerToken: "secret-token",
+    fetch: async (_input, init = {}) => {
+      requestBody = JSON.parse(String(init.body));
+      return Response.json({ data: { event: wireEvent("tool-1", 1, wireProvenance()) } });
+    },
+  });
+  await client.appendEvent("session-1", {
+    type: "tool_call",
+    idempotencyKey: "tool-event-0001",
+    payload: { tool_name: "shell", tool_call_id: "call-1", arguments: {} },
+    replyTo: "request-1",
+    runtimeId: "runtime-1",
+    claimAttempt: 3,
+  });
+  assert.deepEqual(requestBody, {
+    type: "tool_call",
+    idempotency_key: "tool-event-0001",
+    payload: { tool_name: "shell", tool_call_id: "call-1", arguments: {} },
+    reply_to_event_id: "request-1",
+    visibility: "session",
+    runtime_id: "runtime-1",
+    claim_attempt: 3,
   });
 });
 
@@ -250,6 +336,12 @@ function runtimeRegistration(): RuntimeRegistration {
     localSessionId: "local-1",
     captureFidelity: "harness_transcript",
     purpose: "execution",
+    executionProfiles: [{
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoningEfforts: ["low", "high"],
+      defaultReasoningEffort: "low",
+    }],
   };
 }
 
@@ -276,6 +368,12 @@ function wireRuntime() {
     model: "gpt-5",
     local_session_id: "local-1",
     capture_fidelity: "harness_transcript",
+    execution_profiles: [{
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoning_efforts: ["low", "high"],
+      default_reasoning_effort: "low",
+    }],
   };
 }
 
@@ -307,3 +405,110 @@ function wireEvent(id: string, sequence: number, runtime: unknown = null) {
     runtime_provenance: runtime,
   };
 }
+test("context read HTTP preserves the project policy default, explicit views, authorization and raw history", async () => {
+  const original = { kind: "original", event_id: "e1", sequence: 1, actor_user_id: "u1", content: "exact original ".repeat(500) };
+  const summary = { kind: "summary", event_id: "e3", sequence: 1, actor_user_id: "u1", content: "Confirmed the original decision.", source_event_ids: ["e1"] };
+  const requests: { url: string; init: RequestInit | undefined }[] = [];
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1", bearerToken: "context-user-token",
+    fetch: async (input, init) => {
+      const url = String(input);
+      requests.push({ url, init });
+      const data = url.includes("/events?")
+        ? { events: [{ ...wireEvent("e1", 1), payload: { text: original.content } }], cursor: 9, has_more: true }
+        : { view: new URL(url).searchParams.get("view") === "summary" ? "summary" : "original", through_sequence: 3,
+          items: [new URL(url).searchParams.get("view") === "summary" ? summary : original] };
+      return new Response(JSON.stringify({ data }));
+    },
+  });
+  assert.deepEqual(await (client as any).readContext("s1"), { view: "original", through_sequence: 3, items: [original] });
+  const summarized = await (client as any).readContext("s1", "summary");
+  assert.deepEqual(summarized, { view: "summary", through_sequence: 3, items: [summary] });
+  assert.ok(JSON.stringify(summarized).length < original.content.length / 10);
+  assert.deepEqual((await (client as any).readContext("s1", "original")).items, [original]);
+  assert.equal((await client.readContext("s1", undefined, 3)).through_sequence, 3);
+  assert.equal((await client.readContext("s1", "summary", 3)).through_sequence, 3);
+  const raw = await client.readEvents("s1", 4, 7);
+  assert.deepEqual(raw.events[0]?.payload, { text: original.content });
+  assert.equal(raw.nextSequence, 9);
+  assert.equal(raw.hasMore, true);
+  assert.deepEqual(requests.map(({ url }) => url), [
+    "https://collab.example/v1/sessions/s1/context",
+    "https://collab.example/v1/sessions/s1/context?view=summary",
+    "https://collab.example/v1/sessions/s1/context?view=original",
+    "https://collab.example/v1/sessions/s1/context?through_sequence=3",
+    "https://collab.example/v1/sessions/s1/context?view=summary&through_sequence=3",
+    "https://collab.example/v1/sessions/s1/events?after_sequence=4&limit=7",
+  ]);
+  for (const { init } of requests) {
+    assert.equal(new Headers(init?.headers).get("authorization"), "Bearer context-user-token");
+    assert.equal(init?.redirect, "error");
+  }
+});
+
+test("context read HTTP rejects invalid arguments before transport and unavailable or unauthorized servers without fallback", async () => {
+  let requests = 0;
+  let status = 404;
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1", bearerToken: "context-user-token",
+    fetch: async () => {
+      requests += 1;
+      return new Response(JSON.stringify({ error: { code: status === 403 ? "forbidden" : "not_found", message: "Not available" } }), { status });
+    },
+  });
+  for (const sessionId of ["", " ", "../s1", "s1/other", "s1\n", "s".repeat(129), null]) {
+    await assert.rejects((client as any).readContext(sessionId), /session.*identifier|session.*ID/i);
+  }
+  for (const view of ["raw", "", null, 1]) {
+    await assert.rejects((client as any).readContext("s1", view), /view/);
+  }
+  for (const through of [-1, 0.5, "3", null, Number.MAX_SAFE_INTEGER + 1]) {
+    await assert.rejects((client as any).readContext("s1", undefined, through), /through_sequence/);
+  }
+  assert.equal(requests, 0);
+  await assert.rejects((client as any).readContext("s1"), (error: any) => {
+    assert.equal(error.status, 404);
+    assert.match(error.message, /unavailable.*not substituted/i);
+    return true;
+  });
+  assert.equal(requests, 1);
+  status = 403;
+  await assert.rejects((client as any).readContext("s1", "summary"), (error: any) => error.status === 403 && error.code === "forbidden");
+  assert.equal(requests, 2);
+});
+
+test("context read HTTP rejects malformed, mislabeled and oversized context instead of returning partial history", async () => {
+  const item = { kind: "summary", event_id: "e3", sequence: 1, actor_user_id: "u1", content: "Summary", source_event_ids: ["e1"] };
+  const valid = { view: "summary", through_sequence: 3, items: [item] };
+  let payload: unknown = valid;
+  const client = new HttpCollaborationClient({
+    baseUrl: "https://collab.example/v1", bearerToken: "context-user-token",
+    fetch: async () => new Response(JSON.stringify({ data: payload })),
+  });
+  for (const malformed of [
+    { events: [], cursor: 3 },
+    { ...valid, view: "original" },
+    { ...valid, through_sequence: -1 },
+    { ...valid, items: [{ ...item, sequence: 4 }] },
+    { ...valid, items: [{ ...item, sequence: 1.5 }] },
+    { ...valid, items: [{ ...item, content: { text: "not a string" } }] },
+    { ...valid, items: [{ ...item, source_event_ids: [] }] },
+    { ...valid, items: [{ ...item, source_event_ids: ["e1", "e1"] }] },
+    { ...valid, items: [item, item] },
+    { ...valid, items: [{ ...item, content: "x".repeat(256 * 1024) }] },
+  ]) {
+    payload = malformed;
+    await assert.rejects((client as any).readContext("s1", "summary"), /context/i);
+  }
+  payload = { ...valid, view: "original" };
+  await assert.rejects((client as any).readContext("s1", "original"), /context/i);
+  payload = valid;
+  await assert.rejects(client.readContext("s1", "summary", 2), /context/i);
+  await assert.rejects(client.readContext("s1", "summary", 4), /context/i);
+  payload = { ...valid, private_debug: "must not escape", items: [{ ...item, private_runtime_id: "private" }] };
+  assert.deepEqual(await (client as any).readContext("s1", "summary"), valid);
+  const nestedSources = Array.from({ length: 101 }, (_, index) => `ancestor-${index}`);
+  payload = { ...valid, items: [{ ...item, source_event_ids: nestedSources }] };
+  assert.deepEqual((await client.readContext("s1", "summary")).items[0]?.source_event_ids, nestedSources,
+    "validated nested summaries may cover more than one generation's 100 direct sources");
+});

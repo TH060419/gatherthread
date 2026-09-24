@@ -24,12 +24,30 @@ async function loadClient(options: {
   let handoff: Handoff | undefined;
   let effect: (() => (() => void)) | undefined;
   const stateWrites: unknown[] = [];
+  // Hook state survives a re-render so a test can drive the panel to a specific
+  // state and assert on what it actually renders, instead of only matching
+  // bundle source text. The cursor resets per render, the way React numbers
+  // hooks by call order.
+  const hookState = new Map<number, unknown>();
+  let hookCursor = 0;
   const React = {
     useState(initial: unknown) {
-      return [initial, (value: unknown) => { stateWrites.push(value); }];
+      const index = hookCursor++;
+      if (!hookState.has(index)) hookState.set(index, initial);
+      return [hookState.get(index), (value: unknown) => {
+        const next = typeof value === "function"
+          ? (value as (previous: unknown) => unknown)(hookState.get(index))
+          : value;
+        hookState.set(index, next);
+        stateWrites.push(value);
+      }];
     },
     useEffect(callback: () => () => void) { effect = callback; },
-    useRef(initial: unknown) { return { current: initial }; },
+    useRef(initial: unknown) {
+      const index = hookCursor++;
+      if (!hookState.has(index)) hookState.set(index, { current: initial });
+      return hookState.get(index) as { current: unknown };
+    },
     createElement(type: unknown, props: unknown, ...children: unknown[]) {
       return { type, props, children };
     },
@@ -46,6 +64,11 @@ async function loadClient(options: {
     Set,
     Object,
     String,
+    // `URL` is a host global, not a language intrinsic, so a bare vm context
+    // does not have it. The Client parses grant URLs with it, which only a
+    // paired native state reaches.
+    URL,
+    URLSearchParams,
   });
   vm.runInContext(source, context, { filename: "gatherthread-dsh-client.js" });
   if (handoff === undefined) throw new Error("client bundle did not register");
@@ -59,7 +82,21 @@ async function loadClient(options: {
     plugin,
     stateWrites,
     getEffect: () => effect,
+    /** Render a registered component with persistent hooks, as React would. */
+    render<T>(component: () => T): T {
+      hookCursor = 0;
+      return component();
+    },
   };
+}
+
+/** Collect every string a fake-element tree would put on screen. */
+function collectedText(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(collectedText).join("");
+  if (node === null || typeof node !== "object") return "";
+  return collectedText((node as { children?: unknown }).children);
 }
 
 test("dsh.client bundle registers the official settings Slot without credential material", async () => {
@@ -92,6 +129,84 @@ test("dsh.client bundle registers the official settings Slot without credential 
   assert.match(loaded.source, /手动上传/u);
 });
 
+test("Client explains that a paired connection is inactive until a DSH model is selected", async () => {
+  const loaded = await loadClient();
+  // Reaching the route-less branch means authorization is already "paired":
+  // "unpaired" and "pairing" are handled by earlier branches. The grant exists
+  // but no runtime is registered yet, so the GatherThread workspace cannot
+  // discover this DSH. The panel must say so instead of reporting a bare
+  // stopped connection, which is indistinguishable from a fresh install.
+  assert.match(
+    loaded.source,
+    /尚未选择 DSH Provider 与 Model/u,
+    "a paired-but-unrouted connection must explain that a model selection is still required",
+  );
+  assert.match(
+    loaded.source,
+    /配对完成后/u,
+    "the notice must state that pairing itself already succeeded",
+  );
+});
+
+test("Client renders the model-selection notice for a paired but unrouted connection", async () => {
+  // A source-text match only proves the copy ships. This drives the panel to the
+  // paired-without-route state that pairing actually leaves behind and asserts
+  // the notice reaches the rendered output.
+  const loaded = await loadClient({
+    fetch: (async () => { throw new Error("native Client must not use the legacy Fetch route"); }) as typeof fetch,
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: {
+      rpc: {
+        async call() {
+          return { ok: true, value: {
+            schemaVersion: 2,
+            integration: "gatherthread",
+            authorization: "paired",
+            serverUrl: "http://127.0.0.1:8787",
+            deviceName: "DeepSeek Harness",
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+            runtime: {
+              schemaVersion: 1,
+              integration: "gatherthread",
+              connection: "stopped",
+              bindingMode: "project",
+              projectName: "GatherThread / 共序",
+              activeSessionCount: 0,
+              sessions: [],
+              updatedAt: "2026-09-06T00:00:00.000Z",
+            },
+            // No `route`: pairing succeeded, but no provider or model is chosen.
+          } };
+        },
+      },
+    },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  assert.equal(typeof component, "function");
+  loaded.render(component as () => unknown);
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const rendered = collectedText(loaded.render(component as () => unknown));
+  cleanup?.();
+  assert.match(
+    rendered,
+    /配对完成后，尚未选择 DSH Provider 与 Model/u,
+    `the paired-without-route panel must tell the operator what is still missing; rendered: ${rendered}`,
+  );
+  assert.match(
+    rendered,
+    /选择 DSH 模型/u,
+    "the action that completes the step must stay on screen",
+  );
+});
+
 test("Client primary actions keep a visible system foreground in light, dark, and Safari themes", async () => {
   const loaded = await loadClient();
   assert.match(
@@ -103,6 +218,55 @@ test("Client primary actions keep a visible system foreground in light, dark, an
     /background:\s*"currentColor",\s*color:\s*"Canvas"/u,
     "currentColor must not be derived from the foreground color used to paint the label",
   );
+});
+
+test("Client renders separate project code consent, manual actions and disabled-by-default automatic upload", async () => {
+  const loaded = await loadClient({
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: { rpc: { async call() { return { ok: true, value: {
+      schemaVersion: 2, integration: "gatherthread", authorization: "paired",
+      serverUrl: "http://127.0.0.1:18787", deviceName: "DSH",
+      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+      runtime: { schemaVersion: 1, integration: "gatherthread", connection: "connected", bindingMode: "project",
+        projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
+      route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
+      bindings: [{ projectId: "project-code", projectName: "Code project", provider: "deepseek", model: "deepseek-chat" }],
+      localSync: [], codeSync: [{ projectId: "project-code", projectName: "Code project", authorized: true,
+        status: { enabled: true, automatic_upload: false, local_changes: 1, file_count: 2, excluded_count: 3,
+          base_commit: null, cloud_commit: null, branch_id: null, needs_download: false,
+          recovery_directory: "project-recovered-20260922", local_status_unknown: true } }],
+    } }; } } },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  loaded.render(component as () => unknown);
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const tree = loaded.render(component as () => unknown);
+  const text = collectedText(tree);
+  for (const label of ["项目代码 · Git", "允许此 DSH 同步该项目代码", "上传代码", "下载更新", "恢复到新目录", "项目成员均可读取代码"]) {
+    assert.ok(text.includes(label), label);
+  }
+  assert.match(text, /project-recovered-20260922/u);
+  assert.match(text, /原工作区状态未知/u);
+  assert.doesNotMatch(text, /2 个源文件/u);
+  const checkedValues: boolean[] = [];
+  function collect(node: unknown): void {
+    if (Array.isArray(node)) { for (const child of node) collect(child); return; }
+    if (!node || typeof node !== "object") return;
+    const item = node as { props?: { type?: string; checked?: boolean }; children?: unknown };
+    if (item.props?.type === "checkbox") checkedValues.push(item.props.checked === true);
+    collect(item.children);
+  }
+  collect(tree);
+  assert.deepEqual(checkedValues, [true, false]);
+  cleanup?.();
 });
 
 test("Client prefers the authenticated DSH RPC channel and accepts only the pinned native status shape", async () => {

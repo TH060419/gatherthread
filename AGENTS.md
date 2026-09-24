@@ -33,7 +33,7 @@ Do not duplicate a canonical rule into a new document. Link to its owner instead
 - Runtime selection is exact and fail-closed. Do not silently fall back to another harness, device, provider, model, or task.
 - Local harness conversations are projections of canonical history. Cloud deletion must never delete local workspaces, files, Codex tasks, or DSH conversations.
 - Local-to-cloud automatic upload is a per-conversation user choice. Manual recovery must remain explicit and idempotent. Cloud-to-local projection and realtime context injection are independent.
-- A manual Codex history import creates and verifies a new local task. It does not overwrite or archive the previous task; the user archives the old task after checking the replacement.
+- A manual Codex history import creates and verifies a new local task. It does not overwrite or archive the previous task; the user archives the old task after checking the replacement. The retained task is `local_only` in the private Hook registry and must never re-enter local-task discovery or create cloud state.
 - `canonical_history`, `harness_transcript`, and `provider_request` are distinct fidelity claims. Reconstructed or model-generated content must never be labelled as an exact provider request.
 - Hidden reasoning, credentials, private instructions, unapproved local paths, and raw tool data are not shared by default.
 

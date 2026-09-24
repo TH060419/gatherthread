@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260916-2" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260923-1" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -54,63 +54,97 @@
 
       <section class="login-panel">
         <div class="auth-canonical-extension" aria-hidden="true"><span></span><span></span><span></span><span></span><i></i><i></i></div>
-        <div class="brand-lockup brand-lockup-login" role="img" aria-label="GatherThread">
-          <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
-          <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
+        <div class="auth-panel-actions">
+          <a class="brand-lockup brand-lockup-login" href="../" aria-label="GatherThread home" title="GatherThread home">
+            <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
+            <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
+          </a>
+          <button id="auth-language-button" class="auth-language-button" type="button" aria-label="Switch language / 切换语言" title="Switch language / 切换语言">中</button>
         </div>
         <h2 id="login-title">Enter your workspace</h2>
         <p class="muted">Your identity and permissions come from the server.</p>
-        <form id="login-form" novalidate>
-          <label for="token">Access token</label>
-          <input
-            id="token"
-            name="token"
-            type="password"
-            autocomplete="current-password"
-            required
-            aria-describedby="token-help login-error"
-          />
-          <p id="token-help" class="field-help">Enter the access token issued by this owner host.</p>
-          <label class="auth-remember" for="login-remember-device">
-            <input id="login-remember-device" name="remember-device" type="checkbox" />
-            <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
-          </label>
-          <p id="login-error" class="form-error" role="alert"></p>
-          <button class="button button-primary button-wide" type="submit">
-            Continue <span aria-hidden="true">→</span>
-          </button>
-        </form>
-        <div class="auth-divider" aria-hidden="true"><span>or join with an invitation</span></div>
-        <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
-          <label for="claim-invite-secret">Invitation secret</label>
-          <input
-            id="claim-invite-secret"
-            name="invite-secret"
-            type="password"
-            autocomplete="off"
-            autocapitalize="none"
-            spellcheck="false"
-            required
-            aria-describedby="claim-invite-help claim-invite-error"
-          />
-          <p id="claim-invite-help" class="field-help">Paste the secret you received. It stays only in this tab's memory.</p>
+        <div class="auth-identity">
           <div class="claim-identity-grid">
             <div>
               <label for="claim-display-name">Display name</label>
-              <input id="claim-display-name" name="display-name" autocomplete="name" required maxlength="120" />
+              <input id="claim-display-name" name="display-name" autocomplete="name" maxlength="120" aria-describedby="auth-identity-help" />
             </div>
             <div>
               <label for="claim-device-name">Device name</label>
-              <input id="claim-device-name" name="device-name" autocomplete="off" required maxlength="120" value="This browser" />
+              <input id="claim-device-name" name="device-name" autocomplete="off" maxlength="120" value="This browser" aria-describedby="auth-identity-help" />
             </div>
           </div>
-          <label class="auth-remember" for="claim-remember-device">
-            <input id="claim-remember-device" name="remember-device" type="checkbox" />
-            <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
-          </label>
-          <p id="claim-invite-error" class="form-error" role="alert"></p>
-          <button class="button button-secondary button-wide" type="submit">Join workspace</button>
-        </form>
+          <p id="auth-identity-help" class="field-help">Set both names for first-time activation or a project invitation. Existing accounts can leave them unchanged.</p>
+        </div>
+        <div class="auth-entry-tabs" role="tablist" aria-label="Account access">
+          <button id="auth-login-tab" class="auth-entry-tab" type="button" role="tab" aria-selected="true" aria-controls="auth-login-panel" tabindex="0">Existing account</button>
+          <button id="auth-activate-tab" class="auth-entry-tab" type="button" role="tab" aria-selected="false" aria-controls="auth-activate-panel" tabindex="-1">First-time activation</button>
+        </div>
+        <div id="auth-login-panel" class="auth-entry-panel" role="tabpanel" aria-labelledby="auth-login-tab">
+          <form id="login-form" novalidate>
+            <label for="token">Device access token</label>
+            <input
+              id="token"
+              name="token"
+              type="password"
+              autocomplete="current-password"
+              required
+              aria-describedby="token-help login-error"
+            />
+            <p id="token-help" class="field-help">Use the device token issued when you first activated your account.</p>
+            <label class="auth-remember" for="login-remember-device">
+              <input id="login-remember-device" name="remember-device" type="checkbox" />
+              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+            </label>
+            <p id="login-error" class="form-error" role="alert"></p>
+            <button class="button button-primary button-wide" type="submit">Sign in <span aria-hidden="true">→</span></button>
+          </form>
+        </div>
+        <div id="auth-activate-panel" class="auth-entry-panel" role="tabpanel" aria-labelledby="auth-activate-tab" hidden>
+          <form id="claim-test-access-form" novalidate>
+            <label for="test-access-token">Test qualification code</label>
+            <input
+              id="test-access-token"
+              name="test-access-token"
+              type="password"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              required
+              aria-describedby="test-access-help test-access-error"
+            />
+            <p id="test-access-help" class="field-help">Enter your one-time code to activate an account and receive your own device token.</p>
+            <label class="auth-remember" for="test-access-remember-device">
+              <input id="test-access-remember-device" name="remember-device" type="checkbox" />
+              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+            </label>
+            <p id="test-access-error" class="form-error" role="alert"></p>
+            <button class="button button-primary button-wide" type="submit">Activate account <span aria-hidden="true">→</span></button>
+          </form>
+        </div>
+        <details id="auth-project-entry" class="auth-project-entry">
+          <summary>Have a project invitation?</summary>
+          <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
+            <label for="claim-invite-secret">Invitation secret</label>
+            <input
+              id="claim-invite-secret"
+              name="invite-secret"
+              type="password"
+              autocomplete="off"
+              autocapitalize="none"
+              spellcheck="false"
+              required
+              aria-describedby="claim-invite-help claim-invite-error"
+            />
+            <p id="claim-invite-help" class="field-help">A project invitation grants access only to invited projects, not the ability to create a project.</p>
+            <label class="auth-remember" for="claim-remember-device">
+              <input id="claim-remember-device" name="remember-device" type="checkbox" />
+              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+            </label>
+            <p id="claim-invite-error" class="form-error" role="alert"></p>
+            <button class="button button-secondary button-wide" type="submit">Join project</button>
+          </form>
+        </details>
       </section>
     </main>
 
@@ -120,7 +154,7 @@
           <button id="toggle-session-rail-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Collapse session sidebar" title="Collapse session sidebar" aria-controls="session-rail" aria-expanded="true" data-tooltip>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M8.5 4.5v15"/><path d="m14 9-3 3 3 3"/></svg>
           </button>
-          <a class="wordmark" href="#" aria-label="GatherThread home">
+          <a class="wordmark" href="../" aria-label="GatherThread home">
             <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
             <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
           </a>
@@ -131,12 +165,16 @@
           <strong id="topbar-session-name" data-i18n-skip></strong>
         </div>
         <div class="account-cluster">
+          <button id="topbar-create-project-button" class="button button-primary compact-button" type="button" hidden>Create project</button>
           <div class="connection-chip" id="global-connection" role="status">
             <span class="status-dot"></span>
             <span id="global-connection-label">Connecting</span>
           </div>
           <span class="avatar" id="current-user-avatar" aria-hidden="true"></span>
           <span id="current-username" class="current-username"></span>
+          <button id="project-code-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Code collaboration" title="Code collaboration" data-tooltip aria-haspopup="dialog" aria-controls="project-code-dialog">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 7.5v9M18 7.5v1a6 6 0 0 1-6 6H6"/></svg>
+          </button>
           <button id="settings-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Open Settings" title="Settings" data-tooltip aria-haspopup="dialog" aria-controls="settings-dialog">
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" shape-rendering="geometricPrecision"><path d="M8.939 4.609L9.929 4.273L10.044 1.938L13.956 1.938L14.071 4.273L15.061 4.609L16 5.072L17.732 3.502L20.498 6.268L18.928 8L19.391 8.939L19.727 9.929L22.062 10.044L22.062 13.956L19.727 14.071L19.391 15.061L18.928 16L20.498 17.732L17.732 20.498L16 18.928L15.061 19.391L14.071 19.727L13.956 22.062L10.044 22.062L9.929 19.727L8.939 19.391L8 18.928L6.268 20.498L3.502 17.732L5.072 16L4.609 15.061L4.273 14.071L1.938 13.956L1.938 10.044L4.273 9.929L4.609 8.939L5.072 8L3.502 6.268L6.268 3.502L8 5.072Z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
@@ -192,6 +230,7 @@
             <button id="delete-project-button" class="text-button danger-text-button project-delete-button" type="button" aria-haspopup="dialog" aria-controls="delete-cloud-dialog" hidden>
               Delete cloud project
             </button>
+            <button id="leave-project-button" class="text-button project-leave-button" type="button" aria-haspopup="dialog" aria-controls="leave-project-dialog" hidden>Leave project</button>
           </div>
           <div class="rail-heading session-heading">
             <div>
@@ -214,9 +253,9 @@
 
         <main id="main-content" class="conversation" tabindex="-1">
           <section id="empty-state" class="empty-state" hidden>
-            <p class="eyebrow">No sessions yet</p>
+            <p id="empty-state-eyebrow" class="eyebrow">No sessions yet</p>
             <h1 id="empty-state-title">Start a shared thread.</h1>
-            <p>Create a solo room for observers or a multi room for active collaboration.</p>
+            <p id="empty-state-description">Create a solo room for observers or a multi room for active collaboration.</p>
             <button id="empty-create-button" class="button button-primary" type="button">
               Create your first session
             </button>
@@ -290,6 +329,15 @@
                 </div>
               </div>
               <div class="session-header-actions">
+                <button id="history-summary-select-button" class="icon-button workspace-icon-button" type="button" aria-label="Select history to summarize" title="Select history to summarize" aria-pressed="false" aria-controls="history-summary-toolbar" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h10M4 10h10M4 15h5M4 20h5M15 14l2 2 4-5M15 20h6"/></svg>
+                </button>
+                <button id="history-summary-view-button" class="icon-button workspace-icon-button" type="button" aria-label="Show original messages" title="Show original messages" aria-pressed="false" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>
+                </button>
+                <button id="history-summary-versions-button" class="icon-button workspace-icon-button" type="button" aria-label="Summary versions" title="Summary versions" aria-haspopup="dialog" aria-controls="history-summary-versions-dialog" hidden>
+                  <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="13" height="15" rx="2"/><path d="M4 7v13a1 1 0 0 0 1 1h11M10 8h7M10 12h7"/></svg>
+                </button>
                 <button
                   id="download-codex-button"
                   class="button button-download"
@@ -335,6 +383,15 @@
               aria-label="Canonical event timeline"
               aria-busy="true"
             >
+              <div id="history-summary-toolbar" class="history-summary-toolbar" role="group" aria-label="History summary selection" hidden>
+                <span id="history-summary-count" role="status" tabindex="-1">0 / 100</span>
+                <div class="history-summary-actions">
+                  <button id="history-summary-cancel-button" class="icon-button workspace-icon-button" type="button" aria-label="Cancel history selection" title="Cancel history selection"><span aria-hidden="true">×</span></button>
+                  <button id="history-summary-generate-button" class="icon-button workspace-icon-button" type="button" aria-label="Generate summary" title="Generate summary" aria-haspopup="dialog" aria-controls="history-summary-confirm-dialog"><span aria-hidden="true">✦</span></button>
+                  <button id="history-summary-resend-button" class="icon-button workspace-icon-button" type="button" aria-label="Retry the same summary request" title="Retry the same summary request" hidden><span aria-hidden="true">↻</span></button>
+                </div>
+                <p id="history-summary-status" class="form-error" role="alert"></p>
+              </div>
               <ol id="event-timeline" class="event-timeline"></ol>
               <div id="timeline-empty" class="timeline-empty">
                 <span aria-hidden="true">✦</span>
@@ -380,6 +437,10 @@
                 <div id="dsh-agent-profile-fields" class="agent-profile-fields dsh-agent-profile-fields" hidden>
                   <label for="agent-dsh-runtime-select">DSH runtime</label>
                   <select id="agent-dsh-runtime-select" name="agent-dsh-runtime"></select>
+                  <label id="agent-dsh-model-label" for="agent-dsh-model-select" hidden>Model</label>
+                  <select id="agent-dsh-model-select" name="agent-dsh-model" hidden></select>
+                  <label id="agent-dsh-effort-label" for="agent-dsh-effort-select" hidden>Reasoning</label>
+                  <select id="agent-dsh-effort-select" name="agent-dsh-effort" hidden></select>
                 </div>
               </fieldset>
               <div class="composer-actions">
@@ -485,6 +546,70 @@
         </aside>
       </div>
     </div>
+
+    <dialog id="project-code-dialog" class="create-dialog project-code-dialog" aria-labelledby="project-code-title" aria-describedby="project-code-description">
+      <div class="code-dialog-content">
+        <div class="dialog-heading">
+          <div><p id="code-project-name" class="eyebrow" data-i18n-skip></p><h2 id="project-code-title">Code collaboration</h2></div>
+          <button id="close-project-code-button" class="icon-button" type="button" aria-label="Close code collaboration">×</button>
+        </div>
+        <p id="project-code-description" class="code-help">Share code through personal Git branches. Conversation synchronization stays separate.</p>
+        <section id="code-no-project" class="code-section" hidden>
+          <p>Create or join a project before using Git code collaboration. You can still adjust appearance and language in Settings.</p>
+          <button id="code-create-project-button" class="button button-primary compact-button" type="button">Create your first project</button>
+        </section>
+        <div class="code-toolbar"><span id="code-repository-status" role="status"></span><button id="code-refresh-button" class="text-button" type="button">Refresh</button></div>
+        <p id="code-error" class="form-error" role="alert"></p>
+        <section id="code-confirmation" class="code-confirmation" aria-labelledby="code-confirmation-message" hidden>
+          <p id="code-confirmation-message" role="status"></p>
+          <div class="code-actions"><button id="code-confirm-accept" class="button button-primary compact-button" type="button">Continue</button><button id="code-confirm-cancel" class="button button-secondary compact-button" type="button">Cancel</button></div>
+        </section>
+        <section id="code-enable-section" class="code-section" hidden>
+          <p>Uploaded code is visible to all project members. Only the project owner can merge into main. Private files and changes not yet uploaded are not backed up.</p>
+          <button id="code-enable-button" class="button button-primary" type="button">Enable project code storage</button>
+          <p id="code-owner-note" class="code-help" hidden>Ask the project owner to enable code storage.</p>
+        </section>
+        <div id="code-enabled-content" hidden>
+          <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off Git synchronization</button><span class="code-help">Cloud branches remain stored; conversations keep syncing.</span></div>
+          <p id="code-paused-note" class="code-help" hidden>Cloud Git is off. You can still turn off an existing local automatic-upload preference below; other code transfers are paused.</p>
+          <section class="code-section" aria-labelledby="code-local-title">
+            <h3 id="code-local-title">This device and your branch</h3>
+            <label for="code-runtime-select">Local Agent device</label>
+            <select id="code-runtime-select" aria-describedby="code-device-help"></select>
+            <p id="code-device-help" class="code-help">Choose the exact device to transfer files. Changing Agent does not change your cloud branch.</p>
+            <p class="code-help">Authorize locally first: reconnect Codex with --code-sync, or enable code synchronization for this project in the DSH plugin. Files belong to the project, not to a Solo or Multi conversation.</p>
+            <p id="code-local-state" class="code-local-state" role="status" aria-live="polite"></p>
+            <p id="code-local-commits" class="code-help" data-i18n-skip></p>
+            <label class="code-auto-upload-control"><input id="code-auto-upload-toggle" type="checkbox" disabled><span>Automatically upload local code changes</span></label>
+            <p class="code-help">Off by default. When enabled, the connector uploads settled changes while the Agent is idle. This does not enable conversation uploads.</p>
+            <div class="code-actions">
+              <button id="code-upload-button" class="button button-primary compact-button" type="button" disabled>Upload code now</button>
+              <button id="code-download-button" class="button button-secondary compact-button" type="button" disabled>Download my cloud branch</button>
+            </div>
+            <details class="code-recovery"><summary>Recover missing local files</summary><p class="code-help">Restore the last uploaded version into a new local folder. Existing files stay untouched. Open that folder or reconnect explicitly to continue; unuploaded changes cannot be recovered.</p><button id="code-recover-button" class="button button-secondary compact-button" type="button" disabled>Restore to a new folder</button></details>
+          </section>
+          <section class="code-section" aria-labelledby="code-team-title">
+            <div class="code-toolbar"><h3 id="code-team-title">Project branches</h3><span id="code-main-commit" class="code-commit" data-i18n-skip></span></div>
+            <p class="code-help">Each member uploads to their own branch. Review changes before merging; conflicts never overwrite another member's work.</p>
+            <div class="code-actions"><button id="code-review-button" class="button button-secondary compact-button" type="button" disabled>Request review of my branch</button><button id="code-update-button" class="button button-secondary compact-button" type="button" disabled>Merge main into my cloud branch</button></div>
+            <ul id="code-branch-list" class="code-branch-list" aria-label="Project branches"></ul>
+            <p id="code-branches-empty" class="code-help" hidden>No personal branches yet. Upload code from a connected device first.</p>
+            <section id="code-review-preview" class="code-review-preview" aria-labelledby="code-review-title" hidden>
+              <h4 id="code-review-title">Changes against main</h4><p id="code-review-summary" class="code-help"></p><div id="code-review-files"></div>
+              <button id="code-merge-button" class="button button-primary compact-button" type="button" disabled>Approve and merge into main</button>
+            </section>
+          </section>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="code-notice-dialog" class="create-dialog code-notice-dialog" aria-labelledby="code-notice-title" aria-describedby="code-notice-description">
+      <div class="dialog-heading"><h2 id="code-notice-title">About cloud Git synchronization</h2><button id="code-notice-close" class="icon-button" type="button" aria-label="Close">×</button></div>
+      <p id="code-notice-description">Git collaboration can upload local project files to this server. Uploaded files become readable by this project's members. Review your files for secrets and private data before uploading.</p>
+      <p>If you do not want to upload code, leave local automatic upload off and do not select a manual upload. The project owner can turn off Git synchronization here; conversations continue to work.</p>
+      <p class="code-help">This notice appears once in this browser. Turning off Git synchronization retains existing cloud branches and does not remove local files.</p>
+      <div class="dialog-actions"><button id="code-notice-continue" class="button button-primary" type="button">Got it</button></div>
+    </dialog>
 
     <dialog id="create-session-dialog" class="create-dialog">
       <form id="create-session-form" method="dialog">
@@ -600,6 +725,15 @@
       </form>
     </dialog>
 
+    <dialog id="leave-project-dialog" class="create-dialog" aria-labelledby="leave-project-title" aria-describedby="leave-project-description">
+      <form id="leave-project-form" method="dialog">
+        <div class="dialog-heading"><h2 id="leave-project-title">Leave this project?</h2><button id="close-leave-project-button" class="icon-button" type="button" aria-label="Close">×</button></div>
+        <p id="leave-project-description">You will lose access to its cloud sessions and code. Your local files and Agent conversations will not be deleted. Ask the owner for a new invitation if you want to rejoin.</p>
+        <p id="leave-project-error" class="form-error" role="alert"></p>
+        <div class="dialog-actions"><button id="cancel-leave-project-button" class="button button-secondary" type="button">Cancel</button><button id="confirm-leave-project-button" class="button button-danger" type="submit">Leave project</button></div>
+      </form>
+    </dialog>
+
     <dialog
       id="connect-codex-dialog"
       class="create-dialog codex-connect-dialog"
@@ -628,7 +762,7 @@
               <span id="connect-codex-marketplace-title" class="command-label">Codex plugin</span>
               <button class="button button-secondary" type="button" data-copy-command="marketplace" aria-describedby="copy-marketplace-command-status">Copy commands</button>
             </div>
-            <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread
+            <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.7 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread</code>
           <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
           </li>
@@ -832,16 +966,25 @@ codex plugin add gatherthread@gatherthread</code>
 
             <section id="settings-sync" class="settings-section" aria-labelledby="settings-sync-title">
               <div class="settings-section-heading">
-                <div><p class="eyebrow">Sync &amp; context</p><h3 id="settings-sync-title">Projection context ceiling</h3></div>
-                <p>Controls the maximum history used by connector projection, rebuilds, snapshots, and Web Agent execution.</p>
+                <div><p class="eyebrow">Sync &amp; context</p><h3 id="settings-sync-title">Native context management</h3></div>
+                <p>The local Agent manages compaction. Transfer limits and initial-history import remain separate.</p>
               </div>
-              <label class="settings-row" for="settings-sync-mode"><span><strong>Budget mode</strong><small>Adaptive respects the configured maximum and local connector capability.</small></span><select id="settings-sync-mode" name="sync-mode"><option value="adaptive">Adaptive · recommended</option><option value="fixed">Fixed maximum</option></select></label>
-              <label class="settings-row" for="settings-visible-history-sync"><span><strong>Initial Codex history import</strong><small>Choose whether each cloud session gets one readable local task when first connected. Manual import creates a new task; archive the previous task yourself. Realtime context injection always stays active.</small></span><select id="settings-visible-history-sync" name="visible-history-sync"><option value="first-connect" selected>Import once when each session is first created locally</option><option value="never">Do not import automatically</option></select></label>
+              <!-- Retain the stored legacy preference; it never configured native compaction. -->
+              <label class="settings-row" for="settings-sync-mode" hidden><span><strong>Budget mode</strong><small>Adaptive respects the configured maximum and local connector capability.</small></span><select id="settings-sync-mode" name="sync-mode"><option value="adaptive">Adaptive · recommended</option><option value="fixed">Fixed maximum</option></select></label>
+              <label class="settings-row" for="settings-visible-history-sync"><span><strong>Initial Codex history import</strong><small>Import once per new local session, or keep it manual. Manual import creates a new task; archive the old task yourself. Native compaction of long histories may consume model quota. Realtime context injection stays active.</small></span><select id="settings-visible-history-sync" name="visible-history-sync"><option value="first-connect" selected>Import once when each session is first created locally</option><option value="never">Do not import automatically</option></select></label>
               <div class="settings-row settings-row-tall">
-                <span><strong>Projection context ceiling</strong><small>Small values load faster but compact long histories more often. Large values can be slower, consume more memory, or exceed a model limit. Match this to the connected model. Limits and reconnect guidance for every enabled Agent appear below.</small></span>
+                <span><strong>Codex fallback context budget</strong><small>Use the Agent's native context management. This value is only Codex's fallback estimate when its model window is unavailable; it does not resize a model. DSH keeps its own compaction settings.</small></span>
                 <div class="numeric-setting numeric-setting-context"><select id="settings-context-preset" aria-label="Context budget preset"><option value="8192">8 KiB</option><option value="32768">32 KiB</option><option value="131072">128 KiB</option><option value="524288">512 KiB</option><option value="2097152">2 MiB</option><option value="5242880">5 MiB</option><option value="custom">Custom</option></select><label><input id="settings-context-budget" name="context-budget" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" aria-label="Exact context budget" /><select id="settings-context-unit" aria-label="Context budget unit"><option value="KiB">KiB</option><option value="MiB">MiB</option></select></label></div>
               </div>
               <div id="settings-context-diagnostic" class="capability-diagnostic" role="status"></div>
+              <label class="settings-row" for="settings-history-context-mode"><span><strong>My Agent context for this project</strong><small>Summary uses the newest non-overlapping summaries and less context, but may omit detail. Original uses full public messages and more context. This is saved on the server for your user and project, not shared as another member's preference.</small></span><select id="settings-history-context-mode" disabled><option value="summary">Summary · less context, lossy</option><option value="original">Original · more detail and context</option></select></label>
+              <p>Applies to future Agent requests started from GatherThread and explicit MCP context reads. It does not rewrite a running turn, remove existing Codex Desktop task history, or replace history already injected into ordinary DSH sessions.</p>
+              <p id="settings-history-context-status" class="field-help" role="status"></p>
+              <button id="settings-history-context-retry" class="text-button" type="button" hidden>Retry context policy</button>
+              <label class="history-summary-instructions-label" for="settings-history-summary-instructions"><strong>Summary instructions</strong><small>Saved in this browser and shared when generating a summary. Do not enter secrets or private instructions. Edit or add requirements for your summaries.</small></label>
+              <textarea id="settings-history-summary-instructions" rows="7" maxlength="4000" spellcheck="true" translate="no"></textarea>
+              <button id="settings-history-summary-reset" class="text-button" type="button">Reset summary instructions</button>
+              <p id="settings-history-summary-error" class="form-error" role="alert"></p>
             </section>
 
             <section id="settings-agents" class="settings-section" aria-labelledby="settings-agents-title">
@@ -879,9 +1022,9 @@ codex plugin add gatherthread@gatherthread</code>
             </section>
 
             <section id="settings-notifications" class="settings-section" aria-labelledby="settings-notifications-title">
-              <div class="settings-section-heading"><div><p class="eyebrow">Notifications</p><h3 id="settings-notifications-title">Attention</h3></div><p>Browser permission is requested only when you enable a notification.</p></div>
+              <div class="settings-section-heading"><div><p class="eyebrow">Notifications</p><h3 id="settings-notifications-title">Attention</h3></div><p>In-page alerts always work. Saving an enabled notification requests browser permission for background system alerts.</p></div>
               <label class="settings-row settings-toggle" for="settings-notify-agent"><span><strong>Agent completed</strong><small>Notify when a requested Agent finishes while this tab is in the background.</small></span><input id="settings-notify-agent" name="notify-agent" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
-              <label class="settings-row settings-toggle" for="settings-notify-connection"><span><strong>Connection lost</strong><small>Show an in-page notification when live sync goes offline.</small></span><input id="settings-notify-connection" name="notify-connection" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+              <label class="settings-row settings-toggle" for="settings-notify-connection"><span><strong>Connection lost</strong><small>Alert once when an established live sync connection is interrupted.</small></span><input id="settings-notify-connection" name="notify-connection" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
             </section>
           </div>
         </div>
@@ -891,6 +1034,23 @@ codex plugin add gatherthread@gatherthread</code>
           <div><button id="cancel-settings-button" class="button button-secondary" type="button">Cancel</button><button class="button button-primary" type="submit">Save settings</button></div>
         </footer>
       </form>
+    </dialog>
+
+    <dialog id="history-summary-confirm-dialog" class="create-dialog history-summary-confirm-dialog" aria-labelledby="history-summary-confirm-title" aria-describedby="history-summary-confirm-warning">
+      <div>
+        <h2 id="history-summary-confirm-title">Generate summary</h2>
+        <p id="history-summary-confirm-count"></p>
+        <p id="history-summary-confirm-target" class="history-summary-target" translate="no" data-i18n-skip></p>
+        <p id="history-summary-confirm-warning">This uses your selected local Agent and may consume model quota. Only the selected records are supplied as this request's shared-history context; this does not guarantee sandbox isolation from local tools or files. Instructions and the result are shared with session readers.</p>
+        <p>Summaries are derived and lossy. Original records stay available. Already-loaded Codex or DSH history is not removed; native automatic compaction still manages it.</p>
+        <div class="dialog-actions"><button id="history-summary-confirm-cancel" class="button button-secondary" type="button">Cancel</button><button id="history-summary-confirm-button" class="button button-primary" type="button">Generate summary</button></div>
+      </div>
+    </dialog>
+
+    <dialog id="history-summary-versions-dialog" class="create-dialog history-summary-versions-dialog" aria-labelledby="history-summary-versions-title">
+      <div class="history-summary-versions-heading"><h2 id="history-summary-versions-title">Summary versions</h2><button id="history-summary-versions-close" class="icon-button workspace-icon-button" type="button" aria-label="Close summary versions" title="Close summary versions"><span aria-hidden="true">×</span></button></div>
+      <p>Newest non-overlapping summaries are shown by default. Earlier versions and all originals remain available. Display toggles do not change your Agent context policy.</p>
+      <ol id="history-summary-versions" class="history-summary-versions"></ol>
     </dialog>
 
     <dialog id="device-credential-dialog" class="create-dialog device-credential-dialog" aria-labelledby="device-credential-title">
@@ -911,7 +1071,12 @@ codex plugin add gatherthread@gatherthread</code>
       </div>
     </dialog>
 
+    <div id="attention-notice" class="attention-notice" role="status" aria-live="assertive" aria-atomic="true" hidden>
+      <span class="status-dot" aria-hidden="true"></span>
+      <span id="attention-notice-message"></span>
+      <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
+    </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260916-2"></script>
+    <script type="module" src="./src/main.js?v=20260923-2"></script>
   </body>
 </html>

@@ -5,7 +5,7 @@
 For Codex, prefer the standalone connector. Copy the fixed-version operating-system-specific command from the project's **Connect Codex** dialog. It needs no repository checkout, binds one GatherThread project to a safe same-name local workspace, and discovers eligible sessions automatically. Each writable session has a Desktop-owned task plus a separate `exec`-source background projection.
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.7 \
   --url https://your-host.your-tailnet.ts.net \
   --project PROJECT_ID \
   --create-workspace \
@@ -48,7 +48,7 @@ Transcript roots have no implicit defaults and are configured separately for `co
 
 Context snapshots require an explicit fidelity. Reconstructed canonical history is labelled `canonical_history`; parsed local logs are labelled `harness_transcript`. The snapshot fidelity must match the server-registered runtime fidelity, so the server-derived provenance cannot contradict the payload. `provider_request` is disabled by default and requires both service authorization and a caller assertion that an authorized hook or proxy observed the exact request. The bridge cannot independently verify a dishonest caller assertion.
 
-Agent completion follows the server's single-response contract: after a successful claim the bridge appends one lifecycle `agent_progress` marker, then redacts and appends any public Codex `commentary` items as further ordered progress. Tool events are appended idempotently before the claim is completed as one canonical `agent_response`. Progress upload is supplementary and fail-soft so it cannot strand a claimed request; reasoning items are never published. The alpha does not yet implement claim abandonment or lease expiry. If a bridge crashes after claiming, that request remains stuck and the session owner must submit a replacement request.
+Agent completion follows the server's single-response contract: after a successful claim the bridge appends one lifecycle `agent_progress` marker, then redacts and appends any public Codex `commentary` items as further ordered progress. Tool events are appended idempotently before the claim is completed as one canonical `agent_response`. Progress upload is supplementary and fail-soft so it cannot strand a claimed request; reasoning items are never published. Claims are leased. A bridge that crashes after claiming stops renewing; after the lease lapses, only the exact recorded runtime may reclaim it. The claim response's positive attempt number is echoed on progress, completion, and request-linked tool events, fencing every public artifact from an expired execution. Recovery is bounded; past the budget the server fails the request and publishes the canonical failure itself.
 
 ## Codex plugin and project hooks
 

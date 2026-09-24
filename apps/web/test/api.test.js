@@ -3,6 +3,28 @@ import assert from "node:assert/strict";
 
 import { ApiError, HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
 
+test("browser API overrides cannot send credentials to another origin", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLocation = globalThis.location;
+  const requests = [];
+  globalThis.location = new URL("https://gatherthread.example/app/");
+  globalThis.fetch = async (url) => { requests.push(url); return Response.json({ data: { id: "u1", username: "User" } }); };
+  try {
+    for (const baseUrl of ["https://external.invalid", "//external.invalid", "https://user:password@gatherthread.example", "http://gatherthread.example"]) {
+      const api = new HttpCollaborationApi({ baseUrl });
+      await assert.rejects(api.authenticate("fixture-browser-secret"), (error) => error.code === "invalid_api_origin");
+      assert.equal(api.token, "");
+    }
+    assert.equal(requests.length, 0);
+    await new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" }).restoreSession();
+    assert.deepEqual(requests, ["https://gatherthread.example/v1/me"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+  }
+});
+
 test("mock authentication derives the user from a token", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   await assert.rejects(() => api.authenticate("wrong"), (error) => {
@@ -85,6 +107,7 @@ test("DeepSeek Harness requests target one exact runtime without Codex fallback 
         harness: "deepseek-harness",
         provider: "Local Provider",
         model: "CaseSensitive/Model-X",
+        reasoningEffort: "high",
         runtimeId: "runtime-dsh-1",
       },
     });
@@ -95,9 +118,10 @@ test("DeepSeek Harness requests target one exact runtime without Codex fallback 
       harness: "deepseek-harness",
       provider: "Local Provider",
       model: "CaseSensitive/Model-X",
+      reasoning_effort: "high",
       runtime_id: "runtime-dsh-1",
     });
-    assert.doesNotMatch(captured.options.body, /reasoning|token|authorization/iu);
+    assert.doesNotMatch(captured.options.body, /token|authorization/iu);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -111,6 +135,10 @@ test("DeepSeek Harness discovery, pairing approval, and revocation use Cookie-au
       id: "runtime-dsh-1", device_id: "device-dsh-1", harness: "deepseek-harness",
       provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
       last_seen_at: "2026-09-06T00:00:00.000Z",
+      execution_profiles: [{
+        provider: "deepseek-official", model: "deepseek-v4-flash",
+        reasoning_efforts: ["low", "max"], default_reasoning_effort: "max",
+      }],
     }] } },
     { data: { pairing: {
       pairing_id: "dshp-one-use", user_code: "ABCD-2345", device_name: "Studio DSH",
@@ -132,6 +160,10 @@ test("DeepSeek Harness discovery, pairing approval, and revocation use Cookie-au
       id: "runtime-dsh-1", deviceId: "device-dsh-1", harness: "deepseek-harness",
       provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
       lastSeenAt: "2026-09-06T00:00:00.000Z",
+      executionProfiles: [{
+        provider: "deepseek-official", model: "deepseek-v4-flash",
+        reasoningEfforts: ["low", "max"], defaultReasoningEffort: "max",
+      }],
     }]);
     assert.equal((await api.approveDshPairing("ABCD-2345")).status, "approved");
     await api.revokeDevice("device / dsh");
@@ -336,13 +368,27 @@ test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
     await api.deleteSession("session / one");
     await api.deleteProject("project / one");
+    await api.leaveProject("project / one", "user / me");
     assert.deepEqual(requests.map(([url, options]) => [url, options.method, options.body]), [
       ["https://gatherthread.example/v1/sessions/session%20%2F%20one", "DELETE", undefined],
       ["https://gatherthread.example/v1/projects/project%20%2F%20one", "DELETE", undefined],
+      ["https://gatherthread.example/v1/projects/project%20%2F%20one/members/user%20%2F%20me", "DELETE", undefined],
     ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("mock participants and viewers can leave their own project without deleting local work", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const projectId = "project-orbit";
+  await assert.rejects(() => api.leaveProject(projectId, api.currentUser.id), (error) => error.status === 403);
+  api.currentUser = { id: "user-maya", username: "Maya Ortiz", can_create_projects: false };
+  api.projects[0].role = "participant";
+  await assert.rejects(() => api.leaveProject(projectId, "user-jon"), (error) => error.status === 403);
+  await api.leaveProject(projectId, "user-maya");
+  assert.equal((await api.listProjects()).length, 0);
+  assert.equal((await api.listSessions()).length, 0);
 });
 
 test("mock cloud deletion allows session or project creators and clears only cloud state", async () => {
@@ -601,6 +647,7 @@ test("new-user invitation claim requests a browser session without retaining the
       deviceName: "Work laptop",
     });
     assert.equal(claimed.actor.username, "New User");
+    assert.equal(claimed.actor.can_create_projects, false);
     assert.equal(claimed.invitation.status, "claimed");
     assert.equal(claimed.accessToken, "new-device-token");
     assert.equal(api.token, "");
@@ -619,6 +666,38 @@ test("new-user invitation claim requests a browser session without retaining the
   }
 });
 
+test("test access activation uses a separate route and returns only the new device credential once", async () => {
+  const originalFetch = globalThis.fetch;
+  const qualificationCode = ["fixture", "qualification", "code"].join("-");
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return new Response(JSON.stringify({ data: {
+      actor: { user_id: "qualified", display_name: "Qualified", device_id: "qualified-device", can_create_projects: true },
+      token: "new-qualified-device-token",
+    } }), { status: 201, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const result = await api.claimTestAccess({
+      accessToken: qualificationCode,
+      displayName: "Qualified", deviceName: "Work laptop", rememberDevice: true,
+    });
+    assert.equal(result.actor.can_create_projects, true);
+    assert.equal(result.accessToken, "new-qualified-device-token");
+    assert.equal(api.token, "");
+    assert.equal(captured.url, "https://gatherthread.example/v1/test-access/claim");
+    assert.equal(captured.options.headers.Authorization, undefined);
+    assert.equal(captured.options.headers["X-GatherThread-Browser-Session"], "1");
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      access_token: qualificationCode,
+      display_name: "Qualified", device_name: "Work laptop", remember_device: true,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("browser login sends the remember-device choice without retaining the bearer", async () => {
   const originalFetch = globalThis.fetch;
   let captured;
@@ -631,8 +710,12 @@ test("browser login sends the remember-device choice without retaining the beare
   };
   try {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    await api.authenticate("device-token", { rememberDevice: true });
-    assert.deepEqual(JSON.parse(captured.options.body), { remember_device: true });
+    await api.authenticate("device-token", {
+      rememberDevice: true, displayName: "Alice renamed", deviceName: "Office Mac",
+    });
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      remember_device: true, display_name: "Alice renamed", device_name: "Office Mac",
+    });
     assert.equal(captured.options.headers.Authorization, "Bearer device-token");
     assert.equal(api.token, "");
   } finally {

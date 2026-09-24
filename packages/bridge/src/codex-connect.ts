@@ -8,6 +8,8 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import { redactText } from "@gatherthread/adapters";
 import { LocalBridge } from "./bridge.js";
+import { CodeSyncError, ProjectCodeSync } from "./code-sync.js";
+import { isCodeSyncRequestKind } from "@gatherthread/protocol";
 import { CodexProjectHarness, codexSessionKey, managedCodexThreadName } from "./codex-app-server.js";
 import {
   CodexHookRelayServer,
@@ -63,6 +65,8 @@ interface CodexConnectOptions {
   installHooks: boolean;
   pluginHooks: boolean;
   preflightOnly: boolean;
+  codeSync: boolean;
+  recoverCode: boolean;
 }
 
 export type CodexVisibleHistorySyncMode = "first-connect" | "never";
@@ -101,7 +105,7 @@ const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const HELP = `GatherThread Codex connector
 
 Usage:
-  npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url <GatherThread URL> [options]
+  npx --yes @gatherthread/codex-connect@0.1.0-alpha.7 --url <GatherThread URL> [options]
 
 Repository development / compatibility entry:
   npm run codex:connect -- --url <GatherThread URL> [options]
@@ -111,7 +115,7 @@ Options:
   --workspace <path>       Local project Codex may access (default: current directory)
   --model <model>          Codex model (default: gpt-5.6-sol)
   --context-window-tokens <n>
-                           Context ceiling used for safe projection and compaction (default: 128000)
+                           Fallback estimate when Codex reports no model window (default: 128000)
   --visible-history-sync <mode>
                            first-connect or never (default: first-connect)
   --project <id>           Project ID; otherwise choose from your writable projects
@@ -123,6 +127,8 @@ Options:
   --install-hooks          Enable trusted direct-desktop publishing via reviewed project hooks
   --plugin-hooks           Enable the reviewed GatherThread plugin hooks without writing project config
   --preflight-only         Validate server access, workspace, Codex login, and App Server, then exit
+  --code-sync              Authorize source-file sync for this workspace (manual by default)
+  --recover-code           Recover cloud code into a NEW sibling folder, then exit (no Codex required)
   --help                   Show this help
 
 The device access token is read from GATHERTHREAD_TOKEN when set. Otherwise it
@@ -158,6 +164,15 @@ export async function runCodexConnectCli(
       projectName: selected.name,
     })
     : parsed.workspacePath;
+  if (parsed.recoverCode) {
+    const recovery = new ProjectCodeSync({
+      apiUrl: parsed.apiUrl, token, projectId: selected.id, actorId: actor.id,
+      workspacePath: requestedWorkspacePath,
+      onRecovery: (recoveryPath) => process.stdout.write(`Recovered cloud code: ${recoveryPath}\nOriginal workspaces and Agent task bindings were not changed.\n`),
+    });
+    await recovery.recover();
+    return;
+  }
   // Resolve symlinks before deriving any state, hook, or local-MCP endpoint.
   // Codex itself reports the real workspace cwd, so every integration surface
   // must use that same canonical root to find the connector from descendants.
@@ -287,6 +302,15 @@ export async function runCodexConnectCli(
         ? "Snapshot-only mode: visible sessions are monitored for immutable snapshot jobs; no execution runtime is registered.\n"
         : "Project runtime is connecting each writable session with a Desktop-owned task and an isolated background execution projection. New sessions are discovered automatically.\n");
       process.stdout.write("Keep this terminal open; press Control-C to stop.\n");
+      const codeSync = parsed.codeSync ? new ProjectCodeSync({
+        apiUrl: parsed.apiUrl, token, projectId: selected.id, actorId: actor.id, workspacePath,
+        onRecovery: (recoveryPath) => process.stdout.write(`Recovered cloud code into a new local folder: ${recoveryPath}\n`),
+      }) : undefined;
+      if (codeSync) {
+        // Initialization is retried inside the optional code-sync error boundary;
+        // a damaged binding or transient lock must not stop conversation sync.
+        process.stdout.write("Source-file sync authorized for this workspace. Use Code collaboration in GatherThread to upload, download, recover, or enable automatic upload.\n");
+      }
       await runProjectConnector({
         api,
         actorUserId: actor.id,
@@ -302,6 +326,7 @@ export async function runCodexConnectCli(
         hookWorkspacePath: preflight.workspacePath,
         hookMode,
         localSync,
+        ...(codeSync === undefined ? {} : { codeSync }),
       });
     } finally {
       await harness.close();
@@ -491,6 +516,8 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   let installHooks = false;
   let pluginHooks = false;
   let preflightOnly = false;
+  let codeSync = false;
+  let recoverCode = false;
   let createWorkspace = false;
   let workspaceSpecified = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -514,6 +541,14 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
     }
     if (argument === "--preflight-only") {
       preflightOnly = true;
+      continue;
+    }
+    if (argument === "--code-sync") {
+      codeSync = true;
+      continue;
+    }
+    if (argument === "--recover-code") {
+      recoverCode = true;
       continue;
     }
     if (argument === "--create-workspace") {
@@ -559,6 +594,9 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   if (installHooks && pluginHooks) {
     throw new Error("--install-hooks cannot be combined with --plugin-hooks");
   }
+  if (codeSync && !recoverCode && !installHooks && !pluginHooks) {
+    throw new Error("--code-sync requires --plugin-hooks or --install-hooks so local Agent activity can be checked safely");
+  }
   if (!model.trim() || model.length > 200 || model.startsWith("-") || /[\0\r\n]/.test(model)) {
     throw new Error("--model must be a valid non-empty model identifier");
   }
@@ -586,6 +624,8 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
     installHooks,
     pluginHooks,
     preflightOnly,
+    codeSync,
+    recoverCode,
   };
 }
 
@@ -626,6 +666,7 @@ export interface ManagedSession {
   lastHeartbeatAt: number;
   synchronizeLocalTurns?: ProjectHarnessSessionBinding["synchronizeLocalTurns"];
   getLocalSyncStatus?: ProjectHarnessSessionBinding["getLocalSyncStatus"];
+  isLocalRunActive?: ProjectHarnessSessionBinding["isLocalRunActive"];
   setLocalAutoUpload?: ProjectHarnessSessionBinding["setLocalAutoUpload"];
   uploadLocalTurns?: ProjectHarnessSessionBinding["uploadLocalTurns"];
   importVisibleHistorySnapshot?: ProjectHarnessSessionBinding["importVisibleHistorySnapshot"];
@@ -798,6 +839,7 @@ export async function initializeProjectSession(options: {
     ...(binding.activateLocalPublishing === undefined ? {} : { activateLocalPublishing: binding.activateLocalPublishing }),
     ...(binding.deactivateLocalPublishing === undefined ? {} : { deactivateLocalPublishing: binding.deactivateLocalPublishing }),
     ...(binding.relayLocalHarnessEvent === undefined ? {} : { relayLocalHarnessEvent: binding.relayLocalHarnessEvent }),
+    ...(binding.isLocalRunActive === undefined ? {} : { isLocalRunActive: binding.isLocalRunActive }),
   };
 }
 
@@ -889,12 +931,14 @@ export async function runProjectConnector(options: {
   hookWorkspacePath: string;
   hookMode: "disabled" | CodexHookSource;
   localSync?: CodexLocalSyncRegistry;
+  codeSync?: ProjectCodeSync;
   hookRelay?: Pick<CodexHookRelayServer, "start" | "close">;
 }): Promise<void> {
   const hooksEnabled = options.hookMode !== "disabled";
   const projectHookSpoolEnabled = options.hookMode === "project";
   const managed = new Map<string, ManagedSession>();
   const discoveries = new Map<string, Promise<ManagedSession>>();
+  const activeLocalRuns = new Set<string>();
   const discoverySessionIds = new Set<string>();
   const retryReporter = new ConnectorRetryReporter({ token: options.token });
   const setDiscoveryPermission = async (enabled: boolean) => {
@@ -948,6 +992,10 @@ export async function runProjectConnector(options: {
     return operation;
   };
   const dispatchHook = async (event: CodexHookEvent, replay: boolean): Promise<{ additionalContext?: string }> => {
+    if (!replay) {
+      if (event.hook_event_name === "UserPromptSubmit") activeLocalRuns.add(event.session_id);
+      else if (event.hook_event_name === "Stop") activeLocalRuns.delete(event.session_id);
+    }
     for (const current of managed.values()) {
       if (!current.relayLocalHarnessEvent || !current.bridge.runtime) continue;
       const result = await current.relayLocalHarnessEvent({
@@ -1086,6 +1134,17 @@ export async function runProjectConnector(options: {
     if (options.harness.processSnapshotJobs && Date.now() >= nextSnapshotPollAt) {
       try {
         await processLocalSyncControlJobs({ api: options.api, managed });
+        try {
+          const codeBusy = async () => activeLocalRuns.size > 0 || await managedCodeRunsBusy(managed);
+          await processCodeSyncControlJobs({ api: options.api, managed, codeSync: options.codeSync, busy: codeBusy });
+          if (options.codeSync && await options.codeSync.automaticUploadEnabled()) {
+            await options.codeSync.tick({ busy: await codeBusy() });
+          }
+          retryReporter.recovered("code sync");
+        } catch (error) {
+          // Optional source synchronization must never break conversation sync.
+          retryReporter.retrying("code sync", error);
+        }
         await processVisibleHistorySnapshotJobs({
           api: options.api,
           actorDeviceId: options.actorDeviceId,
@@ -1128,6 +1187,50 @@ const LOCAL_SYNC_REQUEST_KINDS = new Set([
   "local_auto_upload_disable",
   "local_turn_upload",
 ]);
+
+async function managedCodeRunsBusy(managed: ReadonlyMap<string, ManagedSession>): Promise<boolean> {
+  for (const current of managed.values()) {
+    // Missing/failed activity probes cannot authorize modifying local source files.
+    try { if (!current.isLocalRunActive || await current.isLocalRunActive()) return true; }
+    catch { return true; }
+  }
+  return false;
+}
+
+export async function processCodeSyncControlJobs(input: {
+  api: Pick<CollaborationApi, "listSnapshotRequests" | "claimSnapshotRequest" | "completeSnapshotRequest" | "failSnapshotRequest">;
+  managed: ReadonlyMap<string, ManagedSession>;
+  codeSync?: Pick<ProjectCodeSync, "execute"> | undefined;
+  busy: boolean | (() => Promise<boolean>);
+}): Promise<void> {
+  const { api } = input;
+  if (!api.listSnapshotRequests || !api.claimSnapshotRequest || !api.completeSnapshotRequest || !api.failSnapshotRequest) return;
+  const jobs = [...await api.listSnapshotRequests("pending", 40), ...await api.listSnapshotRequests("claimed", 40)]
+    .filter((job, index, all) => isCodeSyncRequestKind(job.kind) && all.findIndex((candidate) => candidate.id === job.id) === index);
+  for (const job of jobs) {
+    const runtime = input.managed.get(job.sessionId)?.bridge.runtime;
+    if (!runtime || runtime.harness !== "codex" || job.targetRuntimeId !== runtime.id) continue;
+    let claimed;
+    try { claimed = await api.claimSnapshotRequest(job.id, runtime.id); } catch { continue; }
+    if (claimed.status !== "claimed") continue;
+    let result;
+    try {
+      if (!input.codeSync) throw new CodeSyncError("code_sync_disabled", "Restart this Codex connector with --code-sync to authorize source-file sync for this workspace.");
+      const modifiesFiles = ["code_upload", "code_download", "code_recover", "code_auto_upload_enable"].includes(claimed.kind);
+      const busy = modifiesFiles && (typeof input.busy === "function" ? await input.busy() : input.busy);
+      result = await input.codeSync.execute(claimed.kind, { busy, operationId: claimed.id });
+    } catch (error) {
+      await api.failSnapshotRequest(job.id, runtime.id, {
+        code: error instanceof CodeSyncError ? error.code : "code_sync_failed",
+        message: error instanceof CodeSyncError ? error.message : "Local code synchronization failed. Check the connector; source files and credentials are not included in this message.",
+      });
+      continue;
+    }
+    // The local operation has succeeded. An uncertain completion response must
+    // leave the claimed job retryable, using its operation id for recovery.
+    await api.completeSnapshotRequest(job.id, runtime.id, { kind: claimed.kind, ...result });
+  }
+}
 
 export async function processLocalSyncControlJobs(input: {
   api: HttpCollaborationClient;

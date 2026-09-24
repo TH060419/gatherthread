@@ -43,6 +43,7 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
   const heartbeatRuntime = client.heartbeatRuntime;
   const appendAgentProgress = client.appendAgentProgress;
   const commitLocalTurn = client.commitLocalTurn;
+  const readContext = client.readContext;
   if (listProjectSessions === undefined
     || heartbeatRuntime === undefined
     || appendAgentProgress === undefined
@@ -52,6 +53,10 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
   return {
     listProjectSessions: (projectId) => listProjectSessions.call(client, projectId),
     readEvents: (sessionId, afterSequence, limit) => client.readEvents(sessionId, afterSequence, limit),
+    ...(readContext === undefined ? {} : {
+      readContext: (sessionId: string, view?: Parameters<NonNullable<CollaborationApi["readContext"]>>[1], throughSequence?: number) =>
+        readContext.call(client, sessionId, view, throughSequence),
+    }),
     registerRuntime: async (input: DshRuntimeRegistration) => client.registerRuntime(
       input as unknown as RuntimeRegistration,
     ) as unknown as DshRegisteredRuntime,
@@ -80,10 +85,17 @@ export function adaptCollaborationApi(client: CollaborationApi): DshCollaboratio
   };
 }
 
+/**
+ * A claim conflict the server has already resolved. `agent_request_failed` means
+ * the server exhausted its re-dispatch budget, so the request is finished as far
+ * as this connector is concerned: projecting the canonical failure and moving on
+ * is the only correct response, and retrying would spin on it every poll.
+ */
 export function isTerminalClaimConflict(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
   const candidate = error as { status?: unknown; code?: unknown };
   return candidate.status === 409
     && (candidate.code === "agent_request_already_claimed"
-      || candidate.code === "agent_request_already_completed");
+      || candidate.code === "agent_request_already_completed"
+      || candidate.code === "agent_request_failed");
 }

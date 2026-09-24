@@ -15,7 +15,7 @@ The host operator is inside the plaintext trust boundary defined by [ADR-0001](a
 - A Tailscale HTTPS/MagicDNS name for the host.
 - A private directory on the host for `.env`, SQLite, and backups.
 
-Do not expose port 8787 through a router, firewall, Tailscale Funnel, or a public tunnel.
+Do not expose the default application port 18787 through a router, firewall, Tailscale Funnel, or a public tunnel.
 
 ## Install and configure
 
@@ -31,7 +31,7 @@ The profile command creates or updates a mode-`0600` `.env`, preserves the datab
 ```dotenv
 NODE_ENV=production
 GATHERTHREAD_SERVER_HOST=127.0.0.1
-GATHERTHREAD_SERVER_PORT=8787
+GATHERTHREAD_SERVER_PORT=18787
 GATHERTHREAD_DATABASE_PATH=.local/collaboration.sqlite
 GATHERTHREAD_STATIC_DIRECTORY=apps/web/dist
 GATHERTHREAD_PUBLIC_BASE_URL=https://your-host.your-tailnet.ts.net
@@ -66,6 +66,22 @@ npm run owner-host:init -- \
 
 The command prints the first device credential once. Put it in a password manager. Do not paste it into chat, an invitation, a URL, a command-line argument, or a committed file.
 
+## Issue private test qualification
+
+After bootstrapping the first owner, the host operator can issue one test qualification at a time from the host terminal:
+
+```bash
+npm run owner-host:issue-test-access -- --ttl 7d
+```
+
+The output contains a `grant_id`, expiry and one-use `gtq_` activation token. Send the token privately to exactly one tester; do not paste it into chat, a URL, shell command argument, issue or repository. On the login page, the tester sets their display and device names above the forms, selects **First-time activation** (中文：**首次使用 · 激活资格**), and enters the code in **Test qualification code** (中文：**测试资格码**). It does not belong in the existing-account device-token field. They receive a distinct `gta_` device token once, use **Existing account** to sign in later, and can create their own projects. A leaked, unclaimed qualification can be revoked by metadata ID without reprinting the secret:
+
+```bash
+npm run owner-host:revoke-test-access -- --grant-id GRANT_ID
+```
+
+An already claimed qualification cannot be revoked as a code; revoke the resulting device credential through the authenticated device controls instead. The operator must run these commands against the same database and credential pepper as the active service. No remote administrator issuance endpoint exists.
+
 ## Start the private service
 
 Start GatherThread in one terminal:
@@ -88,7 +104,7 @@ This helper runs `tailscale serve` in background mode and explicitly does not ru
 tailscale serve status
 ```
 
-Collaborators open the exact `GATHERTHREAD_PUBLIC_BASE_URL`. GatherThread still requires its own project invitation, device credential, project role, and one-use WebSocket ticket; tailnet membership is only an additional network boundary.
+Collaborators open the exact `GATHERTHREAD_PUBLIC_BASE_URL`. GatherThread still requires its own test qualification or project invitation for first access, a device credential, project role, and one-use WebSocket ticket; tailnet membership is only an additional network boundary.
 
 ## Restrict tailnet access
 
@@ -101,7 +117,8 @@ GatherThread does not trust Tailscale identity headers as application identity. 
 - The project owner creates a one-use project invitation for `participant` or `viewer`.
 - Expiry choices are one hour, 24 hours, or seven days; the default is 24 hours.
 - A participant can edit `multi` sessions and reads `solo`; a viewer is read-only throughout the project. The owner can change another member's role later.
-- A new collaborator claims the invitation and receives their own first device credential.
+- A new collaborator claiming only a project invitation receives a guest account and first device credential. The guest can use that invited project according to its assigned role but cannot create projects.
+- A tester claiming an operator-issued qualification gets a full account and may create projects, then invite guests or other qualified accounts into each project.
 - An existing user authenticates before accepting an invitation and receives no new credential.
 - A new device uses a separate ten-minute, one-use device authorization token.
 - The inviter never receives the invitee's device credential.

@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GatherThread — 一个空间，汇聚众智。</title>
+<meta name="description" content="GatherThread 让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。">
+<link rel="icon" type="image/svg+xml" href="assets/app-icon-color-on-dark.svg">
+<link rel="stylesheet" href="styles.css">
+<script src="boot.js"></script>
+</head>
+<body>
+
+<!-- Fixed animated color field: viewport-pinned, content scrolls over it -->
+<div class="bg-field" aria-hidden="true">
+  <span class="orb o1"></span>
+  <span class="orb o2"></span>
+  <span class="orb o3"></span>
+  <span class="orb o4"></span>
+  <span class="ring r1"></span>
+  <span class="ring r2"></span>
+</div>
+
+<!-- ============ NAV ============ -->
+<header class="nav" id="nav">
+  <div class="nav-inner">
+    <a class="nav-brand" href="#top" aria-label="GatherThread">
+      <img class="brand-lockup lockup-for-dark" src="assets/lockup-color-transparent-dark.svg" alt="GatherThread">
+      <img class="brand-lockup lockup-for-light" src="assets/lockup-color-transparent-light.svg" alt="GatherThread">
+    </a>
+    <nav class="nav-links" aria-label="主导航" data-i18n-aria="nav.aria">
+      <a href="#sessions" data-i18n="nav.sessions">会话</a>
+      <a href="#context" data-i18n="nav.context">上下文</a>
+      <a href="#connect" data-i18n="nav.connect">连接</a>
+      <a href="#security" data-i18n="nav.security">安全</a>
+      <a href="#specs" data-i18n="nav.specs">规格</a>
+    </nav>
+    <div class="nav-actions">
+      <button class="lang-toggle" id="langToggle" aria-label="Switch language / 切换语言">EN</button>
+      <button class="theme-toggle" id="themeToggle" aria-label="切换黑夜 / 白天模式" title="切换黑夜 / 白天模式">
+        <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <circle cx="12" cy="12" r="4.2"/>
+          <path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M4.9 4.9l1.7 1.7M17.4 17.4l1.7 1.7M19.1 4.9l-1.7 1.7M6.6 17.4l-1.7 1.7"/>
+        </svg>
+        <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M20.4 14.2A8.5 8.5 0 0 1 9.8 3.6a8.5 8.5 0 1 0 10.6 10.6z"/>
+        </svg>
+      </button>
+      <a class="nav-cta" href="./app/" data-i18n="nav.app">进入共序</a>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ PAGE 1 · HERO ============ -->
+  <section class="hero page">
+    <p class="hero-eyebrow mono" data-i18n="hero.eyebrow">[ 0.1.0-ALPHA.7 · ALPHA 预览版 ]</p>
+    <h1 class="hero-title" id="heroTitle" aria-label="一个空间，汇聚众智。">
+      <span class="line" data-split data-i18n="hero.l1">一个空间，汇聚众智。</span>
+    </h1>
+    <p class="hero-tagline" data-i18n="hero.tagline">One room, many minds.</p>
+    <p class="hero-copy" data-i18n="hero.copy">让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。</p>
+    <div class="hero-ctas">
+      <a class="btn-pill" href="./app/" data-i18n="hero.cta1">开始使用</a>
+      <a class="btn-link" href="https://github.com/TH060419/gatherthread" target="_blank" rel="noopener"><span data-i18n="hero.cta2">在 GitHub 上查看</span><span class="chev">›</span></a>
+    </div>
+
+    <!-- Animated brand mark: four threads converge into one -->
+    <div class="hero-mark" aria-hidden="true">
+      <svg id="threadMark" viewBox="0 0 590 380" fill="none">
+        <defs>
+          <linearGradient id="g-cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#20C1DC"/><stop offset=".43" stop-color="#2AC9E5"/><stop offset=".57" stop-color="#60C0EC"/><stop offset=".68" stop-color="#9A96F5"/><stop offset=".80" stop-color="#C986E9"/><stop offset="1" stop-color="#F47BBC"/>
+          </linearGradient>
+          <linearGradient id="g-blue" x1="20" y1="135" x2="330" y2="241" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#2E96F5"/><stop offset=".48" stop-color="#4A8EF6"/><stop offset=".72" stop-color="#7689F3"/><stop offset="1" stop-color="#A789F0"/>
+          </linearGradient>
+          <linearGradient id="g-violet" x1="20" y1="228" x2="330" y2="129" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#A766F0"/><stop offset=".46" stop-color="#B273ED"/><stop offset=".72" stop-color="#B789F2"/><stop offset="1" stop-color="#A39CF8"/>
+          </linearGradient>
+          <linearGradient id="g-pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#F66DB9"/><stop offset=".48" stop-color="#F378BD"/><stop offset=".68" stop-color="#EA82CB"/><stop offset=".84" stop-color="#D28FE5"/><stop offset="1" stop-color="#BB99F1"/>
+          </linearGradient>
+        </defs>
+        <g stroke-width="40" stroke-linejoin="round">
+          <path class="thread" pathLength="1000" d="M50 135 H158 C210 135 245 215 298 240" stroke="url(#g-blue)" stroke-linecap="butt"/>
+          <path class="thread" pathLength="1000" d="M50 228 H162 C214 228 247 143 298 130" stroke="url(#g-violet)" stroke-linecap="butt"/>
+          <path class="thread" pathLength="1000" d="M50 322 H174 C248 322 322 184 404 184 H540" stroke="url(#g-pink)" stroke-linecap="round"/>
+          <path class="thread" pathLength="1000" d="M50 42 H167 C241 42 320 184 404 184 H540" stroke="url(#g-cyan)" stroke-linecap="round"/>
+        </g>
+        <g class="thread-dots">
+          <circle cx="50" cy="42" r="28" fill="#20C1DC"/>
+          <circle cx="50" cy="135" r="28" fill="#2E96F5"/>
+          <circle cx="50" cy="228" r="28" fill="#A766F0"/>
+          <circle cx="50" cy="322" r="28" fill="#F66DB9"/>
+        </g>
+      </svg>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 2 · STATEMENT ============ -->
+  <section class="band statement page">
+    <div class="wrap">
+      <p class="mono label fx">[ HARNESS-NEUTRAL ]</p>
+      <h2 class="h2 fx" data-i18n="statement.h2">不绑定具体 Agent harness。</h2>
+      <p class="lead fx" data-i18n="statement.lead">每位协作者都可以保留自己熟悉的本地 Agent 和工作方式。回复会标注用户名、harness、provider、模型和上下文保真度，不会向其他成员暴露本地设备或原生会话标识。</p>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 3 · SESSIONS ============ -->
+  <section class="band page" id="sessions">
+    <div class="wrap">
+      <p class="mono label fx">[ SESSIONS ]</p>
+      <h2 class="h2 fx" data-i18n="sessions.h2">两种会话：solo 与 multi。</h2>
+      <div class="duo">
+        <article class="card card-solo fx">
+          <p class="mono card-tag">[ SOLO ]</p>
+          <h3 data-i18n="sessions.solo.h3">Solo · 个人会话</h3>
+          <p data-i18n="sessions.solo.p">由创建者发布完整的规范化会话事件流；项目内其他所有人只读，即使对方是项目创建者。</p>
+        </article>
+        <article class="card card-multi fx">
+          <p class="mono card-tag">[ MULTI ]</p>
+          <h3 data-i18n="sessions.multi.h3">Multi · 协作会话</h3>
+          <p data-i18n="sessions.multi.p">多人共享一个有序的项目会话。普通聊天消息只进入共享会话，不会调用 Agent；Agent 请求只由发送者自己的本地 runtime 领取。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 4 · CONTEXT FIDELITY ============ -->
+  <section class="band band-alt page" id="context">
+    <div class="wrap">
+      <p class="mono label fx">[ COMPLETE CONTEXT ]</p>
+      <h2 class="h2 fx" data-i18n="context.h2">三种上下文保真度。</h2>
+      <p class="lead fx" data-i18n="context.lead">根据历史重建的上下文绝不会被标记为 provider_request；上下文压缩由每个本地 Agent 自行处理，共享的规范事件日志保持完整和持久。</p>
+      <div class="rows fx">
+        <div class="row">
+          <p class="mono row-tag">[ CANONICAL_HISTORY ]</p>
+          <div>
+            <h3 data-i18n="context.r1.h3">规范历史</h3>
+            <p data-i18n="context.r1.p">该成员可见的完整共享事件历史。服务器以 SQLite WAL 持久化只追加的规范事件日志，为每个会话分配权威序号。</p>
+          </div>
+        </div>
+        <div class="row">
+          <p class="mono row-tag">[ HARNESS_TRANSCRIPT ]</p>
+          <div>
+            <h3 data-i18n="context.r2.h3">Harness 转录</h3>
+            <p data-i18n="context.r2.p">从已授权的本地 harness 会话记录中实际观察到的内容，经解析与脱敏后进入共享历史。</p>
+          </div>
+        </div>
+        <div class="row">
+          <p class="mono row-tag">[ PROVIDER_REQUEST ]</p>
+          <div>
+            <h3 data-i18n="context.r3.h3">Provider 请求</h3>
+            <p data-i18n="context.r3.p">由明确授权的 harness hook 或 provider 代理观察到的原始请求。未获明确授权并确认前，一律不上传。</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <!-- Thread divider (scroll-drawn) -->
+    <div class="thread-divider" aria-hidden="true">
+      <svg viewBox="0 0 1200 80" preserveAspectRatio="none">
+        <defs>
+          <linearGradient id="g-line" x1="0" y1="0" x2="1200" y2="0" gradientUnits="userSpaceOnUse">
+            <stop stop-color="#20C1DC"/><stop offset=".33" stop-color="#2E96F5"/><stop offset=".66" stop-color="#A766F0"/><stop offset="1" stop-color="#F66DB9"/>
+          </linearGradient>
+        </defs>
+        <path id="dividerPath" pathLength="1000" d="M0 40 H1200" stroke="url(#g-line)" stroke-width="3" fill="none" stroke-linecap="round"/>
+      </svg>
+      <p class="divider-caption mono" data-i18n="divider.caption">有序 · 可追溯 · 实时同步</p>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 5 · CONNECTION MODES ============ -->
+  <section class="band page" id="connect">
+    <div class="wrap">
+      <p class="mono label fx">[ CONNECTION ]</p>
+      <h2 class="h2 fx" data-i18n="connect.h2">无需云账户，三种连接方式。</h2>
+      <p class="lead fx" data-i18n="connect.lead">它们会保留同一个私有 .env、数据库、凭据 Pepper、用户和历史。</p>
+      <div class="trio">
+        <article class="col fx">
+          <h3 data-i18n="connect.c1.h3">仅本机</h3>
+          <p data-i18n="connect.c1.p">一台电脑完整测试，不开放网络。</p>
+          <div class="code-row">
+            <code class="mono">npm run connection:local</code>
+            <button class="copy-btn" data-copy="npm run connection:local" data-i18n-aria="copy.aria" aria-label="复制命令">
+              <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
+            </button>
+          </div>
+        </article>
+        <article class="col fx">
+          <h3 data-i18n="connect.c2.h3">局域网 HTTPS</h3>
+          <p data-i18n="connect.c2.p">同一可信局域网内的已知设备；自动选址并启动两个服务。</p>
+          <div class="code-row">
+            <code class="mono">npm run lan:start</code>
+            <button class="copy-btn" data-copy="npm run lan:start" data-i18n-aria="copy.aria" aria-label="复制命令">
+              <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
+            </button>
+          </div>
+        </article>
+        <article class="col fx">
+          <h3 data-i18n="connect.c3.h3">Tailscale Serve</h3>
+          <p data-i18n="connect.c3.p">跨网络的小规模已知协作者。</p>
+          <div class="code-row">
+            <code class="mono">npm run connection:tailscale -- --url https://host.tailnet.ts.net</code>
+            <button class="copy-btn" data-copy="npm run connection:tailscale -- --url https://host.tailnet.ts.net" data-i18n-aria="copy.aria" aria-label="复制命令">
+              <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
+            </button>
+          </div>
+        </article>
+      </div>
+      <p class="sr-only" id="copyStatus" role="status" aria-live="polite" aria-atomic="true"></p>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 6 · HARNESS SETUP ============ -->
+  <section class="band band-alt page">
+    <div class="wrap">
+      <p class="mono label fx">[ SETUP ]</p>
+      <h2 class="h2 fx" data-i18n="setup.h2">三步，接入你的 Agent。</h2>
+      <div class="duo">
+        <article class="card fx">
+          <p class="mono card-tag">[ CODEX ]</p>
+          <ol class="steps">
+            <li data-i18n="setup.codex.1">一次性安装固定版本的「共序 / GatherThread」Codex 插件。</li>
+            <li data-i18n="setup.codex.2">复制网页生成的 macOS / Linux 或 PowerShell 连接命令。</li>
+            <li data-i18n="setup.codex.3">重启 Codex Desktop，审查并启用插件 Hooks，然后保持连接器终端运行。</li>
+          </ol>
+        </article>
+        <article class="card fx">
+          <p class="mono card-tag">[ DEEPSEEK HARNESS ]</p>
+          <ol class="steps">
+            <li data-i18n="setup.dsh.1">把 @gatherthread/dsh-host 安装到已验证的 DSH Web profile。</li>
+            <li data-i18n="setup.dsh.2">启动 dsh web 并保持运行。</li>
+            <li data-i18n="setup.dsh.3">打开 Settings → GatherThread / 共序，输入当前服务器地址，并批准一次性配对码。</li>
+          </ol>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 7 · SECURITY ============ -->
+  <section class="band page" id="security">
+    <div class="wrap">
+      <p class="mono label fx">[ SECURITY ]</p>
+      <h2 class="h2 fx" data-i18n="security.h2">安全机制与当前限制。</h2>
+      <div class="sec-grid fx">
+        <div class="sec-item"><h3 data-i18n="security.1.h3">设备凭据</h3><p data-i18n="security.1.p">使用 pepper 保护的设备凭据，只完整展示一次。</p></div>
+        <div class="sec-item"><h3 data-i18n="security.2.h3">可撤销会话</h3><p data-i18n="security.2.p">仅存 HMAC 摘要且可撤销的浏览器会话。</p></div>
+        <div class="sec-item"><h3 data-i18n="security.3.h3">一次性授权</h3><p data-i18n="security.3.p">一次性邀请与设备授权，用完即废。</p></div>
+        <div class="sec-item"><h3 data-i18n="security.4.h3">实时连接 ticket</h3><p data-i18n="security.4.p">30 秒有效、一次性、限定会话。</p></div>
+        <div class="sec-item"><h3 data-i18n="security.5.h3">访问控制</h3><p data-i18n="security.5.p">solo / multi ACL 与基于角色的访问控制。</p></div>
+        <div class="sec-item"><h3 data-i18n="security.6.h3">事件脱敏</h3><p data-i18n="security.6.p">不暴露本地设备或原生会话标识。</p></div>
+        <div class="sec-item"><h3 data-i18n="security.7.h3">限流与配额</h3><p data-i18n="security.7.p">按设备限流，事件与快照任务存储配额。</p></div>
+        <div class="sec-item"><h3 data-i18n="security.8.h3">备份与恢复</h3><p data-i18n="security.8.p">SQLite 备份 / 恢复脚本开箱即用。</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 8 · SPECS ============ -->
+  <section class="band page" id="specs">
+    <div class="wrap">
+      <p class="mono label fx">[ SPECS ]</p>
+      <div class="spec-strip">
+        <div class="spec fx"><p class="spec-num mono">24+</p><p class="spec-key" data-i18n="specs.1">Node.js 或更新版本</p></div>
+        <div class="spec fx"><p class="spec-num mono">WAL</p><p class="spec-key" data-i18n="specs.2">SQLite 规范事件日志</p></div>
+        <div class="spec fx"><p class="spec-num mono">WS</p><p class="spec-key" data-i18n="specs.3">WebSocket 实时推送</p></div>
+        <div class="spec fx"><p class="spec-num mono">2.0</p><p class="spec-key" data-i18n="specs.4">Apache License</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 9 · FINAL CTA ============ -->
+  <section class="band final-cta page">
+    <div class="wrap">
+      <h2 class="h2 fx" data-i18n="final.h2">进入共序，开始协作。</h2>
+      <div class="hero-ctas fx">
+        <a class="btn-pill" href="./app/" data-i18n="final.cta1">打开登录页</a>
+        <a class="btn-link" href="https://github.com/TH060419/gatherthread#local-end-to-end-run" target="_blank" rel="noopener"><span data-i18n="final.cta2">阅读运行指南</span><span class="chev">›</span></a>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<!-- ============ FOOTER ============ -->
+<footer class="footer">
+  <div class="wrap">
+    <div class="footnotes">
+      <p data-i18n="foot.1">¹ Alpha 预览版：共序官方服务器尚未开放；本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用。</p>
+      <p data-i18n="foot.2">² 服务器使用 node:sqlite，因此需要 Node.js 24 或更新版本。</p>
+      <p data-i18n="foot.3">³ 局域网模式要求客户端显式信任专用本地 CA，不能绕过证书警告，也不能配置路由器端口转发。</p>
+    </div>
+    <div class="footer-bar">
+      <img class="footer-lockup lockup-for-dark" src="assets/lockup-color-transparent-dark.svg" alt="GatherThread">
+      <img class="footer-lockup lockup-for-light" src="assets/lockup-color-transparent-light.svg" alt="GatherThread">
+      <p class="copyright">Copyright © 2026 Yuhan He and contributors. Licensed under Apache License 2.0.</p>
+    </div>
+    <div class="footer-contact">
+      <p><span data-i18n="foot.contact">联系与反馈：</span> <a href="https://github.com/TH060419/gatherthread/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a></p>
+      <p><span data-i18n="foot.icp">gatherthread.cn 备案：</span> <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" lang="zh-CN">冀ICP备2026037466号-1</a></p>
+    </div>
+  </div>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,8 +1,9 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { createReadStream, realpathSync, statSync } from "node:fs";
+import { createReadStream, realpathSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
-import { extname, resolve, sep } from "node:path";
+import { extname, resolve, sep, join } from "node:path";
 import {
   AppendEventInputSchema,
   AgentProgressInputSchema,
@@ -12,6 +13,7 @@ import {
   ClaimAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
   ClaimInvitationInputSchema,
+  ClaimTestAccessInputSchema,
   ClaimSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
@@ -20,8 +22,10 @@ import {
   CreateBrowserSessionInputSchema,
   CreateInvitationInputSchema,
   CreateIdentityInputSchema,
+  CreateHistorySummaryInputSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
+  CODE_SYNC_MAX_BODY_BYTES,
   FailSnapshotRequestInputSchema,
   IdempotencyKeySchema,
   ListSnapshotRequestsQuerySchema,
@@ -30,6 +34,7 @@ import {
   SetMembershipInputSchema,
   SubscribeMessageSchema,
   UpdateDeviceInputSchema,
+  UpdateContextPolicyInputSchema,
   UpdateProjectInputSchema,
   UpdateSessionInputSchema,
   type ApiErrorBody,
@@ -47,6 +52,7 @@ import { ApiError, notFound, unauthorized } from "./errors.js";
 import { DshDevicePairingBroker, dshPairingPollToken } from "./dsh-pairing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { CollaborationService } from "./service.js";
+import { CodeRepository } from "./code-repository.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const DEFAULT_REPLAY_LIMIT = 50;
@@ -63,6 +69,7 @@ const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/bootstrap",
   "/v1/browser-sessions",
   "/v1/invitations/claim",
+  "/v1/test-access/claim",
   "/v1/device-authorizations/claim",
 ]);
 
@@ -97,6 +104,7 @@ interface HttpAuthentication {
 
 export interface ServerOptions {
   databasePath: string;
+  codeRepositoryDirectory?: string;
   heartbeatIntervalMs?: number;
   allowedOrigins?: string[];
   authTokenPepper?: string;
@@ -169,8 +177,17 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
 function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string): boolean {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
   if (pathname.startsWith("/v1/") || pathname.startsWith("/health")) return false;
+  if (pathname === "/app") {
+    response.writeHead(308, { location: "/app/", "cache-control": "no-store" });
+    response.end();
+    return true;
+  }
   const root = realpathSync(staticDirectory);
-  const relative = pathname === "/" ? "index.html" : pathname.replace(/^\/+/, "");
+  const relative = pathname === "/"
+    ? "index.html"
+    : pathname.endsWith("/")
+      ? `${pathname.replace(/^\/+/, "")}index.html`
+      : pathname.replace(/^\/+/, "");
   const candidate = resolve(root, relative);
   if (candidate !== root && !candidate.startsWith(`${root}${sep}`)) return false;
   let resolved: string;
@@ -185,20 +202,20 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   response.writeHead(200, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
     "content-length": stat.size,
-    "cache-control": relative === "index.html" ? "no-store" : "no-cache",
+    "cache-control": relative.endsWith("index.html") ? "no-store" : "no-cache",
   });
   if (request.method === "HEAD") response.end();
   else createReadStream(resolved).pipe(response);
   return true;
 }
 
-async function readJson(request: IncomingMessage): Promise<unknown> {
+async function readJson(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
     size += buffer.byteLength;
-    if (size > MAX_BODY_BYTES) throw new ApiError(413, "payload_too_large", `Request bodies are limited to ${MAX_BODY_BYTES} bytes`);
+    if (size > maxBytes) throw new ApiError(413, "payload_too_large", `Request bodies are limited to ${maxBytes} bytes`);
     chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
@@ -380,6 +397,15 @@ export async function startCollaborationServer(
     maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
+  const publicAccountActor = (actor: Actor) => ({
+    id: actor.user_id,
+    username: actor.display_name,
+    device_id: actor.device_id,
+    can_create_projects: database.canCreateProjects(actor.user_id),
+  });
+  const ephemeralCodeDirectory = options.databasePath === ":memory:" && !options.codeRepositoryDirectory
+    ? mkdtempSync(join(tmpdir(), "gatherthread-code-")) : undefined;
+  const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
   const dshPairings = new DshDevicePairingBroker();
   const secureTransport = options.secureTransport ?? false;
   const browserCookieName = browserSessionCookieName(secureTransport);
@@ -510,10 +536,41 @@ export async function startCollaborationServer(
             secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined,
           ));
-          sendJson(response, 201, { data: result });
+          sendJson(response, 201, { data: { ...result, actor: {
+            ...result.actor,
+            can_create_projects: database.canCreateProjects(result.actor.user_id),
+          } } });
           return;
         }
-        sendJson(response, 201, { data: service.claimInvitation(input) });
+        const result = service.claimInvitation(input);
+        sendJson(response, 201, { data: { ...result, actor: {
+          ...result.actor,
+          can_create_projects: database.canCreateProjects(result.actor.user_id),
+        } } });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/test-access/claim") {
+        const input = ClaimTestAccessInputSchema.parse(await readJson(request));
+        if (request.headers["x-gatherthread-browser-session"] === "1") {
+          const { browser_session: browserSession, ...result } = service.claimTestAccessWithBrowserSession(input);
+          response.setHeader("set-cookie", serializeBrowserSessionCookie(
+            browserCookieName,
+            browserSession.token,
+            secureTransport,
+            browserSession.remembered ? browserSession.expires_at : undefined,
+          ));
+          sendJson(response, 201, { data: { ...result, actor: {
+            ...result.actor,
+            can_create_projects: true,
+          } } });
+          return;
+        }
+        const result = service.claimTestAccess(input);
+        sendJson(response, 201, { data: { ...result, actor: {
+          ...result.actor,
+          can_create_projects: true,
+        } } });
         return;
       }
 
@@ -526,7 +583,7 @@ export async function startCollaborationServer(
       if (request.method === "POST" && url.pathname === "/v1/browser-sessions") {
         const actor = database.authenticate(bearerToken(request));
         const input = CreateBrowserSessionInputSchema.parse(await readJson(request));
-        const browserSession = database.createBrowserSession(actor, input.remember_device);
+        const browserSession = database.createBrowserSession(actor, input.remember_device, input);
         response.setHeader("set-cookie", serializeBrowserSessionCookie(
           browserCookieName,
           browserSession.token,
@@ -534,7 +591,7 @@ export async function startCollaborationServer(
           browserSession.remembered ? browserSession.expires_at : undefined,
         ));
         sendJson(response, 201, { data: {
-          actor: { id: actor.user_id, username: actor.display_name, device_id: actor.device_id },
+          actor: publicAccountActor({ ...actor, display_name: input.display_name ?? actor.display_name }),
           expires_at: browserSession.expires_at,
         } });
         return;
@@ -569,8 +626,8 @@ export async function startCollaborationServer(
           throw new ApiError(429, "rate_limited", "Too many writes for this device");
         }
       }
-      const readAuthenticatedJson = async (): Promise<unknown> => {
-        const value = await readJson(request);
+      const readAuthenticatedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
+        const value = await readJson(request, maxBytes);
         if (authentication.kind === "browser_session" && authentication.browserSessionId) {
           database.assertActiveBrowserSession(authentication.browserSessionId, actor);
         }
@@ -578,11 +635,7 @@ export async function startCollaborationServer(
       };
 
       if (request.method === "GET" && url.pathname === "/v1/me") {
-        sendJson(response, 200, { data: {
-          id: actor.user_id,
-          username: actor.display_name,
-          device_id: actor.device_id,
-        } });
+        sendJson(response, 200, { data: publicAccountActor(actor) });
         return;
       }
 
@@ -680,6 +733,38 @@ export async function startCollaborationServer(
       }
 
       const projectId = parts[0] === "v1" && parts[1] === "projects" ? parts[2] : undefined;
+      if (projectId && parts[3] === "context-policy" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: service.getProjectContextPolicy(actor, projectId) });
+        return;
+      }
+      if (projectId && parts[3] === "context-policy" && parts.length === 4 && request.method === "PUT") {
+        const input = UpdateContextPolicyInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: service.setProjectContextPolicy(actor, projectId, input.mode) });
+        return;
+      }
+      if (projectId && parts[3] === "code") {
+        service.requireProjectMembership(actor, projectId);
+        if (request.method === "GET" && parts.length === 4) {
+          sendJson(response, 200, { data: codeRepository.status(actor, projectId) });
+          return;
+        }
+        if (request.method === "GET" && parts.length === 5 && parts[4] === "snapshot") {
+          sendJson(response, 200, { data: codeRepository.snapshot(actor, projectId, url.searchParams.get("branch_id") ?? "main") });
+          return;
+        }
+        if (request.method === "POST" && parts.length === 5) {
+          const actions = {
+            enable: codeRepository.enable.bind(codeRepository), disable: codeRepository.disable.bind(codeRepository), checkpoints: codeRepository.checkpoint.bind(codeRepository),
+            review: codeRepository.review.bind(codeRepository), merge: codeRepository.merge.bind(codeRepository), update: codeRepository.update.bind(codeRepository),
+          };
+          const action = Object.hasOwn(actions, parts[4]!) ? actions[parts[4] as keyof typeof actions] : undefined;
+          if (action) {
+            const body = await readAuthenticatedJson(parts[4] === "checkpoints" ? CODE_SYNC_MAX_BODY_BYTES : MAX_BODY_BYTES);
+            sendJson(response, 200, { data: action(actor, projectId, body) });
+            return;
+          }
+        }
+      }
       if (projectId && request.method === "GET" && parts.length === 3) {
         sendJson(response, 200, { data: service.getProject(actor, projectId) });
         return;
@@ -847,6 +932,24 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (sessionId && parts[3] === "history-summaries" && parts.length === 4 && request.method === "POST") {
+        const input = CreateHistorySummaryInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: { event: service.createHistorySummary(actor, sessionId, input) } });
+        return;
+      }
+
+      if (sessionId && parts[3] === "context" && parts.length === 4 && request.method === "GET") {
+        const view = z.enum(["summary", "original"]).optional().parse(url.searchParams.get("view") ?? undefined);
+        const through = url.searchParams.get("through_sequence");
+        if (url.searchParams.getAll("view").length > 1 || url.searchParams.getAll("through_sequence").length > 1
+          || (through !== null && !/^(0|[1-9][0-9]*)$/u.test(through))) {
+          throw new ApiError(400, "validation_error", "Context view and through_sequence must each have one valid value");
+        }
+        const throughSequence = through === null ? undefined : numericQuery(url, "through_sequence", 0, Number.MAX_SAFE_INTEGER);
+        sendJson(response, 200, { data: service.readHistoryContext(actor, sessionId, view, throughSequence) });
+        return;
+      }
+
       if (sessionId && parts[3] === "local-turns" && parts.length === 4 && request.method === "POST") {
         const input = CommitLocalTurnInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 201, { data: service.commitLocalTurn(actor, sessionId, input) });
@@ -924,6 +1027,7 @@ export async function startCollaborationServer(
           input.payload,
           input.observed_model,
           input.observed_reasoning_effort,
+          input.claim_attempt,
         ) } });
         return;
       }
@@ -939,6 +1043,7 @@ export async function startCollaborationServer(
           input.payload,
           input.observed_model,
           input.observed_reasoning_effort,
+          input.claim_attempt,
         ) } });
         return;
       }
@@ -1093,6 +1198,7 @@ export async function startCollaborationServer(
       wsServer.close();
       await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
       database.close();
+      if (ephemeralCodeDirectory) rmSync(ephemeralCodeDirectory, { recursive: true, force: true });
     },
   };
 }

@@ -7,9 +7,11 @@ import type {
   CaptureFidelity,
   CommitLocalTurnInput,
   CommitLocalTurnResult,
+  CreateHistorySummaryInput,
   DeviceAuthorizationRecord,
   EventType,
   EventVisibility,
+  HistoryContext,
   InvitationAuditRecord,
   InvitationRecord,
   InvitationRole,
@@ -20,6 +22,7 @@ import type {
   ProjectInvitationRecord,
   ProjectListItem,
   ReplayResponse,
+  RuntimeExecutionProfile,
   RuntimeProvenance,
   SessionListItem,
   SessionMode,
@@ -28,8 +31,15 @@ import type {
   SnapshotRequestKind,
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
-import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
-import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import {
+  MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, isCodeSyncRequestKind,
+  HISTORY_SUMMARY_MAX_CONTEXT_BYTES, HistorySummaryError, buildHistoryContext,
+  buildHistorySummaryPrompt, historySummaryMarker, historySummarySourceJson, historySummaryText,
+  isHistorySummaryRequest, selectHistorySummarySources,
+} from "@gatherthread/protocol";
+import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
+import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { redactJson } from "./redaction.js";
 
 export interface Actor {
   user_id: string;
@@ -73,6 +83,7 @@ export interface RuntimeRecord {
   harness: string;
   provider: string;
   model: string;
+  execution_profiles?: RuntimeExecutionProfile[];
   local_session_id: string;
   capture_fidelity: CaptureFidelity;
   status: "online" | "offline" | "revoked";
@@ -135,6 +146,16 @@ export interface ClaimInvitationWithBrowserSessionResult extends ClaimInvitation
   browser_session: BrowserSessionIssue;
 }
 
+export interface ClaimTestAccessResult {
+  actor: Actor;
+  token: string;
+  device: DeviceRecord;
+}
+
+export interface ClaimTestAccessWithBrowserSessionResult extends ClaimTestAccessResult {
+  browser_session: BrowserSessionIssue;
+}
+
 export interface AcceptInvitationResult {
   actor: Actor;
   invitation: InvitationRecord | ProjectInvitationRecord;
@@ -189,12 +210,28 @@ interface ProjectMutationRow {
   title: string;
   created_at: string;
 }
-interface RuntimeRow extends RuntimeRecord {}
+interface RuntimeRow extends Omit<RuntimeRecord, "execution_profiles"> {
+  execution_profiles_json: string | null;
+}
 interface CountRow { count: number }
 interface BytesRow { bytes: number }
 interface SequenceRow { next_sequence: number }
 interface MembershipRow { role: MembershipRole }
-interface ClaimRow { runtime_id: string; status: "claimed" | "completed" }
+interface ClaimRow {
+  runtime_id: string;
+  status: "claimed" | "completed" | "failed";
+  attempt_count?: number;
+  lease_expires_at?: string | null;
+}
+export interface AgentClaimRecord {
+  request_event_id: string;
+  runtime_id: string;
+  status: "claimed" | "completed";
+  attempt_count: number;
+}
+export type AgentClaimOutcome =
+  | { claim: AgentClaimRecord }
+  | { failed: true; event?: CanonicalEvent };
 interface InvitationRow extends InvitationRecord { token_digest: string }
 interface ProjectInvitationRow extends ProjectInvitationRecord { token_digest: string }
 interface DeviceAuthorizationRow extends DeviceAuthorizationRecord { token_digest: string }
@@ -258,11 +295,44 @@ const DEFAULT_MAX_USER_ACTIVE_SNAPSHOT_REQUESTS = 64;
 const DEFAULT_MAX_SESSION_ACTIVE_SNAPSHOT_REQUESTS = 256;
 const DEFAULT_MAX_TOTAL_ACTIVE_SNAPSHOT_REQUESTS = 4_096;
 const RUNTIME_OFFLINE_AFTER_MS = 30_000;
+/**
+ * How long a claim survives without proof of work. The holder renews it by
+ * appending `agent_progress`, so a claim lapses only when its runtime has
+ * genuinely gone quiet — which covers a dead device and, just as importantly, a
+ * live device whose execution has wedged. Runtime presence is a separate
+ * question and deliberately does not extend a lease on its own.
+ */
+const AGENT_CLAIM_LEASE_MS = 5 * 60_000;
+/** Exact-runtime recovery attempts before a request is terminally failed. */
+const MAX_AGENT_CLAIM_ATTEMPTS = 3;
+const MAX_HISTORY_CONTEXT_SCAN_EVENTS = 10_000;
+const MAX_HISTORY_CONTEXT_SCAN_BYTES = 16 * 1024 * 1024;
+const MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS = 10_000;
+const MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES = 16 * 1024 * 1024;
+
+function rejectHistorySummaryMetadata(payload: JsonValue): void {
+  if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
+    && Object.hasOwn(payload, "history_summary")) {
+    throw forbidden("history_summary is server-owned metadata; use the history-summaries endpoint");
+  }
+}
+
+function historySummaryOperation<T>(operation: () => T): T {
+  try { return operation(); }
+  catch (error) {
+    if (error instanceof HistorySummaryError) {
+      throw new ApiError(error.code === "too_large" ? 413 : 400, `history_summary_${error.code}`, error.message);
+    }
+    throw error;
+  }
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  can_create_projects INTEGER NOT NULL DEFAULT 0 CHECK (can_create_projects IN (0, 1))
 ) STRICT;
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
@@ -294,6 +364,14 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_id, user_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_context_policies (
+  project_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('summary', 'original')),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, user_id),
+  FOREIGN KEY (project_id, user_id) REFERENCES project_memberships(project_id, user_id) ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE IF NOT EXISTS project_mutations (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -331,6 +409,7 @@ CREATE TABLE IF NOT EXISTS runtimes (
   harness TEXT NOT NULL,
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
+  execution_profiles_json TEXT CHECK (execution_profiles_json IS NULL OR json_valid(execution_profiles_json)),
   local_session_id TEXT NOT NULL,
   capture_fidelity TEXT NOT NULL CHECK (capture_fidelity IN ('canonical_history', 'harness_transcript', 'provider_request')),
   status TEXT NOT NULL DEFAULT 'online' CHECK (status IN ('online', 'offline', 'revoked')),
@@ -367,7 +446,9 @@ CREATE TABLE IF NOT EXISTS agent_request_claims (
   runtime_id TEXT NOT NULL REFERENCES runtimes(id),
   claimed_at TEXT NOT NULL,
   completed_at TEXT,
-  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed'))
+  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+  attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+  lease_expires_at TEXT
 ) STRICT;
 CREATE TABLE IF NOT EXISTS local_turn_commits (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -385,7 +466,7 @@ CREATE TABLE IF NOT EXISTS snapshot_requests (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload')),
+  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable')),
   through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
   target_runtime_id TEXT REFERENCES runtimes(id),
@@ -464,6 +545,17 @@ CREATE TABLE IF NOT EXISTS project_invitation_audit (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS project_invitation_audit_project_idx
   ON project_invitation_audit(project_id, created_at, id);
+CREATE TABLE IF NOT EXISTS test_access_grants (
+  id TEXT PRIMARY KEY,
+  token_digest TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  claimed_at TEXT,
+  claimed_by_user_id TEXT REFERENCES users(id),
+  claimed_by_device_id TEXT REFERENCES devices(id),
+  CHECK (claimed_at IS NULL OR (claimed_by_user_id IS NOT NULL AND claimed_by_device_id IS NOT NULL))
+) STRICT;
 CREATE TABLE IF NOT EXISTS device_authorizations (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -521,6 +613,10 @@ function issueInvitationToken(): string {
   return `gti_${randomBytes(32).toString("base64url")}`;
 }
 
+function issueTestAccessToken(): string {
+  return `gtq_${randomBytes(32).toString("base64url")}`;
+}
+
 function issueDeviceAuthorizationToken(): string {
   return `gtd_${randomBytes(32).toString("base64url")}`;
 }
@@ -565,8 +661,35 @@ function runtimeStatus(
     : "offline";
 }
 
+function parseRuntimeExecutionProfiles(value: string | null | undefined): RuntimeExecutionProfile[] | undefined {
+  if (value === null || value === undefined) return undefined;
+  return RuntimeExecutionProfilesSchema.parse(JSON.parse(value));
+}
+
+function mapRuntimeRow(row: RuntimeRow, now?: number): RuntimeRecord {
+  const { execution_profiles_json: executionProfilesJson, ...runtime } = row;
+  const executionProfiles = parseRuntimeExecutionProfiles(executionProfilesJson);
+  return {
+    ...runtime,
+    ...(executionProfiles === undefined ? {} : { execution_profiles: executionProfiles }),
+    ...(now === undefined ? {} : { status: runtimeStatus(row.status, row.last_seen_at, now) }),
+  };
+}
+
+/**
+ * A claim with no lease was written before leases existed. Nothing renews such a
+ * row, so it reads as expired: recovery is the safe interpretation of a claim no
+ * live build can be working on.
+ */
+function claimLeaseLapsed(leaseExpiresAt: string | null | undefined, now: string): boolean {
+  if (typeof leaseExpiresAt !== "string") return true;
+  const expires = Date.parse(leaseExpiresAt);
+  const current = Date.parse(now);
+  return !Number.isFinite(expires) || !Number.isFinite(current) || expires <= current;
+}
+
 function isLocalSyncRequestKind(kind: SnapshotRequestKind): boolean {
-  return kind === "local_sync_status"
+  return isCodeSyncRequestKind(kind) || kind === "local_sync_status"
     || kind === "local_auto_upload_enable"
     || kind === "local_auto_upload_disable"
     || kind === "local_turn_upload";
@@ -576,10 +699,11 @@ interface AgentRequestTarget {
   harness: string;
   provider?: string;
   model?: string;
+  reasoningEffort?: string;
   runtimeId?: string;
 }
 
-function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
+function agentRequestTarget(event: Pick<CanonicalEvent, "payload">): AgentRequestTarget {
   const payload = event.payload !== null && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? event.payload as Record<string, JsonValue>
     : undefined;
@@ -607,12 +731,19 @@ function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
   if (harness === "deepseek-harness" && !model) {
     throw conflict("DeepSeek Harness Agent request requires a model target");
   }
+  const rawReasoningEffort = profile?.reasoning_effort;
+  const reasoningEffort = typeof rawReasoningEffort === "string" ? rawReasoningEffort.trim() : "";
+  if (rawReasoningEffort !== undefined
+    && (!reasoningEffort || reasoningEffort.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(reasoningEffort))) {
+    throw conflict("Agent request has an invalid reasoning effort target");
+  }
   const rawRuntimeId = profile?.runtime_id;
   if (rawRuntimeId === undefined) {
     return {
       harness,
       ...(rawProvider === undefined ? {} : { provider }),
       ...(rawModel === undefined ? {} : { model }),
+      ...(rawReasoningEffort === undefined ? {} : { reasoningEffort }),
     };
   }
   const runtimeId = typeof rawRuntimeId === "string" ? rawRuntimeId.trim() : "";
@@ -623,8 +754,27 @@ function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
     harness,
     ...(rawProvider === undefined ? {} : { provider }),
     ...(rawModel === undefined ? {} : { model }),
+    ...(rawReasoningEffort === undefined ? {} : { reasoningEffort }),
     runtimeId,
   };
+}
+
+function runtimeSupportsAgentTarget(runtime: RuntimeRecord, target: AgentRequestTarget): boolean {
+  if (runtime.harness.trim().toLowerCase() !== target.harness) return false;
+  if (target.harness === "codex") {
+    return target.provider === undefined || runtime.provider === target.provider;
+  }
+  if (runtime.execution_profiles !== undefined) {
+    if (target.runtimeId === undefined || target.runtimeId !== runtime.id
+      || target.provider === undefined || target.model === undefined) return false;
+    const advertised = runtime.execution_profiles.find((profile) =>
+      profile.provider === target.provider && profile.model === target.model);
+    if (advertised === undefined) return false;
+    return target.reasoningEffort === undefined
+      || advertised.reasoning_efforts?.includes(target.reasoningEffort) === true;
+  }
+  return (target.provider === undefined || runtime.provider === target.provider)
+    && (target.model === undefined || runtime.model === target.model);
 }
 
 function mapEvent(row: EventRow): CanonicalEvent {
@@ -729,14 +879,19 @@ export class CollaborationDatabase {
     const journalMode = (this.sqlite.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
+    this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
+    this.migrateCodeRepositoryEnableColumn();
     this.migrateDeviceCredentialColumns();
     this.migrateProjectModel();
+    this.migrateAccountCapabilities();
     this.migrateRuntimePurposeColumn();
+    this.migrateRuntimeExecutionProfilesColumn();
     this.migrateEventActorDisplayNameColumn();
     this.migrateAgentProgressEventType();
     this.migrateCanonicalProvenancePrivacy();
     this.migrateSnapshotStorageLedger();
     this.migrateSnapshotControlRequests();
+    this.migrateAgentClaimLease();
     this.initializeEventStorageUsage();
   }
 
@@ -778,7 +933,7 @@ export class CollaborationDatabase {
   }): { actor: Actor; token: string } {
     const count = this.sqlite.prepare("SELECT count(*) AS count FROM users").get() as unknown as CountRow;
     if (count.count !== 0) throw conflict("Bootstrap is available only for an empty database");
-    return this.createIdentity(input);
+    return this.createIdentity({ ...input, can_create_projects: true });
   }
 
   createIdentity(input: {
@@ -786,20 +941,107 @@ export class CollaborationDatabase {
     display_name: string;
     device_id?: string | undefined;
     device_name: string;
+    can_create_projects?: boolean | undefined;
   }): { actor: Actor; token: string } {
     const userId = input.user_id ?? randomUUID();
     const deviceId = input.device_id ?? randomUUID();
     const token = issueDeviceToken();
     const createdAt = this.now();
     this.transaction(() => {
-      this.sqlite.prepare("INSERT INTO users(id, display_name, created_at) VALUES (?, ?, ?)")
-        .run(userId, input.display_name, createdAt);
+      this.sqlite.prepare("INSERT INTO users(id, display_name, created_at, can_create_projects) VALUES (?, ?, ?, ?)")
+        .run(userId, input.display_name, createdAt, input.can_create_projects ? 1 : 0);
       this.sqlite.prepare(`
         INSERT INTO devices(id, user_id, name, token_hash, created_at, token_created_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(deviceId, userId, input.device_name, this.tokenDigest(token), createdAt, createdAt);
     });
     return { actor: { user_id: userId, display_name: input.display_name, device_id: deviceId }, token };
+  }
+
+  canCreateProjects(userId: string): boolean {
+    const row = this.sqlite.prepare("SELECT can_create_projects FROM users WHERE id = ?")
+      .get(userId) as { can_create_projects: number } | undefined;
+    if (!row) throw unauthorized("Account is unavailable");
+    return row.can_create_projects === 1;
+  }
+
+  issueTestAccess(ttl: InvitationTtl = "7d"): { grant_id: string; access_token: string; expires_at: string } {
+    const ttlMs = INVITATION_TTL_MS[ttl];
+    if (ttlMs === undefined) throw new ApiError(400, "invalid_ttl", "Test access TTL must be 1h, 24h, or 7d");
+    const count = this.sqlite.prepare("SELECT count(*) AS count FROM users").get() as unknown as CountRow;
+    if (count.count === 0) throw conflict("Bootstrap the first owner before issuing test access");
+    const grantId = randomUUID();
+    const accessToken = issueTestAccessToken();
+    const createdAt = this.clock();
+    const expiresAt = new Date(createdAt.getTime() + ttlMs).toISOString();
+    this.sqlite.prepare(`
+      INSERT INTO test_access_grants(id, token_digest, created_at, expires_at)
+      VALUES (?, ?, ?, ?)
+    `).run(grantId, this.tokenDigest(accessToken), createdAt.toISOString(), expiresAt);
+    return { grant_id: grantId, access_token: accessToken, expires_at: expiresAt };
+  }
+
+  revokeTestAccess(grantId: string): void {
+    this.transaction(() => {
+      const result = this.sqlite.prepare(`
+        UPDATE test_access_grants SET revoked_at = ?
+        WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL
+      `).run(this.now(), grantId);
+      if (Number(result.changes) === 1) return;
+      const row = this.sqlite.prepare("SELECT claimed_at FROM test_access_grants WHERE id = ?")
+        .get(grantId) as { claimed_at: string | null } | undefined;
+      if (!row) throw notFound("Test access grant");
+      if (row.claimed_at !== null) throw conflict("Claimed test access cannot be revoked; revoke the issued device instead");
+      // An already revoked grant remains revoked; preserve idempotent CLI use.
+    });
+  }
+
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }): ClaimTestAccessResult;
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }, options: { browserSession: true }): ClaimTestAccessWithBrowserSessionResult;
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }, options: { browserSession?: boolean } = {}): ClaimTestAccessResult | ClaimTestAccessWithBrowserSessionResult {
+    const timestamp = this.now();
+    return this.transaction(() => {
+      const row = this.sqlite.prepare(`
+        SELECT id FROM test_access_grants
+        WHERE token_digest = ? AND revoked_at IS NULL AND claimed_at IS NULL AND expires_at > ?
+      `).get(this.tokenDigest(input.access_token), timestamp) as { id: string } | undefined;
+      if (!row) throw unauthorized("Test access token is invalid or unavailable");
+      const userId = randomUUID();
+      const deviceId = randomUUID();
+      const token = issueDeviceToken();
+      this.sqlite.prepare(`
+        INSERT INTO users(id, display_name, created_at, can_create_projects) VALUES (?, ?, ?, 1)
+      `).run(userId, input.display_name, timestamp);
+      this.sqlite.prepare(`
+        INSERT INTO devices(id, user_id, name, token_hash, created_at, token_created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(deviceId, userId, input.device_name, this.tokenDigest(token), timestamp, timestamp);
+      const claimed = this.sqlite.prepare(`
+        UPDATE test_access_grants SET claimed_at = ?, claimed_by_user_id = ?, claimed_by_device_id = ?
+        WHERE id = ? AND revoked_at IS NULL AND claimed_at IS NULL AND expires_at > ?
+      `).run(timestamp, userId, deviceId, row.id, timestamp);
+      if (Number(claimed.changes) !== 1) throw unauthorized("Test access token is invalid or unavailable");
+      const actor = { user_id: userId, display_name: input.display_name, device_id: deviceId };
+      const result: ClaimTestAccessResult = { actor, token, device: this.getDeviceForUser(userId, deviceId) };
+      return options.browserSession
+        ? { ...result, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device === true) }
+        : result;
+    });
   }
 
   createDevice(
@@ -858,9 +1100,21 @@ export class CollaborationDatabase {
     return { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id };
   }
 
-  createBrowserSession(actor: Actor, rememberDevice = false): BrowserSessionIssue {
+  createBrowserSession(
+    actor: Actor,
+    rememberDevice = false,
+    profile: { display_name?: string | undefined; device_name?: string | undefined } = {},
+  ): BrowserSessionIssue {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
+      if (profile.display_name !== undefined) {
+        this.sqlite.prepare("UPDATE users SET display_name = ? WHERE id = ?")
+          .run(profile.display_name, actor.user_id);
+      }
+      if (profile.device_name !== undefined) {
+        this.sqlite.prepare("UPDATE devices SET name = ? WHERE id = ? AND user_id = ?")
+          .run(profile.device_name, actor.device_id, actor.user_id);
+      }
       return this.insertBrowserSession(actor, this.clock(), rememberDevice);
     });
   }
@@ -1093,6 +1347,9 @@ export class CollaborationDatabase {
         }
         return this.projectCreationResult(existing);
       }
+      if (!this.canCreateProjects(actor.user_id)) {
+        throw forbidden("This account can join invited projects but cannot create projects");
+      }
       if (this.sqlite.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId)) {
         throw idempotencyConflict("Project ID already exists with another operation");
       }
@@ -1175,6 +1432,27 @@ export class CollaborationDatabase {
     return row?.role ?? null;
   }
 
+  getProjectContextPolicy(actor: Actor, projectId: string): { mode: "summary" | "original" } {
+    this.assertActiveDevice(actor);
+    if (this.projectMembershipRole(projectId, actor.user_id) === null) throw notFound("Project");
+    const row = this.sqlite.prepare("SELECT mode FROM project_context_policies WHERE project_id = ? AND user_id = ?")
+      .get(projectId, actor.user_id) as { mode: "summary" | "original" } | undefined;
+    return { mode: row?.mode ?? "summary" };
+  }
+
+  setProjectContextPolicy(actor: Actor, projectId: string, mode: "summary" | "original"): { mode: "summary" | "original" } {
+    return this.transaction(() => {
+      this.getProjectContextPolicy(actor, projectId);
+      if (mode !== "summary" && mode !== "original") throw new ApiError(400, "invalid_context_policy", "Unknown context policy");
+      // This is the authenticated user's preference, not a shared project mutation.
+      this.sqlite.prepare(`
+        INSERT INTO project_context_policies(project_id, user_id, mode, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(project_id, user_id) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at
+      `).run(projectId, actor.user_id, mode, this.now());
+      return { mode };
+    });
+  }
+
   listProjectMembers(projectId: string): ProjectMemberRecord[] {
     return this.sqlite.prepare(`
       SELECT project_memberships.user_id, users.display_name, project_memberships.role
@@ -1222,9 +1500,11 @@ export class CollaborationDatabase {
   }
 
   removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
-    this.requireProjectOwnedBy(projectId, actor.user_id);
-    if (userId === actor.user_id) throw conflict("The project owner cannot be removed");
     this.transaction(() => {
+      const actorRole = this.projectMembershipRole(projectId, actor.user_id);
+      if (!actorRole) throw notFound("Project");
+      if (actorRole === "owner" && userId === actor.user_id) throw conflict("The project owner cannot leave the project");
+      if (actorRole !== "owner" && userId !== actor.user_id) throw forbidden("Only the project owner can remove another member");
       const result = this.sqlite.prepare(`
         DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
       `).run(projectId, userId);
@@ -1814,6 +2094,9 @@ export class CollaborationDatabase {
         const project = this.sqlite.prepare("SELECT id FROM projects WHERE id = ?")
           .get(projectId);
         if (!project) {
+          if (!this.canCreateProjects(actor.user_id)) {
+            throw forbidden("This account can join invited projects but cannot create projects");
+          }
           this.sqlite.prepare(`
             INSERT INTO projects(id, owner_user_id, title, state, creation_idempotency_key, created_at, updated_at)
             VALUES (?, ?, ?, 'active', ?, ?, ?)
@@ -1971,17 +2254,14 @@ export class CollaborationDatabase {
   listSessionRuntimesForUser(sessionId: string, userId: string): RuntimeRecord[] {
     const rows = this.sqlite.prepare(`
       SELECT id, session_id, user_id, device_id, purpose, harness, provider,
-             model, local_session_id, capture_fidelity, status, last_seen_at
+             model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at
       FROM runtimes
       WHERE session_id = ? AND user_id = ? AND status != 'revoked'
       ORDER BY CASE WHEN status = 'online' THEN 0 ELSE 1 END,
                last_seen_at DESC, id ASC
     `).all(sessionId, userId) as unknown as RuntimeRow[];
     const now = this.clock().getTime();
-    return rows.map((row) => ({
-      ...row,
-      status: runtimeStatus(row.status, row.last_seen_at, now),
-    }));
+    return rows.map((row) => mapRuntimeRow(row, now));
   }
 
   membershipRole(sessionId: string, userId: string): MembershipRole | null {
@@ -2117,9 +2397,136 @@ export class CollaborationDatabase {
     return mapEvent(row);
   }
 
+  createHistorySummary(actor: Actor, sessionId: string, input: CreateHistorySummaryInput): CanonicalEvent {
+    return historySummaryOperation(() => this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (session.state !== "active") throw conflict("Archived sessions do not accept summary requests");
+      // Fetch the bounded selection and its canonical relationships, not a replay
+      // page. A missing or foreign-session ID must never produce a partial summary.
+      if (input.source_event_ids.length < 1 || input.source_event_ids.length > 100) {
+        throw new HistorySummaryError("invalid_selection", "Select between 1 and 100 history messages");
+      }
+      const selectedIds = new Set(input.source_event_ids);
+      const related = new Map<string, CanonicalEvent>();
+      const queue: CanonicalEvent[] = [];
+      let dependencyBytes = 0;
+      const include = (event: CanonicalEvent) => {
+        if (related.has(event.id)) return;
+        dependencyBytes += Buffer.byteLength(JSON.stringify(event));
+        if (related.size >= MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS || dependencyBytes > MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES) {
+          throw new HistorySummaryError("too_large", "Summary source ancestry exceeds the validation limit; select fewer sources");
+        }
+        related.set(event.id, event);
+        queue.push(event);
+      };
+      for (const id of input.source_event_ids) include(this.getEvent(sessionId, id));
+      for (let index = 0; index < queue.length; index += 1) {
+        const event = queue[index]!;
+        if (event.reply_to_event_id !== null) {
+          include(this.getEvent(sessionId, event.reply_to_event_id));
+        }
+        if (event.type !== "agent_request") continue;
+        const marker = historySummaryMarker(event);
+        for (const id of marker?.source_event_ids ?? []) include(this.getEvent(sessionId, id));
+        const responses = this.sqlite.prepare(`
+          SELECT * FROM events WHERE session_id = ? AND reply_to_event_id = ? AND type = 'agent_response'
+          ORDER BY sequence ASC LIMIT 2
+        `).all(sessionId, event.id) as unknown as EventRow[];
+        if (selectedIds.has(event.id) && responses.length === 0 && event.visibility === "session"
+          && !isHistorySummaryRequest(event) && historySummaryText(event.payload).trim()) {
+          throw conflict("Unfinished Agent requests cannot be selected for a history summary");
+        }
+        for (const row of responses) include(mapEvent(row));
+      }
+      const sources = selectHistorySummarySources(
+        [...related.values()].map((event) => ({ ...event, payload: redactJson(event.payload) })), input.source_event_ids,
+      );
+      const instructions = input.instructions === undefined ? undefined : redactJson(input.instructions) as string;
+      const content = buildHistorySummaryPrompt(sources, instructions);
+      if (Buffer.byteLength(JSON.stringify(content)) >= 32 * 1024) {
+        throw new HistorySummaryError("too_large", "Serialized summary prompt exceeds the 32 KiB transport boundary; no text was shortened");
+      }
+      const payload: JsonValue = {
+        content,
+        execution_profile: {
+          harness: input.execution_profile.harness,
+          model: input.execution_profile.model,
+          runtime_id: input.execution_profile.runtime_id,
+          ...(input.execution_profile.provider === undefined ? {} : { provider: input.execution_profile.provider }),
+          ...(input.execution_profile.reasoning_effort === undefined ? {} : { reasoning_effort: input.execution_profile.reasoning_effort }),
+        },
+        history_summary: {
+          version: 1,
+          source_event_ids: sources.map((event) => event.id),
+          source_digest: createHash("sha256").update(historySummarySourceJson(sources)).digest("hex"),
+        },
+      };
+      const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
+      if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", payload, null, "session", null);
+      const target = agentRequestTarget({ payload });
+      const runtime = this.listSessionRuntimesForUser(sessionId, actor.user_id)
+        .find((candidate) => candidate.id === input.execution_profile.runtime_id);
+      if (!runtime || runtime.purpose !== "execution" || runtime.status !== "online" || !runtimeSupportsAgentTarget(runtime, target)) {
+        throw conflict("Select your own exact online execution runtime and supported execution profile");
+      }
+      if (!this.sqlite.prepare(`
+        SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > ?)
+      `).get(runtime.device_id, actor.user_id, this.now())) {
+        throw conflict("The selected execution runtime's device is expired or revoked");
+      }
+      return this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: input.idempotency_key, type: "agent_request", visibility: "session", payload,
+      }, null);
+    }));
+  }
+
+  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number): HistoryContext {
+    return historySummaryOperation(() => this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
+      const through = throughSequence ?? session.next_sequence;
+      if (!Number.isSafeInteger(through) || through < 0 || through > session.next_sequence) {
+        throw new ApiError(400, "invalid_context_sequence", "through_sequence must be between zero and the current session head");
+      }
+      const resolvedView = view ?? this.getProjectContextPolicy(actor, session.project_id).mode;
+      if (resolvedView !== "summary" && resolvedView !== "original") throw new ApiError(400, "invalid_context_view", "Unknown context view");
+      const events: CanonicalEvent[] = [];
+      let scannedBytes = 0;
+      const query = this.sqlite.prepare(`
+        SELECT * FROM events WHERE session_id = ? AND sequence <= ? AND visibility = 'session' ORDER BY sequence ASC
+      `);
+      for (const value of query.iterate(sessionId, through)) {
+        const row = value as unknown as EventRow;
+        scannedBytes += Buffer.byteLength(row.payload_json) + Buffer.byteLength(row.runtime_provenance_json ?? "") + 512;
+        if (events.length >= MAX_HISTORY_CONTEXT_SCAN_EVENTS || scannedBytes > MAX_HISTORY_CONTEXT_SCAN_BYTES) {
+          throw new HistorySummaryError("too_large", "Context scan limit exceeded. Use paginated canonical history; no context was silently omitted");
+        }
+        const event = mapEvent(row);
+        events.push({ ...event, payload: redactJson(event.payload) });
+      }
+      const context = buildHistoryContext(events, resolvedView);
+      // The frozen canonical head includes invisible/control events; it is not
+      // the sequence of the last conversational item returned by the projection.
+      context.through_sequence = through;
+      if (Buffer.byteLength(JSON.stringify(context)) > HISTORY_SUMMARY_MAX_CONTEXT_BYTES) {
+        throw new HistorySummaryError("too_large", "Context view exceeds 256 KiB; use paginated canonical history");
+      }
+      return context;
+    }));
+  }
+
   appendEvent(actor: Actor, sessionId: string, input: AppendEventInput, provenance: RuntimeProvenance | null): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(input.payload);
     return this.transaction(() => {
+      const replyTarget = input.reply_to_event_id === undefined || input.reply_to_event_id === null
+        ? undefined
+        : this.getEvent(sessionId, input.reply_to_event_id);
+      if (input.type === "agent_response" && replyTarget?.type === "agent_request") {
+        throw conflict("Request-linked Agent responses require the dedicated completion endpoint");
+      }
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
       if (existing) return this.requireIdempotencyMatch(
         existing,
@@ -2130,6 +2537,19 @@ export class CollaborationDatabase {
         input.visibility ?? "session",
         provenance?.runtime_id ?? null,
       );
+      if ((input.type === "tool_call" || input.type === "tool_result")
+        && replyTarget !== undefined) {
+        if (replyTarget.type === "agent_request") {
+          const runtimeId = provenance?.runtime_id;
+          const claim = this.sqlite.prepare(
+            "SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?",
+          ).get(replyTarget.id) as unknown as ClaimRow | undefined;
+          if (runtimeId === undefined
+            || !this.isCurrentClaimAttempt(claim, runtimeId, input.claim_attempt, this.now())) {
+            throw conflict("A matching active claim is required to append request-linked tool events");
+          }
+        }
+      }
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
     });
   }
@@ -2189,6 +2609,7 @@ export class CollaborationDatabase {
     harness: string;
     provider: string;
     model: string;
+    execution_profiles?: RuntimeExecutionProfile[] | undefined;
     local_session_id: string;
     capture_fidelity: CaptureFidelity;
   }): RuntimeRecord {
@@ -2196,26 +2617,30 @@ export class CollaborationDatabase {
     this.assertActiveDevice(actor);
     const runtimeId = input.runtime_id ?? randomUUID();
     const timestamp = this.now();
+    const executionProfiles = input.execution_profiles === undefined
+      ? null
+      : JSON.stringify(RuntimeExecutionProfilesSchema.parse(input.execution_profiles));
     this.sqlite.prepare(`
-      INSERT INTO runtimes(id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+      INSERT INTO runtimes(id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
       ON CONFLICT(device_id, harness, local_session_id) DO UPDATE SET
         session_id = excluded.session_id,
         purpose = excluded.purpose,
         provider = excluded.provider,
         model = excluded.model,
+        execution_profiles_json = excluded.execution_profiles_json,
         capture_fidelity = excluded.capture_fidelity,
         status = 'online',
         last_seen_at = excluded.last_seen_at
-    `).run(runtimeId, input.session_id, actor.user_id, input.device_id, input.purpose ?? "execution", input.harness, input.provider, input.model, input.local_session_id, input.capture_fidelity, timestamp, timestamp);
+    `).run(runtimeId, input.session_id, actor.user_id, input.device_id, input.purpose ?? "execution", input.harness, input.provider, input.model, executionProfiles, input.local_session_id, input.capture_fidelity, timestamp, timestamp);
     return this.getRuntimeByIdentity(input.device_id, input.harness, input.local_session_id);
   }
 
   getRuntime(runtimeId: string): RuntimeRecord {
-    const row = this.sqlite.prepare("SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at FROM runtimes WHERE id = ?")
+    const row = this.sqlite.prepare("SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at FROM runtimes WHERE id = ?")
       .get(runtimeId) as unknown as RuntimeRow | undefined;
     if (!row) throw notFound("Runtime");
-    return row;
+    return mapRuntimeRow(row);
   }
 
   heartbeatRuntime(actor: Actor, runtimeId: string): RuntimeRecord {
@@ -2226,9 +2651,12 @@ export class CollaborationDatabase {
     return this.getRuntime(runtimeId);
   }
 
-  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string): { request_event_id: string; runtime_id: string; status: string } {
+  claimAgentRequest(actor: Actor, sessionId: string, requestEventId: string, runtimeId: string): AgentClaimOutcome {
     this.assertActiveDevice(actor);
-    return this.transaction(() => {
+    // The transaction returns terminal failure to the service instead of
+    // throwing. That lets the canonical failure commit before the service
+    // publishes it and raises the HTTP conflict.
+    return this.transaction((): AgentClaimOutcome => {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be claimed");
       if (this.sqlite.prepare("SELECT 1 FROM local_turn_commits WHERE request_event_id = ?").get(requestEventId)) {
@@ -2243,35 +2671,107 @@ export class CollaborationDatabase {
       const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
         candidate.purpose === "execution"
         && candidate.status === "online"
-        && candidate.harness.trim().toLowerCase() === target.harness
-        && (target.provider === undefined || candidate.provider === target.provider)
-        && (target.harness === "codex" || target.model === undefined || candidate.model === target.model));
+        && runtimeSupportsAgentTarget(candidate, target));
       const selectedRuntimeId = target.runtimeId
         ?? (target.harness === "codex" ? runtime.id : matching.length === 1 ? matching[0]?.id : undefined);
-      if (runtime.harness.trim().toLowerCase() !== target.harness
-        || (target.provider !== undefined && runtime.provider !== target.provider)
-        || (target.harness !== "codex" && target.model !== undefined && runtime.model !== target.model)
+      if (!runtimeSupportsAgentTarget(runtime, target)
         || selectedRuntimeId === undefined
         || runtime.id !== selectedRuntimeId
         || !matching.some((candidate) => candidate.id === runtime.id)) {
         throw conflict(`A matching online ${target.harness} runtime is required for this Agent request`);
       }
-      const existing = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const now = this.now();
+      const leaseExpiresAt = new Date(Date.parse(now) + AGENT_CLAIM_LEASE_MS).toISOString();
+      const existing = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
       if (existing) {
-        if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
-        return { request_event_id: requestEventId, runtime_id: runtimeId, status: existing.status };
+        if (existing.status === "failed") return { failed: true };
+        if (existing.status === "completed" || !claimLeaseLapsed(existing.lease_expires_at, now)) {
+          if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
+          return { claim: {
+            request_event_id: requestEventId,
+            runtime_id: runtimeId,
+            status: existing.status,
+            attempt_count: existing.attempt_count ?? 1,
+          } };
+        }
+        // The lease lapsed, so no accepted work is arriving. Exact-runtime
+        // reclaim is bounded: past the budget the request ends visibly instead
+        // of executing forever.
+        if ((existing.attempt_count ?? 1) >= MAX_AGENT_CLAIM_ATTEMPTS) {
+          const failure = this.failAbandonedClaim(sessionId, event, target.harness);
+          return failure === undefined ? { failed: true } : { failed: true, event: failure };
+        }
+        this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
+        this.sqlite.prepare(`
+          UPDATE agent_request_claims
+          SET runtime_id = ?, claimed_at = ?, attempt_count = attempt_count + 1, lease_expires_at = ?
+          WHERE request_event_id = ?
+        `).run(runtimeId, now, leaseExpiresAt, requestEventId);
+        return { claim: {
+          request_event_id: requestEventId,
+          runtime_id: runtimeId,
+          status: "claimed",
+          attempt_count: (existing.attempt_count ?? 1) + 1,
+        } };
       }
-      const active = this.sqlite.prepare(`
-        SELECT request_event_id FROM agent_request_claims
-        WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ?
-        LIMIT 1
-      `).get(runtimeId, requestEventId) as { request_event_id: string } | undefined;
-      if (active) throw runtimeBusy();
-      this.sqlite.prepare("INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status) VALUES (?, ?, ?, 'claimed')")
-        .run(requestEventId, runtimeId, this.now());
-      return { request_event_id: requestEventId, runtime_id: runtimeId, status: "claimed" };
+      this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
+      this.sqlite.prepare(`
+        INSERT INTO agent_request_claims(request_event_id, runtime_id, claimed_at, status, attempt_count, lease_expires_at)
+        VALUES (?, ?, ?, 'claimed', 1, ?)
+      `).run(requestEventId, runtimeId, now, leaseExpiresAt);
+      return { claim: {
+        request_event_id: requestEventId,
+        runtime_id: runtimeId,
+        status: "claimed",
+        attempt_count: 1,
+      } };
     });
+  }
+
+  private assertRuntimeClaimSlotAvailable(runtimeId: string, requestEventId: string, now: string): void {
+    const active = this.sqlite.prepare(`
+      SELECT request_event_id FROM agent_request_claims
+      WHERE runtime_id = ? AND status = 'claimed' AND request_event_id != ? AND lease_expires_at > ?
+      LIMIT 1
+    `).get(runtimeId, requestEventId, now) as { request_event_id: string } | undefined;
+    if (active) throw runtimeBusy();
+  }
+
+  /**
+   * End an abandoned request in a terminal failure the timeline can show, rather
+   * than leaving it pending for ever.
+   *
+   * The response is attributed to the requesting user because that is whose
+   * runtime held it, exactly as a harness-reported execution failure already is.
+   * It carries no runtime provenance and claims no capture fidelity: no harness
+   * produced it, and saying otherwise would overstate what the server observed.
+   */
+  private failAbandonedClaim(sessionId: string, request: CanonicalEvent, harness: string): CanonicalEvent | undefined {
+    this.sqlite.prepare(`
+      UPDATE agent_request_claims
+      SET status = 'failed', completed_at = ?, lease_expires_at = NULL
+      WHERE request_event_id = ?
+    `).run(this.now(), request.id);
+    // This key is generated inside the same transaction that marks the claim
+    // failed. It is therefore unforgeable in advance and does not let a public,
+    // client-chosen idempotency key suppress the canonical failure response.
+    const idempotencyKey = `server:agent-claim-abandoned:${randomUUID()}`;
+    return this.appendInsideTransaction(request.actor_user_id, sessionId, {
+      idempotency_key: idempotencyKey,
+      type: "agent_response",
+      visibility: "session",
+      reply_to_event_id: request.id,
+      payload: {
+        text: "This Agent request was interrupted and could not be recovered.",
+        status: "failed",
+        source_harness: harness,
+        error: {
+          code: "agent_request_abandoned",
+          message: "The exact runtime for this request stopped reporting progress.",
+        },
+      },
+    }, null);
   }
 
   completeAgentRequest(
@@ -2283,8 +2783,10 @@ export class CollaborationDatabase {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(payload);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
@@ -2301,9 +2803,9 @@ export class CollaborationDatabase {
         "session",
         runtimeId,
       );
-      const claim = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const claim = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
-      if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed") {
+      if (!this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())) {
         throw conflict("A matching active claim is required to complete this request");
       }
       const provenance = {
@@ -2334,8 +2836,10 @@ export class CollaborationDatabase {
     payload: JsonValue,
     observedModel?: string,
     observedReasoningEffort?: string,
+    claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(payload);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
@@ -2352,9 +2856,9 @@ export class CollaborationDatabase {
         "session",
         runtimeId,
       );
-      const claim = this.sqlite.prepare("SELECT runtime_id, status FROM agent_request_claims WHERE request_event_id = ?")
+      const claim = this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
         .get(requestEventId) as unknown as ClaimRow | undefined;
-      if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed") {
+      if (!this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())) {
         throw conflict("A matching active claim is required to append progress for this request");
       }
       const provenance = {
@@ -2362,7 +2866,7 @@ export class CollaborationDatabase {
         ...(observedModel === undefined ? {} : { model: observedModel }),
         ...(observedReasoningEffort === undefined ? {} : { reasoning_effort: observedReasoningEffort }),
       };
-      return this.appendInsideTransaction(actor.user_id, sessionId, {
+      const progress = this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "agent_progress",
         visibility: "session",
@@ -2370,12 +2874,34 @@ export class CollaborationDatabase {
         payload,
         runtime_id: runtimeId,
       }, provenance);
+      // Reporting accepted progress is what proves the claimant is still working,
+      // so it — not a device heartbeat — is what extends the lease. A runtime that
+      // is merely switched on cannot keep a dead execution alive.
+      this.sqlite.prepare("UPDATE agent_request_claims SET lease_expires_at = ? WHERE request_event_id = ?")
+        .run(new Date(Date.parse(this.now()) + AGENT_CLAIM_LEASE_MS).toISOString(), requestEventId);
+      return progress;
     });
+  }
+
+  private isCurrentClaimAttempt(
+    claim: ClaimRow | undefined,
+    runtimeId: string,
+    claimAttempt: number | undefined,
+    now: string,
+  ): boolean {
+    if (!claim || claim.runtime_id !== runtimeId || claim.status !== "claimed"
+      || claimLeaseLapsed(claim.lease_expires_at, now)) return false;
+    const currentAttempt = claim.attempt_count ?? 1;
+    if (claimAttempt !== undefined) return claimAttempt === currentAttempt;
+    return currentAttempt === 1;
   }
 
   commitLocalTurn(actor: Actor, sessionId: string, input: CommitLocalTurnInput): CommitLocalTurnResult {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
+      rejectHistorySummaryMetadata(input.request_payload);
+      rejectHistorySummaryMetadata(input.response_payload);
+      for (const event of input.tool_events ?? []) rejectHistorySummaryMetadata(event.payload);
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       const runtime = this.requireRuntimeForActor(actor, sessionId, input.runtime_id, "execution");
       if (session.state !== "active") throw conflict("Archived sessions do not accept completed local turns");
@@ -2466,11 +2992,12 @@ export class CollaborationDatabase {
         : this.requireReadableSessionInsideTransaction(actor, sessionId);
       let targetRuntime: RuntimeRecord | undefined;
       if (localControl) {
+        this.assertCodeControlEnabled(kind, session.project_id);
         targetRuntime = this.listSessionRuntimesForUser(sessionId, actor.user_id)
           .find((runtime) => runtime.id === targetRuntimeId);
         if (!targetRuntime || targetRuntime.purpose !== "execution"
-          || targetRuntime.status !== "online" || targetRuntime.harness.trim().toLowerCase() !== "codex") {
-          throw conflict("An online Codex execution runtime owned by this user is required");
+          || targetRuntime.status !== "online" || !this.supportsControlHarness(kind, targetRuntime.harness)) {
+          throw conflict("An exact online supported execution runtime owned by this user is required");
         }
       } else if (targetRuntimeId !== undefined) {
         throw conflict("Only local sync controls can target an execution runtime");
@@ -2543,7 +3070,8 @@ export class CollaborationDatabase {
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
       const localControl = isLocalSyncRequestKind(request.kind);
       if (request.kind === "visible_history_replace" || localControl) {
-        this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        this.assertCodeControlEnabled(request.kind, session.project_id);
       } else {
         this.requireReadableSessionInsideTransaction(actor, request.session_id);
       }
@@ -2553,8 +3081,8 @@ export class CollaborationDatabase {
         runtimeId,
         localControl ? "execution" : "snapshot_connector",
       );
-      if (localControl && (request.target_runtime_id !== runtime.id || runtime.harness.trim().toLowerCase() !== "codex")) {
-        throw forbidden("This local sync control targets a different Codex runtime");
+      if (localControl && (request.target_runtime_id !== runtime.id || !this.supportsControlHarness(request.kind, runtime.harness))) {
+        throw forbidden("This local sync control targets a different execution runtime");
       }
       if (request.status === "claimed" && request.claimed_by_runtime_id === runtimeId) return request;
       if (request.status !== "pending") throw conflict("Snapshot request is not pending");
@@ -2590,10 +3118,10 @@ export class CollaborationDatabase {
 
   private getRuntimeByIdentity(deviceId: string, harness: string, localSessionId: string): RuntimeRecord {
     const row = this.sqlite.prepare(`
-      SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at
+      SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at
       FROM runtimes WHERE device_id = ? AND harness = ? AND local_session_id = ?
     `).get(deviceId, harness, localSessionId) as unknown as RuntimeRow;
-    return row;
+    return mapRuntimeRow(row);
   }
 
   private requireRuntimeForActor(actor: Actor, sessionId: string, runtimeId: string, purpose: RuntimeRecord["purpose"]): RuntimeRecord {
@@ -2684,14 +3212,18 @@ export class CollaborationDatabase {
       const request = this.requireSnapshotRequest(requestId);
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
       const localControl = isLocalSyncRequestKind(request.kind);
+      if (isCodeSyncRequestKind(request.kind)) {
+        const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        this.assertCodeControlEnabled(request.kind, session.project_id);
+      }
       const runtime = this.requireRuntimeForActor(
         actor,
         request.session_id,
         runtimeId,
         localControl ? "execution" : "snapshot_connector",
       );
-      if (localControl && (request.target_runtime_id !== runtime.id || runtime.harness.trim().toLowerCase() !== "codex")) {
-        throw forbidden("This local sync control targets a different Codex runtime");
+      if (localControl && (request.target_runtime_id !== runtime.id || !this.supportsControlHarness(request.kind, runtime.harness))) {
+        throw forbidden("This local sync control targets a different execution runtime");
       }
       const targetStatus = "result" in outcome ? "completed" : "failed";
       if (request.status === targetStatus && request.claimed_by_runtime_id === runtimeId) {
@@ -2730,6 +3262,21 @@ export class CollaborationDatabase {
 
   private now(): string {
     return this.clock().toISOString();
+  }
+
+  private supportsControlHarness(kind: SnapshotRequestKind, harness: string): boolean {
+    const normalized = harness.trim().toLowerCase();
+    return normalized === "codex" || (isCodeSyncRequestKind(kind) && normalized === "deepseek-harness");
+  }
+
+  private assertCodeControlEnabled(kind: SnapshotRequestKind, projectId: string): void {
+    // Local status and disabling automatic upload remain available while the
+    // cloud repository is paused, so a member can turn off an existing local
+    // upload preference without first re-enabling cloud transfers.
+    if (isCodeSyncRequestKind(kind) && kind !== "code_sync_status" && kind !== "code_auto_upload_disable"
+      && !this.sqlite.prepare("SELECT 1 FROM code_repositories WHERE project_id=? AND enabled=1").get(projectId)) {
+      throw conflict("Enable project code collaboration before changing local code sync");
+    }
   }
 
   private touchProject(projectId: string, timestamp = this.now()): void {
@@ -3017,6 +3564,32 @@ export class CollaborationDatabase {
     }
   }
 
+  private migrateCodeRepositoryEnableColumn(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(code_repositories)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("enabled")) {
+      this.sqlite.exec("ALTER TABLE code_repositories ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))");
+    }
+  }
+
+  private migrateAccountCapabilities(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (columns.has("can_create_projects")) return;
+    this.transaction(() => {
+      this.sqlite.exec("ALTER TABLE users ADD COLUMN can_create_projects INTEGER NOT NULL DEFAULT 0 CHECK (can_create_projects IN (0, 1))");
+      // Preserve the bootstrap operator and everyone who already owns a project.
+      // Other legacy invitation-only identities become project-scoped guests.
+      this.sqlite.exec(`
+        UPDATE users SET can_create_projects = 1
+        WHERE id = (SELECT id FROM users ORDER BY created_at, rowid LIMIT 1)
+           OR id IN (SELECT owner_user_id FROM projects)
+      `);
+    });
+  }
+
   private migrateProjectModel(): void {
     const sessionColumns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((row) => row.name),
@@ -3090,6 +3663,15 @@ export class CollaborationDatabase {
     );
     if (!columns.has("purpose")) {
       this.sqlite.exec("ALTER TABLE runtimes ADD COLUMN purpose TEXT NOT NULL DEFAULT 'execution' CHECK (purpose IN ('execution', 'snapshot_connector'))");
+    }
+  }
+
+  private migrateRuntimeExecutionProfilesColumn(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(runtimes)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("execution_profiles_json")) {
+      this.sqlite.exec("ALTER TABLE runtimes ADD COLUMN execution_profiles_json TEXT CHECK (execution_profiles_json IS NULL OR json_valid(execution_profiles_json))");
     }
   }
 
@@ -3183,6 +3765,51 @@ export class CollaborationDatabase {
     if (violations.length > 0) throw new Error("Agent progress migration failed foreign-key validation");
   }
 
+  /**
+   * Give agent claims a lease and a bounded recovery budget, and let them end in a
+   * terminal `failed` rather than sitting `claimed` forever.
+   *
+   * Pre-lease rows are inserted with a null `lease_expires_at`, which the claim
+   * path reads as "already expired". That is deliberate: a claim written by an
+   * older build is by definition one nothing is renewing, so recovery is the
+   * safe reading of it.
+   */
+  private migrateAgentClaimLease(): void {
+    const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_request_claims'")
+      .get() as { sql?: string } | undefined;
+    if (table?.sql === undefined || table.sql.includes("lease_expires_at")) return;
+    this.sqlite.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.sqlite.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE agent_request_claims_next (
+          request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+          runtime_id TEXT NOT NULL REFERENCES runtimes(id),
+          claimed_at TEXT NOT NULL,
+          completed_at TEXT,
+          status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+          attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+          lease_expires_at TEXT
+        ) STRICT;
+        INSERT INTO agent_request_claims_next(
+          request_event_id, runtime_id, claimed_at, completed_at, status, attempt_count, lease_expires_at
+        ) SELECT
+          request_event_id, runtime_id, claimed_at, completed_at, status, 1, NULL
+        FROM agent_request_claims;
+        DROP TABLE agent_request_claims;
+        ALTER TABLE agent_request_claims_next RENAME TO agent_request_claims;
+        COMMIT;
+      `);
+    } catch (error) {
+      try { this.sqlite.exec("ROLLBACK"); } catch { /* The migration may have failed before BEGIN. */ }
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) throw new Error("Agent claim lease migration failed foreign-key validation");
+  }
+
   private migrateSnapshotStorageLedger(): void {
     const columns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all() as Array<{ name: string }>).map((row) => row.name),
@@ -3219,7 +3846,7 @@ export class CollaborationDatabase {
     const columns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all() as Array<{ name: string }>).map((row) => row.name),
     );
-    if (table?.sql?.includes("'local_sync_status'") && columns.has("target_runtime_id")) return;
+    if (table?.sql?.includes("'code_sync_status'") && columns.has("target_runtime_id")) return;
     this.sqlite.exec("PRAGMA foreign_keys = OFF");
     try {
       this.sqlite.exec(`
@@ -3228,7 +3855,7 @@ export class CollaborationDatabase {
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
           requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload')),
+          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable')),
           through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
           status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
           target_runtime_id TEXT REFERENCES runtimes(id),
@@ -3248,7 +3875,7 @@ export class CollaborationDatabase {
           failed_at, result_json, failure_json, storage_bytes, metadata_charged
         ) SELECT
           id, session_id, requested_by_user_id, request_kind, through_sequence, status,
-          NULL, claimed_by_runtime_id, created_at, claimed_at, completed_at,
+          ${columns.has("target_runtime_id") ? "target_runtime_id" : "NULL"}, claimed_by_runtime_id, created_at, claimed_at, completed_at,
           failed_at, result_json, failure_json, storage_bytes, metadata_charged
         FROM snapshot_requests;
         DROP TABLE snapshot_requests;

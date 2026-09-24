@@ -40,7 +40,7 @@ Use a focused branch for review. Agent-created branch names should use the `code
 ## Making changes
 
 - Prefer small patches over whole-file replacement.
-- Keep domain validation in `packages/protocol`, authorization and persistence decisions in `apps/server`, and presentation state in `apps/web`.
+- Keep domain validation in `packages/protocol` and authorization and persistence decisions in `apps/server`. Authenticated application presentation belongs in `apps/web`; the separate product-home presentation belongs in `site` and is published only through the `apps/web` build, as defined by ADR-0022.
 - Reuse the harness-neutral `ProjectHarnessAdapter` and collaboration client boundaries instead of introducing a direct harness-specific server path.
 - Keep retryable mutations idempotent and add mismatch tests.
 - Preserve explicit error states; do not convert a failed or ambiguous operation into apparent success.
@@ -109,4 +109,3 @@ Update the owner of a changed fact rather than copying the same fact into severa
 ## Security reports
 
 Do not place credentials, private transcripts, personal data, exploit payloads, or production logs in a public issue or PR. Contact the project lead privately with a minimal redacted reproduction. See [`docs/SECURITY.md`](docs/SECURITY.md) for the repository threat model and incident expectations.
-

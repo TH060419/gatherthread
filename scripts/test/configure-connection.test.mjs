@@ -13,9 +13,9 @@ import {
 
 const EXAMPLE = `NODE_ENV=development
 GATHERTHREAD_SERVER_HOST=127.0.0.1
-GATHERTHREAD_SERVER_PORT=8787
+GATHERTHREAD_SERVER_PORT=18787
 GATHERTHREAD_DATABASE_PATH=.local/collaboration.sqlite
-GATHERTHREAD_PUBLIC_BASE_URL=http://127.0.0.1:8787
+GATHERTHREAD_PUBLIC_BASE_URL=http://127.0.0.1:18787
 GATHERTHREAD_ALLOWED_ORIGINS=
 GATHERTHREAD_AUTH_TOKEN_PEPPER=
 GATHERTHREAD_TLS_TERMINATED_BY_PROXY=false
@@ -33,9 +33,18 @@ test("local connection creates a private environment from the example", async ()
   const result = await configureConnectionEnvironment({ cwd: directory, mode: "local" });
   const contents = await readFile(result.envPath, "utf8");
   assert.match(contents, /^NODE_ENV=development$/m);
-  assert.match(contents, /^GATHERTHREAD_PUBLIC_BASE_URL=http:\/\/127\.0\.0\.1:8787$/m);
+  assert.match(contents, /^GATHERTHREAD_PUBLIC_BASE_URL=http:\/\/127\.0\.0\.1:18787$/m);
   assert.match(contents, /^GATHERTHREAD_TLS_TERMINATED_BY_PROXY=false$/m);
   if (process.platform !== "win32") assert.equal((await stat(result.envPath)).mode & 0o777, 0o600);
+});
+
+test("local connection falls back to the high default port when the template omits it", async () => {
+  const directory = await fixture();
+  await writeFile(join(directory, ".env.example"), EXAMPLE.replace("GATHERTHREAD_SERVER_PORT=18787\n", ""));
+  const result = await configureConnectionEnvironment({ cwd: directory, mode: "local" });
+  const contents = await readFile(result.envPath, "utf8");
+  assert.equal(result.serverPort, 18787);
+  assert.match(contents, /^GATHERTHREAD_PUBLIC_BASE_URL=http:\/\/127\.0\.0\.1:18787$/m);
 });
 
 test("LAN connection preserves credentials and storage while narrowing origins", async () => {

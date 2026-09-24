@@ -3,14 +3,18 @@ import assert from "node:assert/strict";
 
 import {
   canAppend,
+  canRetryFailedAgentRequest,
   createSelectionGuard,
+  emptyProjectState,
   eventContent,
   eventLabel,
+  failedRequestFor,
   invitationStatus,
   invitationStatusLabel,
   invitationRolePolicy,
   hasOnlineSnapshotConnector,
   isExecutionRuntime,
+  isFailedAgentResponse,
   isTimelineEventVisible,
   normalizeConnectorState,
   normalizeInvitation,
@@ -19,11 +23,25 @@ import {
   pendingAgentRequests,
   projectCodexConnectionCommands,
   provenanceSummary,
+  retryAgentRequestInput,
   runtimeLabel,
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
 } from "../src/domain.js";
+
+test("empty-project guidance distinguishes qualified accounts from project-invited guests", () => {
+  assert.deepEqual(emptyProjectState(true), {
+    title: "Create your first project.",
+    description: "Create a project to organize your sessions and invite collaborators.",
+    canCreateProjects: true,
+  });
+  assert.deepEqual(emptyProjectState(false), {
+    title: "No invited projects are available. Ask a project owner for an invitation.",
+    description: "Once invited, your projects will appear here. A project invitation does not let you create projects.",
+    canCreateProjects: false,
+  });
+});
 
 test("project Codex commands are cross-platform, quoted, and credential-free", () => {
   const commands = projectCodexConnectionCommands({
@@ -32,11 +50,11 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
   });
   assert.equal(
     commands.posix,
-    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
+    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.7 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
   );
   assert.equal(
     commands.powershell,
-    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
+    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.7 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
   );
   for (const command of Object.values(commands)) {
     assert.match(command, /--url 'https:\/\/gatherthread\.example\/v1'/);
@@ -363,4 +381,74 @@ test("invitation records normalize wire keys and derive fail-closed status", () 
     { projectId: "p1", role: "participant", status: "pending" },
   );
   assert.equal(invitationStatusLabel("claimed"), "Accepted");
+});
+
+function agentRequestEvent(overrides = {}) {
+  return {
+    id: "request-1",
+    type: "agent_request",
+    sequence: 4,
+    replyTo: null,
+    payload: {
+      content: "summarise the migration",
+      execution_profile: {
+        harness: "codex",
+        provider: "openai",
+        model: "gpt-5",
+        reasoning_effort: "high",
+        runtime_id: "runtime-7",
+      },
+    },
+    ...overrides,
+  };
+}
+
+function failedResponseEvent(overrides = {}) {
+  return {
+    id: "response-1",
+    type: "agent_response",
+    sequence: 5,
+    replyTo: "request-1",
+    payload: { status: "failed", text: "This Agent request was interrupted and could not be recovered." },
+    ...overrides,
+  };
+}
+
+test("only a response that reports a failed execution is treated as a failure", () => {
+  assert.equal(isFailedAgentResponse(failedResponseEvent()), true);
+  assert.equal(isFailedAgentResponse({ ...failedResponseEvent(), payload: { text: "all good" } }), false);
+  assert.equal(isFailedAgentResponse({ ...failedResponseEvent(), payload: { status: "completed" } }), false);
+  assert.equal(isFailedAgentResponse(agentRequestEvent()), false);
+  assert.equal(isFailedAgentResponse(undefined), false);
+});
+
+test("a failed response resolves to the request it belongs to", () => {
+  const events = [agentRequestEvent(), failedResponseEvent()];
+  assert.equal(failedRequestFor(events, failedResponseEvent())?.id, "request-1");
+  assert.equal(failedRequestFor(events, failedResponseEvent({ replyTo: "missing" })), undefined);
+  assert.equal(failedRequestFor(events, { type: "agent_response", payload: {} }), undefined);
+});
+
+test("retrying a failed request reuses its exact original target", () => {
+  const request = agentRequestEvent();
+  const input = retryAgentRequestInput(request, "agent_request:retry-key");
+  assert.equal(input.content, "summarise the migration");
+  assert.equal(input.idempotencyKey, "agent_request:retry-key");
+  assert.deepEqual(input.executionProfile, {
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5",
+    reasoningEffort: "high",
+    runtimeId: "runtime-7",
+  });
+  // A request with no recorded target must not be retried onto a different one.
+  const untargeted = agentRequestEvent({ payload: { content: "no profile" } });
+  assert.deepEqual(retryAgentRequestInput(untargeted, "agent_request:retry-key").executionProfile, undefined);
+});
+
+test("only the original requester can retry a failed Agent request", () => {
+  const request = agentRequestEvent({ actor: { id: "user-1", username: "Requester" } });
+  assert.equal(canRetryFailedAgentRequest(request, { id: "user-1" }), true);
+  assert.equal(canRetryFailedAgentRequest(request, { id: "user-2" }), false);
+  assert.equal(canRetryFailedAgentRequest(request, undefined), false);
 });

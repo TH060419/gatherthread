@@ -105,7 +105,9 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       }
       onSuccess?.(next);
     } catch {
-      setNotice(endpoint.startsWith("sync/")
+      setNotice(endpoint.startsWith("code/")
+        ? "代码同步未完成。请检查本机授权、项目权限和云端版本；不会强制覆盖文件。"
+        : endpoint.startsWith("sync/")
         ? "上传操作未完成。请检查连接和会话权限后重试。"
         : "操作未完成。请检查服务器地址、当前授权和模型配置。");
     } finally {
@@ -181,7 +183,84 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       setProvider,
       setModel,
       runAction,
+    }),
+  nativeState === undefined || unavailable ? null : renderCodeSyncControls(nativeState, busy, runAction));
+}
+
+function renderCodeSyncControls(state, busy, runAction) {
+  if (!state.codeSync?.length) return null;
+  const actions = [
+    ["code_sync_status", "检查状态"],
+    ["code_upload", "上传代码"],
+    ["code_download", "下载更新"],
+    ["code_recover", "恢复到新目录"],
+  ];
+  return React.createElement("section", { style: styles.connectionCard, "aria-label": "项目代码同步" },
+    React.createElement("h3", { style: styles.sectionTitle }, "项目代码 · Git"),
+    React.createElement("p", { style: styles.muted },
+      "代码与会话上传独立。每位成员使用自己的云端分支；项目成员均可读取代码。上传前请检查源文件，不上传密钥或私人资料。"),
+    ...state.codeSync.map((project) => {
+      const invoke = (action) => void runAction("code/action", { projectId: project.projectId, action });
+      const status = project.status;
+      return React.createElement("details", { key: project.projectId, style: { ...styles.row, display: "block" } },
+        React.createElement("summary", { style: styles.sessionTitle }, project.projectName),
+        React.createElement("div", { style: styles.form },
+          React.createElement("label", { style: styles.syncToggle },
+            React.createElement("input", {
+              type: "checkbox", checked: project.authorized, disabled: busy,
+              onChange: (event) => void runAction("code/authorize", {
+                projectId: project.projectId, enabled: event.target.checked,
+              }),
+            }), "允许此 DSH 同步该项目代码"),
+          React.createElement("p", { style: styles.muted }, "仅访问此项目已经绑定的本地目录，不改动原 Git 分支或暂存区。下载要求本地没有未上传改动；恢复始终新建目录，不更换当前 Agent 工作目录。"),
+          status ? React.createElement("p", { style: styles.sessionMeta },
+            status.local_status_unknown ? "已恢复云端副本；原工作区状态未知，请单独检查。" : status.enabled
+              ? `${status.file_count} 个源文件 · ${status.local_changes} 项待上传 · ${status.excluded_count} 项已排除 · 云端 ${status.cloud_commit?.slice(0, 8) ?? "尚无版本"}`
+              : "请先由项目创建者在 GatherThread 的「项目代码」中启用 Git。") : null,
+          status?.needs_download ? React.createElement("p", { style: styles.notice }, "云端有新版本。请先下载；本地有改动时请恢复到新目录比较，不会自动覆盖。") : null,
+          project.authorized ? React.createElement("label", { style: styles.syncToggle },
+            React.createElement("input", {
+              type: "checkbox", checked: status?.automatic_upload === true,
+              disabled: busy || !status?.enabled,
+              onChange: (event) => invoke(event.target.checked ? "code_auto_upload_enable" : "code_auto_upload_disable"),
+            }), "空闲时自动上传本地代码至云端") : null,
+          React.createElement("div", { style: styles.syncActions }, ...actions.map(([action, label]) => (
+            React.createElement("button", {
+              key: action, type: "button", style: styles.compactButton,
+              disabled: busy || !project.authorized || (action !== "code_sync_status" && !status?.enabled),
+              onClick: () => {
+                if (action === "code_recover" && !window.confirm("将云端代码恢复到当前项目旁的新目录，原目录和会话保持不变。继续？")) return;
+                invoke(action);
+              },
+            }, label)
+          ))),
+          status?.recovery_directory ? React.createElement("p", { role: "status", style: styles.notice },
+            `已恢复至项目同级目录：${status.recovery_directory}。在本地 Agent 中打开该目录继续工作；原会话保持不变。`) : null,
+          project.error ? React.createElement("p", { role: "status", style: styles.notice }, codeSyncErrorLabel(project.error)) : null,
+        ));
     }));
+}
+
+function codeSyncErrorLabel(code) {
+  const labels = {
+    code_sync_disabled: "请先允许此 DSH 同步项目代码。",
+    code_sync_busy: "Agent 正在工作，请等待本轮结束后再同步。",
+    code_workspace_busy: "Agent 正在工作，请等待本轮结束后再同步。",
+    code_sync_dirty: "本地有未上传修改。先上传，或恢复云端版本到新目录比较。",
+    code_sync_recovery_required: "本地目录缺失或上次下载中断，请先将云端副本恢复到新目录。",
+    code_sync_forbidden: "代码访问被拒绝，请检查该设备的登录状态与项目权限。",
+    code_sync_conflict: "云端版本已变化。请先安全下载或恢复到新目录比较，未覆盖任何云端版本。",
+    code_conflict: "云端版本冲突。请检查最新分支，保留本地修改后重试。",
+    code_stale_head: "云端已有新版本。请恢复到新目录比较，不要覆盖未上传的本地修改。",
+    code_merge_conflict: "分支存在冲突。请保留本地修改，比较云端版本并处理冲突。",
+    code_storage_quota_exceeded: "项目代码存储额度已满，请联系服务管理员。",
+    code_storage_check_required: "代码写入因存储检查暂时停止，请联系服务管理员；会话同步仍可使用。",
+    code_git_unavailable: "Git 不可用，请检查服务器与本机的 Git 安装。",
+    code_secret_detected: "检测到可能的密钥，已阻止上传。请检查项目文件。",
+    code_not_enabled: "请先由项目创建者在 GatherThread 启用项目 Git。",
+    code_sync_secret: "检测到可能的密钥，已阻止上传。请检查项目文件。",
+  };
+  return labels[code] ?? "代码同步未完成。请检查授权、文件和云端状态后重试；会话同步不受影响。";
 }
 
 async function readHostState(connection, signal) {
@@ -302,6 +381,13 @@ function renderNativeControls(input) {
     const models = selectedProvider?.models ?? [];
     controls.push(
       connectionSummary(state),
+      // Reaching this branch means authorization is already "paired": the
+      // "unpaired" and "pairing" states are handled by earlier branches. The
+      // browser approval succeeded, but without a provider and model no runtime
+      // is registered, so a bare stopped connection is indistinguishable from a
+      // fresh install. State the remaining step explicitly.
+      React.createElement("p", { key: "select-model-notice", style: styles.notice },
+        "配对完成后，尚未选择 DSH Provider 与 Model。完成选择并点击下方按钮后，本机 DSH 运行时才会注册到 GatherThread；在此之前，GatherThread 网页无法发现这台 DSH。"),
       input.catalog === undefined
         ? React.createElement("button", {
           key: "load-catalog",
@@ -413,7 +499,7 @@ function detail(label, value) {
 function parseNativeState(value) {
   exactObject(value, [
     "schemaVersion", "integration", "authorization", "compatibility", "runtime",
-    "officialServerUrl", "serverUrl", "deviceName", "route", "projectCount", "bindings", "localSync", "pairing", "recoverableError",
+    "officialServerUrl", "serverUrl", "deviceName", "route", "projectCount", "bindings", "localSync", "codeSync", "pairing", "recoverableError",
   ]);
   if (value.schemaVersion !== 2 || value.integration !== "gatherthread") throw new Error("invalid native status identity");
   if (!AUTHORIZATION_STATES.has(value.authorization)) throw new Error("invalid native authorization state");
@@ -437,6 +523,7 @@ function parseNativeState(value) {
   let route;
   let bindings;
   let localSync;
+  let codeSync;
   if (value.route !== undefined || value.bindings !== undefined || value.projectCount !== undefined) {
     if (value.route === undefined || !Number.isSafeInteger(value.projectCount) || value.projectCount < 0
       || !Array.isArray(value.bindings) || value.bindings.length > 100
@@ -477,6 +564,35 @@ function parseNativeState(value) {
       }
       return { ...sync };
     });
+    const codeSyncValue = value.codeSync ?? [];
+    if (!Array.isArray(codeSyncValue) || codeSyncValue.length > 100) throw new Error("invalid code sync status");
+    codeSync = codeSyncValue.map((project) => {
+      exactObject(project, ["projectId", "projectName", "authorized", "status", "error"]);
+      boundedText(project.projectId, 128);
+      boundedText(project.projectName, 160);
+      if (typeof project.authorized !== "boolean") throw new Error("invalid code sync authorization");
+      if (project.error !== undefined && !/^code_[a-z_]{1,60}$/u.test(project.error)) throw new Error("invalid code sync error");
+      if (project.status !== undefined) {
+        const status = project.status;
+        exactObject(status, ["enabled", "automatic_upload", "local_changes", "file_count", "excluded_count", "base_commit", "cloud_commit", "branch_id", "needs_download", "recovery_directory", "local_status_unknown"]);
+        if (status.local_status_unknown !== undefined && typeof status.local_status_unknown !== "boolean") throw new Error("invalid local status flag");
+        for (const key of ["enabled", "automatic_upload", "needs_download"]) {
+          if (typeof status[key] !== "boolean") throw new Error("invalid code sync flag");
+        }
+        for (const key of ["local_changes", "file_count", "excluded_count"]) {
+          if (!Number.isSafeInteger(status[key]) || status[key] < 0) throw new Error("invalid code sync count");
+        }
+        for (const key of ["base_commit", "cloud_commit"]) {
+          if (status[key] !== null && !/^[a-f0-9]{40}$/u.test(status[key])) throw new Error("invalid code commit");
+        }
+        if (status.branch_id !== null) boundedText(status.branch_id, 128);
+        if (status.recovery_directory !== undefined) {
+          boundedText(status.recovery_directory, 255);
+          if (/[\\/\u0000-\u001f]/u.test(status.recovery_directory)) throw new Error("invalid recovery directory");
+        }
+      }
+      return { ...project };
+    });
   }
   let pairing;
   if (value.pairing !== undefined) {
@@ -512,7 +628,7 @@ function parseNativeState(value) {
     ...(officialServerUrl === undefined ? {} : { officialServerUrl }),
     ...(serverUrl === undefined ? {} : { serverUrl }),
     ...(value.deviceName === undefined ? {} : { deviceName: value.deviceName }),
-    ...(route === undefined ? {} : { route, projectCount: value.projectCount, bindings, localSync }),
+    ...(route === undefined ? {} : { route, projectCount: value.projectCount, bindings, localSync, codeSync }),
     ...(pairing === undefined ? {} : { pairing }),
     ...(value.recoverableError === undefined ? {} : { recoverableError: value.recoverableError }),
   };

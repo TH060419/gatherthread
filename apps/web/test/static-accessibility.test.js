@@ -14,6 +14,38 @@ const dshPath = fileURLToPath(new URL("../src/dsh.js", import.meta.url));
 const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.url));
 const brandLightPath = fileURLToPath(new URL("../brand/lockup-color-transparent-light.svg", import.meta.url));
 const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-dark.svg", import.meta.url));
+const aliyunGuidePath = fileURLToPath(new URL("../../../docs/ALIYUN_ECS.md", import.meta.url));
+const selfHostingGuidePath = fileURLToPath(new URL("../../../docs/SELF_HOSTING.md", import.meta.url));
+
+test("first-project empty state has a localized eyebrow and restores English when language changes", async () => {
+  const [html, main, translations] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(i18nPath, "utf8")]);
+  assert.match(html, /id="empty-state-eyebrow"/);
+  assert.match(main, /empty-state-eyebrow"\)\.textContent = "No project yet"/);
+  assert.match(main, /empty-state-title"\)\.textContent = empty\.title/);
+  assert.match(main, /localizer\.apply\(state\.settings\.general\.locale\)/);
+  assert.match(translations, /"No project yet": "还没有项目"/);
+});
+
+test("a pending browser notification permission does not block saving settings", async () => {
+  const main = await readFile(mainPath, "utf8");
+  assert.match(main, /if \(notificationPermissionNeeded\(nextSettings\.notifications\)\) void ensureNotificationPermission\(\)/);
+  assert.doesNotMatch(main, /await permissionRequest/);
+});
+
+test("manual summaries use accessible icon entries, explicit paid confirmation and bounded settings", async () => {
+  const [html, main, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
+  for (const id of ["history-summary-select-button", "history-summary-view-button", "history-summary-versions-button"]) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*aria-label="[^"]+"[^>]*title="[^"]+"[^>]*>[\\s\\S]*?<svg[^>]*aria-hidden="true"`));
+  }
+  assert.match(html, /id="history-summary-confirm-dialog"[^>]*aria-labelledby="history-summary-confirm-title"[^>]*aria-describedby="history-summary-confirm-warning"/);
+  assert.match(html, /id="history-summary-status"[^>]*role="alert"/);
+  assert.match(html, /id="settings-history-summary-instructions"[^>]*maxlength="4000"/);
+  assert.match(html, /id="settings-history-context-mode" disabled/);
+  assert.match(html, /may consume model quota.*Only the selected records.*does not guarantee sandbox isolation/u);
+  assert.match(html, /Display toggles do not change your Agent context policy/u);
+  assert.match(styles, /\.history-summary-confirm-dialog > div \{ padding: 24px;/u);
+  assert.match(main, /if \(localeChanged && state\.session\) renderTimeline\(\)/u);
+});
 
 const brandedIconHashes = new Map([
   ["android-chrome-192x192.png", "f94f61adcee6cf206813081db0d286bbfde7f49445fcdb3f2c9da4f8892c2fce"],
@@ -71,6 +103,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     '<aside id="member-panel"',
     'aria-live="polite"',
     'for="token"',
+    'for="claim-display-name"',
+    'for="claim-device-name"',
     'id="send-chat-button"',
     'id="send-agent-button"',
     'id="claim-invitation-form"',
@@ -104,6 +138,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     '<span>Connect Codex</span>',
     'id="settings-button"',
     'id="settings-dialog"',
+    'id="attention-notice" class="attention-notice" role="status" aria-live="assertive" aria-atomic="true" hidden',
+    'id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification"',
     'id="settings-locale"',
     'id="settings-ambient-canvas"',
     'id="settings-composer-height"',
@@ -142,7 +178,7 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"/);
   assert.match(main, /title\.title = session\.name/);
   assert.match(main, /element\("session-title"\)\.title = session\.name/);
-  assert.match(main, /localizer\.t\("Continue"\)/);
+  assert.match(main, /localizer\.t\("Sign in"\)/);
   assert.match(styles, /\.session-button strong \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /\.title-line h1 \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /select:not\(:disabled\):hover/);
@@ -158,6 +194,71 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(main, /details\.open = live/);
   assert.match(main, /expandedWorklogs\.has\(worklogId\)/);
   assert.match(main, /details\.addEventListener\("toggle"/);
+});
+
+test("entry navigation, empty-account project actions, and invited-member exit remain accessible", async () => {
+  const [html, main, styles, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8"), readFile(i18nPath, "utf8"),
+  ]);
+  assert.match(html, /id="auth-language-button"[^>]*aria-label="Switch language \/ 切换语言"/);
+  assert.match(html, /class="brand-lockup brand-lockup-login" href="\.\.\/"/);
+  assert.match(html, /class="wordmark" href="\.\.\/"/);
+  assert.match(html, /id="topbar-create-project-button"/);
+  assert.match(html, /id="leave-project-dialog"[^>]*aria-labelledby="leave-project-title"/);
+  assert.match(main, /await api\.leaveProject\(projectId, userId\)/);
+  assert.match(main, /event\.key !== SHARED_LANGUAGE_STORAGE_KEY/);
+  assert.match(styles, /\.account-cluster \{\s*grid-column: 3;/);
+  assert.match(i18n, /"Leave project": "退出项目"/);
+});
+
+test("shared identity fields precede separate login, qualification, and project invitation forms", async () => {
+  const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  const name = markup.indexOf('id="claim-display-name"');
+  const device = markup.indexOf('id="claim-device-name"');
+  const tabs = markup.indexOf('class="auth-entry-tabs" role="tablist"');
+  const loginTab = markup.indexOf('id="auth-login-tab"');
+  const activationTab = markup.indexOf('id="auth-activate-tab"');
+  const tokenForm = markup.indexOf('id="login-form"');
+  const qualificationForm = markup.indexOf('id="claim-test-access-form"');
+  const projectForm = markup.indexOf('id="claim-invitation-form"');
+  assert.ok(name > 0 && device > name && tabs > device && loginTab > tabs
+    && activationTab > loginTab && tokenForm > activationTab
+    && qualificationForm > tokenForm && projectForm > qualificationForm);
+  assert.match(markup, /id="auth-login-tab"[^>]*aria-selected="true"[^>]*aria-controls="auth-login-panel"/u);
+  assert.match(markup, /id="auth-activate-tab"[^>]*aria-selected="false"[^>]*aria-controls="auth-activate-panel"/u);
+  assert.match(markup, /id="auth-activate-panel"[^>]*role="tabpanel"[^>]*hidden/u);
+  assert.match(markup, /<details id="auth-project-entry"/u);
+  assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
+  assert.match(main, /if \(authProjectEntry\.open\)[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
+  assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  const loginHandler = main.slice(main.indexOf('loginForm.addEventListener("submit"'), main.indexOf('claimTestAccessForm.addEventListener("submit"'));
+  const activationHandler = main.slice(main.indexOf('claimTestAccessForm.addEventListener("submit"'), main.indexOf('claimInvitationForm.addEventListener("submit"'));
+  assert.match(loginHandler, /api\.authenticate\(token/u);
+  assert.doesNotMatch(loginHandler, /api\.claimTestAccess\(/u);
+  assert.match(activationHandler, /api\.claimTestAccess\(\{/u);
+  assert.doesNotMatch(activationHandler, /api\.authenticate\(/u);
+});
+
+test("the empty-project paragraph follows account capability and restores session guidance", async () => {
+  const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  assert.match(markup, /id="empty-state-description">Create a solo room for observers or a multi room for active collaboration\./u);
+  assert.match(main, /const empty = emptyProjectState\(state\.currentUser\.can_create_projects === true\)/u);
+  assert.match(main, /element\("empty-state-description"\)\.textContent = empty\.description/u);
+  assert.match(main, /element\("empty-create-button"\)\.hidden = !empty\.canCreateProjects/u);
+  assert.match(main, /element\("empty-state-description"\)\.textContent = "Create a solo room for observers or a multi room for active collaboration\."/u);
+});
+
+test("host guides route one-use qualification codes to the activation field", async () => {
+  const [aliyun, selfHosting] = await Promise.all([
+    readFile(aliyunGuidePath, "utf8"),
+    readFile(selfHostingGuidePath, "utf8"),
+  ]);
+  for (const guide of [aliyun, selfHosting]) {
+    assert.match(guide, /`gtq_`[\s\S]*?\*\*First-time activation\*\*[\s\S]*?\*\*Test qualification code\*\*/u);
+    assert.match(guide, /`gta_`[\s\S]*?\*\*Existing account\*\*/u);
+    assert.doesNotMatch(guide, /top (?:\*\*)?Access token/u);
+  }
 });
 
 test("official light and dark lockups include the approved mark and outlined wordmark", async () => {
@@ -196,11 +297,11 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(html, /codex: command not found/);
   assert.match(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);
-  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.5 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.7 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
   assert.match(domain, /--plugin-hooks/);
   const pluginCommands = (html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "")
     .replace(/\r\n?/gu, "\n");
-  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.7 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Alpha 预览版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);
@@ -242,6 +343,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
     "approve-dsh-pairing-code",
     "agent-harness-select",
     "agent-dsh-runtime-select",
+    "agent-dsh-model-select",
+    "agent-dsh-effort-select",
     "settings-agent-harness",
     "settings-dsh-runtime",
   ]) assert.match(html, new RegExp(`id="${id}"`));
@@ -257,7 +360,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(dsh, /plugin --profile web add @gatherthread\/dsh-host/);
   assert.doesNotMatch(dsh, /--dsh-source|(?:https?|dsh):\/\/localhost|deep[-_ ]?link/iu);
   assert.match(main, /api\.listSessionRuntimes\(sessionId\)/);
-  assert.match(main, /dshExecutionProfile\(currentDshResolution\(\)\.runtime\)/);
+  assert.match(main, /dshExecutionProfile\([\s\S]*?currentDshResolution\(\)\.runtime,/);
+  assert.match(main, /withProjectDshProfile[\s\S]*agentDshModelSelect/);
   assert.match(api, /runtime_id: input\.executionProfile\.runtimeId/);
   assert.match(main, /resolveCodexRuntime\(state\.executionRuntimes\)/);
   assert.match(main, /codexExecutionProfile\(currentCodexResolution\(\)\.runtime/);
@@ -271,6 +375,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(styles, /\.connection-guide/);
   assert.match(styles, /\.connection-preview-banner/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.dsh-runtime-row/);
+  assert.match(styles, /agent-request-profile\[data-layout="dsh-dynamic"\][\s\S]*?agent-dsh-model-select/);
+  assert.match(i18n, /"DSH runtime": "DSH 运行环境"/);
   assert.match(i18n, /不假设公共账户注册系统已经上线/);
   assert.match(i18n, /长期设备凭据只保存在 DSH 本机凭据库/);
 });
@@ -312,6 +418,16 @@ test("runtime presence refreshes while a session is open and stops with the page
   assert.match(main, /error\?\.status === 403 \|\| error\?\.status === 404[\s\S]*?sync\.disconnect\(\)[\s\S]*?await enterWorkspace\(\)/);
 });
 
+test("timeline auto-follow runs only for appended events and preserves a reader's position", async () => {
+  const [main, styles] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
+  assert.match(main, /renderTimeline\(\{ followNewEvents: snapshot\.events\.length > previousCount \}\)/);
+  assert.match(main, /function renderTimeline\(\{ followNewEvents = false \} = \{\}\)/);
+  assert.match(main, /const scrollSnapshot = captureTimelineScroll\([\s\S]*?followNewEvents/);
+  assert.match(main, /settleTimelineScroll\(timelineRegion, \{[\s\S]*?\.\.\.scrollSnapshot/);
+  const timelineRule = styles.match(/\.timeline-region \{[\s\S]*?\}/)?.[0] ?? "";
+  assert.doesNotMatch(timelineRule, /scroll-behavior:\s*smooth/);
+});
+
 test("pending agent feedback is announced and respects reduced-motion preferences", async () => {
   const [main, styles] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
   assert.match(main, /className = "agent-pending-status"/);
@@ -319,6 +435,20 @@ test("pending agent feedback is announced and respects reduced-motion preference
   assert.match(main, /setAttribute\("aria-live", "polite"\)/);
   assert.match(styles, /@keyframes agent-thinking-pulse/);
   assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/);
+});
+
+test("connection interruption notifications are edge-triggered and permission-aware", async () => {
+  const [html, main, styles] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+  ]);
+  assert.match(html, /id="attention-notice" class="attention-notice" role="status" aria-live="assertive"/);
+  assert.match(main, /advanceConnectionNotice\([\s\S]*state\.settings\.notifications\.connectionLost/);
+  assert.match(main, /if \(connectionTransition\.notify\) notifyConnectionLost\(\)/);
+  assert.match(main, /notificationPermissionNeeded\(nextSettings\.notifications\)/);
+  assert.match(main, /Notification\.permission !== "granted"/);
+  assert.match(styles, /\.attention-notice\s*\{[\s\S]*position: fixed/);
 });
 
 test("empty canonical events do not render a visible placeholder message", async () => {
@@ -335,6 +465,7 @@ test("remembered login and current-device naming remain explicit and accessible"
   ]);
   for (const id of [
     "login-remember-device",
+    "test-access-remember-device",
     "claim-remember-device",
     "settings-device",
     "settings-device-name",
@@ -343,10 +474,11 @@ test("remembered login and current-device naming remain explicit and accessible"
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /for="login-remember-device"/);
+  assert.match(html, /for="test-access-remember-device"/);
   assert.match(html, /for="claim-remember-device"/);
   assert.match(html, /for="settings-device-name"/);
   assert.match(main, /automaticDeviceName\(\)/);
-  assert.match(main, /api\.renameDevice\(state\.currentUser\.device_id/);
+  assert.match(main, /api\.renameDevice\(deviceId/);
   assert.match(api, /remember_device: rememberDevice/);
   assert.doesNotMatch(main, /localStorage.*device/i);
 });
@@ -468,6 +600,16 @@ test("custom numeric settings use spinner-free digit inputs", async () => {
   assert.match(styles, /\.numeric-setting-context label \{[\s\S]*?grid-template-columns: minmax\(64px, 1fr\) 100px;/);
 });
 
+test("context numeric controls fit the settings column without horizontal overflow", async () => {
+  const styles = await readFile(stylesPath, "utf8");
+  const settingsColumn = styles.match(/\.settings-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(\d+px, (\d+)px\);/);
+  const contextColumns = styles.match(/\.numeric-setting-context \{[^}]*grid-template-columns: minmax\((\d+)(?:px)?, 1fr\) minmax\((\d+)px, 0\.85fr\);/);
+  const numericGap = styles.match(/\.numeric-setting \{[^}]*gap: (\d+)px;/);
+  assert.ok(settingsColumn && contextColumns && numericGap, "Numeric grid sizing must remain explicit.");
+  assert.ok(Number(contextColumns[1]) + Number(contextColumns[2]) + Number(numericGap[1]) <= Number(settingsColumn[1]),
+    "The preset, exact value, unit, and gap must fit inside the settings control column.");
+});
+
 test("custom Codex models explain that access must already be configured", async () => {
   const [html, i18n] = await Promise.all([readFile(htmlPath, "utf8"), readFile(i18nPath, "utf8")]);
   const explanation = "This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.";
@@ -564,4 +706,24 @@ test("the composer uses its accessible divider instead of a scrolling control pa
   assert.match(styles, /\.composer \{[\s\S]*?grid-template-rows: minmax\(58px, 1fr\)[\s\S]*?overflow: hidden;/);
   assert.match(styles, /\.composer > textarea \{[\s\S]*?resize: none;/);
   assert.match(main, /installComposerLayoutResizer\(composerLayoutResizer\)/);
+});
+
+test("a failed Agent response is shown as a failure with an explicit retry", async () => {
+  const [main, styles] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
+  // The failure has to be visible: a request that no runtime could finish must
+  // not read as an ordinary answer, and it must offer a way forward.
+  assert.match(main, /isFailedAgentResponse\(event\)/);
+  assert.match(main, /failedRequestFor,/);
+  assert.match(main, /request && canRetryFailedAgentRequest\(request, state\.currentUser\)/);
+  assert.match(main, /event-agent_response-failed/);
+  assert.match(main, /setAttribute\("data-action", "retry-agent-request"\)/);
+  assert.match(main, /retryAgentRequestInput\(/);
+  assert.match(main, /api\.appendAgentRequest\(sessionId/);
+  assert.match(main, /closest\("button\[data-action='retry-agent-request'\]"\)/);
+  assert.match(main, /retryingAgentRequestIds\.has\(request\.id\)/);
+  assert.match(main, /retryingAgentRequestIds\.add\(requestId\)/);
+  assert.match(main, /retryingAgentRequestIds\.delete\(requestId\)/);
+  assert.match(main, /button\.disabled = true/);
+  assert.match(styles, /\.event-agent_response-failed/);
+  assert.match(styles, /\.agent-retry-button/);
 });
