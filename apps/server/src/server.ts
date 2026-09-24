@@ -8,6 +8,7 @@ import {
   AppendEventInputSchema,
   AgentProgressInputSchema,
   AcceptInvitationInputSchema,
+  ActivateRememberedAccountInputSchema,
   ApproveDshPairingInputSchema,
   BeginDshPairingInputSchema,
   ClaimAgentRequestInputSchema,
@@ -27,9 +28,11 @@ import {
   CreateSessionInputSchema,
   CODE_SYNC_MAX_BODY_BYTES,
   FailSnapshotRequestInputSchema,
-  IdempotencyKeySchema,
+  DetachedCodeClearResultSchema,
   ListSnapshotRequestsQuerySchema,
   RegisterRuntimeInputSchema,
+  RemoveProjectMembershipInputSchema,
+  RemoveSessionMembershipInputSchema,
   RotateDeviceTokenInputSchema,
   SetMembershipInputSchema,
   SubscribeMessageSchema,
@@ -64,6 +67,8 @@ const MAX_JSON_DEPTH = 64;
 const MAX_JSON_NODES = 50_000;
 const DEVELOPMENT_BROWSER_SESSION_COOKIE = "gatherthread_session";
 const SECURE_BROWSER_SESSION_COOKIE = "__Host-gatherthread_session";
+const DEVELOPMENT_REMEMBERED_BROWSER_COOKIE = "gatherthread_remembered";
+const SECURE_REMEMBERED_BROWSER_COOKIE = "__Host-gatherthread_remembered";
 const REMEMBERED_BROWSER_SESSION_MAX_AGE_SECONDS = REMEMBERED_BROWSER_SESSION_TTL_MS / 1_000;
 const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/bootstrap",
@@ -75,6 +80,7 @@ const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
 
 function isSensitiveUnauthenticatedPath(pathname: string): boolean {
   return SENSITIVE_UNAUTHENTICATED_PATHS.has(pathname)
+    || /^\/v1\/remembered-accounts(?:\/[^/]+(?:\/activate)?)?$/u.test(pathname)
     || pathname === "/v1/dsh-pairings"
     || /^\/v1\/dsh-pairings\/[^/]+\/poll$/u.test(pathname);
 }
@@ -100,6 +106,7 @@ interface HttpAuthentication {
   actor: Actor;
   kind: "bearer" | "browser_session";
   browserSessionId: string | null;
+  rememberedBrowserSession: boolean;
 }
 
 export interface ServerOptions {
@@ -252,6 +259,10 @@ function browserSessionCookieName(secureTransport: boolean): string {
   return secureTransport ? SECURE_BROWSER_SESSION_COOKIE : DEVELOPMENT_BROWSER_SESSION_COOKIE;
 }
 
+function rememberedBrowserCookieName(secureTransport: boolean): string {
+  return secureTransport ? SECURE_REMEMBERED_BROWSER_COOKIE : DEVELOPMENT_REMEMBERED_BROWSER_COOKIE;
+}
+
 function browserSessionCookieValue(request: IncomingMessage, name: string): string | null {
   const matches = (request.headers.cookie ?? "")
     .split(";")
@@ -261,6 +272,28 @@ function browserSessionCookieValue(request: IncomingMessage, name: string): stri
   if (matches.length !== 1) return null;
   const value = matches[0] ?? "";
   return /^gtb_[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
+}
+
+function rememberedBrowserCookieValue(request: IncomingMessage, name: string): string | null {
+  const matches = (request.headers.cookie ?? "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(`${name}=`))
+    .map((part) => part.slice(name.length + 1));
+  if (matches.length !== 1) return null;
+  const value = matches[0] ?? "";
+  return /^gtr_[A-Za-z0-9_-]{43}$/u.test(value) ? value : null;
+}
+
+function appendSetCookie(response: ServerResponse, value: string): void {
+  const prior = response.getHeader("set-cookie");
+  response.setHeader("set-cookie", prior === undefined ? value : [...(Array.isArray(prior) ? prior : [String(prior)]), value]);
+}
+
+function serializeRememberedBrowserCookie(name: string, token: string, secureTransport: boolean, expiresAt: string): string {
+  const maxAge = Math.max(0, Math.min(REMEMBERED_BROWSER_SESSION_MAX_AGE_SECONDS,
+    Math.ceil((Date.parse(expiresAt) - Date.now()) / 1_000)));
+  return `${name}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}; Expires=${new Date(expiresAt).toUTCString()}${secureTransport ? "; Secure" : ""}`;
 }
 
 function serializeBrowserSessionCookie(
@@ -409,6 +442,7 @@ export async function startCollaborationServer(
   const dshPairings = new DshDevicePairingBroker();
   const secureTransport = options.secureTransport ?? false;
   const browserCookieName = browserSessionCookieName(secureTransport);
+  const rememberedCookieName = rememberedBrowserCookieName(secureTransport);
   const sockets = new Map<WebSocket, SocketState>();
   const realtimeTickets = new Map<string, RealtimeTicket>();
   const wsServer = new WebSocketServer({
@@ -424,6 +458,25 @@ export async function startCollaborationServer(
   const actorLimiter = new FixedWindowRateLimiter(options.actorRateLimit ?? { windowMs: 60_000, limit: 600 });
   const actorWriteLimiter = new FixedWindowRateLimiter(options.actorWriteRateLimit ?? { windowMs: 60_000, limit: 120 });
   const maxConnections = options.maxConnections ?? 128;
+
+  const rememberAfterLogin = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
+    const remembered = database.rememberBrowser(
+      rememberedBrowserCookieValue(request, rememberedCookieName), actor,
+    );
+    appendSetCookie(response, serializeRememberedBrowserCookie(
+      rememberedCookieName, remembered.token, secureTransport, remembered.expires_at,
+    ));
+  };
+
+  const rememberAfterOneUseClaim = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
+    try {
+      rememberAfterLogin(request, response, actor);
+    } catch {
+      // The claim and its unique device credential have already committed. Optional
+      // quick-login storage must not hide that credential behind an HTTP 500.
+      console.warn("Optional remembered-account registration failed after a one-use claim");
+    }
+  };
 
   const closeRealtimeWithoutMembership = (): void => {
     for (const [socket, state] of sockets) {
@@ -536,6 +589,7 @@ export async function startCollaborationServer(
             secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined,
           ));
+          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
           sendJson(response, 201, { data: { ...result, actor: {
             ...result.actor,
             can_create_projects: database.canCreateProjects(result.actor.user_id),
@@ -560,6 +614,7 @@ export async function startCollaborationServer(
             secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined,
           ));
+          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
           sendJson(response, 201, { data: { ...result, actor: {
             ...result.actor,
             can_create_projects: true,
@@ -590,10 +645,51 @@ export async function startCollaborationServer(
           secureTransport,
           browserSession.remembered ? browserSession.expires_at : undefined,
         ));
+        if (input.remember_device) rememberAfterLogin(request, response, actor);
         sendJson(response, 201, { data: {
           actor: publicAccountActor({ ...actor, display_name: input.display_name ?? actor.display_name }),
           expires_at: browserSession.expires_at,
         } });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/remembered-accounts") {
+        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
+        if (!token) throw unauthorized("Remembered browser credential is required");
+        sendJson(response, 200, { data: { accounts: database.listRememberedAccounts(token) } });
+        return;
+      }
+
+      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "remembered-accounts"
+        && parts[2] && parts[3] === "activate" && parts.length === 4) {
+        if (!requestOrigin) throw new ApiError(403, "csrf_origin_required", "Remembered-account sign-in requires an allowed Origin");
+        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
+        if (!token) throw unauthorized("Remembered browser credential is required");
+        const input = ActivateRememberedAccountInputSchema.parse(await readJson(request));
+        const result = database.activateRememberedAccount(token, parts[2], input);
+        appendSetCookie(response, serializeBrowserSessionCookie(
+          browserCookieName, result.browser_session.token, secureTransport, result.browser_session.expires_at,
+        ));
+        appendSetCookie(response, serializeRememberedBrowserCookie(
+          rememberedCookieName, result.remembered_browser.token, secureTransport, result.remembered_browser.expires_at,
+        ));
+        sendJson(response, 201, { data: {
+          actor: publicAccountActor(result.actor),
+          expires_at: result.browser_session.expires_at,
+        } });
+        return;
+      }
+
+      if (request.method === "DELETE" && parts[0] === "v1" && parts[1] === "remembered-accounts"
+        && parts[2] && parts.length === 3) {
+        if (!requestOrigin) throw new ApiError(403, "csrf_origin_required", "Forgetting an account requires an allowed Origin");
+        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
+        if (!token) throw unauthorized("Remembered browser credential is required");
+        const next = database.forgetRememberedAccount(token, parts[2]);
+        appendSetCookie(response, next
+          ? serializeRememberedBrowserCookie(rememberedCookieName, next.token, secureTransport, next.expires_at)
+          : serializeClearedBrowserSessionCookie(rememberedCookieName, secureTransport));
+        response.writeHead(204).end();
         return;
       }
 
@@ -605,9 +701,14 @@ export async function startCollaborationServer(
           const cookieToken = browserSessionCookieValue(request, browserCookieName);
           if (!cookieToken) throw unauthorized();
           const authenticated = database.authenticateBrowserSession(cookieToken);
-          return { actor: authenticated.actor, kind: "browser_session", browserSessionId: authenticated.session_id };
+          return {
+            actor: authenticated.actor,
+            kind: "browser_session",
+            browserSessionId: authenticated.session_id,
+            rememberedBrowserSession: authenticated.remembered,
+          };
         })()
-        : { actor: database.authenticate(bearerToken(request)), kind: "bearer", browserSessionId: null };
+        : { actor: database.authenticate(bearerToken(request)), kind: "bearer", browserSessionId: null, rememberedBrowserSession: false };
       const { actor } = authentication;
       const isWrite = request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS";
       if (authentication.kind === "browser_session" && isWrite
@@ -636,6 +737,17 @@ export async function startCollaborationServer(
 
       if (request.method === "GET" && url.pathname === "/v1/me") {
         sendJson(response, 200, { data: publicAccountActor(actor) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/remembered-accounts/adopt-current-session") {
+        z.object({}).strict().parse(await readAuthenticatedJson());
+        if (authentication.kind !== "browser_session" || !authentication.rememberedBrowserSession) {
+          throw new ApiError(403, "remembered_session_required", "Only a remembered browser session can be adopted");
+        }
+        const existing = rememberedBrowserCookieValue(request, rememberedCookieName) ?? "";
+        if (!database.rememberedBrowserHasAccount(existing, actor)) rememberAfterLogin(request, response, actor);
+        sendJson(response, 200, { data: { adopted: true } });
         return;
       }
 
@@ -732,6 +844,17 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/code-storage") {
+        sendJson(response, 200, { data: codeRepository.storageSummary(actor) });
+        return;
+      }
+      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "code-storage"
+        && parts[2] === "detached-branches" && parts[3] && parts[4] === "clear" && parts.length === 5) {
+        const result = codeRepository.clearDetachedBranch(actor, parts[3], await readAuthenticatedJson());
+        sendJson(response, 200, { data: DetachedCodeClearResultSchema.parse(result) });
+        return;
+      }
+
       const projectId = parts[0] === "v1" && parts[1] === "projects" ? parts[2] : undefined;
       if (projectId && parts[3] === "context-policy" && parts.length === 4 && request.method === "GET") {
         sendJson(response, 200, { data: service.getProjectContextPolicy(actor, projectId) });
@@ -756,6 +879,7 @@ export async function startCollaborationServer(
           const actions = {
             enable: codeRepository.enable.bind(codeRepository), disable: codeRepository.disable.bind(codeRepository), checkpoints: codeRepository.checkpoint.bind(codeRepository),
             review: codeRepository.review.bind(codeRepository), merge: codeRepository.merge.bind(codeRepository), update: codeRepository.update.bind(codeRepository),
+            "clear-branch": codeRepository.clearBranch.bind(codeRepository), "clear-project": codeRepository.clearProject.bind(codeRepository),
           };
           const action = Object.hasOwn(actions, parts[4]!) ? actions[parts[4] as keyof typeof actions] : undefined;
           if (action) {
@@ -810,8 +934,9 @@ export async function startCollaborationServer(
       }
 
       if (projectId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        await readAuthenticatedJson();
-        service.removeProjectMembership(actor, projectId, parts[4]);
+        const decision = RemoveProjectMembershipInputSchema.parse(await readAuthenticatedJson());
+        service.removeProjectMembership(actor, projectId, parts[4], decision);
+        codeRepository.repairAfterMembershipRemoval(projectId);
         closeRealtimeWithoutMembership();
         response.writeHead(204).end();
         return;
@@ -912,8 +1037,10 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        const input = z.object({ idempotency_key: IdempotencyKeySchema }).parse(await readAuthenticatedJson());
-        const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key);
+        const input = RemoveSessionMembershipInputSchema.parse(await readAuthenticatedJson());
+        const projectId = database.requireSession(sessionId).project_id;
+        const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key, input);
+        codeRepository.repairAfterMembershipRemoval(projectId);
         closeRealtimeWithoutMembership();
         sendJson(response, 200, { data: { event } });
         return;

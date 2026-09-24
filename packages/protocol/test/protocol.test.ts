@@ -8,6 +8,7 @@ import {
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
   CreateBrowserSessionInputSchema,
+  ActivateRememberedAccountInputSchema,
   CreateSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
@@ -18,6 +19,9 @@ import {
   ProjectInvitationRecordSchema,
   ProjectListItemSchema,
   RegisterRuntimeInputSchema,
+  RemoveProjectMembershipInputSchema,
+  RemoveSessionMembershipInputSchema,
+  DetachedCodeClearResultSchema,
   RuntimeExecutionProfilesSchema,
   RuntimeProvenanceSchema,
   SessionTitleSchema,
@@ -26,6 +30,20 @@ import {
   UpdateSessionInputSchema,
   UpdateProjectInputSchema,
 } from "../src/index.js";
+
+test("member-removal and detached-clear wire contracts reject unknown fields", () => {
+  const head = "a".repeat(40);
+  const decision = { branch_resolution: "delete", expected_branch_head_commit: head };
+  assert.equal(RemoveProjectMembershipInputSchema.safeParse({}).success, true);
+  assert.equal(RemoveProjectMembershipInputSchema.safeParse(decision).success, true);
+  assert.equal(RemoveProjectMembershipInputSchema.safeParse({ ...decision, unexpected: true }).success, false);
+  assert.equal(RemoveProjectMembershipInputSchema.safeParse({ branch_resolution: "delete" }).success, false);
+  assert.equal(RemoveSessionMembershipInputSchema.safeParse({ idempotency_key: "remove-one" }).success, true);
+  assert.equal(RemoveSessionMembershipInputSchema.safeParse({ ...decision, idempotency_key: "remove-two" }).success, true);
+  assert.equal(RemoveSessionMembershipInputSchema.safeParse({ ...decision, idempotency_key: "remove-three", unexpected: true }).success, false);
+  assert.equal(DetachedCodeClearResultSchema.safeParse({ released_bytes: 0 }).success, true);
+  assert.equal(DetachedCodeClearResultSchema.safeParse({ released_bytes: 0, private_detail: "ignored" }).success, false);
+});
 
 test("Agent execution profiles are bounded single-line data", () => {
   assert.deepEqual(AgentExecutionProfileSchema.parse({
@@ -182,6 +200,9 @@ test("invitation inputs allow only fixed TTLs and participant/viewer roles", () 
   }).remember_device, false);
   assert.equal(CreateBrowserSessionInputSchema.parse({}).remember_device, false);
   assert.equal(CreateBrowserSessionInputSchema.parse({ remember_device: true }).remember_device, true);
+  assert.equal(ActivateRememberedAccountInputSchema.safeParse({
+    display_name: "Invitee", device_name: "Laptop", unexpected: true,
+  }).success, false);
 });
 
 test("public invitation records never contain a token digest", () => {

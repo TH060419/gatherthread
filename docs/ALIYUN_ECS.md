@@ -1,6 +1,6 @@
 # Alibaba Cloud ECS deployment: 0.1.0-alpha.7 preview
 
-This profile runs an invitation-only `0.1.0-alpha.7` preview. The application always listens on `127.0.0.1:18787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 18787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host, issue full test qualification locally, and keep project invitations separate for project-scoped guests.
+This profile describes the invitation-only `0.1.0-alpha.7` service pattern used at `https://gatherthread.cn`. The application always listens on `127.0.0.1:18787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 18787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host, issue full test qualification locally, and keep project invitations separate for project-scoped guests. These commands are for a new reviewed release/deployment, not instructions to reinstall an already running server.
 
 ## 1. Prerequisites
 
@@ -50,13 +50,13 @@ sudo deploy/aliyun-ecs/create-owner.sh \
 
 The device token is shown once. Save it immediately in a password manager; never place it in chat, an issue, logs, or a URL. On first browser login, the owner may remember the device and later rename it in settings.
 
-After a reviewed release containing [ADR-0028](adr/0028-separate-test-qualification-from-project-invitations.md) is installed, issue a one-use test qualification directly on the ECS in your own private terminal. Do not run this command through an Agent terminal whose output might enter a transcript:
+For a deployment containing [ADR-0028](adr/0028-separate-test-qualification-from-project-invitations.md), issue a one-use test qualification directly on the ECS in your own private terminal, after reviewing a request made through the [GitHub Alpha access Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml). No server-side application form collects applicant details. Do not run the issuance command through an Agent terminal whose output might enter a transcript:
 
 ```sh
 sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d
 ```
 
-Share the printed `gtq_` code privately with one tester. On the GatherThread login page, they set their display and device names above the forms, select **First-time activation** (中文：**首次使用 · 激活资格**), and enter the code once in **Test qualification code** (中文：**测试资格码**). They must not enter it in the existing-account device-token field. After activation, they retain the newly issued `gta_` device token and use **Existing account** to sign in later. To revoke an unclaimed code, use `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID`; this does not revoke a claimed user's device. A project owner instead uses the in-app project invitation when they want to add a guest to only that project. Neither path opens public registration or grants ECS SSH access.
+Share the printed `gtq_` code privately with one tester, never in the public Issue. If a private channel is needed, an approved applicant may voluntarily email their Issue link to `coolhezi@sjtu.edu.cn`; email is not an alternative application channel. On the GatherThread login page, they set their display and device names above the forms, select **First-time activation** (中文：**首次使用 · 激活资格**), and enter the code once in **Test qualification code** (中文：**测试资格码**). They must not enter it in the existing-account device-token field. After activation, they retain the newly issued `gta_` device token and use **Existing account** to sign in later. To revoke an unclaimed code, use `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID`; this does not revoke a claimed user's device. A project owner instead uses the in-app project invitation when they want to add a guest to only that project. Neither path opens public registration or grants ECS SSH access.
 
 ## 5. Preflight and smoke test
 
@@ -77,14 +77,14 @@ sudo ls -lh /var/backups/gatherthread
 curl -fsS http://127.0.0.1:18787/health/ready
 ```
 
-The database is `/var/lib/gatherthread/collaboration.sqlite`; configuration and the credential pepper are in `/etc/gatherthread/gatherthread.env`. Daily backups are retained for 14 days. Copy encrypted database backups and the pepper separately to another failure domain, or device credentials cannot be verified after total host loss.
+The database is `/var/lib/gatherthread/collaboration.sqlite`; configuration and the credential pepper are in `/etc/gatherthread/gatherthread.env`. Daily backup sets are retained for 14 days. If cloud Git repositories exist, each SQLite backup has a matching `.db.code` companion: verify, move off-host, restore, and eventually rotate them together. The updated backup unit calls `scripts/prune-sqlite-backups.sh` to retire complete sets; an old installed unit will not gain this behavior by changing `/opt/gatherthread/current` alone. Copy encrypted backup sets and the pepper separately to another failure domain, or device credentials cannot be verified after total host loss.
 
 ## 7. Upgrade and rollback
 
 Use a new `/opt/gatherthread/releases/<version>` for every upgrade; never overwrite an old release:
 
 1. Run current preflight and create a verified online backup.
-2. Upload and verify the new candidate, then run its installer.
+2. Upload and verify the new candidate, then run its reviewed installer. Check that `/etc/systemd/system/gatherthread-backup.service` now calls the companion-aware prune script and that `systemctl daemon-reload` completed; a release symlink switch alone does not refresh this unit.
 3. Repeat preflight and the two-browser smoke test.
 4. Repoint `/opt/gatherthread/current` to old code only if it supports the resulting database schema. Otherwise stop the service and restore the verified pre-upgrade backup to a new database path.
 

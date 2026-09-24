@@ -82,17 +82,27 @@
         </div>
         <div id="auth-login-panel" class="auth-entry-panel" role="tabpanel" aria-labelledby="auth-login-tab">
           <form id="login-form" novalidate>
-            <label for="token">Device access token</label>
-            <input
-              id="token"
-              name="token"
-              type="password"
-              autocomplete="current-password"
-              required
-              aria-describedby="token-help login-error"
-            />
-            <p id="token-help" class="field-help">Use the device token issued when you first activated your account.</p>
-            <label class="auth-remember" for="login-remember-device">
+            <div id="remembered-account-control" class="remembered-account-control" hidden>
+              <label for="remembered-account-select">Remembered accounts on this browser</label>
+              <select id="remembered-account-select" aria-describedby="remembered-account-help login-error">
+                <option value="">Use a device access token</option>
+              </select>
+              <p id="remembered-account-help" class="field-help">Choose an account for quick sign-in. The names above can still be changed before signing in. Anyone using this browser profile can choose a remembered account.</p>
+              <button id="forget-remembered-account" class="text-button" type="button" hidden>Forget selected account</button>
+            </div>
+            <div id="token-entry">
+              <label for="token">Device access token</label>
+              <input
+                id="token"
+                name="token"
+                type="password"
+                autocomplete="current-password"
+                required
+                aria-describedby="token-help login-error"
+              />
+              <p id="token-help" class="field-help">Use the device token issued when you first activated your account.</p>
+            </div>
+            <label id="login-remember-control" class="auth-remember" for="login-remember-device">
               <input id="login-remember-device" name="remember-device" type="checkbox" />
               <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
             </label>
@@ -122,6 +132,11 @@
             <button class="button button-primary button-wide" type="submit">Activate account <span aria-hidden="true">→</span></button>
           </form>
         </div>
+        <details id="auth-request-test-access" class="auth-project-entry">
+          <summary>Need a test qualification code?</summary>
+          <p class="field-help">Apply through a GitHub Issue. Describe what you would like to test; do not post your email, access tokens, private code or other secrets in a public Issue. Codes are shared privately after review.</p>
+          <a class="button button-secondary button-wide" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access on GitHub</a>
+        </details>
         <details id="auth-project-entry" class="auth-project-entry">
           <summary>Have a project invitation?</summary>
           <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
@@ -604,10 +619,10 @@
     </dialog>
 
     <dialog id="code-notice-dialog" class="create-dialog code-notice-dialog" aria-labelledby="code-notice-title" aria-describedby="code-notice-description">
-      <div class="dialog-heading"><h2 id="code-notice-title">About cloud Git synchronization</h2><button id="code-notice-close" class="icon-button" type="button" aria-label="Close">×</button></div>
-      <p id="code-notice-description">Git collaboration can upload local project files to this server. Uploaded files become readable by this project's members. Review your files for secrets and private data before uploading.</p>
-      <p>If you do not want to upload code, leave local automatic upload off and do not select a manual upload. The project owner can turn off Git synchronization here; conversations continue to work.</p>
-      <p class="code-help">This notice appears once in this browser. Turning off Git synchronization retains existing cloud branches and does not remove local files.</p>
+      <div class="dialog-heading"><h2 id="code-notice-title">About cloud Git collaboration</h2></div>
+      <p id="code-notice-description">Cloud Git stores project code on this server so project members can share, review and merge it. Uploaded code is readable by every member of that project. It is used for that project's collaboration, not for developing GatherThread or other unrelated purposes. Review files for secrets before upload.</p>
+      <p>Code upload is optional and automatic upload starts off. You can turn off cloud Git for a project; its conversations still work, but code sharing and recovery through the server are then unavailable. Turning it off alone retains existing cloud branches until they are cleared in Settings.</p>
+      <p class="code-help">This notice appears when this device first enters the workspace. It does not request browser notification permission.</p>
       <div class="dialog-actions"><button id="code-notice-continue" class="button button-primary" type="button">Got it</button></div>
     </dialog>
 
@@ -729,6 +744,11 @@
       <form id="leave-project-form" method="dialog">
         <div class="dialog-heading"><h2 id="leave-project-title">Leave this project?</h2><button id="close-leave-project-button" class="icon-button" type="button" aria-label="Close">×</button></div>
         <p id="leave-project-description">You will lose access to its cloud sessions and code. Your local files and Agent conversations will not be deleted. Ask the owner for a new invitation if you want to rejoin.</p>
+        <div id="leave-project-branch-choice" class="field" hidden>
+          <label for="leave-project-branch-resolution">Resolve this member's cloud Git branch</label>
+          <select id="leave-project-branch-resolution" required></select>
+          <p id="leave-project-branch-note" class="field-help"></p>
+        </div>
         <p id="leave-project-error" class="form-error" role="alert"></p>
         <div class="dialog-actions"><button id="cancel-leave-project-button" class="button button-secondary" type="button">Cancel</button><button id="confirm-leave-project-button" class="button button-danger" type="submit">Leave project</button></div>
       </form>
@@ -908,6 +928,7 @@ codex plugin add gatherthread@gatherthread</code>
             <a href="#settings-appearance">Appearance</a>
             <a href="#settings-layout">Layout</a>
             <a href="#settings-sync">Sync &amp; context</a>
+            <a href="#settings-code-storage">Cloud Git storage</a>
             <a href="#settings-agents">Agents</a>
             <a href="#settings-composer">Composer</a>
             <a href="#settings-notifications">Notifications</a>
@@ -985,6 +1006,23 @@ codex plugin add gatherthread@gatherthread</code>
               <textarea id="settings-history-summary-instructions" rows="7" maxlength="4000" spellcheck="true" translate="no"></textarea>
               <button id="settings-history-summary-reset" class="text-button" type="button">Reset summary instructions</button>
               <p id="settings-history-summary-error" class="form-error" role="alert"></p>
+            </section>
+
+            <section id="settings-code-storage" class="settings-section" aria-labelledby="settings-code-storage-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">Cloud Git</p><h3 id="settings-code-storage-title">Storage &amp; cleanup</h3></div>
+                <button id="code-storage-refresh" class="text-button" type="button">Refresh</button>
+              </div>
+              <p id="code-storage-summary" class="field-help" role="status" aria-live="polite">Loading cloud Git storage…</p>
+              <p class="field-help">Select projects with cloud Git data. Members can clear only their own branch; owners can also clear an entire project's cloud repository. Your local Git files and history are not changed. This releases your logical current-head quota and removes cloud access to cleared refs, but old objects and backups remain until separate operator-approved retention cleanup; physical disk capacity is not immediately reclaimed.</p>
+              <div id="code-storage-projects" class="code-storage-projects"></div>
+              <button id="code-storage-review" class="button button-secondary" type="button" disabled>Review selected cleanup</button>
+              <div id="code-storage-confirmation" class="code-storage-confirmation" hidden>
+                <p id="code-storage-confirmation-text"></p>
+                <button id="code-storage-confirm" class="button button-danger" type="button">Delete selected cloud data</button>
+                <button id="code-storage-cancel" class="button button-secondary" type="button">Cancel</button>
+              </div>
+              <p id="code-storage-error" class="form-error" role="alert"></p>
             </section>
 
             <section id="settings-agents" class="settings-section" aria-labelledby="settings-agents-title">

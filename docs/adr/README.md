@@ -32,3 +32,5 @@ Architecture Decision Records document significant technical choices, their rati
 | [0026](0026-native-first-context-management.md) | Separate native context management from synchronization transport bounds | proposed / source preview | 2026-09-22 |
 | [0027](0027-shared-manual-history-summaries.md) | Add shared manual summaries and derived Agent context | proposed / source preview | 2026-09-23 |
 | [0028](0028-separate-test-qualification-from-project-invitations.md) | Separate test qualification from project invitations | proposed | 2026-09-23 |
+| [0029](0029-separate-remembered-browser-vault-from-active-sessions.md) | Separate remembered-browser choices from active sessions | proposed | 2026-09-24 |
+| [0030](0030-resolve-cloud-branches-before-project-member-removal.md) | Resolve cloud branches before project-member removal | proposed | 2026-09-24 |

@@ -45,6 +45,7 @@ test("manual summaries use accessible icon entries, explicit paid confirmation a
   assert.match(html, /Display toggles do not change your Agent context policy/u);
   assert.match(styles, /\.history-summary-confirm-dialog > div \{ padding: 24px;/u);
   assert.match(main, /if \(localeChanged && state\.session\) renderTimeline\(\)/u);
+  assert.match(main, /if \(localeChanged && state\.project\) renderMembers\(\)/u);
 });
 
 const brandedIconHashes = new Map([
@@ -205,7 +206,11 @@ test("entry navigation, empty-account project actions, and invited-member exit r
   assert.match(html, /class="wordmark" href="\.\.\/"/);
   assert.match(html, /id="topbar-create-project-button"/);
   assert.match(html, /id="leave-project-dialog"[^>]*aria-labelledby="leave-project-title"/);
-  assert.match(main, /await api\.leaveProject\(projectId, userId\)/);
+  assert.match(html, /id="leave-project-branch-resolution"[^>]*required/);
+  assert.match(main, /await api\.removeProjectMember\(projectId, userId, branch \?/);
+  assert.match(main, /branch_resolution: resolution, expected_branch_head_commit: branch\.head_commit/);
+  assert.match(main, /removeButton\.setAttribute\("aria-label", memberRemovalAriaLabel\(member\.username, localizer\.t\)\)/);
+  assert.match(main, /roleSelect\.setAttribute\("aria-label", memberRoleAriaLabel\(member\.username, localizer\.t\)\)/);
   assert.match(main, /event\.key !== SHARED_LANGUAGE_STORAGE_KEY/);
   assert.match(styles, /\.account-cluster \{\s*grid-column: 3;/);
   assert.match(i18n, /"Leave project": "退出项目"/);
@@ -231,7 +236,7 @@ test("shared identity fields precede separate login, qualification, and project 
   assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
   assert.match(main, /if \(authProjectEntry\.open\)[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
   assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
-  assert.match(main, /else if \(element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(rememberedAccountSelect\.value \|\| element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
   const loginHandler = main.slice(main.indexOf('loginForm.addEventListener("submit"'), main.indexOf('claimTestAccessForm.addEventListener("submit"'));
   const activationHandler = main.slice(main.indexOf('claimTestAccessForm.addEventListener("submit"'), main.indexOf('claimInvitationForm.addEventListener("submit"'));
   assert.match(loginHandler, /api\.authenticate\(token/u);
@@ -465,6 +470,10 @@ test("remembered login and current-device naming remain explicit and accessible"
   ]);
   for (const id of [
     "login-remember-device",
+    "remembered-account-control",
+    "remembered-account-select",
+    "forget-remembered-account",
+    "auth-request-test-access",
     "test-access-remember-device",
     "claim-remember-device",
     "settings-device",
@@ -480,6 +489,10 @@ test("remembered login and current-device naming remain explicit and accessible"
   assert.match(main, /automaticDeviceName\(\)/);
   assert.match(main, /api\.renameDevice\(deviceId/);
   assert.match(api, /remember_device: rememberDevice/);
+  assert.match(main, /api\.activateRememberedAccount\(rememberedId/);
+  assert.match(main, /api\.forgetRememberedAccount\(id\)/);
+  assert.match(html, /issues\/new\?template=test-access\.yml/);
+  assert.doesNotMatch(html, /test-access-email|application-email/);
   assert.doesNotMatch(main, /localStorage.*device/i);
 });
 

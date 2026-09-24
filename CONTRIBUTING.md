@@ -108,4 +108,4 @@ Update the owner of a changed fact rather than copying the same fact into severa
 
 ## Security reports
 
-Do not place credentials, private transcripts, personal data, exploit payloads, or production logs in a public issue or PR. Contact the project lead privately with a minimal redacted reproduction. See [`docs/SECURITY.md`](docs/SECURITY.md) for the repository threat model and incident expectations.
+Do not place credentials, private transcripts, personal data, exploit payloads, or production logs in a public issue or PR. Report security concerns privately to the project lead at [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn) with a minimal redacted reproduction. Use [GitHub Issues](https://github.com/TH060419/gatherthread/issues) only for non-sensitive questions and bug reports; Alpha test-access applications use the [dedicated Issue template](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml). See [`docs/SECURITY.md`](docs/SECURITY.md) for the repository threat model and incident expectations.

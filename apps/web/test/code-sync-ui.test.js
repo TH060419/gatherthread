@@ -42,7 +42,7 @@ function setup({ seenNotice = true } = {}) {
     mutateProjectCode: async (...args) => { mutations.push(args); return { status }; },
   };
   let context = { project: { id: "p1", name: "Project", role: "owner" }, userId: "u1", sessionId: "s1", runtimes: [] };
-  const storageValues = new Map(seenNotice ? [["gatherthread.code-notice.v1", "seen"]] : []);
+  const storageValues = new Map(seenNotice ? [["gatherthread.code-notice.v2:d1", "seen"]] : []);
   const storage = { getItem: (key) => storageValues.get(key) ?? null, setItem: (key, value) => storageValues.set(key, value) };
   const ui = mountCodeSync({ document: doc, api, localizer: { t: (text) => text }, getContext: () => context, storage });
   return { el, ui, status, mutations,
@@ -52,17 +52,22 @@ function setup({ seenNotice = true } = {}) {
   };
 }
 
-test("the Git notice appears once per browser before opening code controls", async () => {
+test("the Git notice blocks first workspace entry per device until acknowledged", async () => {
   const app = setup({ seenNotice: false });
-  app.el("project-code-button").click();
+  app.ui.showFirstLoginNotice("d1");
   assert.equal(app.el("code-notice-dialog").open, true);
   assert.equal(app.el("project-code-dialog").open, false);
-  app.el("code-notice-close").click();
-  app.el("project-code-button").click();
-  assert.equal(app.el("code-notice-dialog").open, true, "dismissal does not mark the notice read");
+  let prevented = false;
+  app.el("code-notice-dialog").listeners.get("cancel")({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true, "Escape cannot dismiss the required notice");
   app.el("code-notice-continue").click();
-  assert.equal(app.el("project-code-dialog").open, true);
+  assert.equal(app.el("project-code-dialog").open, false);
   app.ui.close();
+  app.ui.showFirstLoginNotice("d1");
+  assert.equal(app.el("code-notice-dialog").open, false);
+  app.ui.showFirstLoginNotice("d2");
+  assert.equal(app.el("code-notice-dialog").open, true, "a second device must see the notice");
+  app.el("code-notice-continue").click();
   app.el("project-code-button").click();
   assert.equal(app.el("code-notice-dialog").open, false);
   assert.equal(app.el("project-code-dialog").open, true);

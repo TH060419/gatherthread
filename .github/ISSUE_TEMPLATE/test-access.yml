@@ -1,0 +1,17 @@
+name: Alpha 测试资格申请 / Request Alpha access
+description: 仅通过此 Issue 申请邀请制 Alpha 测试资格 / Request invitation-only Alpha access
+title: "[Alpha access] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        无需填写申请理由或其他个人资料。请勿在公开 Issue 中留下邮箱、姓名、电话、单位、设备信息、资格码、设备 Token 或任何密钥。维护者会在这里回复申请结果和后续步骤，绝不会在公开 Issue 中发布资格码。如获批准且需要私密投递，申请者可主动将本 Issue 链接发至 coolhezi@sjtu.edu.cn；邮箱只用于私密联系，不替代 Issue 申请。
+
+        No reason or personal profile is required. Do not post email, name, phone number, organization, device details, qualification codes, device tokens, or secrets in this public Issue. A maintainer will reply here with the decision and next steps; codes are never posted in Issues. If approved and private delivery is needed, you may voluntarily email this Issue link to coolhezi@sjtu.edu.cn. Email is for private contact, not a substitute application channel.
+  - type: textarea
+    id: request
+    attributes:
+      label: 申请 / Request
+      value: 我希望参加 GatherThread Alpha 测试。 / I would like to join the GatherThread Alpha test.
+    validations:
+      required: true

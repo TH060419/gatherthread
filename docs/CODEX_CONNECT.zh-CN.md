@@ -2,7 +2,7 @@
 
 共序通过一个轻量本地连接器，把当前选中的云端项目连接到 Codex Desktop。网页不会直接启动 Codex，也不会把任何凭据写进复制的命令。
 
-> Alpha 预览版：`0.1.0-alpha.7` 已为 private 仓库测试准备。npm 包和固定 Git 引用发布后可直接使用；发布前请使用下方“源码测试”路径。
+> 邀请制 Alpha：服务器地址是 `https://gatherthread.cn`。固定 `v0.1.0-alpha.7` Git 引用已存在；`npx` 命令还需要匹配的 npm 包已发布。若包不可用，请使用下方源码路径。测试资格仅通过 [GitHub Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml) 申请，切勿在 Issue 中发布 Token。
 
 ## 正常连接只需三步
 
@@ -47,9 +47,9 @@ npx --yes @gatherthread/codex-connect@0.1.0-alpha.7 \
 
 Codex Desktop 会打开经过验证的本地工作区；共序成员栏会显示 **Agent 在线**。连接器会自动发现当前及之后新增的可写会话。
 
-## npm 发布前的 private 仓库测试
+## npm 包不可用时的源码路径
 
-有仓库权限的协作者现在即可测试完整本地体验：
+有仓库访问权限的协作者可以从当前源码测试完整本地体验：
 
 ```bash
 git clone https://github.com/TH060419/gatherthread.git
@@ -63,7 +63,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-服务器地址和项目 ID 以本地网页显示内容为准。private `v0.1.0-alpha.7` 引用建立后，上方固定插件命令即可使用。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
+服务器地址和项目 ID 以网页显示内容为准；服务器 Alpha 的地址是 `https://gatherthread.cn`。固定 `v0.1.0-alpha.7` 插件引用已存在，而连接器 `npx` 命令仍需 npm 包发布。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
 
 ## 会同步什么
 

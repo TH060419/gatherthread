@@ -2165,6 +2165,47 @@ time,
   line-height: 1.45;
 }
 
+.code-storage-projects {
+  margin: 18px 0;
+  border-top: 1px solid var(--line);
+}
+
+.code-storage-project {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(210px, 300px);
+  align-items: center;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.code-storage-project-label {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.code-storage-project select {
+  max-width: 100%;
+}
+
+.code-storage-confirmation {
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.code-storage-confirmation p {
+  margin-bottom: 12px;
+}
+
+.code-storage-confirmation button + button {
+  margin-left: 8px;
+}
+
 .settings-row {
   min-height: 68px;
   display: grid;
@@ -2497,7 +2538,8 @@ time,
   }
 
   .settings-section-heading,
-  .settings-row {
+  .settings-row,
+  .code-storage-project {
     grid-template-columns: 1fr;
     gap: 10px;
   }
@@ -2624,6 +2666,18 @@ time,
   padding: 3px 28px 3px 7px;
   font-size: 0.68rem;
   text-transform: capitalize;
+}
+
+.member-remove-button {
+  display: block;
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-soft);
+  font-size: 0.67rem;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
 .member-copy strong {
@@ -4052,6 +4106,29 @@ html[lang="zh-CN"] .project-select {
 }
 
 .auth-entry-panel[hidden] { display: none; }
+
+.remembered-account-control {
+  margin-bottom: 12px;
+}
+
+.remembered-account-control[hidden],
+#login-remember-control[hidden],
+#token-entry[hidden] {
+  display: none;
+}
+
+.remembered-account-control select {
+  width: 100%;
+  min-height: 44px;
+}
+
+.remembered-account-control .field-help {
+  margin-bottom: 4px;
+}
+
+#forget-remembered-account {
+  margin: 0 0 7px;
+}
 
 .auth-project-entry {
   margin-top: 16px;

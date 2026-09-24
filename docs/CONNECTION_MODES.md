@@ -8,7 +8,7 @@ GatherThread has three ready-to-use connection modes that do not require a publi
 | LAN HTTPS | A trusted home, lab, or office network | Caddy on the host; the dedicated local CA trusted by clients | `https://private-address:8443` |
 | Tailscale Serve | A small known group across networks | Tailscale on every device | `https://host.tailnet.ts.net` |
 
-For a stable shared entry point, use the separate invitation-only [Alibaba Cloud ECS profile](ALIYUN_ECS.md). Never turn the LAN or Tailscale profiles into router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
+For a stable shared entry point, approved Alpha testers use [https://gatherthread.cn](https://gatherthread.cn/), which follows the invitation-only [Alibaba Cloud ECS profile](ALIYUN_ECS.md). Never turn the LAN or Tailscale profiles into router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
 
 ## Shared initialization
 
@@ -34,7 +34,7 @@ Open `http://127.0.0.1:18787` for the product home, then choose **Get Started** 
 
 Reserve a stable RFC1918 address for the host in DHCP, for example `192.168.50.20`. Advanced local DNS setups may map `gatherthread.home.arpa` to that address. Install [Caddy 2](https://caddyserver.com/docs/install), then configure an unprivileged HTTPS port:
 
-A campus network is normally institution-managed LAN infrastructure, so this mode can work on campus when policy permits inbound peer traffic and the devices can reach each other. Campus Wi-Fi frequently applies client isolation, VLAN separation, or firewall rules; sharing the same SSID alone does not establish reachability or trust. When direct access is blocked, use the deployment's configured remote entry point. Tailscale is available now; prefer the unified hosted server after it is deployed.
+A campus network is normally institution-managed LAN infrastructure, so this mode can work on campus when policy permits inbound peer traffic and the devices can reach each other. Campus Wi-Fi frequently applies client isolation, VLAN separation, or firewall rules; sharing the same SSID alone does not establish reachability or trust. When direct access is blocked, use the deployment's configured remote entry point. Tailscale remains available; qualified testers can also use the hosted `gatherthread.cn` Alpha.
 
 For normal use, one command discovers private interfaces, asks for a choice only when necessary, configures the exact origin, initializes a new database interactively, builds the app, and starts both GatherThread and Caddy:
 
