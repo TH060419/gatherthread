@@ -1786,10 +1786,21 @@ test("both member-removal APIs block unresolved branches and legacy detached bra
     });
     const projectPath = `/v1/projects/${project.id}/members/${member.actor.user_id}`;
     const sessionPath = `/v1/sessions/${session.id}/members/${member.actor.user_id}`;
+    const unknownProjectField = await api<{ error: { code: string } }>(running.origin, projectPath, {
+      method: "DELETE", token: member.token, body: { unexpected: "must be rejected" },
+    });
+    assert.equal(unknownProjectField.status, 400);
+    assert.equal(unknownProjectField.body.error.code, "validation_error");
     assert.equal((await api(running.origin, projectPath, { method: "DELETE", token: member.token, body: {} })).status, 409);
     assert.equal((await api(running.origin, sessionPath, {
       method: "DELETE", token: owner.token, body: { idempotency_key: "legacy-unresolved" },
     })).status, 409);
+    const unknownLegacyField = await api<{ error: { code: string } }>(running.origin, sessionPath, {
+      method: "DELETE", token: owner.token,
+      body: { idempotency_key: "legacy-extra-field", unexpected: "ignored by intersection" },
+    });
+    assert.equal(unknownLegacyField.status, 400);
+    assert.equal(unknownLegacyField.body.error.code, "validation_error");
     assert.equal(running.database.projectMembershipRole(project.id, member.actor.user_id), "participant");
     assert.equal((await api(running.origin, projectPath, { method: "DELETE", token: member.token,
       body: { branch_resolution: "delete", expected_branch_head_commit: initial.commit },

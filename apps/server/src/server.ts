@@ -28,9 +28,11 @@ import {
   CreateSessionInputSchema,
   CODE_SYNC_MAX_BODY_BYTES,
   FailSnapshotRequestInputSchema,
-  IdempotencyKeySchema,
+  DetachedCodeClearResultSchema,
   ListSnapshotRequestsQuerySchema,
   RegisterRuntimeInputSchema,
+  RemoveProjectMembershipInputSchema,
+  RemoveSessionMembershipInputSchema,
   RotateDeviceTokenInputSchema,
   SetMembershipInputSchema,
   SubscribeMessageSchema,
@@ -56,11 +58,6 @@ import { CollaborationService } from "./service.js";
 import { CodeRepository } from "./code-repository.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
-const BranchRemovalDecisionSchema = z.object({
-  branch_resolution: z.enum(["delete", "merged_to_main"]).optional(),
-  expected_branch_head_commit: z.string().regex(/^[a-f0-9]{40}$/u).optional(),
-}).strict().refine((value) => Boolean(value.branch_resolution) === Boolean(value.expected_branch_head_commit),
-  "Branch decision and exact head must be provided together");
 const DEFAULT_REPLAY_LIMIT = 50;
 const MAX_REPLAY_LIMIT = 500;
 const MAX_REPLAY_BYTES = 768 * 1024;
@@ -854,7 +851,7 @@ export async function startCollaborationServer(
       if (request.method === "POST" && parts[0] === "v1" && parts[1] === "code-storage"
         && parts[2] === "detached-branches" && parts[3] && parts[4] === "clear" && parts.length === 5) {
         const result = codeRepository.clearDetachedBranch(actor, parts[3], await readAuthenticatedJson());
-        sendJson(response, 200, { data: result });
+        sendJson(response, 200, { data: DetachedCodeClearResultSchema.parse(result) });
         return;
       }
 
@@ -937,7 +934,7 @@ export async function startCollaborationServer(
       }
 
       if (projectId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        const decision = BranchRemovalDecisionSchema.parse(await readAuthenticatedJson());
+        const decision = RemoveProjectMembershipInputSchema.parse(await readAuthenticatedJson());
         service.removeProjectMembership(actor, projectId, parts[4], decision);
         codeRepository.repairAfterMembershipRemoval(projectId);
         closeRealtimeWithoutMembership();
@@ -1040,7 +1037,7 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        const input = BranchRemovalDecisionSchema.and(z.object({ idempotency_key: IdempotencyKeySchema })).parse(await readAuthenticatedJson());
+        const input = RemoveSessionMembershipInputSchema.parse(await readAuthenticatedJson());
         const projectId = database.requireSession(sessionId).project_id;
         const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key, input);
         codeRepository.repairAfterMembershipRemoval(projectId);

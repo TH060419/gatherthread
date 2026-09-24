@@ -91,6 +91,7 @@ export const CodeStatusSchema = z.object({
 }).strict();
 export const CodeMutationResultSchema = z.object({ status: CodeStatusSchema, commit: Commit }).strict();
 export const CodeClearResultSchema = z.object({ status: CodeStatusSchema, released_bytes: z.number().int().nonnegative() }).strict();
+export const DetachedCodeClearResultSchema = z.object({ released_bytes: z.number().int().nonnegative() }).strict();
 export const CodeStorageSummarySchema = z.object({
   limit_bytes: z.number().int().positive(), used_bytes: z.number().int().nonnegative(),
   detached_branches: z.array(z.object({
@@ -111,6 +112,7 @@ export type CodeStatus = z.infer<typeof CodeStatusSchema>;
 export type CodeBranch = z.infer<typeof CodeBranchSchema>;
 export type CodeMutationResult = z.infer<typeof CodeMutationResultSchema>;
 export type CodeClearResult = z.infer<typeof CodeClearResultSchema>;
+export type DetachedCodeClearResult = z.infer<typeof DetachedCodeClearResultSchema>;
 export type CodeStorageSummary = z.infer<typeof CodeStorageSummarySchema>;
 export type CodeSnapshotResult = z.infer<typeof CodeSnapshotResultSchema>;
 export type CodeCheckpointInput = z.infer<typeof CodeCheckpointInputSchema>;

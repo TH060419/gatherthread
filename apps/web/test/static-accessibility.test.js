@@ -208,6 +208,7 @@ test("entry navigation, empty-account project actions, and invited-member exit r
   assert.match(html, /id="leave-project-branch-resolution"[^>]*required/);
   assert.match(main, /await api\.removeProjectMember\(projectId, userId, branch \?/);
   assert.match(main, /branch_resolution: resolution, expected_branch_head_commit: branch\.head_commit/);
+  assert.match(main, /removeButton\.setAttribute\("aria-label", memberRemovalAriaLabel\(member\.username, localizer\.t\)\)/);
   assert.match(main, /event\.key !== SHARED_LANGUAGE_STORAGE_KEY/);
   assert.match(styles, /\.account-cluster \{\s*grid-column: 3;/);
   assert.match(i18n, /"Leave project": "退出项目"/);

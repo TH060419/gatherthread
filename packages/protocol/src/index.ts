@@ -242,6 +242,22 @@ export const SetMembershipInputSchema = z.object({
   idempotency_key: IdempotencyKeySchema,
 });
 
+const BranchRemovalFields = {
+  branch_resolution: z.enum(["delete", "merged_to_main"]).optional(),
+  expected_branch_head_commit: z.string().regex(/^[a-f0-9]{40}$/u).optional(),
+};
+const completeBranchRemovalDecision = (value: {
+  branch_resolution?: "delete" | "merged_to_main" | undefined;
+  expected_branch_head_commit?: string | undefined;
+}) => Boolean(value.branch_resolution) === Boolean(value.expected_branch_head_commit);
+export const RemoveProjectMembershipInputSchema = z.object(BranchRemovalFields).strict()
+  .refine(completeBranchRemovalDecision, "Branch decision and exact head must be provided together");
+export const RemoveSessionMembershipInputSchema = z.object({
+  ...BranchRemovalFields,
+  idempotency_key: IdempotencyKeySchema,
+}).strict().refine(completeBranchRemovalDecision, "Branch decision and exact head must be provided together");
+export type RemoveProjectMembershipInput = z.infer<typeof RemoveProjectMembershipInputSchema>;
+
 export const CreateIdentityInputSchema = z.object({
   user_id: IdSchema.optional(),
   display_name: z.string().trim().min(1).max(120),

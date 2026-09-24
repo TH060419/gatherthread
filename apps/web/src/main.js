@@ -33,7 +33,7 @@ import { mountCodeStorageSettings } from "./code-storage-settings.js";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer } from "./i18n.js?v=20260923-2";
+import { createLocalizer, memberRemovalAriaLabel } from "./i18n.js?v=20260923-2";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -1801,7 +1801,7 @@ function renderMembers() {
       removeButton.type = "button";
       removeButton.className = "member-remove-button";
       removeButton.textContent = localizer.t("Remove member");
-      removeButton.setAttribute("aria-label", `Remove ${member.username} from project`);
+      removeButton.setAttribute("aria-label", memberRemovalAriaLabel(member.username, localizer.t));
       removeButton.addEventListener("click", () => void openMemberRemovalDialog(member.userId, member.username, false));
       details.append(removeButton);
     } else {

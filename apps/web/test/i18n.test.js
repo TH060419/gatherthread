@@ -1,7 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { translateUiText } from "../src/i18n.js";
+import { memberRemovalAriaLabel, translateUiText } from "../src/i18n.js";
+
+test("remove-member accessible name preserves names and follows the active language", () => {
+  const name = "Maya $& · 玛雅";
+  assert.equal(memberRemovalAriaLabel(name, (source) => translateUiText(source, "en")), `Remove ${name} from project`);
+  assert.equal(memberRemovalAriaLabel(name, (source) => translateUiText(source, "zh-CN")), `将${name}从项目中移除`);
+});
 
 test("manual summary controls, shared quota boundaries and context policy are bilingual", () => {
   const cases = [
@@ -27,6 +33,7 @@ test("manual summary controls, shared quota boundaries and context policy are bi
 test("English is the unchanged default and Simplified Chinese preserves product terminology", () => {
   assert.equal(translateUiText("Settings", "en"), "Settings");
   assert.equal(translateUiText("Settings", "zh-CN"), "设置");
+  assert.equal(translateUiText("Remove {name} from project", "zh-CN"), "将{name}从项目中移除");
   assert.equal(translateUiText("Access token", "zh-CN"), "访问 token");
   assert.equal(translateUiText("Choose either an access token or a project invitation before continuing.", "zh-CN"), "请只填写访问 token 或项目邀请密钥中的一种，再继续。");
   assert.equal(translateUiText("Remember this device", "zh-CN"), "记住此设备");

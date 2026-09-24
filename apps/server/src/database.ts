@@ -18,6 +18,7 @@ import type {
   InvitationTtl,
   JsonValue,
   MembershipRole,
+  RemoveProjectMembershipInput,
   ProjectInvitationAuditRecord,
   ProjectInvitationRecord,
   ProjectListItem,
@@ -47,10 +48,7 @@ export interface Actor {
   device_id: string;
 }
 
-export interface BranchRemovalDecision {
-  branch_resolution?: "delete" | "merged_to_main" | undefined;
-  expected_branch_head_commit?: string | undefined;
-}
+export type BranchRemovalDecision = RemoveProjectMembershipInput;
 
 export interface SessionRecord {
   id: string;
