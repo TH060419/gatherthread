@@ -17,6 +17,13 @@ const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-d
 const aliyunGuidePath = fileURLToPath(new URL("../../../docs/ALIYUN_ECS.md", import.meta.url));
 const selfHostingGuidePath = fileURLToPath(new URL("../../../docs/SELF_HOSTING.md", import.meta.url));
 
+test("Cloud Git subviews move keyboard focus to focusable headings", async () => {
+  const html = await readFile(htmlPath, "utf8");
+  assert.match(html, /id="code-local-title" tabindex="-1"/);
+  assert.match(html, /id="code-team-title" tabindex="-1"/);
+  assert.match(html, /id="code-enabled-home"[^>]*aria-label="Cloud Git settings"/);
+});
+
 test("first-project empty state has a localized eyebrow and restores English when language changes", async () => {
   const [html, main, translations] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(i18nPath, "utf8")]);
   assert.match(html, /id="empty-state-eyebrow"/);

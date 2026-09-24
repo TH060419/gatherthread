@@ -39,6 +39,7 @@ test("staged sign-in and Cloud Git navigation are localized without the irreleva
     ["First-time use · activate access", "首次使用 · 激活资格"],
     ["Only have a project invitation?", "只有项目邀请？"],
     ["← Back", "← 返回"],
+    ["Cloud Git settings", "云端 Git 设置"],
     ["This device · sync & recovery", "本设备 · 同步与恢复"],
     ["Project branches · review", "项目分支 · 审核"],
     ["Manage cloud Git data", "管理云端 Git 数据"],

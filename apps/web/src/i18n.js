@@ -97,6 +97,7 @@ const ZH_CN = Object.freeze({
   "Request Alpha access": "申请 Alpha 测试资格",
   "Join an invited project": "加入受邀项目",
   "← Back": "← 返回",
+  "Cloud Git settings": "云端 Git 设置",
   "About cloud Git collaboration": "关于云端 Git 协作",
   "Cloud Git stores project code on this server so project members can share, review and merge it. Uploaded code is readable by every member of that project. It is used for that project's collaboration, not for developing GatherThread or other unrelated purposes. Review files for secrets before upload.": "云端 Git 将项目代码保存在此服务器，供项目成员共享、审核和合并。该项目的每位成员都能读取已上传代码。代码仅用于该项目协作，不用于开发 GatherThread 或其他无关用途。上传前请检查文件中是否有密钥。",
   "Code upload is optional and automatic upload starts off. You can turn off cloud Git for a project; its conversations still work, but code sharing and recovery through the server are then unavailable. Turning it off alone retains existing cloud branches until they are cleared in Settings.": "代码上传是可选功能，自动上传默认关闭。你可以关闭项目的云端 Git；会话仍可使用，但无法再通过服务器共享或恢复代码。仅关闭功能会保留已有云端分支，需在设置中另行清理。",

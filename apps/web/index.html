@@ -609,7 +609,7 @@
           </section>
           <section id="code-device-view" class="code-section" aria-labelledby="code-local-title" hidden>
             <button id="code-back-device-view" class="text-button code-view-back" type="button">← Back to code settings</button>
-            <h3 id="code-local-title">This device and your branch</h3>
+            <h3 id="code-local-title" tabindex="-1">This device and your branch</h3>
             <label for="code-runtime-select">Local Agent device</label>
             <select id="code-runtime-select" aria-describedby="code-device-help"></select>
             <p id="code-device-help" class="code-help">Choose the exact device to transfer files. Changing Agent does not change your cloud branch.</p>
@@ -626,7 +626,7 @@
           </section>
           <section id="code-branches-view" class="code-section" aria-labelledby="code-team-title" hidden>
             <button id="code-back-branches-view" class="text-button code-view-back" type="button">← Back to code settings</button>
-            <div class="code-toolbar"><h3 id="code-team-title">Project branches</h3><span id="code-main-commit" class="code-commit" data-i18n-skip></span></div>
+            <div class="code-toolbar"><h3 id="code-team-title" tabindex="-1">Project branches</h3><span id="code-main-commit" class="code-commit" data-i18n-skip></span></div>
             <p class="code-help">Each member uploads to their own branch. Review changes before merging; conflicts never overwrite another member's work.</p>
             <div class="code-actions"><button id="code-review-button" class="button button-secondary compact-button" type="button" disabled>Request review of my branch</button><button id="code-update-button" class="button button-secondary compact-button" type="button" disabled>Merge main into my cloud branch</button></div>
             <ul id="code-branch-list" class="code-branch-list" aria-label="Project branches"></ul>
