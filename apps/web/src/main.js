@@ -51,7 +51,12 @@ import {
   withoutDshPairingHash,
 } from "./dsh.js?v=20260922-1";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
-import { captureTimelineScroll, settleTimelineScroll } from "./timeline-scroll.js?v=20260917-1";
+import {
+  captureTimelineScroll,
+  isTimelineAtBottom,
+  scrollTimelineToBottom,
+  settleTimelineScroll,
+} from "./timeline-scroll.js?v=20260925-1";
 import {
   INITIAL_CONNECTION_NOTICE_STATE,
   advanceConnectionNotice,
@@ -73,6 +78,7 @@ import {
   SHARED_LANGUAGE_STORAGE_KEY,
   DEFAULT_SETTINGS,
   effectiveContextBudget,
+  effectiveMotion,
   normalizeCodexProfile,
   normalizeSettings,
   projectAgentHarness,
@@ -83,7 +89,7 @@ import {
   withProjectCodexProfile,
   withProjectDshProfile,
   withProjectEnabledHarnesses,
-} from "./settings.js?v=20260922-1";
+} from "./settings.js?v=20260925-2";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -172,6 +178,7 @@ const sessionView = element("session-view");
 const emptyState = element("empty-state");
 const timeline = element("event-timeline");
 const timelineRegion = element("timeline-region");
+const timelineBottomButton = element("timeline-bottom-button");
 const timelineEmpty = element("timeline-empty");
 const messageInput = element("message-input");
 const sendChatButton = element("send-chat-button");
@@ -2140,7 +2147,36 @@ function renderTimeline({ followNewEvents = false } = {}) {
     ...scrollSnapshot,
     follow: scrollSnapshot.follow && events.length > 0,
   });
+  renderTimelineBottomControl();
 }
+
+/**
+ * Offer the jump back to the newest event exactly when the reader is not at it.
+ * The rule is the same one auto-follow uses, so the control never offers to
+ * scroll somewhere the reader already is.
+ */
+function renderTimelineBottomControl() {
+  timelineBottomButton.hidden = isTimelineAtBottom(timelineRegion);
+}
+
+/**
+ * The scroll this reader actually wants. `appearance.motion` defaults to
+ * `system`, so comparing it to the literal `reduce` would hand a long animated
+ * jump to every reader whose device asks for reduced motion and who never opened
+ * the setting.
+ */
+function timelineScrollBehavior() {
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  return effectiveMotion(state.settings.appearance.motion, reducedMotion) === "reduce" ? "auto" : "smooth";
+}
+
+function returnToNewestEvent() {
+  scrollTimelineToBottom(timelineRegion, timelineScrollBehavior());
+  renderTimelineBottomControl();
+}
+
+timelineRegion.addEventListener("scroll", renderTimelineBottomControl, { passive: true });
+timelineBottomButton.addEventListener("click", returnToNewestEvent);
 
 function renderProgressDisclosure(progressEvents, live) {
   const details = document.createElement("details");

@@ -9,6 +9,7 @@ import {
   contextBudgetToTokenCeiling,
   createSettingsStore,
   DEFAULT_SETTINGS,
+  effectiveMotion,
   effectiveContextBudget,
   normalizeCodexProfile,
   normalizeSettings,
@@ -297,4 +298,22 @@ test("homepage, login, and workspace share one validated language preference", (
   data.set(SHARED_LANGUAGE_STORAGE_KEY, "invalid");
   assert.equal(createSettingsStore(storage).get().general.locale, "zh-CN", "invalid shared values cannot override a valid workspace choice");
   assert.equal(data.get(SHARED_LANGUAGE_STORAGE_KEY), "zh");
+});
+
+test("the effective motion preference resolves the system default against the operating system", () => {
+  // An explicit choice is the reader's, exactly as an explicit theme is: only
+  // `system` defers to the device.
+  assert.equal(effectiveMotion("reduce", false), "reduce");
+  assert.equal(effectiveMotion("reduce", true), "reduce");
+  assert.equal(effectiveMotion("full", false), "full");
+  assert.equal(effectiveMotion("full", true), "full");
+  // The default is `system`, so a reader whose device asks for reduced motion
+  // must not be handed an animated scroll just because they never opened this
+  // setting.
+  assert.equal(effectiveMotion("system", true), "reduce");
+  assert.equal(effectiveMotion("system", false), "full");
+  // Anything the setting schema does not recognise behaves like the default
+  // rather than silently claiming motion is unwanted.
+  assert.equal(effectiveMotion(undefined, true), "reduce");
+  assert.equal(effectiveMotion(undefined, false), "full");
 });
