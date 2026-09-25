@@ -4,6 +4,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Discover the model catalog online after connecting a harness instead of relying on hardcoded lists: the Codex connector asks the connected App Server for its models (`model/list`, falling back to single-model mode on older servers), and the DeepSeek Harness connector always asks the Harness for the configured provider's catalog instead of special-casing one provider. Newly released models (for example a newer GPT generation or DeepSeek release) now appear in the Web model picker as soon as the connected harness advertises them, and locally stored model choices that the built-in catalog does not know yet are no longer silently reset.
 - Prepared public-repository documentation and discoverability updates: bilingual README introductions, documentation/release indexes, private security-reporting policy, product-home metadata, and clearer Alpha access guidance. This does not itself deploy the hosted site or publish a new package.
 - The npm Alpha 7 packages were published separately and were not rebuilt when the Git tag moved to the verified server source.
 
