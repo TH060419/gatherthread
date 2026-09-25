@@ -400,9 +400,9 @@ export async function revealCodexDesktopThread(options: {
   threadId: string;
   workspacePath: string;
   env?: NodeJS.ProcessEnv;
-  platform?: CodexDesktopPlatform;
   timeoutMs?: number;
   spawnProcess?: DesktopRevealSpawn;
+  platform?: CodexDesktopPlatform;
 }): Promise<CodexDesktopThreadLaunchResult> {
   if (!CODEX_THREAD_ID_PATTERN.test(options.threadId)) {
     return { status: "failed", error: new Error("Codex Desktop task id is invalid") };
@@ -791,6 +791,7 @@ export async function initializeProjectSession(options: {
       localSessionId: binding.localSessionId,
       captureFidelity: descriptor.captureFidelity,
       capabilities: descriptor.capabilities,
+      ...(descriptor.executionProfiles === undefined ? {} : { executionProfiles: descriptor.executionProfiles }),
       purpose: "execution",
     },
     transcriptRoots: {},
