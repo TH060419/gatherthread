@@ -17,11 +17,43 @@ test("browser API overrides cannot send credentials to another origin", async ()
     }
     assert.equal(requests.length, 0);
     await new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" }).restoreSession();
-    assert.deepEqual(requests, ["https://gatherthread.example/v1/me"]);
+    assert.deepEqual(requests, ["https://gatherthread.example/v1/me",
+      "https://gatherthread.example/v1/remembered-accounts/adopt-current-session"]);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalLocation === undefined) delete globalThis.location;
     else globalThis.location = originalLocation;
+  }
+});
+
+test("cloud Git quota and cleanup use cookie-authenticated endpoints with explicit CAS inputs", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return Response.json({ data: { projects: [], limit_bytes: 134217728, used_bytes: 0 } });
+  };
+  try {
+    const api = new HttpCollaborationApi();
+    await api.getCodeStorage();
+    await api.clearOwnCodeBranch("p / 1", { expected_head_commit: "a".repeat(40), idempotency_key: "clear-one" });
+    await api.clearProjectCode("p / 1", {
+      expected_main_commit: "b".repeat(40), expected_branches: [], idempotency_key: "clear-all",
+    });
+    assert.deepEqual(requests.map(({ url, options }) => [url, options.method ?? "GET"]), [
+      ["/v1/code-storage", "GET"],
+      ["/v1/projects/p%20%2F%201/code/clear-branch", "POST"],
+      ["/v1/projects/p%20%2F%201/code/clear-project", "POST"],
+    ]);
+    assert.ok(requests.every(({ options }) => options.credentials === "include" && !options.headers.Authorization));
+    assert.deepEqual(JSON.parse(requests[1].options.body), {
+      expected_head_commit: "a".repeat(40), idempotency_key: "clear-one",
+    });
+    assert.deepEqual(JSON.parse(requests[2].options.body), {
+      expected_main_commit: "b".repeat(40), expected_branches: [], idempotency_key: "clear-all",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
   }
 });
 
@@ -33,6 +65,20 @@ test("mock authentication derives the user from a token", async () => {
     return true;
   });
   assert.equal((await api.authenticate("demo-token")).username, "Avery Chen");
+});
+
+test("mock remembered account remains selectable after logout and can be forgotten", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  await api.authenticate("demo-token", { rememberDevice: true, displayName: "Avery", deviceName: "Safari" });
+  await api.logout();
+  assert.deepEqual(await api.listRememberedAccounts(), [{
+    id: "mock-remembered-account", display_name: "Avery", device_name: "Safari",
+  }]);
+  assert.equal((await api.activateRememberedAccount("mock-remembered-account", {
+    displayName: "Avery Chen", deviceName: "Mac",
+  })).username, "Avery Chen");
+  await api.forgetRememberedAccount("mock-remembered-account");
+  assert.deepEqual(await api.listRememberedAccounts(), []);
 });
 
 test("append is idempotent and chat never fabricates an agent response", async () => {
@@ -357,7 +403,7 @@ test("HTTP project rename uses the project PATCH contract", async () => {
   }
 });
 
-test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
+test("HTTP cloud deletion uses explicit branch decisions for member removal", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -372,7 +418,7 @@ test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
     assert.deepEqual(requests.map(([url, options]) => [url, options.method, options.body]), [
       ["https://gatherthread.example/v1/sessions/session%20%2F%20one", "DELETE", undefined],
       ["https://gatherthread.example/v1/projects/project%20%2F%20one", "DELETE", undefined],
-      ["https://gatherthread.example/v1/projects/project%20%2F%20one/members/user%20%2F%20me", "DELETE", undefined],
+      ["https://gatherthread.example/v1/projects/project%20%2F%20one/members/user%20%2F%20me", "DELETE", "{}"],
     ]);
   } finally {
     globalThis.fetch = originalFetch;
@@ -723,6 +769,36 @@ test("browser login sends the remember-device choice without retaining the beare
   }
 });
 
+test("remembered accounts are listed, selected and forgotten without exposing a device token to JavaScript", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const responses = [
+    new Response(JSON.stringify({ data: { accounts: [{ id: "saved-1", username: "Alice", device_name: "Mac", display_name: "Alice" }] } }), { status: 200 }),
+    new Response(JSON.stringify({ data: { actor: { id: "u1", username: "Alice B", device_id: "d1" } } }), { status: 200 }),
+    new Response(null, { status: 204 }),
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return responses.shift();
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.listRememberedAccounts())[0].device_name, "Mac");
+    assert.equal((await api.activateRememberedAccount("saved-1", { displayName: "Alice B", deviceName: "Laptop" })).username, "Alice B");
+    await api.forgetRememberedAccount("saved-1");
+    assert.deepEqual(requests.map(({ url, options }) => [options.method ?? "GET", url]), [
+      ["GET", "https://gatherthread.example/v1/remembered-accounts"],
+      ["POST", "https://gatherthread.example/v1/remembered-accounts/saved-1/activate"],
+      ["DELETE", "https://gatherthread.example/v1/remembered-accounts/saved-1"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[1].options.body), { display_name: "Alice B", device_name: "Laptop" });
+    assert.ok(requests.every(({ options }) => options.credentials === "include" && options.headers.Authorization === undefined));
+    assert.equal(api.token, "");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("HTTP client restores and revokes an HttpOnly browser session without JavaScript token storage", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
@@ -730,6 +806,9 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
     new Response(JSON.stringify({ data: { id: "u1", username: "Alice", device_id: "d1" } }), {
       status: 200,
       headers: { "content-type": "application/json" },
+    }),
+    new Response(JSON.stringify({ data: { adopted: true } }), {
+      status: 200, headers: { "content-type": "application/json" },
     }),
     new Response(null, { status: 204 }),
     new Response(JSON.stringify({ error: { code: "unauthorized", message: "Unauthorized" } }), {
@@ -748,6 +827,7 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
     assert.equal(await api.restoreSession(), null);
     assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
       ["GET", "https://gatherthread.example/v1/me"],
+      ["POST", "https://gatherthread.example/v1/remembered-accounts/adopt-current-session"],
       ["DELETE", "https://gatherthread.example/v1/browser-sessions/current"],
       ["GET", "https://gatherthread.example/v1/me"],
     ]);
@@ -756,6 +836,22 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("optional remembered-session adoption failure does not log out a restored session", async () => {
+  const originalFetch = globalThis.fetch;
+  const paths = [];
+  globalThis.fetch = async (url) => {
+    paths.push(String(url));
+    return paths.length === 1
+      ? Response.json({ data: { id: "u1", username: "Alice", device_id: "d1" } })
+      : Response.json({ error: { code: "remembered_session_required", message: "Not remembered" } }, { status: 403 });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.restoreSession()).username, "Alice");
+    assert.equal(paths.length, 2);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("realtime ticket is carried by WebSocket subprotocol and never placed in the URL", async () => {

@@ -2088,6 +2088,45 @@ test("browser sessions store only peppered digests and expire or revoke with the
   }
 });
 
+test("remembered browser stores multiple account choices without retaining device tokens", () => {
+  let instant = new Date("2026-09-24T00:00:00.000Z");
+  const f = fixture({ clock: () => instant });
+  try {
+    const first = f.database.createBrowserSession(f.owner, true);
+    const ownerVault = f.database.rememberBrowser(null, f.owner);
+    assert.match(ownerVault.token, /^gtr_[A-Za-z0-9_-]{43}$/u);
+    assert.equal(f.database.rememberedBrowserHasAccount(ownerVault.token, f.owner), true);
+    const memberVault = f.database.rememberBrowser(ownerVault.token, f.member);
+    assert.throws(() => f.database.listRememberedAccounts(ownerVault.token), (error: unknown) => error instanceof ApiError && error.status === 401);
+    const choices = f.database.listRememberedAccounts(memberVault.token);
+    assert.deepEqual(new Set(choices.map((choice) => choice.display_name)), new Set(["Owner", "Member"]));
+    assert.equal(JSON.stringify(f.database.sqlite.prepare("SELECT * FROM remembered_browsers").all()).includes(memberVault.token), false);
+    assert.equal(JSON.stringify(f.database.sqlite.prepare("SELECT * FROM remembered_accounts").all()).includes(f.ownerToken), false);
+
+    f.database.revokeBrowserSession(first.session_id, f.owner);
+    assert.equal(f.database.listRememberedAccounts(memberVault.token).length, 2, "logout leaves the chooser available");
+    const ownerChoice = choices.find((choice) => choice.display_name === "Owner");
+    assert.ok(ownerChoice);
+    const activated = f.database.activateRememberedAccount(memberVault.token, ownerChoice.id, {
+      display_name: "Owner renamed", device_name: "My Mac",
+    });
+    assert.equal(f.database.authenticateBrowserSession(activated.browser_session.token).actor.display_name, "Owner renamed");
+    assert.equal(f.database.listRememberedAccounts(activated.remembered_browser.token)
+      .find((choice) => choice.id === ownerChoice.id)?.device_name, "My Mac");
+    assert.throws(() => f.database.listRememberedAccounts(memberVault.token), (error: unknown) => error instanceof ApiError && error.status === 401);
+
+    const remaining = f.database.forgetRememberedAccount(activated.remembered_browser.token, ownerChoice.id);
+    assert.ok(remaining);
+    assert.deepEqual(f.database.listRememberedAccounts(remaining.token).map((choice) => choice.display_name), ["Member"]);
+    f.service.revokeDevice(f.member, f.member.device_id);
+    assert.deepEqual(f.database.listRememberedAccounts(remaining.token), []);
+    instant = new Date(remaining.expires_at);
+    assert.throws(() => f.database.listRememberedAccounts(remaining.token), (error: unknown) => error instanceof ApiError && error.status === 401);
+  } finally {
+    f.close();
+  }
+});
+
 test("invitation claim and requested browser session commit atomically", () => {
   const f = fixture();
   try {

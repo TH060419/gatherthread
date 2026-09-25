@@ -1,11 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { CodeFilesSchema, CodeMutationResultSchema, CodeSnapshotResultSchema, CodeStatusSchema, type CodeFile } from "@gatherthread/protocol";
-import { CodeRepository } from "../src/code-repository.js";
+import { CodeClearResultSchema, CodeFilesSchema, CodeMutationResultSchema, CodeSnapshotResultSchema, CodeStatusSchema,
+  CodeStorageSummarySchema, type CodeFile } from "@gatherthread/protocol";
+import { CodeRepository, MAX_USER_CODE_BYTES } from "../src/code-repository.js";
 import { CollaborationDatabase } from "../src/database.js";
 import { CollaborationService } from "../src/service.js";
 import { ApiError } from "../src/errors.js";
@@ -73,7 +75,10 @@ test("project code branches have real Git snapshots, durable retry receipts, ind
     f.service.setProjectMembership(f.owner, f.project.id, f.member.user_id, "viewer");
     assert.throws(() => f.repository.checkpoint(f.member, f.project.id, input), hasCode("forbidden"));
     assert.doesNotThrow(() => f.repository.snapshot(f.member, f.project.id, branchId));
-    f.service.removeProjectMembership(f.owner, f.project.id, f.member.user_id);
+    assert.throws(() => f.service.removeProjectMembership(f.owner, f.project.id, f.member.user_id), hasCode("code_branch_resolution_required"));
+    f.service.removeProjectMembership(f.owner, f.project.id, f.member.user_id, {
+      branch_resolution: "delete", expected_branch_head_commit: uploaded.commit,
+    });
     assert.throws(() => f.repository.snapshot(f.member, f.project.id, branchId), hasCode("not_found"));
     f.service.deleteProject(f.owner, f.project.id);
     assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM code_branches").get() as { count: number }).count, 0);
@@ -103,6 +108,250 @@ test("owner can pause and resume code transfers without deleting cloud branches"
     assert.equal(resumed.status.repository.enabled, true);
     assert.equal(resumed.status.branches[0]?.head_commit, uploaded.commit);
     assert.equal(f.repository.snapshot(f.member, f.project.id, uploaded.status.own_branch_id!).snapshot.files[0]?.path, "README.md");
+  } finally { f.close(); }
+});
+
+test("cloud code storage summary attributes own branches and owner main; branch cleanup preserves shared main and local independence", () => {
+  const f = fixture();
+  try {
+    const enabled = f.repository.enable(f.owner, f.project.id, { idempotency_key: "enable-cleanup" });
+    const memberUpload = f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: enabled.commit, files: [file("member.txt", "member data")], message: "Member", idempotency_key: "member-upload-cleanup",
+    });
+    f.repository.review(f.member, f.project.id, { head_commit: memberUpload.commit, idempotency_key: "member-review-cleanup" });
+    const mergeInput = {
+      branch_id: memberUpload.status.own_branch_id!, expected_main_commit: enabled.commit,
+      expected_head_commit: memberUpload.commit, idempotency_key: "member-merge-cleanup",
+    };
+    const merged = f.repository.merge(f.owner, f.project.id, mergeInput);
+    const ownerStorage = CodeStorageSummarySchema.parse(f.repository.storageSummary(f.owner));
+    const memberStorage = CodeStorageSummarySchema.parse(f.repository.storageSummary(f.member));
+    assert.equal(ownerStorage.used_bytes, Buffer.byteLength("member data"));
+    assert.equal(memberStorage.used_bytes, Buffer.byteLength("member data"));
+    assert.equal(memberStorage.projects[0]?.can_clear_project, false);
+    assert.equal(ownerStorage.projects[0]?.can_clear_project, true);
+    assert.throws(() => f.repository.clearProject(f.member, f.project.id, {
+      expected_main_commit: merged.commit, expected_branches: [{ branch_id: memberUpload.status.own_branch_id!, head_commit: memberUpload.commit }],
+      idempotency_key: "member-cannot-clear-project",
+    }), hasCode("forbidden"));
+    const input = { expected_head_commit: memberUpload.commit, idempotency_key: "member-clear-branch" };
+    const cleared = CodeClearResultSchema.parse(f.repository.clearBranch(f.member, f.project.id, input));
+    assert.equal(cleared.released_bytes, Buffer.byteLength("member data"));
+    assert.deepEqual(f.repository.clearBranch(f.member, f.project.id, input), cleared);
+    assert.equal(f.repository.storageSummary(f.member).used_bytes, 0);
+    assert.equal(f.repository.storageSummary(f.owner).used_bytes, Buffer.byteLength("member data"));
+    assert.deepEqual(f.repository.merge(f.owner, f.project.id, mergeInput), merged, "unrelated owner retry receipts remain valid");
+    assert.equal(f.repository.snapshot(f.owner, f.project.id, "main").snapshot.files[0]?.path, "member.txt");
+    assert.throws(() => f.repository.snapshot(f.member, f.project.id, memberUpload.status.own_branch_id!), hasCode("not_found"));
+    assert.throws(() => f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: enabled.commit, files: [file("member.txt", "member data")], message: "Member", idempotency_key: "member-upload-cleanup",
+    }), hasCode("code_data_cleared"));
+    f.service.setProjectMembership(f.owner, f.project.id, f.member.user_id, "viewer");
+    assert.equal(f.repository.status(f.member, f.project.id).own_branch_id, null);
+  } finally { f.close(); }
+});
+
+test("a branch retained after project removal still counts against its original user's cloud Git quota", () => {
+  const f = fixture();
+  try {
+    const enabled = f.repository.enable(f.owner, f.project.id, { idempotency_key: "orphan-quota-enable" });
+    f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: enabled.commit, files: [file("member.txt", "retained cloud code")],
+      message: "Member upload", idempotency_key: "orphan-quota-upload",
+    });
+    // Simulate an orphan produced by a release before branch-aware removal.
+    f.database.sqlite.prepare("DELETE FROM project_memberships WHERE project_id=? AND user_id=?")
+      .run(f.project.id, f.member.user_id);
+    f.database.sqlite.prepare("UPDATE code_branches SET logical_bytes=-1 WHERE project_id=? AND user_id=?")
+      .run(f.project.id, f.member.user_id);
+    const detached = CodeStorageSummarySchema.parse(f.repository.storageSummary(f.member));
+    assert.equal(detached.used_bytes, Buffer.byteLength("retained cloud code"));
+    assert.equal(detached.detached_branches[0]?.project_id, f.project.id);
+    assert.equal(detached.detached_branches[0]?.own_branch_bytes, Buffer.byteLength("retained cloud code"));
+    assert.equal((f.database.sqlite.prepare("SELECT logical_bytes AS bytes FROM code_branches WHERE project_id=? AND user_id=?")
+      .get(f.project.id, f.member.user_id) as { bytes: number }).bytes, Buffer.byteLength("retained cloud code"));
+    f.database.sqlite.prepare("UPDATE code_branches SET logical_bytes=? WHERE project_id=? AND user_id=?")
+      .run(MAX_USER_CODE_BYTES, f.project.id, f.member.user_id);
+    const secondProject = f.service.createProject(f.owner, { title: "Second", idempotency_key: "orphan-quota-second" });
+    const invitation = f.service.createProjectInvitation(f.owner, secondProject.id, { role: "participant" });
+    f.service.claimInvitationForActor(f.member, invitation.invite_token);
+    const second = f.repository.enable(f.owner, secondProject.id, { idempotency_key: "orphan-quota-second-enable" });
+    assert.throws(() => f.repository.checkpoint(f.member, secondProject.id, {
+      base_commit: second.commit, files: [file("new.txt", "new data")],
+      message: "Another upload", idempotency_key: "orphan-quota-second-upload",
+    }), hasCode("code_storage_quota_exceeded"));
+    const result = f.repository.clearDetachedBranch(f.member, f.project.id, {
+      expected_head_commit: detached.detached_branches[0]!.own_branch_head_commit,
+      idempotency_key: "orphan-explicit-clear",
+    });
+    assert.equal(result.released_bytes, MAX_USER_CODE_BYTES);
+    assert.deepEqual(f.repository.clearDetachedBranch(f.member, f.project.id, {
+      expected_head_commit: detached.detached_branches[0]!.own_branch_head_commit,
+      idempotency_key: "orphan-explicit-clear",
+    }), result);
+    assert.equal(f.repository.storageSummary(f.member).used_bytes, 0);
+  } finally { f.close(); }
+});
+
+test("leaving with a cloud branch requires an explicit exact-head decision; reviewed main pays after merge", () => {
+  const f = fixture();
+  try {
+    const initial = f.repository.enable(f.owner, f.project.id, { idempotency_key: "leave-enable" });
+    const upload = f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: initial.commit, files: [file("member.txt", "member data")],
+      message: "Member contribution", idempotency_key: "leave-upload",
+    });
+    const disposition = { branch_resolution: "merged_to_main" as const, expected_branch_head_commit: upload.commit };
+    assert.throws(() => f.service.removeProjectMembership(f.member, f.project.id, f.member.user_id), hasCode("code_branch_resolution_required"));
+    assert.throws(() => f.service.removeProjectMembership(f.member, f.project.id, f.member.user_id, disposition), hasCode("code_review_required"));
+    assert.throws(() => f.service.removeProjectMembership(f.member, f.project.id, f.member.user_id, {
+      branch_resolution: "delete", expected_branch_head_commit: initial.commit,
+    }), hasCode("code_stale_head"));
+    assert.equal(f.database.projectMembershipRole(f.project.id, f.member.user_id), "participant");
+    f.repository.review(f.member, f.project.id, { head_commit: upload.commit, idempotency_key: "leave-review" });
+    f.repository.merge(f.owner, f.project.id, {
+      branch_id: upload.status.own_branch_id!, expected_main_commit: initial.commit,
+      expected_head_commit: upload.commit, idempotency_key: "leave-merge",
+    });
+    f.service.removeProjectMembership(f.member, f.project.id, f.member.user_id, disposition);
+    assert.equal(f.database.projectMembershipRole(f.project.id, f.member.user_id), null);
+    assert.equal((f.database.sqlite.prepare("SELECT COUNT(*) AS count FROM code_branches WHERE project_id=? AND user_id=?")
+      .get(f.project.id, f.member.user_id) as { count: number }).count, 0);
+    assert.equal(f.repository.storageSummary(f.member).used_bytes, 0);
+    assert.equal(f.repository.storageSummary(f.owner).used_bytes, Buffer.byteLength("member data"));
+  } finally { f.close(); }
+});
+
+test("owner can clear paused archived cloud code with exact head list; old history is unreachable and retry receipts fail closed", () => {
+  const f = fixture();
+  try {
+    const enabled = f.repository.enable(f.owner, f.project.id, { idempotency_key: "enable-full-clear" });
+    const upload = f.repository.checkpoint(f.owner, f.project.id, {
+      base_commit: enabled.commit, files: [file("private.txt", "old cloud data")], message: "Owner", idempotency_key: "old-owner-upload",
+    });
+    const badInput = { expected_main_commit: enabled.commit, expected_branches: [], idempotency_key: "stale-clear" };
+    assert.throws(() => f.repository.clearProject(f.owner, f.project.id, badInput), hasCode("code_stale_head"));
+    f.repository.disable(f.owner, f.project.id, { idempotency_key: "pause-for-clear" });
+    f.database.sqlite.prepare("UPDATE projects SET state='archived' WHERE id=?").run(f.project.id);
+    const input = { expected_main_commit: enabled.commit,
+      expected_branches: [{ branch_id: upload.status.own_branch_id!, head_commit: upload.commit }], idempotency_key: "full-clear" };
+    const cleared = CodeClearResultSchema.parse(f.repository.clearProject(f.owner, f.project.id, input));
+    assert.equal(cleared.status.repository.enabled, false);
+    assert.notEqual(cleared.status.repository.main_commit, enabled.commit);
+    assert.equal(cleared.status.branches.length, 0);
+    assert.equal(cleared.released_bytes, Buffer.byteLength("old cloud data"));
+    assert.deepEqual(f.repository.clearProject(f.owner, f.project.id, input), cleared);
+    const gitDirectory = join(f.directory, "code", `${createHash("sha256").update(f.project.id).digest("hex")}.git`);
+    const refs = spawnSync("git", [`--git-dir=${gitDirectory}`, "for-each-ref", "--format=%(refname)", "refs/heads"], { encoding: "utf8" });
+    assert.equal(refs.status, 0);
+    assert.equal(refs.stdout.trim(), "refs/heads/main", "deleted branch refs must not remain API or Git reachable");
+    const ancestry = spawnSync("git", [`--git-dir=${gitDirectory}`, "rev-list", "--parents", "-n", "1", cleared.status.repository.main_commit!], { encoding: "utf8" });
+    assert.equal(ancestry.status, 0);
+    assert.equal(ancestry.stdout.trim().split(" ").length, 1, "replacement main must have no parent history");
+    assert.equal(f.repository.storageSummary(f.owner).used_bytes, 0);
+    assert.throws(() => f.repository.snapshot(f.owner, f.project.id, "main"), hasCode("code_not_enabled"));
+    f.database.sqlite.prepare("UPDATE projects SET state='active' WHERE id=?").run(f.project.id);
+    assert.throws(() => f.repository.checkpoint(f.owner, f.project.id, {
+      base_commit: enabled.commit, files: [file("private.txt", "old cloud data")], message: "Owner", idempotency_key: "old-owner-upload",
+    }), hasCode("code_data_cleared"));
+    const resumed = f.repository.enable(f.owner, f.project.id, { idempotency_key: "enable-after-clear" });
+    assert.deepEqual(f.repository.snapshot(f.owner, f.project.id, "main").snapshot.files, []);
+    assert.notEqual(resumed.commit, enabled.commit);
+    const reopened = new CollaborationDatabase(f.path, { authTokenPepper: PEPPER });
+    try {
+      const repository = new CodeRepository(reopened, join(f.directory, "code"));
+      assert.equal(repository.status(f.owner, f.project.id).branches.length, 0);
+      assert.equal(repository.storageSummary(f.owner).used_bytes, 0);
+      assert.deepEqual(reopened.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+    } finally { reopened.close(); }
+  } finally { f.close(); }
+});
+
+test("per-user cloud Git limit applies across projects and to owner-held shared main without writing a rejected head", () => {
+  const f = fixture();
+  try {
+    const first = f.repository.enable(f.owner, f.project.id, { idempotency_key: "quota-enable-first" });
+    const ownerBranch = f.repository.checkpoint(f.owner, f.project.id, {
+      base_commit: first.commit, files: [file("owner.txt", "own")], message: "Owner", idempotency_key: "quota-owner-branch",
+    });
+    const memberBranch = f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: first.commit, files: [file("member.txt", "member")], message: "Member", idempotency_key: "quota-member-branch",
+    });
+    const secondProject = f.service.createProject(f.owner, { title: "Second code project", idempotency_key: "quota-second-project" });
+    const invitation = f.service.createProjectInvitation(f.owner, secondProject.id, { role: "participant", ttl: "1h" });
+    f.service.claimInvitationForActor(f.member, invitation.invite_token);
+    const second = f.repository.enable(f.owner, secondProject.id, { idempotency_key: "quota-enable-second" });
+    const memberSecond = f.repository.checkpoint(f.member, secondProject.id, {
+      base_commit: second.commit, files: [file("other.txt", "x")], message: "Second", idempotency_key: "quota-member-second",
+    });
+    // Set a boundary-sized historical ledger without generating a 128 MiB fixture.
+    f.database.sqlite.prepare("UPDATE code_branches SET logical_bytes=? WHERE project_id=? AND user_id=?")
+      .run(128 * 1024 * 1024 - Buffer.byteLength("member"), secondProject.id, f.member.user_id);
+    const before = f.repository.status(f.member, f.project.id);
+    assert.throws(() => f.repository.checkpoint(f.member, f.project.id, {
+      base_commit: memberBranch.commit, files: [file("member.txt", "member+")], message: "Too large", idempotency_key: "quota-over-branch",
+    }), hasCode("code_storage_quota_exceeded"));
+    assert.deepEqual(f.repository.status(f.member, f.project.id), before);
+    assert.equal(f.repository.status(f.member, secondProject.id).own_branch_id, memberSecond.status.own_branch_id);
+    // Main is charged to the owner even when another member authored the source.
+    f.database.sqlite.prepare("UPDATE code_repositories SET main_logical_bytes=? WHERE project_id=?")
+      .run(128 * 1024 * 1024 - Buffer.byteLength("own") - 1, secondProject.id);
+    f.repository.review(f.member, f.project.id, { head_commit: memberBranch.commit, idempotency_key: "quota-review" });
+    assert.throws(() => f.repository.merge(f.owner, f.project.id, {
+      branch_id: memberBranch.status.own_branch_id!, expected_main_commit: first.commit,
+      expected_head_commit: memberBranch.commit, idempotency_key: "quota-over-main",
+    }), hasCode("code_storage_quota_exceeded"));
+    assert.equal(f.repository.status(f.owner, f.project.id).repository.main_commit, first.commit);
+    assert.equal(f.repository.status(f.owner, f.project.id).own_branch_id, ownerBranch.status.own_branch_id);
+  } finally { f.close(); }
+});
+
+test("expired invalidated code receipts do not permanently exhaust future cloud mutations", () => {
+  const f = fixture();
+  try {
+    const enabled = f.repository.enable(f.owner, f.project.id, { idempotency_key: "receipt-retention-enable" });
+    const insert = f.database.sqlite.prepare(`INSERT INTO code_mutations(
+      project_id,idempotency_key,user_id,operation,payload_hash,result_json,invalidated_at
+    ) VALUES(?,?,?,?,?,?,?)`);
+    f.database.sqlite.exec("BEGIN IMMEDIATE");
+    for (let index = 0; index < 4096; index += 1) {
+      insert.run(f.project.id, `expired-${index}`, f.owner.user_id, "checkpoint", "old", "{}", "2020-01-01T00:00:00.000Z");
+    }
+    f.database.sqlite.exec("COMMIT");
+    const uploaded = f.repository.checkpoint(f.owner, f.project.id, {
+      base_commit: enabled.commit, files: [file("fresh.txt", "fresh")], message: "Fresh", idempotency_key: "fresh-after-old-receipts",
+    });
+    assert.equal(uploaded.status.branches.length, 1);
+    const count = f.database.sqlite.prepare("SELECT COUNT(*) AS count FROM code_mutations WHERE project_id=?")
+      .get(f.project.id) as { count: number };
+    assert.equal(count.count, 2);
+  } finally { f.close(); }
+});
+
+test("legacy code heads migrate to exact logical branch and main usage without changing history", () => {
+  const f = fixture();
+  try {
+    const enabled = f.repository.enable(f.owner, f.project.id, { idempotency_key: "legacy-usage-enable" });
+    const uploaded = f.repository.checkpoint(f.owner, f.project.id, {
+      base_commit: enabled.commit, files: [file("legacy.txt", "legacy bytes")], message: "Legacy", idempotency_key: "legacy-usage-checkpoint",
+    });
+    f.repository.review(f.owner, f.project.id, { head_commit: uploaded.commit, idempotency_key: "legacy-usage-review" });
+    const merged = f.repository.merge(f.owner, f.project.id, {
+      branch_id: uploaded.status.own_branch_id!, expected_main_commit: enabled.commit,
+      expected_head_commit: uploaded.commit, idempotency_key: "legacy-usage-merge",
+    });
+    f.database.sqlite.exec("ALTER TABLE code_repositories DROP COLUMN main_logical_bytes");
+    f.database.sqlite.exec("ALTER TABLE code_branches DROP COLUMN logical_bytes");
+    f.database.sqlite.exec("ALTER TABLE code_mutations DROP COLUMN invalidated_at");
+    const reopened = new CollaborationDatabase(f.path, { authTokenPepper: PEPPER });
+    try {
+      const repository = new CodeRepository(reopened, join(f.directory, "code"));
+      const status = repository.status(f.owner, f.project.id);
+      assert.equal(status.repository.main_commit, merged.commit);
+      assert.equal(status.branches[0]?.head_commit, uploaded.commit);
+      assert.equal(repository.storageSummary(f.owner).used_bytes, Buffer.byteLength("legacy bytes") * 2);
+      assert.deepEqual(reopened.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+    } finally { reopened.close(); }
   } finally { f.close(); }
 });
 
@@ -287,6 +536,7 @@ test("HTTP code boundary returns schema-valid snapshots and has a route-scoped l
     };
     const path = `/v1/projects/${project.id}/code`;
     assert.equal(CodeStatusSchema.parse((await request(path)).body.data).repository.enabled, false);
+    assert.equal(CodeStorageSummarySchema.parse((await request("/v1/code-storage")).body.data).used_bytes, 0);
     const enabled = CodeMutationResultSchema.parse((await request(`${path}/enable`, "POST", { idempotency_key: "http-enable" })).body.data);
     const upload = await request(`${path}/checkpoints`, "POST", { base_commit: enabled.commit, files: [file("large.txt", "a".repeat(300_000))], message: "Large bounded file", idempotency_key: "http-checkpoint" });
     assert.equal(upload.status, 200);
@@ -303,6 +553,45 @@ test("HTTP code boundary returns schema-valid snapshots and has a route-scoped l
     assert.equal(bad.status, 400);
     const ordinary = await request(`/v1/projects`, "POST", { title: "a".repeat(300_000), idempotency_key: "ordinary-limit" });
     assert.equal(ordinary.status, 413);
+    const staleClear = await request(`${path}/clear-branch`, "POST", { expected_head_commit: enabled.commit, idempotency_key: "http-stale-clear" });
+    assert.equal(staleClear.status, 409);
+    const clear = await request(`${path}/clear-branch`, "POST", { expected_head_commit: result.commit, idempotency_key: "http-clear-branch" });
+    assert.equal(CodeClearResultSchema.parse(clear.body.data).released_bytes, 300_000);
+    assert.equal((await request(`${path}/snapshot?branch_id=${result.status.own_branch_id}`)).status, 404);
+    assert.equal(CodeStorageSummarySchema.parse((await request("/v1/code-storage")).body.data).used_bytes, 0);
+  } finally { await running.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("HTTP code cleanup requires cookie Origin, owner role, exact heads, and active device", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-code-clear-http-"));
+  const browserOrigin = "https://code-clear-client.test";
+  const running = await startCollaborationServer({ databasePath: join(directory, "server.sqlite"), authTokenPepper: PEPPER, allowedOrigins: [browserOrigin] });
+  try {
+    const identity = running.database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner" });
+    const member = running.database.createIdentity({ display_name: "Member", device_name: "Member" });
+    const project = running.service.createProject(identity.actor, { title: "Clear HTTP", idempotency_key: "clear-project-http" });
+    const invitation = running.service.createProjectInvitation(identity.actor, project.id, { role: "participant", ttl: "1h" });
+    running.service.claimInvitationForActor(member.actor, invitation.invite_token);
+    const path = `/v1/projects/${project.id}/code`;
+    const repo = new CodeRepository(running.database, `${join(directory, "server.sqlite")}.code`);
+    const initial = repo.enable(identity.actor, project.id, { idempotency_key: "clear-http-enable" });
+    const opened = await fetch(`${running.origin}/v1/browser-sessions`, {
+      method: "POST", headers: { authorization: `Bearer ${identity.token}`, origin: browserOrigin, "content-type": "application/json" }, body: "{}",
+    });
+    const cookie = opened.headers.get("set-cookie")!.split(";", 1)[0]!;
+    const input = { expected_main_commit: initial.commit, expected_branches: [], idempotency_key: "clear-http-project" };
+    const clear = async (headers: Record<string, string>) => {
+      const response = await fetch(`${running.origin}${path}/clear-project`, {
+        method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(input),
+      });
+      return { status: response.status, body: await response.json() as { data?: unknown; error?: { code: string } } };
+    };
+    assert.equal((await clear({ cookie })).body.error?.code, "csrf_origin_required");
+    assert.equal((await clear({ authorization: `Bearer ${member.token}` })).status, 403);
+    assert.equal((await clear({ cookie, origin: browserOrigin })).status, 200);
+    assert.equal(CodeClearResultSchema.parse((await clear({ cookie, origin: browserOrigin })).body.data).status.repository.enabled, false);
+    running.service.revokeDevice(identity.actor, identity.actor.device_id);
+    assert.equal((await clear({ cookie, origin: browserOrigin })).status, 401);
   } finally { await running.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 

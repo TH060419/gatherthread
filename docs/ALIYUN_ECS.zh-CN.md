@@ -1,6 +1,6 @@
 # 阿里云 ECS 部署：0.1.0-alpha.7 预览版
 
-本方案用于为私有 `0.1.0-alpha.7` 预览版提前准备服务器部署；共序官方服务目前尚未开放。应用始终只监听 `127.0.0.1:18787`，Caddy 独占公网 80/443 并自动管理 HTTPS；阿里云安全组不得开放 18787。当前版本没有匿名注册，首位创建者必须在服务器本机创建，后续用户通过一次性项目邀请加入。
+本方案说明 `https://gatherthread.cn` 邀请制 `0.1.0-alpha.7` 服务采用的部署模式。应用始终只监听 `127.0.0.1:18787`，Caddy 独占公网 80/443 并自动管理 HTTPS；阿里云安全组不得开放 18787。当前版本没有匿名注册：首位创建者在服务器本机创建，测试资格码由运维人员在服务器私有终端签发，项目邀请只让访客加入指定项目。以下命令供新版本经过审核后部署，不应在已运行服务器上重复安装。
 
 ## 1. 上线前条件
 
@@ -50,6 +50,14 @@ sudo deploy/aliyun-ecs/create-owner.sh \
 
 命令只显示一次设备 Token。立即保存到密码管理器，不要粘贴到聊天、Issue、日志或 URL。浏览器首次登录后可以勾选“记住此设备”，也可以在设置中修改设备名称。
 
+部署包含 [ADR-0028](adr/0028-separate-test-qualification-from-project-invitations.md) 的版本后，先审核通过 [GitHub Alpha 测试申请 Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml)，再在自己的服务器私有终端签发一次性资格码。系统不提供收集申请者资料的服务器表单。不要通过可能记录输出的 Agent 终端运行签发命令：
+
+```sh
+sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d
+```
+
+把显示的 `gtq_` 资格码私下交给一位测试者，绝不贴在公开 Issue 中。如需私密投递，已获批申请者可以主动把 Issue 链接发至 `coolhezi@sjtu.edu.cn`；邮箱不替代 Issue 申请。测试者在登录页先填写自己的用户名和设备名，再在“首次使用 · 激活资格”中输入资格码。激活后另行获得只展示一次的 `gta_` 设备 Token，之后从“已有账号”登录。尚未使用的资格码可用 `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID` 撤销，不影响已激活账号的设备。项目创建者若只想邀请访客加入一个项目，则使用产品内的项目邀请；这不会授予创建新项目的资格，也不会给访客 ECS SSH 权限。
+
 ## 5. 完整预检
 
 ```sh
@@ -69,14 +77,14 @@ sudo ls -lh /var/backups/gatherthread
 curl -fsS http://127.0.0.1:18787/health/ready
 ```
 
-数据库位于 `/var/lib/gatherthread/collaboration.sqlite`；环境与 Pepper 位于 `/etc/gatherthread/gatherthread.env`。每日备份默认保留 14 天。数据库备份和 Pepper 必须分别加密保存到另一故障域，否则服务器丢失后设备凭据无法继续验证。
+数据库位于 `/var/lib/gatherthread/collaboration.sqlite`；环境与 Pepper 位于 `/etc/gatherthread/gatherthread.env`。每日备份任务仅在成功后使用 `-mtime +14` 清理符合条件的顶层完整备份组，不能保证严格的 14 天上限，也不覆盖恢复演练、不完整或异地副本。若使用云端 Git，SQLite 备份须与同名 `.db.code` 目录一起校验、异地保存、恢复和轮换。新版备份单元调用 `scripts/prune-sqlite-backups.sh` 清理符合条件的备份组；仅切换 `/opt/gatherthread/current` 不会更新已安装的 systemd 单元。备份组和 Pepper 必须分别加密保存到另一故障域，否则服务器丢失后设备凭据无法继续验证。在对外声明固定保留期限前，须为所有副本位置设置并验证到期清理。
 
 ## 7. 升级与回滚
 
 每次升级都使用新的 `/opt/gatherthread/releases/<版本>`，不要覆盖旧 release：
 
 1. 运行当前版本预检并执行一次在线备份。
-2. 上传并验证新候选，运行新版本 `install.sh`。
+2. 上传并验证新候选，运行经过审核的新版本 `install.sh`。确认 `/etc/systemd/system/gatherthread-backup.service` 已调用配套备份清理脚本、`systemctl daemon-reload` 已完成；仅切换 release 符号链接不会刷新这个单元。
 3. 再运行预检和双浏览器冒烟测试。
 4. 只有确认旧代码兼容新数据库 schema 时，才可把 `/opt/gatherthread/current` 指回旧 release 并重启；否则停止服务，将已验证的升级前备份恢复到新数据库路径后再启动。
 

@@ -38,8 +38,16 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   let reviewed;
   let viewProjectId;
   let pendingConfirmation;
+  let noticeDeviceId = null;
   const controller = createCodeSyncController({ api, onChange: render, pollMs: mockEnabled ? 120 : 1800 });
   const routeKey = (state) => JSON.stringify([state.context?.project?.id, state.context?.sessionId, state.context?.userId, state.runtimeId]);
+
+  function showCodeView(view, focusId) {
+    el("code-enabled-home").hidden = view !== "overview";
+    el("code-device-view").hidden = view !== "device";
+    el("code-branches-view").hidden = view !== "branches";
+    if (focusId) el(focusId).focus({ preventScroll: true });
+  }
 
   function finishConfirmation(accepted) {
     const pending = pendingConfirmation;
@@ -65,6 +73,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     if (viewProjectId !== context?.project?.id) {
       finishConfirmation(false);
       viewProjectId = context?.project?.id;
+      showCodeView("overview");
       previewGeneration += 1;
       reviewed = null;
       el("code-review-preview").hidden = true;
@@ -224,32 +233,29 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   }
   trigger.addEventListener("click", () => {
     updateContext();
+    showCodeView("overview");
     returnFocus = doc.activeElement;
-    if (controller.getState().context?.project && !hasSeenCodeNotice(storage)) {
-      noticeDialog.showModal();
-    } else {
-      dialog.showModal();
-      controller.open();
-    }
-  });
-  el("code-notice-close").addEventListener("click", () => noticeDialog.close());
-  el("code-notice-continue").addEventListener("click", () => {
-    markCodeNoticeSeen(storage);
-    noticeDialog.close();
-    if (!controller.getState().context?.project) return;
     dialog.showModal();
     controller.open();
   });
-  noticeDialog.addEventListener("close", () => {
-    if (!dialog.open) returnFocus?.isConnected && returnFocus.focus({ preventScroll: true });
+  noticeDialog.addEventListener("cancel", (event) => event.preventDefault());
+  el("code-notice-continue").addEventListener("click", () => {
+    markCodeNoticeSeen(storage, noticeDeviceId);
+    noticeDeviceId = null;
+    noticeDialog.close();
   });
   el("code-create-project-button").addEventListener("click", () => {
     dialog.close();
     doc.getElementById("new-project-button")?.click?.();
   });
+  el("code-open-device-view").addEventListener("click", () => showCodeView("device", "code-local-title"));
+  el("code-open-branches-view").addEventListener("click", () => showCodeView("branches", "code-team-title"));
+  el("code-back-device-view").addEventListener("click", () => showCodeView("overview", "code-open-device-view"));
+  el("code-back-branches-view").addEventListener("click", () => showCodeView("overview", "code-open-branches-view"));
   el("close-project-code-button").addEventListener("click", () => dialog.close());
   dialog.addEventListener("close", () => {
     finishConfirmation(false);
+    showCodeView("overview");
     previewGeneration += 1;
     controller.close();
     returnFocus?.isConnected && returnFocus.focus({ preventScroll: true });
@@ -292,6 +298,12 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   });
   return {
     updateContext,
-    close() { if (noticeDialog.open) noticeDialog.close(); if (dialog.open) dialog.close(); controller.close(); },
+    showFirstLoginNotice(deviceId) {
+      if (hasSeenCodeNotice(storage, deviceId) || noticeDialog.open) return;
+      noticeDeviceId = deviceId;
+      noticeDialog.showModal();
+    },
+    closeNotice() { noticeDeviceId = null; if (noticeDialog.open) noticeDialog.close(); },
+    close() { if (dialog.open) dialog.close(); controller.close(); },
   };
 }

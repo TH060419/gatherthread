@@ -18,6 +18,7 @@ import type {
   InvitationTtl,
   JsonValue,
   MembershipRole,
+  RemoveProjectMembershipInput,
   ProjectInvitationAuditRecord,
   ProjectInvitationRecord,
   ProjectListItem,
@@ -46,6 +47,8 @@ export interface Actor {
   display_name: string;
   device_id: string;
 }
+
+export type BranchRemovalDecision = RemoveProjectMembershipInput;
 
 export interface SessionRecord {
   id: string;
@@ -184,6 +187,18 @@ export interface BrowserSessionIssue {
 export interface BrowserSessionAuthentication {
   actor: Actor;
   session_id: string;
+  remembered: boolean;
+}
+
+export interface RememberedAccountRecord {
+  id: string;
+  display_name: string;
+  device_name: string;
+}
+
+export interface RememberedBrowserIssue {
+  token: string;
+  expires_at: string;
 }
 
 interface EventRow {
@@ -244,6 +259,10 @@ interface BrowserSessionRow {
   expires_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+}
+interface RememberedBrowserRow {
+  id: string;
+  expires_at: string;
 }
 interface LocalTurnCommitRow {
   input_digest: string;
@@ -582,6 +601,27 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS browser_sessions_device_idx
   ON browser_sessions(device_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS remembered_browsers (
+  id TEXT PRIMARY KEY,
+  token_digest TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT
+) STRICT;
+CREATE TABLE IF NOT EXISTS remembered_accounts (
+  id TEXT PRIMARY KEY,
+  browser_id TEXT NOT NULL REFERENCES remembered_browsers(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  device_token_version INTEGER NOT NULL,
+  display_name TEXT NOT NULL,
+  device_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL,
+  UNIQUE(browser_id, device_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS remembered_accounts_browser_idx
+  ON remembered_accounts(browser_id, last_used_at DESC);
 `;
 
 function stableJson(value: JsonValue): string {
@@ -623,6 +663,10 @@ function issueDeviceAuthorizationToken(): string {
 
 function issueBrowserSessionToken(): string {
   return `gtb_${randomBytes(32).toString("base64url")}`;
+}
+
+function issueRememberedBrowserToken(): string {
+  return `gtr_${randomBytes(32).toString("base64url")}`;
 }
 
 function resolveAuthTokenPepper(path: string, configured?: string): string {
@@ -881,6 +925,7 @@ export class CollaborationDatabase {
     this.sqlite.exec(SCHEMA);
     this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
     this.migrateCodeRepositoryEnableColumn();
+    this.migrateCodeRepositoryUsageColumns();
     this.migrateDeviceCredentialColumns();
     this.migrateProjectModel();
     this.migrateAccountCapabilities();
@@ -1074,6 +1119,7 @@ export class CollaborationDatabase {
         UPDATE browser_sessions SET revoked_at = ?
         WHERE device_id = ? AND revoked_at IS NULL
       `).run(timestamp, deviceId);
+      this.sqlite.prepare("DELETE FROM remembered_accounts WHERE device_id = ?").run(deviceId);
     });
   }
 
@@ -1139,7 +1185,134 @@ export class CollaborationDatabase {
     return {
       actor: { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id },
       session_id: row.id,
+      remembered: Date.parse(row.expires_at) - Date.parse(row.created_at) > BROWSER_SESSION_TTL_MS,
     };
+  }
+
+  listRememberedAccounts(token: string): RememberedAccountRecord[] {
+    const browser = this.lookupRememberedBrowser(token);
+    if (!browser) throw unauthorized("Remembered browser is invalid or expired");
+    return this.sqlite.prepare(`
+      SELECT remembered_accounts.id, remembered_accounts.display_name, remembered_accounts.device_name
+      FROM remembered_accounts
+      JOIN devices ON devices.id = remembered_accounts.device_id
+      WHERE remembered_accounts.browser_id = ?
+        AND devices.user_id = remembered_accounts.user_id
+        AND devices.token_version = remembered_accounts.device_token_version
+        AND devices.revoked_at IS NULL
+        AND (devices.expires_at IS NULL OR devices.expires_at > ?)
+      ORDER BY remembered_accounts.last_used_at DESC, remembered_accounts.id
+    `).all(browser.id, this.now()) as unknown as RememberedAccountRecord[];
+  }
+
+  rememberedBrowserHasAccount(token: string, actor: Actor): boolean {
+    const browser = this.lookupRememberedBrowser(token);
+    if (!browser) return false;
+    const row = this.sqlite.prepare(`
+      SELECT 1 FROM remembered_accounts
+      JOIN devices ON devices.id = remembered_accounts.device_id
+      WHERE browser_id = ? AND remembered_accounts.user_id = ?
+        AND remembered_accounts.device_id = ?
+        AND devices.token_version = remembered_accounts.device_token_version
+    `).get(browser.id, actor.user_id, actor.device_id);
+    return Boolean(row);
+  }
+
+  rememberBrowser(token: string | null, actor: Actor): RememberedBrowserIssue {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const timestamp = this.now();
+      const existing = token ? this.lookupRememberedBrowser(token) : null;
+      const browserId = existing?.id ?? randomUUID();
+      const nextToken = issueRememberedBrowserToken();
+      const expiresAt = new Date(this.clock().getTime() + REMEMBERED_BROWSER_SESSION_TTL_MS).toISOString();
+      if (existing) {
+        this.sqlite.prepare("UPDATE remembered_browsers SET token_digest = ?, expires_at = ? WHERE id = ?")
+          .run(this.tokenDigest(nextToken), expiresAt, browserId);
+      } else {
+        this.sqlite.prepare(`
+          INSERT INTO remembered_browsers(id, token_digest, created_at, expires_at)
+          VALUES (?, ?, ?, ?)
+        `).run(browserId, this.tokenDigest(nextToken), timestamp, expiresAt);
+      }
+      const profile = this.sqlite.prepare(`
+        SELECT users.display_name, devices.name AS device_name, devices.token_version
+        FROM devices JOIN users ON users.id = devices.user_id
+        WHERE devices.id = ? AND devices.user_id = ?
+      `).get(actor.device_id, actor.user_id) as {
+        display_name: string; device_name: string; token_version: number;
+      } | undefined;
+      if (!profile) throw unauthorized("Device is unavailable");
+      this.sqlite.prepare(`
+        INSERT INTO remembered_accounts(
+          id, browser_id, user_id, device_id, device_token_version,
+          display_name, device_name, created_at, last_used_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(browser_id, device_id) DO UPDATE SET
+          device_token_version = excluded.device_token_version,
+          display_name = excluded.display_name,
+          device_name = excluded.device_name,
+          last_used_at = excluded.last_used_at
+      `).run(randomUUID(), browserId, actor.user_id, actor.device_id, profile.token_version,
+        profile.display_name, profile.device_name, timestamp, timestamp);
+      return { token: nextToken, expires_at: expiresAt };
+    });
+  }
+
+  activateRememberedAccount(token: string, accountId: string, profile: {
+    display_name: string; device_name: string;
+  }): { actor: Actor; browser_session: BrowserSessionIssue; remembered_browser: RememberedBrowserIssue } {
+    return this.transaction(() => {
+      const browser = this.lookupRememberedBrowser(token);
+      if (!browser) throw unauthorized("Remembered browser is invalid or expired");
+      const timestamp = this.now();
+      const row = this.sqlite.prepare(`
+        SELECT remembered_accounts.user_id, remembered_accounts.device_id
+        FROM remembered_accounts
+        JOIN devices ON devices.id = remembered_accounts.device_id
+        WHERE remembered_accounts.id = ? AND remembered_accounts.browser_id = ?
+          AND devices.user_id = remembered_accounts.user_id
+          AND devices.token_version = remembered_accounts.device_token_version
+          AND devices.revoked_at IS NULL
+          AND (devices.expires_at IS NULL OR devices.expires_at > ?)
+      `).get(accountId, browser.id, timestamp) as { user_id: string; device_id: string } | undefined;
+      if (!row) throw unauthorized("Remembered account is unavailable");
+      this.sqlite.prepare("UPDATE users SET display_name = ? WHERE id = ?").run(profile.display_name, row.user_id);
+      this.sqlite.prepare("UPDATE devices SET name = ?, last_used_at = ? WHERE id = ?")
+        .run(profile.device_name, timestamp, row.device_id);
+      this.sqlite.prepare(`
+        UPDATE remembered_accounts
+        SET display_name = ?, device_name = ?, last_used_at = ? WHERE id = ?
+      `).run(profile.display_name, profile.device_name, timestamp, accountId);
+      const actor = { user_id: row.user_id, display_name: profile.display_name, device_id: row.device_id };
+      const browserSession = this.insertBrowserSession(actor, this.clock(), true);
+      const nextToken = issueRememberedBrowserToken();
+      const expiresAt = new Date(this.clock().getTime() + REMEMBERED_BROWSER_SESSION_TTL_MS).toISOString();
+      this.sqlite.prepare("UPDATE remembered_browsers SET token_digest = ?, expires_at = ? WHERE id = ?")
+        .run(this.tokenDigest(nextToken), expiresAt, browser.id);
+      return { actor, browser_session: browserSession, remembered_browser: { token: nextToken, expires_at: expiresAt } };
+    });
+  }
+
+  forgetRememberedAccount(token: string, accountId: string): RememberedBrowserIssue | null {
+    return this.transaction(() => {
+      const browser = this.lookupRememberedBrowser(token);
+      if (!browser) throw unauthorized("Remembered browser is invalid or expired");
+      const result = this.sqlite.prepare("DELETE FROM remembered_accounts WHERE id = ? AND browser_id = ?")
+        .run(accountId, browser.id);
+      if (Number(result.changes) === 0) throw notFound("Remembered account");
+      const remaining = this.sqlite.prepare("SELECT 1 FROM remembered_accounts WHERE browser_id = ? LIMIT 1")
+        .get(browser.id);
+      if (!remaining) {
+        this.sqlite.prepare("UPDATE remembered_browsers SET revoked_at = ? WHERE id = ?")
+          .run(this.now(), browser.id);
+        return null;
+      }
+      const nextToken = issueRememberedBrowserToken();
+      this.sqlite.prepare("UPDATE remembered_browsers SET token_digest = ? WHERE id = ?")
+        .run(this.tokenDigest(nextToken), browser.id);
+      return { token: nextToken, expires_at: browser.expires_at };
+    });
   }
 
   assertActiveBrowserSession(sessionId: string, actor: Actor): void {
@@ -1212,6 +1385,7 @@ export class CollaborationDatabase {
         UPDATE browser_sessions SET revoked_at = ?
         WHERE device_id = ? AND revoked_at IS NULL
       `).run(timestamp, deviceId);
+      this.sqlite.prepare("DELETE FROM remembered_accounts WHERE device_id = ?").run(deviceId);
       return { device: this.getDeviceForUser(actor.user_id, deviceId), token };
     });
   }
@@ -1499,27 +1673,43 @@ export class CollaborationDatabase {
     });
   }
 
-  removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
+  removeProjectMembership(actor: Actor, projectId: string, userId: string, decision: BranchRemovalDecision = {}): void {
     this.transaction(() => {
-      const actorRole = this.projectMembershipRole(projectId, actor.user_id);
-      if (!actorRole) throw notFound("Project");
-      if (actorRole === "owner" && userId === actor.user_id) throw conflict("The project owner cannot leave the project");
-      if (actorRole !== "owner" && userId !== actor.user_id) throw forbidden("Only the project owner can remove another member");
-      const result = this.sqlite.prepare(`
-        DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
-      `).run(projectId, userId);
-      if (Number(result.changes) === 0) throw notFound("Project membership");
-      this.sqlite.prepare(`
-        DELETE FROM memberships
-        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-          AND role != 'owner'
-      `).run(userId, projectId);
-      this.sqlite.prepare(`
-        UPDATE runtimes SET status = 'revoked'
-        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-      `).run(userId, projectId);
-      this.touchProject(projectId);
+      this.removeProjectMemberInsideTransaction(actor, projectId, userId, decision);
     });
+  }
+
+  private removeProjectMemberInsideTransaction(actor: Actor, projectId: string, userId: string, decision: BranchRemovalDecision): void {
+    const actorRole = this.projectMembershipRole(projectId, actor.user_id);
+    if (!actorRole) throw notFound("Project");
+    if (actorRole === "owner" && userId === actor.user_id) throw conflict("The project owner cannot leave the project");
+    if (actorRole !== "owner" && userId !== actor.user_id) throw forbidden("Only the project owner can remove another member");
+    if (!this.projectMembershipRole(projectId, userId)) throw notFound("Project membership");
+    const branch = this.sqlite.prepare("SELECT head_commit,review_status FROM code_branches WHERE project_id=? AND user_id=?")
+      .get(projectId, userId) as { head_commit: string; review_status: string } | undefined;
+    if (branch) {
+      if (!decision.branch_resolution || !decision.expected_branch_head_commit) {
+        throw new ApiError(409, "code_branch_resolution_required", "Choose whether to delete the cloud branch or merge its reviewed head to main before leaving");
+      }
+      if (branch.head_commit !== decision.expected_branch_head_commit) {
+        throw new ApiError(409, "code_stale_head", "Cloud branch changed; refresh and choose again");
+      }
+      if (decision.branch_resolution === "merged_to_main" && branch.review_status !== "merged") {
+        throw new ApiError(409, "code_review_required", "The owner must review and merge this exact branch head to main first");
+      }
+      this.sqlite.prepare("DELETE FROM code_branches WHERE project_id=? AND user_id=?").run(projectId, userId);
+      this.sqlite.prepare("UPDATE code_mutations SET invalidated_at=? WHERE project_id=? AND user_id=? AND invalidated_at IS NULL")
+        .run(this.now(), projectId, userId);
+    } else if (decision.branch_resolution || decision.expected_branch_head_commit) {
+      throw new ApiError(409, "code_stale_head", "Cloud branch was already removed; refresh before leaving");
+    }
+    this.sqlite.prepare("DELETE FROM project_memberships WHERE project_id=? AND user_id=? AND role != 'owner'")
+      .run(projectId, userId);
+    this.sqlite.prepare(`DELETE FROM memberships WHERE user_id=? AND session_id IN
+      (SELECT id FROM sessions WHERE project_id=?) AND role != 'owner'`).run(userId, projectId);
+    this.sqlite.prepare(`UPDATE runtimes SET status='revoked' WHERE user_id=? AND session_id IN
+      (SELECT id FROM sessions WHERE project_id=?)`).run(userId, projectId);
+    this.touchProject(projectId);
   }
 
   listProjectSessions(projectId: string, userId: string): SessionListItem[] {
@@ -2310,25 +2500,17 @@ export class CollaborationDatabase {
     });
   }
 
-  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string): CanonicalEvent {
+  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string,
+    decision: BranchRemovalDecision = {}): CanonicalEvent {
     return this.transaction(() => {
       const existing = this.findByIdempotencyKey(sessionId, idempotencyKey);
-      const payload = { action: "removed", user_id: userId } satisfies JsonValue;
+      const payload = { action: "removed", user_id: userId,
+        ...(decision.branch_resolution ? { branch_resolution: decision.branch_resolution } : {}),
+        ...(decision.expected_branch_head_commit ? { expected_branch_head_commit: decision.expected_branch_head_commit } : {}),
+      } satisfies JsonValue;
       if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "membership_change", payload);
       const session = this.requireSession(sessionId);
-      const result = this.sqlite.prepare(`
-        DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
-      `).run(session.project_id, userId);
-      if (Number(result.changes) === 0) throw notFound("Membership");
-      this.sqlite.prepare(`
-        DELETE FROM memberships WHERE user_id = ?
-          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-          AND role != 'owner'
-      `).run(userId, session.project_id);
-      this.sqlite.prepare(`
-        UPDATE runtimes SET status = 'revoked' WHERE user_id = ?
-          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-      `).run(userId, session.project_id);
+      this.removeProjectMemberInsideTransaction(actor, session.project_id, userId, decision);
       return this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "membership_change",
@@ -3296,6 +3478,14 @@ export class CollaborationDatabase {
     return createHmac("sha256", this.authTokenPepper).update(token).digest("hex");
   }
 
+  private lookupRememberedBrowser(token: string): RememberedBrowserRow | null {
+    if (!/^gtr_[A-Za-z0-9_-]{43}$/u.test(token)) return null;
+    return (this.sqlite.prepare(`
+      SELECT id, expires_at FROM remembered_browsers
+      WHERE token_digest = ? AND revoked_at IS NULL AND expires_at > ?
+    `).get(this.tokenDigest(token), this.now()) as RememberedBrowserRow | undefined) ?? null;
+  }
+
   private getDeviceForUser(userId: string, deviceId: string): DeviceRecord {
     const row = this.sqlite.prepare(`
       SELECT id, user_id, name, created_at, COALESCE(token_created_at, created_at) AS token_created_at,
@@ -3570,6 +3760,21 @@ export class CollaborationDatabase {
     );
     if (!columns.has("enabled")) {
       this.sqlite.exec("ALTER TABLE code_repositories ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))");
+    }
+  }
+
+  private migrateCodeRepositoryUsageColumns(): void {
+    const columns = (table: string) => new Set(
+      (this.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns("code_repositories").has("main_logical_bytes")) {
+      this.sqlite.exec("ALTER TABLE code_repositories ADD COLUMN main_logical_bytes INTEGER NOT NULL DEFAULT -1 CHECK(main_logical_bytes >= -1)");
+    }
+    if (!columns("code_branches").has("logical_bytes")) {
+      this.sqlite.exec("ALTER TABLE code_branches ADD COLUMN logical_bytes INTEGER NOT NULL DEFAULT -1 CHECK(logical_bytes >= -1)");
+    }
+    if (!columns("code_mutations").has("invalidated_at")) {
+      this.sqlite.exec("ALTER TABLE code_mutations ADD COLUMN invalidated_at TEXT");
     }
   }
 

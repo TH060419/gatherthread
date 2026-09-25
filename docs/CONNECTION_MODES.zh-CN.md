@@ -8,7 +8,7 @@
 | 局域网 HTTPS | 同一家庭、实验室或办公室网络 | 主机安装 Caddy；客户端信任专用本地 CA | `https://私网地址:8443` | 指定私网网卡与主机防火墙 |
 | Tailscale Serve | 跨网络的小规模已知协作者 | 所有人安装 Tailscale | `https://主机.tailnet.ts.net` | Tailnet、Serve 与 GatherThread ACL |
 
-需要稳定的统一入口时，使用独立的、仅凭邀请加入的[阿里云 ECS 部署方案](ALIYUN_ECS.zh-CN.md)。不要把局域网或 Tailscale 配置改造成路由器端口转发、Tailscale Funnel 或匿名公网隧道。
+需要稳定的统一入口时，获批 Alpha 测试者可使用 [https://gatherthread.cn](https://gatherthread.cn/)，该服务采用仅凭邀请加入的[阿里云 ECS 部署方案](ALIYUN_ECS.zh-CN.md)。不要把局域网或 Tailscale 配置改造成路由器端口转发、Tailscale Funnel 或匿名公网隧道。
 
 ## 局域网最快流程
 
@@ -104,7 +104,7 @@ http://127.0.0.1:18787
 
 局域网模式仍让 GatherThread 只监听 `127.0.0.1:18787`。独立的 Caddy 进程仅绑定选定的 RFC1918/ULA 私网地址，在未特权端口上提供 HTTPS 和 WebSocket。它不会监听公网地址，也不会自动配置路由器。
 
-校园网通常属于学校统一管理的局域网络，因此在校方策略允许终端间入站访问、两台设备能够直接互访时，可以使用本方案。但校园 Wi-Fi 常启用客户端隔离、VLAN 分区或额外防火墙；连接同一 SSID 不代表一定可达，也不应自动视为可信网络。先测试下面的 `/health` 地址；无法互访时，改用项目已经配置的远程入口。当前可使用 Tailscale，统一服务器上线后应优先使用服务器入口。
+校园网通常属于学校统一管理的局域网络，因此在校方策略允许终端间入站访问、两台设备能够直接互访时，可以使用本方案。但校园 Wi-Fi 常启用客户端隔离、VLAN 分区或额外防火墙；连接同一 SSID 不代表一定可达，也不应自动视为可信网络。先测试下面的 `/health` 地址；无法互访时，改用项目已经配置的远程入口。当前可使用 Tailscale；已有测试资格时也可使用 gatherthread.cn 服务器入口。
 
 ### 1. 固定主机私网地址
 

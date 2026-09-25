@@ -1,8 +1,8 @@
 # Project code collaboration / 项目代码协作
 
-Project code collaboration is included in the `0.1.0-alpha.7` Alpha candidate. It remains opt-in and does not open an official hosted service. Use the matching Codex connector and DSH plugin after npm publication, or build this checkout for private testing.
+Project code collaboration is included in the `0.1.0-alpha.7` Alpha. The invitation-only hosted service at `https://gatherthread.cn` may use it only after project and local-device opt-in; public registration and public Git transport remain closed. Use the matching Codex connector and DSH plugin if their packages are available, or build a reviewed source checkout.
 
-项目代码协作已纳入 `0.1.0-alpha.7` Alpha 候选版，仍需单独开启，也不代表官方托管服务已开放。npm 发布后请使用同版本 Codex 连接器与 DSH 插件；发布前可从当前源码构建测试。
+项目代码协作已纳入 `0.1.0-alpha.7` Alpha。邀请制服务器 `https://gatherthread.cn` 仅在项目与本地设备分别授权后使用该功能；公众注册和公开 Git 传输仍未开放。若匹配的 Codex 连接器与 DSH 插件包可用，可直接安装；否则从经过审核的源码构建。
 
 ## What is synchronized
 
@@ -11,6 +11,8 @@ Each project can have one server-managed Git repository. Each member uploads to 
 Only eligible source files are synchronized. A checkpoint preserves file contents, relative paths and executable flags, not a running process, installed dependencies, model credentials, local chat transcripts, Git index or the original repository's historical commits. The server really stores Git objects and commits, but this first version transports bounded checkpoints through the authenticated GatherThread API; it is not a GitHub/Gitea replacement or a `git push` endpoint.
 
 The code feature never changes conversation upload preferences, Codex visible-history imports, Agent model selection or realtime context injection. Code upload defaults off, requires separate local authorization, and never grants approval for local Agent tools.
+
+Cloud Git is used only to synchronize project code among that project's collaborators. Uploaded source is not used for GatherThread product development or other unrelated purposes. Turning cloud code sync off leaves conversation collaboration available, but limits cloud code collaboration. Review eligible files before authorizing upload; every project reader can see the synced branches.
 
 每个项目一个云端 Git 仓库，每位成员一个分支，分支不跟随 Codex/DSH 或设备变化。项目创建者审核差异后合入 `main`，其他成员再更新自己的分支并下载。所有项目成员均可读取代码；个人分支和 Solo 会话都**不是代码隐私隔离**。
 
@@ -55,12 +57,28 @@ An explicitly customized `DSH_HOME` isolates its private code metadata as well. 
 | Download updates / 下载更新 | Apply your cloud branch (or main before you have a branch) locally | Local files must match the acknowledged baseline; ignored-file collisions also refuse |
 | Recover / 恢复到新目录 | Write the latest uploaded branch into a new sibling directory | Does not delete/rebind the original workspace or its native conversations |
 | Pause / 暂停云端同步 | Stop new cloud code transfers while retaining cloud Git history | Owner-only; conversation collaboration remains available, and local files are never deleted |
+| Clear my cloud branch / 清理本人云端分支 | Remove only the current member's cloud branch from active access | Available to its owner, including a project owner; does not change shared `main` or anyone's local Git |
+| Clear project cloud Git / 清理项目云端 Git | Remove the project's cloud code from active access | Project-owner only; affects all members' cloud branches and `main`, never local Git |
 
 Pausing is a server-side transfer gate, not a purge or an instruction to a local Agent to forget its existing preferences. Status and the control for disabling local automatic code upload remain available while paused; upload, download, recovery, review, merge and update cannot proceed until the owner resumes. A transfer already running on a device may have local side effects before its completion is refused, so stop active Agent/code work first and check local state afterward. If automatic source upload was enabled locally, turn it off before resuming unless you intend to use it again.
 
 After another member's work merges, first update your branch from main, then download. A stale device must not force an upload. If both local and cloud have changed, preserve the local files, recover the cloud version into a second directory, then compare/resolve locally there. The recovered copy has a separate baseline for the restored commit and automatic upload off. Explicitly connect/open that directory before uploading the combined result; the original Agent stays bound to its old directory. Automatic conflict resolution and force-push are intentionally absent.
 
 下载只在本地与上次确认的版本一致时进行。遇到本地未上传修改、文件覆盖风险或云端版本前进，会明确停止。恢复始终放到旁边的新目录；请自行检查后在 Agent 中打开它，不会自动切换旧会话的工作目录。
+
+## Storage quota and cloud cleanup / 存储配额与云端清理
+
+Cloud code has a **128 MiB per-user logical active-snapshot quota**, counting that user's own branch and, for a project owner, the shared `main` they own. The existing **256 MiB per-project** and **1 GiB per-deployment** charged caps remain. A rejected checkpoint does not partially advance a branch. These are logical charges, not a promise about immediate filesystem byte reclamation.
+
+In Settings, a member can see projects with cloud Git data and select **Clear my cloud branch** for their own branch; an owner may choose either their own branch or **Clear project cloud Git**. A participant cannot clear `main` or another member's branch. Clearing a personal branch does not undo content already merged into `main`. Project-wide cleanup makes all that project's cloud Git data inaccessible through GatherThread. Confirm the selected project and scope before proceeding; local Git history, branch, index, files, and Agent conversations are untouched. Clearing cloud code can limit or stop future cloud code collaboration until the project is re-enabled and a new baseline is established.
+
+Cloud cleanup immediately revokes API access and releases the active logical quota. It **does not immediately erase physical Git objects or prior backups**. Object cleanup requires separate operator-approved retention maintenance. The ECS online backup includes a companion `.db.code` directory for reachable Git objects; keep, verify, restore and rotate it together with the SQLite backup (see [OPERATIONS.md](OPERATIONS.md)). Do not describe a cleanup result as secure erasure of every old copy.
+
+云端代码按**每用户 128 MiB 有效快照逻辑用量**计费，包括本人分支；项目创建者还承担其项目共享 `main` 的用量。既有**每项目 256 MiB**、**整个部署 1 GiB** 配额仍适用。超限上传不会只写入一半。这些是逻辑计费上限，不代表磁盘空间立刻回收。
+
+设置中会列出有云端 Git 数据的项目。成员可选择清理自己的云端分支，项目创建者既可只清理自己的分支，也可清理整个项目的云端 Git；参与者不能清理共享 `main` 或其他成员分支。清理个人分支不会撤销已合入 `main` 的内容；清理整个项目会让所有成员无法继续读取该项目的云端代码。操作前应核对项目与范围。本地 Git 历史、分支、暂存区、文件和 Agent 对话均不受影响；之后若要恢复云端代码协作，需重新启用并建立基线。
+
+清理会立即撤销云端 API 访问并释放有效逻辑配额，**不会立刻抹除物理 Git 对象或此前的备份**。对象清理需要运维人员另行批准并遵守保留策略。ECS 在线备份会生成包含可达 Git 对象的配套 `.db.code` 目录，必须与 SQLite 备份一同保留、校验、恢复和轮换（见 [OPERATIONS.md](OPERATIONS.md)）。不能把页面上的“清理成功”理解为所有旧副本已经安全擦除。
 
 ## Lost local files
 
@@ -77,7 +95,7 @@ It prints the new local recovery directory and exits without starting an Agent. 
 - A checkpoint: at most 1,000 regular files, 2 MiB per file and 8 MiB total decoded content. No submodules, symlinks or arbitrary local paths from Web commands.
 - Common generated/dependency directories, `.git`, private GatherThread/Codex/DSH state, `.env` secrets and credential-file patterns are excluded or refused. `.env.example` may be shared if it contains only placeholders. Recognizable secret scanning is a safety net, not proof that a file contains no secrets.
 - Names must be portable across supported filesystems: malformed Unicode, Windows device names, NTFS short-name aliases and paths aliasing private state on HFS are refused. Known credentials are checked before sending file content and again before server persistence. Chinese and normal emoji file names remain supported.
-- A project has at most 128 member branches and 4,096 idempotent code mutations; conservative storage charges and disk quotas also apply. These preview limits are deliberately bounded, not a large-repository backup service.
+- A project has at most 128 member branches and 4,096 active idempotent code-mutation receipts; invalidated receipts fail closed for up to 30 days before pruning. Per-user, project, deployment and physical-disk limits also apply. These preview limits are deliberately bounded, not a large-repository backup service.
 - Disk checks are bounded and cached; exceeding their safety budget pauses code writes until operator maintenance/restart. Large concurrent rewrites may need local resolution instead of server merge. This preview is for small private projects, not high-throughput Git hosting.
 - Local code metadata and download recovery journals stay in the user's private state outside the source tree. Source sync never resets, commits or switches the original Git repository.
 - A temporary local lock or lost completion acknowledgement is retryable. Corrupt/unknown bindings are preserved and block code operations, not conversation synchronization; inspect the connector error before retrying, and do not delete binding files to force an upload. Auto-upload rechecks the exact stable inventory before sending it.

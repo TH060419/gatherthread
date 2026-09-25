@@ -12,7 +12,7 @@ import type {
   SnapshotRequestKind,
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
-import { CollaborationDatabase, type Actor, type RuntimeRecord, type SessionRecord } from "./database.js";
+import { CollaborationDatabase, type Actor, type BranchRemovalDecision, type RuntimeRecord, type SessionRecord } from "./database.js";
 import { agentRequestFailed, conflict, forbidden, notFound } from "./errors.js";
 import { redactJson } from "./redaction.js";
 
@@ -123,9 +123,9 @@ export class CollaborationService {
     return this.database.setProjectMembership(actor, projectId, userId, role);
   }
 
-  removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
+  removeProjectMembership(actor: Actor, projectId: string, userId: string, decision: BranchRemovalDecision = {}): void {
     this.requireProjectMembership(actor, projectId);
-    this.database.removeProjectMembership(actor, projectId, userId);
+    this.database.removeProjectMembership(actor, projectId, userId, decision);
   }
 
   getSession(actor: Actor, sessionId: string): { session: SessionRecord; role: MembershipRole } {
@@ -276,9 +276,10 @@ export class CollaborationService {
     return event;
   }
 
-  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string): CanonicalEvent {
+  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string,
+    decision: BranchRemovalDecision = {}): CanonicalEvent {
     this.requireOwner(actor, sessionId);
-    const event = this.database.removeMembership(actor, sessionId, userId, idempotencyKey);
+    const event = this.database.removeMembership(actor, sessionId, userId, idempotencyKey, decision);
     this.publish(event);
     return event;
   }

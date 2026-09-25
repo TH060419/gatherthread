@@ -4,7 +4,7 @@ The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and con
 
 The `0.1.0-alpha.7` plugin adds optional **project code** upload/download/recovery in DSH settings, with separate per-project consent. Automatic code upload defaults off. See [Project code collaboration](CODE_SYNC.md).
 
-> Alpha preview: `0.1.0-alpha.7` is prepared for private repository testing. The official GatherThread service entry is present but disabled. Use a local, LAN, self-hosted, or Tailscale server.
+> Invitation-only Alpha: `https://gatherthread.cn` is live for qualified testers, but the current DSH plugin's **official service** shortcut remains disabled unless an official URL is configured. Enter that HTTPS address manually. The fixed npm command requires the package to have been published; otherwise use the source-checkout path below.
 
 ## Normal four-step setup
 
@@ -32,15 +32,15 @@ Keep DSH running. Open **Settings → GatherThread / 共序**.
 
 ### 3. Pair the current server
 
-Paste the GatherThread server address, choose **Sign in and pair**, and compare the short code. Approve the same code in the GatherThread browser that is already signed in. The code is single-use and expires shortly.
+Paste the GatherThread server address (`https://gatherthread.cn` for the hosted Alpha), choose **Sign in and pair**, and compare the short code. Approve the same code in the GatherThread browser that is already signed in. The code is single-use and expires shortly.
 
 ### 4. Select a DSH provider and model
 
 Approving the short code completes pairing, but pairing alone registers nothing. Back in **Settings → GatherThread / 共序**, choose a provider and a model, then confirm to connect every project this identity can access. No GatherThread runtime exists for this device until that step, so the GatherThread Web workspace cannot find this DSH yet, and the panel still reports a stopped connection. For a compatible DeepSeek route, this selection is the connection default and the plugin also advertises the exact models and reasoning efforts reported by DSH. The GatherThread work page may then choose one of those profiles for an individual Agent request. That temporary request choice does not overwrite the model selected in DSH. Nothing falls back to Codex.
 
-## Private-repository test before npm publication
+## Source-checkout fallback when the npm package is unavailable
 
-From a private source checkout:
+From a source checkout with repository access:
 
 ```bash
 npm install

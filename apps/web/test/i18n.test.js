@@ -1,7 +1,55 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { translateUiText } from "../src/i18n.js";
+import { memberRemovalAriaLabel, memberRoleAriaLabel, translateUiText } from "../src/i18n.js";
+
+test("remove-member accessible name preserves names and follows the active language", () => {
+  const name = "Maya $& · 玛雅";
+  assert.equal(memberRemovalAriaLabel(name, (source) => translateUiText(source, "en")), `Remove ${name} from project`);
+  assert.equal(memberRemovalAriaLabel(name, (source) => translateUiText(source, "zh-CN")), `将${name}从项目中移除`);
+  assert.equal(memberRoleAriaLabel(name, (source) => translateUiText(source, "en")), `Role for ${name}`);
+  assert.equal(memberRoleAriaLabel(name, (source) => translateUiText(source, "zh-CN")), `${name}的角色`);
+});
+
+test("member controls regain localized accessible names after an in-page language switch", () => {
+  const name = "Maya $& · 玛雅";
+  let locale = "en";
+  const attributes = new Map();
+  const renderMember = () => {
+    const translate = (source) => translateUiText(source, locale);
+    attributes.set("role", memberRoleAriaLabel(name, translate));
+    attributes.set("remove", memberRemovalAriaLabel(name, translate));
+  };
+  renderMember();
+  assert.equal(attributes.get("remove"), `Remove ${name} from project`);
+  locale = "zh-CN";
+  renderMember();
+  assert.equal(attributes.get("role"), `${name}的角色`);
+  assert.equal(attributes.get("remove"), `将${name}从项目中移除`);
+  locale = "en";
+  renderMember();
+  assert.equal(attributes.get("role"), `Role for ${name}`);
+  assert.equal(attributes.get("remove"), `Remove ${name} from project`);
+});
+
+test("staged sign-in and Cloud Git navigation are localized without the irrelevant notice sentence", () => {
+  for (const [source, expected] of [
+    ["Choose how to enter", "选择进入方式"],
+    ["Existing account · sign in", "已有账号 · 登录"],
+    ["First-time use · activate access", "首次使用 · 激活资格"],
+    ["Only have a project invitation?", "只有项目邀请？"],
+    ["← Back", "← 返回"],
+    ["Cloud Git settings", "云端 Git 设置"],
+    ["This device · sync & recovery", "本设备 · 同步与恢复"],
+    ["Project branches · review", "项目分支 · 审核"],
+    ["Manage cloud Git data", "管理云端 Git 数据"],
+    ["Back to storage overview", "返回存储概览"],
+  ]) {
+    assert.equal(translateUiText(source, "en"), source);
+    assert.equal(translateUiText(source, "zh-CN"), expected);
+  }
+  assert.equal(translateUiText("This notice appears when this device first enters the workspace. It does not request browser notification permission.", "zh-CN"), "This notice appears when this device first enters the workspace. It does not request browser notification permission.");
+});
 
 test("manual summary controls, shared quota boundaries and context policy are bilingual", () => {
   const cases = [
@@ -27,6 +75,7 @@ test("manual summary controls, shared quota boundaries and context policy are bi
 test("English is the unchanged default and Simplified Chinese preserves product terminology", () => {
   assert.equal(translateUiText("Settings", "en"), "Settings");
   assert.equal(translateUiText("Settings", "zh-CN"), "设置");
+  assert.equal(translateUiText("Remove {name} from project", "zh-CN"), "将{name}从项目中移除");
   assert.equal(translateUiText("Access token", "zh-CN"), "访问 token");
   assert.equal(translateUiText("Choose either an access token or a project invitation before continuing.", "zh-CN"), "请只填写访问 token 或项目邀请密钥中的一种，再继续。");
   assert.equal(translateUiText("Remember this device", "zh-CN"), "记住此设备");
