@@ -12,7 +12,9 @@ already be installed and signed in.
    bundle to `%LOCALAPPDATA%/Programs/GatherThread Launcher`, registers the
    `gatherthread-connect:` URL Scheme for the current Windows user, and opens
    the GUI. It does not require administrator privileges.
-2. In the GUI, check that the Codex CLI path points to `codex.exe`. If the
+2. In the GUI, check the Codex CLI path. A Windows `codex.cmd` wrapper from
+   the official npm CLI is resolved to that package's native `codex.exe`; a
+   Codex Desktop installation can also supply its native executable. If the
    GatherThread plugin is already installed, keep using it and skip the optional
    **Install bundled plugin** button. The existing plugin needs Node/npm
    available to Codex Desktop for its MCP and Hooks. If that is unavailable,

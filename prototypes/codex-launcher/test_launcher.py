@@ -37,6 +37,17 @@ class NativeCodexCommandTests(unittest.TestCase):
             native.touch()
             self.assertEqual(launcher.native_codex_command(str(wrapper)), str(native))
 
+    @unittest.skipUnless(launcher.os.name == "nt", "Windows npm package")
+    def test_official_npm_wrapper_resolves_to_its_own_binary(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            wrapper = Path(directory) / "codex.cmd"
+            native = Path(directory) / "node_modules" / "@openai" / "codex" / "node_modules" / "@openai" / "codex-win32-x64" / "vendor" / "x86_64-pc-windows-msvc" / "bin" / "codex.exe"
+            native.parent.mkdir(parents=True)
+            wrapper.touch()
+            native.touch()
+            with patch.object(launcher, "find_codex", return_value=""):
+                self.assertEqual(launcher.native_codex_command(str(wrapper)), str(native))
+
     @unittest.skipUnless(launcher.os.name == "nt", "Windows command wrappers")
     def test_cmd_wrapper_without_native_executable_fails_closed(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:

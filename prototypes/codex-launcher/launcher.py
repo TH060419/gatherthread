@@ -120,6 +120,21 @@ def find_codex() -> str:
     return which("codex.cmd") or which("codex") or ""
 
 
+def npm_codex_native(wrapper: Path) -> Path | None:
+    """Find the native binary installed by the official Windows npm package."""
+    prefix = wrapper.parent
+    packages = (
+        prefix / "node_modules" / "@openai" / "codex" / "node_modules" / "@openai" / "codex-win32-x64",
+        prefix / "node_modules" / "@openai" / "codex-win32-x64",
+    )
+    for package in packages:
+        for subdir in ("bin", "codex"):
+            candidate = package / "vendor" / "x86_64-pc-windows-msvc" / subdir / "codex.exe"
+            if candidate.is_file():
+                return candidate
+    return None
+
+
 def native_codex_command(selected: str) -> str:
     path = Path(selected)
     if not path.is_file():
@@ -132,10 +147,13 @@ def native_codex_command(selected: str) -> str:
         sibling = path.with_suffix(".exe")
         if sibling.is_file():
             return str(sibling)
+        npm_native = npm_codex_native(path)
+        if npm_native:
+            return str(npm_native)
         native = find_codex()
         if native and Path(native).suffix.lower() == ".exe":
             return native
-    raise ValueError("Codex App Server 需要原生 codex.exe；请安装 Codex Desktop 或选择其 bin 目录下的 codex.exe。不能直接使用 codex.cmd。")
+    raise ValueError("Codex App Server 需要原生 codex.exe；请安装支持插件的 Codex Desktop/CLI，或直接选择其 codex.exe。不能直接启动 codex.cmd。")
 
 
 def register_windows_scheme(directory: Path) -> None:

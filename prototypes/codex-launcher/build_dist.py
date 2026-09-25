@@ -15,7 +15,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
 DIST = HERE / "dist"
-APP = DIST / "GatherThreadLauncher"
+BUILD = HERE / ".build-tools"
+APP = BUILD / "GatherThreadLauncher"
 
 
 def copy(source: Path, destination: Path) -> None:
@@ -43,12 +44,13 @@ def main() -> None:
         raise SystemExit("npm.cmd is required for building the connector")
     subprocess.run([npm, "run", "build:ts"], cwd=ROOT, check=True)
     subprocess.run([npm, "run", "build:connector"], cwd=ROOT, check=True)
-    if DIST.exists():
-        resolved = DIST.resolve()
+    if BUILD.exists():
+        resolved = BUILD.resolve()
         if resolved.parent != HERE.resolve():
             raise SystemExit("Refusing to remove a directory outside the launcher project")
         shutil.rmtree(resolved)
     APP.mkdir(parents=True)
+    DIST.mkdir(exist_ok=True)
 
     for name in ("python.exe", "pythonw.exe", "python3.dll", "python313.dll",
                  "vcruntime140.dll", "vcruntime140_1.dll", "LICENSE.txt"):
@@ -98,7 +100,7 @@ def main() -> None:
         if path.is_file():
             manifest[str(path.relative_to(APP)).replace("\\", "/")] = hashlib.sha256(path.read_bytes()).hexdigest()
     (APP / "SHA256SUMS.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    archive = shutil.make_archive(str(DIST / "GatherThreadLauncher-Windows-x64"), "zip", root_dir=DIST, base_dir=APP.name)
+    archive = shutil.make_archive(str(DIST / "GatherThreadLauncher-Windows-x64"), "zip", root_dir=BUILD, base_dir=APP.name)
     print(archive)
 
 
