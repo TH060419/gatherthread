@@ -6,9 +6,11 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
+from urllib.request import urlopen
 from pathlib import Path
 
 
@@ -24,6 +26,20 @@ def copy(source: Path, destination: Path) -> None:
     shutil.copy2(source, destination)
 
 
+def matching_node_license(version: str) -> bytes:
+    if not re.fullmatch(r"v24\.\d+\.\d+", version):
+        raise SystemExit("A released Node 24 build is required")
+    url = f"https://raw.githubusercontent.com/nodejs/node/{version}/LICENSE"
+    try:
+        with urlopen(url, timeout=20) as response:
+            content = response.read(2_000_001)
+    except OSError as error:
+        raise SystemExit(f"Could not retrieve the matching official Node license: {error}") from error
+    if not (10_000 < len(content) <= 2_000_000) or not content.startswith(b"Node.js is licensed for use as follows:"):
+        raise SystemExit("The matching official Node license is missing or invalid")
+    return content
+
+
 def main() -> None:
     if os.name != "nt":
         raise SystemExit("This package builder currently supports Windows only")
@@ -37,8 +53,8 @@ def main() -> None:
     node_path = Path(shutil.which("node.exe") or "")
     if not node_path.is_file() or not node_path.resolve().name.lower() == "node.exe":
         raise SystemExit("Node 24 executable was not found")
-    if not subprocess.check_output([str(node_path), "--version"], text=True).strip().startswith("v24."):
-        raise SystemExit("Node 24 is required")
+    node_version = subprocess.check_output([str(node_path), "--version"], text=True).strip()
+    node_license = matching_node_license(node_version)
     npm = shutil.which("npm.cmd")
     if not npm:
         raise SystemExit("npm.cmd is required for building the connector")
@@ -62,6 +78,7 @@ def main() -> None:
                                                   "ensurepip", "idlelib", "lib2to3", "tkinter.test"))
     (APP / "runtime" / "python313._pth").write_text(".\nLib\nDLLs\n", encoding="utf-8")
     copy(node_path, APP / "runtime" / "node.exe")
+    (APP / "runtime" / "Node-LICENSE.txt").write_bytes(node_license)
 
     connector_dist = ROOT / "packages" / "codex-connect" / "dist"
     shutil.copytree(connector_dist, APP / "connector")

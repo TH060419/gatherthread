@@ -1,8 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 
 import {
   canAppend,
+  canOpenCodexLauncher,
   canRetryFailedAgentRequest,
   createSelectionGuard,
   emptyProjectState,
@@ -134,13 +136,31 @@ test("Codex launcher links contain validated, credential-free connection setting
   const parsed = new URL(link);
   assert.equal(parsed.protocol, "gatherthread-connect:");
   assert.equal(parsed.host, "connect");
+  assert.equal(parsed.searchParams.get("v"), "1");
   assert.equal(parsed.searchParams.get("origin"), "https://gatherthread.cn");
   assert.equal(parsed.searchParams.get("project"), "project-1");
   assert.equal(parsed.searchParams.get("context_window_tokens"), "65536");
   assert.equal(parsed.searchParams.get("model"), "gpt-5.6-sol");
   assert.equal(parsed.searchParams.get("visible_history_sync"), "first-connect");
-  assert.equal(parsed.searchParams.size, 5);
+  assert.equal(parsed.searchParams.size, 6);
   assert.throws(() => projectCodexLauncherUrl({ baseUrl: "https://bad.example?token=secret", projectId: "project-1" }));
+});
+
+test("Windows Launcher appears only on the supported HTTPS origin and Windows", () => {
+  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "Windows" }), true);
+  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "Win32" }), true);
+  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "MacIntel" }), false);
+  assert.equal(canOpenCodexLauncher({ origin: "http://localhost:3000", platform: "Win32" }), false);
+  assert.equal(canOpenCodexLauncher({ origin: "https://self-hosted.example", platform: "Windows" }), false);
+});
+
+test("browser and Python Launcher agree on versioned URI contract vectors", () => {
+  const vectors = JSON.parse(readFileSync(new URL("../../../prototypes/codex-launcher/contract-vectors.json", import.meta.url), "utf8"));
+  assert.equal(vectors.version, 1);
+  for (const vector of vectors.accepted) {
+    assert.equal(projectCodexLauncherUrl(vector.input), vector.uri, vector.name);
+  }
+  for (const input of vectors.rejected_inputs) assert.throws(() => projectCodexLauncherUrl(input));
 });
 
 const currentUser = { id: "u1", username: "User One" };

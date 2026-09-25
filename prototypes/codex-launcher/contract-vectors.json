@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "accepted": [
+    {
+      "name": "default model and first import",
+      "input": {
+        "baseUrl": "https://gatherthread.cn",
+        "projectId": "project-example",
+        "contextWindowTokens": 65536
+      },
+      "uri": "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect",
+      "parsed": ["https://gatherthread.cn", "project-example", "gpt-5.6-sol", 65536, "first-connect"]
+    },
+    {
+      "name": "custom model and no history import",
+      "input": {
+        "baseUrl": "https://gatherthread.cn",
+        "projectId": "project-abc:123",
+        "model": "gpt-5.6-sol preview",
+        "contextWindowTokens": 128000,
+        "visibleHistorySync": "never"
+      },
+      "uri": "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-abc%3A123&model=gpt-5.6-sol+preview&context_window_tokens=128000&visible_history_sync=never",
+      "parsed": ["https://gatherthread.cn", "project-abc:123", "gpt-5.6-sol preview", 128000, "never"]
+    }
+  ],
+  "rejected_uris": [
+    "gatherthread-connect://connect?origin=https%3A%2F%2Fgatherthread.cn&project=project-example",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Fgatherthread.cn&project=project-example",
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fexample.com&project=project-example",
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&project=project-other",
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&token=secret",
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example#fragment"
+  ],
+  "rejected_inputs": [
+    {"baseUrl": "https://other.example", "projectId": "project-example"},
+    {"baseUrl": "https://gatherthread.cn/v1", "projectId": "project-example"},
+    {"baseUrl": "https://gatherthread.cn", "projectId": "bad project"},
+    {"baseUrl": "https://gatherthread.cn", "projectId": "project-example", "model": "--option"},
+    {"baseUrl": "https://gatherthread.cn", "projectId": "project-example", "contextWindowTokens": 3},
+    {"baseUrl": "https://gatherthread.cn", "projectId": "project-example", "visibleHistorySync": "invalid"}
+  ]
+}

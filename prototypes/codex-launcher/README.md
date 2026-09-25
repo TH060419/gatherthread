@@ -39,7 +39,7 @@ The Launcher accepts only `https://gatherthread.cn`. A browser can open the
 installed Launcher with:
 
 ```text
-gatherthread-connect://connect?origin=https%3A%2F%2Fgatherthread.cn&project=PROJECT_ID&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect
+gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=PROJECT_ID&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect
 ```
 
 The URL Scheme carries no credential. The current server has no Codex browser
@@ -51,12 +51,14 @@ commands until that web change is deployed.
 
 On a Windows development machine with Python 3.13, Node 24, npm, and the repo
 dependencies installed, run `python prototypes/codex-launcher/build_dist.py`.
+Then run `python prototypes/codex-launcher/verify_dist.py`.
 The builder creates `dist/GatherThreadLauncher-Windows-x64.zip` and a per-file
 `SHA256SUMS.json`. It bundles the local source version of the connector and
 plugin, rather than downloading or publishing a package. Check that those
 versions match before distributing. The build machine's Node executable is
-copied into the ZIP; use a verified official Node distribution and include its
-required notices before a public release.
+copied into the ZIP. The builder retrieves the matching Node release's official
+`LICENSE` (including bundled dependency notices), validates it, and includes it
+as `runtime/Node-LICENSE.txt`; a missing or invalid notice fails the build.
 
 The package is a test distribution. It is not code signed, and the Windows
 SmartScreen prompt may appear. It has been verified to start the bundled Python

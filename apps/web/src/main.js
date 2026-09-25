@@ -2,6 +2,7 @@ import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260922-
 import {
   canAppend,
   canRetryFailedAgentRequest,
+  canOpenCodexLauncher,
   createIdempotencyKey,
   createSelectionGuard,
   emptyProjectState,
@@ -27,7 +28,7 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260925-1";
+} from "./domain.js?v=20260925-2";
 import { SessionSync } from "./realtime.js";
 import { mountCodeSync } from "./code-sync-view.js?v=20260924-1";
 import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-2";
@@ -874,7 +875,10 @@ deleteCloudDialog.addEventListener("close", () => {
 });
 connectCodexButton.addEventListener("click", openConnectCodexDialog);
 element("open-codex-launcher-button").addEventListener("click", () => {
-  if (!state.project) return;
+  if (!state.project || !canOpenCodexLauncher({
+    origin: location.origin,
+    platform: navigator.userAgentData?.platform ?? navigator.platform,
+  })) return;
   try {
     const deepLink = projectCodexLauncherUrl({
       baseUrl: location.origin,
@@ -2781,6 +2785,12 @@ function openDeleteCloudDialog(type) {
 
 function openConnectCodexDialog() {
   if (!state.project) return;
+  const launcherAvailable = canOpenCodexLauncher({
+    origin: location.origin,
+    platform: navigator.userAgentData?.platform ?? navigator.platform,
+  });
+  element("codex-launcher-option").hidden = !launcherAvailable;
+  element("open-codex-launcher-button").disabled = !launcherAvailable;
   const errorNode = element("connect-codex-error");
   errorNode.textContent = "";
   for (const status of connectCodexDialog.querySelectorAll("[data-copy-status]")) status.textContent = "";
@@ -2793,7 +2803,6 @@ function openConnectCodexDialog() {
       visibleHistorySync: state.settings.sync.visibleHistorySync,
     });
     element("connect-codex-project-name").textContent = state.project.name;
-    element("open-codex-launcher-button").disabled = false;
     element("connect-codex-posix-command").textContent = commands.posix;
     element("connect-codex-powershell-command").textContent = commands.powershell;
     for (const button of connectCodexDialog.querySelectorAll("button[data-copy-command]")) button.disabled = false;

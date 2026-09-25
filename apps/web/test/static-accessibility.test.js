@@ -346,7 +346,9 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(html, /Keep the terminal open/i);
   assert.doesNotMatch(html, /Move to project|manual Desktop step/i);
   assert.match(html, /device token is requested by a hidden CLI prompt/i);
-  assert.match(html, /opens the installed Launcher or copies commands/i);
+  assert.match(html, /Manual commands remain available/i);
+  assert.match(html, /id="codex-launcher-option"[^>]*hidden/);
+  assert.match(main, /canOpenCodexLauncher/);
   assert.match(html, /codex: command not found/);
   assert.match(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);

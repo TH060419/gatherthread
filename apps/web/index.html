@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260924-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260925-2" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -789,8 +789,8 @@
           </div>
           <button id="close-connect-codex-button" class="icon-button" type="button" aria-label="Close Connect Codex dialog">×</button>
         </div>
-        <p id="connect-codex-summary" class="connection-lead">A local connector keeps this project connected to Codex Desktop. Use the Windows Launcher or the manual terminal steps.</p>
-        <div class="connection-preview-banner" role="note">
+        <p id="connect-codex-summary" class="connection-lead">A local connector keeps this project connected to Codex Desktop. Follow the manual terminal steps; the Launcher is available on supported Windows.</p>
+        <div id="codex-launcher-option" class="connection-preview-banner" role="note" hidden>
           <span class="connection-preview-badge">Windows launcher</span>
           <span>After installing the local Launcher, open it for this project. Enter the device token in its window.</span>
           <button id="open-codex-launcher-button" class="button button-secondary" type="button" disabled>Open Launcher</button>
@@ -844,7 +844,7 @@ codex plugin add gatherthread@gatherthread</code>
           <p>Editable sessions appear as Codex tasks. Web requests run separately; approved Hooks return direct Desktop turns to the same shared history.</p>
           <p>A new local task creates a personal Solo only after its first completed turn. Viewer tasks stay local.</p>
         </details>
-        <p id="connect-codex-security" class="codex-connect-notice">This page opens the installed Launcher or copies commands. No token is placed in a command, URL, or shared history.</p>
+        <p id="connect-codex-security" class="codex-connect-notice">On supported Windows, this page can open the installed Launcher. Manual commands remain available. No token is placed in a command, URL, or shared history.</p>
 
         <p id="connect-codex-error" class="form-error" role="alert"></p>
         <div class="dialog-actions">
@@ -1150,6 +1150,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260925-1"></script>
+    <script type="module" src="./src/main.js?v=20260925-2"></script>
   </body>
 </html>

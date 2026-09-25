@@ -2982,6 +2982,10 @@ time,
   font-size: 0.74rem;
 }
 
+.connection-preview-banner[hidden] {
+  display: none;
+}
+
 .connection-preview-banner .button {
   min-height: 32px;
   padding: 6px 10px;

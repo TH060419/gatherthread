@@ -27,3 +27,15 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
+      - if: matrix.os == 'windows-latest'
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.13'
+      - if: matrix.os == 'windows-latest'
+        name: Test Windows Codex Launcher
+        run: python -m unittest discover -s prototypes/codex-launcher -p test_launcher.py -v
+      - if: matrix.os == 'windows-latest'
+        name: Build and verify Windows Codex Launcher
+        run: |
+          python prototypes/codex-launcher/build_dist.py
+          python prototypes/codex-launcher/verify_dist.py

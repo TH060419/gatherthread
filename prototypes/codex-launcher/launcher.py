@@ -20,6 +20,7 @@ PACKAGE = "@gatherthread/codex-connect@0.1.0-alpha.7"
 SERVER_ORIGIN = "https://gatherthread.cn"
 PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SCHEME = "gatherthread-connect"
+LINK_VERSION = "1"
 
 
 def safe_origin(value: str) -> str:
@@ -35,14 +36,18 @@ def safe_origin(value: str) -> str:
 
 
 def parse_link(value: str) -> tuple[str, str, str, int, str]:
+    if len(value) > 2048:
+        raise ValueError("GatherThread 连接链接过长")
     parsed = urlparse(value)
     if parsed.scheme != SCHEME or parsed.netloc != "connect" or parsed.path not in {"", "/"} or parsed.fragment:
         raise ValueError("无效的 GatherThread 连接链接")
     query = parse_qs(parsed.query, strict_parsing=True)
-    if not {"origin", "project"} <= set(query) or set(query) - {
-        "origin", "project", "model", "context_window_tokens", "visible_history_sync"
+    if not {"v", "origin", "project"} <= set(query) or set(query) - {
+        "v", "origin", "project", "model", "context_window_tokens", "visible_history_sync"
     } or any(len(item) != 1 for item in query.values()):
         raise ValueError("连接链接包含不支持的参数")
+    if query["v"][0] != LINK_VERSION:
+        raise ValueError("不支持的 GatherThread 连接链接版本")
     origin = safe_origin(query["origin"][0])
     if origin != SERVER_ORIGIN:
         raise ValueError("连接链接的网页地址不是 https://gatherthread.cn")
@@ -114,9 +119,34 @@ def find_codex() -> str:
 
 def npm_codex_native(wrapper: Path) -> Path | None:
     """Find the native binary installed by the official Windows npm package."""
+    if wrapper.name.lower() != "codex.cmd":
+        return None
+    try:
+        shim = wrapper.read_text(encoding="utf-8", errors="replace")[:16_384].lower()
+    except OSError:
+        return None
+    # Resolve only the npm shim's own package. An arbitrary .cmd may launch a
+    # different Codex (or something else), even when codex.exe is on PATH.
+    if not re.search(r"node_modules[\\/]@openai[\\/]codex[\\/]bin[\\/]codex\.js", shim):
+        return None
+    if "%~dp0" not in shim and "%dp0%" not in shim:
+        return None
     prefix = wrapper.parent
+    main_package = prefix / "node_modules" / "@openai" / "codex"
+    try:
+        metadata = json.loads((main_package / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(metadata, dict):
+        return None
+    declared_bin = metadata.get("bin")
+    if metadata.get("name") != "@openai/codex" or not (
+        declared_bin == "bin/codex.js"
+        or isinstance(declared_bin, dict) and declared_bin.get("codex") == "bin/codex.js"
+    ):
+        return None
     packages = (
-        prefix / "node_modules" / "@openai" / "codex" / "node_modules" / "@openai" / "codex-win32-x64",
+        main_package / "node_modules" / "@openai" / "codex-win32-x64",
         prefix / "node_modules" / "@openai" / "codex-win32-x64",
     )
     for package in packages:
@@ -136,15 +166,9 @@ def native_codex_command(selected: str) -> str:
     if path.suffix.lower() == ".exe":
         return str(path)
     if path.suffix.lower() in {".cmd", ".bat"}:
-        sibling = path.with_suffix(".exe")
-        if sibling.is_file():
-            return str(sibling)
         npm_native = npm_codex_native(path)
         if npm_native:
             return str(npm_native)
-        native = find_codex()
-        if native and Path(native).suffix.lower() == ".exe":
-            return native
     raise ValueError("Codex App Server 需要原生 codex.exe；请安装支持插件的 Codex Desktop/CLI，或直接选择其 codex.exe。不能直接启动 codex.cmd。")
 
 
