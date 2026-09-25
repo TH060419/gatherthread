@@ -77,10 +77,6 @@ def main() -> None:
     copy(HERE / "launcher.py", APP / "launcher.py")
     copy(HERE / "Uninstall.ps1", APP / "Uninstall.ps1")
     copy(HERE / "README.md", APP / "README.md")
-    (APP / "launcher-config.json").write_text(
-        json.dumps({"allowed_origin": "https://gatherthread.cn"}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
     (APP / "Install.cmd").write_text(
         '@echo off\r\nsetlocal\r\n"%~dp0runtime\\python.exe" "%~dp0launcher.py" --install\r\n'
         'if errorlevel 1 (pause & exit /b 1)\r\n'

@@ -11,6 +11,13 @@ SPEC.loader.exec_module(launcher)
 
 
 class NativeCodexCommandTests(unittest.TestCase):
+    def test_deep_link_accepts_only_fixed_server(self):
+        accepted = "gatherthread-connect://connect?origin=https%3A%2F%2Fgatherthread.cn&project=project-example"
+        rejected = "gatherthread-connect://connect?origin=https%3A%2F%2Fexample.com&project=project-example"
+        self.assertEqual(launcher.parse_link(accepted)[:2], (launcher.SERVER_ORIGIN, "project-example"))
+        with self.assertRaisesRegex(ValueError, "gatherthread.cn"):
+            launcher.parse_link(rejected)
+
     @unittest.skipUnless(launcher.os.name == "nt", "Windows Codex discovery")
     def test_path_executable_is_preferred_over_user_installation(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent) as directory:

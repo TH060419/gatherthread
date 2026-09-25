@@ -20,8 +20,9 @@ already be installed and signed in.
    available to Codex Desktop for its MCP and Hooks. If that is unavailable,
    the optional bundled plugin uses the Launcher's private Node executable;
    review its MCP and Hooks in Codex and restart Codex after installation.
-3. Enter the GatherThread origin, project ID, current model/context settings,
-   and existing device token, then
+3. The Launcher always connects to `https://gatherthread.cn`. Enter the project
+   ID shown on the website (in the form `project-***`), current model/context
+   settings, and existing device token, then
    press **Start connection**. The token is passed only to the connector child
    process, not placed in a URL or log. Closing the window minimizes it to the
    taskbar while the connector runs; restore it to stop the connection.
@@ -34,10 +35,8 @@ per-user installation folder. It retains project workspaces, Codex tasks, and
 private connector state under the user profile. `Uninstall.ps1 -DryRun` shows
 the removal scope without changing anything.
 
-The ZIP defaults to `https://gatherthread.cn` from the supplied screenshot.
-Before installing, change `launcher-config.json` inside the extracted folder
-if your server uses another HTTPS origin. Only that origin may be used in the
-GUI or a browser link. A browser can open the installed Launcher with:
+The Launcher accepts only `https://gatherthread.cn`. A browser can open the
+installed Launcher with:
 
 ```text
 gatherthread-connect://connect?origin=https%3A%2F%2Fgatherthread.cn&project=PROJECT_ID&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect

@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, urlparse
 
 
 PACKAGE = "@gatherthread/codex-connect@0.1.0-alpha.7"
+SERVER_ORIGIN = "https://gatherthread.cn"
 PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SCHEME = "gatherthread-connect"
 
@@ -43,6 +44,8 @@ def parse_link(value: str) -> tuple[str, str, str, int, str]:
     } or any(len(item) != 1 for item in query.values()):
         raise ValueError("连接链接包含不支持的参数")
     origin = safe_origin(query["origin"][0])
+    if origin != SERVER_ORIGIN:
+        raise ValueError("连接链接的网页地址不是 https://gatherthread.cn")
     project = query["project"][0]
     if not PROJECT_RE.fullmatch(project):
         raise ValueError("无效的项目 ID")
@@ -95,17 +98,6 @@ def bundled_node() -> Path:
 
 def bundled_connector() -> Path:
     return runtime_dir() / "connector" / "codex-connect.js"
-
-
-def allowed_origin() -> str:
-    config = runtime_dir() / "launcher-config.json"
-    try:
-        value = json.loads(config.read_text(encoding="utf-8"))["allowed_origin"]
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise ValueError(f"请先在 {config} 配置 allowed_origin") from error
-    if not isinstance(value, str):
-        raise ValueError("allowed_origin 必须是 URL 字符串")
-    return safe_origin(value)
 
 
 def find_codex() -> str:
@@ -204,7 +196,6 @@ class Launcher(tk.Tk):
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.connector: subprocess.Popen[str] | None = None
         self.busy = False
-        self.origin = tk.StringVar()
         self.project = tk.StringVar()
         self.codex = tk.StringVar(value=find_codex())
         self.model = tk.StringVar(value="gpt-5.6-sol")
@@ -215,10 +206,7 @@ class Launcher(tk.Tk):
         self._build()
         if link:
             try:
-                origin, project, model, tokens, mode = parse_link(link)
-                if origin != allowed_origin():
-                    raise ValueError("网页地址与安装包配置的服务地址不一致")
-                self.origin.set(origin)
+                _origin, project, model, tokens, mode = parse_link(link)
                 self.project.set(project)
                 self.model.set(model)
                 self.context_tokens.set(str(tokens))
@@ -233,7 +221,8 @@ class Launcher(tk.Tk):
         root.pack(fill="both", expand=True)
         ttk.Label(root, text="连接本机 Codex", font=("Segoe UI", 18, "bold")).pack(anchor="w")
         ttk.Label(root, text="网页负责项目和会话；此窗口负责启动并保持本机连接器运行。", wraplength=690).pack(anchor="w", pady=(4, 14))
-        for label, var in (("网页服务地址", self.origin), ("项目 ID", self.project), ("Codex CLI 路径", self.codex)):
+        ttk.Label(root, text=f"网页服务地址：{SERVER_ORIGIN}").pack(anchor="w", pady=(0, 9))
+        for label, var in (("项目 ID（格式：project-***）", self.project), ("Codex CLI 路径", self.codex)):
             ttk.Label(root, text=label).pack(anchor="w")
             ttk.Entry(root, textvariable=var).pack(fill="x", pady=(2, 9))
         settings = ttk.Frame(root)
@@ -329,12 +318,10 @@ class Launcher(tk.Tk):
             connector = bundled_connector()
             if not connector.is_file():
                 raise ValueError(f"缺少固定版本 {PACKAGE} 的打包入口：{connector}")
-            origin = safe_origin(self.origin.get().strip())
-            if origin != allowed_origin():
-                raise ValueError("网页地址与安装包配置的服务地址不一致")
+            origin = SERVER_ORIGIN
             project = self.project.get().strip()
             if not PROJECT_RE.fullmatch(project):
-                raise ValueError("项目 ID 格式不正确")
+                raise ValueError("项目 ID 格式不正确；请使用网页显示的项目 ID，格式如 project-***")
             token = self.token.get().strip()
             if not token or "\n" in token or "\r" in token:
                 raise ValueError("请输入有效的设备 Token")
