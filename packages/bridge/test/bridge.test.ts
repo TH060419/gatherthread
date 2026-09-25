@@ -8,6 +8,7 @@ import {
   CollaborationHttpError,
   HarnessExecutionTerminatedError,
   LocalBridge,
+  MalformedAgentRequestError,
   MemoryCursorStore,
   type AppendEventInput,
   type AgentProgressInput,
@@ -446,6 +447,51 @@ test("executor eligibility can skip a locally committed request without blocking
   });
   assert.equal(claims, 0);
   assert.deepEqual(projected, [1]);
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
+});
+
+test("a malformed execution profile is skipped with the cursor advancing, recoverable failures are retried", async () => {
+  const api = new FakeApi();
+  api.history.push(
+    canonical("session-1", 1, {
+      type: "agent_request",
+      idempotencyKey: "malformed-profile",
+      payload: { text: "poison", execution_profile: { harness: "bad\nharness" } },
+    }),
+    canonical("session-1", 2, {
+      type: "agent_request",
+      idempotencyKey: "recoverable-failure",
+      payload: { text: "wait for the local turn to resolve" },
+    }),
+  );
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  let attempts = 0;
+  const examined = await bridge.processPendingAgentRequests({
+    async execute() { throw new Error("must not be reached"); },
+    async shouldExecute(request) {
+      attempts += 1;
+      const payload = request.payload as { text?: string };
+      if (payload.text === "poison") {
+        throw new MalformedAgentRequestError("Agent request contains an invalid target harness");
+      }
+      // A recoverable failure (unknown commit outcome, transient workspace
+      // error) must propagate so the request stays pending and retried.
+      throw new Error("A local turn commit has an unknown server outcome");
+    },
+  });
+  assert.equal(examined, 2);
+  assert.equal(attempts, 2);
+  await assert.rejects(
+    bridge.processPendingAgentRequests({
+      async execute() { throw new Error("must not be reached"); },
+      shouldExecute: async () => { throw new Error("A local turn commit has an unknown server outcome"); },
+    }),
+    /unknown server outcome/,
+  );
+  // The malformed request is permanently behind the cursor; the recoverable
+  // one stays pending at sequence 2 for the next cycle to retry.
   assert.equal((await cursorStore.load()).server["session-1"], 1);
 });
 

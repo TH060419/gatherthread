@@ -7,6 +7,7 @@ import {
   assertUsableZcodeCli,
   DEFAULT_ZCODE_TOOL_ALLOWLIST,
   LocalBridge,
+  MalformedAgentRequestError,
   MemoryCursorStore,
   pendingZcodeLocalSessionId,
   probeZcodeCli,
@@ -274,10 +275,16 @@ test("ZCode shouldExecute only claims requests explicitly targeted at zcode", ()
     ...runtime,
     userId: "user-2",
   }), false);
-  // A malformed profile is silently not ours: refusing must never surface as
-  // a throw that would wedge the shared polling cursor in front of the event.
-  assert.equal(executor.shouldExecute(request({ execution_profile: { harness: "bad\nharness" } }), runtime), false);
-  assert.equal(executor.shouldExecute(request({ execution_profile: { harness: "a\u0000b" } }), runtime), false);
+  // A structurally unparseable profile throws the typed error so the bridge
+  // can skip exactly that request while still retrying recoverable failures.
+  assert.throws(
+    () => executor.shouldExecute(request({ execution_profile: { harness: "bad\nharness" } }), runtime),
+    MalformedAgentRequestError,
+  );
+  assert.throws(
+    () => executor.shouldExecute(request({ execution_profile: { harness: "a\u0000b" } }), runtime),
+    MalformedAgentRequestError,
+  );
 });
 
 test("ZCode tool sharing is opt-in, allowlisted, and bounded", async () => {

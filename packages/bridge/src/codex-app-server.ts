@@ -12,7 +12,7 @@ import {
   validateCodexWorkspace,
 } from "./codex-executor.js";
 import { withoutGatherThreadCredentials } from "./executor.js";
-import { HarnessExecutionTerminatedError } from "./bridge.js";
+import { HarnessExecutionTerminatedError, MalformedAgentRequestError } from "./bridge.js";
 import { updateCodexHookRegistry, type CodexHookEvent, type CodexHookRelayResult } from "./codex-hooks.js";
 import type {
   ProjectHarnessAdapter,
@@ -3667,14 +3667,16 @@ function requestedTargetForRequest(request: CanonicalEvent): {
   const raw = payload && isObject(payload.execution_profile) ? payload.execution_profile : undefined;
   if (raw === undefined) return undefined;
   const harness = typeof raw.harness === "string" ? raw.harness.trim().toLowerCase() : "";
-  if (!isSafeExecutionProfileText(harness, 80)) throw new Error("Agent request contains an invalid target harness");
+  if (!isSafeExecutionProfileText(harness, 80)) {
+    throw new MalformedAgentRequestError("Agent request contains an invalid target harness");
+  }
   const provider = raw.provider === undefined ? undefined : typeof raw.provider === "string" ? raw.provider.trim() : "";
   if (provider !== undefined && !isSafeExecutionProfileText(provider, 80)) {
-    throw new Error("Agent request contains an invalid target provider");
+    throw new MalformedAgentRequestError("Agent request contains an invalid target provider");
   }
   const runtimeId = raw.runtime_id === undefined ? undefined : typeof raw.runtime_id === "string" ? raw.runtime_id.trim() : "";
   if (runtimeId !== undefined && !isSafeExecutionProfileText(runtimeId, 128)) {
-    throw new Error("Agent request contains an invalid target runtime");
+    throw new MalformedAgentRequestError("Agent request contains an invalid target runtime");
   }
   return {
     harness,

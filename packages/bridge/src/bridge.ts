@@ -43,6 +43,21 @@ export class HarnessExecutionTerminatedError extends Error {
   }
 }
 
+/**
+ * The request's execution profile is structurally unparseable, so no executor
+ * can ever claim it. Unlike a recoverable shouldExecute failure (a local turn
+ * with an unknown commit outcome, a transiently unavailable workspace, a
+ * state-file read error — all of which must keep the request pending and
+ * retried), this request is permanently unclaimable: the bridge skips it and
+ * advances the cursor instead of wedging the session on it forever.
+ */
+export class MalformedAgentRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedAgentRequestError";
+  }
+}
+
 export interface LocalBridgeOptions {
   api: CollaborationApi;
   cursorStore: CursorStore;
@@ -139,10 +154,17 @@ export class LocalBridge {
         if (shouldExecute && executor.shouldExecute !== undefined) {
           try {
             shouldExecute = await executor.shouldExecute(event, runtime);
-          } catch {
-            // A malformed or unreadable request profile must never wedge the
-            // polling cursor: treat it as not ours and keep advancing past it.
+          } catch (error) {
+            // Only a structurally unparseable profile is skippable: no
+            // executor can ever claim this request, so advancing the cursor
+            // is the bounded outcome. Every other failure is recoverable or
+            // state-dependent and must keep the request pending for the
+            // session cycle to retry.
+            if (!(error instanceof MalformedAgentRequestError)) throw error;
             shouldExecute = false;
+            process.stderr.write(
+              `gatherthread-bridge: skipping unclaimable agent_request ${event.id} (sequence ${event.sequence}) in session ${event.sessionId}: ${error.message}\n`,
+            );
           }
         }
         if (shouldExecute) {

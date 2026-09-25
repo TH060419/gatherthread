@@ -9,7 +9,7 @@ import type {
   HarnessExecutor,
   RegisteredRuntime,
 } from "./types.js";
-import { HarnessExecutionTerminatedError } from "./bridge.js";
+import { HarnessExecutionTerminatedError, MalformedAgentRequestError } from "./bridge.js";
 import type { ZcodeCliProbe, ZcodeCommandSpec } from "./zcode-compat.js";
 import {
   boundZcodeToolValue,
@@ -207,13 +207,9 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
     if (request.actorId !== runtime.userId) return false;
     // Legacy requests without an execution profile belong to the server's
     // Codex compatibility target, never to ZCode; ambiguity must not claim.
-    // A malformed profile is not ours either: refusing silently (instead of
-    // throwing) keeps the shared polling cursor advancing past the event.
-    try {
-      return requestedHarness(request) === "zcode";
-    } catch {
-      return false;
-    }
+    // A structurally unparseable profile throws the typed error so the bridge
+    // can skip exactly that request and keep retrying everything else.
+    return requestedHarness(request) === "zcode";
   }
 
   async execute(input: HarnessExecutionInput): Promise<HarnessExecutionResult> {
@@ -492,7 +488,7 @@ function requestedHarness(request: CanonicalEvent): string | undefined {
   if (raw === undefined) return undefined;
   const harness = typeof raw.harness === "string" ? raw.harness.trim().toLowerCase() : "";
   if (!harness || harness.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(harness)) {
-    throw new Error("Agent request contains an invalid target harness");
+    throw new MalformedAgentRequestError("Agent request contains an invalid target harness");
   }
   return harness;
 }
