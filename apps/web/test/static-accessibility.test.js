@@ -15,6 +15,46 @@ const dshPath = fileURLToPath(new URL("../src/dsh.js", import.meta.url));
 const manifestPath = fileURLToPath(new URL("../site.webmanifest", import.meta.url));
 const brandLightPath = fileURLToPath(new URL("../brand/lockup-color-transparent-light.svg", import.meta.url));
 const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-dark.svg", import.meta.url));
+const aliyunGuidePath = fileURLToPath(new URL("../../../docs/ALIYUN_ECS.md", import.meta.url));
+const selfHostingGuidePath = fileURLToPath(new URL("../../../docs/SELF_HOSTING.md", import.meta.url));
+
+test("Cloud Git subviews move keyboard focus to focusable headings", async () => {
+  const html = await readFile(htmlPath, "utf8");
+  assert.match(html, /id="code-local-title" tabindex="-1"/);
+  assert.match(html, /id="code-team-title" tabindex="-1"/);
+  assert.match(html, /id="code-enabled-home"[^>]*aria-label="Cloud Git settings"/);
+});
+
+test("first-project empty state has a localized eyebrow and restores English when language changes", async () => {
+  const [html, main, translations] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(i18nPath, "utf8")]);
+  assert.match(html, /id="empty-state-eyebrow"/);
+  assert.match(main, /empty-state-eyebrow"\)\.textContent = "No project yet"/);
+  assert.match(main, /empty-state-title"\)\.textContent = empty\.title/);
+  assert.match(main, /localizer\.apply\(state\.settings\.general\.locale\)/);
+  assert.match(translations, /"No project yet": "还没有项目"/);
+});
+
+test("a pending browser notification permission does not block saving settings", async () => {
+  const main = await readFile(mainPath, "utf8");
+  assert.match(main, /if \(notificationPermissionNeeded\(nextSettings\.notifications\)\) void ensureNotificationPermission\(\)/);
+  assert.doesNotMatch(main, /await permissionRequest/);
+});
+
+test("manual summaries use accessible icon entries, explicit paid confirmation and bounded settings", async () => {
+  const [html, main, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
+  for (const id of ["history-summary-select-button", "history-summary-view-button", "history-summary-versions-button"]) {
+    assert.match(html, new RegExp(`id="${id}"[^>]*aria-label="[^"]+"[^>]*title="[^"]+"[^>]*>[\\s\\S]*?<svg[^>]*aria-hidden="true"`));
+  }
+  assert.match(html, /id="history-summary-confirm-dialog"[^>]*aria-labelledby="history-summary-confirm-title"[^>]*aria-describedby="history-summary-confirm-warning"/);
+  assert.match(html, /id="history-summary-status"[^>]*role="alert"/);
+  assert.match(html, /id="settings-history-summary-instructions"[^>]*maxlength="4000"/);
+  assert.match(html, /id="settings-history-context-mode" disabled/);
+  assert.match(html, /may consume model quota.*Only the selected records.*does not guarantee sandbox isolation/u);
+  assert.match(html, /Display toggles do not change your Agent context policy/u);
+  assert.match(styles, /\.history-summary-confirm-dialog > div \{ padding: 24px;/u);
+  assert.match(main, /if \(localeChanged && state\.session\) renderTimeline\(\)/u);
+  assert.match(main, /if \(localeChanged && state\.project\) renderMembers\(\)/u);
+});
 
 const brandedIconHashes = new Map([
   ["android-chrome-192x192.png", "f94f61adcee6cf206813081db0d286bbfde7f49445fcdb3f2c9da4f8892c2fce"],
@@ -72,6 +112,8 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     '<aside id="member-panel"',
     'aria-live="polite"',
     'for="token"',
+    'for="claim-display-name"',
+    'for="claim-device-name"',
     'id="send-chat-button"',
     'id="send-agent-button"',
     'id="claim-invitation-form"',
@@ -145,7 +187,7 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.doesNotMatch(html, /class="brand-mark(?: brand-mark-small)?"/);
   assert.match(main, /title\.title = session\.name/);
   assert.match(main, /element\("session-title"\)\.title = session\.name/);
-  assert.match(main, /localizer\.t\("Continue"\)/);
+  assert.match(main, /localizer\.t\("Sign in"\)/);
   assert.match(styles, /\.session-button strong \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /\.title-line h1 \{[\s\S]*?text-overflow:\s*ellipsis;[\s\S]*?-webkit-line-clamp:\s*2;/);
   assert.match(styles, /select:not\(:disabled\):hover/);
@@ -161,6 +203,116 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   assert.match(main, /details\.open = live/);
   assert.match(main, /expandedWorklogs\.has\(worklogId\)/);
   assert.match(main, /details\.addEventListener\("toggle"/);
+});
+
+test("entry navigation, empty-account project actions, and invited-member exit remain accessible", async () => {
+  const [html, main, styles, i18n] = await Promise.all([
+    readFile(htmlPath, "utf8"), readFile(mainPath, "utf8"), readFile(stylesPath, "utf8"), readFile(i18nPath, "utf8"),
+  ]);
+  assert.match(html, /id="auth-language-button"[^>]*aria-label="Switch language \/ 切换语言"/);
+  assert.match(html, /class="brand-lockup brand-lockup-login" href="\.\.\/"/);
+  assert.match(html, /class="wordmark" href="\.\.\/"/);
+  assert.match(html, /id="topbar-create-project-button"/);
+  assert.match(html, /id="leave-project-dialog"[^>]*aria-labelledby="leave-project-title"/);
+  assert.match(html, /id="leave-project-branch-resolution"[^>]*required/);
+  assert.match(main, /await api\.removeProjectMember\(projectId, userId, branch \?/);
+  assert.match(main, /branch_resolution: resolution, expected_branch_head_commit: branch\.head_commit/);
+  assert.match(main, /removeButton\.setAttribute\("aria-label", memberRemovalAriaLabel\(member\.username, localizer\.t\)\)/);
+  assert.match(main, /roleSelect\.setAttribute\("aria-label", memberRoleAriaLabel\(member\.username, localizer\.t\)\)/);
+  assert.match(main, /event\.key !== SHARED_LANGUAGE_STORAGE_KEY/);
+  assert.match(styles, /\.account-cluster \{\s*grid-column: 3;/);
+  assert.match(i18n, /"Leave project": "退出项目"/);
+});
+
+test("entry choices precede shared identity fields and separate access forms", async () => {
+  const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  const identity = markup.indexOf('id="auth-identity"');
+  const name = markup.indexOf('id="claim-display-name"');
+  const device = markup.indexOf('id="claim-device-name"');
+  const chooser = markup.indexOf('id="auth-entry-chooser"');
+  const loginChoice = markup.indexOf('id="auth-select-login"');
+  const activationChoice = markup.indexOf('id="auth-select-activate"');
+  const invitationChoice = markup.indexOf('id="auth-select-invitation"');
+  const tokenForm = markup.indexOf('id="login-form"');
+  const qualificationForm = markup.indexOf('id="claim-test-access-form"');
+  const projectForm = markup.indexOf('id="claim-invitation-form"');
+  assert.ok(chooser > 0 && loginChoice > chooser
+    && activationChoice > loginChoice && invitationChoice > activationChoice
+    && identity > invitationChoice && name > identity && device > name
+    && tokenForm > device && qualificationForm > tokenForm && projectForm > qualificationForm);
+  assert.match(markup, /id="auth-identity"[^>]*hidden/u);
+  assert.match(markup, /id="auth-select-login"[^>]*aria-controls="auth-login-panel"/u);
+  assert.match(markup, /id="auth-select-activate"[^>]*aria-controls="auth-activate-panel"/u);
+  assert.match(markup, /id="auth-select-invitation"[^>]*aria-controls="auth-invitation-panel"/u);
+  assert.match(markup, /id="auth-login-panel"[^>]*hidden/u);
+  assert.match(markup, /id="auth-activate-panel"[^>]*hidden/u);
+  assert.match(markup, /id="auth-invitation-panel"[^>]*hidden/u);
+  assert.match(main, /authIdentity\.hidden = entry === "choose"/u);
+  assert.match(main, /entry === "activate" \|\| entry === "invitation" \? "claim-display-name"/u);
+  assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
+  assert.match(main, /activeAuthEntry === "invitation"[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
+  assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);
+  assert.match(main, /else if \(activeAuthEntry === "login"\) \{[\s\S]*?if \(rememberedAccountSelect\.value \|\| element\("token"\)\.value\.trim\(\)\) loginForm\.requestSubmit\(\)/u);
+  assert.match(main, /authView\.hidden = false;[\s\S]*?setActiveAuthEntry\("choose"\)/u);
+  const loginHandler = main.slice(main.indexOf('loginForm.addEventListener("submit"'), main.indexOf('claimTestAccessForm.addEventListener("submit"'));
+  const activationHandler = main.slice(main.indexOf('claimTestAccessForm.addEventListener("submit"'), main.indexOf('claimInvitationForm.addEventListener("submit"'));
+  assert.match(loginHandler, /api\.authenticate\(token/u);
+  assert.doesNotMatch(loginHandler, /api\.claimTestAccess\(/u);
+  assert.match(activationHandler, /api\.claimTestAccess\(\{/u);
+  assert.doesNotMatch(activationHandler, /api\.authenticate\(/u);
+});
+
+test("Alpha access copy allows optional reasons, discovery channel, and public email with private-delivery guidance", async () => {
+  const [template, readme, security, contributing, markup] = await Promise.all([
+    readFile(fileURLToPath(new URL("../../../.github/ISSUE_TEMPLATE/test-access.yml", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../README.md", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../docs/SECURITY.md", import.meta.url)), "utf8"),
+    readFile(fileURLToPath(new URL("../../../CONTRIBUTING.md", import.meta.url)), "utf8"),
+    readFile(htmlPath, "utf8"),
+  ]);
+  assert.match(template, /id: reason[\s\S]*?required: false/u);
+  assert.match(template, /id: discovery[\s\S]*?required: false/u);
+  assert.match(template, /id: email[\s\S]*?required: false/u);
+  for (const text of [template, readme, security, contributing, markup]) {
+    assert.doesNotMatch(text, /must not post an email|do not post your email|请勿在公开 Issue 中留下邮箱/u);
+  }
+  assert.match(template, /Issues in this repository are public[\s\S]*coolhezi@sjtu\.edu\.cn/u);
+  assert.match(readme, /Email is optional and recommended only if you are comfortable sharing it publicly/u);
+  assert.match(security, /requested only through the dedicated public GitHub Issue template[\s\S]*email is recommended only/u);
+  assert.match(contributing, /Alpha test-access applications are a separate public workflow[\s\S]*email is recommended only/u);
+  assert.match(markup, /email is optional and recommended only if you are comfortable sharing it publicly[\s\S]*Issues are public/u);
+});
+
+test("Cloud Git cleanup loading and error statuses are visible and announced in the management view", async () => {
+  const markup = await readFile(htmlPath, "utf8");
+  const manageStart = markup.indexOf('id="code-storage-manage"');
+  const status = markup.indexOf('id="code-storage-manage-status"');
+  const error = markup.indexOf('id="code-storage-error"');
+  const projects = markup.indexOf('id="code-storage-projects"');
+  assert.ok(manageStart > 0 && status > manageStart && error > status && projects > error);
+  assert.match(markup, /id="code-storage-manage-status"[^>]*role="status"[^>]*aria-live="polite"/u);
+  assert.match(markup, /id="code-storage-error"[^>]*role="alert"/u);
+});
+
+test("the empty-project paragraph follows account capability and restores session guidance", async () => {
+  const [markup, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
+  assert.match(markup, /id="empty-state-description">Create a solo room for observers or a multi room for active collaboration\./u);
+  assert.match(main, /const empty = emptyProjectState\(state\.currentUser\.can_create_projects === true\)/u);
+  assert.match(main, /element\("empty-state-description"\)\.textContent = empty\.description/u);
+  assert.match(main, /element\("empty-create-button"\)\.hidden = !empty\.canCreateProjects/u);
+  assert.match(main, /element\("empty-state-description"\)\.textContent = "Create a solo room for observers or a multi room for active collaboration\."/u);
+});
+
+test("host guides route one-use qualification codes to the activation field", async () => {
+  const [aliyun, selfHosting] = await Promise.all([
+    readFile(aliyunGuidePath, "utf8"),
+    readFile(selfHostingGuidePath, "utf8"),
+  ]);
+  for (const guide of [aliyun, selfHosting]) {
+    assert.match(guide, /`gtq_`[\s\S]*?\*\*First-time activation\*\*[\s\S]*?\*\*Test qualification code\*\*/u);
+    assert.match(guide, /`gta_`[\s\S]*?\*\*Existing account\*\*/u);
+    assert.doesNotMatch(guide, /top (?:\*\*)?Access token/u);
+  }
 });
 
 test("official light and dark lockups include the approved mark and outlined wordmark", async () => {
@@ -199,11 +351,11 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(html, /codex: command not found/);
   assert.match(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);
-  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.5 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.7 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
   assert.match(domain, /--plugin-hooks/);
   const pluginCommands = (html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "")
     .replace(/\r\n?/gu, "\n");
-  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.5 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.7 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Alpha 预览版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);
@@ -245,6 +397,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
     "approve-dsh-pairing-code",
     "agent-harness-select",
     "agent-dsh-runtime-select",
+    "agent-dsh-model-select",
+    "agent-dsh-effort-select",
     "settings-agent-harness",
     "settings-dsh-runtime",
   ]) assert.match(html, new RegExp(`id="${id}"`));
@@ -260,7 +414,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(dsh, /plugin --profile web add @gatherthread\/dsh-host/);
   assert.doesNotMatch(dsh, /--dsh-source|(?:https?|dsh):\/\/localhost|deep[-_ ]?link/iu);
   assert.match(main, /api\.listSessionRuntimes\(sessionId\)/);
-  assert.match(main, /dshExecutionProfile\(currentDshResolution\(\)\.runtime\)/);
+  assert.match(main, /dshExecutionProfile\([\s\S]*?currentDshResolution\(\)\.runtime,/);
+  assert.match(main, /withProjectDshProfile[\s\S]*agentDshModelSelect/);
   assert.match(api, /runtime_id: input\.executionProfile\.runtimeId/);
   assert.match(main, /resolveCodexRuntime\(state\.executionRuntimes\)/);
   assert.match(main, /codexExecutionProfile\(currentCodexResolution\(\)\.runtime/);
@@ -274,6 +429,8 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(styles, /\.connection-guide/);
   assert.match(styles, /\.connection-preview-banner/);
   assert.match(styles, /@media \(max-width: 760px\)[\s\S]*?\.dsh-runtime-row/);
+  assert.match(styles, /agent-request-profile\[data-layout="dsh-dynamic"\][\s\S]*?agent-dsh-model-select/);
+  assert.match(i18n, /"DSH runtime": "DSH 运行环境"/);
   assert.match(i18n, /不假设公共账户注册系统已经上线/);
   assert.match(i18n, /长期设备凭据只保存在 DSH 本机凭据库/);
 });
@@ -362,6 +519,11 @@ test("remembered login and current-device naming remain explicit and accessible"
   ]);
   for (const id of [
     "login-remember-device",
+    "remembered-account-control",
+    "remembered-account-select",
+    "forget-remembered-account",
+    "auth-entry-chooser",
+    "test-access-remember-device",
     "claim-remember-device",
     "settings-device",
     "settings-device-name",
@@ -370,11 +532,16 @@ test("remembered login and current-device naming remain explicit and accessible"
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(html, /for="login-remember-device"/);
+  assert.match(html, /for="test-access-remember-device"/);
   assert.match(html, /for="claim-remember-device"/);
   assert.match(html, /for="settings-device-name"/);
   assert.match(main, /automaticDeviceName\(\)/);
-  assert.match(main, /api\.renameDevice\(state\.currentUser\.device_id/);
+  assert.match(main, /api\.renameDevice\(deviceId/);
   assert.match(api, /remember_device: rememberDevice/);
+  assert.match(main, /api\.activateRememberedAccount\(rememberedId/);
+  assert.match(main, /api\.forgetRememberedAccount\(id\)/);
+  assert.match(html, /issues\/new\?template=test-access\.yml/);
+  assert.doesNotMatch(html, /test-access-email|application-email/);
   assert.doesNotMatch(main, /localStorage.*device/i);
 });
 
@@ -495,6 +662,16 @@ test("custom numeric settings use spinner-free digit inputs", async () => {
   assert.match(styles, /\.numeric-setting-context label \{[\s\S]*?grid-template-columns: minmax\(64px, 1fr\) 100px;/);
 });
 
+test("context numeric controls fit the settings column without horizontal overflow", async () => {
+  const styles = await readFile(stylesPath, "utf8");
+  const settingsColumn = styles.match(/\.settings-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(\d+px, (\d+)px\);/);
+  const contextColumns = styles.match(/\.numeric-setting-context \{[^}]*grid-template-columns: minmax\((\d+)(?:px)?, 1fr\) minmax\((\d+)px, 0\.85fr\);/);
+  const numericGap = styles.match(/\.numeric-setting \{[^}]*gap: (\d+)px;/);
+  assert.ok(settingsColumn && contextColumns && numericGap, "Numeric grid sizing must remain explicit.");
+  assert.ok(Number(contextColumns[1]) + Number(contextColumns[2]) + Number(numericGap[1]) <= Number(settingsColumn[1]),
+    "The preset, exact value, unit, and gap must fit inside the settings control column.");
+});
+
 test("custom Codex models explain that access must already be configured", async () => {
   const [html, i18n] = await Promise.all([readFile(htmlPath, "utf8"), readFile(i18nPath, "utf8")]);
   const explanation = "This registers a model name for calls; it does not configure model access. Configure a supported model in Codex first, then add its name here.";
@@ -605,7 +782,7 @@ test("a failed Agent response is shown as a failure with an explicit retry", asy
   assert.match(main, /event-agent_response-failed/);
   assert.match(main, /setAttribute\("data-action", "retry-agent-request"\)/);
   assert.match(main, /retryAgentRequestInput\(/);
-  assert.match(main, /api\.appendAgentRequest\(state\.session\.id/);
+  assert.match(main, /api\.appendAgentRequest\(sessionId/);
   assert.match(main, /closest\("button\[data-action='retry-agent-request'\]"\)/);
   assert.match(main, /retryingAgentRequestIds\.has\(request\.id\)/);
   assert.match(main, /retryingAgentRequestIds\.add\(requestId\)/);
@@ -613,4 +790,35 @@ test("a failed Agent response is shown as a failure with an explicit retry", asy
   assert.match(main, /button\.disabled = true/);
   assert.match(styles, /\.event-agent_response-failed/);
   assert.match(styles, /\.agent-retry-button/);
+});
+
+test("the timeline offers a labelled jump back to the newest event", async () => {
+  const [html, main, styles] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+  ]);
+  // The control lives inside the scrolling region so it can stick to the edge,
+  // and it starts hidden because a fresh timeline is already at the bottom.
+  // A single opening tag, not a lazy span that starts at the first <button> in
+  // the document and swallows everything up to the next </button>.
+  const buttonTag = html.match(/<button(?=[^>]*id="timeline-bottom-button")[^>]*>/)?.[0] ?? "";
+  assert.match(buttonTag, /class="timeline-bottom-button"/);
+  assert.match(buttonTag, /aria-label="Back to the newest message"/);
+  // Bounded to the tag, and anchored so it cannot be satisfied by `aria-hidden`.
+  assert.match(buttonTag, /(?:^|\s)hidden(?:\s|>)/);
+  // Bounded to this one rule, so a later `position: sticky` cannot stand in.
+  const buttonRule = styles.match(/\.timeline-bottom-button \{[\s\S]*?\}/)?.[0] ?? "";
+  assert.match(buttonRule, /position: sticky;/);
+  assert.match(buttonRule, /bottom: 12px;/);
+  // Visibility is the shared bottom rule, not a second opinion about it.
+  assert.match(main, /timelineBottomButton\.hidden = isTimelineAtBottom\(timelineRegion\)/);
+  assert.match(main, /timelineRegion\.addEventListener\("scroll", renderTimelineBottomControl, \{ passive: true \}\)/);
+  assert.match(main, /timelineBottomButton\.addEventListener\("click", returnToNewestEvent\)/);
+  // A reader who asked for reduced motion gets the jump without the glide — and
+  // the setting defaults to `system`, so the decision has to resolve the device
+  // preference rather than compare the setting to the literal `reduce`.
+  assert.match(main, /effectiveMotion\(state\.settings\.appearance\.motion, reducedMotion\)/);
+  assert.match(main, /window\.matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)\.matches === true/);
+  assert.doesNotMatch(main, /appearance\.motion === "reduce" \? "auto"/);
 });

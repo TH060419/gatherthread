@@ -614,6 +614,224 @@ test("project creation leaves the project empty until the owner creates a sessio
   }
 });
 
+test("test qualification creates a full account while project invitations create project-scoped guests", () => {
+  const f = fixture();
+  try {
+    const grant = f.database.issueTestAccess("1h");
+    assert.match(grant.access_token, /^gtq_/);
+    assert.equal(JSON.stringify(f.database.sqlite.prepare("SELECT * FROM test_access_grants").all()).includes(grant.access_token), false);
+    const qualified = f.database.claimTestAccess({
+      access_token: grant.access_token,
+      display_name: "Qualified",
+      device_name: "Qualified laptop",
+      remember_device: true,
+    }, { browserSession: true });
+    assert.equal(f.database.canCreateProjects(qualified.actor.user_id), true);
+    assert.deepEqual(f.database.authenticateBrowserSession(qualified.browser_session.token).actor, qualified.actor);
+    assert.throws(() => f.database.claimTestAccess({
+      access_token: grant.access_token, display_name: "Replay", device_name: "Replay device",
+    }), (error: unknown) => error instanceof ApiError && error.status === 401);
+    assert.throws(() => f.database.revokeTestAccess(grant.grant_id),
+      (error: unknown) => error instanceof ApiError && error.status === 409);
+
+    const revoked = f.database.issueTestAccess("1h");
+    f.database.revokeTestAccess(revoked.grant_id);
+    assert.throws(() => f.database.claimTestAccess({
+      access_token: revoked.access_token, display_name: "Revoked", device_name: "Revoked device",
+    }), (error: unknown) => error instanceof ApiError && error.status === 401);
+
+    const shared = f.service.createProject(f.owner, {
+      title: "Shared", idempotency_key: "qualification-shared",
+    });
+    const guestInvite = f.service.createProjectInvitation(f.owner, shared.id, { role: "participant", ttl: "1h" });
+    const guest = f.service.claimInvitation({
+      invite_token: guestInvite.invite_token,
+      display_name: "Guest",
+      device_name: "Guest laptop",
+    }).actor;
+    assert.equal(f.database.canCreateProjects(guest.user_id), false);
+    assert.deepEqual(f.service.listProjects(guest).map((project) => project.id), [shared.id]);
+    assert.throws(() => f.service.createProject(guest, {
+      title: "Not allowed", idempotency_key: "guest-project-denied",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    assert.throws(() => f.service.createSession(guest, {
+      title: "Legacy bypass", mode: "solo", idempotency_key: "guest-legacy-denied",
+    }), (error: unknown) => error instanceof ApiError && error.status === 403);
+    const guestSolo = f.service.createSession(guest, {
+      project_id: shared.id, title: "Inside invitation", mode: "solo", idempotency_key: "guest-solo-allowed",
+    }).session;
+    assert.equal(guestSolo.owner_user_id, guest.user_id);
+
+    const owned = f.service.createProject(qualified.actor, {
+      title: "Qualified's project", idempotency_key: "qualified-project",
+    });
+    assert.equal(owned.role, "owner");
+    const qualifiedInvite = f.service.createProjectInvitation(f.owner, shared.id, { role: "viewer", ttl: "1h" });
+    f.service.claimInvitationForActor(qualified.actor, qualifiedInvite.invite_token);
+    assert.deepEqual(
+      new Map(f.service.listProjects(qualified.actor).map((project) => [project.id, project.role])),
+      new Map([[shared.id, "viewer"], [owned.id, "owner"]]),
+    );
+    assert.equal(f.service.listProjects(guest).some((project) => project.id === owned.id), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("a test qualification claim and revocation cannot both succeed across database connections", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-race-"));
+  const databasePath = join(directory, "test.sqlite");
+  const pepper = "unit-test-test-access-race-pepper";
+  const database = new CollaborationDatabase(databasePath, { authTokenPepper: pepper });
+  database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner laptop" });
+  const grant = database.issueTestAccess("1h");
+  database.close();
+
+  const workerSource = `
+    const { parentPort, workerData } = require("node:worker_threads");
+    (async () => {
+      const { CollaborationDatabase } = await import(workerData.moduleUrl);
+      const database = new CollaborationDatabase(workerData.databasePath, { authTokenPepper: workerData.pepper });
+      parentPort.postMessage({ ready: true });
+      parentPort.once("message", () => {
+        try {
+          if (workerData.action === "claim") {
+            database.claimTestAccess({
+              access_token: workerData.accessToken,
+              display_name: "Racing tester",
+              device_name: "Racing device",
+            });
+          } else {
+            database.revokeTestAccess(workerData.grantId);
+          }
+          parentPort.postMessage({ action: workerData.action, success: true });
+        } catch (error) {
+          parentPort.postMessage({ action: workerData.action, success: false, status: error && error.status });
+        } finally {
+          database.close();
+        }
+      });
+    })().catch((error) => parentPort.postMessage({ success: false, error: String(error) }));
+  `;
+  const makeWorker = (action: "claim" | "revoke") => new Worker(workerSource, {
+    eval: true,
+    workerData: {
+      action,
+      moduleUrl: new URL("../src/database.js", import.meta.url).href,
+      databasePath,
+      pepper,
+      accessToken: grant.access_token,
+      grantId: grant.grant_id,
+    },
+  });
+  const workers = [makeWorker("claim"), makeWorker("revoke")];
+  try {
+    await Promise.all(workers.map(workerMessage));
+    const results = workers.map((worker) => {
+      const message = workerMessage(worker);
+      worker.postMessage("go");
+      return message;
+    });
+    const [claim, revoke] = await Promise.all(results);
+    assert.equal(claim?.action, "claim");
+    assert.equal(revoke?.action, "revoke");
+    assert.notEqual(claim?.success, revoke?.success);
+    assert.equal(claim?.success === true ? revoke?.status : claim?.status, claim?.success === true ? 409 : 401);
+
+    const verification = new CollaborationDatabase(databasePath, { authTokenPepper: pepper });
+    try {
+      const row = verification.sqlite.prepare("SELECT claimed_at, revoked_at FROM test_access_grants WHERE id = ?")
+        .get(grant.grant_id) as { claimed_at: string | null; revoked_at: string | null };
+      const users = verification.sqlite.prepare("SELECT count(*) AS count FROM users").get() as { count: number };
+      assert.equal(row.claimed_at !== null, claim?.success === true);
+      assert.equal(row.revoked_at !== null, revoke?.success === true);
+      assert.equal(users.count, claim?.success === true ? 2 : 1);
+    } finally {
+      verification.close();
+    }
+  } finally {
+    for (const worker of workers) await worker.terminate();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("account capability migration preserves the first operator and existing project owners only", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-account-capabilities-"));
+  const path = join(directory, "legacy.sqlite");
+  const legacy = new DatabaseSync(path);
+  legacy.exec(`
+    PRAGMA foreign_keys = ON;
+    CREATE TABLE users (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, created_at TEXT NOT NULL) STRICT;
+    CREATE TABLE projects (
+      id TEXT PRIMARY KEY, owner_user_id TEXT NOT NULL REFERENCES users(id), title TEXT NOT NULL,
+      state TEXT NOT NULL, creation_idempotency_key TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      UNIQUE (owner_user_id, creation_idempotency_key)
+    ) STRICT;
+    INSERT INTO users VALUES ('operator', 'Operator', '2026-01-01T00:00:00.000Z');
+    INSERT INTO users VALUES ('guest', 'Guest', '2026-01-02T00:00:00.000Z');
+    INSERT INTO users VALUES ('creator', 'Creator', '2026-01-03T00:00:00.000Z');
+    INSERT INTO projects VALUES ('existing-project', 'creator', 'Existing', 'active', 'existing-key',
+      '2026-01-03T00:00:00.000Z', '2026-01-03T00:00:00.000Z');
+  `);
+  legacy.close();
+  const database = new CollaborationDatabase(path, { authTokenPepper: "migration-test-pepper" });
+  try {
+    assert.equal(database.canCreateProjects("operator"), true);
+    assert.equal(database.canCreateProjects("creator"), true);
+    assert.equal(database.canCreateProjects("guest"), false);
+  } finally {
+    database.close();
+  }
+  try {
+    const reopened = new CollaborationDatabase(path, { authTokenPepper: "migration-test-pepper" });
+    try { assert.equal(reopened.canCreateProjects("guest"), false); }
+    finally { reopened.close(); }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("test qualification expiry and browser-session failure cannot leak or half-create an account", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-atomic-"));
+  let instant = new Date("2026-01-01T00:00:00.000Z");
+  const database = new CollaborationDatabase(join(directory, "test.sqlite"), {
+    authTokenPepper: "unit-test-auth-token-pepper",
+    clock: () => instant,
+  });
+  try {
+    database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner laptop" });
+    const grant = database.issueTestAccess("1h");
+    database.sqlite.exec(`
+      CREATE TRIGGER fail_test_access_browser_session
+      BEFORE INSERT ON browser_sessions
+      BEGIN SELECT RAISE(ABORT, 'simulated browser session failure'); END;
+    `);
+    assert.throws(() => database.claimTestAccess({
+      access_token: grant.access_token, display_name: "Tester", device_name: "Test browser",
+    }, { browserSession: true }));
+    const afterFailure = database.sqlite.prepare("SELECT claimed_at FROM test_access_grants WHERE id = ?")
+      .get(grant.grant_id) as { claimed_at: string | null };
+    assert.equal(afterFailure.claimed_at, null);
+    assert.equal((database.sqlite.prepare("SELECT count(*) AS count FROM users").get() as { count: number }).count, 1);
+    database.sqlite.exec("DROP TRIGGER fail_test_access_browser_session");
+    const claimed = database.claimTestAccess({
+      access_token: grant.access_token, display_name: "Tester", device_name: "Test browser",
+    }, { browserSession: true });
+    assert.equal(database.canCreateProjects(claimed.actor.user_id), true);
+
+    const expired = database.issueTestAccess("1h");
+    instant = new Date("2026-01-01T01:00:00.001Z");
+    assert.throws(() => database.claimTestAccess({
+      access_token: expired.access_token, display_name: "Late", device_name: "Late browser",
+    }), (error: unknown) => error instanceof ApiError && error.status === 401);
+    assert.equal((database.sqlite.prepare("SELECT count(*) AS count FROM users").get() as { count: number }).count, 2);
+  } finally {
+    database.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("cloud deletion is creator-scoped, cascades server history, and leaves unrelated projects intact", () => {
   const f = fixture();
   try {
@@ -1238,6 +1456,43 @@ test("a database written before claim leases migrates its claims into recoverabl
   }
 });
 
+test("a database written before dynamic execution profiles migrates legacy runtimes as fixed routes", () => {
+  const f = fixture();
+  const path = join(f.directory, "test.sqlite");
+  const session = f.service.createSession(f.owner, {
+    session_id: "legacy-runtime-profile-session",
+    idempotency_key: "legacy-runtime-profile-create",
+    mode: "solo",
+    title: "Legacy runtime profile",
+  }).session;
+  const runtime = f.service.registerRuntime(f.owner, {
+    runtime_id: "legacy-runtime-profile",
+    session_id: session.id,
+    device_id: f.owner.device_id,
+    harness: "deepseek-harness",
+    provider: "deepseek-official",
+    model: "deepseek-v4-flash",
+    local_session_id: "legacy-runtime-local",
+    capture_fidelity: "harness_transcript",
+  });
+  f.database.close();
+
+  const legacy = new DatabaseSync(path);
+  legacy.exec("ALTER TABLE runtimes DROP COLUMN execution_profiles_json");
+  legacy.close();
+
+  const reopened = new CollaborationDatabase(path, { authTokenPepper: "unit-test-auth-token-pepper" });
+  try {
+    const columns = (reopened.sqlite.prepare("PRAGMA table_info(runtimes)").all() as Array<{ name: string }>)
+      .map((column) => column.name);
+    assert.ok(columns.includes("execution_profiles_json"));
+    assert.equal(reopened.getRuntime(runtime.id).execution_profiles, undefined);
+  } finally {
+    reopened.close();
+    rmSync(f.directory, { recursive: true, force: true });
+  }
+});
+
 test("DeepSeek Harness claims honor the exact Web-selected runtime and model without changing Codex claims", () => {
   const f = fixture();
   try {
@@ -1323,6 +1578,145 @@ test("DeepSeek Harness claims honor the exact Web-selected runtime and model wit
     });
     assert.throws(
       () => f.service.claimAgentRequest(f.member, session.id, ambiguous.id, firstRuntime.id),
+      (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("DeepSeek Harness dynamic execution profiles accept only exact advertised model and reasoning selections", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "dsh-dynamic-routing",
+      idempotency_key: "create-dsh-dynamic-routing",
+      mode: "multi",
+      title: "DSH dynamic routing",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "dsh-dynamic-member");
+    const runtime = f.service.registerRuntime(f.member, {
+      runtime_id: "dsh-dynamic-runtime",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      local_session_id: "dsh-dynamic-local",
+      capture_fidelity: "harness_transcript",
+      execution_profiles: [{
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        reasoning_efforts: ["low", "high"],
+        default_reasoning_effort: "low",
+      }, {
+        provider: "deepseek-official",
+        model: "deepseek-reasoner",
+        reasoning_efforts: ["high", "max"],
+        default_reasoning_effort: "high",
+      }],
+    });
+    assert.equal(runtime.execution_profiles?.length, 2);
+
+    const accepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use another advertised model",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-reasoner",
+          reasoning_effort: "max",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(f.service.claimAgentRequest(f.member, session.id, accepted.id, runtime.id).runtime_id, runtime.id);
+    f.service.completeAgentRequest(
+      f.member, session.id, accepted.id, runtime.id, "dsh-dynamic-complete", { content: "done" },
+    );
+
+    for (const [suffix, profile] of [["model", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-unadvertised",
+      reasoning_effort: "low",
+      runtime_id: runtime.id,
+    }], ["effort", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoning_effort: "max",
+      runtime_id: runtime.id,
+    }], ["runtime", {
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoning_effort: "low",
+    }]] as const) {
+      const rejected = f.service.appendEvent(f.member, session.id, {
+        idempotency_key: `dsh-dynamic-rejected-${suffix}`,
+        type: "agent_request",
+        visibility: "session",
+        payload: { content: "Reject unsupported route", execution_profile: profile },
+      });
+      assert.throws(
+        () => f.service.claimAgentRequest(f.member, session.id, rejected.id, runtime.id),
+        (error: unknown) => error instanceof ApiError && error.status === 409,
+      );
+    }
+
+    const downgraded = f.service.registerRuntime(f.member, {
+      runtime_id: runtime.id,
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "deepseek-harness",
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      local_session_id: "dsh-dynamic-local",
+      capture_fidelity: "harness_transcript",
+    });
+    assert.equal(downgraded.execution_profiles, undefined, "re-registration must not retain stale capabilities");
+    const legacyAccepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-legacy-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Retain the legacy fixed-model route",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-v4-flash",
+          reasoning_effort: "legacy-adapter-value",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, legacyAccepted.id, runtime.id).runtime_id,
+      runtime.id,
+    );
+    f.service.completeAgentRequest(
+      f.member, session.id, legacyAccepted.id, runtime.id, "dsh-dynamic-legacy-complete", { content: "done" },
+    );
+    const legacyWrongModel = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "dsh-dynamic-legacy-wrong-model",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Do not retain stale dynamic models",
+        execution_profile: {
+          harness: "deepseek-harness",
+          provider: "deepseek-official",
+          model: "deepseek-reasoner",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.throws(
+      () => f.service.claimAgentRequest(f.member, session.id, legacyWrongModel.id, runtime.id),
       (error: unknown) => error instanceof ApiError && error.status === 409,
     );
   } finally {
@@ -1689,6 +2083,45 @@ test("browser sessions store only peppered digests and expire or revoke with the
       () => f.database.authenticateBrowserSession(invalidatedByRevocation.token),
       (error: unknown) => error instanceof ApiError && error.status === 401,
     );
+  } finally {
+    f.close();
+  }
+});
+
+test("remembered browser stores multiple account choices without retaining device tokens", () => {
+  let instant = new Date("2026-09-24T00:00:00.000Z");
+  const f = fixture({ clock: () => instant });
+  try {
+    const first = f.database.createBrowserSession(f.owner, true);
+    const ownerVault = f.database.rememberBrowser(null, f.owner);
+    assert.match(ownerVault.token, /^gtr_[A-Za-z0-9_-]{43}$/u);
+    assert.equal(f.database.rememberedBrowserHasAccount(ownerVault.token, f.owner), true);
+    const memberVault = f.database.rememberBrowser(ownerVault.token, f.member);
+    assert.throws(() => f.database.listRememberedAccounts(ownerVault.token), (error: unknown) => error instanceof ApiError && error.status === 401);
+    const choices = f.database.listRememberedAccounts(memberVault.token);
+    assert.deepEqual(new Set(choices.map((choice) => choice.display_name)), new Set(["Owner", "Member"]));
+    assert.equal(JSON.stringify(f.database.sqlite.prepare("SELECT * FROM remembered_browsers").all()).includes(memberVault.token), false);
+    assert.equal(JSON.stringify(f.database.sqlite.prepare("SELECT * FROM remembered_accounts").all()).includes(f.ownerToken), false);
+
+    f.database.revokeBrowserSession(first.session_id, f.owner);
+    assert.equal(f.database.listRememberedAccounts(memberVault.token).length, 2, "logout leaves the chooser available");
+    const ownerChoice = choices.find((choice) => choice.display_name === "Owner");
+    assert.ok(ownerChoice);
+    const activated = f.database.activateRememberedAccount(memberVault.token, ownerChoice.id, {
+      display_name: "Owner renamed", device_name: "My Mac",
+    });
+    assert.equal(f.database.authenticateBrowserSession(activated.browser_session.token).actor.display_name, "Owner renamed");
+    assert.equal(f.database.listRememberedAccounts(activated.remembered_browser.token)
+      .find((choice) => choice.id === ownerChoice.id)?.device_name, "My Mac");
+    assert.throws(() => f.database.listRememberedAccounts(memberVault.token), (error: unknown) => error instanceof ApiError && error.status === 401);
+
+    const remaining = f.database.forgetRememberedAccount(activated.remembered_browser.token, ownerChoice.id);
+    assert.ok(remaining);
+    assert.deepEqual(f.database.listRememberedAccounts(remaining.token).map((choice) => choice.display_name), ["Member"]);
+    f.service.revokeDevice(f.member, f.member.device_id);
+    assert.deepEqual(f.database.listRememberedAccounts(remaining.token), []);
+    instant = new Date(remaining.expires_at);
+    assert.throws(() => f.database.listRememberedAccounts(remaining.token), (error: unknown) => error instanceof ApiError && error.status === 401);
   } finally {
     f.close();
   }

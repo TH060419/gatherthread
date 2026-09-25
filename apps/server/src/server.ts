@@ -1,17 +1,20 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { createReadStream, realpathSync, statSync } from "node:fs";
+import { createReadStream, realpathSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
-import { extname, resolve, sep } from "node:path";
+import { extname, resolve, sep, join } from "node:path";
 import {
   AppendEventInputSchema,
   AgentProgressInputSchema,
   AcceptInvitationInputSchema,
+  ActivateRememberedAccountInputSchema,
   ApproveDshPairingInputSchema,
   BeginDshPairingInputSchema,
   ClaimAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
   ClaimInvitationInputSchema,
+  ClaimTestAccessInputSchema,
   ClaimSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
@@ -20,16 +23,21 @@ import {
   CreateBrowserSessionInputSchema,
   CreateInvitationInputSchema,
   CreateIdentityInputSchema,
+  CreateHistorySummaryInputSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
+  CODE_SYNC_MAX_BODY_BYTES,
   FailSnapshotRequestInputSchema,
-  IdempotencyKeySchema,
+  DetachedCodeClearResultSchema,
   ListSnapshotRequestsQuerySchema,
   RegisterRuntimeInputSchema,
+  RemoveProjectMembershipInputSchema,
+  RemoveSessionMembershipInputSchema,
   RotateDeviceTokenInputSchema,
   SetMembershipInputSchema,
   SubscribeMessageSchema,
   UpdateDeviceInputSchema,
+  UpdateContextPolicyInputSchema,
   UpdateProjectInputSchema,
   UpdateSessionInputSchema,
   type ApiErrorBody,
@@ -47,6 +55,7 @@ import { ApiError, notFound, unauthorized } from "./errors.js";
 import { DshDevicePairingBroker, dshPairingPollToken } from "./dsh-pairing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { CollaborationService } from "./service.js";
+import { CodeRepository } from "./code-repository.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const DEFAULT_REPLAY_LIMIT = 50;
@@ -58,16 +67,20 @@ const MAX_JSON_DEPTH = 64;
 const MAX_JSON_NODES = 50_000;
 const DEVELOPMENT_BROWSER_SESSION_COOKIE = "gatherthread_session";
 const SECURE_BROWSER_SESSION_COOKIE = "__Host-gatherthread_session";
+const DEVELOPMENT_REMEMBERED_BROWSER_COOKIE = "gatherthread_remembered";
+const SECURE_REMEMBERED_BROWSER_COOKIE = "__Host-gatherthread_remembered";
 const REMEMBERED_BROWSER_SESSION_MAX_AGE_SECONDS = REMEMBERED_BROWSER_SESSION_TTL_MS / 1_000;
 const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/bootstrap",
   "/v1/browser-sessions",
   "/v1/invitations/claim",
+  "/v1/test-access/claim",
   "/v1/device-authorizations/claim",
 ]);
 
 function isSensitiveUnauthenticatedPath(pathname: string): boolean {
   return SENSITIVE_UNAUTHENTICATED_PATHS.has(pathname)
+    || /^\/v1\/remembered-accounts(?:\/[^/]+(?:\/activate)?)?$/u.test(pathname)
     || pathname === "/v1/dsh-pairings"
     || /^\/v1\/dsh-pairings\/[^/]+\/poll$/u.test(pathname);
 }
@@ -93,10 +106,12 @@ interface HttpAuthentication {
   actor: Actor;
   kind: "bearer" | "browser_session";
   browserSessionId: string | null;
+  rememberedBrowserSession: boolean;
 }
 
 export interface ServerOptions {
   databasePath: string;
+  codeRepositoryDirectory?: string;
   heartbeatIntervalMs?: number;
   allowedOrigins?: string[];
   authTokenPepper?: string;
@@ -201,13 +216,13 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   return true;
 }
 
-async function readJson(request: IncomingMessage): Promise<unknown> {
+async function readJson(request: IncomingMessage, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of request) {
     const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array);
     size += buffer.byteLength;
-    if (size > MAX_BODY_BYTES) throw new ApiError(413, "payload_too_large", `Request bodies are limited to ${MAX_BODY_BYTES} bytes`);
+    if (size > maxBytes) throw new ApiError(413, "payload_too_large", `Request bodies are limited to ${maxBytes} bytes`);
     chunks.push(buffer);
   }
   if (chunks.length === 0) return {};
@@ -244,6 +259,10 @@ function browserSessionCookieName(secureTransport: boolean): string {
   return secureTransport ? SECURE_BROWSER_SESSION_COOKIE : DEVELOPMENT_BROWSER_SESSION_COOKIE;
 }
 
+function rememberedBrowserCookieName(secureTransport: boolean): string {
+  return secureTransport ? SECURE_REMEMBERED_BROWSER_COOKIE : DEVELOPMENT_REMEMBERED_BROWSER_COOKIE;
+}
+
 function browserSessionCookieValue(request: IncomingMessage, name: string): string | null {
   const matches = (request.headers.cookie ?? "")
     .split(";")
@@ -253,6 +272,28 @@ function browserSessionCookieValue(request: IncomingMessage, name: string): stri
   if (matches.length !== 1) return null;
   const value = matches[0] ?? "";
   return /^gtb_[A-Za-z0-9_-]{43}$/.test(value) ? value : null;
+}
+
+function rememberedBrowserCookieValue(request: IncomingMessage, name: string): string | null {
+  const matches = (request.headers.cookie ?? "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => part.startsWith(`${name}=`))
+    .map((part) => part.slice(name.length + 1));
+  if (matches.length !== 1) return null;
+  const value = matches[0] ?? "";
+  return /^gtr_[A-Za-z0-9_-]{43}$/u.test(value) ? value : null;
+}
+
+function appendSetCookie(response: ServerResponse, value: string): void {
+  const prior = response.getHeader("set-cookie");
+  response.setHeader("set-cookie", prior === undefined ? value : [...(Array.isArray(prior) ? prior : [String(prior)]), value]);
+}
+
+function serializeRememberedBrowserCookie(name: string, token: string, secureTransport: boolean, expiresAt: string): string {
+  const maxAge = Math.max(0, Math.min(REMEMBERED_BROWSER_SESSION_MAX_AGE_SECONDS,
+    Math.ceil((Date.parse(expiresAt) - Date.now()) / 1_000)));
+  return `${name}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${maxAge}; Expires=${new Date(expiresAt).toUTCString()}${secureTransport ? "; Secure" : ""}`;
 }
 
 function serializeBrowserSessionCookie(
@@ -389,9 +430,19 @@ export async function startCollaborationServer(
     maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
+  const publicAccountActor = (actor: Actor) => ({
+    id: actor.user_id,
+    username: actor.display_name,
+    device_id: actor.device_id,
+    can_create_projects: database.canCreateProjects(actor.user_id),
+  });
+  const ephemeralCodeDirectory = options.databasePath === ":memory:" && !options.codeRepositoryDirectory
+    ? mkdtempSync(join(tmpdir(), "gatherthread-code-")) : undefined;
+  const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
   const dshPairings = new DshDevicePairingBroker();
   const secureTransport = options.secureTransport ?? false;
   const browserCookieName = browserSessionCookieName(secureTransport);
+  const rememberedCookieName = rememberedBrowserCookieName(secureTransport);
   const sockets = new Map<WebSocket, SocketState>();
   const realtimeTickets = new Map<string, RealtimeTicket>();
   const wsServer = new WebSocketServer({
@@ -407,6 +458,25 @@ export async function startCollaborationServer(
   const actorLimiter = new FixedWindowRateLimiter(options.actorRateLimit ?? { windowMs: 60_000, limit: 600 });
   const actorWriteLimiter = new FixedWindowRateLimiter(options.actorWriteRateLimit ?? { windowMs: 60_000, limit: 120 });
   const maxConnections = options.maxConnections ?? 128;
+
+  const rememberAfterLogin = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
+    const remembered = database.rememberBrowser(
+      rememberedBrowserCookieValue(request, rememberedCookieName), actor,
+    );
+    appendSetCookie(response, serializeRememberedBrowserCookie(
+      rememberedCookieName, remembered.token, secureTransport, remembered.expires_at,
+    ));
+  };
+
+  const rememberAfterOneUseClaim = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
+    try {
+      rememberAfterLogin(request, response, actor);
+    } catch {
+      // The claim and its unique device credential have already committed. Optional
+      // quick-login storage must not hide that credential behind an HTTP 500.
+      console.warn("Optional remembered-account registration failed after a one-use claim");
+    }
+  };
 
   const closeRealtimeWithoutMembership = (): void => {
     for (const [socket, state] of sockets) {
@@ -519,10 +589,43 @@ export async function startCollaborationServer(
             secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined,
           ));
-          sendJson(response, 201, { data: result });
+          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
+          sendJson(response, 201, { data: { ...result, actor: {
+            ...result.actor,
+            can_create_projects: database.canCreateProjects(result.actor.user_id),
+          } } });
           return;
         }
-        sendJson(response, 201, { data: service.claimInvitation(input) });
+        const result = service.claimInvitation(input);
+        sendJson(response, 201, { data: { ...result, actor: {
+          ...result.actor,
+          can_create_projects: database.canCreateProjects(result.actor.user_id),
+        } } });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/test-access/claim") {
+        const input = ClaimTestAccessInputSchema.parse(await readJson(request));
+        if (request.headers["x-gatherthread-browser-session"] === "1") {
+          const { browser_session: browserSession, ...result } = service.claimTestAccessWithBrowserSession(input);
+          response.setHeader("set-cookie", serializeBrowserSessionCookie(
+            browserCookieName,
+            browserSession.token,
+            secureTransport,
+            browserSession.remembered ? browserSession.expires_at : undefined,
+          ));
+          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
+          sendJson(response, 201, { data: { ...result, actor: {
+            ...result.actor,
+            can_create_projects: true,
+          } } });
+          return;
+        }
+        const result = service.claimTestAccess(input);
+        sendJson(response, 201, { data: { ...result, actor: {
+          ...result.actor,
+          can_create_projects: true,
+        } } });
         return;
       }
 
@@ -535,17 +638,58 @@ export async function startCollaborationServer(
       if (request.method === "POST" && url.pathname === "/v1/browser-sessions") {
         const actor = database.authenticate(bearerToken(request));
         const input = CreateBrowserSessionInputSchema.parse(await readJson(request));
-        const browserSession = database.createBrowserSession(actor, input.remember_device);
+        const browserSession = database.createBrowserSession(actor, input.remember_device, input);
         response.setHeader("set-cookie", serializeBrowserSessionCookie(
           browserCookieName,
           browserSession.token,
           secureTransport,
           browserSession.remembered ? browserSession.expires_at : undefined,
         ));
+        if (input.remember_device) rememberAfterLogin(request, response, actor);
         sendJson(response, 201, { data: {
-          actor: { id: actor.user_id, username: actor.display_name, device_id: actor.device_id },
+          actor: publicAccountActor({ ...actor, display_name: input.display_name ?? actor.display_name }),
           expires_at: browserSession.expires_at,
         } });
+        return;
+      }
+
+      if (request.method === "GET" && url.pathname === "/v1/remembered-accounts") {
+        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
+        if (!token) throw unauthorized("Remembered browser credential is required");
+        sendJson(response, 200, { data: { accounts: database.listRememberedAccounts(token) } });
+        return;
+      }
+
+      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "remembered-accounts"
+        && parts[2] && parts[3] === "activate" && parts.length === 4) {
+        if (!requestOrigin) throw new ApiError(403, "csrf_origin_required", "Remembered-account sign-in requires an allowed Origin");
+        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
+        if (!token) throw unauthorized("Remembered browser credential is required");
+        const input = ActivateRememberedAccountInputSchema.parse(await readJson(request));
+        const result = database.activateRememberedAccount(token, parts[2], input);
+        appendSetCookie(response, serializeBrowserSessionCookie(
+          browserCookieName, result.browser_session.token, secureTransport, result.browser_session.expires_at,
+        ));
+        appendSetCookie(response, serializeRememberedBrowserCookie(
+          rememberedCookieName, result.remembered_browser.token, secureTransport, result.remembered_browser.expires_at,
+        ));
+        sendJson(response, 201, { data: {
+          actor: publicAccountActor(result.actor),
+          expires_at: result.browser_session.expires_at,
+        } });
+        return;
+      }
+
+      if (request.method === "DELETE" && parts[0] === "v1" && parts[1] === "remembered-accounts"
+        && parts[2] && parts.length === 3) {
+        if (!requestOrigin) throw new ApiError(403, "csrf_origin_required", "Forgetting an account requires an allowed Origin");
+        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
+        if (!token) throw unauthorized("Remembered browser credential is required");
+        const next = database.forgetRememberedAccount(token, parts[2]);
+        appendSetCookie(response, next
+          ? serializeRememberedBrowserCookie(rememberedCookieName, next.token, secureTransport, next.expires_at)
+          : serializeClearedBrowserSessionCookie(rememberedCookieName, secureTransport));
+        response.writeHead(204).end();
         return;
       }
 
@@ -557,9 +701,14 @@ export async function startCollaborationServer(
           const cookieToken = browserSessionCookieValue(request, browserCookieName);
           if (!cookieToken) throw unauthorized();
           const authenticated = database.authenticateBrowserSession(cookieToken);
-          return { actor: authenticated.actor, kind: "browser_session", browserSessionId: authenticated.session_id };
+          return {
+            actor: authenticated.actor,
+            kind: "browser_session",
+            browserSessionId: authenticated.session_id,
+            rememberedBrowserSession: authenticated.remembered,
+          };
         })()
-        : { actor: database.authenticate(bearerToken(request)), kind: "bearer", browserSessionId: null };
+        : { actor: database.authenticate(bearerToken(request)), kind: "bearer", browserSessionId: null, rememberedBrowserSession: false };
       const { actor } = authentication;
       const isWrite = request.method !== "GET" && request.method !== "HEAD" && request.method !== "OPTIONS";
       if (authentication.kind === "browser_session" && isWrite
@@ -578,8 +727,8 @@ export async function startCollaborationServer(
           throw new ApiError(429, "rate_limited", "Too many writes for this device");
         }
       }
-      const readAuthenticatedJson = async (): Promise<unknown> => {
-        const value = await readJson(request);
+      const readAuthenticatedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
+        const value = await readJson(request, maxBytes);
         if (authentication.kind === "browser_session" && authentication.browserSessionId) {
           database.assertActiveBrowserSession(authentication.browserSessionId, actor);
         }
@@ -587,11 +736,18 @@ export async function startCollaborationServer(
       };
 
       if (request.method === "GET" && url.pathname === "/v1/me") {
-        sendJson(response, 200, { data: {
-          id: actor.user_id,
-          username: actor.display_name,
-          device_id: actor.device_id,
-        } });
+        sendJson(response, 200, { data: publicAccountActor(actor) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/remembered-accounts/adopt-current-session") {
+        z.object({}).strict().parse(await readAuthenticatedJson());
+        if (authentication.kind !== "browser_session" || !authentication.rememberedBrowserSession) {
+          throw new ApiError(403, "remembered_session_required", "Only a remembered browser session can be adopted");
+        }
+        const existing = rememberedBrowserCookieValue(request, rememberedCookieName) ?? "";
+        if (!database.rememberedBrowserHasAccount(existing, actor)) rememberAfterLogin(request, response, actor);
+        sendJson(response, 200, { data: { adopted: true } });
         return;
       }
 
@@ -688,7 +844,51 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/code-storage") {
+        sendJson(response, 200, { data: codeRepository.storageSummary(actor) });
+        return;
+      }
+      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "code-storage"
+        && parts[2] === "detached-branches" && parts[3] && parts[4] === "clear" && parts.length === 5) {
+        const result = codeRepository.clearDetachedBranch(actor, parts[3], await readAuthenticatedJson());
+        sendJson(response, 200, { data: DetachedCodeClearResultSchema.parse(result) });
+        return;
+      }
+
       const projectId = parts[0] === "v1" && parts[1] === "projects" ? parts[2] : undefined;
+      if (projectId && parts[3] === "context-policy" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: service.getProjectContextPolicy(actor, projectId) });
+        return;
+      }
+      if (projectId && parts[3] === "context-policy" && parts.length === 4 && request.method === "PUT") {
+        const input = UpdateContextPolicyInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: service.setProjectContextPolicy(actor, projectId, input.mode) });
+        return;
+      }
+      if (projectId && parts[3] === "code") {
+        service.requireProjectMembership(actor, projectId);
+        if (request.method === "GET" && parts.length === 4) {
+          sendJson(response, 200, { data: codeRepository.status(actor, projectId) });
+          return;
+        }
+        if (request.method === "GET" && parts.length === 5 && parts[4] === "snapshot") {
+          sendJson(response, 200, { data: codeRepository.snapshot(actor, projectId, url.searchParams.get("branch_id") ?? "main") });
+          return;
+        }
+        if (request.method === "POST" && parts.length === 5) {
+          const actions = {
+            enable: codeRepository.enable.bind(codeRepository), disable: codeRepository.disable.bind(codeRepository), checkpoints: codeRepository.checkpoint.bind(codeRepository),
+            review: codeRepository.review.bind(codeRepository), merge: codeRepository.merge.bind(codeRepository), update: codeRepository.update.bind(codeRepository),
+            "clear-branch": codeRepository.clearBranch.bind(codeRepository), "clear-project": codeRepository.clearProject.bind(codeRepository),
+          };
+          const action = Object.hasOwn(actions, parts[4]!) ? actions[parts[4] as keyof typeof actions] : undefined;
+          if (action) {
+            const body = await readAuthenticatedJson(parts[4] === "checkpoints" ? CODE_SYNC_MAX_BODY_BYTES : MAX_BODY_BYTES);
+            sendJson(response, 200, { data: action(actor, projectId, body) });
+            return;
+          }
+        }
+      }
       if (projectId && request.method === "GET" && parts.length === 3) {
         sendJson(response, 200, { data: service.getProject(actor, projectId) });
         return;
@@ -734,8 +934,9 @@ export async function startCollaborationServer(
       }
 
       if (projectId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        await readAuthenticatedJson();
-        service.removeProjectMembership(actor, projectId, parts[4]);
+        const decision = RemoveProjectMembershipInputSchema.parse(await readAuthenticatedJson());
+        service.removeProjectMembership(actor, projectId, parts[4], decision);
+        codeRepository.repairAfterMembershipRemoval(projectId);
         closeRealtimeWithoutMembership();
         response.writeHead(204).end();
         return;
@@ -836,8 +1037,10 @@ export async function startCollaborationServer(
       }
 
       if (sessionId && parts[3] === "members" && parts[4] && parts.length === 5 && request.method === "DELETE") {
-        const input = z.object({ idempotency_key: IdempotencyKeySchema }).parse(await readAuthenticatedJson());
-        const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key);
+        const input = RemoveSessionMembershipInputSchema.parse(await readAuthenticatedJson());
+        const projectId = database.requireSession(sessionId).project_id;
+        const event = service.removeMembership(actor, sessionId, parts[4], input.idempotency_key, input);
+        codeRepository.repairAfterMembershipRemoval(projectId);
         closeRealtimeWithoutMembership();
         sendJson(response, 200, { data: { event } });
         return;
@@ -853,6 +1056,24 @@ export async function startCollaborationServer(
         const afterSequence = numericQuery(url, "after_sequence", 0, Number.MAX_SAFE_INTEGER);
         const limit = numericQuery(url, "limit", DEFAULT_REPLAY_LIMIT, MAX_REPLAY_LIMIT, 1);
         sendJson(response, 200, { data: service.replay(actor, sessionId, afterSequence, limit, MAX_REPLAY_BYTES) });
+        return;
+      }
+
+      if (sessionId && parts[3] === "history-summaries" && parts.length === 4 && request.method === "POST") {
+        const input = CreateHistorySummaryInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: { event: service.createHistorySummary(actor, sessionId, input) } });
+        return;
+      }
+
+      if (sessionId && parts[3] === "context" && parts.length === 4 && request.method === "GET") {
+        const view = z.enum(["summary", "original"]).optional().parse(url.searchParams.get("view") ?? undefined);
+        const through = url.searchParams.get("through_sequence");
+        if (url.searchParams.getAll("view").length > 1 || url.searchParams.getAll("through_sequence").length > 1
+          || (through !== null && !/^(0|[1-9][0-9]*)$/u.test(through))) {
+          throw new ApiError(400, "validation_error", "Context view and through_sequence must each have one valid value");
+        }
+        const throughSequence = through === null ? undefined : numericQuery(url, "through_sequence", 0, Number.MAX_SAFE_INTEGER);
+        sendJson(response, 200, { data: service.readHistoryContext(actor, sessionId, view, throughSequence) });
         return;
       }
 
@@ -1104,6 +1325,7 @@ export async function startCollaborationServer(
       wsServer.close();
       await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
       database.close();
+      if (ephemeralCodeDirectory) rmSync(ephemeralCodeDirectory, { recursive: true, force: true });
     },
   };
 }

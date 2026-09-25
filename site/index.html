@@ -3,8 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GatherThread — 一个空间，汇聚众智。</title>
-<meta name="description" content="GatherThread 让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。">
+<title>GatherThread 共序 | 本地 AI Agent 多人联机协作</title>
+<meta name="description" content="GatherThread 共序是面向多人联机协作、各自使用本地 AI Agent 的开源工作区。连接 Codex Desktop 与 DeepSeek Harness，共享可追溯项目会话、实时上下文和可选 Git 代码检查点；支持自托管，官网为邀请制 Alpha。">
+<link rel="canonical" href="https://gatherthread.cn/">
+<meta property="og:title" content="GatherThread 共序 | Local AI Agent Collaboration">
+<meta property="og:description" content="Self-hostable collaboration for teams using local AI coding agents. Shared project history, live context, role-based sessions, Codex and DeepSeek Harness, with opt-in Git code checkpoints.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://gatherthread.cn/">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:locale:alternate" content="en_US">
+<meta name="twitter:card" content="summary">
 <link rel="icon" type="image/svg+xml" href="assets/app-icon-color-on-dark.svg">
 <link rel="stylesheet" href="styles.css">
 <script src="boot.js"></script>
@@ -32,6 +40,7 @@
       <a href="#sessions" data-i18n="nav.sessions">会话</a>
       <a href="#context" data-i18n="nav.context">上下文</a>
       <a href="#connect" data-i18n="nav.connect">连接</a>
+      <a href="#code" data-i18n="nav.code">代码协作</a>
       <a href="#security" data-i18n="nav.security">安全</a>
       <a href="#specs" data-i18n="nav.specs">规格</a>
     </nav>
@@ -55,7 +64,7 @@
 
   <!-- ============ PAGE 1 · HERO ============ -->
   <section class="hero page">
-    <p class="hero-eyebrow mono" data-i18n="hero.eyebrow">[ 0.1.0-ALPHA.5 · ALPHA 预览版 ]</p>
+    <p class="hero-eyebrow mono" data-i18n="hero.eyebrow">[ ALPHA 预览版 · 邀请制测试 ]</p>
     <h1 class="hero-title" id="heroTitle" aria-label="一个空间，汇聚众智。">
       <span class="line" data-split data-i18n="hero.l1">一个空间，汇聚众智。</span>
     </h1>
@@ -63,7 +72,7 @@
     <p class="hero-copy" data-i18n="hero.copy">让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。</p>
     <div class="hero-ctas">
       <a class="btn-pill" href="./app/" data-i18n="hero.cta1">开始使用</a>
-      <a class="btn-link" href="https://github.com/TH060419/gatherthread" target="_blank" rel="noopener"><span data-i18n="hero.cta2">在 GitHub 上查看</span><span class="chev">›</span></a>
+      <a class="btn-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer"><span data-i18n="hero.cta2">申请 Alpha 测试资格</span><span class="chev">›</span></a>
     </div>
 
     <!-- Animated brand mark: four threads converge into one -->
@@ -172,48 +181,29 @@
     </div>
   </section>
 
-  <!-- ============ PAGE 5 · CONNECTION MODES ============ -->
+  <!-- ============ PAGE 5 · SERVER-FIRST CONNECTION ============ -->
   <section class="band page" id="connect">
     <div class="wrap">
       <p class="mono label fx">[ CONNECTION ]</p>
-      <h2 class="h2 fx" data-i18n="connect.h2">无需云账户，三种连接方式。</h2>
-      <p class="lead fx" data-i18n="connect.lead">它们会保留同一个私有 .env、数据库、凭据 Pepper、用户和历史。</p>
+      <h2 class="h2 fx" data-i18n="connect.h2">通过服务器，随时接入同一项目。</h2>
+      <p class="lead fx" data-i18n="connect.lead">当前 Alpha 在 gatherthread.cn 邀请制测试。网页承载共享会话，你的 Agent 与工作目录仍留在自己的设备上。</p>
       <div class="trio">
         <article class="col fx">
-          <h3 data-i18n="connect.c1.h3">仅本机</h3>
-          <p data-i18n="connect.c1.p">一台电脑完整测试，不开放网络。</p>
-          <div class="code-row">
-            <code class="mono">npm run connection:local</code>
-            <button class="copy-btn" data-copy="npm run connection:local" data-i18n-aria="copy.aria" aria-label="复制命令">
-              <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
-            </button>
-          </div>
+          <h3 data-i18n="connect.c1.h3">打开共序</h3>
+          <p data-i18n="connect.c1.p">已有账号？在浏览器中登录。首次参加 Alpha 测试的用户，先用一次性资格码激活自己的账号。</p>
+          <a class="col-action" href="./app/" data-i18n="connect.c1.link">打开登录页 ↗</a>
         </article>
         <article class="col fx">
-          <h3 data-i18n="connect.c2.h3">局域网 HTTPS</h3>
-          <p data-i18n="connect.c2.p">同一可信局域网内的已知设备；自动选址并启动两个服务。</p>
-          <div class="code-row">
-            <code class="mono">npm run lan:start</code>
-            <button class="copy-btn" data-copy="npm run lan:start" data-i18n-aria="copy.aria" aria-label="复制命令">
-              <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
-            </button>
-          </div>
+          <h3 data-i18n="connect.c2.h3">申请测试资格</h3>
+          <p data-i18n="connect.c2.p">还没有资格码？在 GitHub 发起公开的 Alpha 测试申请 Issue。邮箱选填；若愿意公开，建议填写，方便获批后私下发送资格码。申请理由、希望测试的内容和了解渠道也可填写。若介意公开邮箱，可在获批后把 Issue 链接私信至 coolhezi@sjtu.edu.cn。维护者会在 Issue 回复审核结果，但不会公开资格码。请勿发布资格码、设备 Token、密码、密钥或私有代码。</p>
+          <a class="col-action" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer" data-i18n="connect.c2.link">前往 GitHub Issues ↗</a>
         </article>
         <article class="col fx">
-          <h3 data-i18n="connect.c3.h3">Tailscale Serve</h3>
-          <p data-i18n="connect.c3.p">跨网络的小规模已知协作者。</p>
-          <div class="code-row">
-            <code class="mono">npm run connection:tailscale -- --url https://host.tailnet.ts.net</code>
-            <button class="copy-btn" data-copy="npm run connection:tailscale -- --url https://host.tailnet.ts.net" data-i18n-aria="copy.aria" aria-label="复制命令">
-              <svg class="icon-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2.5"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
-              <svg class="icon-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l5 5L20 6.5"/></svg>
-            </button>
-          </div>
+          <h3 data-i18n="connect.c3.h3">连接本地 Agent</h3>
+          <p data-i18n="connect.c3.p">在项目中连接自己的 Codex 或 DeepSeek Harness。模型、凭据和本地文件继续由本人管理。</p>
+          <a class="col-action" href="https://github.com/TH060419/gatherthread#connect-a-local-codex-agent" target="_blank" rel="noopener noreferrer" data-i18n="connect.c3.link">查看连接指南 ↗</a>
         </article>
       </div>
-      <p class="sr-only" id="copyStatus" role="status" aria-live="polite" aria-atomic="true"></p>
     </div>
   </section>
 
@@ -221,7 +211,7 @@
   <section class="band band-alt page">
     <div class="wrap">
       <p class="mono label fx">[ SETUP ]</p>
-      <h2 class="h2 fx" data-i18n="setup.h2">三步，接入你的 Agent。</h2>
+      <h2 class="h2 fx" data-i18n="setup.h2">连接你熟悉的 Agent。</h2>
       <div class="duo">
         <article class="card fx">
           <p class="mono card-tag">[ CODEX ]</p>
@@ -237,13 +227,35 @@
             <li data-i18n="setup.dsh.1">把 @gatherthread/dsh-host 安装到已验证的 DSH Web profile。</li>
             <li data-i18n="setup.dsh.2">启动 dsh web 并保持运行。</li>
             <li data-i18n="setup.dsh.3">打开 Settings → GatherThread / 共序，输入当前服务器地址，并批准一次性配对码。</li>
+            <li data-i18n="setup.dsh.4">选择 Provider 和 Model，确认连接后即可在项目中使用。</li>
           </ol>
         </article>
       </div>
     </div>
   </section>
 
-  <!-- ============ PAGE 7 · SECURITY ============ -->
+  <!-- ============ PAGE 7 · CLOUD CODE COLLABORATION ============ -->
+  <section class="band page" id="code">
+    <div class="wrap">
+      <p class="mono label fx">[ CLOUD GIT · OPT-IN ]</p>
+      <h2 class="h2 fx" data-i18n="code.h2">需要代码协作时，再开启云端 Git。</h2>
+      <p class="lead fx" data-i18n="code.lead">云端 Git 只用于同项目成员协作，不用于 GatherThread 产品开发或其他用途。项目内所有成员可查看已同步的分支，包括 Solo 会话相关代码。</p>
+      <div class="duo">
+        <article class="card fx">
+          <p class="mono card-tag">[ YOUR CHOICE ]</p>
+          <h3 data-i18n="code.c1.h3">上传由你决定</h3>
+          <p data-i18n="code.c1.p">项目创建者先启用云端仓库；每位成员再分别授权自己的本地目录。自动代码上传默认关闭，也可暂停云端同步。</p>
+        </article>
+        <article class="card fx">
+          <p class="mono card-tag">[ LOCAL FIRST ]</p>
+          <h3 data-i18n="code.c2.h3">本地 Git 仍归你所有</h3>
+          <p data-i18n="code.c2.p">云端代码可在设置中按权限清理，不会删除你的本地 Git；关闭云端同步后，代码云端协作会受限。</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ PAGE 8 · SECURITY ============ -->
   <section class="band page" id="security">
     <div class="wrap">
       <p class="mono label fx">[ SECURITY ]</p>
@@ -261,7 +273,7 @@
     </div>
   </section>
 
-  <!-- ============ PAGE 8 · SPECS ============ -->
+  <!-- ============ PAGE 9 · SPECS ============ -->
   <section class="band page" id="specs">
     <div class="wrap">
       <p class="mono label fx">[ SPECS ]</p>
@@ -274,13 +286,14 @@
     </div>
   </section>
 
-  <!-- ============ PAGE 9 · FINAL CTA ============ -->
+  <!-- ============ PAGE 10 · FINAL CTA ============ -->
   <section class="band final-cta page">
     <div class="wrap">
       <h2 class="h2 fx" data-i18n="final.h2">进入共序，开始协作。</h2>
+      <p class="lead fx" data-i18n="final.lead">目前仅接受邀请制 Alpha 测试。已有账号可直接登录；没有测试资格，请在 GitHub Issues 申请。</p>
       <div class="hero-ctas fx">
         <a class="btn-pill" href="./app/" data-i18n="final.cta1">打开登录页</a>
-        <a class="btn-link" href="https://github.com/TH060419/gatherthread#local-end-to-end-run" target="_blank" rel="noopener"><span data-i18n="final.cta2">阅读运行指南</span><span class="chev">›</span></a>
+        <a class="btn-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer"><span data-i18n="final.cta2">申请测试资格</span><span class="chev">›</span></a>
       </div>
     </div>
   </section>
@@ -291,14 +304,18 @@
 <footer class="footer">
   <div class="wrap">
     <div class="footnotes">
-      <p data-i18n="foot.1">¹ Alpha 预览版：共序官方服务器尚未开放；本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用。</p>
+      <p data-i18n="foot.1">¹ Alpha 预览版：gatherthread.cn 正在邀请制测试，尚未开放公众注册或公共 Beta。</p>
       <p data-i18n="foot.2">² 服务器使用 node:sqlite，因此需要 Node.js 24 或更新版本。</p>
-      <p data-i18n="foot.3">³ 局域网模式要求客户端显式信任专用本地 CA，不能绕过证书警告，也不能配置路由器端口转发。</p>
+      <p data-i18n="foot.3">³ Alpha 测试资格通过公开 GitHub Issue 申请；邮箱选填，愿意公开时建议填写。请勿发布资格码、设备 Token、密码、密钥或私有代码。</p>
     </div>
     <div class="footer-bar">
       <img class="footer-lockup lockup-for-dark" src="assets/lockup-color-transparent-dark.svg" alt="GatherThread">
       <img class="footer-lockup lockup-for-light" src="assets/lockup-color-transparent-light.svg" alt="GatherThread">
       <p class="copyright">Copyright © 2026 Yuhan He and contributors. Licensed under Apache License 2.0.</p>
+    </div>
+    <div class="footer-contact">
+      <p><span data-i18n="foot.contact">联系与反馈：</span> <a href="https://github.com/TH060419/gatherthread/issues" target="_blank" rel="noopener noreferrer">GitHub Issues</a> · <a href="mailto:coolhezi@sjtu.edu.cn">coolhezi@sjtu.edu.cn</a></p>
+      <p><span data-i18n="foot.icp">gatherthread.cn 备案：</span> <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer" lang="zh-CN">冀ICP备2026037466号-1</a></p>
     </div>
   </div>
 </footer>

@@ -31,6 +31,7 @@ await cp(resolve(root, "brand"), resolve(applicationDist, "brand"), { recursive:
 await build({
   entryPoints: {
     markdown: resolve(root, "src/markdown.js"),
+    "history-summary-policy": resolve(root, "src/history-summary-policy.js"),
     styles: resolve(root, "src/styles.css"),
   },
   outdir: resolve(applicationDist, "src"),

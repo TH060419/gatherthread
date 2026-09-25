@@ -3,6 +3,8 @@ import type {
   CanonicalEvent,
   CommitLocalTurnInput,
   CommitLocalTurnResult,
+  CreateHistorySummaryInput,
+  HistoryContext,
   JsonValue,
   MembershipRole,
   ReplayResponse,
@@ -10,7 +12,7 @@ import type {
   SnapshotRequestKind,
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
-import { CollaborationDatabase, type Actor, type RuntimeRecord, type SessionRecord } from "./database.js";
+import { CollaborationDatabase, type Actor, type BranchRemovalDecision, type RuntimeRecord, type SessionRecord } from "./database.js";
 import { agentRequestFailed, conflict, forbidden, notFound } from "./errors.js";
 import { redactJson } from "./redaction.js";
 
@@ -64,6 +66,14 @@ export class CollaborationService {
     return { project: this.database.requireProject(projectId), role };
   }
 
+  getProjectContextPolicy(actor: Actor, projectId: string) {
+    return this.database.getProjectContextPolicy(actor, projectId);
+  }
+
+  setProjectContextPolicy(actor: Actor, projectId: string, mode: "summary" | "original") {
+    return this.database.setProjectContextPolicy(actor, projectId, mode);
+  }
+
   listProjects(actor: Actor) {
     this.database.assertActiveDevice(actor);
     return this.database.listProjects(actor.user_id);
@@ -113,9 +123,9 @@ export class CollaborationService {
     return this.database.setProjectMembership(actor, projectId, userId, role);
   }
 
-  removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
-    this.requireProjectOwner(actor, projectId);
-    this.database.removeProjectMembership(actor, projectId, userId);
+  removeProjectMembership(actor: Actor, projectId: string, userId: string, decision: BranchRemovalDecision = {}): void {
+    this.requireProjectMembership(actor, projectId);
+    this.database.removeProjectMembership(actor, projectId, userId, decision);
   }
 
   getSession(actor: Actor, sessionId: string): { session: SessionRecord; role: MembershipRole } {
@@ -159,6 +169,7 @@ export class CollaborationService {
         harness: runtime.harness,
         provider: runtime.provider,
         model: runtime.model,
+        ...(runtime.execution_profiles === undefined ? {} : { execution_profiles: runtime.execution_profiles }),
         status: runtime.status,
         last_seen_at: runtime.last_seen_at,
       }));
@@ -183,6 +194,14 @@ export class CollaborationService {
     const result = this.database.claimInvitation(input, { browserSession: true });
     if (result.event) this.publish(result.event);
     return result;
+  }
+
+  claimTestAccess(input: Parameters<CollaborationDatabase["claimTestAccess"]>[0]) {
+    return this.database.claimTestAccess(input);
+  }
+
+  claimTestAccessWithBrowserSession(input: Parameters<CollaborationDatabase["claimTestAccess"]>[0]) {
+    return this.database.claimTestAccess(input, { browserSession: true });
   }
 
   claimInvitationForActor(actor: Actor, inviteToken: string) {
@@ -257,9 +276,10 @@ export class CollaborationService {
     return event;
   }
 
-  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string): CanonicalEvent {
+  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string,
+    decision: BranchRemovalDecision = {}): CanonicalEvent {
     this.requireOwner(actor, sessionId);
-    const event = this.database.removeMembership(actor, sessionId, userId, idempotencyKey);
+    const event = this.database.removeMembership(actor, sessionId, userId, idempotencyKey, decision);
     this.publish(event);
     return event;
   }
@@ -298,6 +318,16 @@ export class CollaborationService {
       ...replay,
       events: replay.events.map((event) => this.minimizeEventForActor(actor, role, event)),
     };
+  }
+
+  createHistorySummary(actor: Actor, sessionId: string, input: CreateHistorySummaryInput): CanonicalEvent {
+    const event = this.database.createHistorySummary(actor, sessionId, input);
+    this.publish(event);
+    return event;
+  }
+
+  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number): HistoryContext {
+    return this.database.readHistoryContext(actor, sessionId, view, throughSequence);
   }
 
   registerRuntime(actor: Actor, input: Parameters<CollaborationDatabase["registerRuntime"]>[1]): RuntimeRecord {

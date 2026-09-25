@@ -76,3 +76,23 @@ test("compatibility boundary rejects a Collaboration API without required realti
     /lacks required session, heartbeat, progress, or local-turn support/,
   );
 });
+
+test("HTTP compatibility preserves the user's context policy and exact pre-request sequence fence", async () => {
+  const urls: string[] = [];
+  const api = createHttpDshCollaborationApi({
+    baseUrl: "https://gatherthread.example/v1", credential: "fixture-credential",
+    fetch: async (input, init) => {
+      const url = String(input);
+      urls.push(url);
+      assert.equal(new Headers(init?.headers).get("authorization"), "Bearer fixture-credential");
+      return Response.json({ data: { view: "summary", through_sequence: 8, items: [{
+        kind: "summary", event_id: "summary-8", sequence: 1, actor_user_id: "user-1",
+        content: "Decided the API contract.", source_event_ids: ["event-1", "event-2"],
+      }] } });
+    },
+  });
+  const result = await (api as any).readContext("session-1", undefined, 8);
+  assert.equal(result.view, "summary");
+  assert.deepEqual(result.items[0].source_event_ids, ["event-1", "event-2"]);
+  assert.deepEqual(urls, ["https://gatherthread.example/v1/sessions/session-1/context?through_sequence=8"]);
+});

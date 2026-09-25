@@ -1,8 +1,8 @@
-# ADR-0024: Add ZCode as a third harness through a standalone headless connector
+# ADR-0031: Add ZCode as a third harness through a standalone headless connector
 
 - Status: accepted
 - Date: 2026-09-20
-- Supersedes numbering collision with ADR-0023 (lease and bounded redispatch agent claims), which merged first
+- Renumbered from 0024 to 0031 on merge: main had independently accepted ADR-0024 (runtime-advertised DSH model selection) while this branch was in review
 
 ## Context
 

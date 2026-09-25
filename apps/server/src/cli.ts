@@ -19,11 +19,15 @@ interface BootstrapArguments {
 const HELP = `Usage:
   npm start [-- start]
   npm run owner-host:init -- --display-name NAME --device-name NAME [--user-id ID] [--device-id ID]
+  npm run owner-host:issue-test-access -- [--ttl 1h|24h|7d]
+  npm run owner-host:revoke-test-access -- --grant-id ID
 
 Commands:
   start       Start the loopback-only owner host (default)
   bootstrap   Create the first owner directly in SQLite and print its credential once
   init        Alias for bootstrap
+  issue-test-access  Issue one single-use test qualification token locally
+  revoke-test-access Revoke an unclaimed test qualification token locally
 
 Configuration is read from NODE_ENV and the GATHERTHREAD_* variables documented in .env.example.
 `;
@@ -90,6 +94,40 @@ function bootstrap(config: ServerConfig, args: string[]): void {
   }
 }
 
+function withOperatorDatabase(config: ServerConfig, operation: (database: CollaborationDatabase) => void): void {
+  assertPersistentCredentialPepper(config);
+  prepareDatabaseDirectory(config);
+  const database = new CollaborationDatabase(config.databasePath, databaseOptions(config));
+  try {
+    operation(database);
+  } finally {
+    database.close();
+  }
+}
+
+function issueTestAccess(config: ServerConfig, args: string[]): void {
+  if (args.length !== 0 && (args.length !== 2 || args[0] !== "--ttl")) {
+    throw new ConfigurationError("Usage: issue-test-access [--ttl 1h|24h|7d]");
+  }
+  const ttl = args.length === 2 ? args[1] : "7d";
+  if (ttl !== "1h" && ttl !== "24h" && ttl !== "7d") {
+    throw new ConfigurationError("--ttl must be 1h, 24h, or 7d");
+  }
+  withOperatorDatabase(config, (database) => {
+    const grant = database.issueTestAccess(ttl);
+    process.stderr.write("Single-use test access issued. Send it privately; it will not be shown again.\n");
+    process.stdout.write(`${JSON.stringify(grant, null, 2)}\n`);
+  });
+}
+
+function revokeTestAccess(config: ServerConfig, args: string[]): void {
+  if (args.length !== 2 || args[0] !== "--grant-id" || !args[1]) {
+    throw new ConfigurationError("Usage: revoke-test-access --grant-id ID");
+  }
+  withOperatorDatabase(config, (database) => database.revokeTestAccess(args[1]!));
+  process.stdout.write("Unclaimed test access revoked.\n");
+}
+
 async function start(config: ServerConfig): Promise<void> {
   assertPersistentCredentialPepper(config);
   prepareDatabaseDirectory(config);
@@ -131,6 +169,14 @@ async function main(): Promise<void> {
   const config = loadServerConfig();
   if (command === "bootstrap" || command === "init") {
     bootstrap(config, args);
+    return;
+  }
+  if (command === "issue-test-access") {
+    issueTestAccess(config, args);
+    return;
+  }
+  if (command === "revoke-test-access") {
+    revokeTestAccess(config, args);
     return;
   }
   if (command !== "start" || args.length > 0) throw new ConfigurationError(`Unknown command: ${[command, ...args].join(" ")}`);

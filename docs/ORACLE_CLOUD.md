@@ -1,6 +1,6 @@
 # Experimental Oracle Always Free deployment
 
-This legacy alternative is retained for reference only. The current private Alpha targets Alibaba Cloud ECS, and the official GatherThread service is not open yet. If this path is revived later, it keeps the GatherThread process on `127.0.0.1:18787` and places Caddy in front on public ports 80/443. It does **not** create an anonymous public service: GatherThread device credentials, one-use invitations, project roles, exact browser origins, secure cookies, one-use WebSocket tickets, and application rate limits still apply.
+This legacy alternative is retained for reference only. The current invitation-only Alpha runs on Alibaba Cloud ECS at `https://gatherthread.cn`; public registration and public Beta are not open. If this Oracle path is revived later, it keeps the GatherThread process on `127.0.0.1:18787` and places Caddy in front on public ports 80/443. It does **not** create an anonymous public service: GatherThread device credentials, one-use invitations, project roles, exact browser origins, secure cookies, one-use WebSocket tickets, and application rate limits still apply.
 
 Direct Internet ingress expands the supported private Tailscale alpha threat boundary. The installer therefore requires an explicit `--acknowledge-experimental-public-ingress` flag. Do not use this path for sensitive or regulated data until the deployment has completed an external security review, restore drill, and multi-user field test.
 

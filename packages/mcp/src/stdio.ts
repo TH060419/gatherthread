@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import type { Readable, Writable } from "node:stream";
 import type { CollaborationMcpService, JsonRpcResponse } from "./service.js";
+import { DEFAULT_MCP_MESSAGE_BYTES, payloadLimitError, validateMessageLimit } from "./input-limits.js";
 
 export interface StdioMcpServerOptions {
   input?: Readable;
@@ -19,7 +20,7 @@ export class StdioMcpServer {
   async run(options: StdioMcpServerOptions = {}): Promise<void> {
     const input = options.input ?? process.stdin;
     const output = options.output ?? process.stdout;
-    const maxMessageBytes = options.maxMessageBytes ?? 1_048_576;
+    const maxMessageBytes = validateMessageLimit(options.maxMessageBytes ?? DEFAULT_MCP_MESSAGE_BYTES);
     const stop = () => input.destroy();
     options.signal?.addEventListener("abort", stop, { once: true });
     try {
@@ -46,6 +47,8 @@ export class StdioMcpServer {
     } catch {
       return { jsonrpc: "2.0", id: null, error: { code: -32700, message: "Parse error" } };
     }
+    const limitError = payloadLimitError(payload);
+    if (limitError) return invalidRequest(limitError);
     if (!Array.isArray(payload)) return this.#service.handle(payload);
     if (payload.length === 0) return invalidRequest("Invalid Request");
     const responses: JsonRpcResponse[] = [];

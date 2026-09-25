@@ -1,5 +1,8 @@
-export const SETTINGS_VERSION = 10;
+import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
+
+export const SETTINGS_VERSION = 12;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
+export const SHARED_LANGUAGE_STORAGE_KEY = "gt-lang";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 
@@ -33,6 +36,25 @@ const DSH_PROVIDER_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,80}$/u;
 const DSH_MODEL_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,160}$/u;
 export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness", "zcode"]);
 
+export const MOTION_PREFERENCES = Object.freeze(["system", "reduce", "full"]);
+
+/**
+ * The motion the reader actually gets.
+ *
+ * `system` is not a preference in its own right — it defers to the device, the
+ * same way only an explicit theme overrides a system theme. So an explicit
+ * choice wins, and only `system` consults the device; anything the schema does
+ * not recognise behaves like the default rather than claiming motion is unwanted.
+ *
+ * This exists because the default is `system`: code that tests
+ * `motion === "reduce"` directly hands a long animated scroll to every reader who
+ * asked their operating system for reduced motion and never opened this setting.
+ */
+export function effectiveMotion(motion, prefersReducedMotion) {
+  if (motion === "reduce" || motion === "full") return motion;
+  return prefersReducedMotion === true ? "reduce" : "full";
+}
+
 export const DEFAULT_SETTINGS = deepFreeze({
   version: SETTINGS_VERSION,
   general: {
@@ -61,6 +83,7 @@ export const DEFAULT_SETTINGS = deepFreeze({
     confirmAgentRequest: false,
     autoScroll: true,
   },
+  historySummaries: { instructions: DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS },
   notifications: {
     agentCompleted: false,
     connectionLost: true,
@@ -82,6 +105,7 @@ export function normalizeSettings(input) {
   const notifications = isObject(source.notifications) ? source.notifications : {};
   const agents = isObject(source.agents) ? source.agents : {};
   const general = isObject(source.general) ? source.general : {};
+  const summaryInstructions = source.historySummaries?.instructions;
   const visibleHistorySync = sync.visibleHistorySync === "every-connect" || sync.visibleHistorySync === "every-update"
     ? "first-connect"
     : sync.visibleHistorySync;
@@ -143,6 +167,10 @@ export function normalizeSettings(input) {
       enterBehavior: oneOf(composer.enterBehavior, ["newline", "send_chat", "request_agent"], DEFAULT_SETTINGS.composer.enterBehavior),
       confirmAgentRequest: composer.confirmAgentRequest === true,
       autoScroll: composer.autoScroll !== false,
+    },
+    historySummaries: {
+      instructions: typeof summaryInstructions === "string" && summaryInstructions.trim()
+        && summaryInstructions.length <= 4000 ? summaryInstructions : DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS,
     },
     notifications: {
       agentCompleted: notifications.agentCompleted === true,
@@ -326,8 +354,18 @@ export function createSettingsStore(storage = globalThis.localStorage) {
   } catch {
     current = normalizeSettings(DEFAULT_SETTINGS);
   }
+  const sharedLocale = readSharedLocale(storage);
+  if (sharedLocale) {
+    current = { ...current, general: { ...current.general, locale: sharedLocale } };
+  } else {
+    writeSharedLocale(storage, current.general.locale);
+  }
   return {
     get() {
+      const latestSharedLocale = readSharedLocale(storage);
+      if (latestSharedLocale && latestSharedLocale !== current.general.locale) {
+        current = { ...current, general: { ...current.general, locale: latestSharedLocale } };
+      }
       return structuredClone(current);
     },
     set(next) {
@@ -337,6 +375,7 @@ export function createSettingsStore(storage = globalThis.localStorage) {
       } catch {
         // UI preferences remain usable for this tab when browser storage is unavailable.
       }
+      writeSharedLocale(storage, current.general.locale);
       return structuredClone(current);
     },
     reset() {
@@ -346,9 +385,29 @@ export function createSettingsStore(storage = globalThis.localStorage) {
       } catch {
         // Reset still applies to this tab.
       }
+      writeSharedLocale(storage, current.general.locale);
       return structuredClone(current);
     },
   };
+}
+
+function readSharedLocale(storage) {
+  try {
+    const sharedLanguage = storage?.getItem?.(SHARED_LANGUAGE_STORAGE_KEY);
+    if (sharedLanguage === "zh") return "zh-CN";
+    if (sharedLanguage === "en") return "en";
+  } catch {
+    // Restricted browser storage keeps the current in-tab setting usable.
+  }
+  return null;
+}
+
+function writeSharedLocale(storage, locale) {
+  try {
+    storage?.setItem?.(SHARED_LANGUAGE_STORAGE_KEY, locale === "zh-CN" ? "zh" : "en");
+  } catch {
+    // Restricted browser storage keeps the current in-tab setting usable.
+  }
 }
 
 function migrateStoredSettings(input) {
@@ -396,12 +455,25 @@ function migrateStoredSettings(input) {
 function normalizeDshProfile(profile) {
   if (!isObject(profile)) return null;
   const deviceId = typeof profile.deviceId === "string" ? profile.deviceId.trim() : "";
+  const runtimeIdSource = profile.runtimeId ?? profile.id;
+  const runtimeId = typeof runtimeIdSource === "string" ? runtimeIdSource.trim() : "";
   const provider = typeof profile.provider === "string" ? profile.provider.trim() : "";
   const model = typeof profile.model === "string" ? profile.model.trim() : "";
+  const effort = typeof (profile.effort ?? profile.reasoningEffort) === "string"
+    ? (profile.effort ?? profile.reasoningEffort).trim()
+    : "";
   if (!DEVICE_ID_PATTERN.test(deviceId) || !DSH_PROVIDER_PATTERN.test(provider) || !DSH_MODEL_PATTERN.test(model)) {
     return null;
   }
-  return { deviceId, provider, model };
+  if (runtimeId && !DEVICE_ID_PATTERN.test(runtimeId)) return null;
+  if (effort && !DSH_PROVIDER_PATTERN.test(effort)) return null;
+  return {
+    deviceId,
+    ...(runtimeId ? { runtimeId } : {}),
+    provider,
+    model,
+    ...(effort ? { effort } : {}),
+  };
 }
 
 function defaultProjectAgentProfile(settings) {

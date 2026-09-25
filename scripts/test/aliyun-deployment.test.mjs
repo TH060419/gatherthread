@@ -46,7 +46,7 @@ test("Alibaba reverse proxy and service retain the loopback security boundary", 
 
 test("Alibaba preflight checks the active candidate and storage readiness", async () => {
   const preflight = await deploymentFile("preflight.sh");
-  assert.match(preflight, /0\.1\.0-alpha\.5/);
+  assert.match(preflight, /0\.1\.0-alpha\.7/);
   assert.match(preflight, /\/health\/live/);
   assert.match(preflight, /\/health\/ready/);
   assert.match(preflight, /foreign_keys/);

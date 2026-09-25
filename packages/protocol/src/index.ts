@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { codeSyncRequestKinds } from "./code-sync.js";
+export * from "./code-sync.js";
+export * from "./history-summary.js";
 
 export const sessionModes = ["solo", "multi"] as const;
 export const membershipRoles = ["owner", "participant", "viewer"] as const;
@@ -81,6 +84,58 @@ export const AgentExecutionProfileSchema = z.object({
 });
 
 export type AgentExecutionProfile = z.infer<typeof AgentExecutionProfileSchema>;
+
+export const CreateHistorySummaryInputSchema = z.object({
+  idempotency_key: IdempotencyKeySchema,
+  source_event_ids: z.array(IdSchema).min(1).max(100).refine((ids) => new Set(ids).size === ids.length, "Source IDs must be unique"),
+  execution_profile: AgentExecutionProfileSchema.extend({ runtime_id: IdSchema }).strict(),
+  instructions: z.string().trim().min(1).max(4000).optional(),
+}).strict();
+export type CreateHistorySummaryInput = z.infer<typeof CreateHistorySummaryInputSchema>;
+export const ContextPolicySchema = z.object({ mode: z.enum(["summary", "original"]) }).strict();
+export const UpdateContextPolicyInputSchema = ContextPolicySchema;
+
+const RuntimeExecutionReasoningEffortsSchema = z.array(
+  z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+).min(1).max(16).superRefine((efforts, context) => {
+  if (new Set(efforts).size !== efforts.length) {
+    context.addIssue({ code: "custom", message: "Runtime reasoning efforts must be unique" });
+  }
+});
+
+export const RuntimeExecutionProfileSchema = z.object({
+  provider: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+  model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u),
+  reasoning_efforts: RuntimeExecutionReasoningEffortsSchema.optional(),
+  default_reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
+}).strict().superRefine((profile, context) => {
+  if (profile.default_reasoning_effort !== undefined
+    && !profile.reasoning_efforts?.includes(profile.default_reasoning_effort)) {
+    context.addIssue({
+      code: "custom",
+      path: ["default_reasoning_effort"],
+      message: "The default reasoning effort must be advertised by this execution profile",
+    });
+  }
+});
+
+export type RuntimeExecutionProfile = z.infer<typeof RuntimeExecutionProfileSchema>;
+
+export const RuntimeExecutionProfilesSchema = z.array(RuntimeExecutionProfileSchema).min(1).max(32)
+  .superRefine((profiles, context) => {
+    const routes = new Set<string>();
+    for (const [index, profile] of profiles.entries()) {
+      const route = `${profile.provider}\u0000${profile.model}`;
+      if (routes.has(route)) {
+        context.addIssue({
+          code: "custom",
+          path: [index],
+          message: "Runtime execution profiles must have unique provider and model pairs",
+        });
+      }
+      routes.add(route);
+    }
+  });
 
 export const CanonicalEventSchema = z.object({
   id: IdSchema,
@@ -187,6 +242,22 @@ export const SetMembershipInputSchema = z.object({
   idempotency_key: IdempotencyKeySchema,
 });
 
+const BranchRemovalFields = {
+  branch_resolution: z.enum(["delete", "merged_to_main"]).optional(),
+  expected_branch_head_commit: z.string().regex(/^[a-f0-9]{40}$/u).optional(),
+};
+const completeBranchRemovalDecision = (value: {
+  branch_resolution?: "delete" | "merged_to_main" | undefined;
+  expected_branch_head_commit?: string | undefined;
+}) => Boolean(value.branch_resolution) === Boolean(value.expected_branch_head_commit);
+export const RemoveProjectMembershipInputSchema = z.object(BranchRemovalFields).strict()
+  .refine(completeBranchRemovalDecision, "Branch decision and exact head must be provided together");
+export const RemoveSessionMembershipInputSchema = z.object({
+  ...BranchRemovalFields,
+  idempotency_key: IdempotencyKeySchema,
+}).strict().refine(completeBranchRemovalDecision, "Branch decision and exact head must be provided together");
+export type RemoveProjectMembershipInput = z.infer<typeof RemoveProjectMembershipInputSchema>;
+
 export const CreateIdentityInputSchema = z.object({
   user_id: IdSchema.optional(),
   display_name: z.string().trim().min(1).max(120),
@@ -201,6 +272,19 @@ export const ActorSchema = z.object({
 });
 
 export type ActorIdentity = z.infer<typeof ActorSchema>;
+
+export const AccountCapabilitiesSchema = z.object({
+  can_create_projects: z.boolean(),
+});
+
+export const ClaimTestAccessInputSchema = z.object({
+  access_token: z.string().min(32).max(512),
+  display_name: z.string().trim().min(1).max(120),
+  device_name: z.string().trim().min(1).max(120),
+  remember_device: z.boolean().default(false),
+});
+
+export type ClaimTestAccessInput = z.infer<typeof ClaimTestAccessInputSchema>;
 
 export const CreateInvitationInputSchema = z.object({
   role: InvitationRoleSchema,
@@ -282,9 +366,18 @@ export type UpdateDeviceInput = z.infer<typeof UpdateDeviceInputSchema>;
 
 export const CreateBrowserSessionInputSchema = z.object({
   remember_device: z.boolean().default(false),
+  display_name: z.string().trim().min(1).max(120).optional(),
+  device_name: z.string().trim().min(1).max(120).optional(),
 });
 
 export type CreateBrowserSessionInput = z.infer<typeof CreateBrowserSessionInputSchema>;
+
+export const ActivateRememberedAccountInputSchema = z.object({
+  display_name: z.string().trim().min(1).max(120),
+  device_name: z.string().trim().min(1).max(120),
+}).strict();
+
+export type ActivateRememberedAccountInput = z.infer<typeof ActivateRememberedAccountInputSchema>;
 
 export const ClaimDeviceAuthorizationInputSchema = z.object({
   authorization_token: z.string().min(32).max(512),
@@ -367,6 +460,7 @@ export const RegisterRuntimeInputSchema = z.object({
   harness: z.string().trim().min(1).max(80),
   provider: z.string().trim().min(1).max(80),
   model: z.string().trim().min(1).max(160),
+  execution_profiles: RuntimeExecutionProfilesSchema.optional(),
   local_session_id: z.string().trim().min(1).max(512),
   capture_fidelity: CaptureFidelitySchema,
 });
@@ -432,6 +526,7 @@ export const SnapshotRequestStatusSchema = z.enum(snapshotRequestStatuses);
 export type SnapshotRequestStatus = z.infer<typeof SnapshotRequestStatusSchema>;
 
 export const snapshotRequestKinds = [
+  ...codeSyncRequestKinds,
   "immutable",
   "visible_history_replace",
   "local_sync_status",

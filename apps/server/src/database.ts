@@ -7,19 +7,23 @@ import type {
   CaptureFidelity,
   CommitLocalTurnInput,
   CommitLocalTurnResult,
+  CreateHistorySummaryInput,
   DeviceAuthorizationRecord,
   EventType,
   EventVisibility,
+  HistoryContext,
   InvitationAuditRecord,
   InvitationRecord,
   InvitationRole,
   InvitationTtl,
   JsonValue,
   MembershipRole,
+  RemoveProjectMembershipInput,
   ProjectInvitationAuditRecord,
   ProjectInvitationRecord,
   ProjectListItem,
   ReplayResponse,
+  RuntimeExecutionProfile,
   RuntimeProvenance,
   SessionListItem,
   SessionMode,
@@ -28,14 +32,23 @@ import type {
   SnapshotRequestKind,
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
-import { MAX_SNAPSHOT_RESULT_BYTES } from "@gatherthread/protocol";
-import { agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import {
+  MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, isCodeSyncRequestKind,
+  HISTORY_SUMMARY_MAX_CONTEXT_BYTES, HistorySummaryError, buildHistoryContext,
+  buildHistorySummaryPrompt, historySummaryMarker, historySummarySourceJson, historySummaryText,
+  isHistorySummaryRequest, selectHistorySummarySources,
+} from "@gatherthread/protocol";
+import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
+import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { redactJson } from "./redaction.js";
 
 export interface Actor {
   user_id: string;
   display_name: string;
   device_id: string;
 }
+
+export type BranchRemovalDecision = RemoveProjectMembershipInput;
 
 export interface SessionRecord {
   id: string;
@@ -73,6 +86,7 @@ export interface RuntimeRecord {
   harness: string;
   provider: string;
   model: string;
+  execution_profiles?: RuntimeExecutionProfile[];
   local_session_id: string;
   capture_fidelity: CaptureFidelity;
   status: "online" | "offline" | "revoked";
@@ -135,6 +149,16 @@ export interface ClaimInvitationWithBrowserSessionResult extends ClaimInvitation
   browser_session: BrowserSessionIssue;
 }
 
+export interface ClaimTestAccessResult {
+  actor: Actor;
+  token: string;
+  device: DeviceRecord;
+}
+
+export interface ClaimTestAccessWithBrowserSessionResult extends ClaimTestAccessResult {
+  browser_session: BrowserSessionIssue;
+}
+
 export interface AcceptInvitationResult {
   actor: Actor;
   invitation: InvitationRecord | ProjectInvitationRecord;
@@ -163,6 +187,18 @@ export interface BrowserSessionIssue {
 export interface BrowserSessionAuthentication {
   actor: Actor;
   session_id: string;
+  remembered: boolean;
+}
+
+export interface RememberedAccountRecord {
+  id: string;
+  display_name: string;
+  device_name: string;
+}
+
+export interface RememberedBrowserIssue {
+  token: string;
+  expires_at: string;
 }
 
 interface EventRow {
@@ -189,7 +225,9 @@ interface ProjectMutationRow {
   title: string;
   created_at: string;
 }
-interface RuntimeRow extends RuntimeRecord {}
+interface RuntimeRow extends Omit<RuntimeRecord, "execution_profiles"> {
+  execution_profiles_json: string | null;
+}
 interface CountRow { count: number }
 interface BytesRow { bytes: number }
 interface SequenceRow { next_sequence: number }
@@ -221,6 +259,10 @@ interface BrowserSessionRow {
   expires_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
+}
+interface RememberedBrowserRow {
+  id: string;
+  expires_at: string;
 }
 interface LocalTurnCommitRow {
   input_digest: string;
@@ -282,11 +324,34 @@ const RUNTIME_OFFLINE_AFTER_MS = 30_000;
 const AGENT_CLAIM_LEASE_MS = 5 * 60_000;
 /** Exact-runtime recovery attempts before a request is terminally failed. */
 const MAX_AGENT_CLAIM_ATTEMPTS = 3;
+const MAX_HISTORY_CONTEXT_SCAN_EVENTS = 10_000;
+const MAX_HISTORY_CONTEXT_SCAN_BYTES = 16 * 1024 * 1024;
+const MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS = 10_000;
+const MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES = 16 * 1024 * 1024;
+
+function rejectHistorySummaryMetadata(payload: JsonValue): void {
+  if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
+    && Object.hasOwn(payload, "history_summary")) {
+    throw forbidden("history_summary is server-owned metadata; use the history-summaries endpoint");
+  }
+}
+
+function historySummaryOperation<T>(operation: () => T): T {
+  try { return operation(); }
+  catch (error) {
+    if (error instanceof HistorySummaryError) {
+      throw new ApiError(error.code === "too_large" ? 413 : 400, `history_summary_${error.code}`, error.message);
+    }
+    throw error;
+  }
+}
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  can_create_projects INTEGER NOT NULL DEFAULT 0 CHECK (can_create_projects IN (0, 1))
 ) STRICT;
 CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
@@ -318,6 +383,14 @@ CREATE TABLE IF NOT EXISTS project_memberships (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   PRIMARY KEY (project_id, user_id)
+) STRICT;
+CREATE TABLE IF NOT EXISTS project_context_policies (
+  project_id TEXT NOT NULL,
+  user_id TEXT NOT NULL,
+  mode TEXT NOT NULL CHECK (mode IN ('summary', 'original')),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, user_id),
+  FOREIGN KEY (project_id, user_id) REFERENCES project_memberships(project_id, user_id) ON DELETE CASCADE
 ) STRICT;
 CREATE TABLE IF NOT EXISTS project_mutations (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -355,6 +428,7 @@ CREATE TABLE IF NOT EXISTS runtimes (
   harness TEXT NOT NULL,
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
+  execution_profiles_json TEXT CHECK (execution_profiles_json IS NULL OR json_valid(execution_profiles_json)),
   local_session_id TEXT NOT NULL,
   capture_fidelity TEXT NOT NULL CHECK (capture_fidelity IN ('canonical_history', 'harness_transcript', 'provider_request')),
   status TEXT NOT NULL DEFAULT 'online' CHECK (status IN ('online', 'offline', 'revoked')),
@@ -411,7 +485,7 @@ CREATE TABLE IF NOT EXISTS snapshot_requests (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload')),
+  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable')),
   through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
   target_runtime_id TEXT REFERENCES runtimes(id),
@@ -490,6 +564,17 @@ CREATE TABLE IF NOT EXISTS project_invitation_audit (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS project_invitation_audit_project_idx
   ON project_invitation_audit(project_id, created_at, id);
+CREATE TABLE IF NOT EXISTS test_access_grants (
+  id TEXT PRIMARY KEY,
+  token_digest TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  claimed_at TEXT,
+  claimed_by_user_id TEXT REFERENCES users(id),
+  claimed_by_device_id TEXT REFERENCES devices(id),
+  CHECK (claimed_at IS NULL OR (claimed_by_user_id IS NOT NULL AND claimed_by_device_id IS NOT NULL))
+) STRICT;
 CREATE TABLE IF NOT EXISTS device_authorizations (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -516,6 +601,27 @@ CREATE TABLE IF NOT EXISTS browser_sessions (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS browser_sessions_device_idx
   ON browser_sessions(device_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS remembered_browsers (
+  id TEXT PRIMARY KEY,
+  token_digest TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT
+) STRICT;
+CREATE TABLE IF NOT EXISTS remembered_accounts (
+  id TEXT PRIMARY KEY,
+  browser_id TEXT NOT NULL REFERENCES remembered_browsers(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+  device_token_version INTEGER NOT NULL,
+  display_name TEXT NOT NULL,
+  device_name TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_used_at TEXT NOT NULL,
+  UNIQUE(browser_id, device_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS remembered_accounts_browser_idx
+  ON remembered_accounts(browser_id, last_used_at DESC);
 `;
 
 function stableJson(value: JsonValue): string {
@@ -547,12 +653,20 @@ function issueInvitationToken(): string {
   return `gti_${randomBytes(32).toString("base64url")}`;
 }
 
+function issueTestAccessToken(): string {
+  return `gtq_${randomBytes(32).toString("base64url")}`;
+}
+
 function issueDeviceAuthorizationToken(): string {
   return `gtd_${randomBytes(32).toString("base64url")}`;
 }
 
 function issueBrowserSessionToken(): string {
   return `gtb_${randomBytes(32).toString("base64url")}`;
+}
+
+function issueRememberedBrowserToken(): string {
+  return `gtr_${randomBytes(32).toString("base64url")}`;
 }
 
 function resolveAuthTokenPepper(path: string, configured?: string): string {
@@ -591,6 +705,21 @@ function runtimeStatus(
     : "offline";
 }
 
+function parseRuntimeExecutionProfiles(value: string | null | undefined): RuntimeExecutionProfile[] | undefined {
+  if (value === null || value === undefined) return undefined;
+  return RuntimeExecutionProfilesSchema.parse(JSON.parse(value));
+}
+
+function mapRuntimeRow(row: RuntimeRow, now?: number): RuntimeRecord {
+  const { execution_profiles_json: executionProfilesJson, ...runtime } = row;
+  const executionProfiles = parseRuntimeExecutionProfiles(executionProfilesJson);
+  return {
+    ...runtime,
+    ...(executionProfiles === undefined ? {} : { execution_profiles: executionProfiles }),
+    ...(now === undefined ? {} : { status: runtimeStatus(row.status, row.last_seen_at, now) }),
+  };
+}
+
 /**
  * A claim with no lease was written before leases existed. Nothing renews such a
  * row, so it reads as expired: recovery is the safe interpretation of a claim no
@@ -604,7 +733,7 @@ function claimLeaseLapsed(leaseExpiresAt: string | null | undefined, now: string
 }
 
 function isLocalSyncRequestKind(kind: SnapshotRequestKind): boolean {
-  return kind === "local_sync_status"
+  return isCodeSyncRequestKind(kind) || kind === "local_sync_status"
     || kind === "local_auto_upload_enable"
     || kind === "local_auto_upload_disable"
     || kind === "local_turn_upload";
@@ -614,10 +743,11 @@ interface AgentRequestTarget {
   harness: string;
   provider?: string;
   model?: string;
+  reasoningEffort?: string;
   runtimeId?: string;
 }
 
-function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
+function agentRequestTarget(event: Pick<CanonicalEvent, "payload">): AgentRequestTarget {
   const payload = event.payload !== null && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? event.payload as Record<string, JsonValue>
     : undefined;
@@ -645,12 +775,19 @@ function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
   if (harness === "deepseek-harness" && !model) {
     throw conflict("DeepSeek Harness Agent request requires a model target");
   }
+  const rawReasoningEffort = profile?.reasoning_effort;
+  const reasoningEffort = typeof rawReasoningEffort === "string" ? rawReasoningEffort.trim() : "";
+  if (rawReasoningEffort !== undefined
+    && (!reasoningEffort || reasoningEffort.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(reasoningEffort))) {
+    throw conflict("Agent request has an invalid reasoning effort target");
+  }
   const rawRuntimeId = profile?.runtime_id;
   if (rawRuntimeId === undefined) {
     return {
       harness,
       ...(rawProvider === undefined ? {} : { provider }),
       ...(rawModel === undefined ? {} : { model }),
+      ...(rawReasoningEffort === undefined ? {} : { reasoningEffort }),
     };
   }
   const runtimeId = typeof rawRuntimeId === "string" ? rawRuntimeId.trim() : "";
@@ -661,8 +798,27 @@ function agentRequestTarget(event: CanonicalEvent): AgentRequestTarget {
     harness,
     ...(rawProvider === undefined ? {} : { provider }),
     ...(rawModel === undefined ? {} : { model }),
+    ...(rawReasoningEffort === undefined ? {} : { reasoningEffort }),
     runtimeId,
   };
+}
+
+function runtimeSupportsAgentTarget(runtime: RuntimeRecord, target: AgentRequestTarget): boolean {
+  if (runtime.harness.trim().toLowerCase() !== target.harness) return false;
+  if (target.harness === "codex") {
+    return target.provider === undefined || runtime.provider === target.provider;
+  }
+  if (runtime.execution_profiles !== undefined) {
+    if (target.runtimeId === undefined || target.runtimeId !== runtime.id
+      || target.provider === undefined || target.model === undefined) return false;
+    const advertised = runtime.execution_profiles.find((profile) =>
+      profile.provider === target.provider && profile.model === target.model);
+    if (advertised === undefined) return false;
+    return target.reasoningEffort === undefined
+      || advertised.reasoning_efforts?.includes(target.reasoningEffort) === true;
+  }
+  return (target.provider === undefined || runtime.provider === target.provider)
+    && (target.model === undefined || runtime.model === target.model);
 }
 
 function mapEvent(row: EventRow): CanonicalEvent {
@@ -767,9 +923,14 @@ export class CollaborationDatabase {
     const journalMode = (this.sqlite.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
+    this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
+    this.migrateCodeRepositoryEnableColumn();
+    this.migrateCodeRepositoryUsageColumns();
     this.migrateDeviceCredentialColumns();
     this.migrateProjectModel();
+    this.migrateAccountCapabilities();
     this.migrateRuntimePurposeColumn();
+    this.migrateRuntimeExecutionProfilesColumn();
     this.migrateEventActorDisplayNameColumn();
     this.migrateAgentProgressEventType();
     this.migrateCanonicalProvenancePrivacy();
@@ -817,7 +978,7 @@ export class CollaborationDatabase {
   }): { actor: Actor; token: string } {
     const count = this.sqlite.prepare("SELECT count(*) AS count FROM users").get() as unknown as CountRow;
     if (count.count !== 0) throw conflict("Bootstrap is available only for an empty database");
-    return this.createIdentity(input);
+    return this.createIdentity({ ...input, can_create_projects: true });
   }
 
   createIdentity(input: {
@@ -825,20 +986,107 @@ export class CollaborationDatabase {
     display_name: string;
     device_id?: string | undefined;
     device_name: string;
+    can_create_projects?: boolean | undefined;
   }): { actor: Actor; token: string } {
     const userId = input.user_id ?? randomUUID();
     const deviceId = input.device_id ?? randomUUID();
     const token = issueDeviceToken();
     const createdAt = this.now();
     this.transaction(() => {
-      this.sqlite.prepare("INSERT INTO users(id, display_name, created_at) VALUES (?, ?, ?)")
-        .run(userId, input.display_name, createdAt);
+      this.sqlite.prepare("INSERT INTO users(id, display_name, created_at, can_create_projects) VALUES (?, ?, ?, ?)")
+        .run(userId, input.display_name, createdAt, input.can_create_projects ? 1 : 0);
       this.sqlite.prepare(`
         INSERT INTO devices(id, user_id, name, token_hash, created_at, token_created_at)
         VALUES (?, ?, ?, ?, ?, ?)
       `).run(deviceId, userId, input.device_name, this.tokenDigest(token), createdAt, createdAt);
     });
     return { actor: { user_id: userId, display_name: input.display_name, device_id: deviceId }, token };
+  }
+
+  canCreateProjects(userId: string): boolean {
+    const row = this.sqlite.prepare("SELECT can_create_projects FROM users WHERE id = ?")
+      .get(userId) as { can_create_projects: number } | undefined;
+    if (!row) throw unauthorized("Account is unavailable");
+    return row.can_create_projects === 1;
+  }
+
+  issueTestAccess(ttl: InvitationTtl = "7d"): { grant_id: string; access_token: string; expires_at: string } {
+    const ttlMs = INVITATION_TTL_MS[ttl];
+    if (ttlMs === undefined) throw new ApiError(400, "invalid_ttl", "Test access TTL must be 1h, 24h, or 7d");
+    const count = this.sqlite.prepare("SELECT count(*) AS count FROM users").get() as unknown as CountRow;
+    if (count.count === 0) throw conflict("Bootstrap the first owner before issuing test access");
+    const grantId = randomUUID();
+    const accessToken = issueTestAccessToken();
+    const createdAt = this.clock();
+    const expiresAt = new Date(createdAt.getTime() + ttlMs).toISOString();
+    this.sqlite.prepare(`
+      INSERT INTO test_access_grants(id, token_digest, created_at, expires_at)
+      VALUES (?, ?, ?, ?)
+    `).run(grantId, this.tokenDigest(accessToken), createdAt.toISOString(), expiresAt);
+    return { grant_id: grantId, access_token: accessToken, expires_at: expiresAt };
+  }
+
+  revokeTestAccess(grantId: string): void {
+    this.transaction(() => {
+      const result = this.sqlite.prepare(`
+        UPDATE test_access_grants SET revoked_at = ?
+        WHERE id = ? AND claimed_at IS NULL AND revoked_at IS NULL
+      `).run(this.now(), grantId);
+      if (Number(result.changes) === 1) return;
+      const row = this.sqlite.prepare("SELECT claimed_at FROM test_access_grants WHERE id = ?")
+        .get(grantId) as { claimed_at: string | null } | undefined;
+      if (!row) throw notFound("Test access grant");
+      if (row.claimed_at !== null) throw conflict("Claimed test access cannot be revoked; revoke the issued device instead");
+      // An already revoked grant remains revoked; preserve idempotent CLI use.
+    });
+  }
+
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }): ClaimTestAccessResult;
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }, options: { browserSession: true }): ClaimTestAccessWithBrowserSessionResult;
+  claimTestAccess(input: {
+    access_token: string;
+    display_name: string;
+    device_name: string;
+    remember_device?: boolean | undefined;
+  }, options: { browserSession?: boolean } = {}): ClaimTestAccessResult | ClaimTestAccessWithBrowserSessionResult {
+    const timestamp = this.now();
+    return this.transaction(() => {
+      const row = this.sqlite.prepare(`
+        SELECT id FROM test_access_grants
+        WHERE token_digest = ? AND revoked_at IS NULL AND claimed_at IS NULL AND expires_at > ?
+      `).get(this.tokenDigest(input.access_token), timestamp) as { id: string } | undefined;
+      if (!row) throw unauthorized("Test access token is invalid or unavailable");
+      const userId = randomUUID();
+      const deviceId = randomUUID();
+      const token = issueDeviceToken();
+      this.sqlite.prepare(`
+        INSERT INTO users(id, display_name, created_at, can_create_projects) VALUES (?, ?, ?, 1)
+      `).run(userId, input.display_name, timestamp);
+      this.sqlite.prepare(`
+        INSERT INTO devices(id, user_id, name, token_hash, created_at, token_created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `).run(deviceId, userId, input.device_name, this.tokenDigest(token), timestamp, timestamp);
+      const claimed = this.sqlite.prepare(`
+        UPDATE test_access_grants SET claimed_at = ?, claimed_by_user_id = ?, claimed_by_device_id = ?
+        WHERE id = ? AND revoked_at IS NULL AND claimed_at IS NULL AND expires_at > ?
+      `).run(timestamp, userId, deviceId, row.id, timestamp);
+      if (Number(claimed.changes) !== 1) throw unauthorized("Test access token is invalid or unavailable");
+      const actor = { user_id: userId, display_name: input.display_name, device_id: deviceId };
+      const result: ClaimTestAccessResult = { actor, token, device: this.getDeviceForUser(userId, deviceId) };
+      return options.browserSession
+        ? { ...result, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device === true) }
+        : result;
+    });
   }
 
   createDevice(
@@ -871,6 +1119,7 @@ export class CollaborationDatabase {
         UPDATE browser_sessions SET revoked_at = ?
         WHERE device_id = ? AND revoked_at IS NULL
       `).run(timestamp, deviceId);
+      this.sqlite.prepare("DELETE FROM remembered_accounts WHERE device_id = ?").run(deviceId);
     });
   }
 
@@ -897,9 +1146,21 @@ export class CollaborationDatabase {
     return { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id };
   }
 
-  createBrowserSession(actor: Actor, rememberDevice = false): BrowserSessionIssue {
+  createBrowserSession(
+    actor: Actor,
+    rememberDevice = false,
+    profile: { display_name?: string | undefined; device_name?: string | undefined } = {},
+  ): BrowserSessionIssue {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
+      if (profile.display_name !== undefined) {
+        this.sqlite.prepare("UPDATE users SET display_name = ? WHERE id = ?")
+          .run(profile.display_name, actor.user_id);
+      }
+      if (profile.device_name !== undefined) {
+        this.sqlite.prepare("UPDATE devices SET name = ? WHERE id = ? AND user_id = ?")
+          .run(profile.device_name, actor.device_id, actor.user_id);
+      }
       return this.insertBrowserSession(actor, this.clock(), rememberDevice);
     });
   }
@@ -924,7 +1185,134 @@ export class CollaborationDatabase {
     return {
       actor: { user_id: row.user_id, display_name: row.display_name, device_id: row.device_id },
       session_id: row.id,
+      remembered: Date.parse(row.expires_at) - Date.parse(row.created_at) > BROWSER_SESSION_TTL_MS,
     };
+  }
+
+  listRememberedAccounts(token: string): RememberedAccountRecord[] {
+    const browser = this.lookupRememberedBrowser(token);
+    if (!browser) throw unauthorized("Remembered browser is invalid or expired");
+    return this.sqlite.prepare(`
+      SELECT remembered_accounts.id, remembered_accounts.display_name, remembered_accounts.device_name
+      FROM remembered_accounts
+      JOIN devices ON devices.id = remembered_accounts.device_id
+      WHERE remembered_accounts.browser_id = ?
+        AND devices.user_id = remembered_accounts.user_id
+        AND devices.token_version = remembered_accounts.device_token_version
+        AND devices.revoked_at IS NULL
+        AND (devices.expires_at IS NULL OR devices.expires_at > ?)
+      ORDER BY remembered_accounts.last_used_at DESC, remembered_accounts.id
+    `).all(browser.id, this.now()) as unknown as RememberedAccountRecord[];
+  }
+
+  rememberedBrowserHasAccount(token: string, actor: Actor): boolean {
+    const browser = this.lookupRememberedBrowser(token);
+    if (!browser) return false;
+    const row = this.sqlite.prepare(`
+      SELECT 1 FROM remembered_accounts
+      JOIN devices ON devices.id = remembered_accounts.device_id
+      WHERE browser_id = ? AND remembered_accounts.user_id = ?
+        AND remembered_accounts.device_id = ?
+        AND devices.token_version = remembered_accounts.device_token_version
+    `).get(browser.id, actor.user_id, actor.device_id);
+    return Boolean(row);
+  }
+
+  rememberBrowser(token: string | null, actor: Actor): RememberedBrowserIssue {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const timestamp = this.now();
+      const existing = token ? this.lookupRememberedBrowser(token) : null;
+      const browserId = existing?.id ?? randomUUID();
+      const nextToken = issueRememberedBrowserToken();
+      const expiresAt = new Date(this.clock().getTime() + REMEMBERED_BROWSER_SESSION_TTL_MS).toISOString();
+      if (existing) {
+        this.sqlite.prepare("UPDATE remembered_browsers SET token_digest = ?, expires_at = ? WHERE id = ?")
+          .run(this.tokenDigest(nextToken), expiresAt, browserId);
+      } else {
+        this.sqlite.prepare(`
+          INSERT INTO remembered_browsers(id, token_digest, created_at, expires_at)
+          VALUES (?, ?, ?, ?)
+        `).run(browserId, this.tokenDigest(nextToken), timestamp, expiresAt);
+      }
+      const profile = this.sqlite.prepare(`
+        SELECT users.display_name, devices.name AS device_name, devices.token_version
+        FROM devices JOIN users ON users.id = devices.user_id
+        WHERE devices.id = ? AND devices.user_id = ?
+      `).get(actor.device_id, actor.user_id) as {
+        display_name: string; device_name: string; token_version: number;
+      } | undefined;
+      if (!profile) throw unauthorized("Device is unavailable");
+      this.sqlite.prepare(`
+        INSERT INTO remembered_accounts(
+          id, browser_id, user_id, device_id, device_token_version,
+          display_name, device_name, created_at, last_used_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(browser_id, device_id) DO UPDATE SET
+          device_token_version = excluded.device_token_version,
+          display_name = excluded.display_name,
+          device_name = excluded.device_name,
+          last_used_at = excluded.last_used_at
+      `).run(randomUUID(), browserId, actor.user_id, actor.device_id, profile.token_version,
+        profile.display_name, profile.device_name, timestamp, timestamp);
+      return { token: nextToken, expires_at: expiresAt };
+    });
+  }
+
+  activateRememberedAccount(token: string, accountId: string, profile: {
+    display_name: string; device_name: string;
+  }): { actor: Actor; browser_session: BrowserSessionIssue; remembered_browser: RememberedBrowserIssue } {
+    return this.transaction(() => {
+      const browser = this.lookupRememberedBrowser(token);
+      if (!browser) throw unauthorized("Remembered browser is invalid or expired");
+      const timestamp = this.now();
+      const row = this.sqlite.prepare(`
+        SELECT remembered_accounts.user_id, remembered_accounts.device_id
+        FROM remembered_accounts
+        JOIN devices ON devices.id = remembered_accounts.device_id
+        WHERE remembered_accounts.id = ? AND remembered_accounts.browser_id = ?
+          AND devices.user_id = remembered_accounts.user_id
+          AND devices.token_version = remembered_accounts.device_token_version
+          AND devices.revoked_at IS NULL
+          AND (devices.expires_at IS NULL OR devices.expires_at > ?)
+      `).get(accountId, browser.id, timestamp) as { user_id: string; device_id: string } | undefined;
+      if (!row) throw unauthorized("Remembered account is unavailable");
+      this.sqlite.prepare("UPDATE users SET display_name = ? WHERE id = ?").run(profile.display_name, row.user_id);
+      this.sqlite.prepare("UPDATE devices SET name = ?, last_used_at = ? WHERE id = ?")
+        .run(profile.device_name, timestamp, row.device_id);
+      this.sqlite.prepare(`
+        UPDATE remembered_accounts
+        SET display_name = ?, device_name = ?, last_used_at = ? WHERE id = ?
+      `).run(profile.display_name, profile.device_name, timestamp, accountId);
+      const actor = { user_id: row.user_id, display_name: profile.display_name, device_id: row.device_id };
+      const browserSession = this.insertBrowserSession(actor, this.clock(), true);
+      const nextToken = issueRememberedBrowserToken();
+      const expiresAt = new Date(this.clock().getTime() + REMEMBERED_BROWSER_SESSION_TTL_MS).toISOString();
+      this.sqlite.prepare("UPDATE remembered_browsers SET token_digest = ?, expires_at = ? WHERE id = ?")
+        .run(this.tokenDigest(nextToken), expiresAt, browser.id);
+      return { actor, browser_session: browserSession, remembered_browser: { token: nextToken, expires_at: expiresAt } };
+    });
+  }
+
+  forgetRememberedAccount(token: string, accountId: string): RememberedBrowserIssue | null {
+    return this.transaction(() => {
+      const browser = this.lookupRememberedBrowser(token);
+      if (!browser) throw unauthorized("Remembered browser is invalid or expired");
+      const result = this.sqlite.prepare("DELETE FROM remembered_accounts WHERE id = ? AND browser_id = ?")
+        .run(accountId, browser.id);
+      if (Number(result.changes) === 0) throw notFound("Remembered account");
+      const remaining = this.sqlite.prepare("SELECT 1 FROM remembered_accounts WHERE browser_id = ? LIMIT 1")
+        .get(browser.id);
+      if (!remaining) {
+        this.sqlite.prepare("UPDATE remembered_browsers SET revoked_at = ? WHERE id = ?")
+          .run(this.now(), browser.id);
+        return null;
+      }
+      const nextToken = issueRememberedBrowserToken();
+      this.sqlite.prepare("UPDATE remembered_browsers SET token_digest = ? WHERE id = ?")
+        .run(this.tokenDigest(nextToken), browser.id);
+      return { token: nextToken, expires_at: browser.expires_at };
+    });
   }
 
   assertActiveBrowserSession(sessionId: string, actor: Actor): void {
@@ -997,6 +1385,7 @@ export class CollaborationDatabase {
         UPDATE browser_sessions SET revoked_at = ?
         WHERE device_id = ? AND revoked_at IS NULL
       `).run(timestamp, deviceId);
+      this.sqlite.prepare("DELETE FROM remembered_accounts WHERE device_id = ?").run(deviceId);
       return { device: this.getDeviceForUser(actor.user_id, deviceId), token };
     });
   }
@@ -1132,6 +1521,9 @@ export class CollaborationDatabase {
         }
         return this.projectCreationResult(existing);
       }
+      if (!this.canCreateProjects(actor.user_id)) {
+        throw forbidden("This account can join invited projects but cannot create projects");
+      }
       if (this.sqlite.prepare("SELECT 1 FROM projects WHERE id = ?").get(projectId)) {
         throw idempotencyConflict("Project ID already exists with another operation");
       }
@@ -1214,6 +1606,27 @@ export class CollaborationDatabase {
     return row?.role ?? null;
   }
 
+  getProjectContextPolicy(actor: Actor, projectId: string): { mode: "summary" | "original" } {
+    this.assertActiveDevice(actor);
+    if (this.projectMembershipRole(projectId, actor.user_id) === null) throw notFound("Project");
+    const row = this.sqlite.prepare("SELECT mode FROM project_context_policies WHERE project_id = ? AND user_id = ?")
+      .get(projectId, actor.user_id) as { mode: "summary" | "original" } | undefined;
+    return { mode: row?.mode ?? "summary" };
+  }
+
+  setProjectContextPolicy(actor: Actor, projectId: string, mode: "summary" | "original"): { mode: "summary" | "original" } {
+    return this.transaction(() => {
+      this.getProjectContextPolicy(actor, projectId);
+      if (mode !== "summary" && mode !== "original") throw new ApiError(400, "invalid_context_policy", "Unknown context policy");
+      // This is the authenticated user's preference, not a shared project mutation.
+      this.sqlite.prepare(`
+        INSERT INTO project_context_policies(project_id, user_id, mode, updated_at) VALUES (?, ?, ?, ?)
+        ON CONFLICT(project_id, user_id) DO UPDATE SET mode = excluded.mode, updated_at = excluded.updated_at
+      `).run(projectId, actor.user_id, mode, this.now());
+      return { mode };
+    });
+  }
+
   listProjectMembers(projectId: string): ProjectMemberRecord[] {
     return this.sqlite.prepare(`
       SELECT project_memberships.user_id, users.display_name, project_memberships.role
@@ -1260,25 +1673,43 @@ export class CollaborationDatabase {
     });
   }
 
-  removeProjectMembership(actor: Actor, projectId: string, userId: string): void {
-    this.requireProjectOwnedBy(projectId, actor.user_id);
-    if (userId === actor.user_id) throw conflict("The project owner cannot be removed");
+  removeProjectMembership(actor: Actor, projectId: string, userId: string, decision: BranchRemovalDecision = {}): void {
     this.transaction(() => {
-      const result = this.sqlite.prepare(`
-        DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
-      `).run(projectId, userId);
-      if (Number(result.changes) === 0) throw notFound("Project membership");
-      this.sqlite.prepare(`
-        DELETE FROM memberships
-        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-          AND role != 'owner'
-      `).run(userId, projectId);
-      this.sqlite.prepare(`
-        UPDATE runtimes SET status = 'revoked'
-        WHERE user_id = ? AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-      `).run(userId, projectId);
-      this.touchProject(projectId);
+      this.removeProjectMemberInsideTransaction(actor, projectId, userId, decision);
     });
+  }
+
+  private removeProjectMemberInsideTransaction(actor: Actor, projectId: string, userId: string, decision: BranchRemovalDecision): void {
+    const actorRole = this.projectMembershipRole(projectId, actor.user_id);
+    if (!actorRole) throw notFound("Project");
+    if (actorRole === "owner" && userId === actor.user_id) throw conflict("The project owner cannot leave the project");
+    if (actorRole !== "owner" && userId !== actor.user_id) throw forbidden("Only the project owner can remove another member");
+    if (!this.projectMembershipRole(projectId, userId)) throw notFound("Project membership");
+    const branch = this.sqlite.prepare("SELECT head_commit,review_status FROM code_branches WHERE project_id=? AND user_id=?")
+      .get(projectId, userId) as { head_commit: string; review_status: string } | undefined;
+    if (branch) {
+      if (!decision.branch_resolution || !decision.expected_branch_head_commit) {
+        throw new ApiError(409, "code_branch_resolution_required", "Choose whether to delete the cloud branch or merge its reviewed head to main before leaving");
+      }
+      if (branch.head_commit !== decision.expected_branch_head_commit) {
+        throw new ApiError(409, "code_stale_head", "Cloud branch changed; refresh and choose again");
+      }
+      if (decision.branch_resolution === "merged_to_main" && branch.review_status !== "merged") {
+        throw new ApiError(409, "code_review_required", "The owner must review and merge this exact branch head to main first");
+      }
+      this.sqlite.prepare("DELETE FROM code_branches WHERE project_id=? AND user_id=?").run(projectId, userId);
+      this.sqlite.prepare("UPDATE code_mutations SET invalidated_at=? WHERE project_id=? AND user_id=? AND invalidated_at IS NULL")
+        .run(this.now(), projectId, userId);
+    } else if (decision.branch_resolution || decision.expected_branch_head_commit) {
+      throw new ApiError(409, "code_stale_head", "Cloud branch was already removed; refresh before leaving");
+    }
+    this.sqlite.prepare("DELETE FROM project_memberships WHERE project_id=? AND user_id=? AND role != 'owner'")
+      .run(projectId, userId);
+    this.sqlite.prepare(`DELETE FROM memberships WHERE user_id=? AND session_id IN
+      (SELECT id FROM sessions WHERE project_id=?) AND role != 'owner'`).run(userId, projectId);
+    this.sqlite.prepare(`UPDATE runtimes SET status='revoked' WHERE user_id=? AND session_id IN
+      (SELECT id FROM sessions WHERE project_id=?)`).run(userId, projectId);
+    this.touchProject(projectId);
   }
 
   listProjectSessions(projectId: string, userId: string): SessionListItem[] {
@@ -1853,6 +2284,9 @@ export class CollaborationDatabase {
         const project = this.sqlite.prepare("SELECT id FROM projects WHERE id = ?")
           .get(projectId);
         if (!project) {
+          if (!this.canCreateProjects(actor.user_id)) {
+            throw forbidden("This account can join invited projects but cannot create projects");
+          }
           this.sqlite.prepare(`
             INSERT INTO projects(id, owner_user_id, title, state, creation_idempotency_key, created_at, updated_at)
             VALUES (?, ?, ?, 'active', ?, ?, ?)
@@ -2010,17 +2444,14 @@ export class CollaborationDatabase {
   listSessionRuntimesForUser(sessionId: string, userId: string): RuntimeRecord[] {
     const rows = this.sqlite.prepare(`
       SELECT id, session_id, user_id, device_id, purpose, harness, provider,
-             model, local_session_id, capture_fidelity, status, last_seen_at
+             model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at
       FROM runtimes
       WHERE session_id = ? AND user_id = ? AND status != 'revoked'
       ORDER BY CASE WHEN status = 'online' THEN 0 ELSE 1 END,
                last_seen_at DESC, id ASC
     `).all(sessionId, userId) as unknown as RuntimeRow[];
     const now = this.clock().getTime();
-    return rows.map((row) => ({
-      ...row,
-      status: runtimeStatus(row.status, row.last_seen_at, now),
-    }));
+    return rows.map((row) => mapRuntimeRow(row, now));
   }
 
   membershipRole(sessionId: string, userId: string): MembershipRole | null {
@@ -2069,25 +2500,17 @@ export class CollaborationDatabase {
     });
   }
 
-  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string): CanonicalEvent {
+  removeMembership(actor: Actor, sessionId: string, userId: string, idempotencyKey: string,
+    decision: BranchRemovalDecision = {}): CanonicalEvent {
     return this.transaction(() => {
       const existing = this.findByIdempotencyKey(sessionId, idempotencyKey);
-      const payload = { action: "removed", user_id: userId } satisfies JsonValue;
+      const payload = { action: "removed", user_id: userId,
+        ...(decision.branch_resolution ? { branch_resolution: decision.branch_resolution } : {}),
+        ...(decision.expected_branch_head_commit ? { expected_branch_head_commit: decision.expected_branch_head_commit } : {}),
+      } satisfies JsonValue;
       if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "membership_change", payload);
       const session = this.requireSession(sessionId);
-      const result = this.sqlite.prepare(`
-        DELETE FROM project_memberships WHERE project_id = ? AND user_id = ? AND role != 'owner'
-      `).run(session.project_id, userId);
-      if (Number(result.changes) === 0) throw notFound("Membership");
-      this.sqlite.prepare(`
-        DELETE FROM memberships WHERE user_id = ?
-          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-          AND role != 'owner'
-      `).run(userId, session.project_id);
-      this.sqlite.prepare(`
-        UPDATE runtimes SET status = 'revoked' WHERE user_id = ?
-          AND session_id IN (SELECT id FROM sessions WHERE project_id = ?)
-      `).run(userId, session.project_id);
+      this.removeProjectMemberInsideTransaction(actor, session.project_id, userId, decision);
       return this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: idempotencyKey,
         type: "membership_change",
@@ -2156,8 +2579,129 @@ export class CollaborationDatabase {
     return mapEvent(row);
   }
 
+  createHistorySummary(actor: Actor, sessionId: string, input: CreateHistorySummaryInput): CanonicalEvent {
+    return historySummaryOperation(() => this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (session.state !== "active") throw conflict("Archived sessions do not accept summary requests");
+      // Fetch the bounded selection and its canonical relationships, not a replay
+      // page. A missing or foreign-session ID must never produce a partial summary.
+      if (input.source_event_ids.length < 1 || input.source_event_ids.length > 100) {
+        throw new HistorySummaryError("invalid_selection", "Select between 1 and 100 history messages");
+      }
+      const selectedIds = new Set(input.source_event_ids);
+      const related = new Map<string, CanonicalEvent>();
+      const queue: CanonicalEvent[] = [];
+      let dependencyBytes = 0;
+      const include = (event: CanonicalEvent) => {
+        if (related.has(event.id)) return;
+        dependencyBytes += Buffer.byteLength(JSON.stringify(event));
+        if (related.size >= MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS || dependencyBytes > MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES) {
+          throw new HistorySummaryError("too_large", "Summary source ancestry exceeds the validation limit; select fewer sources");
+        }
+        related.set(event.id, event);
+        queue.push(event);
+      };
+      for (const id of input.source_event_ids) include(this.getEvent(sessionId, id));
+      for (let index = 0; index < queue.length; index += 1) {
+        const event = queue[index]!;
+        if (event.reply_to_event_id !== null) {
+          include(this.getEvent(sessionId, event.reply_to_event_id));
+        }
+        if (event.type !== "agent_request") continue;
+        const marker = historySummaryMarker(event);
+        for (const id of marker?.source_event_ids ?? []) include(this.getEvent(sessionId, id));
+        const responses = this.sqlite.prepare(`
+          SELECT * FROM events WHERE session_id = ? AND reply_to_event_id = ? AND type = 'agent_response'
+          ORDER BY sequence ASC LIMIT 2
+        `).all(sessionId, event.id) as unknown as EventRow[];
+        if (selectedIds.has(event.id) && responses.length === 0 && event.visibility === "session"
+          && !isHistorySummaryRequest(event) && historySummaryText(event.payload).trim()) {
+          throw conflict("Unfinished Agent requests cannot be selected for a history summary");
+        }
+        for (const row of responses) include(mapEvent(row));
+      }
+      const sources = selectHistorySummarySources(
+        [...related.values()].map((event) => ({ ...event, payload: redactJson(event.payload) })), input.source_event_ids,
+      );
+      const instructions = input.instructions === undefined ? undefined : redactJson(input.instructions) as string;
+      const content = buildHistorySummaryPrompt(sources, instructions);
+      if (Buffer.byteLength(JSON.stringify(content)) >= 32 * 1024) {
+        throw new HistorySummaryError("too_large", "Serialized summary prompt exceeds the 32 KiB transport boundary; no text was shortened");
+      }
+      const payload: JsonValue = {
+        content,
+        execution_profile: {
+          harness: input.execution_profile.harness,
+          model: input.execution_profile.model,
+          runtime_id: input.execution_profile.runtime_id,
+          ...(input.execution_profile.provider === undefined ? {} : { provider: input.execution_profile.provider }),
+          ...(input.execution_profile.reasoning_effort === undefined ? {} : { reasoning_effort: input.execution_profile.reasoning_effort }),
+        },
+        history_summary: {
+          version: 1,
+          source_event_ids: sources.map((event) => event.id),
+          source_digest: createHash("sha256").update(historySummarySourceJson(sources)).digest("hex"),
+        },
+      };
+      const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
+      if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", payload, null, "session", null);
+      const target = agentRequestTarget({ payload });
+      const runtime = this.listSessionRuntimesForUser(sessionId, actor.user_id)
+        .find((candidate) => candidate.id === input.execution_profile.runtime_id);
+      if (!runtime || runtime.purpose !== "execution" || runtime.status !== "online" || !runtimeSupportsAgentTarget(runtime, target)) {
+        throw conflict("Select your own exact online execution runtime and supported execution profile");
+      }
+      if (!this.sqlite.prepare(`
+        SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL
+          AND (expires_at IS NULL OR expires_at > ?)
+      `).get(runtime.device_id, actor.user_id, this.now())) {
+        throw conflict("The selected execution runtime's device is expired or revoked");
+      }
+      return this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: input.idempotency_key, type: "agent_request", visibility: "session", payload,
+      }, null);
+    }));
+  }
+
+  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number): HistoryContext {
+    return historySummaryOperation(() => this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
+      const through = throughSequence ?? session.next_sequence;
+      if (!Number.isSafeInteger(through) || through < 0 || through > session.next_sequence) {
+        throw new ApiError(400, "invalid_context_sequence", "through_sequence must be between zero and the current session head");
+      }
+      const resolvedView = view ?? this.getProjectContextPolicy(actor, session.project_id).mode;
+      if (resolvedView !== "summary" && resolvedView !== "original") throw new ApiError(400, "invalid_context_view", "Unknown context view");
+      const events: CanonicalEvent[] = [];
+      let scannedBytes = 0;
+      const query = this.sqlite.prepare(`
+        SELECT * FROM events WHERE session_id = ? AND sequence <= ? AND visibility = 'session' ORDER BY sequence ASC
+      `);
+      for (const value of query.iterate(sessionId, through)) {
+        const row = value as unknown as EventRow;
+        scannedBytes += Buffer.byteLength(row.payload_json) + Buffer.byteLength(row.runtime_provenance_json ?? "") + 512;
+        if (events.length >= MAX_HISTORY_CONTEXT_SCAN_EVENTS || scannedBytes > MAX_HISTORY_CONTEXT_SCAN_BYTES) {
+          throw new HistorySummaryError("too_large", "Context scan limit exceeded. Use paginated canonical history; no context was silently omitted");
+        }
+        const event = mapEvent(row);
+        events.push({ ...event, payload: redactJson(event.payload) });
+      }
+      const context = buildHistoryContext(events, resolvedView);
+      // The frozen canonical head includes invisible/control events; it is not
+      // the sequence of the last conversational item returned by the projection.
+      context.through_sequence = through;
+      if (Buffer.byteLength(JSON.stringify(context)) > HISTORY_SUMMARY_MAX_CONTEXT_BYTES) {
+        throw new HistorySummaryError("too_large", "Context view exceeds 256 KiB; use paginated canonical history");
+      }
+      return context;
+    }));
+  }
+
   appendEvent(actor: Actor, sessionId: string, input: AppendEventInput, provenance: RuntimeProvenance | null): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(input.payload);
     return this.transaction(() => {
       const replyTarget = input.reply_to_event_id === undefined || input.reply_to_event_id === null
         ? undefined
@@ -2247,6 +2791,7 @@ export class CollaborationDatabase {
     harness: string;
     provider: string;
     model: string;
+    execution_profiles?: RuntimeExecutionProfile[] | undefined;
     local_session_id: string;
     capture_fidelity: CaptureFidelity;
   }): RuntimeRecord {
@@ -2254,26 +2799,30 @@ export class CollaborationDatabase {
     this.assertActiveDevice(actor);
     const runtimeId = input.runtime_id ?? randomUUID();
     const timestamp = this.now();
+    const executionProfiles = input.execution_profiles === undefined
+      ? null
+      : JSON.stringify(RuntimeExecutionProfilesSchema.parse(input.execution_profiles));
     this.sqlite.prepare(`
-      INSERT INTO runtimes(id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
+      INSERT INTO runtimes(id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'online', ?, ?)
       ON CONFLICT(device_id, harness, local_session_id) DO UPDATE SET
         session_id = excluded.session_id,
         purpose = excluded.purpose,
         provider = excluded.provider,
         model = excluded.model,
+        execution_profiles_json = excluded.execution_profiles_json,
         capture_fidelity = excluded.capture_fidelity,
         status = 'online',
         last_seen_at = excluded.last_seen_at
-    `).run(runtimeId, input.session_id, actor.user_id, input.device_id, input.purpose ?? "execution", input.harness, input.provider, input.model, input.local_session_id, input.capture_fidelity, timestamp, timestamp);
+    `).run(runtimeId, input.session_id, actor.user_id, input.device_id, input.purpose ?? "execution", input.harness, input.provider, input.model, executionProfiles, input.local_session_id, input.capture_fidelity, timestamp, timestamp);
     return this.getRuntimeByIdentity(input.device_id, input.harness, input.local_session_id);
   }
 
   getRuntime(runtimeId: string): RuntimeRecord {
-    const row = this.sqlite.prepare("SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at FROM runtimes WHERE id = ?")
+    const row = this.sqlite.prepare("SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at FROM runtimes WHERE id = ?")
       .get(runtimeId) as unknown as RuntimeRow | undefined;
     if (!row) throw notFound("Runtime");
-    return row;
+    return mapRuntimeRow(row);
   }
 
   heartbeatRuntime(actor: Actor, runtimeId: string): RuntimeRecord {
@@ -2304,14 +2853,10 @@ export class CollaborationDatabase {
       const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
         candidate.purpose === "execution"
         && candidate.status === "online"
-        && candidate.harness.trim().toLowerCase() === target.harness
-        && (target.provider === undefined || candidate.provider === target.provider)
-        && (target.harness === "codex" || target.model === undefined || candidate.model === target.model));
+        && runtimeSupportsAgentTarget(candidate, target));
       const selectedRuntimeId = target.runtimeId
         ?? (target.harness === "codex" ? runtime.id : matching.length === 1 ? matching[0]?.id : undefined);
-      if (runtime.harness.trim().toLowerCase() !== target.harness
-        || (target.provider !== undefined && runtime.provider !== target.provider)
-        || (target.harness !== "codex" && target.model !== undefined && runtime.model !== target.model)
+      if (!runtimeSupportsAgentTarget(runtime, target)
         || selectedRuntimeId === undefined
         || runtime.id !== selectedRuntimeId
         || !matching.some((candidate) => candidate.id === runtime.id)) {
@@ -2423,6 +2968,7 @@ export class CollaborationDatabase {
     claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(payload);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
@@ -2475,6 +3021,7 @@ export class CollaborationDatabase {
     claimAttempt?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
+    rejectHistorySummaryMetadata(payload);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
@@ -2534,6 +3081,9 @@ export class CollaborationDatabase {
   commitLocalTurn(actor: Actor, sessionId: string, input: CommitLocalTurnInput): CommitLocalTurnResult {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
+      rejectHistorySummaryMetadata(input.request_payload);
+      rejectHistorySummaryMetadata(input.response_payload);
+      for (const event of input.tool_events ?? []) rejectHistorySummaryMetadata(event.payload);
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       const runtime = this.requireRuntimeForActor(actor, sessionId, input.runtime_id, "execution");
       if (session.state !== "active") throw conflict("Archived sessions do not accept completed local turns");
@@ -2624,11 +3174,12 @@ export class CollaborationDatabase {
         : this.requireReadableSessionInsideTransaction(actor, sessionId);
       let targetRuntime: RuntimeRecord | undefined;
       if (localControl) {
+        this.assertCodeControlEnabled(kind, session.project_id);
         targetRuntime = this.listSessionRuntimesForUser(sessionId, actor.user_id)
           .find((runtime) => runtime.id === targetRuntimeId);
         if (!targetRuntime || targetRuntime.purpose !== "execution"
-          || targetRuntime.status !== "online" || targetRuntime.harness.trim().toLowerCase() !== "codex") {
-          throw conflict("An online Codex execution runtime owned by this user is required");
+          || targetRuntime.status !== "online" || !this.supportsControlHarness(kind, targetRuntime.harness)) {
+          throw conflict("An exact online supported execution runtime owned by this user is required");
         }
       } else if (targetRuntimeId !== undefined) {
         throw conflict("Only local sync controls can target an execution runtime");
@@ -2701,7 +3252,8 @@ export class CollaborationDatabase {
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
       const localControl = isLocalSyncRequestKind(request.kind);
       if (request.kind === "visible_history_replace" || localControl) {
-        this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        this.assertCodeControlEnabled(request.kind, session.project_id);
       } else {
         this.requireReadableSessionInsideTransaction(actor, request.session_id);
       }
@@ -2711,8 +3263,8 @@ export class CollaborationDatabase {
         runtimeId,
         localControl ? "execution" : "snapshot_connector",
       );
-      if (localControl && (request.target_runtime_id !== runtime.id || runtime.harness.trim().toLowerCase() !== "codex")) {
-        throw forbidden("This local sync control targets a different Codex runtime");
+      if (localControl && (request.target_runtime_id !== runtime.id || !this.supportsControlHarness(request.kind, runtime.harness))) {
+        throw forbidden("This local sync control targets a different execution runtime");
       }
       if (request.status === "claimed" && request.claimed_by_runtime_id === runtimeId) return request;
       if (request.status !== "pending") throw conflict("Snapshot request is not pending");
@@ -2748,10 +3300,10 @@ export class CollaborationDatabase {
 
   private getRuntimeByIdentity(deviceId: string, harness: string, localSessionId: string): RuntimeRecord {
     const row = this.sqlite.prepare(`
-      SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, local_session_id, capture_fidelity, status, last_seen_at
+      SELECT id, session_id, user_id, device_id, purpose, harness, provider, model, execution_profiles_json, local_session_id, capture_fidelity, status, last_seen_at
       FROM runtimes WHERE device_id = ? AND harness = ? AND local_session_id = ?
     `).get(deviceId, harness, localSessionId) as unknown as RuntimeRow;
-    return row;
+    return mapRuntimeRow(row);
   }
 
   private requireRuntimeForActor(actor: Actor, sessionId: string, runtimeId: string, purpose: RuntimeRecord["purpose"]): RuntimeRecord {
@@ -2842,14 +3394,18 @@ export class CollaborationDatabase {
       const request = this.requireSnapshotRequest(requestId);
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
       const localControl = isLocalSyncRequestKind(request.kind);
+      if (isCodeSyncRequestKind(request.kind)) {
+        const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
+        this.assertCodeControlEnabled(request.kind, session.project_id);
+      }
       const runtime = this.requireRuntimeForActor(
         actor,
         request.session_id,
         runtimeId,
         localControl ? "execution" : "snapshot_connector",
       );
-      if (localControl && (request.target_runtime_id !== runtime.id || runtime.harness.trim().toLowerCase() !== "codex")) {
-        throw forbidden("This local sync control targets a different Codex runtime");
+      if (localControl && (request.target_runtime_id !== runtime.id || !this.supportsControlHarness(request.kind, runtime.harness))) {
+        throw forbidden("This local sync control targets a different execution runtime");
       }
       const targetStatus = "result" in outcome ? "completed" : "failed";
       if (request.status === targetStatus && request.claimed_by_runtime_id === runtimeId) {
@@ -2890,6 +3446,21 @@ export class CollaborationDatabase {
     return this.clock().toISOString();
   }
 
+  private supportsControlHarness(kind: SnapshotRequestKind, harness: string): boolean {
+    const normalized = harness.trim().toLowerCase();
+    return normalized === "codex" || (isCodeSyncRequestKind(kind) && normalized === "deepseek-harness");
+  }
+
+  private assertCodeControlEnabled(kind: SnapshotRequestKind, projectId: string): void {
+    // Local status and disabling automatic upload remain available while the
+    // cloud repository is paused, so a member can turn off an existing local
+    // upload preference without first re-enabling cloud transfers.
+    if (isCodeSyncRequestKind(kind) && kind !== "code_sync_status" && kind !== "code_auto_upload_disable"
+      && !this.sqlite.prepare("SELECT 1 FROM code_repositories WHERE project_id=? AND enabled=1").get(projectId)) {
+      throw conflict("Enable project code collaboration before changing local code sync");
+    }
+  }
+
   private touchProject(projectId: string, timestamp = this.now()): void {
     this.sqlite.prepare(`
       UPDATE projects SET updated_at = CASE WHEN updated_at > ? THEN updated_at ELSE ? END
@@ -2905,6 +3476,14 @@ export class CollaborationDatabase {
 
   private tokenDigest(token: string): string {
     return createHmac("sha256", this.authTokenPepper).update(token).digest("hex");
+  }
+
+  private lookupRememberedBrowser(token: string): RememberedBrowserRow | null {
+    if (!/^gtr_[A-Za-z0-9_-]{43}$/u.test(token)) return null;
+    return (this.sqlite.prepare(`
+      SELECT id, expires_at FROM remembered_browsers
+      WHERE token_digest = ? AND revoked_at IS NULL AND expires_at > ?
+    `).get(this.tokenDigest(token), this.now()) as RememberedBrowserRow | undefined) ?? null;
   }
 
   private getDeviceForUser(userId: string, deviceId: string): DeviceRecord {
@@ -3175,6 +3754,47 @@ export class CollaborationDatabase {
     }
   }
 
+  private migrateCodeRepositoryEnableColumn(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(code_repositories)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("enabled")) {
+      this.sqlite.exec("ALTER TABLE code_repositories ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0, 1))");
+    }
+  }
+
+  private migrateCodeRepositoryUsageColumns(): void {
+    const columns = (table: string) => new Set(
+      (this.sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns("code_repositories").has("main_logical_bytes")) {
+      this.sqlite.exec("ALTER TABLE code_repositories ADD COLUMN main_logical_bytes INTEGER NOT NULL DEFAULT -1 CHECK(main_logical_bytes >= -1)");
+    }
+    if (!columns("code_branches").has("logical_bytes")) {
+      this.sqlite.exec("ALTER TABLE code_branches ADD COLUMN logical_bytes INTEGER NOT NULL DEFAULT -1 CHECK(logical_bytes >= -1)");
+    }
+    if (!columns("code_mutations").has("invalidated_at")) {
+      this.sqlite.exec("ALTER TABLE code_mutations ADD COLUMN invalidated_at TEXT");
+    }
+  }
+
+  private migrateAccountCapabilities(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (columns.has("can_create_projects")) return;
+    this.transaction(() => {
+      this.sqlite.exec("ALTER TABLE users ADD COLUMN can_create_projects INTEGER NOT NULL DEFAULT 0 CHECK (can_create_projects IN (0, 1))");
+      // Preserve the bootstrap operator and everyone who already owns a project.
+      // Other legacy invitation-only identities become project-scoped guests.
+      this.sqlite.exec(`
+        UPDATE users SET can_create_projects = 1
+        WHERE id = (SELECT id FROM users ORDER BY created_at, rowid LIMIT 1)
+           OR id IN (SELECT owner_user_id FROM projects)
+      `);
+    });
+  }
+
   private migrateProjectModel(): void {
     const sessionColumns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(sessions)").all() as Array<{ name: string }>).map((row) => row.name),
@@ -3248,6 +3868,15 @@ export class CollaborationDatabase {
     );
     if (!columns.has("purpose")) {
       this.sqlite.exec("ALTER TABLE runtimes ADD COLUMN purpose TEXT NOT NULL DEFAULT 'execution' CHECK (purpose IN ('execution', 'snapshot_connector'))");
+    }
+  }
+
+  private migrateRuntimeExecutionProfilesColumn(): void {
+    const columns = new Set(
+      (this.sqlite.prepare("PRAGMA table_info(runtimes)").all() as Array<{ name: string }>).map((row) => row.name),
+    );
+    if (!columns.has("execution_profiles_json")) {
+      this.sqlite.exec("ALTER TABLE runtimes ADD COLUMN execution_profiles_json TEXT CHECK (execution_profiles_json IS NULL OR json_valid(execution_profiles_json))");
     }
   }
 
@@ -3422,7 +4051,7 @@ export class CollaborationDatabase {
     const columns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all() as Array<{ name: string }>).map((row) => row.name),
     );
-    if (table?.sql?.includes("'local_sync_status'") && columns.has("target_runtime_id")) return;
+    if (table?.sql?.includes("'code_sync_status'") && columns.has("target_runtime_id")) return;
     this.sqlite.exec("PRAGMA foreign_keys = OFF");
     try {
       this.sqlite.exec(`
@@ -3431,7 +4060,7 @@ export class CollaborationDatabase {
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
           requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload')),
+          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable')),
           through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
           status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
           target_runtime_id TEXT REFERENCES runtimes(id),
@@ -3451,7 +4080,7 @@ export class CollaborationDatabase {
           failed_at, result_json, failure_json, storage_bytes, metadata_charged
         ) SELECT
           id, session_id, requested_by_user_id, request_kind, through_sequence, status,
-          NULL, claimed_by_runtime_id, created_at, claimed_at, completed_at,
+          ${columns.has("target_runtime_id") ? "target_runtime_id" : "NULL"}, claimed_by_runtime_id, created_at, claimed_at, completed_at,
           failed_at, result_json, failure_json, storage_bytes, metadata_charged
         FROM snapshot_requests;
         DROP TABLE snapshot_requests;

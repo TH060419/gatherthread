@@ -8,6 +8,7 @@ import type {
   AppendEventInput,
   CollaborationApi,
   CompleteAgentRequestInput,
+  HistoryContext,
   RuntimeRegistration,
 } from "../src/index.js";
 import {
@@ -277,4 +278,65 @@ test("workspace IPC names are stable but write authorization is not encoded in t
   assert.equal(first, second);
   assert.match(first, /^\\\\\.\\pipe\\gatherthread-[a-f0-9]{24}-user-api$/);
   assert.doesNotMatch(first, /token|capability|Bearer|gta_/i);
+});
+
+test("context relay preserves policy and sequence fences and enforces capability and project routing", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX socket fixture; Windows shares the same capability and dispatcher logic");
+    return;
+  }
+  const directory = await mkdtemp(path.join("/tmp", "gtr-context-"));
+  const homeDirectory = path.join(directory, "home");
+  const workspacePath = path.join(directory, "workspace");
+  await mkdir(workspacePath);
+  const endpoint = resolveWorkspaceConnectorApiPath(await realpath(workspacePath), homeDirectory);
+  const calls: unknown[][] = [];
+  let rawReads = 0;
+  const api: CollaborationApi = Object.assign(new FakeApi(), {
+    async readContext(sessionId: string, view?: HistoryContext["view"], throughSequence?: number): Promise<HistoryContext> {
+      calls.push([sessionId, view, throughSequence]);
+      return { view: view ?? "original", through_sequence: throughSequence ?? 3, items: [] };
+    },
+    async readEvents(_sessionId: string, afterSequence: number) {
+      rawReads += 1;
+      return { events: [], nextSequence: afterSequence, hasMore: false };
+    },
+  });
+  const server = new LocalConnectorApiRelayServer({ endpoint, api, projectId: "p1", homeDirectory });
+  try { await server.start(); } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "EPERM") {
+      t.skip("Unix sockets are blocked by this sandbox");
+      return;
+    }
+    throw error;
+  }
+  t.after(() => server.close());
+  const client = new LocalConnectorCollaborationClient({ workspacePath, homeDirectory });
+  assert.deepEqual(await client.readContext("s1"), { view: "original", through_sequence: 3, items: [] });
+  assert.deepEqual(await client.readContext("s1", "summary"), { view: "summary", through_sequence: 3, items: [] });
+  assert.deepEqual(await client.readContext("s1", undefined, 0), { view: "original", through_sequence: 0, items: [] });
+  assert.deepEqual(await client.readContext("s1", "original", 2), { view: "original", through_sequence: 2, items: [] });
+  assert.deepEqual(calls, [["s1", undefined, undefined], ["s1", "summary", undefined], ["s1", undefined, 0], ["s1", "original", 2]]);
+  const capability = await readFile(`${endpoint}.capability`, "utf8");
+  const call = async (params: unknown[], authority = capability): Promise<{ error?: string }> => new Promise((resolve, reject) => {
+    const socket = net.createConnection(endpoint);
+    let data = "";
+    socket.setEncoding("utf8");
+    socket.once("connect", () => socket.write(`${JSON.stringify({ id: "context-check", method: "readContext", params, capability: authority })}\n`));
+    socket.on("data", (chunk) => { data += chunk; });
+    socket.once("error", reject);
+    socket.once("end", () => { try { resolve(JSON.parse(data.trim())); } catch (error) { reject(error); } });
+  });
+  assert.match((await call(["s1"], "not-the-private-capability")).error ?? "", /capability was rejected/);
+  assert.match((await call(["other-session", "summary"])).error ?? "", /not routed/);
+  assert.match((await call(["s1", "raw"])).error ?? "", /view/);
+  assert.match((await call(["s1", "summary", -1])).error ?? "", /through_sequence/);
+  assert.match((await call(["s1", "summary", 1, "extra"])).error ?? "", /parameter count/);
+  await assert.rejects(client.readContext("../s1"), /session identifier/);
+  assert.equal(calls.length, 4, "no rejected request reached the context API");
+  delete api.readContext;
+  await assert.rejects(client.readContext("s1"), /unavailable.*not substituted/);
+  assert.equal(rawReads, 0, "unsupported context reads never fall back to raw history");
+  assert.deepEqual(await client.readEvents("s1", 7, 4), { events: [], nextSequence: 7, hasMore: false });
+  assert.equal(rawReads, 1);
 });

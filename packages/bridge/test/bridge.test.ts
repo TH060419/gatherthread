@@ -239,6 +239,26 @@ test("agent request claim hydrates canonical history and completes with redacted
   assert.equal(api.completeInput?.claimAttempt, 2);
 });
 
+test("a marked summary session never falls back to raw context when the connector lacks the context API", async () => {
+  const api = new FakeApi();
+  const request = canonical("session-1", 3, {
+    type: "agent_request", idempotencyKey: "current", payload: { content: "continue" },
+  });
+  api.history.push(canonical("session-1", 1, {
+    type: "agent_request", idempotencyKey: "summary", payload: {
+      content: "selected summary prompt", history_summary: {
+        version: 1, source_event_ids: ["source"], source_digest: "a".repeat(64),
+      },
+    },
+  }), request);
+  const bridge = new LocalBridge({ api, cursorStore: new MemoryCursorStore(),
+    runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  await assert.rejects(() => bridge.processAgentRequest(request, {
+    async execute() { throw new Error("must not execute with raw context"); },
+  }), /cannot read GatherThread's summarized context/);
+});
+
 test("pending request polling persists the server cursor only after execution completes", async () => {
   const api = new FakeApi();
   const cursorStore = new MemoryCursorStore();
