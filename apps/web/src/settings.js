@@ -36,6 +36,25 @@ const DSH_PROVIDER_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,80}$/u;
 const DSH_MODEL_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,160}$/u;
 export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness"]);
 
+export const MOTION_PREFERENCES = Object.freeze(["system", "reduce", "full"]);
+
+/**
+ * The motion the reader actually gets.
+ *
+ * `system` is not a preference in its own right — it defers to the device, the
+ * same way only an explicit theme overrides a system theme. So an explicit
+ * choice wins, and only `system` consults the device; anything the schema does
+ * not recognise behaves like the default rather than claiming motion is unwanted.
+ *
+ * This exists because the default is `system`: code that tests
+ * `motion === "reduce"` directly hands a long animated scroll to every reader who
+ * asked their operating system for reduced motion and never opened this setting.
+ */
+export function effectiveMotion(motion, prefersReducedMotion) {
+  if (motion === "reduce" || motion === "full") return motion;
+  return prefersReducedMotion === true ? "reduce" : "full";
+}
+
 export const DEFAULT_SETTINGS = deepFreeze({
   version: SETTINGS_VERSION,
   general: {

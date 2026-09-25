@@ -812,6 +812,10 @@ test("the timeline offers a labelled jump back to the newest event", async () =>
   assert.match(main, /timelineBottomButton\.hidden = isTimelineAtBottom\(timelineRegion\)/);
   assert.match(main, /timelineRegion\.addEventListener\("scroll", renderTimelineBottomControl, \{ passive: true \}\)/);
   assert.match(main, /timelineBottomButton\.addEventListener\("click", returnToNewestEvent\)/);
-  // A reader who asked for reduced motion gets the jump without the glide.
-  assert.match(main, /state\.settings\.appearance\.motion === "reduce" \? "auto" : "smooth"/);
+  // A reader who asked for reduced motion gets the jump without the glide — and
+  // the setting defaults to `system`, so the decision has to resolve the device
+  // preference rather than compare the setting to the literal `reduce`.
+  assert.match(main, /effectiveMotion\(state\.settings\.appearance\.motion, reducedMotion\)/);
+  assert.match(main, /window\.matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)\.matches === true/);
+  assert.doesNotMatch(main, /appearance\.motion === "reduce" \? "auto"/);
 });

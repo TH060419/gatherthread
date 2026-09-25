@@ -78,6 +78,7 @@ import {
   SHARED_LANGUAGE_STORAGE_KEY,
   DEFAULT_SETTINGS,
   effectiveContextBudget,
+  effectiveMotion,
   normalizeCodexProfile,
   normalizeSettings,
   projectAgentHarness,
@@ -88,7 +89,7 @@ import {
   withProjectCodexProfile,
   withProjectDshProfile,
   withProjectEnabledHarnesses,
-} from "./settings.js?v=20260922-1";
+} from "./settings.js?v=20260925-2";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -2158,11 +2159,19 @@ function renderTimelineBottomControl() {
   timelineBottomButton.hidden = isTimelineAtBottom(timelineRegion);
 }
 
+/**
+ * The scroll this reader actually wants. `appearance.motion` defaults to
+ * `system`, so comparing it to the literal `reduce` would hand a long animated
+ * jump to every reader whose device asks for reduced motion and who never opened
+ * the setting.
+ */
+function timelineScrollBehavior() {
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  return effectiveMotion(state.settings.appearance.motion, reducedMotion) === "reduce" ? "auto" : "smooth";
+}
+
 function returnToNewestEvent() {
-  scrollTimelineToBottom(
-    timelineRegion,
-    state.settings.appearance.motion === "reduce" ? "auto" : "smooth",
-  );
+  scrollTimelineToBottom(timelineRegion, timelineScrollBehavior());
   renderTimelineBottomControl();
 }
 
