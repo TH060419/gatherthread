@@ -5,6 +5,7 @@ import {
   createIdempotencyKey,
   createSelectionGuard,
   emptyProjectState,
+  eventBubbleRole,
   eventContent,
   eventLabel,
   failedRequestFor,
@@ -26,7 +27,7 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260923-1";
+} from "./domain.js?v=20260925-1";
 import { SessionSync } from "./realtime.js";
 import { mountCodeSync } from "./code-sync-view.js?v=20260924-1";
 import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-2";
@@ -2059,6 +2060,12 @@ function renderTimeline({ followNewEvents = false } = {}) {
     const time = document.createElement("time");
 
     article.className = `event-card event-${event.type}`;
+    // Bubble tint is presentation only: self-authored messages get the green
+    // bubble, agent-produced events get the yellow one, and everyone else
+    // keeps the theme's default card.
+    const bubbleRole = eventBubbleRole(event, state.currentUser?.id ?? null);
+    if (bubbleRole === "self") article.classList.add("event-bubble-self");
+    if (bubbleRole === "agent") article.classList.add("event-bubble-agent");
     const failedResponse = isFailedAgentResponse(event);
     if (failedResponse) article.classList.add("event-agent_response-failed");
     article.setAttribute("aria-labelledby", `event-${event.id}-actor`);

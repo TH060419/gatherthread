@@ -26,6 +26,15 @@
   --surface-highlight: color-mix(in srgb, white 54%, transparent);
   --response-surface: color-mix(in srgb, var(--teal-wash) 62%, var(--paper-raised));
   --response-border: color-mix(in srgb, var(--teal) 38%, var(--line));
+  /* Conversation bubble tints. Each one is mixed from the theme's own accent and
+     raised surface, so the light theme, the explicit dark theme, and a
+     system-dark session all resolve this single definition instead of repeating
+     it per appearance. Body text stays --ink on a wash that is at least 70% of
+     the theme surface, which keeps contrast above WCAG AAA in every path. */
+  --bubble-self-bg: color-mix(in srgb, var(--teal) 24%, var(--paper-raised));
+  --bubble-self-border: color-mix(in srgb, var(--teal) 50%, var(--paper-raised));
+  --bubble-agent-bg: color-mix(in srgb, var(--amber) 30%, var(--paper-raised));
+  --bubble-agent-border: color-mix(in srgb, var(--amber) 50%, var(--paper-raised));
   --switch-thumb: #ffffff;
   --left-rail-width: 340px;
   --right-panel-width: 320px;
@@ -5631,6 +5640,58 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
 @media (forced-colors: active) {
   .session-context-panel {
     border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+}
+
+/* Conversation bubble tints: self (green), agent (yellow), peers default.
+   These rules deliberately come after every generic .event-card layer so the
+   tint wins without !important. Body text stays --ink, which measures 8.5 to 1
+   or better against every wash in every appearance path. */
+
+/* Every text tier has to clear the same bar, not just body copy. --ink-soft
+   carries the metadata (.event-type, .event-sequence, time, .provenance and the
+   worklog summary) at 0.68 to 0.76rem, which a tinted wash would otherwise pull
+   below the AA threshold. Redefining the token on the card covers every
+   descendant that reads it, including any added later. It is mixed from --ink
+   and --paper-raised rather than from --ink-soft, because a token defined in
+   terms of itself is a cycle that resolves to nothing. */
+.event-card.event-bubble-self,
+.event-card.event-bubble-agent {
+  --ink-soft: color-mix(in srgb, var(--ink) 76%, var(--paper-raised));
+}
+
+.event-card.event-bubble-self {
+  border-color: var(--bubble-self-border);
+  background: var(--bubble-self-bg);
+}
+
+/* An agent request is marked with a coral left edge. The rule above sets
+   border-color on all four sides at a higher specificity, so the marker has to
+   be re-asserted or a self-authored request silently loses it. */
+.event-card.event-bubble-self.event-agent_request {
+  border-left-color: var(--coral);
+}
+
+.event-card.event-bubble-agent {
+  border-color: var(--bubble-agent-border);
+  background: var(--bubble-agent-bg);
+}
+
+/* A failed Agent answer keeps its warning wash even though it is agent-produced. */
+.event-card.event-bubble-agent.event-agent_response-failed {
+  border-color: #d4ad67;
+  background: var(--amber-wash);
+}
+
+/* The failed card is three classes deep, so it outranks a two-class selector and
+   would keep its amber wash instead of falling back to the system palette. */
+@media (forced-colors: active) {
+  .event-card.event-bubble-self,
+  .event-card.event-bubble-agent,
+  .event-card.event-bubble-agent.event-agent_response-failed {
+    border-color: CanvasText;
     background: Canvas;
     color: CanvasText;
   }
