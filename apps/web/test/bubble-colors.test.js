@@ -50,8 +50,7 @@ function declarations(body) {
   for (const part of body.split(";")) {
     const colon = part.indexOf(":");
     if (colon < 0) continue;
-    const name = part.slice(0, colon).trim();
-    if (name.startsWith("--")) found.set(name, part.slice(colon + 1).trim());
+    found.set(part.slice(0, colon).trim(), part.slice(colon + 1).trim());
   }
   return found;
 }
@@ -155,6 +154,7 @@ async function themePaths() {
   const rules = parseRules(css, null, []);
   return {
     css,
+    rules,
     light: variablesFor(rules, [{ media: null, selectors: [":root"] }]),
     dark: variablesFor(rules, [{ media: null, selectors: [":root", ':root[data-theme="dark"]'] }]),
     systemDark: variablesFor(rules, [
@@ -163,6 +163,28 @@ async function themePaths() {
     ]),
   };
 }
+
+/** Theme variables plus whatever a card-scoped rule redefines on the card itself.
+ *  Custom properties inherit, so a card that re-derives a token also changes
+ *  every descendant that reads it. */
+function withCardOverrides(rules, themeVars, selector) {
+  const vars = new Map(themeVars);
+  for (const rule of rules) {
+    if (rule.media !== null) continue;
+    if (!rule.selector.split(",").map((part) => part.trim()).includes(selector)) continue;
+    for (const [name, value] of declarations(rule.body)) {
+      if (name.startsWith("--")) vars.set(name, value);
+    }
+  }
+  return vars;
+}
+
+const BUBBLE_ROLES = [
+  ["self", ".event-card.event-bubble-self", "--bubble-self-bg"],
+  ["agent", ".event-card.event-bubble-agent", "--bubble-agent-bg"],
+];
+
+const APPEARANCES = ["light", "dark", "systemDark"];
 
 const BUBBLE_TINTS = [
   "--bubble-self-bg",
@@ -185,6 +207,32 @@ test("conversation bubble text stays readable in every appearance path", async (
         ratio >= 4.5,
         `${appearance} ${tint} is ${formatColor(background)} behind ${formatColor(ink)}: ${ratio.toFixed(2)}:1`,
       );
+    }
+  }
+});
+
+test("every text tier inside a tinted bubble clears the contrast bar", async () => {
+  const themes = await themePaths();
+  // A card carries more than body copy. --ink-soft drives the metadata
+  // (.event-type, .event-sequence, time, .provenance, the worklog summary) at
+  // 0.68 to 0.76rem, and --teal-dark colours links inside Agent markdown.
+  // Tinting the card drops the metadata below 4.5:1 unless the card re-derives
+  // it, which is what the first revision of the tints got wrong.
+  const tiers = [
+    ["metadata", "--ink-soft"],
+    ["links", "--teal-dark"],
+  ];
+  for (const appearance of APPEARANCES) {
+    for (const [role, selector, background] of BUBBLE_ROLES) {
+      const vars = withCardOverrides(themes.rules, themes[appearance], selector);
+      for (const [tier, token] of tiers) {
+        const foreground = resolve(vars.get(token), vars);
+        const ratio = contrastRatio(foreground, resolve(vars.get(background), vars));
+        assert.ok(
+          ratio >= 4.5,
+          `${appearance} ${role} ${tier} is ${formatColor(foreground)}: ${ratio.toFixed(2)}:1`,
+        );
+      }
     }
   }
 });
@@ -220,6 +268,31 @@ test("bubble tints are declared once and derive from the theme accents", async (
   const agent = css.match(/--bubble-agent-bg:([^;]+);/)?.[1] ?? "";
   assert.match(self, /color-mix\(in srgb, var\(--teal\)[\d. ]+%, var\(--paper-raised\)\)/);
   assert.match(agent, /color-mix\(in srgb, var\(--amber\)[\d. ]+%, var\(--paper-raised\)\)/);
+});
+
+test("forced colors reaches the failed agent card too", async () => {
+  const themes = await themePaths();
+  // A failed answer is three classes deep, so the two-class forced-colors rule
+  // loses to it on specificity and the system colors never apply.
+  const selector = ".event-card.event-bubble-agent.event-agent_response-failed";
+  const forced = themes.rules.filter((rule) =>
+    (rule.media ?? "").includes("forced-colors")
+    && rule.selector.split(",").map((part) => part.trim()).includes(selector));
+  assert.ok(forced.length > 0, `forced-colors must cover ${selector}`);
+  const forcedDeclarations = new Map(forced.flatMap((rule) => [...declarations(rule.body)]));
+  assert.equal(forcedDeclarations.get("background"), "Canvas");
+  assert.equal(forcedDeclarations.get("color"), "CanvasText");
+});
+
+test("a self-authored agent request keeps its coral request accent", async () => {
+  const styles = await readFile(stylesPath, "utf8");
+  // .event-agent_request marks a request with a coral left edge. The bubble tint
+  // sets border-color on all four sides at a higher specificity, so without this
+  // the green card silently loses the marker.
+  assert.match(
+    styles,
+    /\.event-card\.event-bubble-self\.event-agent_request \{[\s\S]*?border-left-color: var\(--coral\);/,
+  );
 });
 
 test("the timeline tints bubbles by role and keeps failures on the warning wash", async () => {
