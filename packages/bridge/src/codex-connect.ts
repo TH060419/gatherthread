@@ -949,8 +949,7 @@ export async function runProjectConnector(options: {
       workspacePath: path.resolve(options.hookWorkspacePath),
       discoverUnregistered: enabled,
     });
-  }
-;
+  };
   const discoverLocalSolo = (event: Extract<CodexHookEvent, { hook_event_name: "UserPromptSubmit" }>) => {
     const existing = discoveries.get(event.session_id);
     if (existing) return existing;
