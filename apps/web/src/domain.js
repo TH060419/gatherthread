@@ -298,6 +298,22 @@ export function eventContent(event) {
   return typeof importedText === "string" ? importedText : "";
 }
 
+/**
+ * Conversation bubble role for timeline presentation: the signed-in author's
+ * messages read as "self", everyone else's human messages keep the default
+ * card, and agent-produced events read as "agent". Non-conversation control
+ * events stay "default" and are styled exactly as before.
+ */
+export function eventBubbleRole(event, currentUserId) {
+  const type = event?.type ?? "";
+  if (type === "agent_response" || type === "agent_progress") return "agent";
+  if (type === "human_chat" || type === "agent_request") {
+    const actorId = event?.actor?.id;
+    return typeof actorId === "string" && actorId === currentUserId ? "self" : "peer";
+  }
+  return "default";
+}
+
 export function pendingAgentRequests(events) {
   const answeredRequestIds = new Set(
     (events ?? [])
