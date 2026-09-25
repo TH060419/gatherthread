@@ -3,6 +3,7 @@ import type {
   CollaborationApi,
   HarnessExecutor,
   RegisteredRuntime,
+  RuntimeExecutionProfile,
   SessionSummary,
 } from "./types.js";
 
@@ -12,6 +13,12 @@ export interface ProjectHarnessDescriptor {
   model: string;
   captureFidelity: CaptureFidelity;
   capabilities: readonly string[];
+  /**
+   * Models the connected harness reported online (for example via the Codex
+   * App Server model/list RPC). When present, the collaboration server and
+   * the Web workspace use this list instead of any hardcoded catalog.
+   */
+  executionProfiles?: readonly RuntimeExecutionProfile[];
 }
 
 export interface ProjectHarnessPreflight {
