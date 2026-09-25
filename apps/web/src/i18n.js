@@ -644,6 +644,7 @@ const ZH_CN = Object.freeze({
   "Read-only history": "只读历史",
   "Agent request": "Agent request",
   "Agent response": "Agent 最终答复",
+  "Back to the newest message": "回到底部",
   "This Agent request failed before it produced an answer.": "该 Agent 请求未能产出回答。",
   "Retry Agent request": "重试 Agent 请求",
   "Working": "正在工作",

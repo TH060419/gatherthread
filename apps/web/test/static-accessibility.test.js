@@ -788,3 +788,30 @@ test("a failed Agent response is shown as a failure with an explicit retry", asy
   assert.match(styles, /\.event-agent_response-failed/);
   assert.match(styles, /\.agent-retry-button/);
 });
+
+test("the timeline offers a labelled jump back to the newest event", async () => {
+  const [html, main, styles] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+  ]);
+  // The control lives inside the scrolling region so it can stick to the edge,
+  // and it starts hidden because a fresh timeline is already at the bottom.
+  // A single opening tag, not a lazy span that starts at the first <button> in
+  // the document and swallows everything up to the next </button>.
+  const buttonTag = html.match(/<button(?=[^>]*id="timeline-bottom-button")[^>]*>/)?.[0] ?? "";
+  assert.match(buttonTag, /class="timeline-bottom-button"/);
+  assert.match(buttonTag, /aria-label="Back to the newest message"/);
+  // Bounded to the tag, and anchored so it cannot be satisfied by `aria-hidden`.
+  assert.match(buttonTag, /(?:^|\s)hidden(?:\s|>)/);
+  // Bounded to this one rule, so a later `position: sticky` cannot stand in.
+  const buttonRule = styles.match(/\.timeline-bottom-button \{[\s\S]*?\}/)?.[0] ?? "";
+  assert.match(buttonRule, /position: sticky;/);
+  assert.match(buttonRule, /bottom: 12px;/);
+  // Visibility is the shared bottom rule, not a second opinion about it.
+  assert.match(main, /timelineBottomButton\.hidden = isTimelineAtBottom\(timelineRegion\)/);
+  assert.match(main, /timelineRegion\.addEventListener\("scroll", renderTimelineBottomControl, \{ passive: true \}\)/);
+  assert.match(main, /timelineBottomButton\.addEventListener\("click", returnToNewestEvent\)/);
+  // A reader who asked for reduced motion gets the jump without the glide.
+  assert.match(main, /state\.settings\.appearance\.motion === "reduce" \? "auto" : "smooth"/);
+});

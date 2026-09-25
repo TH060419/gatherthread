@@ -4,6 +4,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Add a back-to-bottom control to the shared conversation timeline. It appears once the reader scrolls away from the newest event, hides again at the bottom, and follows the reader's reduced-motion preference when it jumps.
 - Prepared public-repository documentation and discoverability updates: bilingual README introductions, documentation/release indexes, private security-reporting policy, product-home metadata, and clearer Alpha access guidance. This does not itself deploy the hosted site or publish a new package.
 - The npm Alpha 7 packages were published separately and were not rebuilt when the Git tag moved to the verified server source.
 

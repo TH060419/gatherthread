@@ -51,7 +51,12 @@ import {
   withoutDshPairingHash,
 } from "./dsh.js?v=20260922-1";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
-import { captureTimelineScroll, settleTimelineScroll } from "./timeline-scroll.js?v=20260917-1";
+import {
+  captureTimelineScroll,
+  isTimelineAtBottom,
+  scrollTimelineToBottom,
+  settleTimelineScroll,
+} from "./timeline-scroll.js?v=20260925-1";
 import {
   INITIAL_CONNECTION_NOTICE_STATE,
   advanceConnectionNotice,
@@ -172,6 +177,7 @@ const sessionView = element("session-view");
 const emptyState = element("empty-state");
 const timeline = element("event-timeline");
 const timelineRegion = element("timeline-region");
+const timelineBottomButton = element("timeline-bottom-button");
 const timelineEmpty = element("timeline-empty");
 const messageInput = element("message-input");
 const sendChatButton = element("send-chat-button");
@@ -2140,7 +2146,28 @@ function renderTimeline({ followNewEvents = false } = {}) {
     ...scrollSnapshot,
     follow: scrollSnapshot.follow && events.length > 0,
   });
+  renderTimelineBottomControl();
 }
+
+/**
+ * Offer the jump back to the newest event exactly when the reader is not at it.
+ * The rule is the same one auto-follow uses, so the control never offers to
+ * scroll somewhere the reader already is.
+ */
+function renderTimelineBottomControl() {
+  timelineBottomButton.hidden = isTimelineAtBottom(timelineRegion);
+}
+
+function returnToNewestEvent() {
+  scrollTimelineToBottom(
+    timelineRegion,
+    state.settings.appearance.motion === "reduce" ? "auto" : "smooth",
+  );
+  renderTimelineBottomControl();
+}
+
+timelineRegion.addEventListener("scroll", renderTimelineBottomControl, { passive: true });
+timelineBottomButton.addEventListener("click", returnToNewestEvent);
 
 function renderProgressDisclosure(progressEvents, live) {
   const details = document.createElement("details");
