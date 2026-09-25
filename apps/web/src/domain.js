@@ -5,6 +5,14 @@ export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
 export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
 export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.7";
+export const CODEX_LAUNCHER_ORIGIN = "https://gatherthread.cn";
+export const CODEX_LAUNCHER_LINK_VERSION = "1";
+
+export function canOpenCodexLauncher({ origin, platform }) {
+  return origin === CODEX_LAUNCHER_ORIGIN
+    && typeof platform === "string"
+    && /^(?:windows|win32|win64)$/i.test(platform);
+}
 
 export function emptyProjectState(canCreateProjects) {
   return canCreateProjects
@@ -90,6 +98,30 @@ export function projectCodexConnectionCommands({
       ...optionalArguments(powerShellQuote),
     ].join(" "),
   });
+}
+
+export function projectCodexLauncherUrl({
+  baseUrl,
+  projectId,
+  model = DEFAULT_CODEX_MODEL,
+  contextWindowTokens = DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS,
+  visibleHistorySync = DEFAULT_VISIBLE_HISTORY_SYNC,
+}) {
+  // Reuse the connector command's origin and ID validation before crossing into
+  // an OS protocol handler. Never put an auth token or browser cookie here.
+  projectCodexConnectionCommands({ baseUrl, projectId, model, contextWindowTokens, visibleHistorySync });
+  if (baseUrl !== CODEX_LAUNCHER_ORIGIN) {
+    throw new Error("The Windows Launcher supports only https://gatherthread.cn.");
+  }
+  const parameters = new URLSearchParams({
+    v: CODEX_LAUNCHER_LINK_VERSION,
+    origin: baseUrl.replace(/\/$/, ""),
+    project: projectId,
+    model,
+    context_window_tokens: String(contextWindowTokens),
+    visible_history_sync: visibleHistorySync,
+  });
+  return `gatherthread-connect://connect?${parameters.toString()}`;
 }
 
 export function createSelectionGuard() {

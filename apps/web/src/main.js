@@ -2,6 +2,7 @@ import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260922-
 import {
   canAppend,
   canRetryFailedAgentRequest,
+  canOpenCodexLauncher,
   createIdempotencyKey,
   createSelectionGuard,
   emptyProjectState,
@@ -17,6 +18,7 @@ import {
   normalizeConnectorState,
   pendingAgentRequests,
   projectCodexConnectionCommands,
+  projectCodexLauncherUrl,
   provenanceSummary,
   invitationStatusLabel,
   invitationRolePolicy,
@@ -26,14 +28,14 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260923-1";
+} from "./domain.js?v=20260925-2";
 import { SessionSync } from "./realtime.js";
 import { mountCodeSync } from "./code-sync-view.js?v=20260924-1";
 import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-2";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260924-2";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260925-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -879,6 +881,24 @@ deleteCloudDialog.addEventListener("close", () => {
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
 });
 connectCodexButton.addEventListener("click", openConnectCodexDialog);
+element("open-codex-launcher-button").addEventListener("click", () => {
+  if (!state.project || !canOpenCodexLauncher({
+    origin: location.origin,
+    platform: navigator.userAgentData?.platform ?? navigator.platform,
+  })) return;
+  try {
+    const deepLink = projectCodexLauncherUrl({
+      baseUrl: location.origin,
+      projectId: state.project.id,
+      model: currentProjectProfile().model,
+      contextWindowTokens: contextBudgetToTokenCeiling(state.settings),
+      visibleHistorySync: state.settings.sync.visibleHistorySync,
+    });
+    window.location.href = deepLink;
+  } catch (error) {
+    element("connect-codex-error").textContent = error.message ?? "Unable to open the Codex launcher.";
+  }
+});
 element("close-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 element("done-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 connectCodexDialog.addEventListener("close", () => {
@@ -2801,6 +2821,12 @@ function openDeleteCloudDialog(type) {
 
 function openConnectCodexDialog() {
   if (!state.project) return;
+  const launcherAvailable = canOpenCodexLauncher({
+    origin: location.origin,
+    platform: navigator.userAgentData?.platform ?? navigator.platform,
+  });
+  element("codex-launcher-option").hidden = !launcherAvailable;
+  element("open-codex-launcher-button").disabled = !launcherAvailable;
   const errorNode = element("connect-codex-error");
   errorNode.textContent = "";
   for (const status of connectCodexDialog.querySelectorAll("[data-copy-status]")) status.textContent = "";
@@ -2819,6 +2845,7 @@ function openConnectCodexDialog() {
   } catch (error) {
     errorNode.textContent = error.message ?? "Unable to create a safe connector command.";
     for (const button of connectCodexDialog.querySelectorAll("button[data-copy-command]")) button.disabled = true;
+    element("open-codex-launcher-button").disabled = true;
   }
   connectCodexReturnFocus = document.activeElement;
   connectCodexDialog.showModal();
