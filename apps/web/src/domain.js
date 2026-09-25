@@ -301,8 +301,12 @@ export function eventContent(event) {
 /**
  * Conversation bubble role for timeline presentation: the signed-in author's
  * messages read as "self", everyone else's human messages keep the default
- * card, and agent-produced events read as "agent". Non-conversation control
+ * card, and agent-produced output reads as "agent". Non-conversation control
  * events stay "default" and are styled exactly as before.
+ *
+ * `agent_progress` is classified as "agent" for completeness, but the timeline
+ * skips those events before it builds a card — they render as the worklog
+ * disclosure under their request — so no progress update carries a tint today.
  */
 export function eventBubbleRole(event, currentUserId) {
   const type = event?.type ?? "";

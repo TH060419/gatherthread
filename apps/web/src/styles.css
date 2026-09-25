@@ -26,12 +26,15 @@
   --surface-highlight: color-mix(in srgb, white 54%, transparent);
   --response-surface: color-mix(in srgb, var(--teal-wash) 62%, var(--paper-raised));
   --response-border: color-mix(in srgb, var(--teal) 38%, var(--line));
-  /* Conversation bubble tints. Text stays --ink; both washes keep the
-     light-theme contrast ratio above 14:1 so body copy stays clearly readable. */
-  --bubble-self-bg: #d8efe1;
-  --bubble-self-border: #8fc7a6;
-  --bubble-agent-bg: #fdf1cd;
-  --bubble-agent-border: #e0c56a;
+  /* Conversation bubble tints. Each one is mixed from the theme's own accent and
+     raised surface, so the light theme, the explicit dark theme, and a
+     system-dark session all resolve this single definition instead of repeating
+     it per appearance. Body text stays --ink on a wash that is at least 70% of
+     the theme surface, which keeps contrast above WCAG AAA in every path. */
+  --bubble-self-bg: color-mix(in srgb, var(--teal) 24%, var(--paper-raised));
+  --bubble-self-border: color-mix(in srgb, var(--teal) 50%, var(--paper-raised));
+  --bubble-agent-bg: color-mix(in srgb, var(--amber) 30%, var(--paper-raised));
+  --bubble-agent-border: color-mix(in srgb, var(--amber) 50%, var(--paper-raised));
   --switch-thumb: #ffffff;
   --left-rail-width: 340px;
   --right-panel-width: 320px;
@@ -1823,10 +1826,6 @@ code {
   --amber: #e0a33c;
   --amber-wash: #44351d;
   --danger: #ff8a80;
-  --bubble-self-bg: #1d3a2c;
-  --bubble-self-border: #3f8159;
-  --bubble-agent-bg: #3a3018;
-  --bubble-agent-border: #8a7326;
   --shadow: 0 30px 90px rgba(0, 0, 0, 0.48), 0 2px 16px rgba(0, 0, 0, 0.28);
   --shadow-card: 0 1px 1px rgba(255, 255, 255, 0.035), 0 12px 34px rgba(0, 0, 0, 0.22);
   --shadow-card-hover: 0 1px 1px rgba(255, 255, 255, 0.055), 0 18px 42px rgba(0, 0, 0, 0.32);
@@ -5648,8 +5647,8 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
 
 /* Conversation bubble tints: self (green), agent (yellow), peers default.
    These rules deliberately come after every generic .event-card layer so the
-   tint wins without !important; text stays --ink, which keeps contrast above
-   10:1 against both the light and dark washes. */
+   tint wins without !important. Text stays --ink, which measures 8.5:1 or
+   better against every wash in every appearance path. */
 .event-card.event-bubble-self {
   border-color: var(--bubble-self-border);
   background: var(--bubble-self-bg);
