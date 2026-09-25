@@ -101,7 +101,15 @@ export function normalizeSettings(input) {
     for (const [projectId, profile] of Object.entries(agents.projectProfiles)) {
       if (!PROJECT_ID_PATTERN.test(projectId) || !isObject(profile)) continue;
       const legacyCodex = isObject(profile.codex) ? profile.codex : profile;
-      const model = availableModels.has(legacyCodex.model) ? legacyCodex.model : "gpt-5.6-sol";
+      // Keep valid models even when they are not in the built-in catalog: a
+      // connected harness may advertise them online (for example a newer GPT
+      // generation) and resetting here would silently discard that choice.
+      const storedModel = typeof legacyCodex.model === "string" ? legacyCodex.model.trim() : "";
+      const model = availableModels.has(storedModel)
+        ? storedModel
+        : MODEL_ID_PATTERN.test(storedModel) && !storedModel.startsWith("-")
+          ? storedModel
+          : "gpt-5.6-sol";
       const harness = oneOf(profile.harness, AGENT_HARNESSES, activeHarness);
       const enabledHarnesses = normalizeEnabledHarnesses(profile.enabledHarnesses, harness);
       projectProfiles[projectId] = {
@@ -171,7 +179,14 @@ export function normalizeCodexProfile(profile, customModels = []) {
   for (const model of uniqueStrings(customModels).filter((value) => MODEL_ID_PATTERN.test(value))) {
     if (!available.has(model)) available.set(model, { id: model, defaultEffort: "medium", efforts: CODEX_REASONING_EFFORTS });
   }
-  const selected = available.get(profile?.model) ?? available.get("gpt-5.6-sol");
+  const requested = typeof profile?.model === "string" ? profile.model.trim() : "";
+  // A model advertised by a connected harness is valid even when it is not in
+  // the built-in catalog; keep it with the default effort range instead of
+  // silently falling back to the shipped default model.
+  if (requested && MODEL_ID_PATTERN.test(requested) && !requested.startsWith("-") && !available.has(requested)) {
+    available.set(requested, { id: requested, defaultEffort: "medium", efforts: CODEX_REASONING_EFFORTS });
+  }
+  const selected = available.get(requested) ?? available.get("gpt-5.6-sol");
   const effort = selected.efforts.includes(profile?.effort) ? profile.effort : selected.defaultEffort;
   return { model: selected.id, effort };
 }
