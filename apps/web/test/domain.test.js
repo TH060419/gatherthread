@@ -22,6 +22,7 @@ import {
   normalizeSnapshotRequest,
   pendingAgentRequests,
   projectCodexConnectionCommands,
+  projectCodexLauncherUrl,
   provenanceSummary,
   retryAgentRequestInput,
   runtimeLabel,
@@ -122,6 +123,24 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
       model,
     }), /model is not safe/);
   }
+});
+
+test("Codex launcher links contain validated, credential-free connection settings", () => {
+  const link = projectCodexLauncherUrl({
+    baseUrl: "https://gatherthread.cn",
+    projectId: "project-1",
+    contextWindowTokens: 65536,
+  });
+  const parsed = new URL(link);
+  assert.equal(parsed.protocol, "gatherthread-connect:");
+  assert.equal(parsed.host, "connect");
+  assert.equal(parsed.searchParams.get("origin"), "https://gatherthread.cn");
+  assert.equal(parsed.searchParams.get("project"), "project-1");
+  assert.equal(parsed.searchParams.get("context_window_tokens"), "65536");
+  assert.equal(parsed.searchParams.get("model"), "gpt-5.6-sol");
+  assert.equal(parsed.searchParams.get("visible_history_sync"), "first-connect");
+  assert.equal(parsed.searchParams.size, 5);
+  assert.throws(() => projectCodexLauncherUrl({ baseUrl: "https://bad.example?token=secret", projectId: "project-1" }));
 });
 
 const currentUser = { id: "u1", username: "User One" };

@@ -341,12 +341,12 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(html, /Alpha preview/i);
   assert.match(html, /Official service is not open yet/i);
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Connect this project<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Confirm in Codex<\/h3>/);
-  assert.match(html, /The terminal keeps this project connected/i);
+  assert.match(html, /A local connector keeps this project connected/i);
   assert.match(html, /Review and enable the GatherThread Hooks/i);
   assert.match(html, /Keep the terminal open/i);
   assert.doesNotMatch(html, /Move to project|manual Desktop step/i);
   assert.match(html, /device token is requested by a hidden CLI prompt/i);
-  assert.match(html, /only copies commands/i);
+  assert.match(html, /opens the installed Launcher or copies commands/i);
   assert.match(html, /codex: command not found/);
   assert.match(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);

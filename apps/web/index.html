@@ -789,7 +789,12 @@
           </div>
           <button id="close-connect-codex-button" class="icon-button" type="button" aria-label="Close Connect Codex dialog">×</button>
         </div>
-        <p id="connect-codex-summary" class="connection-lead">The terminal keeps this project connected to Codex Desktop. Setup takes three steps.</p>
+        <p id="connect-codex-summary" class="connection-lead">A local connector keeps this project connected to Codex Desktop. Use the Windows Launcher or the manual terminal steps.</p>
+        <div class="connection-preview-banner" role="note">
+          <span class="connection-preview-badge">Windows launcher</span>
+          <span>After installing the local Launcher, open it for this project. Enter the device token in its window.</span>
+          <button id="open-codex-launcher-button" class="button button-secondary" type="button" disabled>Open Launcher</button>
+        </div>
         <div class="connection-preview-banner" role="note">
           <span class="connection-preview-badge">Alpha preview</span>
           <span>Current server only</span>
@@ -797,7 +802,7 @@
         </div>
         <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
           <li>
-            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>Requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.</p></div></div>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>The manual terminal path requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.</p></div></div>
             <p class="field-help codex-cli-recovery-hint">If Terminal reports “codex: command not found”, first run npm install -g @openai/codex, reopen Terminal, and confirm codex plugin --help works.</p>
             <div class="command-heading">
               <span id="connect-codex-marketplace-title" class="command-label">Codex plugin</span>
@@ -839,7 +844,7 @@ codex plugin add gatherthread@gatherthread</code>
           <p>Editable sessions appear as Codex tasks. Web requests run separately; approved Hooks return direct Desktop turns to the same shared history.</p>
           <p>A new local task creates a personal Solo only after its first completed turn. Viewer tasks stay local.</p>
         </details>
-        <p id="connect-codex-security" class="codex-connect-notice">This page only copies commands. No token is placed in a command, URL, or shared history.</p>
+        <p id="connect-codex-security" class="codex-connect-notice">This page opens the installed Launcher or copies commands. No token is placed in a command, URL, or shared history.</p>
 
         <p id="connect-codex-error" class="form-error" role="alert"></p>
         <div class="dialog-actions">
@@ -1145,6 +1150,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260924-2"></script>
+    <script type="module" src="./src/main.js?v=20260925-1"></script>
   </body>
 </html>

@@ -92,6 +92,26 @@ export function projectCodexConnectionCommands({
   });
 }
 
+export function projectCodexLauncherUrl({
+  baseUrl,
+  projectId,
+  model = DEFAULT_CODEX_MODEL,
+  contextWindowTokens = DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS,
+  visibleHistorySync = DEFAULT_VISIBLE_HISTORY_SYNC,
+}) {
+  // Reuse the connector command's origin and ID validation before crossing into
+  // an OS protocol handler. Never put an auth token or browser cookie here.
+  projectCodexConnectionCommands({ baseUrl, projectId, model, contextWindowTokens, visibleHistorySync });
+  const parameters = new URLSearchParams({
+    origin: baseUrl.replace(/\/$/, ""),
+    project: projectId,
+    model,
+    context_window_tokens: String(contextWindowTokens),
+    visible_history_sync: visibleHistorySync,
+  });
+  return `gatherthread-connect://connect?${parameters.toString()}`;
+}
+
 export function createSelectionGuard() {
   let generation = 0;
   return {
