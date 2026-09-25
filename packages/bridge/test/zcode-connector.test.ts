@@ -5,7 +5,9 @@ import path from "node:path";
 import test from "node:test";
 import {
   assertUsableZcodeCli,
+  CollaborationHttpError,
   DEFAULT_ZCODE_TOOL_ALLOWLIST,
+  HarnessExecutionTerminatedError,
   LocalBridge,
   MalformedAgentRequestError,
   MemoryCursorStore,
@@ -262,6 +264,54 @@ test("ZCode deactivation aborts publication before and after the native turn", a
   await rm(root, { recursive: true, force: true });
 });
 
+test("deactivate and the shared shutdown signal abort an in-flight ZCode turn", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-abort-"));
+  // A runner that hangs until its signal fires (and refuses an already-aborted
+  // signal), mirroring how the real protocol turn binds the shutdown signal.
+  const hangUntilAborted = async (turnOptions: ZcodeTurnRunnerOptions): Promise<ZcodeTurnOutcome> => {
+    const signal = turnOptions.signal;
+    if (signal?.aborted) {
+      throw signal.reason instanceof Error ? signal.reason : new Error("ZCode execution aborted");
+    }
+    return new Promise<ZcodeTurnOutcome>((_resolve, reject) => {
+      signal?.addEventListener("abort", () => {
+        reject(signal.reason instanceof Error ? signal.reason : new Error("ZCode execution aborted"));
+      }, { once: true });
+    });
+  };
+  const baseOptions = {
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    sessionId: "session-1",
+    workspacePath: ".",
+  };
+
+  // Deactivation aborts the in-flight turn through the executor's derived
+  // controller and stays idempotent.
+  const statePath = path.join(root, "state.json");
+  const executor = new ZcodeSessionExecutor({ ...baseOptions, statePath }, hangUntilAborted);
+  const pending = executor.execute(executionInput());
+  executor.deactivate();
+  executor.deactivate();
+  await assert.rejects(pending, /deactivated/);
+  // The interrupted turn stays journaled as running: a restart refuses to
+  // re-run it instead of double-executing.
+  const state = JSON.parse(await readFile(statePath, "utf8")) as ZcodeConnectorState;
+  assert.equal(state.sessions["session-1"]?.journal?.status, "running");
+
+  // The shared connector signal reaches the same derived controller.
+  const shared = new AbortController();
+  const sharedExecutor = new ZcodeSessionExecutor({
+    ...baseOptions,
+    statePath: path.join(root, "shared.json"),
+    signal: shared.signal,
+  }, hangUntilAborted);
+  const sharedPending = sharedExecutor.execute(executionInput());
+  shared.abort(new Error("ZCode connector shutdown requested"));
+  await assert.rejects(sharedPending, /shutdown requested/);
+  await rm(root, { recursive: true, force: true });
+});
+
 test("ZCode shouldExecute only claims requests explicitly targeted at zcode", () => {
   const executor = fakeExecutor("unused-state.json");
   const runtime = runtimeValue();
@@ -389,6 +439,21 @@ test("ZCode CLI resolution prefers an explicit entry and fails closed when nothi
 
   await assert.rejects(resolveZcodeCommand(path.join(root, "missing.cjs"), {}, "win32"), /does not exist/);
   await assert.rejects(resolveZcodeCommand(undefined, { PATH: root }, "win32"), /Could not locate the ZCode CLI/);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("an explicit --zcode-command pointing at a script shim is refused with an actionable error", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-shim-"));
+  for (const extension of [".bat", ".cmd", ".ps1"]) {
+    const shimPath = path.join(root, `zcode${extension}`);
+    await writeFile(shimPath, "@echo off\r\n");
+    await assert.rejects(
+      resolveZcodeCommand(shimPath, { PATH: "" }, "win32"),
+      (error: unknown) => error instanceof Error
+        && error.message.includes(`--zcode-command option points at a ${extension} script shim`)
+        && error.message.includes("glm/zcode.cjs"),
+    );
+  }
   await rm(root, { recursive: true, force: true });
 });
 
@@ -790,6 +855,65 @@ test("a malformed execution profile advances the polling cursor instead of wedgi
   await rm(root, { recursive: true, force: true });
 });
 
+test("a terminal claim conflict advances the cursor instead of wedging the zcode session", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-conflict-"));
+  const conflicted = canonicalEvent({
+    sequence: 2,
+    type: "agent_request",
+    payload: { content: "resolved elsewhere", execution_profile: { harness: "zcode" } },
+  });
+  const next = canonicalEvent({
+    sequence: 3,
+    type: "agent_request",
+    payload: { content: "real request", execution_profile: { harness: "zcode" } },
+  });
+  const api = new FakeApi();
+  api.history.push(conflicted, next);
+  let conflictedClaims = 0;
+  api.claimAgentRequest = async (_sessionId, requestId, runtimeId) => {
+    if (requestId === conflicted.id) {
+      conflictedClaims += 1;
+      throw new CollaborationHttpError(409, "already completed", "agent_request_already_completed");
+    }
+    return { claimed: true, status: "claimed" as const, requestId, runtimeId };
+  };
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({
+    api,
+    cursorStore,
+    runtime: {
+      sessionId: "session-1",
+      deviceId: "device-1",
+      harness: "zcode",
+      provider: "GLM Account",
+      model: "default",
+      localSessionId: pendingZcodeLocalSessionId("key-1"),
+      captureFidelity: "harness_transcript",
+    },
+    transcriptRoots: {},
+  });
+  await bridge.connect();
+  const statePath = path.join(root, "state.json");
+  const executor = fakeExecutor(statePath, {
+    turns: [{ outcome: { nativeSessionId: "sess_after_conflict", finalResponse: "answered after the conflict" } }],
+  });
+  const outcome = await bridge.processPendingAgentRequests(executor);
+  assert.equal(outcome.claimed, 1, "the valid request behind the terminal conflict must still be claimed");
+  assert.equal(conflictedClaims, 1, "the conflicted request must be claimed exactly once");
+  assert.equal((await cursorStore.load()).server["session-1"], 3, "the cursor advances past the conflict and the completed request");
+
+  // No hot retry: later polls re-examine nothing and never re-claim the
+  // terminally conflicted request.
+  const followUp = await bridge.processPendingAgentRequests(executor);
+  assert.equal(followUp.examined, 0);
+  assert.equal(conflictedClaims, 1);
+
+  const state = JSON.parse(await readFile(statePath, "utf8")) as ZcodeConnectorState;
+  assert.equal(state.sessions["session-1"]?.projectedThroughSequence, 3);
+  assert.equal(state.sessions["session-1"]?.journal?.status, "completed");
+  await rm(root, { recursive: true, force: true });
+});
+
 test("protocol probes and turns fail closed on structurally wrong servers", async () => {
   await withFakeAppServer(
     `let buffer = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => { buffer += chunk; let i; while ((i = buffer.indexOf("\\n")) >= 0) { const line = buffer.slice(0, i); buffer = buffer.slice(i + 1); if (!line.trim()) continue; const message = JSON.parse(line); if (message.method === "session/list") { process.stdout.write(JSON.stringify({ id: message.id, result: { nope: true } }) + "\\n"); } else if (message.id !== undefined) { process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n"); } } });`,
@@ -821,6 +945,60 @@ test("protocol probes and turns fail closed on structurally wrong servers", asyn
       );
     },
   );
+});
+
+test("a mid-turn child crash surfaces the real exit cause instead of a timeout", async () => {
+  const script = `
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    let message;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message.method === "session/requestRuntimePreferences") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { nativeSearchEnhancementsEnabled: false } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/create") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {
+        session: { sessionId: "sess_crash_1" },
+        protocol: { name: "ZCode Protocol", version: 1 },
+      } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/send") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { accepted: true } }) + "\\n");
+      process.stderr.write("fatal: model runtime crashed\\n");
+      process.exit(1);
+    }
+    if (message.id !== undefined) {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+    }
+  }
+});
+`;
+  await withFakeAppServer(script, async (commandSpec, directory) => {
+    await assert.rejects(
+      runZcodeProtocolTurn({
+        spec: commandSpec,
+        workspacePath: directory,
+        resumeSessionId: undefined,
+        prompt: "hello",
+        timeoutMs: 10_000,
+        maxOutputBytes: 1_000_000,
+        signal: undefined,
+        onTurnEvent: () => undefined,
+      }),
+      (error: unknown) => error instanceof HarnessExecutionTerminatedError
+        && error.failureCode === "zcode_child_exited"
+        && /fatal: model runtime crashed/.test(error.message),
+    );
+  });
 });
 
 test("projection events delivered before our send are ignored as replay", async () => {
@@ -884,6 +1062,70 @@ process.stdin.on("data", (chunk) => {
       },
     });
     assert.equal(outcome.finalResponse, "fresh final answer");
+    assert.deepEqual(surfaced, ["fresh commentary"]);
+  });
+});
+
+test("a replayed prior turn.completed cannot settle the current turn", async () => {
+  // The fake emits the previous turn's turn.completed while answering
+  // session/subscribe — before the connector's session/send write. It must
+  // never settle this turn with the stale response.
+  const script = `
+let buffer = "";
+let eventSeq = 0;
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    let message;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message.method === "session/requestRuntimePreferences") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { nativeSearchEnhancementsEnabled: false } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/resume") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {
+        session: { sessionId: "sess_stale_1" },
+        protocol: { name: "ZCode Protocol", version: 1 },
+      } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/subscribe") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { eventSeq: 0, events: [], sessionId: message.params.sessionId } }) + "\\n");
+      process.stdout.write(JSON.stringify({ method: "session/event", params: { deliveryKind: "desktop-continuous", eventId: "stale", type: "turn.completed", payload: { response: "stale prior answer" } } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/send") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { accepted: true, sessionId: message.params.sessionId } }) + "\\n");
+      process.stdout.write(JSON.stringify({ method: "session/event", params: { deliveryKind: "desktop-continuous", eventId: "fresh" + (++eventSeq), type: "message.upserted", payload: { messageId: "fresh", content: "fresh commentary" } } }) + "\\n");
+      process.stdout.write(JSON.stringify({ method: "session/event", params: { deliveryKind: "desktop-continuous", eventId: "done", type: "turn.completed", payload: { response: "fresh final answer" } } }) + "\\n");
+      continue;
+    }
+    if (message.id !== undefined) {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+    }
+  }
+});
+`;
+  await withFakeAppServer(script, async (commandSpec, directory) => {
+    const surfaced: string[] = [];
+    const outcome = await runZcodeProtocolTurn({
+      spec: commandSpec,
+      workspacePath: directory,
+      resumeSessionId: "sess_stale_1",
+      prompt: "hello",
+      timeoutMs: 10_000,
+      maxOutputBytes: 1_000_000,
+      signal: undefined,
+      onTurnEvent: async (event) => {
+        if (event.kind === "assistant") surfaced.push(event.content ?? "");
+      },
+    });
+    assert.equal(outcome.finalResponse, "fresh final answer", "the stale replayed response must not be published");
     assert.deepEqual(surfaced, ["fresh commentary"]);
   });
 });

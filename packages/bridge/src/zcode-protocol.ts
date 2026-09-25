@@ -39,6 +39,13 @@ export interface ZcodeTurnHandlers {
   onSessionEvent?: (event: ZcodeProtocolEvent) => void;
   /** `state.updated` notifications; used for observed-model metadata only. */
   onStateUpdated?: (patch: Record<string, unknown>) => void;
+  /**
+   * Invoked synchronously while the successful response line for `method` is
+   * processed — before the awaiting continuation resumes. Callers use this to
+   * order their own delivery gates against the response without depending on
+   * microtask timing or stdout chunk boundaries.
+   */
+  onResponse?: (method: string) => void;
 }
 
 export interface ZcodeProtocolSession {
@@ -86,6 +93,7 @@ interface PendingEntry {
   resolve: (value: Record<string, unknown>) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
+  method: string;
 }
 
 export class ZcodeProtocolConnection {
@@ -133,6 +141,25 @@ export class ZcodeProtocolConnection {
   get exited(): boolean {
     return this.#child.exitCode !== null || this.#child.signalCode !== null;
   }
+
+  /** The captured failure cause once the child exited; undefined while it runs. */
+  get exitError(): Error | undefined {
+    return this.#exitError;
+  }
+
+  /**
+   * Binds the shutdown signal whose abort closes this child. `close()` removes
+   * the listener again, so a long-lived shared signal does not accumulate one
+   * handler per executed turn.
+   */
+  bindAbortSignal(signal: AbortSignal): void {
+    if (this.#closed) return;
+    const handler = () => this.close();
+    signal.addEventListener("abort", handler, { once: true });
+    this.#abortBinding = { signal, handler };
+  }
+
+  #abortBinding: { signal: AbortSignal; handler: () => void } | undefined;
 
   #stderrSuffix(): string {
     const last = this.#stderrTail.trim().split(/\r?\n/).pop();
@@ -184,6 +211,7 @@ export class ZcodeProtocolConnection {
           redactText(String(error.message ?? "ZCode Protocol request failed")).slice(0, 400),
         ));
       } else {
+        this.#turnHandlers?.onResponse?.(entry.method);
         entry.resolve(isRecord(message.result) ? message.result : {});
       }
       return;
@@ -244,7 +272,7 @@ export class ZcodeProtocolConnection {
         reject(new ZcodeProtocolError(-32001, `ZCode Protocol request timed out: ${method}`));
       }, timeoutMs);
       timer.unref();
-      this.#pending.set(id, { resolve, reject, timer });
+      this.#pending.set(id, { resolve, reject, timer, method });
       this.#write({ id, method, params });
     });
   }
@@ -268,6 +296,8 @@ export class ZcodeProtocolConnection {
   close(): void {
     if (this.#closed) return;
     this.#closed = true;
+    const binding = this.#abortBinding;
+    if (binding) binding.signal.removeEventListener("abort", binding.handler);
     this.#child.kill("SIGTERM");
     const forceKill = setTimeout(() => this.#child.kill("SIGKILL"), 5_000);
     forceKill.unref();
@@ -301,8 +331,7 @@ export async function openZcodeProtocolConnection(options: ZcodeProtocolRunOptio
     maxOutputBytes: options.maxOutputBytes ?? PROTOCOL_MAX_OUTPUT_BYTES,
   });
   if (options.signal) {
-    const abort = () => connection.close();
-    options.signal.addEventListener("abort", abort, { once: true });
+    connection.bindAbortSignal(options.signal);
   }
   return connection;
 }

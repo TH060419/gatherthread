@@ -183,12 +183,26 @@ export type ZcodeTurnRunner = (options: ZcodeTurnRunnerOptions) => Promise<Zcode
 export class ZcodeSessionExecutor implements HarnessExecutor {
   readonly #options: Required<Pick<ZcodeExecutorOptions, "shareToolEvents">> & ZcodeExecutorOptions;
   readonly #runTurn: ZcodeTurnRunner;
+  readonly #turnAbort = new AbortController();
+  readonly #sharedSignal?: AbortSignal;
+  readonly #sharedAbortHandler?: () => void;
   #deactivated = false;
   #activeTurns = 0;
 
   constructor(options: ZcodeExecutorOptions, runTurn?: ZcodeTurnRunner) {
     this.#options = { ...options, shareToolEvents: options.shareToolEvents === true };
     this.#runTurn = runTurn ?? options.turnRunner ?? runZcodeProtocolTurn;
+    // Turns run on a signal derived from the shared connector signal, so
+    // deactivation can also abort the in-flight headless child: the shared
+    // signal alone is connector-scoped and outlives individual bindings.
+    const shared = options.signal;
+    if (shared) {
+      const forward = () => this.#turnAbort.abort(shared.reason);
+      if (shared.aborted) forward();
+      else shared.addEventListener("abort", forward, { once: true });
+      this.#sharedSignal = shared;
+      this.#sharedAbortHandler = forward;
+    }
   }
 
   /**
@@ -197,6 +211,12 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
    */
   deactivate(): void {
     this.#deactivated = true;
+    if (this.#sharedSignal && this.#sharedAbortHandler) {
+      this.#sharedSignal.removeEventListener("abort", this.#sharedAbortHandler);
+    }
+    // Aborting the derived controller kills the in-flight headless child;
+    // the execute() pre/post checks still refuse publication of any result.
+    this.#turnAbort.abort(new Error("ZCode execution was deactivated"));
   }
 
   get hasActiveTurn(): boolean {
@@ -283,7 +303,7 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
         prompt,
         timeoutMs: this.#options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         maxOutputBytes: this.#options.maxOutputBytes ?? DEFAULT_MAX_OUTPUT_BYTES,
-        signal: this.#options.signal,
+        signal: this.#turnAbort.signal,
         onTurnEvent: async (event) => {
           if (event.kind === "assistant") {
             // Public commentary streams while the turn runs, renewing the
@@ -555,24 +575,33 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
       let completedResponse: string | undefined;
       let failure: { code?: string; message: string } | undefined;
       let settled = false;
-      // Auxiliary replay window: projections are accepted only from the
-      // moment the send request is written. Anything delivered between
-      // subscribe and then predates this request.
-      let acceptProjections = false;
+      // Replay barrier: turn lifecycle and projections are accepted only
+      // after the session/send response has been processed. The app-server
+      // writes a session's replayed events before it can receive — let alone
+      // answer — our send, and the pipe preserves that order, so any
+      // delivery observed before the send response predates this request: a
+      // replayed prior `turn.completed` must never settle this turn with the
+      // stale response. The flag flips synchronously while the response line
+      // is processed, so fresh events delivered in the same chunk are still
+      // accepted regardless of stdout chunk boundaries.
+      let sendResponded = false;
 
       connection.setTurnHandlers({
+        onResponse: (method) => {
+          if (method === "session/send") sendResponded = true;
+        },
         onSessionEvent: (event: ZcodeProtocolEvent) => {
           void (async () => {
             const parsed = parseZcodeProtocolEvent(event.payload);
             if (parsed.eventType === "turn.completed") {
-              if (!settled) {
+              if (sendResponded && !settled) {
                 settled = true;
                 completedResponse = parsed.finalResponse;
               }
               return;
             }
             if (parsed.eventType === "turn.failed") {
-              if (!settled) {
+              if (sendResponded && !settled) {
                 settled = true;
                 failure = {
                   ...(parsed.errorCode === undefined ? {} : { code: parsed.errorCode }),
@@ -581,7 +610,7 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
               }
               return;
             }
-            if (!acceptProjections) return;
+            if (!sendResponded) return;
             if (parsed.eventType === "message.upserted" && isRecord(event.payload)) {
               // The delivery envelope wraps the schema fields one level down.
               const inner = isRecord(event.payload.payload) ? event.payload.payload : event.payload;
@@ -602,7 +631,16 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
                 await options.onTurnEvent(shareable);
               }
             }
-          })();
+          })().catch((error: unknown) => {
+            // Deliveries are supplementary and stay fail-soft: a projection
+            // failure must neither crash the connector process nor fabricate a
+            // turn outcome. Bounded diagnostic note only, matching the
+            // fail-soft treatment of progress publication upstream.
+            const message = (error instanceof Error ? error.message : String(error))
+              .replace(/[\r\n]+/g, " ")
+              .slice(0, 300);
+            process.stderr.write(`gatherthread-zcode: dropping session-event projection: ${message}\n`);
+          });
         },
         onStateUpdated: (patch) => {
           const model = isRecord(patch.model) ? patch.model : {};
@@ -615,11 +653,6 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
         deliveryKind: "desktop-continuous",
       }, options.timeoutMs);
 
-      // Accept projections from the moment the send request is written: any
-      // event the server produces for this request arrives after the write,
-      // while anything delivered between subscribe and here (for example a
-      // replayed history snapshot on resume) predates it and stays ignored.
-      acceptProjections = true;
       const sent = await connection.request("session/send", {
         sessionId,
         content: options.prompt,
@@ -633,6 +666,17 @@ export async function runZcodeProtocolTurn(options: ZcodeTurnRunnerOptions): Pro
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
       if (!settled) {
+        // The wait ended through abort or a child exit: surface the real
+        // cause instead of mislabelling it as a timeout.
+        if (options.signal?.aborted) {
+          throw options.signal.reason instanceof Error ? options.signal.reason : new Error("ZCode execution aborted");
+        }
+        if (connection.exited) {
+          throw new HarnessExecutionTerminatedError(
+            "zcode_child_exited",
+            connection.exitError?.message ?? "ZCode app-server exited before the turn completed",
+          );
+        }
         throw new HarnessExecutionTerminatedError(
           "zcode_turn_timeout",
           "ZCode turn did not complete in time",

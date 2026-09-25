@@ -176,10 +176,19 @@ export class LocalBridge {
             }
           } catch (error) {
             if (!isTerminalAgentRequestClaimConflict(error)) throw error;
-            if (!executor.projectCanonicalEvents) {
-              throw new Error("Agent request was claimed by another runtime but this executor cannot project the canonical request safely");
+            if (executor.projectCanonicalEvents) {
+              await executor.projectCanonicalEvents([event], runtime);
+            } else {
+              // The conflict is final server state no retry can resolve, and
+              // this executor derives its native hydration from the canonical
+              // history read at claim time instead of incremental projection,
+              // so the durable cursor records everything it needs. Refusing to
+              // advance here wedged the whole session: the unsaved cursor made
+              // every poll re-throw on this event forever.
+              process.stderr.write(
+                `gatherthread-bridge: agent_request ${event.id} (sequence ${event.sequence}) in session ${event.sessionId} was already resolved elsewhere (${error.code}); advancing the cursor\n`,
+              );
             }
-            await executor.projectCanonicalEvents([event], runtime);
           }
         } else if (executor.projectCanonicalEvents) {
           await executor.projectCanonicalEvents([event], runtime);
@@ -492,10 +501,11 @@ export class LocalBridge {
 /**
  * A claim conflict the server has already resolved. `agent_request_failed` means
  * the server exhausted its re-dispatch budget, so the request is finished as far
- * as this connector is concerned: projecting the canonical failure and moving on
- * is the only correct response, and retrying would spin on it every poll.
+ * as this connector is concerned: recording the canonical failure for executors
+ * that project incrementally, then moving on, is the only correct response, and
+ * retrying would spin on it every poll.
  */
-function isTerminalAgentRequestClaimConflict(error: unknown): boolean {
+function isTerminalAgentRequestClaimConflict(error: unknown): error is CollaborationHttpError {
   return error instanceof CollaborationHttpError
     && error.status === 409
     && (error.code === "agent_request_already_claimed"

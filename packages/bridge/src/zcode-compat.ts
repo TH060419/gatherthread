@@ -40,6 +40,10 @@ export interface ZcodeCliProbe {
 const PROBE_TIMEOUT_MS = 15_000;
 const PROBE_MAX_OUTPUT_BYTES = 262_144;
 const SCRIPT_EXTENSIONS = new Set([".cjs", ".mjs", ".js"]);
+// Node spawns with shell:false and refuses .bat/.cmd shims outright (since
+// CVE-2024-27980), so an accepted shim would only fail later with an opaque
+// EINVAL. A PowerShell script is equally unspawnable as a direct executable.
+const SCRIPT_SHIM_EXTENSIONS = new Set([".bat", ".cmd", ".ps1"]);
 
 interface ProbeRunner {
   (spec: ZcodeCommandSpec, args: readonly string[]): Promise<string>;
@@ -70,9 +74,10 @@ const defaultProbeRunner: ProbeRunner = (spec, args) => new Promise((resolve, re
 /**
  * Resolves the ZCode CLI without a shell. An explicit option wins; it may be a
  * directory-qualified executable or a `.cjs`/`.mjs`/`.js` entry (run through
- * Node, mirroring the desktop bundle layout). Otherwise the connector looks
- * for `zcode` on PATH and then in the documented desktop install locations.
- * A missing CLI is an actionable refusal, never a silent fallback.
+ * Node, mirroring the desktop bundle layout), while `.bat`/`.cmd`/`.ps1`
+ * script shims are refused with an actionable error. Otherwise the connector
+ * looks for `zcode` on PATH and then in the documented desktop install
+ * locations. A missing CLI is an actionable refusal, never a silent fallback.
  */
 export async function resolveZcodeCommand(
   option: string | undefined,
@@ -98,6 +103,11 @@ async function specForEntry(entry: string, source: string): Promise<ZcodeCommand
   const extension = path.extname(resolved).toLowerCase();
   if (SCRIPT_EXTENSIONS.has(extension)) {
     return { command: process.execPath, baseArgs: [resolved], source };
+  }
+  if (SCRIPT_SHIM_EXTENSIONS.has(extension)) {
+    throw new Error(
+      `${source} points at a ${extension} script shim (${resolved}); the connector spawns without a shell, so pass the real ZCode .exe or the bundled glm/zcode.cjs entry instead`,
+    );
   }
   return { command: resolved, baseArgs: [], source };
 }
