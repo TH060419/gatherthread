@@ -735,18 +735,38 @@ export class DshNativeHostController {
   ): Promise<void> {
     const routeKey = `${route.provider}\u0000${route.model}`;
     if (this.#executionProfileRouteKey === routeKey) return;
-    if (route.provider !== "deepseek-official") {
+    // Always discover the model catalog online for the configured provider;
+    // which providers support catalog listing is the Harness's decision, not
+    // something this connector hardcodes.
+    let discovered: readonly DshRuntimeExecutionProfile[] | undefined;
+    try {
+      discovered = this.#options.listExecutionProfiles === undefined
+        ? await listNativeExecutionProfiles(this.#options.context, route.provider, signal)
+        : await this.#options.listExecutionProfiles(route.provider, signal);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      // Catalog listing is an enhancement, not a connection prerequisite: a
+      // provider without catalog support keeps the previous fixed-model mode.
       this.#executionProfiles = undefined;
       this.#executionProfileRouteKey = routeKey;
       return;
     }
-    const discovered = this.#options.listExecutionProfiles === undefined
-      ? await listNativeExecutionProfiles(this.#options.context, route.provider, signal)
-      : await this.#options.listExecutionProfiles(route.provider, signal);
     throwIfAborted(signal);
-    const profiles = normalizeExecutionProfiles(discovered, route.provider);
+    const advertised = discovered ?? [];
+    let profiles: readonly DshRuntimeExecutionProfile[] = advertised.length === 0
+      ? Object.freeze([])
+      : normalizeExecutionProfiles(advertised, route.provider);
     if (!profiles.some((profile) => profile.model === route.model)) {
-      throw new Error("DeepSeek Harness did not advertise the configured model as an execution profile");
+      // The configured model was validated against the Harness when the route
+      // was chosen; an incomplete catalog must not hide it from the Web model
+      // picker. Advertise it with the provider-default reasoning metadata.
+      profiles = Object.freeze([
+        ...profiles,
+        {
+          provider: route.provider,
+          model: route.model,
+        },
+      ]);
     }
     this.#executionProfiles = profiles;
     this.#executionProfileRouteKey = routeKey;
@@ -1227,9 +1247,16 @@ async function listNativeExecutionProfiles(
   const profiles: DshRuntimeExecutionProfile[] = [];
   for (const model of models) {
     throwIfAborted(signal);
-    const resolved = asObject(await llm.resolveModelInfo(provider, model.id, signal));
+    // One unresolved entry must not discard the whole catalog; the Harness
+    // can advertise models this plugin build cannot fully describe yet.
+    let resolved: ReturnType<typeof asObject>;
+    try {
+      resolved = asObject(await llm.resolveModelInfo(provider, model.id, signal));
+    } catch {
+      continue;
+    }
     if (resolved === undefined || resolved.provider !== provider || resolved.id !== model.id) {
-      throw new Error("DeepSeek Harness did not resolve an advertised provider/model exactly");
+      continue;
     }
     const reasoning = parseNativeReasoningMetadata(resolved.reasoning, provider, model.id);
     profiles.push({
