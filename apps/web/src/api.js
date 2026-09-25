@@ -1192,6 +1192,20 @@ export class MockCollaborationApi {
         model: "gpt-5.6-sol",
         status: "online",
         lastSeenAt: new Date().toISOString(),
+        executionProfiles: [
+          {
+            provider: "openai",
+            model: "gpt-6",
+            reasoningEfforts: ["low", "medium", "high", "xhigh", "max"],
+            defaultReasoningEffort: "high",
+          },
+          {
+            provider: "openai",
+            model: "gpt-5.6-sol",
+            reasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
+            defaultReasoningEffort: "low",
+          },
+        ],
       },
       ...(this.dshRevoked ? [] : [{
         id: `runtime-dsh-${sessionId}`,
@@ -1202,6 +1216,12 @@ export class MockCollaborationApi {
         status: "online",
         lastSeenAt: new Date().toISOString(),
         executionProfiles: [
+          {
+            provider: "deepseek-official",
+            model: "deepseek-v4.1",
+            reasoningEfforts: ["low", "high", "max"],
+            defaultReasoningEffort: "max",
+          },
           {
             provider: "deepseek-official",
             model: "deepseek-v4-flash",
