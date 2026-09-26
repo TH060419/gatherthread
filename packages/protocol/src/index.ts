@@ -154,6 +154,28 @@ export const CanonicalEventSchema = z.object({
 
 export type CanonicalEvent = z.infer<typeof CanonicalEventSchema>;
 
+// UTF-16 offsets match browser text selection; labels remain in the message.
+export const MessageMentionsSchema = z.array(z.object({
+  user_id: IdSchema,
+  start: z.number().int().nonnegative().max(1_000_000),
+  end: z.number().int().positive().max(1_000_000),
+}).strict()).max(32);
+
+export const ProjectMentionSchema = z.object({
+  id: IdSchema,
+  session_id: IdSchema,
+  sequence: z.number().int().positive(),
+  created_at: z.string().datetime(),
+  actor_display_name: z.string().max(120),
+  session_title: z.string().max(200),
+  excerpt: z.string().max(360), // SQLite counts Unicode characters, JavaScript counts UTF-16 units.
+}).strict();
+
+export const ProjectMentionsPageSchema = z.object({
+  mentions: z.array(ProjectMentionSchema).max(50),
+  next_before_id: IdSchema.nullable(),
+}).strict();
+
 export const AppendEventInputSchema = z.object({
   event_id: IdSchema.optional(),
   idempotency_key: IdempotencyKeySchema,

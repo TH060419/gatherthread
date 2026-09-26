@@ -89,6 +89,11 @@ export class CollaborationService {
     return this.database.listProjectMembers(projectId);
   }
 
+  listProjectMentions(actor: Actor, projectId: string, beforeId?: string) {
+    this.requireProjectMembership(actor, projectId);
+    return this.database.listProjectMentions(actor, projectId, beforeId);
+  }
+
   createProjectInvitation(
     actor: Actor,
     projectId: string,

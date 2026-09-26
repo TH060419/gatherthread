@@ -33,7 +33,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import {
-  MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, isCodeSyncRequestKind,
+  MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, MessageMentionsSchema, isCodeSyncRequestKind,
   HISTORY_SUMMARY_MAX_CONTEXT_BYTES, HistorySummaryError, buildHistoryContext,
   buildHistorySummaryPrompt, historySummaryMarker, historySummarySourceJson, historySummaryText,
   isHistorySummaryRequest, selectHistorySummarySources,
@@ -2719,6 +2719,27 @@ export class CollaborationDatabase {
         input.visibility ?? "session",
         provenance?.runtime_id ?? null,
       );
+      if (replyTarget && ["human_chat", "agent_request"].includes(input.type)
+        && replyTarget.visibility === "owner_only"
+        && (this.membershipRole(sessionId, actor.user_id) !== "owner" || input.visibility !== "owner_only")) {
+        throw forbidden("Cannot quote private history in a shared message");
+      }
+      if (input.payload && typeof input.payload === "object" && !Array.isArray(input.payload) && "mentions" in input.payload) {
+        if (!["human_chat", "agent_request"].includes(input.type)) throw conflict("Mentions require a user-authored message");
+        const result = MessageMentionsSchema.safeParse(input.payload.mentions);
+        const content = input.payload.content;
+        if (!result.success || typeof content !== "string") throw conflict("Invalid message mentions");
+        let previousEnd = 0;
+        for (const mention of result.data) {
+          const user = this.sqlite.prepare("SELECT display_name FROM users WHERE id = ?").get(mention.user_id) as { display_name: string } | undefined;
+          if (!user || !this.membershipRole(sessionId, mention.user_id)
+            || mention.start < previousEnd || mention.end <= mention.start
+            || content.slice(mention.start, mention.end) !== `@${user.display_name}`) {
+            throw conflict("Mention must match a current session member and its exact text range");
+          }
+          previousEnd = mention.end;
+        }
+      }
       if ((input.type === "tool_call" || input.type === "tool_result")
         && replyTarget !== undefined) {
         if (replyTarget.type === "agent_request") {
@@ -2734,6 +2755,28 @@ export class CollaborationDatabase {
       }
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
     });
+  }
+
+  listProjectMentions(actor: Actor, projectId: string, beforeId?: string) {
+    this.assertActiveDevice(actor);
+    const role = this.projectMembershipRole(projectId, actor.user_id);
+    if (!role) throw notFound("Project");
+    const rows = this.sqlite.prepare(`
+      SELECT e.id, e.session_id, e.sequence, e.created_at, e.actor_display_name, s.title AS session_title,
+        coalesce(substr(CAST(json_extract(e.payload_json, '$.content') AS TEXT), 1, 180), '') AS excerpt
+      FROM events e JOIN sessions s ON s.id = e.session_id
+      JOIN memberships m ON m.session_id = s.id AND m.user_id = ?
+      WHERE s.project_id = ? AND (e.visibility = 'session' OR ? = 'owner')
+        AND e.type IN ('human_chat', 'agent_request')
+        AND (? IS NULL OR e.rowid < (SELECT rowid FROM events WHERE id = ?))
+        AND EXISTS (SELECT 1 FROM json_each(e.payload_json, '$.mentions') entry
+          WHERE CASE WHEN entry.type = 'object' THEN json_extract(entry.value, '$.user_id') END = ?)
+      ORDER BY e.rowid DESC LIMIT 51
+    `).all(actor.user_id, projectId, role, beforeId ?? null, beforeId ?? null, actor.user_id) as unknown as Array<{
+      id: string; session_id: string; sequence: number; created_at: string;
+      actor_display_name: string; session_title: string; excerpt: string;
+    }>;
+    return { mentions: rows.slice(0, 50), next_before_id: rows.length > 50 ? rows[49]?.id ?? null : null };
   }
 
   replay(

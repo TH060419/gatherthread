@@ -11,6 +11,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
   const expanded = new Set();
   let selecting = false;
   let original = false;
+  let revealedSummaryId = null;
   let scope;
   let attempt = null;
   let confirmationAttempt = null;
@@ -37,6 +38,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     button.className = "icon-button workspace-icon-button history-summary-icon";
     button.setAttribute("aria-label", t(label));
     button.title = t(label);
+    button.setAttribute("data-tooltip", "");
     const mark = document.createElement("span");
     mark.setAttribute("aria-hidden", "true");
     mark.textContent = glyph;
@@ -53,6 +55,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     scope = context().scope;
     selecting = false;
     original = false;
+    revealedSummaryId = null;
     selected.clear();
     expanded.clear();
     attempt = null;
@@ -85,10 +88,12 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     el("history-summary-select-button").setAttribute("aria-pressed", String(selecting));
     el("history-summary-view-button").hidden = versions.length === 0;
     el("history-summary-versions-button").hidden = versions.length === 0;
-    const viewLabel = original ? "Show summaries" : "Show original messages";
+    const viewLabel = selecting ? "Finish selection to switch views" : original ? "Show all summaries" : "Show all original messages";
     el("history-summary-view-button").setAttribute("aria-label", t(viewLabel));
     el("history-summary-view-button").title = t(viewLabel);
     el("history-summary-view-button").setAttribute("aria-pressed", String(original));
+    el("history-summary-view-button").disabled = selecting || !versions.some((version) => version.status === "completed");
+    el("history-summary-view-label").textContent = t(original || selecting ? "Original view" : "Summary view");
     el("history-summary-toolbar").hidden = !selecting && !attempt;
     el("history-summary-count").textContent = `${selected.size} / 100 · ${t("messages selected")}`;
     const selectionError = selecting ? historySelectionError(context().events, selectedHistorySourceIds(context().events, selected)) : "";
@@ -193,15 +198,23 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     article.className = "event-card history-summary-card";
     article.dataset.summaryRequestId = version.id;
     article.dataset.state = version.status;
+    article.dataset.historyAnchor = [version.response?.id, ...version.coverage.map((source) => source.id)].filter(Boolean).join(" ");
+    const showingOriginals = !list && expanded.has(version.id);
+    article.dataset.view = showingOriginals ? "original" : "summary";
     const header = document.createElement("header");
     const title = document.createElement("strong");
-    title.textContent = t(version.status === "completed" ? "History summary" : version.status === "failed" ? "Summary failed" : "Summary pending");
+    title.textContent = t(version.status === "completed" ? showingOriginals ? "Original messages" : "History summary" : version.status === "failed" ? "Summary failed" : "Summary pending");
     const controls = document.createElement("div");
     controls.className = "history-summary-actions";
-    if (!list && version.status === "completed") controls.append(icon(expanded.has(version.id) ? "Show summary" : "Show selected originals", "⇄", () => {
-      if (expanded.has(version.id)) expanded.delete(version.id); else expanded.add(version.id);
-      onChange();
-    }));
+    if (!list && version.status === "completed") {
+      const toggle = icon(showingOriginals ? "Show this section's summary" : "Show this section's originals", "⇄", () => {
+        if (expanded.has(version.id)) expanded.delete(version.id); else expanded.add(version.id);
+        onChange({ preserveAnchor: true, focusSummaryId: version.response?.id });
+      });
+      toggle.setAttribute("aria-pressed", String(showingOriginals));
+      toggle.setAttribute("data-summary-view-toggle", "");
+      controls.append(toggle);
+    }
     if (context().writable && version.status !== "pending") {
       const regenerate = icon("Select sources to regenerate with my Agent", "↻", () => changeSelection(version.metadata.source_event_ids));
       regenerate.disabled = !version.available || !canGenerate() || busy();
@@ -222,13 +235,15 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     if (version.status === "completed") {
       const disclaimer = document.createElement("p");
       disclaimer.className = "history-summary-note";
-      disclaimer.textContent = t("Derived, lossy summary. Original messages are preserved.");
+      disclaimer.textContent = t(showingOriginals ? "Originals below. Use the arrows to return to this summary."
+        : "Derived, lossy summary. Original messages are preserved.");
       article.append(disclaimer);
       if (list || !expanded.has(version.id)) {
         const body = renderMarkdown(eventContent(version.response));
         // A summary remains shared user content in the versions dialog too.
         // UI language changes must not translate matching words in its body.
         body.setAttribute("data-i18n-skip", "");
+        body.classList.add("event-content");
         article.append(body);
       }
     } else {
@@ -271,7 +286,13 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
   el("history-summary-confirm-button").addEventListener("click", submit);
   el("history-summary-confirm-cancel").addEventListener("click", closeConfirmation);
   confirmation.addEventListener("cancel", (event) => { event.preventDefault(); closeConfirmation(); });
-  el("history-summary-view-button").addEventListener("click", () => { original = !original; onChange(); });
+  el("history-summary-view-button").addEventListener("click", () => {
+    if (selecting || el("history-summary-view-button").disabled) return;
+    original = !original;
+    expanded.clear();
+    revealedSummaryId = null;
+    onChange({ preserveAnchor: true });
+  });
   el("history-summary-versions-button").addEventListener("click", () => { renderVersions(); versionsDialog.showModal(); });
   el("history-summary-versions-close").addEventListener("click", () => versionsDialog.close());
   versionsDialog.addEventListener("close", () => {
@@ -279,7 +300,15 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
   });
   return {
     reset, updateContext, sourceControl, card,
-    timeline: () => historySummaryTimeline(events(), { original, selecting, expanded }),
+    revealOriginal: (eventId) => { original = true; revealedSummaryId = eventId; },
+    timeline: () => {
+      const view = historySummaryTimeline(events(), { original, selecting, expanded });
+      const revealed = view.versions.find((version) => version.response?.id === revealedSummaryId);
+      if (revealed && ![...view.before.values()].flat().some((version) => version.id === revealed.id)) {
+        view.before.set(revealed.response.id, [...(view.before.get(revealed.response.id) ?? []), revealed]);
+      }
+      return view;
+    },
     // Receipts are already canonical but do not advance the realtime cursor.
     events,
   };

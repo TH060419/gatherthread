@@ -51,6 +51,45 @@ function workerMessage(worker: Worker): Promise<Record<string, unknown>> {
   });
 }
 
+test("quotes stay in-session and cannot expose owner-only history; mentions are membership validated", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "quote-session", idempotency_key: "quote-create-session", mode: "multi", title: "Quotes",
+    });
+    const invitation = f.service.createInvitation(f.owner, session.id, { role: "participant" });
+    const guest = f.database.claimInvitation({ invite_token: invitation.invite_token,
+      display_name: "Guest", device_name: "Browser", user_id: "quote-guest", device_id: "quote-device" }).actor;
+    const original = f.service.appendEvent(f.owner, session.id, { type: "human_chat",
+      idempotency_key: "quote-original", visibility: "session", payload: { content: "original" } });
+    const reply = f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "quote-reply", reply_to_event_id: original.id,
+      payload: { content: "@Owner hello", mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } });
+    assert.equal(reply.reply_to_event_id, original.id);
+    assert.equal(f.service.listProjectMentions(f.owner, session.project_id).mentions[0]?.id, reply.id);
+    assert.deepEqual(f.service.listProjectMentions(guest, session.project_id).mentions, []);
+    assert.equal(f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "quote-reply", reply_to_event_id: original.id,
+      payload: { content: "@Owner hello", mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } }).id, reply.id);
+    const other = f.service.createSession(f.owner, { session_id: "other-quotes", project_id: session.project_id,
+      idempotency_key: "other-quote-session", mode: "multi", title: "Other" }).session;
+    assert.throws(() => f.service.appendEvent(f.owner, other.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "quote-cross-session", reply_to_event_id: original.id, payload: { content: "reply" } }), ApiError);
+    assert.throws(() => f.service.listProjectMentions(f.member, session.project_id), ApiError);
+    const hidden = f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "owner_only",
+      idempotency_key: "quote-hidden", payload: { content: "private" } });
+    assert.throws(() => f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "quote-leak", reply_to_event_id: hidden.id, payload: { content: "leak" } }), ApiError);
+    assert.throws(() => f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-forged", payload: { content: "@Nobody", mentions: [{ user_id: "stranger", start: 0, end: 7 }] } }), ApiError);
+    assert.throws(() => f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-mismatch", payload: { content: "@Guest", mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } }), ApiError);
+    f.service.setProjectMembership(f.owner, session.project_id, guest.user_id, "viewer");
+    assert.throws(() => f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-readonly", payload: { content: "@Owner", mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } }), ApiError);
+  } finally { f.close(); }
+});
+
 test("SQLite WAL assigns ordered sequences and replays an idempotent event", () => {
   const f = fixture();
   try {

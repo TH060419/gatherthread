@@ -1,4 +1,12 @@
 import assert from "node:assert/strict";
+import { codexActivityStatus } from "../src/codex-app-server.js";
+
+test("native work activity reports thinking without reading hidden reasoning", () => {
+  assert.equal(codexActivityStatus("item/reasoning/textDelta", { delta: "secret reasoning" }), "thinking");
+  assert.equal(codexActivityStatus("item/started", { item: { type: "commandExecution", command: "secret command" } }), "running");
+  assert.equal(codexActivityStatus("thread/tokenUsage/updated", {}), null);
+  assert.equal(codexActivityStatus("unknown/private", {}), null);
+});
 import { createHash } from "node:crypto";
 import { getEventListeners } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
@@ -3774,6 +3782,10 @@ for await (const line of lines) {
       },
     }) + "\\n");
   } else if (message.id === 99) {
+    process.stdout.write(JSON.stringify({ method: "item/reasoning/textDelta", params: {
+      threadId: "other-thread", turnId: "turn-1", delta: "must not report other work" } }) + "\\n");
+    process.stdout.write(JSON.stringify({ method: "item/reasoning/textDelta", params: {
+      threadId: "thread-1", turnId: "turn-1", delta: "private reasoning must never reach progress" } }) + "\\n");
     process.stdout.write(JSON.stringify({
       method: "item/completed",
       params: {
@@ -3806,13 +3818,16 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   });
   t.after(() => client.dispose());
   const completedItems: unknown[] = [];
+  const activity: unknown[] = [];
   const completed = await client.runTurn({
     threadId: "thread-1",
     prompt: "continue without interactive input",
     clientUserMessageId: "elicitation-turn",
     onItemCompleted: async (item) => { completedItems.push(item); },
+    onWorkActivity: async (status) => { activity.push(status); },
   });
   assert.deepEqual(completed.items, [{ type: "agentMessage", text: "continued safely" }]);
+  assert.deepEqual(activity, ["thinking", "running"]);
   assert.deepEqual(completedItems, [{
     id: "commentary-1",
     type: "agentMessage",
@@ -4001,7 +4016,7 @@ function fail(id, message) {
   assert.equal(first.events.at(-1)?.content, "first app answer");
   assert.equal(first.observedModel, "gpt-5.6-terra");
   assert.equal(first.observedReasoningEffort, "high");
-  assert.deepEqual(progress, [{ id: "commentary-1", content: "Checking turn 1" }]);
+  assert.deepEqual(progress, [{ id: "activity-1", phase: "activity", status: "running", content: "Agent is working." }, { id: "commentary-1", content: "Checking turn 1" }]);
   assert.deepEqual(revealedThreads, [], "background execution tasks must never be opened in Desktop");
 
   const secondRequest = canonical(5, "agent_request", { content: "implement second" });

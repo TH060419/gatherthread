@@ -337,7 +337,7 @@ export class LocalBridge {
         ? await this.#api.readContext(request.sessionId, undefined, request.sequence - 1)
         : undefined;
     await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
-      idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:start`,
+      idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:${claimAttempt}:progress:start`,
       payload: {
         content: "Agent started processing the request.",
         phase: "lifecycle",
@@ -358,10 +358,11 @@ export class LocalBridge {
             const content = redactText(update.content).trim();
             if (!content) return;
             await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
-              idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:${hash(update.id)}`,
+              idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:${claimAttempt}:progress:${hash(update.id)}`,
               payload: redactValue({
                 content,
-                phase: "commentary",
+                phase: update.phase ?? "commentary",
+                ...(update.status === undefined ? {} : { status: update.status }),
                 ...(update.occurredAt === undefined ? {} : { occurred_at: update.occurredAt }),
                 capture_fidelity: "harness_transcript",
                 source_harness: runtime.harness,

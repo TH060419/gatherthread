@@ -796,6 +796,13 @@ export async function initializeProjectSession(options: {
     transcriptRoots: {},
   });
   await bridge.connect();
+  const initializingHeartbeatStop = new AbortController();
+  const initializingHeartbeat = runManagedSessionHeartbeats({
+    managed: new Map([[options.session.id, { bridge, executor: binding.executor, lastHeartbeatAt: Date.now() }]]),
+    signal: initializingHeartbeatStop.signal,
+    onError: () => undefined, // Initialization's authoritative reads still fail closed.
+  });
+  try {
   await bridge.materializeAuthoritativeHistory(binding.executor, authoritativeCursor);
   if (binding.importVisibleHistorySnapshot) {
     try {
@@ -841,6 +848,10 @@ export async function initializeProjectSession(options: {
     ...(binding.relayLocalHarnessEvent === undefined ? {} : { relayLocalHarnessEvent: binding.relayLocalHarnessEvent }),
     ...(binding.isLocalRunActive === undefined ? {} : { isLocalRunActive: binding.isLocalRunActive }),
   };
+  } finally {
+    initializingHeartbeatStop.abort();
+    await initializingHeartbeat;
+  }
 }
 
 export async function runManagedSessionCycle(
@@ -863,6 +874,31 @@ export async function runManagedSessionCycle(
 }
 
 class LocalTaskDiscoveryDisabledError extends Error {}
+
+/** Presence is independent of task execution and never renews a claim lease. */
+export async function runManagedSessionHeartbeats(options: {
+  managed: ReadonlyMap<string, ManagedSession>;
+  signal: AbortSignal;
+  onError: (sessionId: string, error: unknown) => void;
+  now?: () => number;
+  wait?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+}): Promise<void> {
+  const now = options.now ?? Date.now;
+  const wait = options.wait ?? waitForConnectorPoll;
+  while (!options.signal.aborted) {
+    await wait(10_000, options.signal);
+    if (options.signal.aborted) break;
+    await Promise.all([...options.managed].map(async ([id, current]) => {
+      if (now() - current.lastHeartbeatAt < 10_000) return;
+      try {
+        await current.bridge.heartbeat();
+        current.lastHeartbeatAt = now();
+      } catch (error) {
+        if (!options.signal.aborted) options.onError(id, error);
+      }
+    }));
+  }
+}
 
 export function localSoloCreationKey(actorDeviceId: string, projectId: string, localConversationId: string): string {
   return `codex-solo-${createHash("sha256")
@@ -1053,6 +1089,12 @@ export async function runProjectConnector(options: {
   let visibleSessions: SessionSummary[] = [];
   let nextSnapshotPollAt = 0;
   let authoritativeAclLoaded = false;
+  const heartbeatStop = new AbortController();
+  const heartbeat = runManagedSessionHeartbeats({
+    managed,
+    signal: AbortSignal.any([options.signal, heartbeatStop.signal]),
+    onError: (id, error) => retryReporter.retrying(`${id}:heartbeat`, error),
+  });
   try {
   while (!options.signal.aborted) {
     const now = Date.now();
@@ -1119,10 +1161,6 @@ export async function runProjectConnector(options: {
           options.localSync?.attach(session.id, current);
           process.stdout.write(formatConnectedCodexSessionOutput(options.project.name, session));
         }
-        if (Date.now() - current.lastHeartbeatAt >= 10_000) {
-          await current.bridge.heartbeat();
-          current.lastHeartbeatAt = Date.now();
-        }
         await runManagedSessionCycle(current, options.api);
         retryReporter.recovered(session.id);
       } catch (error) {
@@ -1176,6 +1214,8 @@ export async function runProjectConnector(options: {
     await waitForConnectorPoll(1_000, options.signal);
   }
   } finally {
+    heartbeatStop.abort();
+    await heartbeat;
     options.localSync?.clear();
     await relay?.close();
   }

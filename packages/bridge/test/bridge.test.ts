@@ -205,6 +205,7 @@ test("agent request claim hydrates canonical history and completes with redacted
     async execute(input) {
       assert.deepEqual(input.canonicalHistory.map((item) => item.sequence), [1, 2]);
       await input.publishProgress?.({ id: "commentary-1", content: "Checking token=supersecretvalue" });
+      await input.publishProgress?.({ id: "activity-1", content: "Agent is thinking.", phase: "activity", status: "thinking" });
       return {
         events: [{
           kind: "tool_call",
@@ -225,8 +226,10 @@ test("agent request claim hydrates canonical history and completes with redacted
     },
   });
   assert.equal(result.claimed, true);
-  assert.equal(api.progressInputs.length, 2);
-  assert.deepEqual(api.progressInputs.map((input) => input.claimAttempt), [2, 2]);
+  assert.equal(api.progressInputs.length, 3);
+  assert.deepEqual(api.progressInputs.map((input) => input.claimAttempt), [2, 2, 2]);
+  assert.equal((api.progressInputs[2]?.payload as any)?.phase, "activity");
+  assert.equal((api.progressInputs[2]?.payload as any)?.status, "thinking");
   assert.equal((api.progressInputs[0]?.payload as any)?.content, "Agent started processing the request.");
   assert.equal((api.progressInputs[0]?.payload as any)?.phase, "lifecycle");
   assert.match(api.progressInputs[0]?.idempotencyKey ?? "", /:progress:start$/);

@@ -57,6 +57,18 @@ The same-origin API is rooted at `/v1`.
 - Cookie-authenticated writes require an allowed `Origin`. Bearer-authenticated connectors remain device- and role-scoped.
 - Retryable mutations carry a stable `idempotency_key`. An exact same-actor retry returns the original result; a changed actor, operation, target, or canonical payload conflicts.
 
+### Message quotes and mentions
+
+`human_chat` and ordinary `agent_request` events may quote an existing event in the same session using `reply_to_event_id`. This does not change Agent-response linkage or claim fencing. Shared messages cannot quote owner-only history. A quote is a reference, not a new copy of the source event; its original content remains authoritative.
+
+An optional `payload.mentions` array uses `MessageMentionsSchema`: at most 32 strict `{ user_id, start, end }` records, ordered and non-overlapping. Offsets are JavaScript UTF-16 indices in the exact submitted `payload.content`; each range must equal `@` plus the recipient's current display name and the recipient must be a current session member. Plain typed `@name` without a selected member is ordinary text. Changed names or removed members can cause a stale draft to be rejected instead of notifying the wrong person. Mention metadata is additive; older consumers still read the content normally.
+
+`GET /v1/projects/:id/mentions?before_event_id=...` returns `{ data: { mentions, next_before_id } }`, newest first, at most 50 entries. Each entry contains `id`, `session_id`, `sequence`, `created_at`, `actor_display_name`, `session_title`, and a 180-character `excerpt`. It is an authenticated inbox for only the caller, filtered by current project/session membership and event visibility. It grants no new access and does not send third-party push notifications. Pagination reads canonical storage; WebSocket remains advisory.
+
+Codex runtime presence now runs independently of the execution loop every ten seconds. Only matched native thread/turn work may publish throttled `agent_progress` with `phase: activity`, `status: thinking|running` and generic public text. No reasoning text or tool parameters are shared by this signal. Existing claim attempts and five-minute work-based lease expiry remain unchanged.
+
+DSH also retains its independent ten-second heartbeat. A transient heartbeat failure recovers the plugin's idle/running state on the next successful heartbeat without waiting for prompt settlement. A matched native running transition publishes generic activity immediately; durable work keeps its separate throttle. Activity idempotency keys include the claim attempt, and neither idle presence nor a persistent busy label fabricates periodic work. A completely silent five-minute request may still lose its claim lease; this is distinct from runtime presence. Native reasoning text remains private.
+
 ### Route families
 
 | Family | Purpose | Contract notes |

@@ -5,6 +5,8 @@ import {
   AgentProgressInputSchema,
   AgentRequestClaimSchema,
   AppendEventInputSchema,
+  MessageMentionsSchema,
+  ProjectMentionsPageSchema,
   CanonicalEventSchema,
   ClaimInvitationInputSchema,
   CreateBrowserSessionInputSchema,
@@ -30,6 +32,16 @@ import {
   UpdateSessionInputSchema,
   UpdateProjectInputSchema,
 } from "../src/index.js";
+
+test("mention and inbox wire contracts are strict and bounded", () => {
+  const mention = { user_id: "recipient", start: 0, end: 10 };
+  assert.equal(MessageMentionsSchema.safeParse([mention]).success, true);
+  assert.equal(MessageMentionsSchema.safeParse([{ ...mention, spoofed_name: "Owner" }]).success, false);
+  assert.equal(MessageMentionsSchema.safeParse(Array(33).fill(mention)).success, false);
+  assert.equal(MessageMentionsSchema.safeParse([{ ...mention, start: -1 }]).success, false);
+  assert.equal(ProjectMentionsPageSchema.safeParse({ mentions: [], next_before_id: null }).success, true);
+  assert.equal(ProjectMentionsPageSchema.safeParse({ mentions: [], next_before_id: null, private_token: "unused" }).success, false);
+});
 
 test("member-removal and detached-clear wire contracts reject unknown fields", () => {
   const head = "a".repeat(40);

@@ -30,6 +30,7 @@ import {
   FailSnapshotRequestInputSchema,
   DetachedCodeClearResultSchema,
   ListSnapshotRequestsQuerySchema,
+  ProjectMentionsPageSchema,
   RegisterRuntimeInputSchema,
   RemoveProjectMembershipInputSchema,
   RemoveSessionMembershipInputSchema,
@@ -910,6 +911,15 @@ export async function startCollaborationServer(
 
       if (projectId && parts[3] === "sessions" && parts.length === 4 && request.method === "GET") {
         sendJson(response, 200, { data: { sessions: service.listProjectSessions(actor, projectId) } });
+        return;
+      }
+
+      if (projectId && parts[3] === "mentions" && parts.length === 4 && request.method === "GET") {
+        const beforeId = url.searchParams.get("before_event_id") ?? undefined;
+        if (beforeId !== undefined && !/^[A-Za-z0-9_.:-]{1,200}$/u.test(beforeId)) {
+          throw new ApiError(400, "invalid_cursor", "Invalid mention cursor");
+        }
+        sendJson(response, 200, { data: ProjectMentionsPageSchema.parse(service.listProjectMentions(actor, projectId, beforeId)) });
         return;
       }
 

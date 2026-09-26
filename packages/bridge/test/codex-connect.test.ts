@@ -28,6 +28,7 @@ import {
   resolveCodexHookRelayPath,
   resolveWorkspaceCodexHookPaths,
   runManagedSessionCycle,
+  runManagedSessionHeartbeats,
   runProjectConnector,
 } from "../src/codex-connect.js";
 import { managedCodexThreadName } from "../src/codex-app-server.js";
@@ -44,6 +45,27 @@ import {
 
 const execFileAsync = promisify(execFile);
 const socketTemporaryBase = process.platform === "darwin" ? "/private/tmp" : tmpdir();
+
+test("project heartbeats remain independent while execution exceeds the 30-second presence TTL", async () => {
+  const stop = new AbortController();
+  let now = 0;
+  const beats: number[] = [];
+  const managed = new Map([["session-1", {
+    bridge: { heartbeat: async () => { beats.push(now); } }, lastHeartbeatAt: 0,
+  }]]) as unknown as ReadonlyMap<string, Parameters<typeof runManagedSessionCycle>[0]>;
+  // The execution promise deliberately never settles during the heartbeats.
+  let executionDone = false;
+  const executing = new Promise<void>((resolve) => {
+    stop.signal.addEventListener("abort", () => { executionDone = true; resolve(); });
+  });
+  await runManagedSessionHeartbeats({ managed, signal: stop.signal, now: () => now,
+    wait: async () => { now += 10_000; if (now > 40_000) stop.abort(); },
+    onError: () => assert.fail("unexpected heartbeat error"),
+  });
+  assert.deepEqual(beats, [10_000, 20_000, 30_000, 40_000]);
+  assert.equal(executionDone, true);
+  await executing;
+});
 
 test("Windows Codex discovery skips shell shims and selects a native executable", async () => {
   const directory = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-path-"));
