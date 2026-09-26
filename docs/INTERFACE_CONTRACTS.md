@@ -23,6 +23,7 @@ Alpha status never permits silent reinterpretation of persisted data, identity, 
 | User-facing MCP tools and resources | Public Alpha | `packages/mcp/src/service.ts`, `packages/mcp/README.md` | GatherThread Codex plugin and user Agents |
 | Capability-protected local connector relay | Internal versioned | `packages/bridge/src/local-api-relay.ts` | GatherThread Codex plugin MCP only |
 | Codex App Server adapter and persisted projection state | Internal versioned | `packages/bridge/src/codex-app-server.ts`, `packages/bridge/src/project-harness.ts` | Codex connector |
+| ZCode headless connector and persisted binding state | Internal versioned | `packages/bridge/src/zcode-compat.ts`, `zcode-executor.ts`, `zcode-harness.ts`, `zcode-connect.ts` | `@gatherthread/zcode-connect` |
 | DSH native plugin RPC and persisted state | Public Alpha package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
 | Browser entry routes and legacy deep-link forwarding | Public Alpha | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
 | Stable Web control IDs and accessible names | Internal versioned | `apps/web/index.html`, `apps/web/test/static-accessibility.test.js` | Web event bindings, accessibility, browser tests |
@@ -147,7 +148,7 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - HTTP/stdio MCP messages default to 1 MiB, with at most 128 requests per batch and bounded JSON depth/node count; oversized inputs are rejected before any batch member executes. Valid batches and silent notifications remain supported. Manual visible-history import creates a new native task and is explicitly non-idempotent.
 - Renaming or removing an MCP tool/resource, parameter, URI, or result field is a Public Alpha interface change.
 
-## Codex and DSH native boundaries
+## Codex, DSH, and ZCode native boundaries
 
 - Codex Hooks are limited to reviewed `UserPromptSubmit` and `Stop` definitions. Hook payloads, output limits, registry purpose, and workspace path checks are security contracts.
 - Codex Desktop projection, background execution, and snapshot tasks have separate purposes and single-writer rules. Never mutate an active or ambiguously owned native task.
@@ -155,6 +156,7 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - DSH uses public session append/flush and Agent services, durable projected-event IDs, echo suppression, and an outgoing outbox. Only allowlisted assistant output and redacted tool data may leave DSH.
 - DSH model selection uses exact metadata advertised by the connected runtime. A GatherThread request may temporarily select one declared model and effort for its own DSH turn; it must not persistently rewrite DSH-native selection for later local turns.
 - Native DSH pairing/configuration is single-flight. Disconnect drains canceled configuration writes before clearing its credential, and a project-role change refreshes only that project's native owner and permissions.
+- The ZCode connector resolves and probes the headless CLI structurally plus a live ZCode Protocol handshake, fails closed on missing headless capabilities, unsupported protocol versions, or unsupported binding-state versions, spawns one bounded app-server child per claimed request, declines every server-initiated permission or input interaction, records a durable execution journal before publishing so a retry replays instead of re-running a finished native turn (an interrupted turn keeps its `running` refusal, a natively failed turn records the terminal `failed` status), strips GatherThread credentials from the child environment, shares only the final answer by default with tool events gated behind explicit opt-in plus a reviewed tool allowlist, and never reads ZCode's private session store. One connector process per binding root is enforced by an advisory startup lock whose file carries only a pid and a timestamp. All version-sensitive CLI behavior lives in the ZCode compatibility modules.
 - Persistent connector and DSH state must carry a version. A state change needs atomic migration or a safe, actionable refusal; never guess at an old structure.
 - Upstream version support is explicit. An unsupported Codex App Server or DSH Host API must fail safely and preserve local/cloud data.
 

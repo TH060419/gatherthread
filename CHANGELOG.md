@@ -7,6 +7,14 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - Add a back-to-bottom control to the shared conversation timeline. It appears once the reader scrolls away from the newest event, hides again at the bottom, and follows the reader's reduced-motion preference when it jumps.
 - Prepared public-repository documentation and discoverability updates: bilingual README introductions, documentation/release indexes, private security-reporting policy, product-home metadata, and clearer Alpha access guidance. This does not itself deploy the hosted site or publish a new package.
 - The npm Alpha 7 packages were published separately and were not rebuilt when the Git tag moved to the verified server source.
+- Add ZCode as a third harness through the standalone `@gatherthread/zcode-connect` connector: headless CLI discovery and structural preflight probing, one execution runtime per writable session, claimed Web Agent request execution in a bounded headless ZCode child, incremental canonical-history hydration with native session resume, and versioned private binding state (see [ADR-0031](docs/adr/0031-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md)).
+- Add a ZCode Protocol app-server client and event parser, plus the `zcode` harness name, to the shared adapters and bridge registries. Execution uses the official `zcode app-server` stdio protocol with live preflight handshake, protocol-version refusal, and durable write-ahead execution journaling so retries replay a finished native turn exactly once.
+- Add ZCode to the Web workspace: agent harness selection, runtime resolution, connector command dialog, and bilingual copy.
+
+### Known limitations
+
+- The ZCode connector covers the Web Agent execution loop only. Local direct-ZCode turn capture through reviewed ZCode hooks, per-conversation upload preferences, visible-history import, snapshots, and first-prompt discovery remain future phases; the connector never reads ZCode's private session store.
+- Headless ZCode behavior (permission prompts, model availability) requires a real-device smoke test before release.
 
 ## [0.1.0-alpha.7] - 2026-09-24
 

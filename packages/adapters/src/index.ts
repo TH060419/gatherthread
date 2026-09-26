@@ -4,3 +4,4 @@ export * from "./jsonl.js";
 export * from "./discovery.js";
 export * from "./codex.js";
 export * from "./claude-code.js";
+export * from "./zcode.js";

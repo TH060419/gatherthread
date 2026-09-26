@@ -15,6 +15,7 @@ try {
   for (const archive of [
     `gatherthread-codex-connect-${VERSION}.tgz`,
     `gatherthread-dsh-host-${VERSION}.tgz`,
+    `gatherthread-zcode-connect-${VERSION}.tgz`,
   ]) {
     await runNpm([
       "--cache", cacheRoot,

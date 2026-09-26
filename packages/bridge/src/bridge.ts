@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   ClaudeCodeProjectAdapter,
   CodexRolloutAdapter,
+  ZcodeStreamAdapter,
   discoverJsonlTranscripts,
   redactText,
   redactValue,
@@ -42,6 +43,21 @@ export class HarnessExecutionTerminatedError extends Error {
   }
 }
 
+/**
+ * The request's execution profile is structurally unparseable, so no executor
+ * can ever claim it. Unlike a recoverable shouldExecute failure (a local turn
+ * with an unknown commit outcome, a transiently unavailable workspace, a
+ * state-file read error — all of which must keep the request pending and
+ * retried), this request is permanently unclaimable: the bridge skips it and
+ * advances the cursor instead of wedging the session on it forever.
+ */
+export class MalformedAgentRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "MalformedAgentRequestError";
+  }
+}
+
 export interface LocalBridgeOptions {
   api: CollaborationApi;
   cursorStore: CursorStore;
@@ -76,6 +92,7 @@ export class LocalBridge {
     this.#adapters = {
       codex: new CodexRolloutAdapter(),
       "claude-code": new ClaudeCodeProjectAdapter(),
+      zcode: new ZcodeStreamAdapter(),
     };
   }
 
@@ -133,8 +150,23 @@ export class LocalBridge {
         throw new Error("Collaboration API returned an event for a different session");
       }
       if (event.type === "agent_request") {
-        const shouldExecute = event.actorId === runtime.userId
-          && (executor.shouldExecute === undefined || await executor.shouldExecute(event, runtime));
+        let shouldExecute = event.actorId === runtime.userId;
+        if (shouldExecute && executor.shouldExecute !== undefined) {
+          try {
+            shouldExecute = await executor.shouldExecute(event, runtime);
+          } catch (error) {
+            // Only a structurally unparseable profile is skippable: no
+            // executor can ever claim this request, so advancing the cursor
+            // is the bounded outcome. Every other failure is recoverable or
+            // state-dependent and must keep the request pending for the
+            // session cycle to retry.
+            if (!(error instanceof MalformedAgentRequestError)) throw error;
+            shouldExecute = false;
+            process.stderr.write(
+              `gatherthread-bridge: skipping unclaimable agent_request ${event.id} (sequence ${event.sequence}) in session ${event.sessionId}: ${error.message}\n`,
+            );
+          }
+        }
         if (shouldExecute) {
           try {
             const result = await this.processAgentRequest(event, executor);
@@ -144,10 +176,19 @@ export class LocalBridge {
             }
           } catch (error) {
             if (!isTerminalAgentRequestClaimConflict(error)) throw error;
-            if (!executor.projectCanonicalEvents) {
-              throw new Error("Agent request was claimed by another runtime but this executor cannot project the canonical request safely");
+            if (executor.projectCanonicalEvents) {
+              await executor.projectCanonicalEvents([event], runtime);
+            } else {
+              // The conflict is final server state no retry can resolve, and
+              // this executor derives its native hydration from the canonical
+              // history read at claim time instead of incremental projection,
+              // so the durable cursor records everything it needs. Refusing to
+              // advance here wedged the whole session: the unsaved cursor made
+              // every poll re-throw on this event forever.
+              process.stderr.write(
+                `gatherthread-bridge: agent_request ${event.id} (sequence ${event.sequence}) in session ${event.sessionId} was already resolved elsewhere (${error.code}); advancing the cursor\n`,
+              );
             }
-            await executor.projectCanonicalEvents([event], runtime);
           }
         } else if (executor.projectCanonicalEvents) {
           await executor.projectCanonicalEvents([event], runtime);
@@ -478,10 +519,11 @@ export class LocalBridge {
 /**
  * A claim conflict the server has already resolved. `agent_request_failed` means
  * the server exhausted its re-dispatch budget, so the request is finished as far
- * as this connector is concerned: projecting the canonical failure and moving on
- * is the only correct response, and retrying would spin on it every poll.
+ * as this connector is concerned: recording the canonical failure for executors
+ * that project incrementally, then moving on, is the only correct response, and
+ * retrying would spin on it every poll.
  */
-function isTerminalAgentRequestClaimConflict(error: unknown): boolean {
+function isTerminalAgentRequestClaimConflict(error: unknown): error is CollaborationHttpError {
   return error instanceof CollaborationHttpError
     && error.status === 409
     && (error.code === "agent_request_already_claimed"

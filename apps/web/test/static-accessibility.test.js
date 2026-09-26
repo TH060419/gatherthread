@@ -8,6 +8,7 @@ const htmlPath = fileURLToPath(new URL("../index.html", import.meta.url));
 const mainPath = fileURLToPath(new URL("../src/main.js", import.meta.url));
 const apiPath = fileURLToPath(new URL("../src/api.js", import.meta.url));
 const stylesPath = fileURLToPath(new URL("../src/styles.css", import.meta.url));
+const agentControlsPath = fileURLToPath(new URL("../src/settings-agent-controls.js", import.meta.url));
 const domainPath = fileURLToPath(new URL("../src/domain.js", import.meta.url));
 const i18nPath = fileURLToPath(new URL("../src/i18n.js", import.meta.url));
 const dshPath = fileURLToPath(new URL("../src/dsh.js", import.meta.url));
@@ -736,13 +737,14 @@ test("Codex-only history and upload controls follow the saved project Agent sele
 });
 
 test("project Agent shortcuts are selectable, contextual, and compact in the fixed session rail", async () => {
-  const [html, main, styles, i18n] = await Promise.all([
+  const [html, main, styles, i18n, agentControls] = await Promise.all([
     readFile(htmlPath, "utf8"),
     readFile(mainPath, "utf8"),
     readFile(stylesPath, "utf8"),
     readFile(i18nPath, "utf8"),
+    readFile(agentControlsPath, "utf8"),
   ]);
-  for (const id of ["settings-enabled-codex", "settings-enabled-dsh", "settings-agent-summary"]) {
+  for (const id of ["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-zcode", "settings-agent-summary"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.equal((html.match(/class="icon-button rail-create-button"/g) ?? []).length, 2);
@@ -751,7 +753,8 @@ test("project Agent shortcuts are selectable, contextual, and compact in the fix
   assert.match(main, /connectDshButton\.hidden = !enabled\.has\(DSH_HARNESS\)/);
   assert.match(main, /const enabledHarnesses = currentProjectEnabledHarnesses\(\);[\s\S]*?agentHarnessSelect\.replaceChildren\(\);/);
   assert.match(main, /for \(const enabledHarness of enabledHarnesses\)[\s\S]*?agentHarnessSelect\.append\(option\);/);
-  assert.match(main, /DeepSeek Harness supplies this project's runtime and handles new Agent requests by default\./);
+  assert.match(agentControls, /DeepSeek Harness supplies this project's runtime and handles new Agent requests by default\./);
+  assert.match(agentControls, /ZCode supplies this project's connection command and handles new Agent requests by default\./);
   assert.match(i18n, /当前项目使用 DeepSeek Harness 运行环境，并默认由其处理新的 Agent 请求。/);
   assert.match(styles, /\.session-list \{[\s\S]*?flex: 1 1 auto;[\s\S]*?overflow-y: auto;/);
   assert.match(styles, /\.rail-create-button \{[\s\S]*?width: 34px;[\s\S]*?height: 34px;/);

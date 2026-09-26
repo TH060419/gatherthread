@@ -1,0 +1,591 @@
+import { createHash } from "node:crypto";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
+import { redactText } from "@gatherthread/adapters";
+import { HttpCollaborationClient } from "./http-client.js";
+import type { ManagedSession } from "./codex-connect.js";
+import { initializeProjectSession, runManagedSessionCycle, terminalQuoted, waitForConnectorPoll } from "./codex-connect.js";
+import { ensureProjectWorkspace } from "./project-workspace.js";
+import { isProjectAccessRevoked, refreshProjectSessionPermissions } from "./project-session-permissions.js";
+import type { ProjectHarnessAdapter } from "./project-harness.js";
+import type { ProjectSummary, SessionSummary } from "./types.js";
+import { validateZcodeWorkspace, ZcodeProjectHarness } from "./zcode-harness.js";
+import { assertUsableZcodeCli, probeZcodeCli, resolveZcodeCommand } from "./zcode-compat.js";
+import { DEFAULT_ZCODE_TOOL_ALLOWLIST } from "./zcode-executor.js";
+import { probeZcodeProtocol } from "./zcode-protocol.js";
+
+export interface ZcodeConnectOptions {
+  apiUrl: string;
+  workspacePath: string;
+  provider: string;
+  model: string;
+  projectId?: string;
+  createWorkspace: boolean;
+  zcodeCommand?: string;
+  /** Default false: only the final ZCode answer is shared. */
+  shareToolEvents: boolean;
+  /** Exact tool names eligible for sharing when shareToolEvents is on. */
+  toolAllowlist: readonly string[];
+  preflightOnly: boolean;
+  executionTimeoutMs: number;
+}
+
+const HELP = `GatherThread ZCode connector
+
+Usage:
+  npx --yes @gatherthread/zcode-connect@0.1.0-alpha.5 --url <GatherThread URL> [options]
+
+Repository development / compatibility entry:
+  npm run zcode:connect -- --url <GatherThread URL> [options]
+
+Options:
+  --url <url>              GatherThread HTTPS origin or /v1 API URL (required)
+  --workspace <path>       Local project directory ZCode may access (default: current directory)
+  --project <id>           Project ID; otherwise choose from your writable projects
+  --create-workspace       Create/reuse ~/GatherThread Projects/<project name>
+  --provider <name>        Provenance provider label (default: zcode)
+  --model <name>           Provenance model label until the first execution reports the observed model (default: default)
+  --zcode-command <path>   ZCode CLI executable, or its bundled glm/zcode.cjs entry (default: discover automatically)
+  --share-tool-events      Also share redacted tool events for the allowlisted
+                           tools below. Default: share only the final answer.
+  --share-tool-allowlist <names>
+                           Comma-separated exact tool names eligible for
+                           sharing (default: Read,Glob,Grep). Non-allowlisted
+                           tool activity always stays local.
+  --execution-timeout-ms <n>
+                           Per-request headless execution ceiling (default: 900000)
+  --preflight-only         Validate server access, workspace, and the ZCode CLI, then exit
+  --help                   Show this help
+
+The device access token is read from GATHERTHREAD_TOKEN when set. Otherwise it
+is requested using a hidden terminal prompt. It is kept only in this process
+and is never passed to ZCode, written to session state, or printed. Each
+writable session registers one execution runtime; a claimed Web Agent request
+runs once in a bounded headless ZCode app-server child inside the workspace.
+Interactive permission and input requests from the child are declined: this
+connector never grants local tool approval remotely. Local-turn capture
+through reviewed ZCode hooks is planned as a later phase and is not part of
+this connector yet. The ZCode CLI must be signed in (run \`zcode login\`) with
+a default model selected on this device before connecting.
+`;
+
+export async function runZcodeConnectCli(
+  argv: readonly string[] = process.argv.slice(2),
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  const parsed = parseZcodeConnectArgs(argv);
+  if (parsed === "help") {
+    process.stdout.write(HELP);
+    return;
+  }
+  const token = env.GATHERTHREAD_TOKEN?.trim() || await readSecret("GatherThread device access token: ");
+  if (!token || /[\r\n]/.test(token)) throw new Error("A valid GatherThread device access token is required");
+
+  const api = new HttpCollaborationClient({ baseUrl: parsed.apiUrl, bearerToken: token });
+  const actor = await api.getCurrentActor();
+  const projects = (await api.listProjects()).filter((project) => project.state === "active");
+  const selected = await selectProject(projects, parsed.projectId);
+  const requestedWorkspacePath = parsed.createWorkspace
+    ? await ensureProjectWorkspace({
+      apiUrl: parsed.apiUrl,
+      projectId: selected.id,
+      projectName: selected.name,
+    })
+    : parsed.workspacePath;
+  const workspacePath = await validateZcodeWorkspace(requestedWorkspacePath);
+  const mappingId = createHash("sha256")
+    .update([parsed.apiUrl, actor.deviceId, selected.id, path.resolve(workspacePath)].join("\0"))
+    .digest("hex")
+    .slice(0, 24);
+  const stateRoot = path.join(homedir(), ".gatherthread", "zcode", mappingId);
+  await mkdir(stateRoot, { recursive: true, mode: 0o700 });
+
+  const spec = await resolveZcodeCommand(parsed.zcodeCommand, env);
+  const probe = await probeZcodeCli(spec);
+  assertUsableZcodeCli(probe);
+  const protocol = await probeZcodeProtocol(spec, { cwd: workspacePath });
+  const shutdown = new AbortController();
+  const harness = new ZcodeProjectHarness({
+    probe,
+    spec,
+    workspacePath,
+    provider: parsed.provider,
+    model: parsed.model,
+    shareToolEvents: parsed.shareToolEvents,
+    toolAllowlist: parsed.toolAllowlist,
+    stateRoot,
+    timeoutMs: parsed.executionTimeoutMs,
+    signal: shutdown.signal,
+  });
+  const preflight = await harness.preflight();
+
+  if (parsed.preflightOnly) {
+    process.stdout.write(`GatherThread ZCode connector preflight succeeded.\n`);
+    process.stdout.write(`Server: ${parsed.apiUrl}\n`);
+    process.stdout.write(`Project: ${terminalQuoted(selected.name)} (${selected.id}) as ${selected.role}\n`);
+    process.stdout.write(`Workspace: ${preflight.workspacePath}\n`);
+    process.stdout.write(`ZCode CLI: ${preflight.version} (${spec.source})\n`);
+    process.stdout.write(`ZCode Protocol: ${protocol.protocolName} version ${protocol.protocolVersion}\n`);
+    process.stdout.write(`Tool sharing: ${parsed.shareToolEvents ? `redacted events for ${parsed.toolAllowlist.join(", ")}` : "final answer only"}\n`);
+    return;
+  }
+
+  process.stdout.write(`Connecting GatherThread project ${terminalQuoted(selected.name)} to ZCode at ${terminalQuoted(preflight.workspacePath)}\n`);
+  process.stdout.write(`ZCode CLI ${preflight.version} (${protocol.protocolName} v${protocol.protocolVersion}); headless execution ready.\n`);
+
+  const stop = () => shutdown.abort(new Error("ZCode connector shutdown requested"));
+  process.once("SIGINT", stop);
+  process.once("SIGTERM", stop);
+  const managed = new Map<string, ManagedSession>();
+  const retryReporter = new ZcodeRetryReporter({ token });
+  // One connector process per binding root: a second process sharing these
+  // binding-state files would race the write-ahead execution journal.
+  const releaseConnectorLock = await acquireConnectorLock(path.join(stateRoot, "connector.lock"));
+  // The shared reconciler doubles as the server's cheapest liveness signal;
+  // throttling it to the same five-second cadence as the Codex connector
+  // keeps the poll loop from issuing one refresh per second on an idle
+  // project. The mid-turn watcher keeps its own independent 30-second path.
+  let nextRefreshAt = 0;
+  let eligibleSessions: SessionSummary[] = [];
+  try {
+    while (!shutdown.signal.aborted) {
+      if (Date.now() >= nextRefreshAt) {
+        const refresh = await refreshProjectSessionPermissions({
+          loadSessions: () => api.listProjectSessions(selected.id),
+          actorUserId: actor.id,
+          managed,
+          harness,
+        });
+        if (refresh.status === "project_inaccessible") {
+          for (const [sessionId, current] of [...managed]) {
+            managed.delete(sessionId);
+          }
+          await harness.deactivateExecutionBindings?.().catch(() => undefined);
+          throw new Error("GatherThread project access was revoked; ZCode execution has been disabled", {
+            cause: refresh.error,
+          });
+        }
+        if (refresh.status === "transient_failure") {
+          retryReporter.retrying("project refresh", refresh.error);
+          await waitForConnectorPoll(5_000, shutdown.signal);
+          continue;
+        }
+        retryReporter.recovered("project refresh");
+        eligibleSessions = refresh.eligibleSessions;
+        nextRefreshAt = Date.now() + PROJECT_REFRESH_THROTTLE_MS;
+      }
+      for (const session of eligibleSessions) {
+        if (shutdown.signal.aborted) break;
+        try {
+          let current = managed.get(session.id);
+          if (!current) {
+            current = await initializeProjectSession({
+              api,
+              actorDeviceId: actor.deviceId,
+              stateRoot,
+              harness,
+              session,
+            });
+            managed.set(session.id, current);
+            process.stdout.write(formatConnectedSessionOutput(selected.name, session));
+          }
+          if (Date.now() - current.lastHeartbeatAt >= 10_000) {
+            await current.bridge.heartbeat();
+            current.lastHeartbeatAt = Date.now();
+          }
+          // A cycle can hold this loop for a whole native turn (up to the
+          // execution cap). While it runs, an independent watcher keeps
+          // reconciling write eligibility so removal, role downgrade, or
+          // project revocation aborts the in-flight headless child instead of
+          // waiting for the turn to finish on its own.
+          const stopWatcher = startExecutionPermissionWatcher({
+            loadSessions: () => api.listProjectSessions(selected.id),
+            actorUserId: actor.id,
+            managed,
+            harness,
+            signal: shutdown.signal,
+          });
+          const stopHeartbeatKeeper = startCycleHeartbeatKeeper({ managed });
+          try {
+            await runManagedSessionCycle(current, api);
+            retryReporter.recovered(session.id);
+          } finally {
+            stopHeartbeatKeeper();
+            stopWatcher();
+          }
+        } catch (error) {
+          if (!shutdown.signal.aborted) retryReporter.retrying(session.id, error);
+        }
+      }
+      await waitForConnectorPoll(1_000, shutdown.signal);
+    }
+  } finally {
+    for (const current of managed.values()) {
+      await current.deactivateLocalPublishing?.("project_inaccessible").catch(() => undefined);
+    }
+    await harness.close();
+    await releaseConnectorLock();
+  }
+}
+
+const EXECUTION_PERMISSION_WATCH_INTERVAL_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = 10_000;
+/** Main-loop permission refresh cadence, mirroring the Codex connector. */
+const PROJECT_REFRESH_THROTTLE_MS = 5_000;
+/** A lock older than this is stale even if its pid was reused by another process. */
+const CONNECTOR_LOCK_STALE_MS = 24 * 60 * 60_000;
+
+/**
+ * Advisory startup guard enforcing one connector process per binding root.
+ * Two processes sharing the binding-state files would race the write-ahead
+ * journal's read-modify-write and weaken its exactly-once barrier, so the
+ * second process refuses to start. A lock left behind by a crashed process is
+ * taken over once its pid is gone; the staleness window guards against pid
+ * reuse. The lock file contains only a pid and a timestamp.
+ */
+export async function acquireConnectorLock(lockPath: string): Promise<() => Promise<void>> {
+  const token = `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(lockPath, "wx");
+    } catch (error) {
+      if (errnoCode(error) !== "EEXIST") throw error;
+      const owner = await readConnectorLockOwner(lockPath);
+      const fresh = owner !== undefined
+        && pidAlive(owner.pid)
+        && Number.isFinite(Date.parse(owner.acquiredAt))
+        && Date.now() - Date.parse(owner.acquiredAt) < CONNECTOR_LOCK_STALE_MS;
+      if (fresh) {
+        throw new Error(
+          `Another GatherThread ZCode connector process (pid ${owner.pid}) is already bound to this project workspace; stop it before starting a new one`,
+        );
+      }
+      if (attempt >= 1) {
+        throw new Error(
+          `The ZCode connector lock at ${lockPath} could not be acquired after clearing a stale lock; another process may be taking it over`,
+        );
+      }
+      await rm(lockPath, { force: true });
+      continue;
+    }
+    await handle.write(token, 0);
+    await handle.close();
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      // Only remove the lock this process wrote: a second process may have
+      // taken the file over between this process's open and its write.
+      const owner = await readConnectorLockOwner(lockPath).catch(() => undefined);
+      if (owner?.pid !== process.pid) return;
+      await rm(lockPath, { force: true });
+    };
+  }
+  throw new Error(`The ZCode connector lock at ${lockPath} could not be acquired`);
+}
+
+interface ConnectorLockOwner {
+  pid: number;
+  acquiredAt: string;
+}
+
+async function readConnectorLockOwner(lockPath: string): Promise<ConnectorLockOwner | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(lockPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.pid !== "number" || typeof record.acquiredAt !== "string") return undefined;
+    return { pid: record.pid, acquiredAt: record.acquiredAt };
+  } catch {
+    return undefined;
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but is not observable by this user.
+    return errnoCode(error) === "EPERM";
+  }
+}
+
+function errnoCode(error: unknown): string | undefined {
+  return error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : undefined;
+}
+
+/**
+ * While one session's cycle holds the serial main loop for a whole native
+ * turn (up to the execution cap), the managed sessions stop receiving their
+ * normal per-cycle heartbeats and the server marks their runtimes offline
+ * after thirty seconds. This keeper heartbeats every managed session on the
+ * usual ten-second cadence for the duration of one cycle. Failures are
+ * fail-soft: the next tick and the main loop both retry.
+ */
+export function startCycleHeartbeatKeeper(input: {
+  managed: Map<string, ManagedSession>;
+  intervalMs?: number;
+}): () => void {
+  const intervalMs = input.intervalMs ?? HEARTBEAT_INTERVAL_MS;
+  const timer = setInterval(() => {
+    for (const current of input.managed.values()) {
+      if (Date.now() - current.lastHeartbeatAt < intervalMs) continue;
+      current.lastHeartbeatAt = Date.now();
+      void current.bridge.heartbeat().catch(() => undefined);
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
+/**
+ * Runs the shared permission reconciliation on an interval while one managed
+ * cycle executes a native turn. The reconciler stays the single authority:
+ * ineligible sessions leave `managed` and their execution bindings are
+ * deactivated, which aborts the in-flight headless child and refuses later
+ * publication. A revoked project surfaces here as a failed refresh and on the
+ * main loop's next refresh, which is where the connector exits with its
+ * actionable error. Overlapping refreshes are folded into one in-flight call.
+ */
+export function startExecutionPermissionWatcher(input: {
+  loadSessions: () => Promise<SessionSummary[]>;
+  actorUserId: string;
+  managed: Map<string, ManagedSession>;
+  harness: Pick<ProjectHarnessAdapter, "deactivateExecutionBindings">;
+  signal: AbortSignal;
+  intervalMs?: number;
+}): () => void {
+  let stopped = false;
+  let inFlight = false;
+  const tick = (): void => {
+    if (stopped) return;
+    if (input.signal.aborted) {
+      stop();
+      return;
+    }
+    if (inFlight) return;
+    inFlight = true;
+    void refreshProjectSessionPermissions({
+      loadSessions: input.loadSessions,
+      actorUserId: input.actorUserId,
+      managed: input.managed,
+      harness: input.harness,
+    }).then(
+      (result) => {
+        // A session-level loss reconciles inside the shared refresh. A
+        // project-level revocation (403/404) does not: the reconciler is
+        // never reached, and the main loop is blocked inside the very cycle
+        // this watcher guards — so abort every in-flight child now instead
+        // of letting the turn run to its cap against a revoked project. The
+        // main loop still owns the authoritative exit on its next refresh.
+        if (result.status === "project_inaccessible") {
+          void input.harness.deactivateExecutionBindings?.().catch(() => undefined);
+        }
+        return undefined;
+      },
+      () => undefined,
+    ).finally(() => {
+      inFlight = false;
+    });
+  };
+  const timer = setInterval(tick, input.intervalMs ?? EXECUTION_PERMISSION_WATCH_INTERVAL_MS);
+  timer.unref?.();
+  const stop = (): void => {
+    stopped = true;
+    clearInterval(timer);
+  };
+  return stop;
+}
+
+export function parseZcodeConnectArgs(argv: readonly string[]): ZcodeConnectOptions | "help" {
+  const options: ZcodeConnectOptions = {
+    apiUrl: "",
+    workspacePath: process.cwd(),
+    provider: "zcode",
+    model: "default",
+    createWorkspace: false,
+    shareToolEvents: false,
+    toolAllowlist: DEFAULT_ZCODE_TOOL_ALLOWLIST,
+    preflightOnly: false,
+    executionTimeoutMs: 900_000,
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    const value = (): string => {
+      const next = argv[index + 1];
+      if (next === undefined) throw new Error(`${argument} requires a value`);
+      index += 1;
+      return next;
+    };
+    if (argument === "--help" || argument === "-h") return "help";
+    else if (argument === "--url") options.apiUrl = normalizeApiUrl(value());
+    else if (argument === "--workspace") options.workspacePath = value();
+    else if (argument === "--project") options.projectId = value();
+    else if (argument === "--create-workspace") options.createWorkspace = true;
+    else if (argument === "--provider") options.provider = validateLabel(value(), "--provider");
+    else if (argument === "--model") options.model = validateLabel(value(), "--model");
+    else if (argument === "--zcode-command") options.zcodeCommand = value();
+    else if (argument === "--share-tool-events") options.shareToolEvents = true;
+    else if (argument === "--share-tool-allowlist") {
+      options.toolAllowlist = parseToolAllowlist(value());
+    } else if (argument === "--execution-timeout-ms") {
+      const parsedValue = Number(value());
+      if (!Number.isSafeInteger(parsedValue) || parsedValue < 1_000 || parsedValue > 3_600_000) {
+        throw new Error("--execution-timeout-ms must be an integer between 1000 and 3600000");
+      }
+      options.executionTimeoutMs = parsedValue;
+    } else if (argument === "--preflight-only") options.preflightOnly = true;
+    else throw new Error(`Unknown option: ${argument ?? "(empty)"}. Pass --help for usage.`);
+  }
+  if (!options.apiUrl) throw new Error("--url is required. Pass --help for usage.");
+  return options;
+}
+
+function parseToolAllowlist(value: string): readonly string[] {
+  const names = [...new Set(
+    value
+      .split(",")
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.length > 0),
+  )];
+  if (names.length === 0) {
+    throw new Error("--share-tool-allowlist must contain at least one comma-separated tool name");
+  }
+  for (const name of names) {
+    if (name.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(name)) {
+      throw new Error(`Invalid tool name in --share-tool-allowlist: ${JSON.stringify(name.slice(0, 20))}`);
+    }
+  }
+  return names;
+}
+
+function validateLabel(value: string, flag: string): string {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > 80 || /[\u0000-\u001f\u007f-\u009f]/u.test(trimmed)) {
+    throw new Error(`${flag} must be 1-80 printable characters`);
+  }
+  return trimmed;
+}
+
+function normalizeApiUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("--url must be an absolute GatherThread HTTP(S) URL");
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    throw new Error("--url must use HTTPS or loopback HTTP");
+  }
+  if (url.protocol === "http:" && !["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)) {
+    throw new Error("--url must use HTTPS except for a loopback host");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("--url cannot contain credentials, a query, or a fragment");
+  }
+  const pathname = url.pathname.replace(/\/+$/, "");
+  if (pathname === "") url.pathname = "/v1";
+  else if (pathname !== "/v1") throw new Error("--url path must be empty or exactly /v1");
+  return url.toString().replace(/\/$/, "");
+}
+
+async function selectProject(
+  projects: readonly ProjectSummary[],
+  requestedId: string | undefined,
+): Promise<ProjectSummary> {
+  const writable = projects.filter((project) => project.role !== "viewer");
+  if (requestedId !== undefined) {
+    const selected = projects.find((project) => project.id === requestedId);
+    if (!selected) throw new Error("The requested GatherThread project was not found or is not active");
+    if (selected.role === "viewer") throw new Error("A viewer cannot register a ZCode execution runtime");
+    return selected;
+  }
+  if (writable.length === 0) throw new Error("No active writable GatherThread project is available for this device");
+  if (writable.length === 1) return writable[0] as ProjectSummary;
+  throw new Error(
+    `Multiple writable projects are available; pass --project <id> with one of: ${writable.map((project) => project.id).join(", ")}`,
+  );
+}
+
+async function readSecret(label: string): Promise<string> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY || !process.stdin.setRawMode) {
+    throw new Error("Set GATHERTHREAD_TOKEN when no interactive terminal is available");
+  }
+  process.stdout.write(label);
+  process.stdin.setRawMode(true);
+  let secret = "";
+  try {
+    for await (const chunk of process.stdin) {
+      const characters = String(chunk);
+      for (const character of characters) {
+        if (character === "\r" || character === "\n") {
+          process.stdout.write("\n");
+          return secret;
+        }
+        if (character === "\u0003") {
+          throw new Error("Device access token entry cancelled");
+        }
+        if (character === "\u007f" || character === "\b") {
+          secret = secret.slice(0, -1);
+          continue;
+        }
+        secret += character;
+        if (secret.length > 1024) {
+          throw new Error("The entered device access token exceeds 1024 characters");
+        }
+      }
+    }
+  } finally {
+    // Covers every exit: newline, cancel, overflow, and a stdin read error
+    // rejecting the iterator — the terminal must never stay in raw mode.
+    try {
+      process.stdin.setRawMode(false);
+    } catch {
+      // The stream closed while waiting for the newline; nothing to restore.
+    }
+  }
+  process.stdout.write("\n");
+  return secret;
+}
+
+function formatConnectedSessionOutput(_projectName: string, session: SessionSummary): string {
+  return `Connected session: ${terminalQuoted(session.name ?? session.id)} [${session.mode}]\n`;
+}
+
+class ZcodeRetryReporter {
+  readonly #token: string;
+  readonly #failures = new Map<string, { message: string; lastReportedAt: number }>();
+
+  constructor(options: { token: string }) {
+    this.#token = options.token;
+  }
+
+  retrying(scope: string, error: unknown): void {
+    const message = formatZcodeConnectFailure(error, this.#token);
+    const now = Date.now();
+    const previous = this.#failures.get(scope);
+    if (!previous || previous.message !== message || now - previous.lastReportedAt >= 60_000) {
+      this.#write(`gatherthread-zcode (${scope}): ${message}; retrying\n`);
+      this.#failures.set(scope, { message, lastReportedAt: now });
+    }
+  }
+
+  recovered(scope: string): void {
+    if (!this.#failures.delete(scope)) return;
+    this.#write(`gatherthread-zcode (${scope}): recovered\n`);
+  }
+
+  #write(message: string): void {
+    process.stderr.write(message);
+  }
+}
+
+function formatZcodeConnectFailure(error: unknown, token: string): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const redacted = redactText(token ? raw.split(token).join("[REDACTED]") : raw);
+  return redacted.replace(/[\r\n]+/g, " ").slice(0, 400) || "unknown failure";
+}

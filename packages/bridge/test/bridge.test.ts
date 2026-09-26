@@ -8,6 +8,7 @@ import {
   CollaborationHttpError,
   HarnessExecutionTerminatedError,
   LocalBridge,
+  MalformedAgentRequestError,
   MemoryCursorStore,
   type AppendEventInput,
   type AgentProgressInput,
@@ -410,6 +411,73 @@ test("an atomically completed local turn is projected without retrying its agent
   assert.equal((await cursorStore.load()).server["session-1"], 1);
 });
 
+test("a terminal claim conflict cannot wedge a session whose executor cannot project", async () => {
+  const conflicted = canonical("session-1", 1, {
+    type: "agent_request",
+    idempotencyKey: "conflicted-request",
+    payload: { text: "resolved on another device" },
+  });
+  const next = canonical("session-1", 2, {
+    type: "agent_request",
+    idempotencyKey: "next-request",
+    payload: { text: "fresh work" },
+  });
+  const api = new FakeApi();
+  api.history.push(conflicted, next);
+  api.claimAgentRequest = async (_sessionId, requestId, runtimeId) => {
+    if (requestId === conflicted.id) {
+      throw new CollaborationHttpError(409, "already completed", "agent_request_already_completed");
+    }
+    return { claimed: true, status: "claimed" as const, requestId, runtimeId };
+  };
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  const result = await bridge.processPendingAgentRequests({
+    async execute() {
+      return { events: [{
+        kind: "assistant",
+        localEventId: "answer-2",
+        harness: "codex",
+        captureFidelity: "harness_transcript",
+        content: "done",
+      }] };
+    },
+  });
+  assert.equal(result.claimed, 1, "the request behind the terminal conflict must still be claimed");
+  assert.equal(
+    (await cursorStore.load()).server["session-1"],
+    2,
+    "the cursor must advance past the terminal conflict",
+  );
+
+  // No hot retry: the next poll re-examines nothing and never re-claims the
+  // conflicted request.
+  const followUp = await bridge.processPendingAgentRequests({
+    async execute() { throw new Error("must not run again"); },
+  });
+  assert.equal(followUp.examined, 0);
+  assert.equal(followUp.claimed, 0);
+
+  // Only the terminal conflict codes may be skipped this way; every other 409
+  // keeps propagating so the request stays pending.
+  const busyApi = new FakeApi();
+  busyApi.history.push(conflicted);
+  busyApi.claimAgentRequest = async () => {
+    throw new CollaborationHttpError(409, "runtime busy", "runtime_busy");
+  };
+  const busyStore = new MemoryCursorStore();
+  const busyBridge = new LocalBridge({ api: busyApi, cursorStore: busyStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await busyBridge.connect();
+  await assert.rejects(
+    busyBridge.processPendingAgentRequests({
+      async execute() { throw new Error("must not execute"); },
+    }),
+    (error: unknown) => error instanceof CollaborationHttpError && error.code === "runtime_busy",
+  );
+  assert.equal((await busyStore.load()).server["session-1"] ?? 0, 0);
+});
+
 test("request polling projects remote requests and advances without claiming them", async () => {
   const api = new FakeApi();
   let claims = 0;
@@ -466,6 +534,56 @@ test("executor eligibility can skip a locally committed request without blocking
   });
   assert.equal(claims, 0);
   assert.deepEqual(projected, [1]);
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
+});
+
+test("a malformed execution profile is skipped with the cursor advancing, recoverable failures are retried", async () => {
+  const api = new FakeApi();
+  api.history.push(
+    canonical("session-1", 1, {
+      type: "agent_request",
+      idempotencyKey: "malformed-profile",
+      payload: { text: "poison", execution_profile: { harness: "bad\nharness" } },
+    }),
+    canonical("session-1", 2, {
+      type: "agent_request",
+      idempotencyKey: "recoverable-failure",
+      payload: { text: "wait for the local turn to resolve" },
+    }),
+  );
+  const cursorStore = new MemoryCursorStore();
+  const bridge = new LocalBridge({ api, cursorStore, runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  let attempts = 0;
+  // The bridge's committed contract: the malformed profile is skipped and the
+  // cursor advances past it, then the next request's recoverable failure (an
+  // unknown local-turn commit outcome) propagates and rejects the cycle so
+  // that request stays pending for a later retry.
+  await assert.rejects(
+    bridge.processPendingAgentRequests({
+      async execute() { throw new Error("must not be reached"); },
+      async shouldExecute(request) {
+        attempts += 1;
+        const payload = request.payload as { text?: string };
+        if (payload.text === "poison") {
+          throw new MalformedAgentRequestError("Agent request contains an invalid target harness");
+        }
+        throw new Error("A local turn commit has an unknown server outcome");
+      },
+    }),
+    /unknown server outcome/,
+  );
+  assert.equal(attempts, 2, "the malformed request was skipped and the next one examined before the failure propagated");
+  // The malformed request is permanently behind the cursor; the recoverable
+  // one stays pending at sequence 2 for the next cycle to retry.
+  assert.equal((await cursorStore.load()).server["session-1"], 1);
+  await assert.rejects(
+    bridge.processPendingAgentRequests({
+      async execute() { throw new Error("must not be reached"); },
+      shouldExecute: async () => { throw new Error("A local turn commit has an unknown server outcome"); },
+    }),
+    /unknown server outcome/,
+  );
   assert.equal((await cursorStore.load()).server["session-1"], 1);
 });
 
