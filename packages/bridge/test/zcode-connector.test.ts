@@ -19,6 +19,7 @@ import {
   renderZcodePrompt,
   runZcodeProtocolTurn,
   saveZcodeState,
+  loadZcodeState,
   withoutGatherThreadCredentialEnvironment,
   ZcodeProjectHarness,
   ZcodeSessionExecutor,
@@ -29,11 +30,14 @@ import {
   type CompleteAgentRequestInput,
   type RegisteredRuntime,
   type RuntimeRegistration,
+  type SessionSummary,
   type ZcodeCliProbe,
   type ZcodeConnectorState,
   type ZcodeTurnOutcome,
   type ZcodeTurnRunnerOptions,
 } from "../src/index.js";
+import { startExecutionPermissionWatcher } from "../src/zcode-connect.js";
+import type { ManagedSession } from "../src/codex-connect.js";
 
 const usableProbe: ZcodeCliProbe = {
   version: "test-cli 1.0.0",
@@ -1128,4 +1132,305 @@ process.stdin.on("data", (chunk) => {
     assert.equal(outcome.finalResponse, "fresh final answer", "the stale replayed response must not be published");
     assert.deepEqual(surfaced, ["fresh commentary"]);
   });
+});
+
+test("ZCode CLI probes run on a credential-free child environment", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-probe-env-"));
+  const fixturePath = path.join(root, "probe-fixture.cjs");
+  await writeFile(
+    fixturePath,
+    "process.stdout.write(JSON.stringify(Object.keys(process.env).filter((key) => /^gatherthread_/i.test(key))));\n",
+  );
+  const previousToken = process.env.GATHERTHREAD_TOKEN;
+  process.env.GATHERTHREAD_TOKEN = "secret-device-token-for-probe-test";
+  try {
+    // The default probe runner must strip the credential environment exactly
+    // like the app-server execution child does.
+    const probe = await probeZcodeCli({ command: process.execPath, baseArgs: [fixturePath], source: "test fixture" });
+    assert.deepEqual(JSON.parse(probe.version) as string[], []);
+  } finally {
+    if (previousToken === undefined) delete process.env.GATHERTHREAD_TOKEN;
+    else process.env.GATHERTHREAD_TOKEN = previousToken;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a malformed execution journal refuses to load instead of enabling a duplicate native turn", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-journal-corrupt-"));
+  const statePath = path.join(root, "binding-session.json");
+  await writeFile(statePath, JSON.stringify({
+    version: 1,
+    sessions: {
+      "session-1": {
+        projectedThroughSequence: 2,
+        journal: { requestId: "req-1", requestSequence: 5, status: "corrupt", startedAt: "2026-09-20T00:00:00.000Z" },
+      },
+    },
+  }), "utf8");
+
+  await assert.rejects(loadZcodeState(statePath), /malformed execution journal/);
+
+  // The executor loads through the same barrier: the retry of the affected
+  // request must be refused before any native turn can run again.
+  const captured: RecordedTurn[] = [];
+  await assert.rejects(
+    fakeExecutor(statePath, { capture: captured }).execute(executionInput()),
+    /malformed execution journal/,
+  );
+  assert.equal(captured.length, 0, "the native turn must not run on a corrupt journal");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("the execution permission watcher reconciles eligibility mid-turn and stops cleanly", async () => {
+  const baseSessions: SessionSummary[] = [
+    { id: "session-1", mode: "multi", role: "participant", state: "active" },
+    { id: "session-2", mode: "multi", role: "participant", state: "active" },
+  ];
+  let calls = 0;
+  const deactivations: { retainSessionIds?: readonly string[]; preserveSessionIds?: readonly string[] }[] = [];
+  const managed = new Map<string, ManagedSession>();
+  const fakeManaged = { deactivateLocalPublishing: async () => undefined } as unknown as ManagedSession;
+  managed.set("session-1", fakeManaged);
+  managed.set("session-2", fakeManaged);
+  const stop = startExecutionPermissionWatcher({
+    loadSessions: async () => {
+      calls += 1;
+      return calls >= 3
+        ? baseSessions.map((session) => session.id === "session-1" ? { ...session, state: "archived" as const } : session)
+        : baseSessions;
+    },
+    actorUserId: "user-1",
+    managed,
+    harness: { deactivateExecutionBindings: async (input) => { deactivations.push(input ?? {}); } },
+    signal: new AbortController().signal,
+    intervalMs: 10,
+  });
+  const deadline = Date.now() + 2_000;
+  while (managed.has("session-1") && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(!managed.has("session-1"), "the ineligible session must leave managed during the watch");
+  assert.ok(deactivations.length >= 1, "execution bindings must be reconciled during the watch");
+  const last = deactivations.at(-1) ?? {};
+  assert.ok(!last.retainSessionIds?.includes("session-1"));
+  assert.ok(last.retainSessionIds?.includes("session-2"));
+  stop();
+  const callsAtStop = calls;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(calls, callsAtStop, "the watcher must stop ticking after stop()");
+
+  const abort = new AbortController();
+  let abortedCalls = 0;
+  const stopAborted = startExecutionPermissionWatcher({
+    loadSessions: async () => {
+      abortedCalls += 1;
+      return baseSessions;
+    },
+    actorUserId: "user-1",
+    managed,
+    harness: { deactivateExecutionBindings: async () => undefined },
+    signal: abort.signal,
+    intervalMs: 10,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  abort.abort();
+  const callsAtAbort = abortedCalls;
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(abortedCalls, callsAtAbort, "an aborted shutdown signal must stop the watcher by itself");
+  stopAborted();
+});
+
+test("revoking a session through the harness aborts its in-flight ZCode turn", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-midturn-revoke-"));
+  const statePath = path.join(root, "binding-session.json");
+  let releaseTurn: (error: Error) => void = () => undefined;
+  const turnGate = new Promise<never>((_resolve, reject) => {
+    releaseTurn = (error) => reject(error);
+  });
+  const harness = new ZcodeProjectHarness({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    workspacePath: root,
+    provider: "zcode",
+    model: "default",
+    turnRunner: async (turnOptions) => {
+      turnOptions.signal?.addEventListener("abort", () => {
+        releaseTurn(turnOptions.signal?.reason instanceof Error
+          ? turnOptions.signal.reason
+          : new Error("ZCode execution aborted"));
+      }, { once: true });
+      await turnGate;
+      return { nativeSessionId: "sess_revoked", finalResponse: "unreachable" };
+    },
+  });
+  const binding = harness.createSessionBinding({
+    session: { id: "session-1", mode: "multi" } as SessionSummary,
+    sessionKey: "key-1",
+    statePath,
+  });
+  const execution = binding.executor.execute(executionInput()).then(
+    () => {
+      throw new Error("the revoked turn must not complete successfully");
+    },
+    (error: unknown) => error,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // This is exactly what the mid-turn permission watcher triggers through the
+  // shared reconciler once the session loses write eligibility.
+  await harness.deactivateExecutionBindings();
+  const failure = await execution;
+  assert.ok(failure instanceof Error);
+  assert.match(failure.message, /deactivated/);
+  // The interrupted turn left its durable `running` journal: a later retry
+  // refuses instead of re-running the native turn.
+  const state = JSON.parse(await readFile(statePath, "utf8")) as ZcodeConnectorState;
+  assert.equal(state.sessions["session-1"]?.journal?.status, "running");
+  await harness.close();
+  await rm(root, { recursive: true, force: true });
+});
+
+test("ZCode execution renders the frozen history context instead of raw history", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-context-"));
+  const statePath = path.join(root, "binding-session.json");
+  const captured: RecordedTurn[] = [];
+  const executor = fakeExecutor(statePath, { capture: captured });
+  await executor.execute({
+    request: canonicalEvent({ sequence: 10, type: "agent_request", payload: { content: "answer with context" } }),
+    canonicalHistory: [
+      canonicalEvent({ sequence: 2, type: "human_chat", payload: { content: "raw folded source" } }),
+      canonicalEvent({ sequence: 4, type: "human_chat", payload: { content: "raw kept original" } }),
+      { ...canonicalEvent({ sequence: 6, type: "agent_response", payload: { content: "own prior answer" } }), runtime: ownProvenance() },
+      canonicalEvent({ sequence: 10, type: "agent_request", payload: { content: "answer with context" } }),
+    ],
+    historyContext: {
+      view: "summary",
+      through_sequence: 9,
+      items: [
+        { kind: "original", event_id: "event-4", sequence: 4, actor_user_id: "user-1", content: "raw kept original" },
+        {
+          kind: "summary",
+          event_id: "summary-1",
+          sequence: 8,
+          actor_user_id: "user-2",
+          content: "folded earlier events",
+          source_event_ids: ["event-2", "event-6"],
+        },
+      ],
+    },
+    runtime: runtimeValue(),
+  });
+  const prompt = captured[0]?.prompt ?? "";
+  assert.ok(prompt.includes("[seq 4] human_chat"), "original items must resolve to canonical entries");
+  assert.ok(prompt.includes("folded earlier events"), "summary items must be rendered");
+  assert.ok(prompt.includes("GatherThread derived summary"), "summary rendering must stay explicitly lossy");
+  assert.ok(!prompt.includes("raw folded source"), "folded source text must be replaced by the summary");
+  assert.ok(!prompt.includes("own prior answer"), "the native session must not be fed its own earlier output");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("a history context frozen at the wrong boundary refuses execution", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-context-stale-"));
+  const executor = fakeExecutor(path.join(root, "binding-session.json"));
+  await assert.rejects(
+    executor.execute({
+      ...executionInput(),
+      historyContext: { view: "summary", through_sequence: 3, items: [] },
+    }),
+    /not frozen at the current request boundary/,
+  );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("a summary-generation request renders no derived replacement of its own input", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-context-gen-"));
+  const statePath = path.join(root, "binding-session.json");
+  const captured: RecordedTurn[] = [];
+  const executor = fakeExecutor(statePath, { capture: captured });
+  await executor.execute({
+    request: canonicalEvent({
+      sequence: 10,
+      type: "agent_request",
+      payload: { history_summary: { request: "fold the session" } },
+    }),
+    canonicalHistory: [
+      canonicalEvent({ sequence: 4, type: "human_chat", payload: { content: "raw history body" } }),
+      canonicalEvent({ sequence: 10, type: "agent_request", payload: { history_summary: { request: "fold the session" } } }),
+    ],
+    historyContext: { view: "summary", through_sequence: 9, items: [] },
+    runtime: runtimeValue(),
+  });
+  const prompt = captured[0]?.prompt ?? "";
+  assert.ok(prompt.includes("(empty)"), "the transcript section must be empty for summary generation");
+  assert.ok(!prompt.includes("raw history body"), "raw history must not leak into a summary-generation turn");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("a silent tool-only turn renews the claim lease with bounded lifecycle progress", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-lease-"));
+  const statePath = path.join(root, "binding-session.json");
+  const progress: { id: string; content: string }[] = [];
+  const executor = new ZcodeSessionExecutor({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    sessionId: "session-1",
+    workspacePath: ".",
+    statePath,
+    leaseRenewalIntervalMs: 20,
+    maxLeaseRenewals: 2,
+  }, async (turnOptions) => {
+    await turnOptions.onTurnEvent(toolCallEvent("t1", "Read", { file_path: "a.ts" }));
+    await new Promise((resolve) => setTimeout(resolve, 70));
+    return { nativeSessionId: "sess_lease_1", finalResponse: "slow answer" };
+  });
+  const result = await executor.execute({
+    ...executionInput(),
+    publishProgress: async (update) => {
+      progress.push({ id: update.id, content: update.content });
+    },
+  });
+  assert.equal(result.events.at(-1)?.content, "slow answer");
+  assert.ok(progress.length >= 1, "a silent turn must publish lease-renewal progress");
+  assert.ok(progress.length <= 2, "renewal progress must stay within its per-turn budget");
+  for (const update of progress) {
+    assert.match(update.id, /^zcode-lease-/);
+    assert.match(update.content, /still running/);
+  }
+  // The renewer stops with the turn: no further progress ever arrives.
+  const count = progress.length;
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(progress.length, count);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("flowing assistant commentary suppresses synthetic lease renewals", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-lease-quiet-"));
+  const statePath = path.join(root, "binding-session.json");
+  const progress: { id: string; content: string }[] = [];
+  const executor = new ZcodeSessionExecutor({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    sessionId: "session-1",
+    workspacePath: ".",
+    statePath,
+    leaseRenewalIntervalMs: 40,
+    maxLeaseRenewals: 5,
+  }, async (turnOptions) => {
+    for (let index = 0; index < 6; index += 1) {
+      await turnOptions.onTurnEvent(assistantText(`msg-${index}`, "progress commentary"));
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return { nativeSessionId: "sess_lease_2", finalResponse: "done" };
+  });
+  await executor.execute({
+    ...executionInput(),
+    publishProgress: async (update) => {
+      progress.push({ id: update.id, content: update.content });
+    },
+  });
+  assert.ok(progress.length >= 6, "all commentary updates must be published");
+  assert.ok(
+    progress.every((update) => !update.id.startsWith("zcode-lease-")),
+    "commentary renews the lease; no synthetic renewal may be needed",
+  );
+  await rm(root, { recursive: true, force: true });
 });

@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import { access, stat } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { withoutGatherThreadCredentialEnvironment } from "./zcode-protocol.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -54,6 +55,9 @@ const defaultProbeRunner: ProbeRunner = (spec, args) => new Promise((resolve, re
     timeout: PROBE_TIMEOUT_MS,
     maxBuffer: PROBE_MAX_OUTPUT_BYTES,
     windowsHide: true,
+    // Probe children are model-adjacent processes too: they must never see
+    // GatherThread credentials, exactly like the app-server execution child.
+    env: withoutGatherThreadCredentialEnvironment(process.env),
   }).then(
     ({ stdout }) => resolve(stdout),
     (error: NodeJS.ErrnoException & { stdout?: string; killed?: boolean }) => {

@@ -8,6 +8,7 @@ import type { ManagedSession } from "./codex-connect.js";
 import { initializeProjectSession, runManagedSessionCycle, waitForConnectorPoll } from "./codex-connect.js";
 import { ensureProjectWorkspace } from "./project-workspace.js";
 import { isProjectAccessRevoked, refreshProjectSessionPermissions } from "./project-session-permissions.js";
+import type { ProjectHarnessAdapter } from "./project-harness.js";
 import type { ProjectSummary, SessionSummary } from "./types.js";
 import { validateZcodeWorkspace, ZcodeProjectHarness } from "./zcode-harness.js";
 import { assertUsableZcodeCli, probeZcodeCli, resolveZcodeCommand } from "./zcode-compat.js";
@@ -180,8 +181,24 @@ export async function runZcodeConnectCli(
             await current.bridge.heartbeat();
             current.lastHeartbeatAt = Date.now();
           }
-          await runManagedSessionCycle(current, api);
-          retryReporter.recovered(session.id);
+          // A cycle can hold this loop for a whole native turn (up to the
+          // execution cap). While it runs, an independent watcher keeps
+          // reconciling write eligibility so removal, role downgrade, or
+          // project revocation aborts the in-flight headless child instead of
+          // waiting for the turn to finish on its own.
+          const stopWatcher = startExecutionPermissionWatcher({
+            loadSessions: () => api.listProjectSessions(selected.id),
+            actorUserId: actor.id,
+            managed,
+            harness,
+            signal: shutdown.signal,
+          });
+          try {
+            await runManagedSessionCycle(current, api);
+            retryReporter.recovered(session.id);
+          } finally {
+            stopWatcher();
+          }
         } catch (error) {
           if (!shutdown.signal.aborted) retryReporter.retrying(session.id, error);
         }
@@ -194,6 +211,56 @@ export async function runZcodeConnectCli(
     }
     await harness.close();
   }
+}
+
+const EXECUTION_PERMISSION_WATCH_INTERVAL_MS = 30_000;
+
+/**
+ * Runs the shared permission reconciliation on an interval while one managed
+ * cycle executes a native turn. The reconciler stays the single authority:
+ * ineligible sessions leave `managed` and their execution bindings are
+ * deactivated, which aborts the in-flight headless child and refuses later
+ * publication. A revoked project surfaces here as a failed refresh and on the
+ * main loop's next refresh, which is where the connector exits with its
+ * actionable error. Overlapping refreshes are folded into one in-flight call.
+ */
+export function startExecutionPermissionWatcher(input: {
+  loadSessions: () => Promise<SessionSummary[]>;
+  actorUserId: string;
+  managed: Map<string, ManagedSession>;
+  harness: Pick<ProjectHarnessAdapter, "deactivateExecutionBindings">;
+  signal: AbortSignal;
+  intervalMs?: number;
+}): () => void {
+  let stopped = false;
+  let inFlight = false;
+  const tick = (): void => {
+    if (stopped) return;
+    if (input.signal.aborted) {
+      stop();
+      return;
+    }
+    if (inFlight) return;
+    inFlight = true;
+    void refreshProjectSessionPermissions({
+      loadSessions: input.loadSessions,
+      actorUserId: input.actorUserId,
+      managed: input.managed,
+      harness: input.harness,
+    }).then(
+      () => undefined,
+      () => undefined,
+    ).finally(() => {
+      inFlight = false;
+    });
+  };
+  const timer = setInterval(tick, input.intervalMs ?? EXECUTION_PERMISSION_WATCH_INTERVAL_MS);
+  timer.unref?.();
+  const stop = (): void => {
+    stopped = true;
+    clearInterval(timer);
+  };
+  return stop;
 }
 
 export function parseZcodeConnectArgs(argv: readonly string[]): ZcodeConnectOptions | "help" {

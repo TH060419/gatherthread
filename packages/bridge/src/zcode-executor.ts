@@ -7,6 +7,7 @@ import type {
   HarnessExecutionInput,
   HarnessExecutionResult,
   HarnessExecutor,
+  HistoryContext,
   RegisteredRuntime,
 } from "./types.js";
 import { HarnessExecutionTerminatedError, MalformedAgentRequestError } from "./bridge.js";
@@ -68,6 +69,14 @@ export const DEFAULT_ZCODE_TOOL_ALLOWLIST: readonly string[] = ["Read", "Glob", 
 const DEFAULT_TIMEOUT_MS = 900_000;
 const DEFAULT_MAX_OUTPUT_BYTES = 33_554_432;
 const MAX_PROMPT_BYTES = 8 * 1024 * 1024;
+/**
+ * The server claim lease renews on accepted canonical progress and expires
+ * after five minutes, while the default execution cap is fifteen minutes. A
+ * silent tool-only turn must therefore publish bounded lifecycle progress
+ * during execution or its completion would be refused as a stale claim.
+ */
+const DEFAULT_LEASE_RENEWAL_INTERVAL_MS = 120_000;
+const DEFAULT_MAX_LEASE_RENEWALS = 8;
 
 export async function loadZcodeState(statePath: string): Promise<ZcodeConnectorState> {
   let parsed: unknown;
@@ -95,11 +104,27 @@ export async function loadZcodeState(statePath: string): Promise<ZcodeConnectorS
       projectedThroughSequence: value.projectedThroughSequence as number,
       ...(typeof value.localSessionId === "string" && value.localSessionId ? { localSessionId: value.localSessionId } : {}),
       ...(typeof value.observedModel === "string" && value.observedModel ? { observedModel: value.observedModel } : {}),
-      ...(isZcodeExecutionJournal(value.journal) ? { journal: value.journal } : {}),
+      ...zcodeJournalField(value.journal),
     };
     sessions[sessionId] = session;
   }
   return { version: STATE_VERSION, sessions };
+}
+
+/**
+ * The journal is the exactly-once barrier for native execution: dropping a
+ * present-but-malformed entry would make the next poll of the same request
+ * re-run the native turn and its tool side effects. An unreadable journal is
+ * therefore a safe refusal, never a silent omission.
+ */
+function zcodeJournalField(value: unknown): { journal: ZcodeExecutionJournal } | {} {
+  if (value === undefined) return {};
+  if (!isZcodeExecutionJournal(value)) {
+    throw new Error(
+      "ZCode connector state contains a malformed execution journal; repair or remove the state file explicitly before reconnecting",
+    );
+  }
+  return { journal: value };
 }
 
 function isZcodeExecutionJournal(value: unknown): value is ZcodeExecutionJournal {
@@ -144,6 +169,10 @@ export interface ZcodeExecutorOptions {
   toolAllowlist?: readonly string[];
   timeoutMs?: number;
   maxOutputBytes?: number;
+  /** Interval for synthetic lease-renewal progress on silent turns. */
+  leaseRenewalIntervalMs?: number;
+  /** Upper bound of synthetic lease-renewal progress events per turn. */
+  maxLeaseRenewals?: number;
   signal?: AbortSignal;
   /** Injectable turn runner; defaults to the real protocol turn runner. */
   turnRunner?: ZcodeTurnRunner;
@@ -258,10 +287,15 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
     // Own progress/tool/response events and the current request are excluded:
     // the native session already contains the connector's earlier output, and
     // the request itself is rendered as the authoritative final instruction.
-    const historyDelta = input.canonicalHistory.filter((event) =>
-      event.sequence > sessionState.projectedThroughSequence
-      && event.sequence < input.request.sequence
-      && !isOwnRuntimeEvent(event, input.runtime.id));
+    // When the bridge froze a derived context for this request, that view
+    // replaces the raw transcript instead of being layered on top of it.
+    const historyDelta = zcodeHistoryDelta({
+      canonicalHistory: input.canonicalHistory,
+      ...(input.historyContext === undefined ? {} : { historyContext: input.historyContext }),
+      request: input.request,
+      projectedThroughSequence: sessionState.projectedThroughSequence,
+      runtimeId: input.runtime.id,
+    });
     const prompt = renderZcodePrompt({
       history: historyDelta,
       request: input.request,
@@ -276,6 +310,15 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
 
     const toolEvents: TranscriptEvent[] = [];
     this.#activeTurns += 1;
+    // Silent tool-only turns must keep the server claim lease alive through
+    // bounded lifecycle progress; assistant commentary renews it implicitly.
+    const lease = new ZcodeTurnLeaseRenewer({
+      requestId: input.request.id,
+      ...(input.publishProgress === undefined ? {} : { publishProgress: input.publishProgress }),
+      intervalMs: this.#options.leaseRenewalIntervalMs ?? DEFAULT_LEASE_RENEWAL_INTERVAL_MS,
+      maxRenewals: this.#options.maxLeaseRenewals ?? DEFAULT_MAX_LEASE_RENEWALS,
+      isAborted: () => this.#deactivated || this.#turnAbort.signal.aborted,
+    });
     // Write-ahead journal: a crash or restart while the child runs leaves a
     // durable `running` entry that refuses re-execution of the same request.
     await saveZcodeState(this.#options.statePath, {
@@ -294,6 +337,7 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
         },
       },
     });
+    lease.start();
     let outcome: ZcodeTurnOutcome;
     try {
       outcome = await this.#runTurn({
@@ -310,6 +354,7 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
             // claim lease through accepted progress.
             if (event.content?.trim() && input.publishProgress) {
               await input.publishProgress({ id: event.localEventId, content: event.content });
+              lease.markExternalProgress();
             }
             return;
           }
@@ -321,6 +366,8 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
       if (error instanceof HarnessExecutionTerminatedError) throw error;
       const message = error instanceof Error ? error.message : "unknown ZCode child failure";
       throw new HarnessExecutionTerminatedError("zcode_execution_failed", message);
+    } finally {
+      lease.stop();
     }
     this.#activeTurns -= 1;
 
@@ -441,6 +488,136 @@ function isNodeError(error: unknown): error is NodeJS.ErrnoException {
 function isOwnRuntimeEvent(event: CanonicalEvent, runtimeId: string): boolean {
   return event.runtime?.runtimeId === runtimeId
     && ["agent_progress", "agent_response", "tool_call", "tool_result"].includes(event.type);
+}
+
+/**
+ * Selects the transcript delta the headless prompt renders. Without a frozen
+ * context this is the raw canonical delta above the native cursor. With one,
+ * the server-derived view replaces raw history exactly as the bridge froze it:
+ * original items resolve to their canonical events, summary items render as
+ * explicitly lossy derived text, a summary-generation request sees no prior
+ * history at all, and entries the native session already contains stay
+ * excluded so a resumed conversation is never fed its own output twice.
+ */
+function zcodeHistoryDelta(input: {
+  canonicalHistory: readonly CanonicalEvent[];
+  historyContext?: HistoryContext;
+  request: CanonicalEvent;
+  projectedThroughSequence: number;
+  runtimeId: string;
+}): CanonicalEvent[] {
+  const belowRequest = (event: CanonicalEvent) =>
+    event.sequence > input.projectedThroughSequence
+    && event.sequence < input.request.sequence
+    && !isOwnRuntimeEvent(event, input.runtimeId);
+  const context = input.historyContext;
+  if (context === undefined) return input.canonicalHistory.filter(belowRequest);
+  if (context.through_sequence !== input.request.sequence - 1) {
+    throw new HarnessExecutionTerminatedError(
+      "zcode_context_not_frozen",
+      "Shared history context is not frozen at the current request boundary",
+    );
+  }
+  if (isRecord(input.request.payload) && "history_summary" in input.request.payload) {
+    // The bridge freezes an empty context for summary generation so the
+    // folding turn is never handed a derived replacement of its own input.
+    return [];
+  }
+  const byId = new Map(input.canonicalHistory.map((event) => [event.id, event]));
+  return context.items.map((item): CanonicalEvent => {
+    if (item.kind === "original") {
+      const original = byId.get(item.event_id);
+      if (!original) {
+        throw new HarnessExecutionTerminatedError(
+          "zcode_context_unavailable",
+          "Shared history context refers to canonical history this connector cannot read",
+        );
+      }
+      return original;
+    }
+    return {
+      id: item.event_id,
+      sessionId: input.request.sessionId,
+      sequence: item.sequence,
+      type: "agent_response",
+      actorId: item.actor_user_id,
+      timestamp: byId.get(item.event_id)?.timestamp ?? input.request.timestamp,
+      payload: {
+        content: `[GatherThread derived summary; lossy; source events: ${item.source_event_ids?.join(", ") ?? ""}]\n${item.content}`,
+      },
+    };
+  }).filter(belowRequest);
+}
+
+/**
+ * Publishes bounded lifecycle progress while a turn runs so the server claim
+ * lease survives tool-only stretches without assistant commentary. Real
+ * commentary resets the cadence; the renewer never runs past the turn and
+ * never exceeds its per-turn budget. Canonical progress is the renewal
+ * channel — the connector's transport heartbeat is deliberately not one.
+ */
+class ZcodeTurnLeaseRenewer {
+  readonly #requestId: string;
+  readonly #publishProgress?: HarnessExecutionInput["publishProgress"];
+  readonly #intervalMs: number;
+  readonly #maxRenewals: number;
+  readonly #isAborted: () => boolean;
+  #timer: NodeJS.Timeout | undefined;
+  #renewals = 0;
+  #lastProgressAt = Date.now();
+
+  constructor(options: {
+    requestId: string;
+    publishProgress?: HarnessExecutionInput["publishProgress"];
+    intervalMs: number;
+    maxRenewals: number;
+    isAborted: () => boolean;
+  }) {
+    this.#requestId = options.requestId;
+    this.#publishProgress = options.publishProgress;
+    this.#intervalMs = options.intervalMs;
+    this.#maxRenewals = options.maxRenewals;
+    this.#isAborted = options.isAborted;
+  }
+
+  start(): void {
+    this.#timer = setInterval(() => void this.#tick(), this.#intervalMs);
+    this.#timer.unref?.();
+  }
+
+  stop(): void {
+    if (this.#timer !== undefined) {
+      clearInterval(this.#timer);
+      this.#timer = undefined;
+    }
+  }
+
+  /** Accepted commentary renews the lease upstream; restart the cadence. */
+  markExternalProgress(): void {
+    this.#lastProgressAt = Date.now();
+  }
+
+  async #tick(): Promise<void> {
+    if (this.#timer === undefined) return;
+    if (this.#isAborted()) {
+      this.stop();
+      return;
+    }
+    if (Date.now() - this.#lastProgressAt < this.#intervalMs) return;
+    if (this.#renewals >= this.#maxRenewals) return;
+    this.#renewals += 1;
+    this.#lastProgressAt = Date.now();
+    if (this.#publishProgress === undefined) return;
+    try {
+      await this.#publishProgress({
+        id: `zcode-lease-${this.#requestId}-${this.#renewals}`,
+        content: "The ZCode turn is still running; its final answer will be published when it completes.",
+      });
+    } catch {
+      // Upstream publication is fail-soft and redacted; the bounded cadence
+      // simply tries again on the next interval.
+    }
+  }
 }
 
 /**
