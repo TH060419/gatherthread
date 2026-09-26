@@ -7,6 +7,14 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - Add a back-to-bottom control to the shared conversation timeline. It appears once the reader scrolls away from the newest event, hides again at the bottom, and follows the reader's reduced-motion preference when it jumps.
 - Prepared public-repository documentation and discoverability updates: bilingual README introductions, documentation/release indexes, private security-reporting policy, product-home metadata, and clearer Alpha access guidance. This does not itself deploy the hosted site or publish a new package.
 - The npm Alpha 7 packages were published separately and were not rebuilt when the Git tag moved to the verified server source.
+- Add ZCode as a third harness through the standalone `@gatherthread/zcode-connect` connector: headless CLI discovery and structural preflight probing, one execution runtime per writable session, claimed Web Agent request execution in a bounded headless ZCode child, incremental canonical-history hydration with native session resume, and versioned private binding state (see [ADR-0031](docs/adr/0031-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md)).
+- Add a ZCode Protocol app-server client and event parser, plus the `zcode` harness name, to the shared adapters and bridge registries. Execution uses the official `zcode app-server` stdio protocol with live preflight handshake, protocol-version refusal, and durable write-ahead execution journaling so retries replay a finished native turn exactly once.
+- Add ZCode to the Web workspace: agent harness selection, runtime resolution, connector command dialog, and bilingual copy.
+
+### Known limitations
+
+- The ZCode connector covers the Web Agent execution loop only. Local direct-ZCode turn capture through reviewed ZCode hooks, per-conversation upload preferences, visible-history import, snapshots, and first-prompt discovery remain future phases; the connector never reads ZCode's private session store.
+- Headless ZCode behavior (permission prompts, model availability) requires a real-device smoke test before release.
 
 ## [0.1.0-alpha.7] - 2026-09-24
 
@@ -67,9 +75,6 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Added
 
-- Add ZCode as a third harness through the standalone `@gatherthread/zcode-connect` connector: headless CLI discovery and structural preflight probing, one execution runtime per writable session, claimed Web Agent request execution in a bounded headless ZCode child, incremental canonical-history hydration with native session resume, and versioned private binding state (see [ADR-0031](docs/adr/0031-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md)).
-- Add a ZCode Protocol app-server client and event parser, plus the `zcode` harness name, to the shared adapters and bridge registries. Execution uses the official `zcode app-server` stdio protocol with live preflight handshake, protocol-version refusal, and durable write-ahead execution journaling so retries replay a finished native turn exactly once.
-- Add ZCode to the Web workspace: agent harness selection, runtime resolution, connector command dialog, and bilingual copy.
 - Lease Agent claims and bound exact-runtime recovery. A claim is renewed only by accepted progress, a lapsed claim may be reclaimed only by its recorded runtime, stale attempts are fenced, and a request that exhausts its recovery budget fails visibly instead of staying pending.
 - Show a failed Agent response as a failure in the timeline, with a retry that replays the request's exact recorded harness, provider, model, and runtime.
 - Let compatible DeepSeek Harness runtimes advertise executable model and reasoning-effort combinations so each new Agent request can select them directly from the GatherThread work page.
@@ -94,11 +99,6 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 - Dynamic model and reasoning selection is available only when an exact compatible DSH runtime advertises execution profiles; other providers continue to use their native fixed selection.
 - The hosted GatherThread service and public Beta remain closed; this Alpha supports local, private LAN HTTPS, private Tailscale, and operator-managed self-hosting.
-
-### Known limitations
-
-- The ZCode connector covers the Web Agent execution loop only. Local direct-ZCode turn capture through reviewed ZCode hooks, per-conversation upload preferences, visible-history import, snapshots, and first-prompt discovery remain future phases; the connector never reads ZCode's private session store.
-- Headless ZCode behavior (permission prompts, model availability) requires a real-device smoke test before release.
 
 ## [0.1.0-alpha.5] - 2026-09-16
 

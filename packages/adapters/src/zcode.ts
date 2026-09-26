@@ -123,11 +123,12 @@ function protocolEvent(
   fields: Partial<TranscriptEvent>,
 ): TranscriptEvent {
   return {
+    ...fields,
     kind,
     localEventId,
+    // Fidelity labels stay authoritative over caller-provided fields.
     harness: "zcode",
     captureFidelity: "harness_transcript",
-    ...fields,
   };
 }
 

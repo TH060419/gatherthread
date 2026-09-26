@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdir } from "node:fs/promises";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { redactText } from "@gatherthread/adapters";
 import { HttpCollaborationClient } from "./http-client.js";
 import type { ManagedSession } from "./codex-connect.js";
-import { initializeProjectSession, runManagedSessionCycle, waitForConnectorPoll } from "./codex-connect.js";
+import { initializeProjectSession, runManagedSessionCycle, terminalQuoted, waitForConnectorPoll } from "./codex-connect.js";
 import { ensureProjectWorkspace } from "./project-workspace.js";
 import { isProjectAccessRevoked, refreshProjectSessionPermissions } from "./project-session-permissions.js";
 import type { ProjectHarnessAdapter } from "./project-harness.js";
@@ -123,7 +123,7 @@ export async function runZcodeConnectCli(
   if (parsed.preflightOnly) {
     process.stdout.write(`GatherThread ZCode connector preflight succeeded.\n`);
     process.stdout.write(`Server: ${parsed.apiUrl}\n`);
-    process.stdout.write(`Project: ${selected.name} (${selected.id}) as ${selected.role}\n`);
+    process.stdout.write(`Project: ${terminalQuoted(selected.name)} (${selected.id}) as ${selected.role}\n`);
     process.stdout.write(`Workspace: ${preflight.workspacePath}\n`);
     process.stdout.write(`ZCode CLI: ${preflight.version} (${spec.source})\n`);
     process.stdout.write(`ZCode Protocol: ${protocol.protocolName} version ${protocol.protocolVersion}\n`);
@@ -131,7 +131,7 @@ export async function runZcodeConnectCli(
     return;
   }
 
-  process.stdout.write(`Connecting GatherThread project ${selected.name} to ZCode at ${preflight.workspacePath}\n`);
+  process.stdout.write(`Connecting GatherThread project ${terminalQuoted(selected.name)} to ZCode at ${terminalQuoted(preflight.workspacePath)}\n`);
   process.stdout.write(`ZCode CLI ${preflight.version} (${protocol.protocolName} v${protocol.protocolVersion}); headless execution ready.\n`);
 
   const stop = () => shutdown.abort(new Error("ZCode connector shutdown requested"));
@@ -139,30 +139,43 @@ export async function runZcodeConnectCli(
   process.once("SIGTERM", stop);
   const managed = new Map<string, ManagedSession>();
   const retryReporter = new ZcodeRetryReporter({ token });
+  // One connector process per binding root: a second process sharing these
+  // binding-state files would race the write-ahead execution journal.
+  const releaseConnectorLock = await acquireConnectorLock(path.join(stateRoot, "connector.lock"));
+  // The shared reconciler doubles as the server's cheapest liveness signal;
+  // throttling it to the same five-second cadence as the Codex connector
+  // keeps the poll loop from issuing one refresh per second on an idle
+  // project. The mid-turn watcher keeps its own independent 30-second path.
+  let nextRefreshAt = 0;
+  let eligibleSessions: SessionSummary[] = [];
   try {
     while (!shutdown.signal.aborted) {
-      const refresh = await refreshProjectSessionPermissions({
-        loadSessions: () => api.listProjectSessions(selected.id),
-        actorUserId: actor.id,
-        managed,
-        harness,
-      });
-      if (refresh.status === "project_inaccessible") {
-        for (const [sessionId, current] of [...managed]) {
-          managed.delete(sessionId);
-        }
-        await harness.deactivateExecutionBindings?.().catch(() => undefined);
-        throw new Error("GatherThread project access was revoked; ZCode execution has been disabled", {
-          cause: refresh.error,
+      if (Date.now() >= nextRefreshAt) {
+        const refresh = await refreshProjectSessionPermissions({
+          loadSessions: () => api.listProjectSessions(selected.id),
+          actorUserId: actor.id,
+          managed,
+          harness,
         });
+        if (refresh.status === "project_inaccessible") {
+          for (const [sessionId, current] of [...managed]) {
+            managed.delete(sessionId);
+          }
+          await harness.deactivateExecutionBindings?.().catch(() => undefined);
+          throw new Error("GatherThread project access was revoked; ZCode execution has been disabled", {
+            cause: refresh.error,
+          });
+        }
+        if (refresh.status === "transient_failure") {
+          retryReporter.retrying("project refresh", refresh.error);
+          await waitForConnectorPoll(5_000, shutdown.signal);
+          continue;
+        }
+        retryReporter.recovered("project refresh");
+        eligibleSessions = refresh.eligibleSessions;
+        nextRefreshAt = Date.now() + PROJECT_REFRESH_THROTTLE_MS;
       }
-      if (refresh.status === "transient_failure") {
-        retryReporter.retrying("project refresh", refresh.error);
-        await waitForConnectorPoll(5_000, shutdown.signal);
-        continue;
-      }
-      retryReporter.recovered("project refresh");
-      for (const session of refresh.eligibleSessions) {
+      for (const session of eligibleSessions) {
         if (shutdown.signal.aborted) break;
         try {
           let current = managed.get(session.id);
@@ -193,10 +206,12 @@ export async function runZcodeConnectCli(
             harness,
             signal: shutdown.signal,
           });
+          const stopHeartbeatKeeper = startCycleHeartbeatKeeper({ managed });
           try {
             await runManagedSessionCycle(current, api);
             retryReporter.recovered(session.id);
           } finally {
+            stopHeartbeatKeeper();
             stopWatcher();
           }
         } catch (error) {
@@ -210,10 +225,122 @@ export async function runZcodeConnectCli(
       await current.deactivateLocalPublishing?.("project_inaccessible").catch(() => undefined);
     }
     await harness.close();
+    await releaseConnectorLock();
   }
 }
 
 const EXECUTION_PERMISSION_WATCH_INTERVAL_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = 10_000;
+/** Main-loop permission refresh cadence, mirroring the Codex connector. */
+const PROJECT_REFRESH_THROTTLE_MS = 5_000;
+/** A lock older than this is stale even if its pid was reused by another process. */
+const CONNECTOR_LOCK_STALE_MS = 24 * 60 * 60_000;
+
+/**
+ * Advisory startup guard enforcing one connector process per binding root.
+ * Two processes sharing the binding-state files would race the write-ahead
+ * journal's read-modify-write and weaken its exactly-once barrier, so the
+ * second process refuses to start. A lock left behind by a crashed process is
+ * taken over once its pid is gone; the staleness window guards against pid
+ * reuse. The lock file contains only a pid and a timestamp.
+ */
+export async function acquireConnectorLock(lockPath: string): Promise<() => Promise<void>> {
+  const token = `${JSON.stringify({ pid: process.pid, acquiredAt: new Date().toISOString() })}\n`;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let handle: Awaited<ReturnType<typeof open>>;
+    try {
+      handle = await open(lockPath, "wx");
+    } catch (error) {
+      if (errnoCode(error) !== "EEXIST") throw error;
+      const owner = await readConnectorLockOwner(lockPath);
+      const fresh = owner !== undefined
+        && pidAlive(owner.pid)
+        && Number.isFinite(Date.parse(owner.acquiredAt))
+        && Date.now() - Date.parse(owner.acquiredAt) < CONNECTOR_LOCK_STALE_MS;
+      if (fresh) {
+        throw new Error(
+          `Another GatherThread ZCode connector process (pid ${owner.pid}) is already bound to this project workspace; stop it before starting a new one`,
+        );
+      }
+      if (attempt >= 1) {
+        throw new Error(
+          `The ZCode connector lock at ${lockPath} could not be acquired after clearing a stale lock; another process may be taking it over`,
+        );
+      }
+      await rm(lockPath, { force: true });
+      continue;
+    }
+    await handle.write(token, 0);
+    await handle.close();
+    let released = false;
+    return async () => {
+      if (released) return;
+      released = true;
+      // Only remove the lock this process wrote: a second process may have
+      // taken the file over between this process's open and its write.
+      const owner = await readConnectorLockOwner(lockPath).catch(() => undefined);
+      if (owner?.pid !== process.pid) return;
+      await rm(lockPath, { force: true });
+    };
+  }
+  throw new Error(`The ZCode connector lock at ${lockPath} could not be acquired`);
+}
+
+interface ConnectorLockOwner {
+  pid: number;
+  acquiredAt: string;
+}
+
+async function readConnectorLockOwner(lockPath: string): Promise<ConnectorLockOwner | undefined> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(lockPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return undefined;
+    const record = parsed as Record<string, unknown>;
+    if (typeof record.pid !== "number" || typeof record.acquiredAt !== "string") return undefined;
+    return { pid: record.pid, acquiredAt: record.acquiredAt };
+  } catch {
+    return undefined;
+  }
+}
+
+function pidAlive(pid: number): boolean {
+  if (!Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but is not observable by this user.
+    return errnoCode(error) === "EPERM";
+  }
+}
+
+function errnoCode(error: unknown): string | undefined {
+  return error instanceof Error && "code" in error ? String((error as NodeJS.ErrnoException).code) : undefined;
+}
+
+/**
+ * While one session's cycle holds the serial main loop for a whole native
+ * turn (up to the execution cap), the managed sessions stop receiving their
+ * normal per-cycle heartbeats and the server marks their runtimes offline
+ * after thirty seconds. This keeper heartbeats every managed session on the
+ * usual ten-second cadence for the duration of one cycle. Failures are
+ * fail-soft: the next tick and the main loop both retry.
+ */
+export function startCycleHeartbeatKeeper(input: {
+  managed: Map<string, ManagedSession>;
+  intervalMs?: number;
+}): () => void {
+  const intervalMs = input.intervalMs ?? HEARTBEAT_INTERVAL_MS;
+  const timer = setInterval(() => {
+    for (const current of input.managed.values()) {
+      if (Date.now() - current.lastHeartbeatAt < intervalMs) continue;
+      current.lastHeartbeatAt = Date.now();
+      void current.bridge.heartbeat().catch(() => undefined);
+    }
+  }, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
 
 /**
  * Runs the shared permission reconciliation on an interval while one managed
@@ -248,7 +375,18 @@ export function startExecutionPermissionWatcher(input: {
       managed: input.managed,
       harness: input.harness,
     }).then(
-      () => undefined,
+      (result) => {
+        // A session-level loss reconciles inside the shared refresh. A
+        // project-level revocation (403/404) does not: the reconciler is
+        // never reached, and the main loop is blocked inside the very cycle
+        // this watcher guards — so abort every in-flight child now instead
+        // of letting the turn run to its cap against a revoked project. The
+        // main loop still owns the authoritative exit on its next refresh.
+        if (result.status === "project_inaccessible") {
+          void input.harness.deactivateExecutionBindings?.().catch(() => undefined);
+        }
+        return undefined;
+      },
       () => undefined,
     ).finally(() => {
       inFlight = false;
@@ -380,36 +518,42 @@ async function readSecret(label: string): Promise<string> {
   process.stdout.write(label);
   process.stdin.setRawMode(true);
   let secret = "";
-  for await (const chunk of process.stdin) {
-    const characters = String(chunk);
-    for (const character of characters) {
-      if (character === "\r" || character === "\n") {
-        process.stdin.setRawMode(false);
-        process.stdout.write("\n");
-        return secret;
-      }
-      if (character === "\u0003") {
-        process.stdin.setRawMode(false);
-        throw new Error("Device access token entry cancelled");
-      }
-      if (character === "\u007f" || character === "\b") {
-        secret = secret.slice(0, -1);
-        continue;
-      }
-      secret += character;
-      if (secret.length > 1024) {
-        process.stdin.setRawMode(false);
-        throw new Error("The entered device access token exceeds 1024 characters");
+  try {
+    for await (const chunk of process.stdin) {
+      const characters = String(chunk);
+      for (const character of characters) {
+        if (character === "\r" || character === "\n") {
+          process.stdout.write("\n");
+          return secret;
+        }
+        if (character === "\u0003") {
+          throw new Error("Device access token entry cancelled");
+        }
+        if (character === "\u007f" || character === "\b") {
+          secret = secret.slice(0, -1);
+          continue;
+        }
+        secret += character;
+        if (secret.length > 1024) {
+          throw new Error("The entered device access token exceeds 1024 characters");
+        }
       }
     }
+  } finally {
+    // Covers every exit: newline, cancel, overflow, and a stdin read error
+    // rejecting the iterator — the terminal must never stay in raw mode.
+    try {
+      process.stdin.setRawMode(false);
+    } catch {
+      // The stream closed while waiting for the newline; nothing to restore.
+    }
   }
-  process.stdin.setRawMode(false);
   process.stdout.write("\n");
   return secret;
 }
 
 function formatConnectedSessionOutput(_projectName: string, session: SessionSummary): string {
-  return `Connected session: ${session.name ?? session.id} [${session.mode}]\n`;
+  return `Connected session: ${terminalQuoted(session.name ?? session.id)} [${session.mode}]\n`;
 }
 
 class ZcodeRetryReporter {

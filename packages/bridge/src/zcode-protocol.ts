@@ -48,12 +48,6 @@ export interface ZcodeTurnHandlers {
   onResponse?: (method: string) => void;
 }
 
-export interface ZcodeProtocolSession {
-  sessionId: string;
-  request: (method: string, params: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  handlers: ZcodeTurnHandlers;
-}
-
 export interface ZcodeProtocolRunOptions {
   spec: ZcodeCommandSpec;
   cwd: string;
@@ -107,6 +101,7 @@ export class ZcodeProtocolConnection {
   #stderrTail = "";
   #exitError: Error | undefined;
   #closed = false;
+  #warnedNonNumericResponseId = false;
 
   constructor(child: ReturnType<typeof spawn>, options: { maxOutputBytes: number }) {
     this.#child = child;
@@ -125,15 +120,20 @@ export class ZcodeProtocolConnection {
     child.stdout.on("data", (chunk: string) => this.#onStdout(chunk));
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
-      // Bounded tail for failure diagnostics; never persisted or logged.
+      // Bounded tail for failure diagnostics. It is printed to the connector's
+      // own terminal when the child fails and is never written to disk, a log
+      // file, or an Error message: failure messages are published to the
+      // shared session through HarnessExecutionTerminatedError, and the
+      // child's last output lines can carry local paths or harness-internal
+      // content that credential redaction does not cover.
       this.#stderrTail = (this.#stderrTail + chunk).slice(-2_000);
     });
     child.once("error", (error: Error) => {
-      this.#fail(new Error(`ZCode app-server could not be started: ${error.message}`));
+      this.#failChild(new Error(`ZCode app-server could not be started: ${error.message}`));
     });
     child.once("close", (code, signal) => {
-      this.#fail(new Error(
-        `ZCode app-server exited unexpectedly (${signal ?? code ?? "unknown"})${this.#stderrSuffix()}`,
+      this.#failChild(new Error(
+        `ZCode app-server exited unexpectedly (${signal ?? code ?? "unknown"})`,
       ));
     });
   }
@@ -166,10 +166,26 @@ export class ZcodeProtocolConnection {
     return last ? `: ${last.slice(0, 300)}` : "";
   }
 
+  /**
+   * Records the connection failure and prints the child's last output line to
+   * the connector's own terminal. The detail deliberately stays local: the
+   * error message itself can reach the shared session as a published failure,
+   * while the stderr tail is unredacted harness-internal output.
+   */
+  #failChild(error: Error): void {
+    const detail = this.#stderrSuffix();
+    if (detail) {
+      process.stderr.write(`gatherthread-zcode: app-server diagnostic: ${detail.replace(/^:\s*/, "")}\n`);
+    }
+    this.#fail(error);
+  }
+
   #onStdout(chunk: string): void {
     this.#outputBytes += Buffer.byteLength(chunk, "utf8");
     if (this.#outputBytes > this.#maxOutputBytes) {
-      this.#fail(new Error("ZCode app-server output exceeded the configured limit"));
+      // failChild keeps this failure's stderr diagnostic on the local
+      // terminal and preserves it as the connection's recorded exit cause.
+      this.#failChild(new Error("ZCode app-server output exceeded the configured limit"));
       return;
     }
     this.#buffer += chunk;
@@ -199,10 +215,21 @@ export class ZcodeProtocolConnection {
     }
     const id = message.id;
     if (id !== undefined && (message.result !== undefined || message.error !== undefined)) {
-      const key = typeof id === "number" ? id : -1;
-      const entry = this.#pending.get(key);
+      if (typeof id !== "number") {
+        // The documented protocol echoes the client's numeric id; a string id
+        // cannot be matched to a pending request. Warn once, then keep
+        // failing closed per request instead of spamming the terminal.
+        if (!this.#warnedNonNumericResponseId) {
+          this.#warnedNonNumericResponseId = true;
+          process.stderr.write(
+            "gatherthread-zcode: app-server response carries a non-numeric id; it cannot be matched to a pending request\n",
+          );
+        }
+        return;
+      }
+      const entry = this.#pending.get(id);
       if (!entry) return;
-      this.#pending.delete(key);
+      this.#pending.delete(id);
       clearTimeout(entry.timer);
       if (message.error !== undefined) {
         const error = isRecord(message.error) ? message.error : {};
@@ -263,7 +290,9 @@ export class ZcodeProtocolConnection {
   ): Promise<Record<string, unknown>> {
     if (this.#closed) return Promise.reject(new Error("ZCode Protocol connection is closed"));
     if (this.exited) {
-      return Promise.reject(new Error(`ZCode app-server is not running${this.#stderrSuffix()}`));
+      // The child's own failure diagnostic already went to the connector's
+      // terminal through #failChild; keep this rejection publishable.
+      return Promise.reject(new Error("ZCode app-server is not running"));
     }
     const id = this.#nextRequestId++;
     return new Promise<Record<string, unknown>>((resolve, reject) => {
@@ -422,11 +451,13 @@ export function zcodeTranscriptEvent(
   fields: Partial<TranscriptEvent>,
 ): TranscriptEvent {
   return {
+    ...fields,
     kind,
     localEventId,
+    // Fidelity labels stay authoritative: caller fields may never rebrand a
+    // reviewed projection as another harness or a higher-fidelity capture.
     harness: "zcode",
     captureFidelity: "harness_transcript",
-    ...fields,
   };
 }
 

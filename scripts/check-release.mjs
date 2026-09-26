@@ -6,6 +6,10 @@ import { dirname, join } from "node:path";
 
 const EXPECTED_VERSION = "0.1.0-alpha.7";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
+// `packages/zcode-connect` is excluded from the version assertions: it is
+// unreleased and keeps its own version (0.1.0-alpha.5) until its first
+// publication. Its structural checks live further down; `npm pack` still
+// requires its lock entry to exist.
 const manifestPaths = [
   "package.json",
   "apps/server/package.json",
@@ -16,7 +20,6 @@ const manifestPaths = [
   "packages/dsh-host/package.json",
   "packages/mcp/package.json",
   "packages/protocol/package.json",
-  "packages/zcode-connect/package.json",
 ];
 
 async function json(path) {
@@ -30,9 +33,10 @@ for (const path of manifestPaths) {
 
 const lock = await json("package-lock.json");
 assert.equal(lock.version, EXPECTED_VERSION, "package-lock.json must declare the candidate version");
-for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/dsh-host", "packages/mcp", "packages/protocol", "packages/zcode-connect"]) {
+for (const path of ["", "apps/server", "apps/web", "packages/adapters", "packages/bridge", "packages/codex-connect", "packages/dsh-host", "packages/mcp", "packages/protocol"]) {
   assert.equal(lock.packages?.[path]?.version, EXPECTED_VERSION, `package-lock.json package ${path || "root"} is stale`);
 }
+assert.ok(lock.packages?.["packages/zcode-connect"]?.version, "package-lock.json must contain packages/zcode-connect");
 
 const dshBundle = await json("packages/dsh-host/bundle/manifest.json");
 const dshPackage = await json("packages/dsh-host/package.json");

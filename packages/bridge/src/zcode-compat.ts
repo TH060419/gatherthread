@@ -1,7 +1,6 @@
 import { execFile as execFileCallback } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
-import { access, stat } from "node:fs/promises";
-import path from "node:path";
+import { access, stat } from "node:fs/promises";import path from "node:path";
 import { promisify } from "node:util";
 import { withoutGatherThreadCredentialEnvironment } from "./zcode-protocol.js";
 
@@ -143,6 +142,11 @@ async function fromPath(
     for (const executableName of executableNames) {
       const candidate = path.join(directory, executableName);
       try {
+        // POSIX grants X_OK on directories, so a directory that happens to
+        // share the command name must be skipped before it is selected and
+        // fails later with an opaque exec error.
+        const metadata = await stat(candidate);
+        if (!metadata.isFile()) continue;
         await access(candidate, accessMode);
         return { command: candidate, baseArgs: [], source: `PATH (${directory})` };
       } catch {
