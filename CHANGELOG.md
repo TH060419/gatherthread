@@ -4,6 +4,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Keep maximum-size cloud Git checkpoints usable on slower Windows hosts: only the two bounded batch-write commands receive a 60-second Windows deadline; other Git deadlines, snapshot limits and atomic failure/retry semantics remain unchanged.
 - Pause safety: full event quotas no longer block the one bounded server pause marker; DSH lost-settlement recovery excludes fenced native work from both automatic and manual uploads while preserving subsequent local turns.
 - Separate realtime delivery from read/write permissions in the top status badge. Make summary-section arrows reveal originals, reset local overrides when switching all history, and preserve the reading anchor during explicit view changes. Add concise localized icon guidance and a roomier, responsive summary versions dialog; display changes never alter Agent context policy.
 
