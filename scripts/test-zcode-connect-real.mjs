@@ -46,7 +46,17 @@ try {
 
   const first = await runTurn(workspace, undefined,
     "Reply with exactly the word PONG and nothing else. Do not use any tools.",
-    "PONG");
+    "PONG").catch((error) => {
+    // A signed-out CLI with no default model is a provisioning gap, not a
+    // connector defect: fail with the exact device-side fix instead of a
+    // bare assertion error.
+    if (error?.failureCode === "zcode_turn_failed" && /Select a model before continuing/i.test(error?.message ?? "")) {
+      process.stdout.write("FAIL: the real CLI started but no model is available for headless turns.\n");
+      process.stdout.write("Sign this CLI in and select a default model (run `zcode login`), then re-run this script.\n");
+      process.exit(2);
+    }
+    throw error;
+  });
   process.stdout.write(`First turn completed in native session ${first.nativeSessionId}\n`);
 
   const second = await runTurn(workspace, first.nativeSessionId,

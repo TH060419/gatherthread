@@ -1,8 +1,8 @@
-# ADR-0031: Add ZCode as a third harness through a standalone headless connector
+# ADR-0032: Add ZCode as a third harness through a standalone headless connector
 
 - Status: accepted
 - Date: 2026-09-20
-- Renumbered from 0024 to 0031 on merge: main had independently accepted ADR-0024 (runtime-advertised DSH model selection) while this branch was in review
+- Renumbered twice on merge (0024 → 0031 → 0032): main independently accepted ADR-0024 and later ADR-0031 (in-session quotes and member mentions) while this branch was in review
 
 ## Context
 
