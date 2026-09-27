@@ -55,3 +55,8 @@ The reproducible mock-only check is `tests/browser/onboarding.mjs`; invocation i
 
 - Settings now has a distinct Summaries heading. Summary is recommended for organizing conversations and focusing on agreed conclusions with less distraction; Original is described as useful for exact wording and details. Copy retains the detail-loss caveat and notes that generating summaries consumes model quota without guaranteeing token savings. The final summary tutorial uses the same rationale.
 - 270 Web tests and 2 build-output checks passed. Chrome at 320×568 and Playwright WebKit at 1440×900 passed the tutorial, language-switch and isolation checks; a late Chrome keyboard-focus assertion failed once and passed on a standalone rerun. Bilingual Settings headings, the default summary choice and both selectable modes were checked in Chrome and visually inspected. The English option labels were shortened after inspection to avoid clipping.
+
+### PR submission verification, 2026-09-28
+
+- `npm run release:verify` passed on the final application code: 612 unit tests (607 pass, 5 existing skips), 47 script tests, 270 Web tests, 2 build-output checks, 4 integration tests and 9 end-to-end tests; audits and Git-less package verification passed, with zero dependency vulnerabilities.
+- Full Chrome and WebKit browser runs passed all authored guide scenarios and produced-page variants. Chrome's late disclosure keyboard assertion intermittently failed before a standalone and full rerun passed. The test now waits for the native disclosure toggle to portal the panel before focusing its children, and includes active-element diagnostics on failure. Native Safari and Edge remain manual follow-ups.

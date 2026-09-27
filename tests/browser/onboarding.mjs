@@ -228,11 +228,17 @@ try {
   assert.equal(await disclosure.evaluate((node) => node === document.activeElement), true);
   await disclosure.press('Escape');
   assert.equal(await page.locator('#session-context-details').getAttribute('open'), null);
-  await disclosure.click(); await page.locator('#history-summary-select-button').evaluate((node) => { node.disabled = true; });
+  await disclosure.click();
+  // The native toggle event portals the panel asynchronously. Wait before
+  // focusing a child, otherwise moving that child can clear its focus.
+  await page.waitForFunction(() => document.querySelector('.session-context-panel').parentElement === document.body);
+  await page.locator('#history-summary-select-button').evaluate((node) => { node.disabled = true; });
   await page.locator('#upload-local-turns-button').focus(); await page.keyboard.press('Tab');
   assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true, 'disabled summary never traps focus');
   await page.locator('#mentions-button').press('Shift+Tab');
-  assert.equal(await page.locator('#upload-local-turns-button').evaluate((node) => node === document.activeElement), true);
+  assert.equal(await page.locator('#upload-local-turns-button').evaluate((node) => node === document.activeElement), true,
+    JSON.stringify(await page.evaluate(() => ({ active: document.activeElement?.id, driverActive: document.body.classList.contains('driver-active'), open: document.querySelector('#session-context-details').open,
+      controls: [...document.querySelector('.session-context-panel').querySelectorAll('button, input, select, a[href]')].map(node => ({ id: node.id, disabled: node.disabled, hidden: Boolean(node.closest('[hidden]')), rects: node.getClientRects().length })) }))));
   await page.keyboard.press('Escape');
   await disclosure.click(); await page.locator('#logout-button').click();
   await page.locator('#auth-view:not([hidden])').waitFor();
