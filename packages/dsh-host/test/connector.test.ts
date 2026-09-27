@@ -1631,6 +1631,7 @@ test("runtime heartbeat is independent of polling, retries transport failure, an
   const api = new FakeApi();
   api.failNextHeartbeat = true;
   const errors: Error[] = [];
+  const states: string[] = [];
   const host = new FakeHost(cfg.dshSessionId, freshPersistence());
   const connector = new DshHostConnector({
     config: cfg,
@@ -1639,12 +1640,14 @@ test("runtime heartbeat is independent of polling, retries transport failure, an
     stateStore: new MemoryConnectorStateStore(),
     heartbeatIntervalMs: 5,
     onBackgroundError: (error) => errors.push(error),
+    onLifecycle: (update) => states.push(update.state),
   });
 
   await connector.start({ runImmediately: false, schedule: true });
   await waitFor(() => api.heartbeatCount >= 2);
   assert.equal(api.readCount, 0, "heartbeat must not depend on the canonical-event poll interval");
   assert.match(errors[0]?.message ?? "", /simulated heartbeat transport failure/);
+  assert.equal(states.at(-1), "idle", "an idle connector also recovers its connection state");
   await connector.stop();
   const heartbeatsAtUnload = api.heartbeatCount;
   await new Promise<void>((resolve) => setTimeout(resolve, 30));
@@ -1678,6 +1681,85 @@ test("runtime heartbeat starts before a blocked initial DSH prompt completes", a
   await connector.stop();
 });
 
+test("long DSH execution publishes busy immediately and keeps presence without fabricating work", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: eventTime });
+  const cfg = config({ pollIntervalMs: 60_000 });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  let release!: () => void;
+  host.promptGate = new Promise<void>((resolve) => { release = resolve; });
+  const connector = new DshHostConnector({ config: cfg, api, host,
+    stateStore: new MemoryConnectorStateStore() });
+  t.after(async () => { release(); await connector.stop(); });
+  await connector.start({ runImmediately: false });
+  api.events.push(request(1));
+  const pending = connector.pollOnce();
+  await waitFor(() => host.prompts.length === 1);
+  // Native running is observable before the first durable tool/answer event.
+  await Promise.resolve();
+  assert.ok(api.progress.some((item) => (item.payload as { status?: string }).status === "running"));
+  const progressCount = api.progress.length;
+  for (let i = 0; i < 36; i += 1) {
+    t.mock.timers.tick(10_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+  assert.equal(api.heartbeatCount, 36, "presence must survive both the 30s TTL and a six-minute blocked prompt");
+  assert.equal(api.progress.length, progressCount, "idle heartbeats must not fabricate work or renew an inactive claim");
+  assert.equal(api.completions.length, 0);
+  release();
+  await pending;
+  assert.equal(api.completions.length, 1);
+});
+
+test("DSH heartbeat recovery restores running before a long prompt settles", async (t) => {
+  const cfg = config({ pollIntervalMs: 60_000 });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  let release!: () => void;
+  host.promptGate = new Promise<void>((resolve) => { release = resolve; });
+  const states: string[] = [];
+  const connector = new DshHostConnector({ config: cfg, api, host,
+    stateStore: new MemoryConnectorStateStore(), heartbeatIntervalMs: 5,
+    onLifecycle: (update) => states.push(update.state) });
+  t.after(async () => { release(); await connector.stop(); });
+  await connector.start({ runImmediately: false });
+  api.events.push(request(1));
+  const pending = connector.pollOnce();
+  await waitFor(() => host.prompts.length === 1);
+  api.failNextHeartbeat = true;
+  await waitFor(() => states.at(-1) === "offline");
+  const atFailure = api.heartbeatCount;
+  await waitFor(() => api.heartbeatCount > atFailure);
+  assert.equal(states.at(-1), "running", "successful heartbeat must not leave a busy Agent stuck offline until completion");
+  assert.equal(api.completions.length, 0);
+  release();
+  await pending;
+});
+
+test("a late DSH heartbeat failure cannot change a stopped connector back to offline", async () => {
+  let rejectHeartbeat!: (error: Error) => void;
+  let heartbeatStarted = false;
+  class PendingHeartbeatApi extends FakeApi {
+    override heartbeatRuntime(): Promise<DshRegisteredRuntime> {
+      heartbeatStarted = true;
+      return new Promise((_, reject) => { rejectHeartbeat = reject; });
+    }
+  }
+  const cfg = config({ pollIntervalMs: 60_000 });
+  const states: string[] = [];
+  const connector = new DshHostConnector({ config: cfg, api: new PendingHeartbeatApi(),
+    host: new FakeHost(cfg.dshSessionId, freshPersistence()), stateStore: new MemoryConnectorStateStore(),
+    heartbeatIntervalMs: 5, onLifecycle: (update) => states.push(update.state) });
+  await connector.start({ runImmediately: false });
+  await waitFor(() => heartbeatStarted);
+  const stopped = connector.stop();
+  rejectHeartbeat(new Error("late transport error"));
+  await stopped;
+  assert.equal(states.at(-1), "stopped");
+});
+
 test("runtime identity drift during heartbeat fails closed without changing durable state", async () => {
   const cfg = config({ pollIntervalMs: 60_000 });
   const api = new FakeApi();
@@ -1704,7 +1786,7 @@ test("runtime identity drift during heartbeat fails closed without changing dura
   await connector.stop();
 });
 
-test("runtime identity drift interrupts a blocked initial prompt and rejects start without publishing", async () => {
+test("runtime identity drift interrupts a blocked initial prompt without publishing a result or further work", async () => {
   const cfg = config({ pollIntervalMs: 60_000 });
   const api = new FakeApi();
   api.events.push(request(1));
@@ -1737,7 +1819,8 @@ test("runtime identity drift interrupts a blocked initial prompt and rejects sta
   assert.match(errors[0]?.message ?? "", /changed the DSH runtime identity/);
   assert.equal(host.disposeCount, 1);
   assert.equal(host.listenerCount(), 0);
-  assert.equal(api.progress.length, 0);
+  assert.equal(api.progress.length, 1, "only the native start observed before identity drift may be published");
+  assert.equal((api.progress[0]?.payload as { status?: string }).status, "running");
   assert.equal(api.appended.length, 0);
   assert.equal(api.completions.length, 0);
   const after = await store.load();

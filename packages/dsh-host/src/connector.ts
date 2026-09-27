@@ -91,6 +91,7 @@ export class DshHostConnector {
   #pollPromise: Promise<DshPollResult> | undefined;
   #localSyncControlPromise: Promise<void> | undefined;
   #heartbeatPromise: Promise<void> | undefined;
+  #heartbeatOffline = false;
   #liveProgressPromise: Promise<void> = Promise.resolve();
   #lastLiveProgressKey: string | undefined;
   #lastLiveProgressAt = 0;
@@ -232,6 +233,17 @@ export class DshHostConnector {
       if (active === undefined || (active.contextExecution !== undefined && sourceSessionId !== active.contextExecution.sessionId)) return;
       if (this.#activeStatuses.at(-1) !== status) {
         this.#activeStatuses.push(status);
+        if (status === "running") {
+          // Publish this native transition once, independently of the durable
+          // event throttle. A busy label is not periodic proof of progress.
+          this.#queueLiveProgress(`dsh-running-${String(this.#activeStatuses.length)}`, {
+            content: "DeepSeek Harness is processing the active request.",
+            phase: "activity",
+            status: "running",
+            capture_fidelity: "harness_transcript",
+            source_harness: "deepseek-harness",
+          }, false);
+        }
       }
       this.#notifyLifecycle(status);
     }));
@@ -305,6 +317,7 @@ export class DshHostConnector {
         return result;
       })
       .catch((error: unknown) => {
+        this.#heartbeatOffline = false;
         if (!this.#stopped) this.#notifyLifecycle("offline");
         throw error;
       })
@@ -463,7 +476,9 @@ export class DshHostConnector {
       return { claimed: false, completed: false };
     }
 
-    const prompt = buildDshRequestPrompt(request);
+    const quotedEvent = request.replyTo ? (await this.#readThroughRequest(request.id, request.sequence))
+      .find((event) => event.id === request.replyTo) : undefined;
+    const prompt = buildDshRequestPrompt(request, quotedEvent);
     const context = await this.#contextForRequest(request);
     const prepared = context === undefined ? undefined : await this.#host.prepareContextExecution!({
       requestId: request.id, requestSequence: request.sequence, ...context,
@@ -608,7 +623,7 @@ export class DshHostConnector {
     if (request === undefined || request.type !== "agent_request") {
       throw new Error("Active GatherThread request is unavailable during DSH resume");
     }
-    const prompt = buildDshRequestPrompt(request);
+    const prompt = buildDshRequestPrompt(request, history.find((event) => event.id === request.replyTo));
     const profile = requestedDshProfile(request);
     if (profile === undefined) {
       throw new Error("Active GatherThread request lost its DeepSeek Harness execution profile");
@@ -696,7 +711,7 @@ export class DshHostConnector {
     await this.#finalizeDeliveredRequest();
   }
 
-  #queueLiveProgress(idSuffix: string, payload: Record<string, unknown>): void {
+  #queueLiveProgress(idSuffix: string, payload: Record<string, unknown>, throttle = true): void {
     const active = this.#state?.activeRequest;
     const runtime = this.#runtime;
     if (active === undefined || runtime === undefined) return;
@@ -704,13 +719,15 @@ export class DshHostConnector {
     const claimAttempt = active.claimAttempt ?? 1;
     const progressKey = `${requestId}:${String(claimAttempt)}`;
     const now = Date.now();
-    if (this.#lastLiveProgressKey === progressKey
+    if (throttle && this.#lastLiveProgressKey === progressKey
       && now - this.#lastLiveProgressAt < LIVE_PROGRESS_MIN_INTERVAL_MS) {
       return;
     }
-    this.#lastLiveProgressKey = progressKey;
-    this.#lastLiveProgressAt = now;
-    const idempotencyKey = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${idSuffix}`;
+    if (throttle) {
+      this.#lastLiveProgressKey = progressKey;
+      this.#lastLiveProgressAt = now;
+    }
+    const idempotencyKey = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${String(claimAttempt)}:${idSuffix}`;
     this.#liveProgressPromise = this.#liveProgressPromise
       .then(async () => {
         const current = this.#state?.activeRequest;
@@ -1189,7 +1206,9 @@ export class DshHostConnector {
     if (this.#stopped) return;
     this.#heartbeatTimer = setInterval(() => {
       void this.#heartbeat().catch((error: unknown) => {
+        if (this.#stopped) return;
         const publicFailure = publicError(error);
+        this.#heartbeatOffline = !(error instanceof RuntimeIdentityError);
         this.#notifyLifecycle(error instanceof RuntimeIdentityError ? "error" : "offline");
         this.#onBackgroundError?.(publicFailure);
         if (error instanceof RuntimeIdentityError) {
@@ -1214,6 +1233,16 @@ export class DshHostConnector {
         this.#assertRuntime(refreshed);
       } catch {
         throw new RuntimeIdentityError("GatherThread returned incompatible DSH runtime heartbeat data");
+      }
+      // A transient presence failure must recover without waiting for a
+      // potentially minutes-long prompt/poll. Never treat heartbeat as work:
+      // it does not publish progress, advance cursors or renew the claim lease.
+      if (!this.#stopped && this.#heartbeatOffline) {
+        this.#heartbeatOffline = false;
+        if (this.#visibleState === "offline") {
+          this.#notifyLifecycle(this.#state?.activeRequest === undefined
+            ? "idle" : this.#activeStatuses.at(-1) ?? "running");
+        }
       }
     })().finally(() => {
       this.#heartbeatPromise = undefined;

@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260926-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260927-2" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -356,13 +356,15 @@
                 </div>
               </div>
               <div class="session-header-actions">
-                <button id="history-summary-select-button" class="icon-button workspace-icon-button" type="button" aria-label="Select history to summarize" title="Select history to summarize" aria-pressed="false" aria-controls="history-summary-toolbar" hidden>
+                <button id="history-summary-select-button" class="icon-button workspace-icon-button" type="button" aria-label="Select history to summarize" title="Select history to summarize" aria-pressed="false" aria-controls="history-summary-toolbar" data-tooltip hidden>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h10M4 10h10M4 15h5M4 20h5M15 14l2 2 4-5M15 20h6"/></svg>
                 </button>
-                <button id="history-summary-view-button" class="icon-button workspace-icon-button" type="button" aria-label="Show original messages" title="Show original messages" aria-pressed="false" hidden>
+                <button id="mentions-button" class="icon-button workspace-icon-button" type="button" aria-label="Mentions" title="Mentions" aria-haspopup="dialog" aria-controls="mentions-dialog"><span aria-hidden="true">@</span><span id="mentions-count" class="mentions-count"></span></button>
+                <button id="history-summary-view-button" class="icon-button workspace-icon-button history-view-toggle" type="button" aria-label="Show all original messages" title="Show all original messages" aria-pressed="false" data-tooltip hidden>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>
+                  <span id="history-summary-view-label" class="history-view-label" aria-hidden="true">Summary view</span>
                 </button>
-                <button id="history-summary-versions-button" class="icon-button workspace-icon-button" type="button" aria-label="Summary versions" title="Summary versions" aria-haspopup="dialog" aria-controls="history-summary-versions-dialog" hidden>
+                <button id="history-summary-versions-button" class="icon-button workspace-icon-button" type="button" aria-label="Summary versions" title="Summary versions" aria-haspopup="dialog" aria-controls="history-summary-versions-dialog" data-tooltip hidden>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="13" height="15" rx="2"/><path d="M4 7v13a1 1 0 0 0 1 1h11M10 8h7M10 12h7"/></svg>
                 </button>
                 <button
@@ -447,14 +449,19 @@
 
             <form id="composer" class="composer">
               <label for="message-input">Message</label>
+              <div class="message-draft">
+                <div id="composer-quote" class="composer-quote" hidden><span id="composer-quote-text"></span><button id="cancel-message-quote" class="icon-button message-action" type="button" aria-label="Cancel quote" title="Cancel quote">×</button></div>
+                <div id="mention-picker" class="mention-picker" role="listbox" aria-label="Mention a member" hidden></div>
               <textarea
                 id="message-input"
+                aria-controls="mention-picker" aria-expanded="false" aria-autocomplete="list"
                 name="message"
                 rows="3"
                 maxlength="12000"
                 placeholder="Write to the room…"
                 aria-describedby="composer-permission send-chat-help send-agent-help"
               ></textarea>
+              </div>
               <p id="composer-permission" class="permission-note"></p>
               <fieldset id="agent-request-profile" class="agent-request-profile">
                 <legend>Agent request settings</legend>
@@ -769,13 +776,21 @@
       </form>
     </dialog>
 
+    <dialog id="mentions-dialog" class="create-dialog" aria-labelledby="mentions-title">
+      <div class="dialog-heading"><h2 id="mentions-title">Mentions</h2><button id="mentions-close" class="icon-button" type="button" aria-label="Close mentions">×</button></div>
+      <p id="mentions-empty" class="field-help">No mentions in this project.</p>
+      <p id="mentions-error" class="form-error" role="alert"></p>
+      <ul id="mentions-list" class="mentions-list"></ul>
+      <button id="mentions-more" class="text-button" type="button" hidden>Earlier mentions</button>
+    </dialog>
+
     <dialog id="leave-project-dialog" class="create-dialog" aria-labelledby="leave-project-title" aria-describedby="leave-project-description">
       <form id="leave-project-form" method="dialog">
         <div class="dialog-heading"><h2 id="leave-project-title">Leave this project?</h2><button id="close-leave-project-button" class="icon-button" type="button" aria-label="Close">×</button></div>
         <p id="leave-project-description">You will lose access to its cloud sessions and code. Your local files and Agent conversations will not be deleted. Ask the owner for a new invitation if you want to rejoin.</p>
         <div id="leave-project-branch-choice" class="field" hidden>
           <label for="leave-project-branch-resolution">Resolve this member's cloud Git branch</label>
-          <select id="leave-project-branch-resolution" required></select>
+          <select id="leave-project-branch-resolution" required disabled></select>
           <p id="leave-project-branch-note" class="field-help"></p>
         </div>
         <p id="leave-project-error" class="form-error" role="alert"></p>
@@ -801,7 +816,6 @@
         <div class="connection-preview-banner" role="note">
           <span class="connection-preview-badge">Alpha preview</span>
           <span>Current server only</span>
-          <button class="button button-secondary" type="button" disabled>Official service is not open yet</button>
         </div>
         <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
           <li>
@@ -874,7 +888,6 @@ codex plugin add gatherthread@gatherthread</code>
         <div class="connection-preview-banner" role="note">
           <span class="connection-preview-badge">Alpha preview</span>
           <span>Current server only</span>
-          <button class="button button-secondary" type="button" disabled>Official service is not open yet</button>
         </div>
         <ol class="connection-guide dsh-connect-steps">
           <li>
@@ -1125,7 +1138,7 @@ codex plugin add gatherthread@gatherthread</code>
 
     <dialog id="history-summary-versions-dialog" class="create-dialog history-summary-versions-dialog" aria-labelledby="history-summary-versions-title">
       <div class="history-summary-versions-heading"><h2 id="history-summary-versions-title">Summary versions</h2><button id="history-summary-versions-close" class="icon-button workspace-icon-button" type="button" aria-label="Close summary versions" title="Close summary versions"><span aria-hidden="true">×</span></button></div>
-      <p>Newest non-overlapping summaries are shown by default. Earlier versions and all originals remain available. Display toggles do not change your Agent context policy.</p>
+      <p class="history-summary-versions-help">Toolbar arrows switch all history; arrows on a summary switch only that section. Originals are preserved. Display changes do not change Agent context.</p>
       <ol id="history-summary-versions" class="history-summary-versions"></ol>
     </dialog>
 
@@ -1153,6 +1166,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260925-1"></script>
+    <script type="module" src="./src/main.js?v=20260927-2"></script>
   </body>
 </html>

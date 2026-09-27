@@ -87,6 +87,14 @@ The project scheduling contract is harness-neutral through `ProjectHarnessAdapte
 
 Harness switching does not change cloud session identity. A user may use Codex, then DSH, then Codex again in one server session; each harness connects or pairs once per device and project, owns a separate native binding, and catches up from canonical history. A connected but unselected runtime may continue passive projection and must not execute another runtime's `agent_request`. Ambiguous multiple Codex runtimes fail closed. The feature synchronizes conversation state only and does not provide a global lock for cross-harness edits to one working directory.
 
+## Conversation quotes and mentions
+
+The Web timeline offers copy-body and quote icon controls for visible conversation messages, including another member's Chat, one's own Chat, Agent replies and displayed work messages. Quoting attaches an in-session reference to the next explicit Chat or Agent request. The preview can be cancelled; sent quotes can be clicked to reveal and locate their original message, including when the reader was viewing a compact summary. Shared quotes never bypass private-history permissions.
+
+Typing `@` opens a current-session member picker supporting keyboard arrows, Enter and Escape. Choosing a member records their identity; typing a name without choosing it remains plain text. Recipients get an in-page badge and a project-scoped mentions inbox, from which they can open the relevant session and jump to the message. Read markers are temporary to the current browser tab and reset on reload; this is not a durable cross-device read-receipt system. No `@all`, forced browser notification permission or implicit Agent execution is introduced. Viewers may read mentions but cannot send quotes or mentions without normal session-write permission.
+
+Codex and DSH Agent requests retain public quote attribution alongside the requested text. Context projection, local-upload preferences, manual snapshots, native compaction and exact-runtime model selection remain independent.
+
 ## Optional project code collaboration
 
 An owner may enable or pause a separate Git-backed code repository for a project. Pausing blocks new code transfers and mutations without deleting cloud commits or member branches; re-enabling restores the existing heads. Code checkpoints are not conversation events: each authenticated member owns one cloud branch across devices and harnesses, and only the project owner can review and merge an explicitly submitted head into shared main. All project readers can inspect source branches, including viewers; Solo does not narrow source-code visibility. Upload uses an expected base, so a stale device cannot overwrite a newer cloud revision.

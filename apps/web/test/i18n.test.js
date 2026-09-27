@@ -3,6 +3,10 @@ import assert from "node:assert/strict";
 
 import { memberRemovalAriaLabel, memberRoleAriaLabel, translateUiText } from "../src/i18n.js";
 
+test("Git back buttons translate their complete labels including the arrow", () => {
+  assert.equal(translateUiText("← Back to code settings", "zh-CN"), "← 返回代码设置");
+});
+
 test("remove-member accessible name preserves names and follows the active language", () => {
   const name = "Maya $& · 玛雅";
   assert.equal(memberRemovalAriaLabel(name, (source) => translateUiText(source, "en")), `Remove ${name} from project`);
