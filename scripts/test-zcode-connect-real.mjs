@@ -51,8 +51,11 @@ try {
     // connector defect: fail with the exact device-side fix instead of a
     // bare assertion error.
     if (error?.failureCode === "zcode_turn_failed" && /Select a model before continuing/i.test(error?.message ?? "")) {
-      process.stdout.write("FAIL: the real CLI started but no model is available for headless turns.\n");
-      process.stdout.write("Sign this CLI in and select a default model (run `zcode login`), then re-run this script.\n");
+      process.stdout.write("FAIL: the real CLI started but no entitled model is available for headless turns.\n");
+      process.stdout.write("The CLI needs a signed-in plan it can use on this device (run `zcode login`).\n");
+      process.stdout.write("Known 0.16.x limitation: domestic BigModel coding plans provisioned only through\n");
+      process.stdout.write("the desktop app are not visible to standalone headless app-server runs, and\n");
+      process.stdout.write("personal API-key provider configs are not read by the app-server at all.\n");
       process.exit(2);
     }
     throw error;
