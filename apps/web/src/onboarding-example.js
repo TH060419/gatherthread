@@ -15,7 +15,7 @@ export function mountExampleGateway({ document: doc, getContext, openSettings, s
     if (previous?.isConnected && !previous.closest('dialog:not([open]), [hidden]')) previous.focus({ preventScroll: true });
     else doc.getElementById('settings-button').focus({ preventScroll: true });
   }
-  function start(topic = 'basics') {
+  function start(topic = 'basics', locale = getContext().locale) {
     if (doc.getElementById('workspace').hidden || !getContext().userId || doc.querySelector('dialog[open]')) return;
     cancel();
     activeTopic = Object.hasOwn(GUIDE_LABELS, topic) ? topic : 'browse';
@@ -30,7 +30,7 @@ export function mountExampleGateway({ document: doc, getContext, openSettings, s
     frame.setAttribute('sandbox', 'allow-scripts');
     frame.setAttribute('referrerpolicy', 'no-referrer');
     presentation = JSON.stringify([getContext().locale, doc.documentElement.dataset.theme]);
-    frame.name = JSON.stringify({ topic: activeTopic, channel, locale: getContext().locale,
+    frame.name = JSON.stringify({ topic: activeTopic, channel, locale,
       theme: doc.documentElement.dataset.theme ?? 'system' });
     // This public, self-contained example alone permits same-site embedding.
     // It has no API access, credentials or external script/style requests.
@@ -41,7 +41,7 @@ export function mountExampleGateway({ document: doc, getContext, openSettings, s
   }
   win.addEventListener('message', (event) => {
     if (!frame || event.source !== frame.contentWindow || event.data?.channel !== channel) return;
-    if (event.data.type === 'example-topic' && (event.data.topic === 'browse' || Object.hasOwn(GUIDE_LABELS, event.data.topic))) { const topic = event.data.topic; cancel(); start(topic); return; }
+    if (event.data.type === 'example-topic' && (event.data.topic === 'browse' || Object.hasOwn(GUIDE_LABELS, event.data.topic))) { const topic = event.data.topic; const locale = event.data.locale === 'zh-CN' ? 'zh-CN' : 'en'; cancel(); start(topic, locale); return; }
     if (event.data.type === 'example-exit') {
       if (activeTopic === 'basics') progress.mark(activeKey, event.data.status === 'completed' ? 'completed' : 'skipped');
       cancel();
@@ -65,15 +65,27 @@ export function mountExampleGateway({ document: doc, getContext, openSettings, s
 
 export function exampleToolbar(doc, { cancel, onExit }) {
   const channel = doc.defaultView.__examplePresentation?.channel;
-  const zh = doc.documentElement.lang === 'zh-CN';
-  const bar = doc.createElement('nav'); bar.className = 'example-toolbar'; bar.setAttribute('aria-label', zh ? '示例导航' : 'Example navigation');
+  const locale = () => doc.documentElement.lang;
+  const zh = locale() === 'zh-CN';
+  const bar = doc.createElement('nav'); bar.className = 'example-toolbar'; bar.setAttribute('data-i18n-skip', ''); bar.setAttribute('aria-label', zh ? '示例导航' : 'Example navigation');
   const label = doc.createElement('span'); label.textContent = zh ? '示例项目 · 操作仅保留在本次演示' : 'Example project · changes stay in this demo';
   const choices = doc.createElement('select'); choices.setAttribute('aria-label', zh ? '选择教程' : 'Choose a guide');
   const browse = doc.createElement('option'); browse.value = ''; browse.textContent = zh ? '自由浏览' : 'Browse freely'; choices.append(browse);
   for (const [topic, pair] of Object.entries(GUIDE_LABELS)) { const option = doc.createElement('option'); option.value = topic; option.textContent = guideText(pair, doc.documentElement.lang); choices.append(option); }
-  choices.addEventListener('change', () => { cancel(); if (choices.value) { doc.defaultView.parent.postMessage({ type: 'example-topic', topic: choices.value, channel }, '*'); } });
+  choices.addEventListener('change', () => { cancel(); if (choices.value) { doc.defaultView.parent.postMessage({ type: 'example-topic', topic: choices.value, locale: locale(), channel }, '*'); } });
   const free = doc.createElement('button'); free.type = 'button'; free.textContent = zh ? '自由浏览' : 'Browse freely'; free.addEventListener('click', () => { cancel(); choices.value = ''; });
   const close = doc.createElement('button'); close.type = 'button'; close.textContent = zh ? '退出示例 ×' : 'Exit example ×'; close.addEventListener('click', () => onExit('skipped'));
-  const reset = doc.createElement('button'); reset.type = 'button'; reset.textContent = zh ? '重置示例' : 'Reset example'; reset.addEventListener('click', () => { doc.defaultView.parent.postMessage({ type: 'example-topic', topic: 'browse', channel }, '*'); });
+  const reset = doc.createElement('button'); reset.type = 'button'; reset.textContent = zh ? '重置示例' : 'Reset example'; reset.addEventListener('click', () => { doc.defaultView.parent.postMessage({ type: 'example-topic', topic: 'browse', locale: locale(), channel }, '*'); });
   bar.append(label, choices, free, reset, close); doc.body.append(bar);
+  return { refreshLanguage() {
+    const zh = locale() === 'zh-CN';
+    bar.setAttribute('aria-label', zh ? '示例导航' : 'Example navigation');
+    label.textContent = zh ? '示例项目 · 操作仅保留在本次演示' : 'Example project · changes stay in this demo';
+    choices.setAttribute('aria-label', zh ? '选择教程' : 'Choose a guide');
+    browse.textContent = free.textContent = zh ? '自由浏览' : 'Browse freely';
+    for (const option of choices.options) if (option.value) option.textContent = guideText(GUIDE_LABELS[option.value], locale());
+    reset.textContent = zh ? '重置示例' : 'Reset example';
+    close.textContent = zh ? '退出示例 ×' : 'Exit example ×';
+  } };
+
 }

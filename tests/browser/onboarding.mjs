@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { ExampleCollaborationApi } from '../../apps/web/src/example-api.js';
 import { guideSteps } from '../../apps/web/src/onboarding-content.js';
 const { chromium, webkit } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright');
 const origin = process.env.ONBOARDING_ORIGIN ?? 'http://127.0.0.1:4173';
@@ -110,7 +111,8 @@ async function assertStep(frame, item, size) {
 async function walk(page, frame, topic, prefix) {
   const steps = guideSteps(topic), size = page.viewportSize();
   for (let index = 0; index < steps.length; index++) {
-    await assertStep(frame, steps[index], size);
+    try { await assertStep(frame, steps[index], size); }
+    catch (error) { await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}-failure.png` }); error.message = `${prefix} ${topic}/${steps[index].id}: ${error.message}`; throw error; }
     if (['welcome', 'model', 'answer', 'upload', 'roles', 'enable', 'original'].includes(steps[index].id)) await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}.png` });
     await frame.locator('.driver-popover-next-btn').click();
   }
@@ -118,12 +120,27 @@ async function walk(page, frame, topic, prefix) {
   assert.deepEqual(await page.evaluate(() => window.realWrites), [], 'guides never write to parent API');
 }
 try {
+  // The produced example is an actual, small interactive page, not a report-only fixture.
+  for (const locale of ['en', 'zh-CN']) {
+    const api = new ExampleCollaborationApi(locale);
+    for (const branch of ['main', 'branch-maya']) {
+      const { snapshot } = await api.getProjectCodeSnapshot('project-orbit', branch);
+      const page = await browser.newPage();
+      await page.setContent(Buffer.from(snapshot.files[0].content_base64, 'base64').toString('utf8'));
+      assert.equal(await page.locator('[role=status]').isVisible(), false);
+      await page.getByRole('button', { name: locale === 'zh-CN' ? '我要报名' : 'Sign me up' }).click();
+      assert.equal(await page.locator('[role=status]').isVisible(), true);
+      assert.match(await page.locator('[role=status]').innerText(), locale === 'zh-CN' ? /报名成功/ : /signed up/);
+      if (branch === 'branch-maya') assert.match(await page.locator('[role=status]').innerText(), locale === 'zh-CN' ? /周六见/ : /See you Saturday/);
+      await page.close();
+    }
+  }
   for (const options of [
     { locale: 'en', width: 1440, height: 900 },
     { locale: 'zh-CN', width: 1440, height: 900, empty: true },
     { locale: 'zh-CN', width: 390, height: 844, viewer: true },
     { locale: 'zh-CN', width: 320, height: 568, empty: true, deniedStorage: true },
-  ]) {
+  ].filter(options => !process.env.ONBOARDING_WIDTH || options.width === Number(process.env.ONBOARDING_WIDTH))) {
     console.log(`${browserName}: checking ${options.locale} ${options.width}×${options.height}${options.empty ? ' empty' : ''}${options.viewer ? ' viewer' : ''}`);
     const { page, context, frame } = await launchPage(options);
     const prefix = `${options.locale}-${options.width}`;
@@ -154,6 +171,40 @@ try {
   await frame.getByText('Temporary change', { exact: true }).waitFor();
   await frame.locator('.example-toolbar button').nth(1).click();
   let fresh = await example(page); assert.equal(await fresh.getByText('Temporary change', { exact: true }).count(), 0);
+  // In-example language preview/cancel/save retains practice and stays local.
+  await fresh.locator('#message-input').fill('Keep this practice message');
+  await fresh.locator('#send-chat-button').click();
+  await fresh.getByText('Keep this practice message', { exact: true }).waitFor();
+  await fresh.locator('#settings-button').click();
+  await fresh.locator('#settings-locale').selectOption('zh-CN');
+  await fresh.getByText('Keep this practice message', { exact: true }).waitFor();
+  assert.match(await fresh.locator('.example-toolbar').innerText(), /自由浏览/);
+  assert.match(await fresh.locator('#event-timeline').innerText(), /林悦/);
+  assert.equal(await fresh.locator('#current-username').innerText(), '陈晓');
+  assert.match(await fresh.locator('#member-list').innerText(), /林悦/);
+  assert.equal(await page.locator('html').getAttribute('lang'), 'en', 'sample language does not change real settings');
+  await fresh.locator('#cancel-settings-button').click();
+  assert.equal(await fresh.locator('#current-username').innerText(), 'Alex', 'cancel restores authored language');
+  await fresh.locator('#settings-button').click();
+  await fresh.locator('#settings-locale').selectOption('zh-CN');
+  await fresh.locator('#settings-form button[type=submit]').click();
+  await fresh.locator('#settings-dialog[open]').waitFor({ state: 'hidden' });
+  await fresh.locator('.example-toolbar select').selectOption('summaries');
+  fresh = await example(page); await fresh.locator(popup).waitFor();
+  assert.equal(await fresh.locator('html').getAttribute('lang'), 'zh-CN', 'guide navigation keeps sample language');
+  for (let index = 0; index < 4; index++) await fresh.locator('.driver-popover-next-btn').click();
+  await fresh.locator('#settings-dialog[open]').waitFor();
+  assert.equal(await fresh.locator('#settings-summary-title').innerText(), '摘要');
+  assert.match(await fresh.locator('#settings-history-context-mode option[value=summary]').innerText(), /推荐.*聚焦核心结论/);
+  // Exercise preview while the tutorial owns Settings, without restarting it.
+  await fresh.locator('#settings-locale').selectOption('en', { force: true });
+  assert.equal(await fresh.locator('#settings-dialog[open]').count(), 1);
+  assert.match(await fresh.locator('.driver-popover-title').innerText(), /Choose what your AI agent reads/);
+  assert.match(await fresh.locator('.driver-popover-description').innerText(), /focus on agreed conclusions/);
+  assert.equal(await fresh.locator('#settings-summary-title').innerText(), 'Summaries');
+  assert.match(await fresh.locator('#settings-history-context-mode option[value=summary]').innerText(), /focus.*recommended/);
+  await fresh.locator('.example-toolbar button').first().click();
+  assert.equal(await fresh.locator('#settings-dialog[open]').count(), 0);
   await page.evaluate(() => { localStorage.setItem('gt-lang', 'zh'); dispatchEvent(new StorageEvent('storage', { key: 'gt-lang', newValue: 'zh' })); });
   await page.waitForTimeout(250); fresh = await example(page);
   await fresh.waitForFunction(() => document.documentElement.lang === 'zh-CN');

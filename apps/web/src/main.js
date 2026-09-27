@@ -3183,6 +3183,17 @@ function applyVisualSettings(settings) {
   root.style.setProperty("--right-panel-width", `${normalized.layout.rightPanelPixels}px`);
   root.style.setProperty("--composer-height", `min(${normalized.layout.composerPixels}px, 44vh)`);
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
+  if (exampleMode && localeChanged) {
+    api.setLocale(normalized.general.locale, { ...state, events: sync.events });
+    window.__examplePresentation.locale = normalized.general.locale;
+    if (state.currentUser) {
+      element("current-username").textContent = state.currentUser.username;
+      element("current-user-avatar").textContent = initials(state.currentUser.username);
+    }
+    renderProjectSelect();
+    renderSessionList();
+    if (state.session) renderSessionHeader();
+  }
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
   onboarding.refreshLanguage();

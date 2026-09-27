@@ -16,4 +16,12 @@ window.fetch = () => Promise.reject(new Error('Example mode does not access a se
 window.WebSocket = class { constructor() { throw new Error('Example mode has no runtime connection.'); } };
 document.documentElement.dataset.example = 'true';
 document.addEventListener('click', (event) => { const anchor = event.target.closest?.('a'); if (anchor && !anchor.getAttribute('href')?.startsWith('#')) event.preventDefault(); }, true);
+// The sandbox forbids native form submission. Run only the shell's local
+// handlers so saving example settings never navigates or needs allow-forms.
+document.addEventListener('click', (event) => {
+  const button = event.target.closest?.('button, input');
+  if (button?.type !== 'submit' || !button.form || button.disabled) return;
+  event.preventDefault();
+  if (button.form.reportValidity()) button.form.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true, submitter: button }));
+}, true);
 import('./main.js');

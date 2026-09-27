@@ -51,6 +51,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   let layoutFrame;
   let ending = false;
   let language;
+  let toolbar;
   let line;
   let lastTarget;
   const originalAttributes = new Map();
@@ -380,14 +381,23 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       if (!initialOffer) return;
       initialOffer = false;
       const topic = win.__examplePresentation?.topic;
-      exampleToolbar(doc, { start, cancel: () => end(null), onExit: (status) => exitExample(status) });
+      toolbar = exampleToolbar(doc, { start, cancel: () => end(null), onExit: (status) => exitExample(status) });
       if (topic && topic !== "browse") win.requestAnimationFrame(() => start(topic));
     },
     cancel() { pendingKey = null; win.cancelAnimationFrame(autoFrame); end(null); },
     refreshLanguage() {
+      toolbar?.refreshLanguage();
       if (tour && language !== getContext().locale) {
-        const index = tour.getActiveIndex(); const topic = activeTopic;
-        end(null); start(topic); tour?.drive(index);
+        language = getContext().locale;
+        const config = tour.getConfig();
+        // Keep the current Settings dialog and scenario alive during preview.
+        // Destroying/restarting would close owned dialogs and cancel the preview.
+        tour.setConfig({ ...config,
+          nextBtnText: text(GUIDE_COPY.next), prevBtnText: text(GUIDE_COPY.back), doneBtnText: text(GUIDE_COPY.done),
+          steps: config.steps.map((item, index) => ({ ...item,
+            popover: { ...item.popover, title: text(activeItems[index].title), description: text(activeItems[index].text) } })),
+        });
+        tour.drive(tour.getActiveIndex());
       }
     },
   };

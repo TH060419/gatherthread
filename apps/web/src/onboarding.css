@@ -108,6 +108,7 @@ html[data-example="true"] .workspace[data-onboarding-view="details"] .conversati
   html[data-example="true"] .workspace[data-onboarding-step="selection"] #composer-layout-resizer { display: none; }
   html[data-example="true"] .workspace[data-onboarding-step="quote"] .session-view,
   html[data-example="true"] .workspace[data-onboarding-step="selection"] .session-view { grid-template-rows: auto auto auto auto auto minmax(0, 1fr) 0 0; }
+  html[data-example="true"] .workspace[data-onboarding-step="quote"] #timeline-region { max-height: max(60px, calc(100dvh - 220px)); }
   html[data-example="true"] .workspace[data-onboarding-step="roles"] .member-panel { padding: 12px; }
   html[data-example="true"] .workspace[data-onboarding-step="roles"] .member-list { margin-top: 8px; }
   html[data-example="true"] .workspace[data-onboarding-step="roles"] .member-row { padding: 2px 0; gap: 6px; }
