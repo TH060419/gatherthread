@@ -3970,8 +3970,8 @@ export function executionProfilesFromModelList(
 ): readonly RuntimeExecutionProfile[] | undefined {
   const catalog: RuntimeExecutionProfile[] = [];
   const advertised = new Set<string>();
+  let configuredProfile: RuntimeExecutionProfile | undefined;
   for (const entry of entries) {
-    if (catalog.length >= MAX_ADVERTISED_MODELS) break;
     if (!isObject(entry) || entry.hidden === true) continue;
     const id = normalizableCodexModel(entry.id);
     if (id === undefined || advertised.has(id)) continue;
@@ -3982,20 +3982,23 @@ export function executionProfilesFromModelList(
       : "";
     // A model whose effort metadata is missing or empty is advertised without any
     // efforts. Absence is not evidence of support, so nothing is invented for it.
-    catalog.push({
+    const profile: RuntimeExecutionProfile = {
       provider,
       model: id,
       ...(reasoningEfforts.length === 0 ? {} : { reasoningEfforts }),
       ...(reasoningEfforts.includes(defaultReasoningEffort) ? { defaultReasoningEffort } : {}),
-    });
+    };
+    if (id === configuredModel) configuredProfile = profile;
+    if (catalog.length < MAX_ADVERTISED_MODELS) catalog.push(profile);
   }
-  if (advertised.has(configuredModel)) return catalog;
+  if (catalog.length === 0) return undefined;
+  if (catalog.some((profile) => profile.model === configuredModel)) return catalog;
   // This runtime is registered for the configured model, so a request naming it must
   // stay claimable: one slot is reserved for it when the catalog does not name it,
   // which also keeps the whole declaration inside the protocol's profile bound. Its
-  // efforts stay undeclared because no catalog entry describes them.
+  // efforts stay undeclared only when no catalog entry describes them.
   const profiles = catalog.slice(0, MAX_ADVERTISED_MODELS - 1);
-  profiles.push({ provider, model: configuredModel });
+  profiles.push(configuredProfile ?? { provider, model: configuredModel });
   return profiles;
 }
 
@@ -4030,6 +4033,7 @@ function advertisedReasoningEfforts(value: unknown): readonly string[] {
     if (typeof raw !== "string") continue;
     const effort = raw.trim();
     if (!isSafeExecutionProfileText(effort, 80)) continue;
+    if (!CODEX_REASONING_EFFORTS.includes(effort)) continue;
     if (efforts.includes(effort)) continue;
     efforts.push(effort);
   }

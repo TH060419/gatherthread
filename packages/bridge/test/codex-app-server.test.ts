@@ -4303,12 +4303,11 @@ async function waitForCapturedMethod(capturePath: string, method: string, expect
 }
 
 test("Codex model catalog parsing keeps only usable picker models and bounds the declaration", () => {
-  // An empty catalog still keeps the configured model claimable: the runtime is
-  // registered for it, so a request naming it must not become unclaimable. Its
-  // efforts stay undeclared because no catalog entry describes them.
-  assert.deepEqual(executionProfilesFromModelList([], "openai", "gpt-5.6-sol"), [
-    { provider: "openai", model: "gpt-5.6-sol" },
-  ]);
+  // An unusable catalog must retain legacy routing, not publish a restrictive declaration.
+  assert.equal(executionProfilesFromModelList([], "openai", "gpt-5.6-sol"), undefined);
+  assert.equal(executionProfilesFromModelList([
+    { id: "-p" }, { id: "hidden", hidden: true }, "invalid",
+  ], "openai", "gpt-5.6-sol"), undefined);
   const profiles = executionProfilesFromModelList([
     {
       id: "gpt-6-sol",
@@ -4348,7 +4347,7 @@ test("Codex model catalog parsing keeps only usable picker models and bounds the
   // A catalog identifier longer than the protocol's model bound cannot be registered.
   assert.deepEqual(
     executionProfilesFromModelList([{ id: `long-${"x".repeat(170)}` }], "openai", "gpt-6-sol"),
-    [{ provider: "openai", model: "gpt-6-sol" }],
+    undefined,
   );
 });
 
@@ -4381,6 +4380,29 @@ test("a full Codex catalog still leaves the configured model claimable", () => {
     withConfigured?.find((profile) => profile.model === "gpt-5.6-sol")?.reasoningEfforts,
     ["low", "medium"],
   );
+  for (const position of [32, 39]) {
+    const entries: Array<{ id: string; supportedReasoningEfforts: string[]; defaultReasoningEffort?: string }> = [...many];
+    entries.splice(position, 0, {
+      id: "gpt-5.6-sol", supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high",
+    });
+    const selected = executionProfilesFromModelList(entries, "openai", "gpt-5.6-sol");
+    assert.equal(selected?.length, 32);
+    assert.deepEqual(selected?.find((profile) => profile.model === "gpt-5.6-sol"), {
+      provider: "openai", model: "gpt-5.6-sol", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high",
+    });
+  }
+});
+
+test("Codex catalog efforts agree with the connector execution boundary", () => {
+  assert.deepEqual(executionProfilesFromModelList([{
+    id: "gpt-5.6-sol", supportedReasoningEfforts: ["none", "minimal", "future", "low", "high"],
+    defaultReasoningEffort: "future",
+  }], "openai", "gpt-5.6-sol"), [{
+    provider: "openai", model: "gpt-5.6-sol", reasoningEfforts: ["low", "high"],
+  }]);
+  assert.deepEqual(executionProfilesFromModelList([{
+    id: "gpt-5.6-sol", supportedReasoningEfforts: CODEX_EFFORTS,
+  }], "openai", "gpt-5.6-sol")?.[0]?.reasoningEfforts, CODEX_EFFORTS);
 });
 
 test("Codex preflight advertises the App Server's own model catalog", async (t) => {

@@ -152,9 +152,9 @@ export class DshProjectManager {
    *
    * The manager owns the catalog every session connector is created from, so a
    * refresh updates that source first and then asks each running connector to
-   * re-register. Connectors that fail are reported through the background-error
-   * channel instead of aborting the refresh: one unhealthy session must not stop
-   * the others from advertising a newly published model.
+   * re-register. Every connector gets its chance before failures are reported and
+   * rejected together, so one unhealthy session cannot block its peers and the
+   * native owner retains the publication for retry until all sessions confirm it.
    */
   async updateExecutionProfiles(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void> {
     const cloned = profiles.map((profile) => ({
@@ -175,6 +175,9 @@ export class DshProjectManager {
     // Reported after every session had its chance, so a caller awaiting this can
     // still observe that the refresh only partly applied.
     for (const failure of failures) this.#reportError(failure);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "DSH execution profile publication was not confirmed by every session");
+    }
   }
 
   activeSessionIds(): string[] {

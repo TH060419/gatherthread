@@ -21,6 +21,9 @@ import {
   type DshManagedConnector,
 } from "../src/project-manager.js";
 import { MemoryConnectorStateStore } from "../src/state-store.js";
+import { DSH_NATIVE_CREDENTIAL_KEY } from "../src/native-connection.js";
+import { DshNativeHostController } from "../src/native-plugin.js";
+import { DshStatusController } from "../src/status.js";
 import type {
   DshAgentStatus,
   DshAppendEventInput,
@@ -655,7 +658,7 @@ test("a refreshed catalog reaches every active connector and one failure cannot 
     { provider: "deepseek-official", model: "DeepSeek-CustomCase" },
     { provider: "deepseek-official", model: "deepseek-v4.1", reasoningEfforts: ["low", "high"] },
   ];
-  await manager.updateExecutionProfiles(refreshed);
+  await assert.rejects(manager.updateExecutionProfiles(refreshed), AggregateError);
   assert.deepEqual(created.map((connector) => connector.profileUpdates.length), [0, 1]);
   assert.deepEqual(created[1]!.profileUpdates[0], refreshed);
   assert.equal(reported.length, 1, "the failing session is reported instead of hidden");
@@ -666,6 +669,66 @@ test("a refreshed catalog reaches every active connector and one failure cannot 
   await manager.refreshOnce();
   assert.deepEqual(attachedProfiles.at(-1), refreshed);
   await manager.stop();
+});
+
+test("native owner retries an unchanged catalog after an actual project manager partially fails", async () => {
+  const api = new DiscoveryApi();
+  api.sessions = [session("first"), session("second")];
+  const created: FakeManagedConnector[] = [];
+  const failures: Error[] = [];
+  let clock = 1_000_000;
+  let catalog = [{ provider: "deepseek-official", model: "DeepSeek-CustomCase" }];
+  const grant = {
+    schemaVersion: 2, serverUrl: "https://gatherthread.example", apiUrl: "https://gatherthread.example/v1",
+    deviceId: "device-1", deviceName: "Fixture device", token: "gta_fixture-long-lived-secret",
+    route: { provider: "deepseek-official", model: "DeepSeek-CustomCase" },
+  };
+  const controller = new DshNativeHostController({
+    context: { credentials: {
+      async readRecord(key: string) {
+        return key === DSH_NATIVE_CREDENTIAL_KEY ? { kind: "grant", payload: grant } : undefined;
+      },
+      async modifyRecord() { throw new Error("Catalog refresh must not modify credentials"); },
+      async deleteRecord() { throw new Error("Catalog refresh must not delete credentials"); },
+    } },
+    status: new DshStatusController({ bindingMode: "project", projectName: "Fixture Project" }),
+    workspacePath: "/readonly/workspace",
+    now: () => clock,
+    listExecutionProfiles: async () => catalog,
+    listProjects: async () => [{ id: "project-1", name: "Fixture Project", role: "owner", state: "active", sessionCount: 2 }],
+    resolveWorkspace: async () => "/readonly/workspace",
+    createOwner: async (_grant, _binding, _signal, _status, _workspace, executionProfiles) => {
+      const manager = new DshProjectManager({
+        config: projectConfig(executionProfiles === undefined ? {} : { executionProfiles }), api,
+        onBackgroundError: (error) => failures.push(error),
+        createConnector: () => {
+          const connector = new FakeManagedConnector();
+          created.push(connector);
+          return connector;
+        },
+      });
+      await manager.start();
+      // This is the forwarding contract used by the production native owner.
+      return { stop: () => manager.stop(), updateExecutionProfiles: (profiles) => manager.updateExecutionProfiles(profiles) };
+    },
+  });
+  try {
+    await controller.start();
+    assert.equal(created.length, 2);
+    created[0]!.failProfileUpdate = true;
+    catalog = [...catalog, { provider: "deepseek-official", model: "deepseek-v4.1" }];
+    clock += 5 * 60 * 1_000;
+    await controller.refreshProjects();
+    assert.deepEqual(created.map((connector) => connector.profileUpdates.length), [0, 1]);
+    assert.equal(failures.length, 1);
+    assert.equal(controller.publicState().recoverableError, "connection_failed");
+    created[0]!.failProfileUpdate = false;
+    clock += 5 * 60 * 1_000;
+    await controller.refreshProjects();
+    assert.deepEqual(created[0]!.profileUpdates, [catalog]);
+    assert.equal(controller.publicState().recoverableError, undefined);
+    assert.equal(created.some((connector) => connector.stopped), false);
+  } finally { await controller.dispose(); }
 });
 
 async function bounded<T>(value: Promise<T>, milliseconds: number): Promise<T> {
