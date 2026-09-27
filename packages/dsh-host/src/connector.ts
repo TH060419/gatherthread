@@ -92,6 +92,8 @@ export class DshHostConnector {
   #pollPromise: Promise<DshPollResult> | undefined;
   #localSyncControlPromise: Promise<void> | undefined;
   #heartbeatPromise: Promise<void> | undefined;
+  /** An in-flight execution-profile re-registration owns the runtime declaration. */
+  #publicationPromise: Promise<void> | undefined;
   #heartbeatOffline = false;
   #liveProgressPromise: Promise<void> = Promise.resolve();
   #lastLiveProgressKey: string | undefined;
@@ -142,26 +144,47 @@ export class DshHostConnector {
    * time; that registration is idempotent per device, harness, and local session,
    * so the runtime identity and any in-flight claim survive the refresh.
    *
+   * Publication is serialized with heartbeat validation. A heartbeat that was
+   * already in flight answers with the declaration the server stored before this
+   * refresh, so committing the new config first would make that answer look like
+   * identity drift and stop the connector; heartbeats that arrive during the
+   * refresh wait for it instead of racing it.
+   *
    * The catalog is only ever replaced wholesale: a refresh that reports the same
    * routes does nothing, and a not-yet-started connector refuses the update rather
    * than recording a declaration it never sent.
    */
   async updateExecutionProfiles(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void> {
     if (!this.#started || this.#stopped) throw new Error("DSH connector is not running");
+    if (this.#publicationPromise !== undefined) {
+      throw new Error("A DSH execution profile publication is already in flight");
+    }
     const runtime = this.#requireRuntime();
     if (sameExecutionProfiles(runtime.executionProfiles, profiles)) return;
     const cloned = cloneExecutionProfiles(profiles);
-    const registration = await this.#api.registerRuntime(this.#runtimeRegistration(cloned));
-    // The declaration only counts once the server confirms it. Committing before
-    // that would let this connector accept requests for models the server has not
-    // recorded for this runtime, so a stale echo fails closed instead.
-    if (registration.executionProfiles === undefined
-      || !sameExecutionProfiles(registration.executionProfiles, cloned)) {
-      throw new Error("GatherThread did not confirm the refreshed DSH execution profiles");
+    const publication = (async () => {
+      // Let an in-flight heartbeat finish validating against the current
+      // declaration before this refresh replaces it.
+      await this.#heartbeatPromise?.catch(() => undefined);
+      if (this.#stopped) throw new Error("DSH connector is not running");
+      const registration = await this.#api.registerRuntime(this.#runtimeRegistration(cloned));
+      // The declaration only counts once the server confirms it. Committing before
+      // that would let this connector accept requests for models the server has not
+      // recorded for this runtime, so a stale echo fails closed instead.
+      if (registration.executionProfiles === undefined
+        || !sameExecutionProfiles(registration.executionProfiles, cloned)) {
+        throw new Error("GatherThread did not confirm the refreshed DSH execution profiles");
+      }
+      this.#config.executionProfiles = cloned;
+      this.#runtime = registration;
+      this.#assertRuntime(registration);
+    })();
+    this.#publicationPromise = publication;
+    try {
+      await publication;
+    } finally {
+      if (this.#publicationPromise === publication) this.#publicationPromise = undefined;
     }
-    this.#config.executionProfiles = cloned;
-    this.#runtime = registration;
-    this.#assertRuntime(registration);
   }
 
   #runtimeRegistration(
@@ -1260,6 +1283,12 @@ export class DshHostConnector {
 
   #heartbeat(): Promise<void> {
     if (this.#stopped) return Promise.reject(new Error("DSH connector is not running"));
+    // A profile refresh is replacing the runtime declaration. A heartbeat started
+    // now would read the declaration the server has not stored yet and be rejected
+    // as identity drift, so wait for the refresh and then validate the new one.
+    if (this.#publicationPromise !== undefined) {
+      return this.#publicationPromise.catch(() => undefined).then(() => this.#heartbeat());
+    }
     if (this.#heartbeatPromise !== undefined) return this.#heartbeatPromise;
     const current = this.#requireRuntime();
     this.#heartbeatPromise = (async () => {

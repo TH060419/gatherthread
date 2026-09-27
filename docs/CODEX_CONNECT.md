@@ -102,7 +102,7 @@ RPC frames and the 7 KiB Codex Desktop Hook capsule remain bounded. The capsule 
 
 ## Model selection
 
-A Codex installation publishes the models it offers, and that catalog — not a list built into the browser — decides which models the Web workspace shows for this connection. The connector reads it once during preflight, so restart the connector after changing your Codex model catalog if you want the new entries offered immediately. `--model` still selects the model this connection uses by default; a Web request may name any advertised model and one of that model's advertised reasoning efforts, and nothing else is accepted.
+A Codex installation publishes the models it offers, and that catalog — not a list built into the browser — decides which models the Web workspace shows for this connection. The connector reads it once during preflight, so restart the connector after changing your Codex model catalog if you want the new entries offered immediately. `--model` still selects the model this connection uses by default; a Web request may name any advertised model and one of that model's advertised reasoning efforts, and nothing else is accepted. When the catalog describes no reasoning efforts for a model, that model is offered without a Reasoning control and its requests send no effort, rather than guessing a value the harness may not accept.
 
 If your Codex version cannot report a catalog, the Web workspace falls back to its built-in list and this connection keeps using its configured `--model`. A model you configured in Codex but that does not appear there is not a synchronization failure; check the `Codex model catalog:` line that preflight prints. [ADR-0032](adr/0032-harness-advertised-model-catalogs.md) records the rule.
 

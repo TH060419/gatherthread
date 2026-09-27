@@ -3968,10 +3968,10 @@ export function executionProfilesFromModelList(
   provider: string,
   configuredModel: string,
 ): readonly RuntimeExecutionProfile[] | undefined {
-  const profiles: RuntimeExecutionProfile[] = [];
+  const catalog: RuntimeExecutionProfile[] = [];
   const advertised = new Set<string>();
   for (const entry of entries) {
-    if (profiles.length >= MAX_ADVERTISED_MODELS) break;
+    if (catalog.length >= MAX_ADVERTISED_MODELS) break;
     if (!isObject(entry) || entry.hidden === true) continue;
     const id = normalizableCodexModel(entry.id);
     if (id === undefined || advertised.has(id)) continue;
@@ -3980,17 +3980,23 @@ export function executionProfilesFromModelList(
     const defaultReasoningEffort = typeof entry.defaultReasoningEffort === "string"
       ? entry.defaultReasoningEffort.trim()
       : "";
-    profiles.push({
+    // A model whose effort metadata is missing or empty is advertised without any
+    // efforts. Absence is not evidence of support, so nothing is invented for it.
+    catalog.push({
       provider,
       model: id,
       ...(reasoningEfforts.length === 0 ? {} : { reasoningEfforts }),
       ...(reasoningEfforts.includes(defaultReasoningEffort) ? { defaultReasoningEffort } : {}),
     });
   }
-  if (!advertised.has(configuredModel) && profiles.length < MAX_ADVERTISED_MODELS) {
-    profiles.push({ provider, model: configuredModel, reasoningEfforts: CODEX_REASONING_EFFORTS });
-  }
-  return profiles.length === 0 ? undefined : profiles;
+  if (advertised.has(configuredModel)) return catalog;
+  // This runtime is registered for the configured model, so a request naming it must
+  // stay claimable: one slot is reserved for it when the catalog does not name it,
+  // which also keeps the whole declaration inside the protocol's profile bound. Its
+  // efforts stay undeclared because no catalog entry describes them.
+  const profiles = catalog.slice(0, MAX_ADVERTISED_MODELS - 1);
+  profiles.push({ provider, model: configuredModel });
+  return profiles;
 }
 
 /**

@@ -125,6 +125,8 @@ class FakeApi implements DshCollaborationApi {
   failNextKind: "progress" | "append" | "complete" | "local_turn" | undefined;
   failNextHeartbeat = false;
   readGate: Promise<void> | undefined;
+  /** Holds heartbeat responses in flight so a refresh can race one. */
+  heartbeatGate: Promise<void> | undefined;
   forcedRuntimeId: string | undefined;
   forcedHeartbeatRuntimeId: string | undefined;
   /** Mimic a server that stores and echoes the latest declaration, as the real one does. */
@@ -177,12 +179,17 @@ class FakeApi implements DshCollaborationApi {
       this.failNextHeartbeat = false;
       throw new Error("simulated heartbeat transport failure");
     }
-    if (this.#runtime === undefined || runtimeId !== this.#runtime.id) {
+    // Snapshot before waiting: a real heartbeat reads the stored row when the
+    // request is served, so a gated response carries the declaration the server
+    // held before any later registration.
+    const observed = this.#runtime === undefined ? undefined : structuredClone(this.#runtime);
+    await this.heartbeatGate;
+    if (observed === undefined || runtimeId !== observed.id) {
       throw new Error("unknown fake runtime");
     }
     return {
-      ...structuredClone(this.#runtime),
-      id: this.forcedHeartbeatRuntimeId ?? this.#runtime.id,
+      ...observed,
+      id: this.forcedHeartbeatRuntimeId ?? observed.id,
     };
   }
 
@@ -1882,6 +1889,45 @@ test("ambiguous state/session identity and viewer access fail closed", async () 
   });
   await assert.rejects(rewound.start({ schedule: false }), /head precedes the persisted DSH cursor/);
   assert.equal(rewoundHost.openCount, 0);
+});
+
+test("a catalog refresh waits for an in-flight heartbeat instead of reading it as identity drift", async () => {
+  const cfg = config({
+    executionProfiles: [{ provider: "deepseek-official", model: "deepseek-v4-flash" }],
+  });
+  const api = new FakeApi();
+  api.echoRegistrations = true;
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+    heartbeatIntervalMs: 5,
+  });
+  await connector.start({ runImmediately: false });
+
+  // Park a heartbeat mid-flight so its response still carries the previous
+  // declaration when the refresh below tries to replace it.
+  let release: () => void = () => {};
+  api.heartbeatGate = new Promise<void>((resolve) => { release = resolve; });
+  await waitFor(() => api.heartbeatCount >= 1);
+
+  const refreshed = [
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    { provider: "deepseek-official", model: "deepseek-v4.1", reasoningEfforts: ["low"] },
+  ];
+  const update = connector.updateExecutionProfiles(refreshed);
+  assert.equal(api.registrations.length, 1, "the refresh must not commit while a heartbeat can still answer");
+  release();
+  await update;
+
+  // The stale heartbeat answer is the declaration this connector held when the
+  // request was served, so it must not be treated as identity drift.
+  assert.equal(connector.stopped, false);
+  assert.deepEqual(api.registrations.at(-1)?.executionProfiles, refreshed);
+  assert.deepEqual(api.returnedRuntimeIds, ["runtime-1", "runtime-1"]);
+  await connector.stop();
 });
 
 test("a refreshed DSH model catalog is re-registered on the same runtime identity", async () => {

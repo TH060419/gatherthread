@@ -240,6 +240,29 @@ test("Codex requests may only name a model and effort the runtime advertises", (
   });
 });
 
+test("a Codex model declared without efforts accepts only an effort-less request", () => {
+  const codex = runtime({
+    id: "runtime-codex-1",
+    device_id: "codex-device-1",
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    execution_profiles: [{ provider: "openai", model: "gpt-6-sol" }],
+  });
+  // Absence of effort metadata is not evidence of support, so the request omits the
+  // effort rather than substituting a built-in value.
+  assert.deepEqual(codexExecutionProfile(codex, { model: "gpt-6-sol" }), {
+    harness: "codex",
+    model: "gpt-6-sol",
+    runtimeId: "runtime-codex-1",
+  });
+  assert.throws(
+    () => codexExecutionProfile(codex, { model: "gpt-6-sol", reasoningEffort: "low" }),
+    /does not advertise a reasoning effort/u,
+  );
+  assert.throws(() => codexExecutionProfile(codex, { model: "gpt-6-terra" }), /advertises/u);
+});
+
 test("pairing hash accepts only the short one-time code and can be removed without losing project navigation", () => {
   assert.equal(dshPairingCodeFromHash("#project=p1&dsh-pair=ABCD-2345"), "ABCD-2345");
   assert.equal(dshPairingCodeFromHash("#dsh-pair=bad-token-value"), "");

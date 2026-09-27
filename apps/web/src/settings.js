@@ -133,7 +133,7 @@ export function normalizeSettings(input) {
       projectProfiles[projectId] = {
         harness,
         enabledHarnesses,
-        codex: normalizeCodexProfile(legacyCodex, customCodexModels),
+        codex: normalizeStoredCodexProfile(legacyCodex, customCodexModels),
         dsh: normalizeDshProfile(profile.dsh),
       };
     }
@@ -206,7 +206,30 @@ export function normalizeCodexProfile(profile, customModels = [], advertisedMode
       ? { id: requested, defaultEffort: "medium", efforts: CODEX_REASONING_EFFORTS }
       : available.get(DEFAULT_CODEX_MODEL));
   const effort = selected.efforts.includes(profile?.effort) ? profile.effort : selected.defaultEffort;
-  return { model: selected.id, effort };
+  // No effort is chosen when the declaration offers none, so callers omit it from
+  // the request instead of substituting a value the harness never advertised.
+  return effort === undefined ? { model: selected.id } : { model: selected.id, effort };
+}
+
+/**
+ * Preserve a stored Codex choice instead of re-deriving it.
+ *
+ * Which efforts a model accepts is a runtime fact that the built-in list cannot
+ * know, so normalizing a stored choice against that list silently replaced an
+ * advertised effort (for example `max` on `gpt-5.5`) with the static fallback.
+ * Persistence keeps a well-formed choice; the connected runtime's declaration
+ * validates it while the controls render and again before submission.
+ */
+function normalizeStoredCodexProfile(profile, customModels) {
+  const model = selectableModelId(profile?.model);
+  if (!model) return normalizeCodexProfile(profile, customModels);
+  const effort = safeEffort(profile?.effort);
+  return effort === undefined ? { model } : { model, effort };
+}
+
+function safeEffort(value) {
+  const effort = typeof value === "string" ? value.trim() : "";
+  return MODEL_ID_PATTERN.test(effort) ? effort : undefined;
 }
 
 /**
@@ -253,16 +276,19 @@ function runtimeAdvertisedModels(advertisedModels) {
     const defaultEffort = typeof candidate.defaultEffort === "string" && efforts.includes(candidate.defaultEffort)
       ? candidate.defaultEffort
       : undefined;
+    // The runtime declares exactly which efforts its model accepts. An absent or
+    // empty list means no effort selection is advertised, never the built-in set:
+    // absence is not evidence that the harness supports those values.
     entries.push({
       id,
-      defaultEffort: defaultEffort ?? "medium",
-      efforts: efforts.length > 0 ? efforts : CODEX_REASONING_EFFORTS,
+      efforts,
+      ...(defaultEffort === undefined ? {} : { defaultEffort }),
     });
   }
   return entries;
 }
 
-export function withProjectCodexProfile(settings, projectId, profile) {
+export function withProjectCodexProfile(settings, projectId, profile, advertisedModels = []) {
   if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
   const normalized = normalizeSettings(settings);
   return normalizeSettings({
@@ -273,7 +299,7 @@ export function withProjectCodexProfile(settings, projectId, profile) {
         ...normalized.agents.projectProfiles,
         [projectId]: {
           ...(normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized)),
-          codex: normalizeCodexProfile(profile, normalized.agents.customCodexModels),
+          codex: normalizeCodexProfile(profile, normalized.agents.customCodexModels, advertisedModels),
         },
       },
     },

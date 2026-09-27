@@ -52,7 +52,7 @@ import {
   resolveCodexRuntime,
   resolveDshRuntime,
   withoutDshPairingHash,
-} from "./dsh.js?v=20260925-2";
+} from "./dsh.js?v=20260925-3";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import {
   captureTimelineScroll,
@@ -92,7 +92,7 @@ import {
   withProjectCodexProfile,
   withProjectDshProfile,
   withProjectEnabledHarnesses,
-} from "./settings.js?v=20260925-3";
+} from "./settings.js?v=20260925-4";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -3185,9 +3185,12 @@ function renderModelOptions(select, selectedModel, settings = settingsPreview, a
 }
 
 function effortOptionsForModel(model, settings = state.settings, advertised = advertisedCodexModels()) {
-  const known = CODEX_MODELS.find((entry) => entry.id === model);
   const runtimeAdvertised = advertised.find((entry) => entry.id === model);
-  if (runtimeAdvertised?.efforts?.length > 0) return runtimeAdvertised.efforts;
+  // A connected runtime is the authority for a model it declares — including a model
+  // whose effort metadata is absent, which advertises no effort selection rather
+  // than the built-in fallback set.
+  if (runtimeAdvertised) return runtimeAdvertised.efforts ?? [];
+  const known = CODEX_MODELS.find((entry) => entry.id === model);
   return known?.efforts ?? CODEX_REASONING_EFFORTS;
 }
 
@@ -3197,14 +3200,18 @@ function updateEffortControl(modelSelect, effortSelect, requestedEffort, setting
     settings.agents.customCodexModels,
     advertised,
   );
+  const options = effortOptionsForModel(profile.model, settings, advertised);
   effortSelect.replaceChildren();
-  for (const effort of effortOptionsForModel(profile.model, settings, advertised)) {
+  for (const effort of options) {
     const option = document.createElement("option");
     option.value = effort;
     option.textContent = effort;
     option.selected = effort === profile.effort;
     effortSelect.append(option);
   }
+  // No declared effort means no selection is offered, so the request omits it
+  // instead of sending a value the harness never advertised.
+  return options.length > 0;
 }
 
 function uniqueModelIds(models) {
@@ -3321,7 +3328,7 @@ function renderAgentProfileControls() {
   }
   agentHarnessSelect.value = harness;
   renderModelOptions(agentModelSelect, profile.model, state.settings);
-  updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
+  const hasEffortChoice = updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
   renderDshRuntimeOptions(agentDshRuntimeSelect, state.settings);
   const dshResolution = currentDshResolution();
   renderDshExecutionControls(
@@ -3331,7 +3338,11 @@ function renderAgentProfileControls() {
   const disabled = !state.project;
   agentHarnessSelect.disabled = disabled;
   agentModelSelect.disabled = disabled;
-  agentEffortSelect.disabled = disabled;
+  // The runtime advertised no reasoning effort for this model, so the control is
+  // hidden rather than offering values the harness never declared.
+  element("agent-effort-label").hidden = !hasEffortChoice;
+  agentEffortSelect.hidden = !hasEffortChoice;
+  agentEffortSelect.disabled = disabled || !hasEffortChoice;
   element("codex-agent-profile-fields").hidden = harness !== "codex";
   element("dsh-agent-profile-fields").hidden = harness !== DSH_HARNESS;
   if (harness !== DSH_HARNESS) element("agent-request-profile").dataset.layout = "codex";
@@ -3344,7 +3355,15 @@ function updateComposerAgentProfile(changed) {
     model: agentModelSelect.value,
     effort: changed === "model" ? previous.effort : agentEffortSelect.value,
   };
-  state.settings = settingsStore.set(withProjectCodexProfile(state.settings, state.project.id, requested));
+  // The connected runtime's declaration validates and stores this choice: the
+  // built-in fallback list does not know an advertised model's effort set, and
+  // normalizing against it would silently reset a supported selection.
+  state.settings = settingsStore.set(withProjectCodexProfile(
+    state.settings,
+    state.project.id,
+    requested,
+    advertisedCodexModels(),
+  ));
   renderAgentProfileControls();
 }
 
@@ -3511,7 +3530,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
     next = withProjectCodexProfile(next, state.project.id, {
       model: element("settings-default-model").value,
       effort: element("settings-default-effort").value,
-    });
+    }, advertisedCodexModels());
     next = withProjectEnabledHarnesses(next, state.project.id, settingsEnabledHarnesses());
     next = withProjectAgentHarness(next, state.project.id, element("settings-agent-harness").value);
     if (element("settings-agent-harness").value === DSH_HARNESS) {

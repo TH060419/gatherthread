@@ -965,3 +965,55 @@ test("a Project that cannot republish its catalog does not fail discovery", asyn
   assert.equal(controller.publicState().recoverableError, "connection_failed");
   await controller.dispose();
 });
+
+test("an unconfirmed catalog publication is retried even when discovery returns the same catalog", async () => {
+  const routedGrant: DshNativeGrant = {
+    ...unboundGrant,
+    route: { provider: "deepseek-official", model: "deepseek-chat" },
+  };
+  const credentials = credentialsFixture(routedGrant);
+  let catalog: Array<{ provider: string; model: string }> = [
+    { provider: "deepseek-official", model: "deepseek-chat" },
+  ];
+  let clock = 3_000_000;
+  let attempts = 0;
+  const published: string[][] = [];
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service },
+    status: status(),
+    workspacePath: "/readonly/workspace",
+    now: () => clock,
+    listExecutionProfiles: async (provider) => catalog.map((profile) => ({ ...profile, provider })),
+    listProjects: async () => [{
+      id: "project-a",
+      name: "Project A",
+      role: "owner",
+      state: "active",
+      sessionCount: 1,
+    }],
+    resolveWorkspace: async () => "/managed/project-a",
+    createOwner: async () => ({
+      async stop() {},
+      async updateExecutionProfiles(profiles) {
+        attempts += 1;
+        if (attempts === 1) throw new Error("simulated transient publication failure");
+        published.push(profiles.map((profile) => profile.model));
+      },
+    }),
+  });
+  await controller.start();
+  catalog = [...catalog, { provider: "deepseek-official", model: "deepseek-v4.1" }];
+  clock += 5 * 60 * 1_000;
+  await controller.refreshProjects();
+  assert.equal(attempts, 1);
+
+  // Discovery now returns the catalog it already cached, so a change-triggered
+  // publication would never run again and the failure would be permanent.
+  clock += 5 * 60 * 1_000;
+  await controller.refreshProjects();
+  assert.equal(attempts, 2, "the unconfirmed publication must be retried");
+  assert.deepEqual(published, [["deepseek-chat", "deepseek-v4.1"]]);
+  // Cleared only after a confirmed publication.
+  assert.equal(controller.publicState().recoverableError, undefined);
+  await controller.dispose();
+});

@@ -4304,9 +4304,10 @@ async function waitForCapturedMethod(capturePath: string, method: string, expect
 
 test("Codex model catalog parsing keeps only usable picker models and bounds the declaration", () => {
   // An empty catalog still keeps the configured model claimable: the runtime is
-  // registered for it, so a request naming it must not become unclaimable.
+  // registered for it, so a request naming it must not become unclaimable. Its
+  // efforts stay undeclared because no catalog entry describes them.
   assert.deepEqual(executionProfilesFromModelList([], "openai", "gpt-5.6-sol"), [
-    { provider: "openai", model: "gpt-5.6-sol", reasoningEfforts: CODEX_EFFORTS },
+    { provider: "openai", model: "gpt-5.6-sol" },
   ]);
   const profiles = executionProfilesFromModelList([
     {
@@ -4330,8 +4331,10 @@ test("Codex model catalog parsing keeps only usable picker models and bounds the
   assert.deepEqual(profiles, [
     { provider: "openai", model: "gpt-6-sol", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
     { provider: "openai", model: "gpt-6-terra", reasoningEfforts: ["low", "max"] },
+    // Effort metadata is absent for this model, so no effort is advertised for it:
+    // absence is not evidence that the harness supports the built-in set.
     { provider: "openai", model: "gpt-6-luna" },
-    { provider: "openai", model: "gpt-5.6-sol", reasoningEfforts: CODEX_EFFORTS },
+    { provider: "openai", model: "gpt-5.6-sol" },
   ]);
   // A default the model does not advertise is never propagated.
   assert.deepEqual(
@@ -4345,11 +4348,39 @@ test("Codex model catalog parsing keeps only usable picker models and bounds the
   // A catalog identifier longer than the protocol's model bound cannot be registered.
   assert.deepEqual(
     executionProfilesFromModelList([{ id: `long-${"x".repeat(170)}` }], "openai", "gpt-6-sol"),
-    [{ provider: "openai", model: "gpt-6-sol", reasoningEfforts: CODEX_EFFORTS }],
+    [{ provider: "openai", model: "gpt-6-sol" }],
   );
-  // The protocol accepts at most 32 exact profiles for one runtime.
-  const many = Array.from({ length: 40 }, (_, index) => ({ id: `model-${index}` }));
-  assert.equal(executionProfilesFromModelList(many, "openai", "gpt-5.6-sol")?.length, 32);
+});
+
+test("a full Codex catalog still leaves the configured model claimable", () => {
+  const many = Array.from({ length: 40 }, (_, index) => ({
+    id: `model-${index}`,
+    supportedReasoningEfforts: ["low"],
+  }));
+  // The protocol accepts at most 32 exact profiles for one runtime, so one slot is
+  // reserved for the configured model rather than letting the catalog consume them
+  // all and making this runtime's own previous route unclaimable.
+  const profiles = executionProfilesFromModelList(many, "openai", "gpt-5.6-sol");
+  assert.equal(profiles?.length, 32);
+  assert.deepEqual(profiles?.at(-1), { provider: "openai", model: "gpt-5.6-sol" });
+  assert.equal(profiles?.filter((profile) => profile.model === "gpt-5.6-sol").length, 1);
+  assert.deepEqual(profiles?.[0], { provider: "openai", model: "model-0", reasoningEfforts: ["low"] });
+  assert.equal(profiles?.some((profile) => profile.model === "model-31"), false,
+    "the last catalog entry gives way to the configured model");
+
+  // When the catalog already names the configured model, every slot stays usable for
+  // catalog entries and the model keeps the efforts that entry declares.
+  const withConfigured = executionProfilesFromModelList([
+    ...many.slice(0, 31),
+    { id: "gpt-5.6-sol", supportedReasoningEfforts: ["low", "medium"] },
+    ...many.slice(31),
+  ], "openai", "gpt-5.6-sol");
+  assert.equal(withConfigured?.length, 32);
+  assert.equal(withConfigured?.filter((profile) => profile.model === "gpt-5.6-sol").length, 1);
+  assert.deepEqual(
+    withConfigured?.find((profile) => profile.model === "gpt-5.6-sol")?.reasoningEfforts,
+    ["low", "medium"],
+  );
 });
 
 test("Codex preflight advertises the App Server's own model catalog", async (t) => {
@@ -4402,7 +4433,9 @@ for await (const line of createInterface({ input: process.stdin })) {
   assert.match(preflight.version, /test-version/u);
   assert.deepEqual(harness.descriptor.executionProfiles, [
     { provider: "openai", model: "gpt-6-sol", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
-    { provider: "openai", model: "gpt-5.6-sol", reasoningEfforts: CODEX_EFFORTS },
+    // The configured model is kept claimable, but the catalog describes no efforts
+    // for it, so none are advertised on its behalf.
+    { provider: "openai", model: "gpt-5.6-sol" },
   ]);
   const requests = (await readFile(capturePath, "utf8")).trim().split("\n").filter(Boolean)
     .map((line) => JSON.parse(line) as { method?: string; params?: { includeHidden?: boolean } });

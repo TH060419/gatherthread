@@ -100,10 +100,40 @@ test("a model a connected runtime advertises is selectable and never resets to t
   // A malformed stored model still falls back instead of being trusted.
   assert.deepEqual(normalizeCodexProfile({ model: "bad\nmodel" }), { model: "gpt-5.6-sol", effort: "low" });
   assert.deepEqual(normalizeCodexProfile({ model: "--danger" }, [], advertised), { model: "gpt-5.6-sol", effort: "low" });
-  // An advertised model with no declared efforts keeps the built-in effort set.
+});
+
+test("a runtime-advertised model and effort survive saving and reloading", () => {
+  const advertised = [{ id: "gpt-5.5", efforts: ["low", "max"], defaultEffort: "max" }];
+  const saved = withProjectCodexProfile(
+    DEFAULT_SETTINGS,
+    "project-alpha",
+    { model: "gpt-5.5", effort: "max" },
+    advertised,
+  );
+  assert.deepEqual(projectCodexProfile(saved, "project-alpha", advertised), { model: "gpt-5.5", effort: "max" });
+  // A reload re-normalizes stored settings with no runtime knowledge at all. The
+  // saved choice must survive: the built-in list for gpt-5.5 has no `max`, so
+  // normalizing against it here silently replaced a supported selection.
+  const reloaded = normalizeSettings(JSON.parse(JSON.stringify(saved)));
+  assert.deepEqual(reloaded.agents.projectProfiles["project-alpha"].codex, { model: "gpt-5.5", effort: "max" });
+  assert.deepEqual(projectCodexProfile(reloaded, "project-alpha", advertised), { model: "gpt-5.5", effort: "max" });
+});
+
+test("a model a runtime declares without efforts advertises no effort selection", () => {
+  // Absence is not evidence of support, so no effort is chosen for this model and
+  // the request omits one instead of substituting a built-in value.
   assert.deepEqual(
-    normalizeCodexProfile({ model: "gpt-6-terra", effort: "xhigh" }, [], [{ id: "gpt-6-terra" }]),
-    { model: "gpt-6-terra", effort: "xhigh" },
+    normalizeCodexProfile({ model: "gpt-6-luna", effort: "high" }, [], [{ id: "gpt-6-luna" }]),
+    { model: "gpt-6-luna" },
+  );
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-5.6-sol", effort: "ultra" }, [], [{ id: "gpt-5.6-sol", efforts: [] }]),
+    { model: "gpt-5.6-sol" },
+  );
+  // A malformed stored effort is still dropped rather than carried forward.
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-6-luna", effort: "bad\neffort" }, [], [{ id: "gpt-6-luna" }]),
+    { model: "gpt-6-luna" },
   );
 });
 

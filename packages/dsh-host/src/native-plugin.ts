@@ -255,6 +255,8 @@ export class DshNativeHostController {
   #executionProfileRouteKey: string | undefined;
   #executionProfiles: readonly DshRuntimeExecutionProfile[] | undefined;
   #executionProfilesDiscoveredAt: number | undefined;
+  /** Owners that have not yet confirmed the current execution-profile catalog. */
+  readonly #pendingProfileOwners = new Set<NativeOwner>();
 
   constructor(options: DshNativeHostControllerOptions) {
     this.#options = options;
@@ -692,6 +694,7 @@ export class DshNativeHostController {
     this.#projectRefreshTimer = undefined;
     const owners = [...this.#owners.values()];
     this.#owners.clear();
+    this.#pendingProfileOwners.clear();
     this.#projects.clear();
     this.#projectStatuses.clear();
     await Promise.allSettled(owners.map((owner) => owner.stop()));
@@ -713,6 +716,13 @@ export class DshNativeHostController {
     throwIfAborted(signal);
     const profilesChanged = await this.#refreshExecutionProfiles(route, signal);
     throwIfAborted(signal);
+    if (profilesChanged) {
+      // Owners already running still advertise the catalog from before this
+      // discovery. Owners activated below receive the new one at creation, so they
+      // are deliberately not marked pending.
+      for (const owner of this.#owners.values()) this.#pendingProfileOwners.add(owner);
+    }
+    if (this.#executionProfiles === undefined) this.#pendingProfileOwners.clear();
     const nextIds = new Set(projects.map((project) => project.id));
     const previousRoles = new Map([...this.#projects].map(([id, project]) => [id, project.role]));
     this.#projects.clear();
@@ -743,10 +753,8 @@ export class DshNativeHostController {
       }
     }
     this.#refreshAggregateStatus();
-    this.#recoverableError = failures > 0 ? "connection_failed" : undefined;
-    if (profilesChanged && this.#executionProfiles !== undefined) {
-      await this.#publishExecutionProfiles(this.#executionProfiles);
-    }
+    const catalogsPending = await this.#publishPendingExecutionProfiles();
+    this.#recoverableError = failures > 0 || catalogsPending ? "connection_failed" : undefined;
   }
 
   /**
@@ -791,28 +799,43 @@ export class DshNativeHostController {
   }
 
   /**
-   * Republish a refreshed catalog to the owners that are already running.
+   * Republish the current catalog to every owner that has not confirmed it.
    *
-   * Owners capture the catalog when they start, so an existing Project would
-   * otherwise keep advertising the models DSH listed at connect time. An owner that
-   * cannot update is skipped rather than failing discovery: injected owners in
-   * tests have no updater, and a partially applied refresh is retried by the next
-   * interval instead of taking the whole connection down.
+   * Owners capture the catalog when they start, so an existing Project keeps
+   * advertising the models DSH listed at connect time until it is updated. An owner
+   * that fails stays pending rather than being dropped: discovery has already cached
+   * this catalog, so waiting for the next *change* would mean a transient
+   * publication failure is never retried. Returns whether anything is still
+   * unconfirmed.
    */
-  async #publishExecutionProfiles(
-    profiles: readonly DshRuntimeExecutionProfile[],
-  ): Promise<void> {
-    for (const owner of [...this.#owners.values()]) {
-      if (this.#disposed) return;
-      if (owner.updateExecutionProfiles === undefined) continue;
+  async #publishPendingExecutionProfiles(): Promise<boolean> {
+    const profiles = this.#executionProfiles;
+    if (profiles === undefined) {
+      this.#pendingProfileOwners.clear();
+      return false;
+    }
+    const current = new Set(this.#owners.values());
+    for (const owner of [...this.#pendingProfileOwners]) {
+      if (this.#disposed) return true;
+      if (!current.has(owner)) {
+        // The owner was replaced or removed during this reconcile; the replacement
+        // received the current catalog when it was created.
+        this.#pendingProfileOwners.delete(owner);
+        continue;
+      }
+      if (owner.updateExecutionProfiles === undefined) {
+        // Nothing to republish to; this deployment keeps its previous declaration.
+        this.#pendingProfileOwners.delete(owner);
+        continue;
+      }
       try {
         await owner.updateExecutionProfiles(profiles);
+        this.#pendingProfileOwners.delete(owner);
       } catch {
-        // Kept recoverable: the owner keeps its previous declaration and the next
-        // refresh interval publishes the catalog again.
-        this.#recoverableError = "connection_failed";
+        // Kept pending so the next refresh interval retries it.
       }
     }
+    return this.#pendingProfileOwners.size > 0;
   }
 
   #currentBindings(route: DshNativeRoute): DshNativeBinding[] {

@@ -114,7 +114,7 @@ Automatic upload, manual upload, realtime projection, and Web-triggered Agent ex
 An `agent_request` names an exact harness/model profile and eligible runtime. The selected same-user execution runtime may claim it once, append public `agent_progress`, and complete it with one final `agent_response`.
 
 - Runtime selection never falls back silently.
-- A runtime may advertise a bounded set of exact provider/model profiles and adapter-owned reasoning efforts. The server accepts a targeted request only when the complete requested profile appears in that declaration. A legacy runtime without the declaration retains fixed-provider/model matching. See [ADR-0032](adr/0032-harness-advertised-model-catalogs.md).
+- A runtime may advertise a bounded set of exact provider/model profiles and adapter-owned reasoning efforts. The server accepts a targeted request only when the complete requested profile appears in that declaration — for every harness that publishes one, so a direct API caller cannot bypass it. A model declared without efforts accepts only a request that omits the effort. A legacy runtime without the declaration retains fixed-provider/model matching. See [ADR-0032](adr/0032-harness-advertised-model-catalogs.md).
 - Claims and completions are idempotent and bound to the request and runtime.
 - Public commentary may be uploaded; hidden reasoning is excluded.
 - The final response does not close the claim until it is durably committed.
