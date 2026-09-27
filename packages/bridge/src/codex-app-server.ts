@@ -562,6 +562,7 @@ export class CodexAppServerClient {
     effort?: string;
     onStarted?: (turnId: string) => Promise<void> | void;
     onItemCompleted?: (item: unknown) => Promise<void> | void;
+    onWorkActivity?: (status: "thinking" | "running") => Promise<void> | void;
   }): Promise<{ turnId: string; items: unknown[]; modelContextWindow?: number; totalTokens?: number }> {
     await this.start();
     this.#threadTokenUsage.delete(input.threadId);
@@ -587,6 +588,12 @@ export class CodexAppServerClient {
     let completedItems = Promise.resolve();
     const listener = (notification: JsonRpcNotification) => {
       if (!isObject(notification.params) || notification.params.threadId !== input.threadId) return;
+      const activity = codexActivityStatus(notification.method, notification.params);
+      const activityTurnId = notification.params.turnId;
+      if (activity && input.onWorkActivity
+        && (expectedTurnId === undefined || activityTurnId === expectedTurnId)) {
+        completedItems = completedItems.then(async () => input.onWorkActivity?.(activity)).catch(() => undefined);
+      }
       if (notification.method === "thread/tokenUsage/updated") {
         const usage = objectValue(notification.params, "tokenUsage");
         const context = usage?.modelContextWindow;
@@ -2074,7 +2081,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         );
       }
 
-      const renderedRequest = renderProjectionEvent(input.request, input.runtime);
+      const renderedRequest = renderProjectionEvent(input.request, input.runtime,
+        input.canonicalHistory.find((event) => event.id === input.request.replyTo));
       const requestChunks = splitUtf8(renderedRequest.text, this.#maxPromptBytes - 64);
       if (requestChunks.length === 0) requestChunks.push(renderedRequest.text);
       state = await this.#compactBeforeHighWater(state, estimateTokens(renderedRequest.text));
@@ -2107,6 +2115,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       await this.#saveState(state);
       const connectorState = state;
       let turn;
+      let lastActivityAt = 0;
+      let activityIndex = 0;
+      let lastActivityStatus = "";
       try {
         turn = await this.#client.runTurn({
           threadId: connectorState.threadId,
@@ -2126,6 +2137,14 @@ export class CodexAppServerExecutor implements HarnessExecutor {
             await this.#saveState(connectorState);
           },
           ...(input.publishProgress === undefined ? {} : {
+            onWorkActivity: async (status: "thinking" | "running") => {
+              const now = Date.now();
+              if (now - lastActivityAt < (status === lastActivityStatus ? 30_000 : 2_000)) return;
+              // No hidden reasoning, tool arguments or notification body is shared.
+              lastActivityAt = now; lastActivityStatus = status;
+              await input.publishProgress?.({ id: `activity-${++activityIndex}`, phase: "activity", status,
+                content: status === "thinking" ? "Agent is thinking." : "Agent is working." });
+            },
             onItemCompleted: async (item: unknown) => {
               if (!isObject(item) || item.type !== "agentMessage" || item.phase !== "commentary") return;
               if (typeof item.text !== "string" || !item.text.trim()) return;
@@ -3737,16 +3756,32 @@ function parseThreadTurn(value: unknown): CodexThreadTurn[] {
   }];
 }
 
+/** Only evidence of native work renews a claim; idle presence is not evidence. */
+export function codexActivityStatus(method: string, params: unknown): "thinking" | "running" | null {
+  if (method.startsWith("item/reasoning/") && method.endsWith("Delta")) return "thinking";
+  if (["item/agentMessage/delta", "item/commandExecution/outputDelta", "item/fileChange/outputDelta"].includes(method)) return "running";
+  if (method === "item/started" || method === "item/completed") {
+    const item = isObject(params) && isObject(params.item) ? params.item : undefined;
+    if (item?.type === "reasoning") return "thinking";
+    if (["agentMessage", "commandExecution", "fileChange", "mcpToolCall", "webSearch"].includes(String(item?.type))) return "running";
+  }
+  return null;
+}
+
 function renderProjectionEvent(
   event: CanonicalEvent,
   _fallbackRuntime?: RegisteredRuntime,
+  quotedEvent?: CanonicalEvent,
 ): { role: "user" | "assistant"; text: string } {
   const payload = isObject(event.payload) ? event.payload : undefined;
   const username = event.actorDisplayName
     ?? objectOptionalString(payload, "actor_display_name")
     ?? objectOptionalString(payload, "username")
     ?? event.actorId;
-  const content = payloadText(event.payload);
+  const quote = ["human_chat", "agent_request"].includes(event.type) && event.replyTo
+    ? `[Quoted message ${event.replyTo}${quotedEvent ? ` · ${quotedEvent.actorDisplayName ?? quotedEvent.actorId}: ${payloadText(quotedEvent.payload)}` : ""}]\n`
+    : "";
+  const content = quote + payloadText(event.payload);
   if (event.type === "human_chat") {
     return { role: "user", text: `${username} · Human Chat：${content}` };
   }

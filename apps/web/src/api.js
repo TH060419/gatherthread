@@ -237,6 +237,11 @@ export class HttpCollaborationApi {
     return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code`);
   }
 
+  listProjectMentions(projectId, beforeId) {
+    const query = beforeId ? `?before_event_id=${encodeURIComponent(beforeId)}` : "";
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/mentions${query}`);
+  }
+
   async getCodeStorage() {
     return this.request("/v1/code-storage");
   }
@@ -579,6 +584,7 @@ export class HttpCollaborationApi {
         visibility: "session",
         payload: {
           content: input.content,
+          ...(input.mentions?.length ? { mentions: input.mentions } : {}),
           ...(type === "agent_request" && input.executionProfile ? {
             execution_profile: {
               harness: input.executionProfile.harness,
@@ -665,6 +671,7 @@ export class HttpCollaborationApi {
       payload: event.payload,
       provenance: provenance ? {
         username,
+        runtimeId: provenance.runtime_id,
         harness: provenance.harness,
         provider: provenance.provider,
         model: provenance.model,
@@ -1608,13 +1615,27 @@ export class MockCollaborationApi {
       idempotencyKey: input.idempotencyKey,
       executionProfile: input.executionProfile,
       historySummary: input.historySummary,
+      replyTo: input.replyTo,
+      mentions: input.mentions,
     });
     this.idempotentEvents.set(`${sessionId}:${input.idempotencyKey}`, event);
     this.#publish(sessionId, event);
     return structuredClone(event);
   }
 
-  #makeEvent(sessionId, type, { content, actor, idempotencyKey, provenance, replyTo = null, executionProfile, historySummary }) {
+  async listProjectMentions(projectId, beforeId) {
+    await this.#wait();
+    const sessions = this.sessions.filter((session) => session.projectId === projectId);
+    const entries = sessions.flatMap((session) => (this.events.get(session.id) ?? [])
+      .filter((event) => event.payload?.mentions?.some((mention) => mention.user_id === this.currentUser.id))
+      .map((event) => ({ id: event.id, session_id: session.id, session_title: session.name,
+        actor_display_name: event.actor.username, sequence: event.sequence, created_at: event.createdAt,
+        excerpt: String(event.payload.content ?? "").slice(0, 180) }))).reverse();
+    const start = beforeId ? entries.findIndex((event) => event.id === beforeId) + 1 : 0;
+    return { mentions: entries.slice(start, start + 50), next_before_id: entries[start + 50] ? entries[start + 49].id : null };
+  }
+
+  #makeEvent(sessionId, type, { content, actor, idempotencyKey, provenance, replyTo = null, executionProfile, historySummary, mentions }) {
     const bucket = this.events.get(sessionId) ?? [];
     const event = {
       id: `evt-${sessionId}-${bucket.length + 1}`,
@@ -1628,6 +1649,7 @@ export class MockCollaborationApi {
       replyTo,
       payload: {
         content,
+        ...(mentions?.length ? { mentions } : {}),
         ...(historySummary ? { history_summary: historySummary } : {}),
         ...(type === "agent_request" && executionProfile ? {
           execution_profile: {

@@ -80,3 +80,22 @@ test("a queued auto-follow is cancelled when the reader scrolls before the frame
   frames[0]();
   assert.deepEqual(region.scrollCalls, []);
 });
+
+test("summary/original reflow preserves the visible source anchor instead of a stale pixel position", () => {
+  const region = timelineRegion({ scrollTop: 500 });
+  region.getBoundingClientRect = () => ({ top: 100, bottom: 500 });
+  const card = (ids, top, height) => ({ dataset: { historyAnchor: ids },
+    getBoundingClientRect: () => ({ top: top - region.scrollTop + 100, bottom: top - region.scrollTop + 100 + height }) });
+  let cards = [card("old", 0, 50), card("a b", 480, 400)];
+  region.querySelectorAll = () => cards;
+  const snapshot = captureTimelineScroll(region, { automatic: false, followNewEvents: false, preserveAnchor: true });
+  // Expanding history above the reader changes its height by 1000px.
+  cards = [card("old", 0, 1050), card("a", 1480, 250), card("b", 1730, 150)];
+  settleTimelineScroll(region, snapshot, () => assert.fail("display switching must not follow the bottom"));
+  assert.equal(region.scrollTop, 1500);
+  const originals = captureTimelineScroll(region, { automatic: false, followNewEvents: false, preserveAnchor: true });
+  cards = [card("old", 0, 50), card("a b", 480, 400)];
+  settleTimelineScroll(region, originals, () => assert.fail("display switching must not follow the bottom"));
+  assert.equal(region.scrollTop, 500);
+  assert.deepEqual(region.scrollCalls, []);
+});

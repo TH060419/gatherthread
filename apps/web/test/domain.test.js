@@ -6,6 +6,7 @@ import {
   canRetryFailedAgentRequest,
   createSelectionGuard,
   emptyProjectState,
+  eventBubbleRole,
   eventContent,
   eventLabel,
   failedRequestFor,
@@ -41,6 +42,31 @@ test("empty-project guidance distinguishes qualified accounts from project-invit
     description: "Once invited, your projects will appear here. A project invitation does not let you create projects.",
     canCreateProjects: false,
   });
+});
+
+test("timeline bubble roles color self, peers, and the agent distinctly", () => {
+  const me = { id: "u1", username: "User One" };
+  const other = { id: "u2", username: "User Two" };
+  const chat = (actor) => ({ type: "human_chat", actor });
+  const agentRequest = (actor) => ({ type: "agent_request", actor });
+
+  assert.equal(eventBubbleRole(chat(me), me.id), "self");
+  assert.equal(eventBubbleRole(agentRequest(me), me.id), "self");
+  assert.equal(eventBubbleRole(chat(other), me.id), "peer");
+  assert.equal(eventBubbleRole(agentRequest(other), me.id), "peer");
+  assert.equal(eventBubbleRole(chat(other), "u1"), "peer");
+
+  assert.equal(eventBubbleRole({ type: "agent_response", actor: other }, me.id), "agent");
+  assert.equal(eventBubbleRole({ type: "agent_progress", actor: other }, me.id), "agent");
+
+  assert.equal(eventBubbleRole({ type: "tool_call", actor: other }, me.id), "default");
+  assert.equal(eventBubbleRole({ type: "attachment", actor: me }, me.id), "default");
+  assert.equal(eventBubbleRole({ type: "session_state_change", actor: me }, me.id), "default");
+
+  assert.equal(eventBubbleRole(chat(me), null), "peer");
+  assert.equal(eventBubbleRole(chat(me), undefined), "peer");
+  assert.equal(eventBubbleRole(null, me.id), "default");
+  assert.equal(eventBubbleRole(chat({ username: "No id" }), "u1"), "peer");
 });
 
 test("project Codex commands are cross-platform, quoted, and credential-free", () => {

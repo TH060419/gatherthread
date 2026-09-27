@@ -4,6 +4,13 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Separate realtime delivery from read/write permissions in the top status badge. Make summary-section arrows reveal originals, reset local overrides when switching all history, and preserve the reading anchor during explicit view changes. Add concise localized icon guidance and a roomier, responsive summary versions dialog; display changes never alter Agent context policy.
+
+- Add message-body copy controls, public in-session quotes and member mentions with a project-scoped inbox and jump-to-message navigation. Preserve raw history and existing human-chat / Agent-request separation. Mentions do not grant access or automatically run an Agent.
+- Fix Safari body selection, hidden required branch fields blocking member removal, and the untranslated cloud Git back link. Remove outdated service-unavailable copy from connector guides.
+- Keep Codex execution runtimes online through an independent ten-second heartbeat loop, including initialization. Publish throttled, content-free busy/thinking signals from actual native work; presence alone never renews a request claim lease.
+- Preserve DSH's independent heartbeat during long prompts, recover idle/running status immediately after a transient heartbeat failure, and publish the native busy transition before the final answer. Late heartbeat failures cannot resurrect stopped connectors; presence never fabricates work or renews inactive claims.
+
 - Add a back-to-bottom control to the shared conversation timeline. It appears once the reader scrolls away from the newest event, hides again at the bottom, and follows the reader's reduced-motion preference when it jumps.
 - Prepared public-repository documentation and discoverability updates: bilingual README introductions, documentation/release indexes, private security-reporting policy, product-home metadata, and clearer Alpha access guidance. This does not itself deploy the hosted site or publish a new package.
 - The npm Alpha 7 packages were published separately and were not rebuilt when the Git tag moved to the verified server source.

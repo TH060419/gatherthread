@@ -26,6 +26,15 @@
   --surface-highlight: color-mix(in srgb, white 54%, transparent);
   --response-surface: color-mix(in srgb, var(--teal-wash) 62%, var(--paper-raised));
   --response-border: color-mix(in srgb, var(--teal) 38%, var(--line));
+  /* Conversation bubble tints. Each one is mixed from the theme's own accent and
+     raised surface, so the light theme, the explicit dark theme, and a
+     system-dark session all resolve this single definition instead of repeating
+     it per appearance. Body text stays --ink on a wash that is at least 70% of
+     the theme surface, which keeps contrast above WCAG AAA in every path. */
+  --bubble-self-bg: color-mix(in srgb, var(--teal) 24%, var(--paper-raised));
+  --bubble-self-border: color-mix(in srgb, var(--teal) 50%, var(--paper-raised));
+  --bubble-agent-bg: color-mix(in srgb, var(--amber) 30%, var(--paper-raised));
+  --bubble-agent-border: color-mix(in srgb, var(--amber) 50%, var(--paper-raised));
   --switch-thumb: #ffffff;
   --left-rail-width: 340px;
   --right-panel-width: 320px;
@@ -2376,19 +2385,31 @@ time,
 .history-summary-toolbar > p { flex-basis: 100%; margin: 0; }
 .history-summary-actions, .history-summary-versions-heading { display: flex; align-items: center; gap: 8px; }
 .history-summary-versions-heading { justify-content: space-between; }
+.history-summary-versions-heading { align-items: flex-start; gap: 16px; }
+.history-summary-versions-heading h2 { min-width: 0; margin: 0; font-size: 1.25rem; line-height: 1.35; }
+.history-summary-versions-heading > button { flex: 0 0 auto; }
+.session-header-actions .history-view-toggle { width: auto; gap: 5px; padding-inline: 9px; }
+.history-view-label { font-size: 0.72rem; font-weight: 500; white-space: nowrap; }
 .history-summary-icon { flex: 0 0 auto; }
 .history-source-checkbox { width: 22px; height: 22px; min-height: 22px; flex: 0 0 22px; accent-color: var(--teal); }
 .history-summary-card { border-color: var(--line-strong); }
-.history-summary-card > header { display: flex; justify-content: space-between; flex-wrap: wrap; }
+.history-summary-card > header { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; }
+.history-summary-card > header > strong { flex: 1 1 120px; min-width: 0; overflow-wrap: anywhere; }
+.history-summary-card > header > .history-summary-actions { flex: 0 0 auto; }
 .history-summary-card > p, .history-summary-card > .markdown-body { margin-left: 0; }
-.history-summary-card .history-summary-meta, .history-summary-card .history-summary-note { font-size: 0.75rem; color: var(--ink-soft); }
+.history-summary-card .history-summary-meta, .history-summary-card .history-summary-note { font-size: 0.75rem; line-height: 1.5; color: var(--ink-soft); overflow-wrap: anywhere; }
+.history-summary-card[data-view="original"] { padding-block: 12px; }
+.history-summary-card[data-view="original"] .history-summary-note { margin-bottom: 0; }
 .history-summary-card[data-state="failed"] { border-color: var(--amber); }
 .history-summary-target { overflow-wrap: anywhere; font-size: 0.82rem; }
 .history-summary-confirm-dialog { width: min(620px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; }
 .history-summary-confirm-dialog > div { padding: 24px; }
-.history-summary-versions-dialog { width: min(860px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: 24px; }
-.history-summary-versions { list-style: none; padding: 0; }
-.history-summary-versions > li { margin-top: 12px; }
+.create-dialog.history-summary-versions-dialog { width: min(760px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; padding: clamp(16px, 3vw, 28px); }
+.history-summary-versions-help { margin: 12px 0 20px; font-size: 0.8rem; line-height: 1.6; color: var(--ink-soft); }
+.history-summary-versions { display: grid; gap: 16px; list-style: none; padding: 0; margin: 0; }
+.history-summary-versions > li { min-width: 0; }
+.history-summary-versions .history-summary-card { padding: clamp(14px, 2.5vw, 22px); }
+.history-summary-versions .history-summary-card > .markdown-body { min-width: 0; overflow-wrap: anywhere; }
 .history-summary-instructions-label { display: grid; gap: 6px; margin: 16px 0 8px; }
 .history-summary-instructions-label small { color: var(--ink-soft); }
 #settings-history-summary-instructions { width: 100%; min-width: 0; max-width: 100%; resize: vertical; }
@@ -4468,6 +4489,17 @@ html[lang="zh-CN"] .project-select {
   transform: translateY(0);
 }
 
+.history-summary-actions .workspace-icon-button[data-tooltip]::after {
+  right: 0;
+  left: auto;
+  transform: translateY(-4px);
+}
+
+.history-summary-actions .workspace-icon-button[data-tooltip]:hover::after,
+.history-summary-actions .workspace-icon-button[data-tooltip]:focus-visible::after {
+  transform: translateY(0);
+}
+
 .title-line .workspace-icon-button {
   flex: 0 0 auto;
 }
@@ -4891,6 +4923,31 @@ html[lang="zh-CN"] .project-select {
   resize: none;
   overflow-y: auto;
 }
+
+/* Keep selectable conversation text separate from Safari's selection metadata. */
+.event-card > header, .event-card > .provenance, .agent-worklog-list time, .message-actions, .quoted-message {
+  -webkit-user-select: none;
+  user-select: none;
+}
+.event-content { -webkit-user-select: text; user-select: text; }
+.message-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 4px; }
+.message-action { width: 28px; height: 28px; min-height: 28px; border: 0; box-shadow: none; background: transparent; color: var(--ink-soft); }
+.message-action svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.quoted-message { display: block; width: 100%; text-align: start; padding: 8px 10px; margin: 8px 0; border: 0; border-radius: 6px; background: var(--surface-muted, rgba(128,128,128,.1)); color: var(--ink-soft); font-size: .85em; white-space: normal; overflow-wrap: anywhere; }
+.message-mentions-me { outline: 1px solid var(--teal); outline-offset: -1px; }
+.message-located { outline: 2px solid var(--teal); outline-offset: -2px; }
+.mentions-count { font-size: 11px; color: var(--teal); }
+.mentions-list { padding: 0; list-style: none; max-height: 55vh; overflow-y: auto; }
+.mention-inbox-entry { width: 100%; display: grid; gap: 4px; padding: 12px; text-align: start; white-space: normal; overflow-wrap: anywhere; margin-block: 5px; }
+.mention-inbox-entry span { color: var(--ink-soft); font-size: .9em; }
+.message-draft { position: relative; min-height: 0; display: flex; flex-direction: column; gap: 5px; }
+.message-draft textarea { width: 100%; min-height: 40px; height: 100%; flex: 1; resize: none; overflow-y: auto; }
+.composer-quote { display: flex; align-items: center; gap: 6px; font-size: .8em; color: var(--ink-soft); }
+.composer-quote span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mention-picker { position: fixed; z-index: 100; min-width: 180px; max-height: 220px; overflow-y: auto; border-radius: 10px; border: 1px solid var(--glass-hairline); background: var(--paper-raised); box-shadow: 0 6px 24px rgba(0,0,0,.15); padding: 4px; }
+.mention-picker button { display: block; width: 100%; text-align: start; border: 0; background: transparent; padding: 8px; border-radius: 6px; }
+.mention-picker [aria-selected="true"] { background: var(--accent-soft, rgba(0,128,110,.12)); }
+.composer-quote[hidden], .mention-picker[hidden] { display: none; }
 
 .composer .permission-note,
 .composer .agent-request-profile,
@@ -5631,6 +5688,58 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
 @media (forced-colors: active) {
   .session-context-panel {
     border: 1px solid CanvasText;
+    background: Canvas;
+    color: CanvasText;
+  }
+}
+
+/* Conversation bubble tints: self (green), agent (yellow), peers default.
+   These rules deliberately come after every generic .event-card layer so the
+   tint wins without !important. Body text stays --ink, which measures 8.5 to 1
+   or better against every wash in every appearance path. */
+
+/* Every text tier has to clear the same bar, not just body copy. --ink-soft
+   carries the metadata (.event-type, .event-sequence, time, .provenance and the
+   worklog summary) at 0.68 to 0.76rem, which a tinted wash would otherwise pull
+   below the AA threshold. Redefining the token on the card covers every
+   descendant that reads it, including any added later. It is mixed from --ink
+   and --paper-raised rather than from --ink-soft, because a token defined in
+   terms of itself is a cycle that resolves to nothing. */
+.event-card.event-bubble-self,
+.event-card.event-bubble-agent {
+  --ink-soft: color-mix(in srgb, var(--ink) 76%, var(--paper-raised));
+}
+
+.event-card.event-bubble-self {
+  border-color: var(--bubble-self-border);
+  background: var(--bubble-self-bg);
+}
+
+/* An agent request is marked with a coral left edge. The rule above sets
+   border-color on all four sides at a higher specificity, so the marker has to
+   be re-asserted or a self-authored request silently loses it. */
+.event-card.event-bubble-self.event-agent_request {
+  border-left-color: var(--coral);
+}
+
+.event-card.event-bubble-agent {
+  border-color: var(--bubble-agent-border);
+  background: var(--bubble-agent-bg);
+}
+
+/* A failed Agent answer keeps its warning wash even though it is agent-produced. */
+.event-card.event-bubble-agent.event-agent_response-failed {
+  border-color: #d4ad67;
+  background: var(--amber-wash);
+}
+
+/* The failed card is three classes deep, so it outranks a two-class selector and
+   would keep its amber wash instead of falling back to the system palette. */
+@media (forced-colors: active) {
+  .event-card.event-bubble-self,
+  .event-card.event-bubble-agent,
+  .event-card.event-bubble-agent.event-agent_response-failed {
+    border-color: CanvasText;
     background: Canvas;
     color: CanvasText;
   }

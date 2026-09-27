@@ -1,10 +1,12 @@
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260922-1";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
+import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
 import {
   canAppend,
   canRetryFailedAgentRequest,
   createIdempotencyKey,
   createSelectionGuard,
   emptyProjectState,
+  eventBubbleRole,
   eventContent,
   eventLabel,
   failedRequestFor,
@@ -27,14 +29,14 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260923-1";
+} from "./domain.js?v=20260925-1";
 import { SessionSync } from "./realtime.js";
 import { mountCodeSync } from "./code-sync-view.js?v=20260924-1";
 import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-2";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260924-2";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260927-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   codexExecutionProfile,
@@ -274,10 +276,22 @@ const historySummaryUi = mountHistorySummaries({
     executionProfile: historySummaryExecutionProfile(),
     instructions: state.settings.historySummaries.instructions,
   }),
-  onChange: () => renderTimeline(),
+  onChange: (options) => renderTimeline(options),
 });
 let connectCodexReturnFocus = null;
 let connectZcodeReturnFocus = null;
+let pendingHistoryTarget = null;
+const messageActions = mountMessageActions({ document, api, localizer, announce, selectSession,
+  getContext: () => ({ projectId: state.project?.id, sessionId: state.session?.id,
+    userId: state.currentUser?.id, members: state.session?.members ?? [],
+    writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed }),
+  revealEvent: (id, sequence) => {
+    pendingHistoryTarget = { id, sequence, sessionId: state.session?.id };
+    const progress = state.sync.events.find((event) => event.id === id && event.type === "agent_progress");
+    if (progress?.replyTo) expandedWorklogs.add(progress.replyTo);
+    historySummaryUi.revealOriginal(id); renderTimeline();
+  },
+});
 let connectDshReturnFocus = null;
 let renameSessionReturnFocus = null;
 let renameProjectReturnFocus = null;
@@ -352,6 +366,7 @@ sync.subscribe((snapshot) => {
   renderTimeline({ followNewEvents: snapshot.events.length > previousCount });
   renderComposerPermissions();
   renderSessionDeliveryControls();
+  renderMembers();
   if (connectionTransition.notify) notifyConnectionLost();
   if (snapshot.phase === "live" && snapshot.events.length > previousCount && previousCount > 0) {
     const latest = snapshot.events.at(-1);
@@ -793,6 +808,7 @@ async function openMemberRemovalDialog(userId, username, isSelf) {
   element("confirm-leave-project-button").textContent = localizer.t(isSelf ? "Leave project" : "Remove member");
   element("leave-project-error").textContent = "";
   element("leave-project-branch-choice").hidden = true;
+  element("leave-project-branch-resolution").disabled = true;
   element("confirm-leave-project-button").disabled = true;
   leaveProjectDialog.showModal();
   try {
@@ -801,6 +817,8 @@ async function openMemberRemovalDialog(userId, username, isSelf) {
     const branch = status.branches.find((item) => item.user_id === userId) ?? null;
     pendingMemberRemoval.branch = branch;
     const choice = element("leave-project-branch-resolution");
+    choice.required = Boolean(branch);
+    choice.disabled = !branch;
     choice.replaceChildren();
     element("leave-project-branch-choice").hidden = !branch;
     if (branch) {
@@ -849,14 +867,15 @@ leaveProjectForm.addEventListener("submit", async (event) => {
     if (state.project?.id !== projectId) return;
     leaveProjectDialog.close();
     if (!isSelf) {
+      const sessionId = state.session?.id;
       const [members, sessions, sessionMembers] = await Promise.all([
         api.listProjectMembers(projectId), api.listProjectSessions(projectId),
-        state.session ? api.listMembers(state.session.id) : Promise.resolve([]),
+        sessionId ? api.listMembers(sessionId) : Promise.resolve([]),
       ]);
       if (state.project?.id !== projectId) return;
       state.projectMembers = members;
       state.sessions = sessions;
-      if (state.session) state.session = { ...state.session, members: sessionMembers };
+      if (state.session && state.session.id === sessionId) state.session = { ...state.session, members: sessionMembers };
       renderMembers();
       renderSessionList();
       announce(localizer.t("Member removed. Their local Git was not changed."));
@@ -1252,6 +1271,7 @@ async function restoreBrowserSession() {
 }
 
 function resetWorkspaceToAuth() {
+  messageActions.reset();
   authenticationGeneration += 1;
   workspaceLoadGeneration += 1;
   pendingMessageSend?.restore?.();
@@ -1448,6 +1468,8 @@ async function selectSession(sessionId) {
   selectionRetry = null;
   codeSyncUi.close();
   historySummaryUi.reset();
+  messageActions.reset();
+  pendingHistoryTarget = null;
   if (state.session?.id !== sessionId) expandedWorklogs.clear();
   const generation = ++selectedSessionGeneration;
   const projectId = state.project.id;
@@ -1488,6 +1510,7 @@ async function selectSession(sessionId) {
     renderMembers();
     renderComposerPermissions();
     renderSessionDeliveryControls();
+    void messageActions.refresh();
     await refreshDshRuntimes({ sessionId, generation });
     if (generation !== selectedSessionGeneration) return;
     startDshRuntimePolling();
@@ -1673,6 +1696,7 @@ async function refreshMembers(sessionId) {
     renderTimeline();
     renderComposerPermissions();
     renderSessionDeliveryControls();
+    void messageActions.refresh();
   } catch (error) {
     if (!isCurrent() || state.session?.id !== sessionId) return;
     if (error?.status === 403 || error?.status === 404) {
@@ -1836,7 +1860,7 @@ function renderMembers() {
     if (member.runtime?.purpose === "snapshot_connector") {
       presence.textContent = member.runtime.status === "online" ? "Snapshot connector" : "Connector offline";
     } else {
-      presence.textContent = isExecutionRuntime(member.runtime) ? "Agent online" : member.runtime ? "Offline" : "No runtime";
+      presence.textContent = isExecutionRuntime(member.runtime) ? agentWorkStatus(state.sync.events, member.runtime?.id) ?? "Agent online" : member.runtime ? "Offline" : "No runtime";
     }
     item.append(avatar, details, presence);
 
@@ -2028,14 +2052,9 @@ function renderSyncState() {
     blocked: "History incomplete",
   }[phase];
   banner.dataset.state = phase;
-  const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
-  const isLive = sessionDeliveryMode({
-    role: membership?.role ?? state.session?.role,
-    mode: state.session?.mode,
-    ownerUserId: state.session?.ownerUserId,
-    currentUserId: state.currentUser?.id,
-  }) === "live";
-  element("sync-title").textContent = isLive ? title : phase === "live" ? "Read-only history" : title;
+  // Delivery freshness is independent of write permission. Access is shown
+  // in session status details, never as a substitute for connection state.
+  element("sync-title").textContent = title;
   element("sync-detail").textContent = bufferedCount
     ? `${detail} ${bufferedCount} later event${bufferedCount === 1 ? " is" : "s are"} buffered.`
     : detail;
@@ -2045,14 +2064,15 @@ function renderSyncState() {
   element("sequence-label").textContent = `Contiguous through sequence #${cursor}`;
   element("global-connection").dataset.state = phase;
   element("global-connection-label").textContent = phase === "live"
-    ? isLive ? `Live · #${cursor}` : `Read only · #${cursor}`
+    ? `Live · #${cursor}`
     : title;
 }
 
-function renderTimeline({ followNewEvents = false } = {}) {
+function renderTimeline({ followNewEvents = false, preserveAnchor = false, focusSummaryId = null } = {}) {
   const scrollSnapshot = captureTimelineScroll(timelineRegion, {
     automatic: state.settings.composer.autoScroll,
     followNewEvents,
+    preserveAnchor,
   });
   timeline.replaceChildren();
   historySummaryUi.updateContext();
@@ -2071,7 +2091,12 @@ function renderTimeline({ followNewEvents = false } = {}) {
   for (const event of events) {
     for (const version of summaryView.before.get(event.id) ?? []) {
       const summaryItem = document.createElement("li");
-      summaryItem.append(historySummaryUi.card(version));
+      const card = historySummaryUi.card(version);
+      if (version.response && version.status === "completed") {
+        card.id = `message-${version.response.id}`; card.tabIndex = -1;
+        card.append(messageActions.actions(version.response));
+      }
+      summaryItem.append(card);
       timeline.append(summaryItem);
     }
     if (summaryView.hidden.has(event.id)) continue;
@@ -2088,6 +2113,16 @@ function renderTimeline({ followNewEvents = false } = {}) {
     const time = document.createElement("time");
 
     article.className = `event-card event-${event.type}`;
+    article.id = `message-${event.id}`;
+    article.dataset.historyAnchor = event.id;
+    article.tabIndex = -1;
+    if (Array.isArray(event.payload?.mentions) && event.payload.mentions.some((mention) => mention?.user_id === state.currentUser?.id)) article.classList.add("message-mentions-me");
+    // Bubble tint is presentation only: self-authored messages get the green
+    // bubble, agent-produced events get the yellow one, and everyone else
+    // keeps the theme's default card.
+    const bubbleRole = eventBubbleRole(event, state.currentUser?.id ?? null);
+    if (bubbleRole === "self") article.classList.add("event-bubble-self");
+    if (bubbleRole === "agent") article.classList.add("event-bubble-agent");
     const failedResponse = isFailedAgentResponse(event);
     if (failedResponse) article.classList.add("event-agent_response-failed");
     article.setAttribute("aria-labelledby", `event-${event.id}-actor`);
@@ -2109,16 +2144,21 @@ function renderTimeline({ followNewEvents = false } = {}) {
     const sourceControl = historySummaryUi.sourceControl(event);
     if (sourceControl) identity.prepend(sourceControl);
     const content = eventContent(event);
+    const quoted = messageActions.quoted(event, events);
     article.append(header);
+    if (quoted) article.append(quoted);
     if (content) {
+      let body;
       if (event.type === "agent_response") {
-        article.append(renderMarkdown(content));
+        body = renderMarkdown(content);
       } else {
-        const body = document.createElement("p");
+        body = document.createElement("p");
         body.textContent = content;
-        article.append(body);
       }
+      body.classList.add("event-content");
+      article.append(body);
     }
+    article.append(messageActions.actions(event));
 
     if (failedResponse) {
       // A failure that no runtime finished has to look like one, and it has to
@@ -2177,6 +2217,15 @@ function renderTimeline({ followNewEvents = false } = {}) {
     follow: scrollSnapshot.follow && events.length > 0,
   });
   renderTimelineBottomControl();
+  if (focusSummaryId) element(`message-${focusSummaryId}`)?.querySelector("[data-summary-view-toggle]")?.focus({ preventScroll: true });
+  if (pendingHistoryTarget && state.session && pendingHistoryTarget.sessionId === state.session.id) {
+    const target = element(`message-${pendingHistoryTarget.id}`);
+    if (target) {
+      timelineRegion.scrollTop += target.getBoundingClientRect().top - timelineRegion.getBoundingClientRect().top - 16;
+      target.focus({ preventScroll: true }); target.classList.add("message-located");
+      pendingHistoryTarget = null;
+    }
+  }
 }
 
 /**
@@ -2224,10 +2273,13 @@ function renderProgressDisclosure(progressEvents, live) {
   list.className = "agent-worklog-list";
   for (const progress of progressEvents) {
     const item = document.createElement("li");
+    item.id = `message-${progress.id}`; item.tabIndex = -1;
     const timestamp = document.createElement("time");
     timestamp.dateTime = progress.createdAt;
     timestamp.textContent = formatTimestamp(progress.createdAt);
-    item.append(timestamp, renderMarkdown(localizer.t(eventContent(progress))));
+    const body = renderMarkdown(localizer.t(eventContent(progress)));
+    body.classList.add("event-content");
+    item.append(timestamp, body, messageActions.actions(progress));
     list.append(item);
   }
   details.append(summary, list);
@@ -2703,13 +2755,17 @@ async function sendMessage(kind) {
   const isCurrent = captureWorkspaceScope();
   const sessionId = state.session.id;
   const draft = messageInput.value;
+  const metadata = messageActions.metadata();
+  const metadataFingerprint = JSON.stringify(metadata);
   const original = [...button.childNodes];
   isCurrent.restore = () => button.replaceChildren(...original);
   pendingMessageSend = isCurrent;
   renderComposerPermissions();
   button.textContent = "Sending…";
   try {
-    const input = { content, idempotencyKey: createIdempotencyKey(kind) };
+    const leading = messageInput.value.length - messageInput.value.trimStart().length;
+    const input = { content, idempotencyKey: createIdempotencyKey(kind), replyTo: metadata.replyTo,
+      mentions: metadata.mentions.map((mention) => ({ ...mention, start: mention.start - leading, end: mention.end - leading })) };
     if (kind === "human_chat") await api.appendHumanChat(sessionId, input);
     else {
       const harness = currentProjectHarness();
@@ -2729,8 +2785,9 @@ async function sendMessage(kind) {
           });
       await api.appendAgentRequest(sessionId, { ...input, executionProfile });
     }
-    if (isCurrent() && messageInput.value === draft) {
+    if (isCurrent() && messageInput.value === draft && JSON.stringify(messageActions.metadata()) === metadataFingerprint) {
       messageInput.value = "";
+      messageActions.sent();
       messageInput.focus();
     }
   } catch (error) {

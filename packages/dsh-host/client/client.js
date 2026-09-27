@@ -317,7 +317,7 @@ function renderNativeControls(input) {
           disabled: input.busy || state.officialServerUrl === undefined,
           style: styles.secondaryButton,
           onClick: () => input.setServerUrl(state.officialServerUrl || ""),
-        }, state.officialServerUrl === undefined ? "共序官方服务 · 尚未开放" : "使用共序官方服务"),
+        }, state.officialServerUrl === undefined ? "输入共序服务器地址" : "使用共序官方服务"),
         React.createElement("span", { style: styles.muted }, "局域网、自托管与 Tailscale 请使用自定义地址。")),
       React.createElement("form", {
         key: "pairing-form",

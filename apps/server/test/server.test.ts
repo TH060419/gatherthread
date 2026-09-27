@@ -110,6 +110,34 @@ test("liveness and readiness endpoints remain unauthenticated and distinguish pr
   }
 });
 
+test("project mention inbox authenticates, scopes membership and validates the pagination cursor", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-mentions-http-"));
+  const running = await startCollaborationServer({ databasePath: join(directory, "server.sqlite"),
+    authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST", body: { display_name: "Owner", device_name: "Browser" },
+    });
+    const actor = running.database.authenticate(owner.body.data.token);
+    const project = running.service.createProject(actor, { title: "Mentions", idempotency_key: "mention-http-project" });
+    const { session } = running.service.createSession(actor, { project_id: project.id,
+      mode: "multi", title: "Messages", idempotency_key: "mention-http-session" });
+    const event = running.service.appendEvent(actor, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-http-message", payload: { content: "@Owner hello", mentions: [{ user_id: actor.user_id, start: 0, end: 6 }] } });
+    const path = `/v1/projects/${project.id}/mentions`;
+    assert.equal((await api(running.origin, path)).status, 401);
+    const response = await api<{ data: { mentions: Array<{ id: string }>; next_before_id: string | null } }>(running.origin, path, { token: owner.body.data.token });
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.mentions[0]?.id, event.id);
+    assert.equal(response.body.data.next_before_id, null);
+    assert.equal((await api(running.origin, `${path}?before_event_id=%3Cinvalid%3E`, { token: owner.body.data.token })).status, 400);
+    assert.equal((await api(running.origin, "/v1/projects/not-a-project/mentions", { token: owner.body.data.token })).status, 404);
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("test access and project invitations create distinct account capabilities over HTTP", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-http-"));
   const browserOrigin = "http://client.test";

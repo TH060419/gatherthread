@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { mountHistorySummaries } from "../src/history-summary-view.js";
 
 class Node {
-  constructor() { this.listeners = new Map(); this.children = []; this.dataset = {}; this.attributes = {}; this.isConnected = true; this.open = false; }
+  constructor() {
+    this.listeners = new Map(); this.children = []; this.dataset = {}; this.attributes = {}; this.isConnected = true; this.open = false;
+    this.classList = { add: (name) => { this.className = `${this.className ?? ""} ${name}`.trim(); } };
+  }
   addEventListener(type, fn) { this.listeners.set(type, fn); }
   dispatch(type) { return this.listeners.get(type)?.({ target: this, preventDefault() {} }); }
   setAttribute(name, value) { this.attributes[name] = value; }
@@ -35,6 +38,46 @@ function setup() {
 }
 const receipt = { id: "summary", type: "agent_request", sequence: 2, visibility: "session", actor: { id: "u1", username: "Author" },
   payload: { content: "prompt", history_summary: { version: 1, source_event_ids: ["a"], source_digest: "a".repeat(64) } } };
+const answer = { id: "answer", sequence: 3, type: "agent_response", visibility: "session", actor: { id: "u1" },
+  replyTo: "summary", payload: { content: "summary text" } };
+
+test("section arrows show originals with an explicit return control, not a collapsed summary", () => {
+  const app = setup(); app.update({ events: [source, receipt, answer] });
+  const version = app.ui.timeline().active[0];
+  app.ui.card(version).children[0].children[1].children[0].dispatch("click");
+  assert.equal(app.ui.timeline().hidden.has("a"), false);
+  const originals = app.ui.card(version);
+  assert.equal(originals.children[0].children[0].textContent, "Original messages");
+  assert.equal(originals.children.some((child) => child.markdown), false);
+  originals.children[0].children[1].children[0].dispatch("click");
+  assert.equal(app.ui.timeline().hidden.has("a"), true);
+  assert.equal(app.ui.card(version).children.some((child) => child.markdown), true);
+});
+
+test("global view switches clear section overrides and quoted-summary reveals in one click", () => {
+  const app = setup(); app.update({ events: [source, receipt, answer] });
+  const version = app.ui.timeline().active[0];
+  app.ui.card(version).children[0].children[1].children[0].dispatch("click");
+  app.el("history-summary-view-button").dispatch("click");
+  assert.equal(app.ui.timeline().hidden.has("a"), false);
+  app.el("history-summary-view-button").dispatch("click");
+  assert.equal(app.ui.timeline().hidden.has("a"), true, "returning to summaries must clear section-original overrides");
+  app.ui.revealOriginal("answer");
+  app.ui.updateContext();
+  app.el("history-summary-view-button").dispatch("click");
+  assert.equal(app.ui.timeline().before.has("answer"), false, "a quote reveal is not a permanent mixed-view override");
+  assert.equal(app.ui.timeline().hidden.has("a"), true);
+});
+
+test("summary selection explains and disables the global view until selection finishes", () => {
+  const app = setup(); app.update({ events: [source, receipt, answer] });
+  app.choose();
+  assert.equal(app.el("history-summary-view-button").disabled, true);
+  app.el("history-summary-view-button").dispatch("click");
+  app.el("history-summary-cancel-button").dispatch("click");
+  assert.equal(app.ui.timeline().hidden.has("a"), true);
+  assert.equal(app.el("history-summary-view-button").disabled, false);
+});
 
 test("generation requires explicit confirmation, freezes runtime and rejects repeat submit", async () => {
   const app = setup(); app.choose();
@@ -108,6 +151,18 @@ test("viewers can inspect summaries and originals but never generate or regenera
   const body = versionCard.children.find((child) => child.markdown);
   assert.equal(body.attributes["data-i18n-skip"], "");
   assert.equal(app.calls.length, 0);
+});
+
+test("quoted summary navigation can reveal its response while preserving original history", () => {
+  const app = setup();
+  app.update({ events: [source, receipt, { id: "answer", sequence: 3, type: "agent_response", visibility: "session",
+    actor: { id: "u1" }, replyTo: "summary", payload: { content: "summary text" } }] });
+  app.ui.revealOriginal("answer");
+  const view = app.ui.timeline();
+  assert.equal(view.hidden.has("a"), false);
+  assert.equal(view.before.get("answer")[0].response.id, "answer");
+  app.ui.reset();
+  assert.equal(app.ui.timeline().before.has("answer"), false);
 });
 
 test("rendering many summary cards reuses pending state instead of rescanning history per card", () => {
