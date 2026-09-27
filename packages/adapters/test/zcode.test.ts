@@ -38,6 +38,7 @@ test("ZCode protocol parsing keeps reviewed text and tool blocks only", () => {
   assert.deepEqual(events[1]?.arguments, { file_path: "a.ts" });
   assert.equal(events[1]?.toolName, "Read");
   assert.equal(events[2]?.toolCallId, "t1");
+  assert.equal(events[2]?.toolName, "Read", "a result carries its call's validated tool name");
   assert.equal(events[2]?.result, "contents");
   assert.equal(events.at(-1)?.content, "done");
   assert.ok(events.every((item) => item.harness === "zcode"));

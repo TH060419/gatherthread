@@ -2664,7 +2664,14 @@ function renderComposerPermissions() {
 function historySummaryExecutionProfile() {
   if (!state.session || !state.project) return null;
   const harness = currentProjectHarness();
-  const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
+  // Route by the exact selected harness: summary generation must target the
+  // same runtime the composer would. Missing the ZCode branch used to send
+  // ZCode sessions' summary requests to a hidden Codex runtime instead.
+  const resolution = harness === DSH_HARNESS
+    ? currentDshResolution()
+    : harness === ZCODE_HARNESS
+      ? currentZcodeResolution()
+      : currentCodexResolution();
   const runtime = resolution.runtime;
   const advertised = state.executionRuntimes.find((candidate) => candidate.id === runtime?.id);
   if (!runtime || advertised?.purpose === "snapshot_connector"
@@ -2672,7 +2679,9 @@ function historySummaryExecutionProfile() {
   try {
     return harness === DSH_HARNESS
       ? dshExecutionProfile(runtime, dshExecutionSelection(runtime, projectDshProfile(state.settings, state.project.id)))
-      : codexExecutionProfile(runtime, { model: agentModelSelect.value, reasoningEffort: agentEffortSelect.value });
+      : harness === ZCODE_HARNESS
+        ? zcodeExecutionProfile(runtime)
+        : codexExecutionProfile(runtime, { model: agentModelSelect.value, reasoningEffort: agentEffortSelect.value });
   } catch { return null; }
 }
 

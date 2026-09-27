@@ -412,7 +412,13 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
             }
             return;
           }
-          if (this.#isShareableToolEvent(event)) toolEvents.push(event);
+          if (event.kind === "tool_call" || event.kind === "tool_result") {
+            // Any observed native tool activity — allowlisted or not — proves
+            // the child is doing work; payloads themselves stay local either
+            // way and only gate canonical sharing below.
+            lease.markNativeProgress();
+            if (this.#isShareableToolEvent(event)) toolEvents.push(event);
+          }
         },
       });
     } catch (error) {
@@ -435,7 +441,6 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
     const answerEvent = zcodeTranscriptEvent("assistant", `zcode-final-${input.request.id}`, {
       content: outcome.finalResponse,
     });
-    const sharedToolEvents = this.#sharedToolEvents(toolEvents);
     let completedJournal: ZcodeExecutionJournal;
     try {
       completedJournal = this.#boundedJournal({
@@ -445,7 +450,7 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
         nativeSessionId: outcome.nativeSessionId,
         ...(outcome.observedModel === undefined ? {} : { observedModel: outcome.observedModel }),
         answerEvent,
-        toolEvents: sharedToolEvents,
+        toolEvents: this.#sharedToolEvents(toolEvents),
         startedAt: new Date().toISOString(),
       });
     } catch (error) {
@@ -486,8 +491,14 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
       );
     }
 
+    // The journal is the single source of truth for what this turn publishes:
+    // #boundedJournal's reduction (dropping oversized tool events) applies to
+    // the live result exactly as it will later apply to a replay, so both
+    // attempts carry the identical persisted event set.
+    const publishedEvents: TranscriptEvent[] = [...(completedJournal.toolEvents ?? [])];
+    if (completedJournal.answerEvent !== undefined) publishedEvents.push(completedJournal.answerEvent);
     return {
-      events: [...sharedToolEvents, answerEvent],
+      events: publishedEvents,
       localSessionId: outcome.nativeSessionId,
       ...(outcome.observedModel === undefined ? {} : { observedModel: outcome.observedModel }),
     };
@@ -496,6 +507,7 @@ export class ZcodeSessionExecutor implements HarnessExecutor {
   #boundedJournal(journal: ZcodeExecutionJournal): ZcodeExecutionJournal {
     if (jsonByteLength(journal) <= MAX_JOURNAL_BYTES) return journal;
     // Shrink tool events first, then refuse if the answer itself cannot fit.
+    // The reduction is shared by the live publish and every later replay.
     const reduced: ZcodeExecutionJournal = {
       ...journal,
       toolEvents: [],
@@ -697,11 +709,14 @@ function zcodeHistoryDelta(input: {
 }
 
 /**
- * Publishes bounded lifecycle progress while a turn runs so the server claim
- * lease survives tool-only stretches without assistant commentary. Real
- * commentary resets the cadence; the renewer never runs past the turn and
- * never exceeds its per-turn budget. Canonical progress is the renewal
- * channel — the connector's transport heartbeat is deliberately not one.
+ * Publishes bounded lifecycle progress while a turn shows real work so the
+ * server claim lease survives tool-only stretches. Renewal follows ADR-0023:
+ * progress proves work, so a renewal is sent only when the native child
+ * produced new observed activity since the last renewal — a live-but-silent
+ * child loses its claim instead of holding it to the execution cap. Accepted
+ * commentary renews upstream and resets the cadence; the renewer never runs
+ * past the turn and never exceeds its per-turn budget. Canonical progress is
+ * the renewal channel — the connector's transport heartbeat is not one.
  */
 class ZcodeTurnLeaseRenewer {
   readonly #requestId: string;
@@ -712,6 +727,7 @@ class ZcodeTurnLeaseRenewer {
   #timer: NodeJS.Timeout | undefined;
   #renewals = 0;
   #lastProgressAt = Date.now();
+  #nativeActivity = false;
 
   constructor(options: {
     requestId: string;
@@ -744,6 +760,11 @@ class ZcodeTurnLeaseRenewer {
     this.#lastProgressAt = Date.now();
   }
 
+  /** New native work (tool activity, message text) observed since the last tick. */
+  markNativeProgress(): void {
+    this.#nativeActivity = true;
+  }
+
   async #tick(): Promise<void> {
     if (this.#timer === undefined) return;
     if (this.#isAborted()) {
@@ -751,6 +772,8 @@ class ZcodeTurnLeaseRenewer {
       return;
     }
     if (Date.now() - this.#lastProgressAt < this.#intervalMs) return;
+    if (!this.#nativeActivity) return;
+    this.#nativeActivity = false;
     if (this.#renewals >= this.#maxRenewals) return;
     this.#renewals += 1;
     this.#lastProgressAt = Date.now();
@@ -762,7 +785,7 @@ class ZcodeTurnLeaseRenewer {
       });
     } catch {
       // Upstream publication is fail-soft and redacted; the bounded cadence
-      // simply tries again on the next interval.
+      // simply tries again on the next interval when work continues.
     }
   }
 }

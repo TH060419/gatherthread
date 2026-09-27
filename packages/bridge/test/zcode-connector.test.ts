@@ -120,6 +120,10 @@ function toolCallEvent(localEventId: string, toolName: string, argumentsValue: u
   return { kind: "tool_call" as const, localEventId, harness: "zcode" as const, captureFidelity: "harness_transcript" as const, toolName, toolCallId: `${localEventId}:id`, arguments: argumentsValue };
 }
 
+function toolResultEvent(localEventId: string, toolName: string, resultValue: unknown) {
+  return { kind: "tool_result" as const, localEventId: `${localEventId}:result`, harness: "zcode" as const, captureFidelity: "harness_transcript" as const, toolName, toolCallId: `${localEventId}:id`, result: resultValue };
+}
+
 test("ZCode execution maps protocol events into one final answer and durable binding state", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "zcode-exec-"));
   const statePath = path.join(root, "state", "binding-session.json");
@@ -368,6 +372,78 @@ test("ZCode tool sharing is opt-in, allowlisted, and bounded", async () => {
   const bounded = sharedEvents.find((event) => event.localEventId === "t-big");
   assert.ok(Buffer.byteLength(JSON.stringify(bounded?.arguments) ?? "") < 40_000);
   assert.equal((bounded?.arguments as { truncated?: boolean })?.truncated, true);
+  await rm(root, { recursive: true, force: true });
+});
+
+test("shared tool events pair calls with results through the allowlist", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-pair-"));
+  const statePath = path.join(root, "binding-session.json");
+  const executor = fakeExecutor(statePath, {
+    shareToolEvents: true,
+    toolAllowlist: ["Read"],
+    turnEvents: [
+      toolCallEvent("a:tool:0", "Read", { file_path: "a.ts" }),
+      toolResultEvent("a:tool:0", "Read", "file body"),
+      toolCallEvent("b:tool:0", "Bash", { command: "rm -rf /" }),
+      toolResultEvent("b:tool:0", "Bash", "output"),
+    ],
+    turns: [{ outcome: { nativeSessionId: "sess_pair_1", finalResponse: "final result text" } }],
+  });
+  const result = await executor.execute(executionInput());
+  // The Read pair passes together; the non-allowlisted Bash pair stays local
+  // entirely — a nameless result used to be dropped, orphaning its call.
+  assert.deepEqual(
+    result.events.filter((event) => event.kind.startsWith("tool")).map((event) => [event.kind, event.toolName]),
+    [["tool_call", "Read"], ["tool_result", "Read"]],
+  );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("first publish and journal replay carry the identical bounded event set", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-journal-parity-"));
+  const statePath = path.join(root, "binding-session.json");
+  const oversized = "x".repeat(32_000);
+  const oversizedTurnEvents: (ReturnType<typeof toolCallEvent> | ReturnType<typeof toolResultEvent>)[] = [];
+  for (let index = 0; index < 20; index += 1) {
+    oversizedTurnEvents.push(toolCallEvent(`m${index}:tool:0`, "Read", { file_path: `f${index}.ts` }));
+    oversizedTurnEvents.push(toolResultEvent(`m${index}:tool:0`, "Read", oversized));
+  }
+  const oversizedExecutor = fakeExecutor(statePath, {
+    shareToolEvents: true,
+    toolAllowlist: ["Read"],
+    turnEvents: oversizedTurnEvents,
+    turns: [{ outcome: { nativeSessionId: "sess_parity_1", finalResponse: "final result text" } }],
+  });
+  const first = await oversizedExecutor.execute(executionInput());
+  // ~640 KiB of bounded tool payloads cannot fit the 512 KiB journal, so the
+  // durable set reduces to the answer — and the live publish must reduce
+  // with it instead of streaming events the journal can never replay.
+  assert.equal(first.events.length, 1);
+  assert.equal(first.events[0]?.kind, "assistant");
+  const replay = await fakeExecutor(statePath).execute(executionInput());
+  assert.deepEqual(
+    replay.events.map((event) => [event.kind, event.localEventId]),
+    first.events.map((event) => [event.kind, event.localEventId]),
+  );
+
+  // A set that fits the journal is preserved whole across a replay.
+  const smallStatePath = path.join(root, "small", "binding-session.json");
+  const smallExecutor = fakeExecutor(smallStatePath, {
+    shareToolEvents: true,
+    toolAllowlist: ["Read"],
+    turnEvents: [
+      toolCallEvent("a:tool:0", "Read", { file_path: "a.ts" }),
+      toolResultEvent("a:tool:0", "Read", "file body"),
+    ],
+    turns: [{ outcome: { nativeSessionId: "sess_parity_2", finalResponse: "final result text" } }],
+  });
+  const smallFirst = await smallExecutor.execute(executionInput());
+  assert.equal(smallFirst.events.length, 3);
+  const smallReplay = await fakeExecutor(smallStatePath).execute(executionInput());
+  assert.deepEqual(
+    smallReplay.events.map((event) => [event.kind, event.localEventId]),
+    smallFirst.events.map((event) => [event.kind, event.localEventId]),
+  );
   await rm(root, { recursive: true, force: true });
 });
 
@@ -1114,6 +1190,65 @@ process.stdin.on("data", (chunk) => {
   });
 });
 
+test("output over the configured limit kills the child instead of waiting out the cap", async () => {
+  const script = `
+let buffer = "";
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  let index;
+  while ((index = buffer.indexOf("\\n")) >= 0) {
+    const line = buffer.slice(0, index);
+    buffer = buffer.slice(index + 1);
+    if (!line.trim()) continue;
+    let message;
+    try { message = JSON.parse(line); } catch { continue; }
+    if (message.method === "session/requestRuntimePreferences") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { nativeSearchEnhancementsEnabled: false } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/create") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {
+        session: { sessionId: "sess_flood_1" },
+        protocol: { name: "ZCode Protocol", version: 1 },
+      } }) + "\\n");
+      continue;
+    }
+    if (message.method === "session/send") {
+      process.stdout.write(JSON.stringify({ id: message.id, result: { accepted: true } }) + "\\n");
+      // Flood stdout and stay alive: the connector must terminate the child
+      // instead of letting it run until the execution timeout.
+      const flood = "y".repeat(4096);
+      setInterval(() => { for (let i = 0; i < 32; i++) process.stdout.write(flood); }, 5);
+      continue;
+    }
+    if (message.id !== undefined) {
+      process.stdout.write(JSON.stringify({ id: message.id, result: {} }) + "\\n");
+    }
+  }
+});
+`;
+  await withFakeAppServer(script, async (commandSpec, directory) => {
+    const started = Date.now();
+    await assert.rejects(
+      runZcodeProtocolTurn({
+        spec: commandSpec,
+        workspacePath: directory,
+        resumeSessionId: undefined,
+        prompt: "hello",
+        timeoutMs: 30_000,
+        maxOutputBytes: 512_000,
+        signal: undefined,
+        onTurnEvent: () => undefined,
+      }),
+      (error: unknown) => error instanceof HarnessExecutionTerminatedError
+        && error.failureCode === "zcode_child_exited"
+        && /output exceeded/.test(error.message),
+    );
+    assert.ok(Date.now() - started < 20_000, "the flood must end the turn long before the execution cap");
+  });
+});
+
 test("projection events delivered before our send are ignored as replay", async () => {
   // The fake emits a replayed message.upserted while answering subscribe —
   // before the connector's session/send resolves. It must never surface as
@@ -1568,6 +1703,69 @@ test("flowing assistant commentary suppresses synthetic lease renewals", async (
     progress.every((update) => !update.id.startsWith("zcode-lease-")),
     "commentary renews the lease; no synthetic renewal may be needed",
   );
+  await rm(root, { recursive: true, force: true });
+});
+
+test("a live but silent hung turn never renews the claim lease", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-lease-hung-"));
+  const statePath = path.join(root, "binding-session.json");
+  const progress: { id: string; content: string }[] = [];
+  const executor = new ZcodeSessionExecutor({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    sessionId: "session-1",
+    workspacePath: ".",
+    statePath,
+    leaseRenewalIntervalMs: 20,
+    maxLeaseRenewals: 10,
+  }, async () => {
+    // Six-plus renewal intervals with zero native activity: ADR-0023 makes
+    // progress the only renewal, so the claim must lapse instead of the
+    // synthetic timer holding it to the execution cap.
+    await new Promise((resolve) => setTimeout(resolve, 140));
+    return { nativeSessionId: "sess_hung_1", finalResponse: "late answer" };
+  });
+  const result = await executor.execute({
+    ...executionInput(),
+    publishProgress: async (update) => {
+      progress.push({ id: update.id, content: update.content });
+    },
+  });
+  assert.equal(result.events.at(-1)?.content, "late answer");
+  assert.equal(progress.length, 0, "a silent hung child must not produce renewal progress");
+  await rm(root, { recursive: true, force: true });
+});
+
+test("recurring native tool activity renews the lease without sharing payloads", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "zcode-lease-tools-"));
+  const statePath = path.join(root, "binding-session.json");
+  const progress: { id: string; content: string }[] = [];
+  const executor = new ZcodeSessionExecutor({
+    probe: usableProbe,
+    spec: { command: "zcode-fake", baseArgs: [], source: "test" },
+    sessionId: "session-1",
+    workspacePath: ".",
+    statePath,
+    leaseRenewalIntervalMs: 25,
+    maxLeaseRenewals: 5,
+  }, async (turnOptions) => {
+    // A long stretch of non-allowlisted tool work: observed as progress,
+    // never shared, and sufficient to renew the claim.
+    for (let index = 0; index < 8; index += 1) {
+      await turnOptions.onTurnEvent(toolCallEvent(`bash-${index}`, "Bash", { command: "sleep 30" }));
+      await new Promise((resolve) => setTimeout(resolve, 15));
+    }
+    return { nativeSessionId: "sess_tools_1", finalResponse: "done" };
+  });
+  const result = await executor.execute({
+    ...executionInput(),
+    publishProgress: async (update) => {
+      progress.push({ id: update.id, content: update.content });
+    },
+  });
+  assert.ok(progress.length >= 1, "real tool activity must renew the lease");
+  assert.ok(progress.length <= 5, "renewals stay within the per-turn budget");
+  assert.ok(result.events.every((event) => event.kind === "assistant"), "non-allowlisted tools stay local");
   await rm(root, { recursive: true, force: true });
 });
 

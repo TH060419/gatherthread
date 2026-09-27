@@ -183,9 +183,11 @@ export class ZcodeProtocolConnection {
   #onStdout(chunk: string): void {
     this.#outputBytes += Buffer.byteLength(chunk, "utf8");
     if (this.#outputBytes > this.#maxOutputBytes) {
-      // failChild keeps this failure's stderr diagnostic on the local
-      // terminal and preserves it as the connection's recorded exit cause.
+      // failChild records this failure as the connection's exit cause and
+      // keeps its diagnostic local; the kill stops a child that would
+      // otherwise keep running local tools until the execution cap.
       this.#failChild(new Error("ZCode app-server output exceeded the configured limit"));
+      this.#child.kill("SIGKILL");
       return;
     }
     this.#buffer += chunk;
@@ -344,7 +346,7 @@ export async function openZcodeProtocolConnection(options: ZcodeProtocolRunOptio
   }
   const child = spawn(options.spec.command, [...options.spec.baseArgs, "app-server"], {
     cwd: options.cwd,
-    env: withoutGatherThreadCredentialEnvironment(process.env),
+    env: zcodeSpawnEnvironment(options.spec, process.env),
     shell: false,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
@@ -424,6 +426,30 @@ export function withoutGatherThreadCredentialEnvironment(
   return Object.fromEntries(
     Object.entries(stripped).filter(([key]) => !/^gatherthread_/i.test(key)),
   );
+}
+
+/**
+ * Environment name the bundled CLI uses to locate its non-credential provider
+ * template config. Desktop layouts keep the file at
+ * `resources/config/provider/zcode-builtin.json` while the CLI searches next
+ * to its entry and the working directory, so the connector points at it
+ * explicitly; official 0.16.x app-servers exit at startup without it.
+ */
+export const ZCODE_BUILTIN_PROVIDER_CONFIG_FILE = "ZCODE_BUILTIN_PROVIDER_CONFIG_FILE";
+
+/**
+ * Builds the spawn environment for a ZCode child: credentials stripped, plus
+ * the bundled provider config path when the resolved spec carries one. The
+ * path is a template-rule document shipped with the distribution, never a
+ * credential.
+ */
+export function zcodeSpawnEnvironment(
+  spec: Pick<ZcodeCommandSpec, "providerConfigPath">,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const stripped = withoutGatherThreadCredentialEnvironment(env);
+  if (spec.providerConfigPath === undefined) return stripped;
+  return { ...stripped, [ZCODE_BUILTIN_PROVIDER_CONFIG_FILE]: spec.providerConfigPath };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

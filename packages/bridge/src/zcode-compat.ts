@@ -2,7 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { access, stat } from "node:fs/promises";import path from "node:path";
 import { promisify } from "node:util";
-import { withoutGatherThreadCredentialEnvironment } from "./zcode-protocol.js";
+import { zcodeSpawnEnvironment } from "./zcode-protocol.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -24,6 +24,13 @@ export interface ZcodeCommandSpec {
   baseArgs: readonly string[];
   /** Where the spec was found, for actionable diagnostics only. */
   source: string;
+  /**
+   * Non-credential provider template config bundled with a desktop
+   * distribution, injected as `ZCODE_BUILTIN_PROVIDER_CONFIG_FILE`: official
+   * 0.16.x app-servers cannot locate it themselves when spawned from an
+   * arbitrary working directory and exit at startup.
+   */
+  providerConfigPath?: string;
 }
 
 export interface ZcodeCliProbe {
@@ -55,8 +62,9 @@ const defaultProbeRunner: ProbeRunner = (spec, args) => new Promise((resolve, re
     maxBuffer: PROBE_MAX_OUTPUT_BYTES,
     windowsHide: true,
     // Probe children are model-adjacent processes too: they must never see
-    // GatherThread credentials, exactly like the app-server execution child.
-    env: withoutGatherThreadCredentialEnvironment(process.env),
+    // GatherThread credentials, exactly like the app-server execution child,
+    // and they need the same bundled provider config path to start.
+    env: zcodeSpawnEnvironment(spec, process.env),
   }).then(
     ({ stdout }) => resolve(stdout),
     (error: NodeJS.ErrnoException & { stdout?: string; killed?: boolean }) => {
@@ -105,7 +113,12 @@ async function specForEntry(entry: string, source: string): Promise<ZcodeCommand
   await accessEntry(resolved, source);
   const extension = path.extname(resolved).toLowerCase();
   if (SCRIPT_EXTENSIONS.has(extension)) {
-    return { command: process.execPath, baseArgs: [resolved], source };
+    return {
+      command: process.execPath,
+      baseArgs: [resolved],
+      source,
+      ...(await bundledProviderConfigPath(resolved)),
+    };
   }
   if (SCRIPT_SHIM_EXTENSIONS.has(extension)) {
     throw new Error(
@@ -113,6 +126,30 @@ async function specForEntry(entry: string, source: string): Promise<ZcodeCommand
     );
   }
   return { command: resolved, baseArgs: [], source };
+}
+
+/**
+ * Desktop layouts keep the non-credential provider template config at
+ * `<bundle>/config/provider/zcode-builtin.json` two levels above the
+ * `glm/zcode.cjs` entry. Official 0.16.x CLIs cannot find it themselves when
+ * spawned from an arbitrary working directory, so a resolved path is attached
+ * to the spec and injected into every child environment.
+ */
+async function bundledProviderConfigPath(entryPath: string): Promise<Pick<ZcodeCommandSpec, "providerConfigPath"> | {}> {
+  const candidate = path.join(
+    path.dirname(path.dirname(entryPath)),
+    "config",
+    "provider",
+    "zcode-builtin.json",
+  );
+  try {
+    const metadata = await stat(candidate);
+    return metadata.isFile() ? { providerConfigPath: candidate } : {};
+  } catch {
+    // A non-desktop layout has no bundled config; the CLI then locates its
+    // own configuration or fails with its own actionable diagnostic.
+    return {};
+  }
 }
 
 async function accessEntry(resolved: string, source: string): Promise<void> {
@@ -185,6 +222,7 @@ async function fromDesktopInstall(
         command: process.execPath,
         baseArgs: [candidate],
         source: `desktop bundle (${candidate})`,
+        ...(await bundledProviderConfigPath(candidate)),
       };
     } catch {
       // Try the next documented install location.

@@ -92,6 +92,10 @@ function parseMessageUpserted(payload: JsonObject): TranscriptEvent[] {
     }));
     if (entry.result !== undefined || entry.content !== undefined || entry.isError === true) {
       events.push(protocolEvent("tool_result", `${localEventId}:result`, {
+        // Carry the call's validated tool name: the connector's sharing
+        // allowlist checks both calls and results, and a nameless result
+        // would silently drop the other half of every shared tool pair.
+        toolName,
         toolCallId,
         ...(entry.result !== undefined
           ? { result: entry.result }
