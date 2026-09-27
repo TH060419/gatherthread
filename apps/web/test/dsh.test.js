@@ -193,6 +193,76 @@ test("Codex runtime selection fails closed when offline or ambiguous", () => {
   );
 });
 
+test("Codex requests may only name a model and effort the runtime advertises", () => {
+  const codex = runtime({
+    id: "runtime-codex-1",
+    device_id: "codex-device-1",
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    execution_profiles: [
+      {
+        provider: "openai",
+        model: "gpt-6-sol",
+        reasoning_efforts: ["low", "high"],
+        default_reasoning_effort: "high",
+      },
+    ],
+  });
+  assert.deepEqual(codexExecutionProfile(codex, { model: "gpt-6-sol", reasoningEffort: "high" }), {
+    harness: "codex",
+    model: "gpt-6-sol",
+    reasoningEffort: "high",
+    runtimeId: "runtime-codex-1",
+  });
+  assert.throws(
+    () => codexExecutionProfile(codex, { model: "gpt-6-terra", reasoningEffort: "high" }),
+    /advertises/u,
+  );
+  assert.throws(
+    () => codexExecutionProfile(codex, { model: "gpt-6-sol", reasoningEffort: "ultra" }),
+    /reasoning effort/u,
+  );
+  // The configured model is still refused when the catalog does not name it: an
+  // advertised catalog is the authority, not the connector's own default.
+  assert.throws(
+    () => codexExecutionProfile(codex, { model: "gpt-5.6-sol", reasoningEffort: "ultra" }),
+    /advertises/u,
+  );
+  // A runtime that declares no catalog keeps the previous fixed-model behavior
+  // instead of rejecting a request it used to accept.
+  const { execution_profiles: _omitted, ...undeclared } = codex;
+  assert.deepEqual(codexExecutionProfile(undeclared, { model: "gpt-5.6-sol", reasoningEffort: "ultra" }), {
+    harness: "codex",
+    model: "gpt-5.6-sol",
+    reasoningEffort: "ultra",
+    runtimeId: "runtime-codex-1",
+  });
+});
+
+test("a Codex model declared without efforts accepts only an effort-less request", () => {
+  const codex = runtime({
+    id: "runtime-codex-1",
+    device_id: "codex-device-1",
+    harness: "codex",
+    provider: "openai",
+    model: "gpt-5.6-sol",
+    execution_profiles: [{ provider: "openai", model: "gpt-6-sol" }],
+  });
+  // Absence of effort metadata is not evidence of support, so the request omits the
+  // effort rather than substituting a built-in value.
+  assert.deepEqual(codexExecutionProfile(codex, { model: "gpt-6-sol" }), {
+    harness: "codex",
+    model: "gpt-6-sol",
+    runtimeId: "runtime-codex-1",
+  });
+  assert.throws(
+    () => codexExecutionProfile(codex, { model: "gpt-6-sol", reasoningEffort: "low" }),
+    /does not advertise a reasoning effort/u,
+  );
+  assert.throws(() => codexExecutionProfile(codex, { model: "gpt-6-terra" }), /advertises/u);
+});
+
 test("pairing hash accepts only the short one-time code and can be removed without losing project navigation", () => {
   assert.equal(dshPairingCodeFromHash("#project=p1&dsh-pair=ABCD-2345"), "ABCD-2345");
   assert.equal(dshPairingCodeFromHash("#dsh-pair=bad-token-value"), "");

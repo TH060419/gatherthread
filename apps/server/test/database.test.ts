@@ -1999,6 +1999,131 @@ test("DeepSeek Harness dynamic execution profiles accept only exact advertised m
   }
 });
 
+test("an advertised Codex catalog is enforced for a direct API caller too", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "codex-catalog-routing",
+      idempotency_key: "create-codex-catalog-routing",
+      mode: "multi",
+      title: "Codex catalog routing",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "codex-catalog-member");
+    const runtime = f.service.registerRuntime(f.member, {
+      runtime_id: "codex-catalog-runtime",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      local_session_id: "codex-catalog-local",
+      capture_fidelity: "harness_transcript",
+      execution_profiles: [
+        { provider: "openai", model: "gpt-6-sol", reasoning_efforts: ["low", "high"] },
+        // Declared without effort metadata, so no effort selection is advertised.
+        { provider: "openai", model: "gpt-5.6-sol" },
+      ],
+    });
+    assert.equal(runtime.execution_profiles?.length, 2);
+
+    // The Web's Codex target carries no provider, and an exact runtime is required
+    // once the runtime declares its own catalog.
+    const accepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "codex-catalog-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use an advertised Codex model",
+        execution_profile: {
+          harness: "codex",
+          model: "gpt-6-sol",
+          reasoning_effort: "high",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, accepted.id, runtime.id).runtime_id,
+      runtime.id,
+    );
+    f.service.completeAgentRequest(
+      f.member, session.id, accepted.id, runtime.id, "codex-catalog-complete", { content: "done" },
+    );
+
+    // A model declared without efforts accepts a request that omits the effort.
+    const effortlessModel = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "codex-catalog-effortless",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use the model whose efforts were not declared",
+        execution_profile: { harness: "codex", model: "gpt-5.6-sol", runtime_id: runtime.id },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, effortlessModel.id, runtime.id).runtime_id,
+      runtime.id,
+    );
+    f.service.completeAgentRequest(
+      f.member, session.id, effortlessModel.id, runtime.id, "codex-catalog-effortless-complete", { content: "done" },
+    );
+
+    for (const [suffix, profile] of [
+      ["unadvertised-model", { harness: "codex", model: "gpt-6-terra", reasoning_effort: "high", runtime_id: runtime.id }],
+      ["unadvertised-effort", { harness: "codex", model: "gpt-6-sol", reasoning_effort: "max", runtime_id: runtime.id }],
+      ["wrong-provider", { harness: "codex", provider: "other", model: "gpt-6-sol", reasoning_effort: "low", runtime_id: runtime.id }],
+      ["undeclared-effort", { harness: "codex", model: "gpt-5.6-sol", reasoning_effort: "low", runtime_id: runtime.id }],
+      ["untargeted", { harness: "codex", model: "gpt-6-sol", reasoning_effort: "low" }],
+    ] as const) {
+      const rejected = f.service.appendEvent(f.member, session.id, {
+        idempotency_key: `codex-catalog-rejected-${suffix}`,
+        type: "agent_request",
+        visibility: "session",
+        payload: { content: "Reject an unadvertised Codex route", execution_profile: profile },
+      });
+      assert.throws(
+        () => f.service.claimAgentRequest(f.member, session.id, rejected.id, runtime.id),
+        (error: unknown) => error instanceof ApiError && error.status === 409,
+        `${suffix} must not be claimable`,
+      );
+    }
+
+    // A runtime that declares nothing keeps the previous fixed-route behavior,
+    // including a browser-selected model that differs from the registered one.
+    const downgraded = f.service.registerRuntime(f.member, {
+      runtime_id: runtime.id,
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      local_session_id: "codex-catalog-local",
+      capture_fidelity: "harness_transcript",
+    });
+    assert.equal(downgraded.execution_profiles, undefined);
+    const legacyAccepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "codex-catalog-legacy-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Keep the fixed Codex route",
+        execution_profile: {
+          harness: "codex",
+          model: "gpt-6-terra",
+          reasoning_effort: "ultra",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, legacyAccepted.id, runtime.id).runtime_id,
+      runtime.id,
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("Agent request claims stay on the selected harness and exact runtime with legacy Codex compatibility", () => {
   const f = fixture();
   try {

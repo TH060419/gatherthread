@@ -3,6 +3,7 @@ import type {
   CollaborationApi,
   HarnessExecutor,
   RegisteredRuntime,
+  RuntimeExecutionProfile,
   SessionSummary,
 } from "./types.js";
 
@@ -10,6 +11,16 @@ export interface ProjectHarnessDescriptor {
   harness: HarnessName;
   provider: string;
   model: string;
+  /**
+   * Exact provider/model profiles this connection discovered from the harness
+   * itself, so the Web workspace can offer what the harness really runs instead
+   * of a catalog hard-coded in the browser.
+   *
+   * Present only once discovery succeeded. An absent list keeps the previous
+   * exact fixed-model routing rule, so an older or unsupported harness version
+   * loses no safety: it simply advertises nothing.
+   */
+  executionProfiles?: readonly RuntimeExecutionProfile[];
   captureFidelity: CaptureFidelity;
   capabilities: readonly string[];
 }
