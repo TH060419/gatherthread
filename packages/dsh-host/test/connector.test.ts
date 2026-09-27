@@ -127,6 +127,8 @@ class FakeApi implements DshCollaborationApi {
   readGate: Promise<void> | undefined;
   forcedRuntimeId: string | undefined;
   forcedHeartbeatRuntimeId: string | undefined;
+  /** Mimic a server that stores and echoes the latest declaration, as the real one does. */
+  echoRegistrations = false;
   #runtime: DshRegisteredRuntime | undefined;
 
   async listProjectSessions(): Promise<SessionSummary[]> {
@@ -157,10 +159,10 @@ class FakeApi implements DshCollaborationApi {
 
   async registerRuntime(input: DshRuntimeRegistration): Promise<DshRegisteredRuntime> {
     this.registrations.push(structuredClone(input));
-    if (this.#runtime === undefined || this.forcedRuntimeId !== undefined) {
+    if (this.#runtime === undefined || this.forcedRuntimeId !== undefined || this.echoRegistrations) {
       this.#runtime = {
         ...structuredClone(input),
-        id: this.forcedRuntimeId ?? "runtime-1",
+        id: this.forcedRuntimeId ?? this.#runtime?.id ?? "runtime-1",
         userId: "user-1",
         registeredAt: now,
       };
@@ -1880,6 +1882,78 @@ test("ambiguous state/session identity and viewer access fail closed", async () 
   });
   await assert.rejects(rewound.start({ schedule: false }), /head precedes the persisted DSH cursor/);
   assert.equal(rewoundHost.openCount, 0);
+});
+
+test("a refreshed DSH model catalog is re-registered on the same runtime identity", async () => {
+  const cfg = config({
+    executionProfiles: [{ provider: "deepseek-official", model: "deepseek-v4-flash" }],
+  });
+  const api = new FakeApi();
+  api.echoRegistrations = true;
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await connector.start({ runImmediately: false, schedule: false });
+
+  // An unchanged catalog costs nothing: the server already has this declaration.
+  await connector.updateExecutionProfiles([{ provider: "deepseek-official", model: "deepseek-v4-flash" }]);
+  assert.equal(api.registrations.length, 1);
+
+  // A model published after connect is declared without changing the identity, so
+  // an in-flight claim on this runtime stays valid.
+  const refreshed = [
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    { provider: "deepseek-official", model: "deepseek-v4.1", reasoningEfforts: ["low", "high"] },
+  ];
+  await connector.updateExecutionProfiles(refreshed);
+  assert.equal(api.registrations.length, 2);
+  assert.deepEqual(api.registrations[1]?.executionProfiles, refreshed);
+  assert.deepEqual(api.returnedRuntimeIds, ["runtime-1", "runtime-1"]);
+  await connector.stop();
+});
+
+test("a server that does not confirm a refreshed catalog keeps the previous declaration", async () => {
+  const cfg = config({
+    executionProfiles: [{ provider: "deepseek-official", model: "deepseek-v4-flash" }],
+  });
+  // The echo stays stale, the way a server that ignored the new field would reply.
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await connector.start({ runImmediately: false, schedule: false });
+  const refreshed = [
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    { provider: "deepseek-official", model: "deepseek-v4.1" },
+  ];
+  await assert.rejects(connector.updateExecutionProfiles(refreshed), /did not confirm/u);
+  // Nothing was committed, so the next refresh tries again instead of pretending
+  // this runtime offers a model the server never recorded.
+  await assert.rejects(connector.updateExecutionProfiles(refreshed), /did not confirm/u);
+  assert.equal(api.registrations.length, 3);
+  await connector.stop();
+});
+
+test("a connector that has not started refuses a catalog update", async () => {
+  const cfg = config();
+  const connector = new DshHostConnector({
+    config: cfg,
+    api: new FakeApi(),
+    host: new FakeHost(cfg.dshSessionId, freshPersistence()),
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await assert.rejects(
+    connector.updateExecutionProfiles([{ provider: "deepseek-official", model: "deepseek-v4.1" }]),
+    /not running/u,
+  );
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {

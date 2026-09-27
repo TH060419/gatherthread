@@ -38,6 +38,7 @@ import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
 import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260927-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
+  CODEX_HARNESS,
   codexExecutionProfile,
   DSH_HARNESS,
   DSH_INSTALL_COMMAND,
@@ -51,7 +52,7 @@ import {
   resolveCodexRuntime,
   resolveDshRuntime,
   withoutDshPairingHash,
-} from "./dsh.js?v=20260922-1";
+} from "./dsh.js?v=20260925-2";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import {
   captureTimelineScroll,
@@ -91,7 +92,7 @@ import {
   withProjectCodexProfile,
   withProjectDshProfile,
   withProjectEnabledHarnesses,
-} from "./settings.js?v=20260925-2";
+} from "./settings.js?v=20260925-3";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -3140,11 +3141,39 @@ function setAutomaticClaimDeviceName({ force = false } = {}) {
   input.dataset.automatic = "true";
 }
 
-function renderModelOptions(select, selectedModel, settings = settingsPreview) {
-  const models = [
-    ...CODEX_MODELS.map((entry) => entry.id),
-    ...settings.agents.customCodexModels.filter((model) => !CODEX_MODELS.some((entry) => entry.id === model)),
-  ];
+/**
+ * Codex models the connected runtimes advertise.
+ *
+ * A Codex installation publishes its own catalog, so this is the authoritative
+ * source for the model picker; the built-in list in settings.js stays only as a
+ * fallback for a workspace whose connector has not reported a catalog (an older
+ * Codex, or no connection yet). Offline runtimes are ignored because their models
+ * cannot run in this session.
+ */
+function advertisedCodexModels() {
+  const entries = [];
+  for (const runtime of state.executionRuntimes) {
+    if (runtime.harness !== CODEX_HARNESS || runtime.status !== "online") continue;
+    for (const profile of runtime.executionProfiles ?? []) {
+      entries.push({
+        id: profile.model,
+        efforts: profile.reasoningEfforts,
+        defaultEffort: profile.defaultReasoningEffort,
+      });
+    }
+  }
+  return entries;
+}
+
+function renderModelOptions(select, selectedModel, settings = settingsPreview, advertised = advertisedCodexModels()) {
+  const advertisedIds = uniqueModelIds(advertised.map((entry) => entry.id));
+  // An advertised catalog is the authority on what this connection can run, so
+  // nothing else is offered while one exists. The stored selection stays listed
+  // even then: repointing a project at a different model silently would be worse
+  // than showing it, and submission still fails closed for an unadvertised model.
+  const models = uniqueModelIds(advertisedIds.length > 0
+    ? [...advertisedIds, selectedModel]
+    : [...CODEX_MODELS.map((entry) => entry.id), ...settings.agents.customCodexModels, selectedModel]);
   select.replaceChildren();
   for (const model of models) {
     const option = document.createElement("option");
@@ -3155,15 +3184,21 @@ function renderModelOptions(select, selectedModel, settings = settingsPreview) {
   }
 }
 
-function effortOptionsForModel(model, settings = state.settings) {
+function effortOptionsForModel(model, settings = state.settings, advertised = advertisedCodexModels()) {
   const known = CODEX_MODELS.find((entry) => entry.id === model);
+  const runtimeAdvertised = advertised.find((entry) => entry.id === model);
+  if (runtimeAdvertised?.efforts?.length > 0) return runtimeAdvertised.efforts;
   return known?.efforts ?? CODEX_REASONING_EFFORTS;
 }
 
-function updateEffortControl(modelSelect, effortSelect, requestedEffort, settings = state.settings) {
-  const profile = normalizeCodexProfile({ model: modelSelect.value, effort: requestedEffort }, settings.agents.customCodexModels);
+function updateEffortControl(modelSelect, effortSelect, requestedEffort, settings = state.settings, advertised = advertisedCodexModels()) {
+  const profile = normalizeCodexProfile(
+    { model: modelSelect.value, effort: requestedEffort },
+    settings.agents.customCodexModels,
+    advertised,
+  );
   effortSelect.replaceChildren();
-  for (const effort of effortOptionsForModel(profile.model, settings)) {
+  for (const effort of effortOptionsForModel(profile.model, settings, advertised)) {
     const option = document.createElement("option");
     option.value = effort;
     option.textContent = effort;
@@ -3172,8 +3207,13 @@ function updateEffortControl(modelSelect, effortSelect, requestedEffort, setting
   }
 }
 
+function uniqueModelIds(models) {
+  return [...new Set(models.filter((model) => typeof model === "string" && model))];
+}
+
 function currentProjectProfile(settings = state.settings) {
-  return state.project ? projectCodexProfile(settings, state.project.id) : normalizeCodexProfile(undefined);
+  if (!state.project) return normalizeCodexProfile(undefined);
+  return projectCodexProfile(settings, state.project.id, advertisedCodexModels());
 }
 
 function currentProjectHarness(settings = state.settings) {

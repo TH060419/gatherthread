@@ -135,6 +135,8 @@ class FakeManagedConnector implements DshManagedConnector {
   stopped = false;
   starts = 0;
   stops = 0;
+  readonly profileUpdates: Array<ReadonlyArray<{ provider: string; model: string }>> = [];
+  failProfileUpdate = false;
 
   constructor(private readonly failStart = false) {}
 
@@ -147,6 +149,11 @@ class FakeManagedConnector implements DshManagedConnector {
     if (this.stopped) return;
     this.stopped = true;
     this.stops += 1;
+  }
+
+  async updateExecutionProfiles(profiles: ReadonlyArray<{ provider: string; model: string }>): Promise<void> {
+    if (this.failProfileUpdate) throw new Error("simulated re-registration failure");
+    this.profileUpdates.push(structuredClone(profiles));
   }
 }
 
@@ -621,6 +628,45 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise<void>((resolve) => setTimeout(resolve, 2));
   }
 }
+
+test("a refreshed catalog reaches every active connector and one failure cannot block the rest", async () => {
+  const api = new DiscoveryApi();
+  api.sessions = [session("multi"), session("owned-solo", { mode: "solo", ownerUserId: "actor-1" })];
+  const created: FakeManagedConnector[] = [];
+  const attachedProfiles: Array<ReadonlyArray<{ provider: string; model: string }> | undefined> = [];
+  const reported: Error[] = [];
+  const manager = new DshProjectManager({
+    config: projectConfig(),
+    api,
+    onBackgroundError: (error) => reported.push(error),
+    createConnector: ({ config }) => {
+      const connector = new FakeManagedConnector();
+      created.push(connector);
+      attachedProfiles.push(config.executionProfiles);
+      return connector;
+    },
+  });
+  await manager.start();
+  assert.equal(created.length, 2);
+
+  // One unhealthy session must not stop its peer from advertising the new model.
+  created[0]!.failProfileUpdate = true;
+  const refreshed = [
+    { provider: "deepseek-official", model: "DeepSeek-CustomCase" },
+    { provider: "deepseek-official", model: "deepseek-v4.1", reasoningEfforts: ["low", "high"] },
+  ];
+  await manager.updateExecutionProfiles(refreshed);
+  assert.deepEqual(created.map((connector) => connector.profileUpdates.length), [0, 1]);
+  assert.deepEqual(created[1]!.profileUpdates[0], refreshed);
+  assert.equal(reported.length, 1, "the failing session is reported instead of hidden");
+
+  // The catalog the manager creates from was refreshed, so a later Session
+  // inherits it without waiting for another harness refresh.
+  api.sessions.push(session("later"));
+  await manager.refreshOnce();
+  assert.deepEqual(attachedProfiles.at(-1), refreshed);
+  await manager.stop();
+});
 
 async function bounded<T>(value: Promise<T>, milliseconds: number): Promise<T> {
   return Promise.race([

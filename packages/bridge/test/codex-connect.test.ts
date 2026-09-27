@@ -41,6 +41,8 @@ import {
   updateCodexHookRegistry,
   type CanonicalEvent,
   type CollaborationApi,
+  type RuntimeExecutionProfile,
+  type RuntimeRegistration,
 } from "../src/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -888,6 +890,58 @@ test("new binding materializes through the authoritative cursor before one-time 
   ]);
 });
 
+test("a session runtime registers the Codex model catalog its harness discovered", async () => {
+  const stateRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-connect-catalog-"));
+  const order: string[] = [];
+  const registrations: RuntimeRegistration[] = [];
+  const advertised: readonly RuntimeExecutionProfile[] = [
+    { provider: "openai", model: "gpt-6-sol", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
+  ];
+  const api: CollaborationApi = {
+    ...projectApi([], order),
+    registerRuntime: async (runtime) => {
+      registrations.push(runtime);
+      return { ...runtime, id: "runtime-1", userId: "user-1" };
+    },
+  };
+  const harness = projectHarness({
+    order,
+    project() {},
+    activate() {},
+    executionProfiles: advertised,
+  });
+
+  await initializeProjectSession({
+    api,
+    actorDeviceId: "device-1",
+    stateRoot,
+    harness,
+    session: session("owner", "multi"),
+  });
+  // The declared catalog travels with the registration, so the server can match a
+  // targeted request against what this connection really offers.
+  assert.deepEqual(registrations[0]?.executionProfiles, advertised);
+
+  // A harness that discovered nothing keeps the previous fixed-model registration.
+  const plainRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-connect-no-catalog-"));
+  const plainRegistrations: RuntimeRegistration[] = [];
+  await initializeProjectSession({
+    api: {
+      ...api,
+      registerRuntime: async (runtime) => {
+        plainRegistrations.push(runtime);
+        return { ...runtime, id: "runtime-2", userId: "user-1" };
+      },
+    },
+    actorDeviceId: "device-1",
+    stateRoot: plainRoot,
+    harness: projectHarness({ order: [], project() {}, activate() {} }),
+    session: session("owner", "multi"),
+  });
+  assert.equal(plainRegistrations[0]?.executionProfiles, undefined);
+  assert.equal("executionProfiles" in (plainRegistrations[0] ?? {}), false);
+});
+
 test("session initialization imports visible history after canonical materialization and before publishing", async () => {
   const stateRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-visible-history-order-"));
   const order: string[] = [];
@@ -1204,12 +1258,14 @@ function projectHarness(input: {
   deactivate?(): void;
   prepare?(): number;
   importVisibleHistory?(input: { throughSequence: number; automatic: boolean }): void;
+  executionProfiles?: readonly RuntimeExecutionProfile[];
 }): ProjectHarnessAdapter {
   return {
     descriptor: {
       harness: "codex",
       provider: "openai",
       model: "gpt-test",
+      ...(input.executionProfiles === undefined ? {} : { executionProfiles: input.executionProfiles }),
       captureFidelity: "harness_transcript",
       capabilities: [],
     },

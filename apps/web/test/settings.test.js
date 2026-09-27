@@ -75,6 +75,38 @@ test("project Agent profiles are isolated and custom models remain safe data", (
   assert.throws(() => withProjectCodexProfile(settings, "bad project", { model: "deepseek-chat", effort: "high" }), /safe project ID/);
 });
 
+test("a model a connected runtime advertises is selectable and never resets to the fallback", () => {
+  const advertised = [{ id: "gpt-6-sol", efforts: ["low", "high", "max"], defaultEffort: "high" }];
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-6-sol", effort: "max" }, [], advertised),
+    { model: "gpt-6-sol", effort: "max" },
+  );
+  // The runtime's own effort set governs the model it advertises.
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-6-sol", effort: "ultra" }, [], advertised),
+    { model: "gpt-6-sol", effort: "high" },
+  );
+  // An advertised model is a legitimate project choice even though the built-in
+  // fallback list has never heard of it.
+  const settings = normalizeSettings({
+    ...DEFAULT_SETTINGS,
+    agents: {
+      ...DEFAULT_SETTINGS.agents,
+      projectProfiles: { "project-alpha": { codex: { model: "gpt-6-sol", effort: "low" } } },
+    },
+  });
+  assert.deepEqual(projectCodexProfile(settings, "project-alpha"), { model: "gpt-6-sol", effort: "low" });
+  assert.deepEqual(projectCodexProfile(settings, "project-alpha", advertised), { model: "gpt-6-sol", effort: "low" });
+  // A malformed stored model still falls back instead of being trusted.
+  assert.deepEqual(normalizeCodexProfile({ model: "bad\nmodel" }), { model: "gpt-5.6-sol", effort: "low" });
+  assert.deepEqual(normalizeCodexProfile({ model: "--danger" }, [], advertised), { model: "gpt-5.6-sol", effort: "low" });
+  // An advertised model with no declared efforts keeps the built-in effort set.
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-6-terra", effort: "xhigh" }, [], [{ id: "gpt-6-terra" }]),
+    { model: "gpt-6-terra", effort: "xhigh" },
+  );
+});
+
 test("project harness and DSH runtime selections are exact, isolated, and credential-free", () => {
   let settings = withProjectAgentHarness(DEFAULT_SETTINGS, "project-alpha", "deepseek-harness");
   settings = withProjectDshProfile(settings, "project-alpha", {

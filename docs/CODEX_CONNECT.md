@@ -100,6 +100,12 @@ Existing first-connect snapshots are not silently replaced by this update. If an
 
 RPC frames and the 7 KiB Codex Desktop Hook capsule remain bounded. The capsule continues from an acknowledged checkpoint; its size is not the model's total context window. DSH has its own native policy and does not use this browser/CLI fallback. See [ADR-0026](adr/0026-native-first-context-management.md).
 
+## Model selection
+
+A Codex installation publishes the models it offers, and that catalog — not a list built into the browser — decides which models the Web workspace shows for this connection. The connector reads it once during preflight, so restart the connector after changing your Codex model catalog if you want the new entries offered immediately. `--model` still selects the model this connection uses by default; a Web request may name any advertised model and one of that model's advertised reasoning efforts, and nothing else is accepted.
+
+If your Codex version cannot report a catalog, the Web workspace falls back to its built-in list and this connection keeps using its configured `--model`. A model you configured in Codex but that does not appear there is not a synchronization failure; check the `Codex model catalog:` line that preflight prints. [ADR-0032](adr/0032-harness-advertised-model-catalogs.md) records the rule.
+
 ## Troubleshooting
 
 | Symptom | Action |

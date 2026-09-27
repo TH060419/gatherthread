@@ -31,6 +31,7 @@ import type {
   DshMappedEvent,
   DshRegisteredRuntime,
   DshRuntimeExecutionProfile,
+  DshRuntimeRegistration,
   DshSessionEventRecord,
 } from "./types.js";
 import type { SessionSummary } from "@gatherthread/bridge";
@@ -130,6 +131,64 @@ export class DshHostConnector {
 
   get stopped(): boolean {
     return this.#stopped;
+  }
+
+  /**
+   * Adopt a refreshed execution-profile catalog on a running connection.
+   *
+   * Discovery reads the live DSH catalog, so a model published after this
+   * connection started has to become selectable without reconnecting. The runtime
+   * is re-registered because the server stores the declaration at registration
+   * time; that registration is idempotent per device, harness, and local session,
+   * so the runtime identity and any in-flight claim survive the refresh.
+   *
+   * The catalog is only ever replaced wholesale: a refresh that reports the same
+   * routes does nothing, and a not-yet-started connector refuses the update rather
+   * than recording a declaration it never sent.
+   */
+  async updateExecutionProfiles(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void> {
+    if (!this.#started || this.#stopped) throw new Error("DSH connector is not running");
+    const runtime = this.#requireRuntime();
+    if (sameExecutionProfiles(runtime.executionProfiles, profiles)) return;
+    const cloned = cloneExecutionProfiles(profiles);
+    const registration = await this.#api.registerRuntime(this.#runtimeRegistration(cloned));
+    // The declaration only counts once the server confirms it. Committing before
+    // that would let this connector accept requests for models the server has not
+    // recorded for this runtime, so a stale echo fails closed instead.
+    if (registration.executionProfiles === undefined
+      || !sameExecutionProfiles(registration.executionProfiles, cloned)) {
+      throw new Error("GatherThread did not confirm the refreshed DSH execution profiles");
+    }
+    this.#config.executionProfiles = cloned;
+    this.#runtime = registration;
+    this.#assertRuntime(registration);
+  }
+
+  #runtimeRegistration(
+    executionProfiles: readonly DshRuntimeExecutionProfile[] | undefined = this.#config.executionProfiles,
+  ): DshRuntimeRegistration {
+    return {
+      sessionId: this.#config.sessionId,
+      deviceId: this.#config.deviceId,
+      harness: "deepseek-harness",
+      provider: this.#config.provider,
+      model: this.#config.model,
+      localSessionId: this.#config.dshSessionId,
+      captureFidelity: "harness_transcript",
+      capabilities: [
+        "agent_request",
+        "agent_progress",
+        "durable_session_events",
+        "native_session_resume",
+        "outbox_replay",
+        "canonical_history_projection",
+        "bidirectional_local_turns",
+      ],
+      ...(executionProfiles === undefined ? {} : {
+        executionProfiles: cloneExecutionProfiles(executionProfiles),
+      }),
+      purpose: "execution",
+    };
   }
 
   get executionRuntimeId(): string | undefined {
@@ -261,28 +320,7 @@ export class DshHostConnector {
       const mode = await this.#host.open();
       this.#state = this.#reconcileState(storedState, mode);
       await this.#stateStore.save(this.#state);
-      this.#runtime = await this.#api.registerRuntime({
-        sessionId: this.#config.sessionId,
-        deviceId: this.#config.deviceId,
-        harness: "deepseek-harness",
-        provider: this.#config.provider,
-        model: this.#config.model,
-        localSessionId: this.#config.dshSessionId,
-        captureFidelity: "harness_transcript",
-        capabilities: [
-          "agent_request",
-          "agent_progress",
-          "durable_session_events",
-          "native_session_resume",
-          "outbox_replay",
-          "canonical_history_projection",
-          "bidirectional_local_turns",
-        ],
-        ...(this.#config.executionProfiles === undefined ? {} : {
-          executionProfiles: cloneExecutionProfiles(this.#config.executionProfiles),
-        }),
-        purpose: "execution",
-      });
+      this.#runtime = await this.#api.registerRuntime(this.#runtimeRegistration());
       this.#assertRuntime(this.#runtime);
       this.#notifyLifecycle("idle");
       if (options.schedule !== false) this.#scheduleHeartbeat();

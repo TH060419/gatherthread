@@ -854,3 +854,114 @@ async function eventually(predicate: () => boolean, milliseconds = 500): Promise
     await new Promise<void>((resolve) => setTimeout(resolve, 5));
   }
 }
+
+test("a model published after connect is republished to running Projects", async () => {
+  const routedGrant: DshNativeGrant = {
+    ...unboundGrant,
+    route: { provider: "deepseek-official", model: "deepseek-chat" },
+  };
+  const credentials = credentialsFixture(routedGrant);
+  let catalog: Array<{ provider: string; model: string }> = [
+    { provider: "deepseek-official", model: "deepseek-chat" },
+  ];
+  let clock = 1_000_000;
+  let reads = 0;
+  const updates: Array<{ projectId: string; models: string[] }> = [];
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service },
+    status: status(),
+    workspacePath: "/readonly/workspace",
+    now: () => clock,
+    listExecutionProfiles: async (provider) => {
+      reads += 1;
+      return catalog.map((profile) => ({ ...profile, provider }));
+    },
+    listProjects: async () => [{
+      id: "project-a",
+      name: "Project A",
+      role: "owner",
+      state: "active",
+      sessionCount: 1,
+    }],
+    resolveWorkspace: async () => "/managed/project-a",
+    createOwner: async (_grant, binding) => ({
+      async stop() {},
+      async updateExecutionProfiles(profiles) {
+        updates.push({ projectId: binding.projectId, models: profiles.map((profile) => profile.model) });
+      },
+    }),
+  });
+  await controller.start();
+  assert.equal(reads, 1, "the catalog is read once while connecting");
+  // A fresh owner already captured this catalog, so nothing is republished yet.
+  assert.deepEqual(updates, []);
+
+  // A catalog change inside the refresh interval is deliberately not re-read.
+  catalog = [...catalog, { provider: "deepseek-official", model: "deepseek-v4.1" }];
+  await controller.refreshProjects();
+  assert.equal(reads, 1);
+  assert.deepEqual(updates, []);
+
+  // Once the interval elapses the newly published model reaches the live Project.
+  clock += 5 * 60 * 1_000;
+  await controller.refreshProjects();
+  assert.equal(reads, 2);
+  assert.deepEqual(updates, [{
+    projectId: "project-a",
+    models: ["deepseek-chat", "deepseek-v4.1"],
+  }]);
+
+  // An unchanged catalog is not republished on every interval.
+  clock += 5 * 60 * 1_000;
+  await controller.refreshProjects();
+  assert.equal(reads, 3);
+  assert.equal(updates.length, 1);
+  await controller.dispose();
+});
+
+test("a Project that cannot republish its catalog does not fail discovery", async () => {
+  const routedGrant: DshNativeGrant = {
+    ...unboundGrant,
+    route: { provider: "deepseek-official", model: "deepseek-chat" },
+  };
+  const credentials = credentialsFixture(routedGrant);
+  let clock = 2_000_000;
+  let catalog: Array<{ provider: string; model: string }> = [
+    { provider: "deepseek-official", model: "deepseek-chat" },
+  ];
+  const updates: string[] = [];
+  const stopped: string[] = [];
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service },
+    status: status(),
+    workspacePath: "/readonly/workspace",
+    now: () => clock,
+    listExecutionProfiles: async (provider) => catalog.map((profile) => ({ ...profile, provider })),
+    listProjects: async () => [
+      { id: "project-a", name: "Project A", role: "owner", state: "active", sessionCount: 1 },
+      { id: "project-b", name: "Project B", role: "owner", state: "active", sessionCount: 1 },
+    ],
+    resolveWorkspace: async (_grant, binding) => `/managed/${binding.projectId}`,
+    createOwner: async (_grant, binding) => {
+      if (binding.projectId === "project-b") return { async stop() {} };
+      return {
+        async stop() { stopped.push(binding.projectId); },
+        async updateExecutionProfiles() {
+          updates.push(binding.projectId);
+          throw new Error("this Project could not re-register");
+        },
+      };
+    },
+  });
+  await controller.start();
+  catalog = [...catalog, { provider: "deepseek-official", model: "deepseek-v4.1" }];
+  clock += 5 * 60 * 1_000;
+  await controller.refreshProjects();
+  assert.deepEqual(updates, ["project-a"], "the failing republish was attempted");
+  assert.deepEqual(stopped, [], "a failed republish never stops the Project");
+  // The connection itself stays usable; only the catalog refresh is reported as
+  // recoverable, so an operator can tell the offered model list may be stale.
+  assert.equal(controller.publicState().runtime.connection, "connected");
+  assert.equal(controller.publicState().recoverableError, "connection_failed");
+  await controller.dispose();
+});

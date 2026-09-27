@@ -109,6 +109,17 @@ export function codexExecutionProfile(runtime, { model, reasoningEffort }) {
     throw new Error("A matching online Codex runtime is required.");
   }
   if (!safeModel || !safeEffort) throw new Error("A valid Codex model and reasoning effort are required.");
+  const profiles = normalized.executionProfiles ?? [];
+  if (profiles.length > 0) {
+    // The runtime published its own catalog, so a request may only name a model
+    // and effort that catalog declares. A runtime without a declaration keeps the
+    // previous fixed-model behavior instead of failing a legitimate request.
+    const advertised = profiles.find((profile) => profile.model === safeModel);
+    if (!advertised) throw new Error("Choose a Codex model this runtime advertises.");
+    if (advertised.reasoningEfforts.length > 0 && !advertised.reasoningEfforts.includes(safeEffort)) {
+      throw new Error("Choose a reasoning effort this Codex model advertises.");
+    }
+  }
   return {
     harness: CODEX_HARNESS,
     model: safeModel,
