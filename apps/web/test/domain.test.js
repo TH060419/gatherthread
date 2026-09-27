@@ -478,3 +478,21 @@ test("only the original requester can retry a failed Agent request", () => {
   assert.equal(canRetryFailedAgentRequest(request, { id: "user-2" }), false);
   assert.equal(canRetryFailedAgentRequest(request, undefined), false);
 });
+
+test("a paused request stops counting as waiting for an answer", () => {
+  const request = agentRequestEvent();
+  const lifecycle = (status) => ({
+    id: `progress-${status}`,
+    type: "agent_progress",
+    sequence: 5,
+    replyTo: request.id,
+    payload: { phase: "lifecycle", status, content: `The request is ${status}.` },
+  });
+  // A pause is the end of this request's life: the author stopped it, and asking
+  // again is a new request. Leaving it pending would show a paused agent as
+  // still queued for ever.
+  assert.deepEqual(pendingAgentRequests([request, lifecycle("paused")]), []);
+  // Ordinary execution lifecycle markers are not terminal.
+  assert.deepEqual(pendingAgentRequests([request, lifecycle("started")]).map((event) => event.id), [request.id]);
+  assert.deepEqual(pendingAgentRequests([request]).map((event) => event.id), [request.id]);
+});

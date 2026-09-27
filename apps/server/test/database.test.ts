@@ -1520,6 +1520,217 @@ test("a database written before claim leases migrates its claims into recoverabl
   }
 });
 
+test("pausing fences the execution that was holding the claim", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count, 1);
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // The paused claim is no longer "claimed", so every write the in-flight
+    // execution could still make is fenced by the existing attempt check.
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-progress-0001", { content: "late" }),
+      (error: unknown) => error instanceof ApiError,
+      "a paused execution must not append progress",
+    );
+    assert.throws(
+      () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "pause-complete-0001", { text: "late" }),
+      (error: unknown) => error instanceof ApiError,
+      "a paused execution must not publish a final answer",
+    );
+    const responses = f.service.replay(f.member, sessionId, 0, 100).events
+      .filter((candidate) => candidate.type === "agent_response");
+    assert.deepEqual(responses, [], "the discarded in-flight answer must never reach canonical history");
+  } finally {
+    f.close();
+  }
+});
+
+test("a paused request is never resumed by the lease on its own", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0002");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // Long past the lease. Automatic recovery must not treat an explicit pause
+    // as an abandoned execution, or the button would do nothing.
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status,
+      "paused",
+      "a paused request stays paused until the requester resumes it",
+    );
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count,
+      1,
+      "a pause opens no execution and spends no recovery budget",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("pausing is visible to the whole room as an ordered lifecycle marker", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, secondActor, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0006");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // Everyone reads the same canonical log, so a pause has to be an event and
+    // not just a control-plane row: otherwise the room still believes the agent
+    // is working.
+    const marker = f.service.replay(f.member, sessionId, 0, 100).events
+      .find((candidate) => candidate.type === "agent_progress" && candidate.reply_to_event_id === event.id);
+    assert.ok(marker, "a pause must leave a canonical marker on the request");
+    assert.equal((marker.payload as { status?: string }).status, "paused");
+    assert.equal((marker.payload as { phase?: string }).phase, "lifecycle");
+    assert.equal(marker.actor_user_id, f.member.user_id, "the pause is attributed to the person who asked for it");
+    assert.ok(marker.sequence > event.sequence, "the marker is ordered after the request it pauses");
+    // Repeating the pause must not spam the timeline.
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    assert.equal(
+      f.service.replay(f.member, sessionId, 0, 100).events
+        .filter((candidate) => candidate.type === "agent_progress"
+          && (candidate.payload as { status?: string }).status === "paused").length,
+      1,
+      "pausing an already paused request is idempotent",
+    );
+    // A second member reads the same marker.
+    assert.ok(f.service.replay(secondActor, sessionId, 0, 100).events
+      .some((candidate) => candidate.reply_to_event_id === event.id
+        && (candidate.payload as { status?: string }).status === "paused"));
+  } finally {
+    f.close();
+  }
+});
+
+test("an execution fenced by a pause can never publish, however it ends", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0005");
+    const heldAttempt = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count;
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // The execution that was running when the author paused must never publish,
+    // whether it reports the generation it holds or omits it as a legacy client.
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-fence-progress-0001", { content: "late" },
+        undefined, undefined, heldAttempt),
+      (error: unknown) => error instanceof ApiError,
+    );
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-fence-progress-0002", { content: "late" }),
+      (error: unknown) => error instanceof ApiError,
+    );
+    assert.throws(
+      () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "pause-fence-complete-0001", { text: "late" }),
+      (error: unknown) => error instanceof ApiError,
+    );
+    // And no amount of waiting turns it back into work.
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "paused");
+  } finally {
+    f.close();
+  }
+});
+
+test("a reserved idempotency key cannot suppress the canonical pause", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0007");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // Any writer with session access can guess a predictable key and reserve it
+    // with an ordinary event. If the pause reused that key the insert would
+    // collide, the whole pause transaction would roll back, and the author would
+    // be unable to fence the execution that is still running.
+    f.service.appendEvent(f.member, sessionId, {
+      idempotency_key: `agent-request-paused:${event.id}`,
+      type: "human_chat",
+      visibility: "session",
+      payload: { content: "reserved before the pause" },
+    });
+    const paused = f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    assert.equal(paused.status, "paused", "the pause must survive a reserved key");
+    const markers = f.service.replay(f.member, sessionId, 0, 200).events.filter((candidate) =>
+      candidate.type === "agent_progress"
+      && candidate.reply_to_event_id === event.id
+      && (candidate.payload as { status?: string }).status === "paused");
+    assert.equal(markers.length, 1, "the pause must still be announced once");
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status,
+      "paused",
+      "the claim must actually be fenced",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+for (const scope of ["session", "user", "deployment"] as const) {
+  test(`a full ${scope} quota still permits one bounded pause but no ordinary writes`, () => {
+    const limit = 5000;
+    const f = fixture({ maxEventBytes: limit,
+      maxSessionEventBytes: scope === "session" ? limit : 20000,
+      maxUserEventBytes: scope === "user" ? limit : 20000,
+      maxTotalEventBytes: scope === "deployment" ? limit : 20000,
+      // Aggregate limits cannot exceed the deployment limit.
+      ...(scope === "deployment" ? { maxSessionEventBytes: limit, maxUserEventBytes: limit } : {}),
+    });
+    try {
+      const session = f.service.createSession(f.owner, { session_id: `pause-full-${scope}`,
+        idempotency_key: `pause-full-create-${scope}`, mode: "solo", title: "Full" }).session;
+      const runtime = f.service.registerRuntime(f.owner, { runtime_id: `pause-full-runtime-${scope}`,
+        session_id: session.id, device_id: f.owner.device_id, harness: "codex", provider: "local", model: "test",
+        local_session_id: "pause-full-local", capture_fidelity: "canonical_history", purpose: "execution" });
+      const request = f.service.appendEvent(f.owner, session.id, { type: "agent_request", visibility: "session",
+        idempotency_key: `pause-full-request-${scope}`, payload: { content: "work",
+          execution_profile: { harness: "codex", provider: "local", model: "test", runtime_id: runtime.id } } });
+      f.service.claimAgentRequest(f.owner, session.id, request.id, runtime.id);
+      const usage = f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM event_storage_usage").get() as { bytes: number };
+      f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "session",
+        idempotency_key: `pause-full-fill-${scope}`,
+        payload: { content: "x".repeat(limit - usage.bytes - 512 - Buffer.byteLength(JSON.stringify({ content: "" }))) } });
+      assert.equal(f.service.pauseAgentRequest(f.owner, session.id, request.id).status, "paused");
+      assert.equal(f.service.claimAgentRequest(f.owner, session.id, request.id, runtime.id).status, "paused");
+      f.service.pauseAgentRequest(f.owner, session.id, request.id);
+      const markers = f.service.replay(f.owner, session.id, 0, 100).events.filter((event) =>
+        event.type === "agent_progress" && event.reply_to_event_id === request.id);
+      assert.equal(markers.length, 1);
+      const after = f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM event_storage_usage").get() as { bytes: number };
+      assert.ok(after.bytes > limit && after.bytes <= limit + 1024);
+      assert.throws(() => f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "session",
+        idempotency_key: `pause-full-extra-${scope}`, payload: { content: "still refused" } }),
+      (error: unknown) => error instanceof ApiError && error.code === "storage_quota_exceeded");
+      assert.throws(() => f.service.completeAgentRequest(f.owner, session.id, request.id, runtime.id,
+        `pause-full-late-${scope}`, { text: "late answer" }), ApiError);
+    } finally { f.close(); }
+  });
+}
+
+test("only the requesting user may pause an agent request", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0003");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // The project owner holds write access to this multi session and is still
+    // not the author of the request.
+    assert.throws(
+      () => f.service.pauseAgentRequest(f.owner, sessionId, event.id),
+      (error: unknown) => error instanceof ApiError,
+      "another member must not be able to stop someone else's agent",
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("a database written before dynamic execution profiles migrates legacy runtimes as fixed routes", () => {
   const f = fixture();
   const path = join(f.directory, "test.sqlite");

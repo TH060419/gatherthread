@@ -19,6 +19,11 @@ export const MAX_USER_CODE_BYTES = 128 * 1024 * 1024;
 const MAX_MUTATIONS = 4096;
 const INVALIDATED_RECEIPT_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const SERVER_MERGE_ATTRIBUTES = "* conflict-marker-size=7\n";
+/** Internal deadline policy; callers cannot select an unbounded Git operation. */
+export function codeGitTimeoutMs(command: string | undefined, platform: NodeJS.Platform = process.platform): number {
+  if (command === "hash-object" || command === "update-index") return platform === "win32" ? 60_000 : 30_000;
+  return 15_000;
+}
 interface RepoRow { main_commit: string; enabled: number; charged_bytes: number; main_logical_bytes: number }
 interface Receipt { user_id: string; operation: string; payload_hash: string; result_json: string; invalidated_at: string | null }
 
@@ -466,9 +471,9 @@ export class CodeRepository {
       GIT_CONFIG_KEY_1: "core.autocrlf", GIT_CONFIG_VALUE_1: "false", GIT_CONFIG_KEY_2: "core.attributesFile", GIT_CONFIG_VALUE_2: gitNull,
       ...extraEnv,
     };
-    // A bounded 1000-file batch can exceed 15 seconds on a busy Windows host.
-    // Keep the longer deadline limited to the two batch-write commands.
-    const timeout = args[0] === "hash-object" || args[0] === "update-index" ? 30_000 : 15_000;
+    // A bounded 1000-file batch can exceed 30 seconds on a busy Windows host.
+    // Only its two batch-write commands get the platform-specific deadline.
+    const timeout = codeGitTimeoutMs(args[0]);
     const result = spawnSync("git", [`--git-dir=${this.repoPath(projectId)}`, ...args], {
       env, input, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
     });

@@ -2019,3 +2019,141 @@ test("HTTP exposes idempotent local turns and snapshot request control-plane", a
     rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test("only the author can pause their Agent request over HTTP", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-pause-http-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    heartbeatIntervalMs: 50,
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST", body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    const ownerToken = owner.body.data.token;
+    const member = running.database.createIdentity({
+      user_id: "member", display_name: "Member", device_id: "member-device", device_name: "Member laptop",
+    });
+    const memberToken = member.token;
+    await api(running.origin, "/v1/sessions", {
+      method: "POST", token: ownerToken,
+      body: { session_id: "pause-http", idempotency_key: "pause-http-create", mode: "multi", title: "Pause" },
+    });
+    running.service.setMembership(
+      running.database.authenticate(ownerToken), "pause-http", member.actor.user_id, "participant", "pause-http-member",
+    );
+    await api(running.origin, "/v1/runtimes", {
+      method: "POST", token: memberToken, body: {
+        runtime_id: "pause-http-runtime", session_id: "pause-http", device_id: "member-device",
+        purpose: "execution", harness: "codex", provider: "local", model: "test",
+        local_session_id: "pause-local", capture_fidelity: "canonical_history",
+      },
+    });
+    const request = await api<{ data: { event: { id: string } } }>(running.origin, "/v1/sessions/pause-http/events", {
+      method: "POST", token: memberToken,
+      body: {
+        idempotency_key: "pause-http-request", type: "agent_request",
+        payload: { content: "work", execution_profile: { harness: "codex", provider: "local", model: "test", runtime_id: "pause-http-runtime" } },
+      },
+    });
+    const requestId = request.body.data.event.id;
+    assert.equal((await api(running.origin, `/v1/sessions/pause-http/agent-requests/${requestId}/claim`, {
+      method: "POST", token: memberToken, body: { runtime_id: "pause-http-runtime" },
+    })).status, 200);
+    // The project owner administers the session and is still not its author.
+    const refused = await api<{ error: { code: string } }>(running.origin, `/v1/sessions/pause-http/agent-requests/${requestId}/pause`, {
+      method: "POST", token: ownerToken, body: {},
+    });
+    assert.equal(refused.status, 403);
+    assert.equal(refused.body.error.code, "forbidden");
+    const paused = await api<{ data: { status: string } }>(running.origin, `/v1/sessions/pause-http/agent-requests/${requestId}/pause`, {
+      method: "POST", token: memberToken, body: {},
+    });
+    assert.equal(paused.status, 200);
+    assert.equal(paused.body.data.status, "paused");
+    const replay = await api<{ data: { events: Array<{ type: string; reply_to_event_id: string | null; payload: { status?: string } }> } }>(
+      running.origin, "/v1/sessions/pause-http/events?after_sequence=0", { token: ownerToken },
+    );
+    const marker = replay.body.data.events.find((event) =>
+      event.type === "agent_progress" && event.reply_to_event_id === requestId && event.payload.status === "paused");
+    assert.ok(marker, "the owner reads the same canonical pause marker as everyone else");
+    // Pausing again is idempotent and leaves exactly one marker behind.
+    const repeated = await api<{ data: { status: string } }>(running.origin, `/v1/sessions/pause-http/agent-requests/${requestId}/pause`, {
+      method: "POST", token: memberToken, body: {},
+    });
+    assert.equal(repeated.status, 200);
+    assert.equal(repeated.body.data.status, "paused");
+  } finally {
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a pause reaches every subscribed member without waiting for a replay", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-pause-socket-"));
+  const running = await startCollaborationServer({
+    databasePath: join(directory, "server.sqlite"),
+    heartbeatIntervalMs: 50,
+    authTokenPepper: TEST_PEPPER,
+    allowHttpBootstrap: true,
+  }, 0);
+  let socket: WebSocket | undefined;
+  try {
+    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+      method: "POST", body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
+    });
+    const ownerToken = owner.body.data.token;
+    const member = running.database.createIdentity({
+      user_id: "member", display_name: "Member", device_id: "member-device", device_name: "Member laptop",
+    });
+    await api(running.origin, "/v1/sessions", {
+      method: "POST", token: ownerToken,
+      body: { session_id: "pause-socket", idempotency_key: "pause-socket-create", mode: "multi", title: "Pause" },
+    });
+    running.service.setMembership(
+      running.database.authenticate(ownerToken), "pause-socket", member.actor.user_id, "participant", "pause-socket-member",
+    );
+    await api(running.origin, "/v1/runtimes", {
+      method: "POST", token: member.token, body: {
+        runtime_id: "pause-socket-runtime", session_id: "pause-socket", device_id: "member-device",
+        purpose: "execution", harness: "codex", provider: "local", model: "test",
+        local_session_id: "pause-socket-local", capture_fidelity: "canonical_history",
+      },
+    });
+    const request = await api<{ data: { event: { id: string } } }>(running.origin, "/v1/sessions/pause-socket/events", {
+      method: "POST", token: member.token,
+      body: {
+        idempotency_key: "pause-socket-request", type: "agent_request",
+        payload: { content: "work", execution_profile: { harness: "codex", provider: "local", model: "test", runtime_id: "pause-socket-runtime" } },
+      },
+    });
+    const requestId = request.body.data.event.id;
+    await api(running.origin, `/v1/sessions/pause-socket/agent-requests/${requestId}/claim`, {
+      method: "POST", token: member.token, body: { runtime_id: "pause-socket-runtime" },
+    });
+
+    // A second member is already watching the conversation.
+    socket = await realtimeSocket(running.origin, ownerToken, "pause-socket");
+    const subscribed = waitForSocketMessage(socket, (message) => message.type === "subscribed");
+    socket.send(JSON.stringify({ type: "subscribe", session_id: "pause-socket", after_sequence: 0 }));
+    await subscribed;
+
+    const delivered = waitForSocketMessage(socket, (message) =>
+      message.type === "event"
+      && (message.event as { type?: string })?.type === "agent_progress"
+      && (message.event as { reply_to_event_id?: string })?.reply_to_event_id === requestId);
+    await api(running.origin, `/v1/sessions/pause-socket/agent-requests/${requestId}/pause`, {
+      method: "POST", token: member.token, body: {},
+    });
+    // Publishing is what makes the pause a shared fact rather than something
+    // only the pausing client learns.
+    const marker = await delivered;
+    assert.equal((marker.event as { payload: { status?: string } }).payload.status, "paused");
+  } finally {
+    socket?.close();
+    await running.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
