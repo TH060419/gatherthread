@@ -319,8 +319,25 @@ export class LocalBridge {
     const claimAttempt = claim.attemptCount ?? 1;
 
     const canonicalHistory = await this.#readCanonicalHistory(request.sessionId, request.sequence);
+    // Freeze derived context before the current request. Summary generation is
+    // still an explicitly claimed normal local-Agent turn; no other member's
+    // runtime is ever borrowed. Older servers without summary records retain
+    // their old raw-history behavior, but a marked session must never silently
+    // inject originals when its derived-context capability is unavailable.
+    const summaryGeneration = request.payload !== null && typeof request.payload === "object"
+      && "history_summary" in request.payload;
+    const hasSummaryHistory = canonicalHistory.some((event) => event.type === "agent_request"
+      && event.payload !== null && typeof event.payload === "object" && "history_summary" in event.payload);
+    if (hasSummaryHistory && !this.#api.readContext) {
+      throw new Error("This connector cannot read GatherThread's summarized context; update the connector before continuing.");
+    }
+    const historyContext = summaryGeneration
+      ? { view: "summary" as const, through_sequence: request.sequence - 1, items: [] }
+      : this.#api.readContext && hasSummaryHistory
+        ? await this.#api.readContext(request.sessionId, undefined, request.sequence - 1)
+        : undefined;
     await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
-      idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:start`,
+      idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:${claimAttempt}:progress:start`,
       payload: {
         content: "Agent started processing the request.",
         phase: "lifecycle",
@@ -334,16 +351,18 @@ export class LocalBridge {
       execution = await executor.execute({
         request,
         canonicalHistory,
+        ...(historyContext === undefined ? {} : { historyContext }),
         runtime,
         ...(this.#api.appendAgentProgress === undefined ? {} : {
           publishProgress: async (update) => {
             const content = redactText(update.content).trim();
             if (!content) return;
             await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
-              idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:progress:${hash(update.id)}`,
+              idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:${claimAttempt}:progress:${hash(update.id)}`,
               payload: redactValue({
                 content,
-                phase: "commentary",
+                phase: update.phase ?? "commentary",
+                ...(update.status === undefined ? {} : { status: update.status }),
                 ...(update.occurredAt === undefined ? {} : { occurred_at: update.occurredAt }),
                 capture_fidelity: "harness_transcript",
                 source_harness: runtime.harness,

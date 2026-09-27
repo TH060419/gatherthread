@@ -4,7 +4,21 @@ export const INVITATION_ROLES = Object.freeze(["participant", "viewer"]);
 export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
 export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
-export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.5";
+export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alpha.7";
+
+export function emptyProjectState(canCreateProjects) {
+  return canCreateProjects
+    ? {
+      title: "Create your first project.",
+      description: "Create a project to organize your sessions and invite collaborators.",
+      canCreateProjects: true,
+    }
+    : {
+      title: "No invited projects are available. Ask a project owner for an invitation.",
+      description: "Once invited, your projects will appear here. A project invitation does not let you create projects.",
+      canCreateProjects: false,
+    };
+}
 
 const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
 const DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS = 128_000;
@@ -129,7 +143,8 @@ export function normalizeSnapshotRequest(payload) {
     result?.thread_id,
   ].find((value) => typeof value === "string" && value.length > 0) ?? "";
   const kind = ["immutable", "visible_history_replace", "local_sync_status", "local_auto_upload_enable",
-    "local_auto_upload_disable", "local_turn_upload"].includes(request.kind)
+    "local_auto_upload_disable", "local_turn_upload", "code_sync_status", "code_upload", "code_download",
+    "code_recover", "code_auto_upload_enable", "code_auto_upload_disable"].includes(request.kind)
     ? request.kind
     : "immutable";
   return {
@@ -142,6 +157,7 @@ export function normalizeSnapshotRequest(payload) {
     createdAt: request.created_at ?? request.createdAt ?? new Date().toISOString(),
     localTaskName,
     result,
+    failureCode: typeof failure === "object" && failure !== null ? failure.code ?? "" : "",
     failureMessage: typeof failure === "string" ? failure : failure?.message ?? "",
   };
 }
@@ -280,6 +296,26 @@ export function eventContent(event) {
   if (typeof content === "string") return content;
   const importedText = event?.payload?.text;
   return typeof importedText === "string" ? importedText : "";
+}
+
+/**
+ * Conversation bubble role for timeline presentation: the signed-in author's
+ * messages read as "self", everyone else's human messages keep the default
+ * card, and agent-produced output reads as "agent". Non-conversation control
+ * events stay "default" and are styled exactly as before.
+ *
+ * `agent_progress` is classified as "agent" for completeness, but the timeline
+ * skips those events before it builds a card — they render as the worklog
+ * disclosure under their request — so no progress update carries a tint today.
+ */
+export function eventBubbleRole(event, currentUserId) {
+  const type = event?.type ?? "";
+  if (type === "agent_response" || type === "agent_progress") return "agent";
+  if (type === "human_chat" || type === "agent_request") {
+    const actorId = event?.actor?.id;
+    return typeof actorId === "string" && actorId === currentUserId ? "self" : "peer";
+  }
+  return "default";
 }
 
 export function pendingAgentRequests(events) {

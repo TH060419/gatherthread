@@ -4,12 +4,14 @@ import { homedir } from "node:os";
 import net from "node:net";
 import path from "node:path";
 import { redactText } from "@gatherthread/adapters";
+import { parseHistoryContext, validateContextReadInput } from "./http-client.js";
 import type {
   AgentRequestClaim,
   AppendEventInput,
   CanonicalEvent,
   CollaborationApi,
   CompleteAgentRequestInput,
+  HistoryContext,
   ProjectSummary,
   ReadEventsResult,
   RegisteredRuntime,
@@ -60,6 +62,7 @@ const USER_METHODS = new Set([
   "listSessions",
   "listSessionMembers",
   "readEvents",
+  "readContext",
   "appendEvent",
   "getLocalSyncStatus",
   "setLocalAutoUpload",
@@ -259,6 +262,15 @@ export class LocalConnectorApiRelayServer {
       if (params.length < 2 || params.length > 3) throw new Error("Invalid local parameter count");
       return this.#api.readEvents(sessionId, params[1] as number, params[2] as number | undefined);
     }
+    if (method === "readContext") {
+      if (params.length < 1 || params.length > 3) throw new Error("Invalid local parameter count");
+      // JSON arrays represent an omitted middle argument as null when only a fence is supplied.
+      const view = params[1] == null ? undefined : params[1] as HistoryContext["view"];
+      const throughSequence = params[2] as number | undefined;
+      validateContextReadInput(sessionId, view, throughSequence);
+      if (!this.#api.readContext) throw new Error("Context reading is unavailable on this connector; raw history was not substituted");
+      return parseHistoryContext(await this.#api.readContext(sessionId, view, throughSequence), view, throughSequence);
+    }
     if (method === "appendEvent") {
       requireParameterCount(params, 2);
       const event = params[1] as AppendEventInput;
@@ -347,6 +359,14 @@ export class LocalConnectorCollaborationClient implements CollaborationApi {
 
   async readEvents(sessionId: string, afterSequence: number, limit?: number): Promise<ReadEventsResult> {
     return this.#callConnection(await this.#sessionRoute(sessionId), "readEvents", [sessionId, afterSequence, limit]);
+  }
+
+  async readContext(sessionId: string, view?: HistoryContext["view"], throughSequence?: number): Promise<HistoryContext> {
+    validateContextReadInput(sessionId, view, throughSequence);
+    const params = throughSequence !== undefined ? [sessionId, view, throughSequence]
+      : view !== undefined ? [sessionId, view] : [sessionId];
+    const result = await this.#callConnection(await this.#sessionRoute(sessionId), "readContext", params);
+    return parseHistoryContext(result, view, throughSequence);
   }
 
   async appendEvent(sessionId: string, event: AppendEventInput): Promise<CanonicalEvent> {

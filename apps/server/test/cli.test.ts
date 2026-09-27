@@ -56,3 +56,41 @@ test("bootstrap rejects incomplete and unknown command-line options before openi
   assert.equal(unknown.status, 1);
   assert.match(unknown.stderr, /Unknown bootstrap option/);
 });
+
+test("operator can issue and revoke a single-use test qualification without printing it in diagnostics", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-cli-"));
+  const environment = {
+    ...process.env,
+    NODE_ENV: "test",
+    GATHERTHREAD_DATABASE_PATH: join(directory, "owner.sqlite"),
+    GATHERTHREAD_AUTH_TOKEN_PEPPER: "test-only-pepper-not-for-production",
+  };
+  try {
+    const beforeBootstrap = spawnSync(process.execPath, [cliPath, "issue-test-access"], {
+      env: environment, encoding: "utf8",
+    });
+    assert.equal(beforeBootstrap.status, 1);
+    assert.match(beforeBootstrap.stderr, /Bootstrap the first owner/);
+    const bootstrap = spawnSync(process.execPath, [
+      cliPath, "bootstrap", "--display-name", "Owner", "--device-name", "Owner laptop",
+    ], { env: environment, encoding: "utf8" });
+    assert.equal(bootstrap.status, 0, bootstrap.stderr);
+    const issued = spawnSync(process.execPath, [cliPath, "issue-test-access", "--ttl", "24h"], {
+      env: environment, encoding: "utf8",
+    });
+    assert.equal(issued.status, 0, issued.stderr);
+    const grant = JSON.parse(issued.stdout) as { grant_id: string; access_token: string; expires_at: string };
+    assert.match(grant.access_token, /^gtq_/);
+    assert.ok(grant.grant_id);
+    assert.ok(grant.expires_at);
+    assert.equal(issued.stdout.split(grant.access_token).length - 1, 1);
+    assert.doesNotMatch(issued.stderr, new RegExp(grant.access_token));
+    const revoked = spawnSync(process.execPath, [cliPath, "revoke-test-access", "--grant-id", grant.grant_id], {
+      env: environment, encoding: "utf8",
+    });
+    assert.equal(revoked.status, 0, revoked.stderr);
+    assert.doesNotMatch(revoked.stdout + revoked.stderr, new RegExp(grant.access_token));
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { redactText, redactValue } from "@gatherthread/adapters";
+import { parseHistoryContext, validateContextReadInput } from "@gatherthread/bridge";
 import type {
   CollaborationApi,
   LocalConversationSyncControl,
@@ -56,10 +57,14 @@ const USER_TOOL_DEFINITIONS = [
     project_id: stringSchema("Project identifier"),
   }, ["project_id"]),
   tool("collaboration_list_sessions", "List collaboration sessions visible to the authenticated user", {}),
-  tool("collaboration_read_history", "Read canonical session events after a durable server sequence", {
+  tool("collaboration_read_history", "Read exact canonical session events after a durable server sequence; use collaboration_read_context for a summary-aware public context view", {
     session_id: stringSchema("Session identifier"),
     after_sequence: integerSchema("Return events after this sequence", 0),
     limit: integerSchema("Maximum events to return", 1),
+  }, ["session_id"]),
+  tool("collaboration_read_context", "Read public session context using this user's project context policy (default summary), or explicitly choose summary or original. Summary replaces covered messages with existing completed summaries and source_event_ids; no Agent run is triggered. This read does not remove already-injected native context. Use collaboration_read_history for exact canonical events and pagination", {
+    session_id: { ...stringSchema("Session identifier"), minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+    view: { ...enumSchema(["summary", "original"]), description: "Optional override; omit to follow your project context policy" },
   }, ["session_id"]),
   tool("collaboration_append_chat", "Append human chat without triggering an agent", {
     session_id: stringSchema("Session identifier"),
@@ -86,9 +91,9 @@ const USER_TOOL_DEFINITIONS = [
   tool("collaboration_upload_local_turns", "Manually discover and upload completed local turns, including turns missed by Hooks", {
     session_id: stringSchema("Session identifier"),
   }, ["session_id"], MUTATING_TOOL_ANNOTATIONS),
-  tool("collaboration_import_codex_history", "Replace the Desktop-visible Codex task with a verified snapshot of current shared history; realtime context injection remains active", {
+  tool("collaboration_import_codex_history", "Create a new Desktop-visible Codex task containing a verified shared-history snapshot; the user archives old tasks manually. Realtime context injection remains active", {
     session_id: stringSchema("Session identifier"),
-  }, ["session_id"], MUTATING_TOOL_ANNOTATIONS),
+  }, ["session_id"], { ...MUTATING_TOOL_ANNOTATIONS, idempotentHint: false }),
 ] as const;
 
 const RUNTIME_TOOL_DEFINITIONS = [
@@ -149,8 +154,11 @@ export class CollaborationMcpService {
   }
 
   async handle(input: unknown): Promise<JsonRpcResponse | undefined> {
-    if (!isObject(input) || input.jsonrpc !== "2.0" || typeof input.method !== "string") {
-      const invalidId = isObject(input) && (typeof input.id === "string" || typeof input.id === "number")
+    if (!isObject(input) || input.jsonrpc !== "2.0" || typeof input.method !== "string"
+      || !(input.id === undefined || input.id === null || typeof input.id === "string"
+        || (typeof input.id === "number" && Number.isFinite(input.id)))) {
+      const invalidId = isObject(input) && (typeof input.id === "string"
+        || (typeof input.id === "number" && Number.isFinite(input.id)))
         ? input.id
         : null;
       return failure(invalidId, -32600, "Invalid Request");
@@ -213,6 +221,19 @@ export class CollaborationMcpService {
           optionalPositiveInteger(args.limit, 200),
         );
         break;
+      case "collaboration_read_context": {
+        if (Object.keys(args).some((key) => key !== "session_id" && key !== "view")) {
+          throw new Error("Context read accepts only session_id and view");
+        }
+        const sessionId = requiredString(args, "session_id");
+        const view = args.view === undefined ? undefined : requiredEnum(args, "view", ["summary", "original"] as const);
+        validateContextReadInput(sessionId, view);
+        if (!this.#api.readContext) {
+          throw new Error("Context reading is unavailable on the configured API; raw history was not substituted");
+        }
+        result = parseHistoryContext(await this.#api.readContext(sessionId, view), view);
+        break;
+      }
       case "collaboration_append_chat":
         result = await this.#appendVisibleMessage(args, "human_chat");
         break;
@@ -409,7 +430,7 @@ function tool(
   description: string,
   properties: Record<string, unknown>,
   required: readonly string[] = [],
-  annotations: typeof READ_ONLY_TOOL_ANNOTATIONS | typeof MUTATING_TOOL_ANNOTATIONS = READ_ONLY_TOOL_ANNOTATIONS,
+  annotations: { [Key in keyof typeof READ_ONLY_TOOL_ANNOTATIONS]: boolean } = READ_ONLY_TOOL_ANNOTATIONS,
 ) {
   return {
     name,

@@ -71,6 +71,7 @@ export async function apply(context: unknown, rawConfig?: unknown): Promise<void
         context,
         sessionId: config.dshSessionId,
         workspacePath: config.workspacePath,
+        contextBinding: { apiUrl: config.apiUrl, projectId: config.projectId, sessionId: config.sessionId },
         provider: config.provider,
         model: config.model,
       });
@@ -144,6 +145,7 @@ function createManagedConnector(options: {
     context: options.context,
     sessionId: options.input.config.dshSessionId,
     workspacePath: options.input.config.workspacePath,
+    contextBinding: { apiUrl: options.input.config.apiUrl, projectId: options.input.config.projectId, sessionId: options.input.config.sessionId },
     provider: options.input.config.provider,
     model: options.input.config.model,
   });

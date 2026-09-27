@@ -3,6 +3,8 @@ import type {
   HarnessName,
   TranscriptEvent,
 } from "@gatherthread/adapters";
+import type { HistoryContext } from "@gatherthread/protocol";
+export type { HistoryContext, HistoryContextItem } from "@gatherthread/protocol";
 
 export type CanonicalEventType =
   | "human_chat"
@@ -35,6 +37,7 @@ export interface CanonicalEvent {
   type: CanonicalEventType;
   actorId: string;
   actorDisplayName?: string;
+  replyTo?: string;
   timestamp: string;
   payload: unknown;
   runtime?: RuntimeProvenance;
@@ -64,7 +67,9 @@ export interface CommitLocalTurnResult {
 
 export type SnapshotRequestStatus = "pending" | "claimed" | "completed" | "failed";
 export type SnapshotRequestKind = "immutable" | "visible_history_replace"
-  | "local_sync_status" | "local_auto_upload_enable" | "local_auto_upload_disable" | "local_turn_upload";
+  | "local_sync_status" | "local_auto_upload_enable" | "local_auto_upload_disable" | "local_turn_upload"
+  | "code_sync_status" | "code_upload" | "code_download" | "code_recover"
+  | "code_auto_upload_enable" | "code_auto_upload_disable";
 
 export interface SnapshotRequestSummary {
   id: string;
@@ -141,10 +146,18 @@ export interface RuntimeRegistration {
   harness: HarnessName;
   provider: string;
   model: string;
+  executionProfiles?: readonly RuntimeExecutionProfile[];
   localSessionId: string;
   captureFidelity: CaptureFidelity;
   capabilities?: readonly string[];
   purpose?: "execution" | "snapshot_connector";
+}
+
+export interface RuntimeExecutionProfile {
+  provider: string;
+  model: string;
+  reasoningEfforts?: readonly string[];
+  defaultReasoningEffort?: string;
 }
 
 export interface RegisteredRuntime extends RuntimeRegistration {
@@ -183,6 +196,8 @@ export interface HarnessProgressUpdate {
   id: string;
   content: string;
   occurredAt?: string;
+  phase?: "commentary" | "activity";
+  status?: "thinking" | "running";
 }
 
 export interface CollaborationApi {
@@ -198,6 +213,8 @@ export interface CollaborationApi {
   }): Promise<SessionSummary>;
   updateSession?(sessionId: string, input: { title: string; idempotencyKey: string }): Promise<SessionSummary>;
   readEvents(sessionId: string, afterSequence: number, limit?: number): Promise<ReadEventsResult>;
+  /** Derived public context, not a replay cursor. Omitted view follows this user's project policy. */
+  readContext?(sessionId: string, view?: HistoryContext["view"], throughSequence?: number): Promise<HistoryContext>;
   appendEvent(sessionId: string, event: AppendEventInput): Promise<CanonicalEvent>;
   registerRuntime(runtime: RuntimeRegistration): Promise<RegisteredRuntime>;
   heartbeatRuntime?(runtimeId: string): Promise<RegisteredRuntime>;
@@ -224,6 +241,8 @@ export interface CollaborationApi {
 export interface HarnessExecutionInput {
   request: CanonicalEvent;
   canonicalHistory: CanonicalEvent[];
+  /** Optional server-authorized derived context frozen before this request. Raw history remains available. */
+  historyContext?: HistoryContext;
   runtime: RegisteredRuntime;
   publishProgress?: (update: HarnessProgressUpdate) => Promise<void>;
 }

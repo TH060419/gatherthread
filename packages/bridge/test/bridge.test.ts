@@ -205,6 +205,7 @@ test("agent request claim hydrates canonical history and completes with redacted
     async execute(input) {
       assert.deepEqual(input.canonicalHistory.map((item) => item.sequence), [1, 2]);
       await input.publishProgress?.({ id: "commentary-1", content: "Checking token=supersecretvalue" });
+      await input.publishProgress?.({ id: "activity-1", content: "Agent is thinking.", phase: "activity", status: "thinking" });
       return {
         events: [{
           kind: "tool_call",
@@ -225,8 +226,10 @@ test("agent request claim hydrates canonical history and completes with redacted
     },
   });
   assert.equal(result.claimed, true);
-  assert.equal(api.progressInputs.length, 2);
-  assert.deepEqual(api.progressInputs.map((input) => input.claimAttempt), [2, 2]);
+  assert.equal(api.progressInputs.length, 3);
+  assert.deepEqual(api.progressInputs.map((input) => input.claimAttempt), [2, 2, 2]);
+  assert.equal((api.progressInputs[2]?.payload as any)?.phase, "activity");
+  assert.equal((api.progressInputs[2]?.payload as any)?.status, "thinking");
   assert.equal((api.progressInputs[0]?.payload as any)?.content, "Agent started processing the request.");
   assert.equal((api.progressInputs[0]?.payload as any)?.phase, "lifecycle");
   assert.match(api.progressInputs[0]?.idempotencyKey ?? "", /:progress:start$/);
@@ -236,6 +239,26 @@ test("agent request claim hydrates canonical history and completes with redacted
   assert.equal(api.appended[0]?.claimAttempt, 2);
   assert.equal((api.completeInput?.payload as any).text, "[REDACTED]");
   assert.equal(api.completeInput?.claimAttempt, 2);
+});
+
+test("a marked summary session never falls back to raw context when the connector lacks the context API", async () => {
+  const api = new FakeApi();
+  const request = canonical("session-1", 3, {
+    type: "agent_request", idempotencyKey: "current", payload: { content: "continue" },
+  });
+  api.history.push(canonical("session-1", 1, {
+    type: "agent_request", idempotencyKey: "summary", payload: {
+      content: "selected summary prompt", history_summary: {
+        version: 1, source_event_ids: ["source"], source_digest: "a".repeat(64),
+      },
+    },
+  }), request);
+  const bridge = new LocalBridge({ api, cursorStore: new MemoryCursorStore(),
+    runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  await assert.rejects(() => bridge.processAgentRequest(request, {
+    async execute() { throw new Error("must not execute with raw context"); },
+  }), /cannot read GatherThread's summarized context/);
 });
 
 test("pending request polling persists the server cursor only after execution completes", async () => {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
+import { link, mkdir, mkdtemp, realpath, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -110,6 +110,22 @@ test("authorized roots reject traversal and symlink escapes", async () => {
   await symlink(outside, link, process.platform === "win32" ? "junction" : "dir");
   await assert.rejects(resolveAuthorizedPath(linkedTarget, [root]), /outside authorized roots/);
   await assert.rejects(resolveAuthorizedPath(target, []), /explicitly authorized/);
+});
+
+test("transcript discovery and tailing refuse hardlinks to files outside authorized roots", async () => {
+  const temporary = await mkdtemp(path.join(tmpdir(), "adapter-hardlink-"));
+  const root = path.join(temporary, "authorized");
+  await mkdir(root);
+  const outside = path.join(temporary, "outside.jsonl");
+  const transcript = path.join(root, "linked.jsonl");
+  await writeFile(outside, `${JSON.stringify({
+    type: "response_item", payload: { type: "message", role: "user", content: "private outside transcript" },
+  })}\n`);
+  await link(outside, transcript);
+  await assert.rejects(tailJsonlTranscript(new CodexRolloutAdapter(), transcript, undefined, {
+    authorizedRoots: [root],
+  }), /single-link regular file/u);
+  assert.deepEqual(await discoverJsonlTranscripts("codex", [root]), []);
 });
 
 test("discovery is recursive but remains scoped to explicitly authorized roots", async () => {

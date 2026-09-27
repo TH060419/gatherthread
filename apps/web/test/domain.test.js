@@ -5,6 +5,8 @@ import {
   canAppend,
   canRetryFailedAgentRequest,
   createSelectionGuard,
+  emptyProjectState,
+  eventBubbleRole,
   eventContent,
   eventLabel,
   failedRequestFor,
@@ -29,6 +31,44 @@ import {
   snapshotStatusView,
 } from "../src/domain.js";
 
+test("empty-project guidance distinguishes qualified accounts from project-invited guests", () => {
+  assert.deepEqual(emptyProjectState(true), {
+    title: "Create your first project.",
+    description: "Create a project to organize your sessions and invite collaborators.",
+    canCreateProjects: true,
+  });
+  assert.deepEqual(emptyProjectState(false), {
+    title: "No invited projects are available. Ask a project owner for an invitation.",
+    description: "Once invited, your projects will appear here. A project invitation does not let you create projects.",
+    canCreateProjects: false,
+  });
+});
+
+test("timeline bubble roles color self, peers, and the agent distinctly", () => {
+  const me = { id: "u1", username: "User One" };
+  const other = { id: "u2", username: "User Two" };
+  const chat = (actor) => ({ type: "human_chat", actor });
+  const agentRequest = (actor) => ({ type: "agent_request", actor });
+
+  assert.equal(eventBubbleRole(chat(me), me.id), "self");
+  assert.equal(eventBubbleRole(agentRequest(me), me.id), "self");
+  assert.equal(eventBubbleRole(chat(other), me.id), "peer");
+  assert.equal(eventBubbleRole(agentRequest(other), me.id), "peer");
+  assert.equal(eventBubbleRole(chat(other), "u1"), "peer");
+
+  assert.equal(eventBubbleRole({ type: "agent_response", actor: other }, me.id), "agent");
+  assert.equal(eventBubbleRole({ type: "agent_progress", actor: other }, me.id), "agent");
+
+  assert.equal(eventBubbleRole({ type: "tool_call", actor: other }, me.id), "default");
+  assert.equal(eventBubbleRole({ type: "attachment", actor: me }, me.id), "default");
+  assert.equal(eventBubbleRole({ type: "session_state_change", actor: me }, me.id), "default");
+
+  assert.equal(eventBubbleRole(chat(me), null), "peer");
+  assert.equal(eventBubbleRole(chat(me), undefined), "peer");
+  assert.equal(eventBubbleRole(null, me.id), "default");
+  assert.equal(eventBubbleRole(chat({ username: "No id" }), "u1"), "peer");
+});
+
 test("project Codex commands are cross-platform, quoted, and credential-free", () => {
   const commands = projectCodexConnectionCommands({
     baseUrl: "https://gatherthread.example/v1",
@@ -36,11 +76,11 @@ test("project Codex commands are cross-platform, quoted, and credential-free", (
   });
   assert.equal(
     commands.posix,
-    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
+    "npx --yes @gatherthread/codex-connect@0.1.0-alpha.7 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
   );
   assert.equal(
     commands.powershell,
-    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.5 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
+    "npx.cmd --yes @gatherthread/codex-connect@0.1.0-alpha.7 --url 'https://gatherthread.example/v1' --project 'project-alpha_1' --create-workspace --plugin-hooks --visible-history-sync first-connect",
   );
   for (const command of Object.values(commands)) {
     assert.match(command, /--url 'https:\/\/gatherthread\.example\/v1'/);

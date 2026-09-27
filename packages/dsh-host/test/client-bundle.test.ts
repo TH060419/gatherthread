@@ -220,6 +220,55 @@ test("Client primary actions keep a visible system foreground in light, dark, an
   );
 });
 
+test("Client renders separate project code consent, manual actions and disabled-by-default automatic upload", async () => {
+  const loaded = await loadClient({
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: { rpc: { async call() { return { ok: true, value: {
+      schemaVersion: 2, integration: "gatherthread", authorization: "paired",
+      serverUrl: "http://127.0.0.1:18787", deviceName: "DSH",
+      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+      runtime: { schemaVersion: 1, integration: "gatherthread", connection: "connected", bindingMode: "project",
+        projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
+      route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
+      bindings: [{ projectId: "project-code", projectName: "Code project", provider: "deepseek", model: "deepseek-chat" }],
+      localSync: [], codeSync: [{ projectId: "project-code", projectName: "Code project", authorized: true,
+        status: { enabled: true, automatic_upload: false, local_changes: 1, file_count: 2, excluded_count: 3,
+          base_commit: null, cloud_commit: null, branch_id: null, needs_download: false,
+          recovery_directory: "project-recovered-20260922", local_status_unknown: true } }],
+    } }; } } },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  loaded.render(component as () => unknown);
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const tree = loaded.render(component as () => unknown);
+  const text = collectedText(tree);
+  for (const label of ["项目代码 · Git", "允许此 DSH 同步该项目代码", "上传代码", "下载更新", "恢复到新目录", "项目成员均可读取代码"]) {
+    assert.ok(text.includes(label), label);
+  }
+  assert.match(text, /project-recovered-20260922/u);
+  assert.match(text, /原工作区状态未知/u);
+  assert.doesNotMatch(text, /2 个源文件/u);
+  const checkedValues: boolean[] = [];
+  function collect(node: unknown): void {
+    if (Array.isArray(node)) { for (const child of node) collect(child); return; }
+    if (!node || typeof node !== "object") return;
+    const item = node as { props?: { type?: string; checked?: boolean }; children?: unknown };
+    if (item.props?.type === "checkbox") checkedValues.push(item.props.checked === true);
+    collect(item.children);
+  }
+  collect(tree);
+  assert.deepEqual(checkedValues, [true, false]);
+  cleanup?.();
+});
+
 test("Client prefers the authenticated DSH RPC channel and accepts only the pinned native status shape", async () => {
   const calls: Array<{ channel: string; endpoint: string; payload: unknown }> = [];
   let sessionListRefreshes = 0;

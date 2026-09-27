@@ -57,6 +57,8 @@ export interface ProjectHarnessSessionBinding {
   /** Capture/flush local turns before Web execution; the persisted upload preference remains authoritative. */
   synchronizeLocalTurns?: (input: { api: CollaborationApi; runtime: RegisteredRuntime }) => Promise<void>;
   getLocalSyncStatus?: () => Promise<LocalConversationSyncStatus>;
+  /** Point-in-time guard for optional source-file synchronization; uncertainty is busy. */
+  isLocalRunActive?: () => Promise<boolean>;
   setLocalAutoUpload?: (enabled: boolean) => Promise<LocalConversationSyncStatus>;
   uploadLocalTurns?: (input: {
     api: CollaborationApi;

@@ -11,17 +11,18 @@
     "nav.sessions":   { zh: "会话", en: "Sessions" },
     "nav.context":    { zh: "上下文", en: "Context" },
     "nav.connect":    { zh: "连接", en: "Connect" },
+    "nav.code":       { zh: "代码协作", en: "Code" },
     "nav.security":   { zh: "安全", en: "Security" },
     "nav.specs":      { zh: "规格", en: "Specs" },
     "nav.app":        { zh: "进入共序", en: "Open App" },
 
-    "hero.eyebrow":   { zh: "[ 0.1.0-ALPHA.5 · ALPHA 预览版 ]", en: "[ 0.1.0-ALPHA.5 · ALPHA PREVIEW ]" },
+    "hero.eyebrow":   { zh: "[ ALPHA 预览版 · 邀请制测试 ]", en: "[ ALPHA PREVIEW · BY INVITATION ]" },
     "hero.l1":        { zh: "一个空间，汇聚众智。", en: "One room, many minds." },
     "hero.tagline":   { zh: "One room, many minds.", en: "一个空间，汇聚众智。" },
     "hero.copy":      { zh: "让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。",
                         en: "Where people collaborate in one shared workspace, each with their own local Agent, while context stays ordered, attributable, and live." },
     "hero.cta1":      { zh: "开始使用", en: "Get Started" },
-    "hero.cta2":      { zh: "在 GitHub 上查看", en: "View on GitHub" },
+    "hero.cta2":      { zh: "申请 Alpha 测试资格", en: "Request Alpha access" },
 
     "statement.h2":   { zh: "不绑定具体 Agent harness。",
                         en: "It remains harness-neutral." },
@@ -51,26 +52,40 @@
 
     "divider.caption": { zh: "有序 · 可追溯 · 实时同步", en: "Ordered · Attributable · Live" },
 
-    "connect.h2":    { zh: "无需云账户，三种连接方式。", en: "Three connection modes, no cloud account." },
-    "connect.lead":  { zh: "它们会保留同一个私有 .env、数据库、凭据 Pepper、用户和历史。",
-                       en: "All three preserve the same private .env, database, credential pepper, users, and history." },
-    "connect.c1.h3": { zh: "仅本机", en: "Local-only" },
-    "connect.c1.p":  { zh: "一台电脑完整测试，不开放网络。",
-                       en: "One computer for a complete test; no network exposure." },
-    "connect.c2.h3": { zh: "局域网 HTTPS", en: "LAN HTTPS" },
-    "connect.c2.p":  { zh: "同一可信局域网内的已知设备；自动选址并启动两个服务。",
-                       en: "Known devices on one trusted LAN; address selection and both services are automatic." },
-    "connect.c3.h3": { zh: "Tailscale Serve", en: "Tailscale Serve" },
-    "connect.c3.p":  { zh: "跨网络的小规模已知协作者。",
-                       en: "A small group of known collaborators across networks." },
+    "connect.h2":    { zh: "通过服务器，随时接入同一项目。", en: "Meet in the same project, through one server." },
+    "connect.lead":  { zh: "当前 Alpha 在 gatherthread.cn 邀请制测试。网页承载共享会话，你的 Agent 与工作目录仍留在自己的设备上。",
+                       en: "The invitation-only Alpha runs at gatherthread.cn. The Web app hosts shared sessions; your Agent and workspace stay on your own device." },
+    "connect.c1.h3": { zh: "打开共序", en: "Open GatherThread" },
+    "connect.c1.p":  { zh: "已有账号？在浏览器中登录。首次参加 Alpha 测试的用户，先用一次性资格码激活自己的账号。",
+                       en: "Already have an account? Sign in on the Web. First-time Alpha testers activate their own account with a one-use qualification code." },
+    "connect.c1.link": { zh: "打开登录页 ↗", en: "Open sign in ↗" },
+    "connect.c2.h3": { zh: "申请测试资格", en: "Request test access" },
+    "connect.c2.p":  { zh: "还没有资格码？在 GitHub 发起公开的 Alpha 测试申请 Issue。邮箱选填；若愿意公开，建议填写，方便获批后私下发送资格码。申请理由、希望测试的内容和了解渠道也可填写。若介意公开邮箱，可在获批后把 Issue 链接私信至 coolhezi@sjtu.edu.cn。维护者会在 Issue 回复审核结果，但不会公开资格码。请勿发布资格码、设备 Token、密码、密钥或私有代码。",
+                       en: "No qualification code yet? Open a public Alpha access Issue on GitHub. Email is optional; if you're comfortable sharing it publicly, we recommend including it for private code delivery after approval. You can also share why you're applying, what you'd like to test, and how you heard about GatherThread. If you prefer not to publish your email, after approval privately email the Issue link to coolhezi@sjtu.edu.cn. The maintainer will post the review decision on the Issue, but never the qualification code. Never post qualification codes, device tokens, passwords, keys, or private source." },
+    "connect.c2.link": { zh: "前往 GitHub Issues ↗", en: "Open GitHub Issues ↗" },
+    "connect.c3.h3": { zh: "连接本地 Agent", en: "Connect your local Agent" },
+    "connect.c3.p":  { zh: "在项目中连接自己的 Codex 或 DeepSeek Harness。模型、凭据和本地文件继续由本人管理。",
+                       en: "Connect your own Codex or DeepSeek Harness to the project. Models, credentials, and local files remain under your control." },
+    "connect.c3.link": { zh: "查看连接指南 ↗", en: "Read the connection guide ↗" },
 
-    "setup.h2":      { zh: "三步，接入你的 Agent。", en: "Connect your Agent in three steps." },
+    "setup.h2":      { zh: "连接你熟悉的 Agent。", en: "Connect the Agent you already use." },
     "setup.codex.1": { zh: "一次性安装固定版本的「共序 / GatherThread」Codex 插件。", en: "Install the fixed 共序 / GatherThread Codex plugin once." },
     "setup.codex.2": { zh: "复制网页生成的 macOS / Linux 或 PowerShell 连接命令。", en: "Copy the generated macOS / Linux or PowerShell connector command." },
     "setup.codex.3": { zh: "重启 Codex Desktop，审查并启用插件 Hooks，然后保持连接器终端运行。", en: "Restart Codex Desktop, review and enable the plugin Hooks, then keep the connector terminal open." },
     "setup.dsh.1":   { zh: "把 @gatherthread/dsh-host 安装到已验证的 DSH Web profile。", en: "Install @gatherthread/dsh-host into the verified DSH Web profile." },
     "setup.dsh.2":   { zh: "启动 dsh web 并保持运行。", en: "Start dsh web and keep it running." },
     "setup.dsh.3":   { zh: "打开 Settings → GatherThread / 共序，输入当前服务器地址，并批准一次性配对码。", en: "Open Settings → GatherThread / 共序, enter the current server, and approve the one-use pairing code." },
+    "setup.dsh.4":   { zh: "选择 Provider 和 Model，确认连接后即可在项目中使用。", en: "Choose a Provider and Model, then confirm the connection to use it in your projects." },
+
+    "code.h2":      { zh: "需要代码协作时，再开启云端 Git。", en: "Switch on cloud Git only when you need code collaboration." },
+    "code.lead":    { zh: "云端 Git 只用于同项目成员协作，不用于 GatherThread 产品开发或其他用途。项目内所有成员可查看已同步的分支，包括 Solo 会话相关代码。",
+                      en: "Cloud Git is only for collaboration among project members, not GatherThread product development or other purposes. All project members can read synced branches, including code from Solo work." },
+    "code.c1.h3": { zh: "上传由你决定", en: "Uploading is your choice" },
+    "code.c1.p":  { zh: "项目创建者先启用云端仓库；每位成员再分别授权自己的本地目录。自动代码上传默认关闭，也可暂停云端同步。",
+                      en: "The project owner enables the repository first; each member then authorizes their own local directory. Automatic code upload starts off, and cloud sync can be paused." },
+    "code.c2.h3": { zh: "本地 Git 仍归你所有", en: "Your local Git stays yours" },
+    "code.c2.p":  { zh: "云端代码可在设置中按权限清理，不会删除你的本地 Git；关闭云端同步后，代码云端协作会受限。",
+                      en: "Cloud code can be cleared in Settings according to your role without deleting your local Git. Turning cloud sync off limits code collaboration." },
 
     "security.h2":   { zh: "安全机制与当前限制。", en: "Security and current limits." },
     "security.1.h3": { zh: "设备凭据", en: "Device credentials" },
@@ -96,15 +111,19 @@
     "specs.4": { zh: "Apache License", en: "Apache License" },
 
     "final.h2":  { zh: "进入共序，开始协作。", en: "Enter GatherThread and start collaborating." },
+    "final.lead": { zh: "目前仅接受邀请制 Alpha 测试。已有账号可直接登录；没有测试资格，请在 GitHub Issues 申请。",
+                    en: "The Alpha is invitation-only. Sign in if you have an account; otherwise request test access through GitHub Issues." },
     "final.cta1": { zh: "打开登录页", en: "Open sign in" },
-    "final.cta2": { zh: "阅读运行指南", en: "Read the run guide" },
+    "final.cta2": { zh: "申请测试资格", en: "Request test access" },
 
-    "foot.1": { zh: "¹ Alpha 预览版：共序官方服务器尚未开放；本机、局域网 HTTPS 与私有 Tailscale Serve 现在可用。",
-                en: "¹ Alpha preview: the hosted GatherThread service is not open; local-only, private LAN HTTPS, and private Tailscale Serve are available." },
+    "foot.1": { zh: "¹ Alpha 预览版：gatherthread.cn 正在邀请制测试，尚未开放公众注册或公共 Beta。",
+                en: "¹ Alpha preview: gatherthread.cn is in invitation-only testing, with no open registration or public Beta." },
     "foot.2": { zh: "² 服务器使用 node:sqlite，因此需要 Node.js 24 或更新版本。",
                 en: "² The server uses node:sqlite — Node.js 24 or newer is required." },
-    "foot.3": { zh: "³ 局域网模式要求客户端显式信任专用本地 CA，不能绕过证书警告，也不能配置路由器端口转发。",
-                en: "³ LAN mode requires clients to explicitly trust the dedicated local CA; never bypass a certificate warning or expose the port through the router." },
+    "foot.3": { zh: "³ Alpha 测试资格通过公开 GitHub Issue 申请；邮箱选填，愿意公开时建议填写。请勿发布资格码、设备 Token、密码、密钥或私有代码。",
+                en: "³ Request Alpha access through a public GitHub Issue. Email is optional and recommended if you are comfortable sharing it publicly. Never post qualification codes, device tokens, passwords, keys, or private source." },
+    "foot.contact": { zh: "联系与反馈：", en: "Contact & feedback:" },
+    "foot.icp": { zh: "gatherthread.cn 备案：", en: "gatherthread.cn ICP filing:" },
 
     "doc.title": { zh: "GatherThread — 一个空间，汇聚众智。", en: "GatherThread — One room, many minds." },
     "nav.aria": { zh: "主导航", en: "Primary navigation" },
@@ -115,7 +134,17 @@
   };
 
   var lang = "zh";
-  try { lang = localStorage.getItem("gt-lang") || "zh"; } catch (e) {}
+  try {
+    var savedLanguage = localStorage.getItem("gt-lang");
+    if (savedLanguage === "zh" || savedLanguage === "en") {
+      lang = savedLanguage;
+    } else {
+      // Preserve an existing workspace choice when this is the first home-page visit.
+      var savedSettings = JSON.parse(localStorage.getItem("gatherthread.settings.v1") || "null");
+      if (savedSettings && savedSettings.general && savedSettings.general.locale === "en") lang = "en";
+      if (savedSettings && savedSettings.general && savedSettings.general.locale === "zh-CN") lang = "zh";
+    }
+  } catch (e) {}
 
   var title = document.getElementById("heroTitle");
   var themeToggle = document.getElementById("themeToggle");
@@ -150,7 +179,8 @@
   }
 
   /* ---------- Language ---------- */
-  function applyLang(next, replayTitle) {
+  function applyLang(next, replayTitle, persist) {
+    if (next !== "zh" && next !== "en") return;
     lang = next;
     root.setAttribute("lang", next === "zh" ? "zh-CN" : "en");
     document.querySelectorAll("[data-i18n]").forEach(function (el) {
@@ -168,11 +198,19 @@
     themeToggle.setAttribute("title", I18N["theme.aria"][next]);
     langToggle.textContent = next === "zh" ? "EN" : "中";
     renderTitle(replayTitle);
-    try { localStorage.setItem("gt-lang", next); } catch (e) {}
+    if (persist !== false) {
+      try { localStorage.setItem("gt-lang", next); } catch (e) {}
+    }
   }
 
   langToggle.addEventListener("click", function () {
     applyLang(lang === "zh" ? "en" : "zh", true);
+  });
+
+  window.addEventListener("storage", function (event) {
+    if (event.key === "gt-lang" && (event.newValue === "zh" || event.newValue === "en")) {
+      applyLang(event.newValue, false, false);
+    }
   });
 
   /* ---------- Theme toggle ---------- */

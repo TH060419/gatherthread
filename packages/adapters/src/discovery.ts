@@ -29,12 +29,12 @@ export async function discoverJsonlTranscripts(
   while (pending.length > 0 && discovered.length < limit) {
     const candidate = pending.shift();
     if (!candidate) break;
-    const canonicalCandidate = await realpath(candidate);
+    const canonicalCandidate = await resolveAuthorizedPath(candidate, roots);
     if (visited.has(canonicalCandidate)) continue;
     visited.add(canonicalCandidate);
     const metadata = await stat(canonicalCandidate);
     if (metadata.isFile()) {
-      if (canonicalCandidate.endsWith(".jsonl")) {
+      if (metadata.nlink === 1 && canonicalCandidate.endsWith(".jsonl")) {
         const authorizedPath = await resolveAuthorizedPath(canonicalCandidate, roots);
         discovered.push({
           path: authorizedPath,

@@ -9,6 +9,7 @@ export interface DshRequestProfile {
   harness: "deepseek-harness";
   provider?: string;
   model: string;
+  reasoningEffort?: string;
   runtimeId?: string;
 }
 
@@ -25,11 +26,18 @@ export function requestedDshProfile(event: DshCanonicalEvent): DshRequestProfile
   if (profile.provider !== undefined && !provider) {
     throw new Error("DeepSeek Harness Agent request has an invalid provider target");
   }
+  const reasoningEffort = profile.reasoning_effort === undefined
+    ? undefined
+    : safeProfileText(profile.reasoning_effort, 80);
+  if (profile.reasoning_effort !== undefined && !reasoningEffort) {
+    throw new Error("DeepSeek Harness Agent request has an invalid reasoning effort target");
+  }
   const runtimeId = profile.runtime_id === undefined ? undefined : safeRuntimeId(profile.runtime_id);
   return {
     harness,
     ...(provider === undefined ? {} : { provider }),
     model,
+    ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
     ...(runtimeId === undefined ? {} : { runtimeId }),
   };
 }
@@ -102,11 +110,13 @@ export function buildDshCanonicalPrompt(
  * request is submitted through Agent.followup(). This lets DSH create exactly
  * one ordinary user bubble and avoids embedding a second textual transcript.
  */
-export function buildDshRequestPrompt(request: DshCanonicalEvent): string {
+export function buildDshRequestPrompt(request: DshCanonicalEvent, quotedEvent?: DshCanonicalEvent): string {
   if (request.type !== "agent_request") throw new Error("Expected an agent_request event");
   const requestText = extractPublicText(request.payload);
   if (!requestText) throw new Error("DeepSeek Harness Agent request has no public text content");
-  return boundText(redactText(requestText), MAX_REQUEST_TEXT_BYTES);
+  const quote = request.replyTo ? `[Quoted message ${request.replyTo}${quotedEvent
+    ? ` · ${redactText(quotedEvent.actorDisplayName ?? quotedEvent.actorId)}: ${boundText(redactText(extractPublicText(quotedEvent.payload)), MAX_EVENT_TEXT_BYTES)}` : ""}]\n` : "";
+  return quote + boundText(redactText(requestText), MAX_REQUEST_TEXT_BYTES);
 }
 
 export function extractPublicText(value: unknown): string {

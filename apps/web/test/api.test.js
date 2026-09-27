@@ -3,6 +3,60 @@ import assert from "node:assert/strict";
 
 import { ApiError, HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
 
+test("browser API overrides cannot send credentials to another origin", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalLocation = globalThis.location;
+  const requests = [];
+  globalThis.location = new URL("https://gatherthread.example/app/");
+  globalThis.fetch = async (url) => { requests.push(url); return Response.json({ data: { id: "u1", username: "User" } }); };
+  try {
+    for (const baseUrl of ["https://external.invalid", "//external.invalid", "https://user:password@gatherthread.example", "http://gatherthread.example"]) {
+      const api = new HttpCollaborationApi({ baseUrl });
+      await assert.rejects(api.authenticate("fixture-browser-secret"), (error) => error.code === "invalid_api_origin");
+      assert.equal(api.token, "");
+    }
+    assert.equal(requests.length, 0);
+    await new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" }).restoreSession();
+    assert.deepEqual(requests, ["https://gatherthread.example/v1/me",
+      "https://gatherthread.example/v1/remembered-accounts/adopt-current-session"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+  }
+});
+
+test("cloud Git quota and cleanup use cookie-authenticated endpoints with explicit CAS inputs", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return Response.json({ data: { projects: [], limit_bytes: 134217728, used_bytes: 0 } });
+  };
+  try {
+    const api = new HttpCollaborationApi();
+    await api.getCodeStorage();
+    await api.clearOwnCodeBranch("p / 1", { expected_head_commit: "a".repeat(40), idempotency_key: "clear-one" });
+    await api.clearProjectCode("p / 1", {
+      expected_main_commit: "b".repeat(40), expected_branches: [], idempotency_key: "clear-all",
+    });
+    assert.deepEqual(requests.map(({ url, options }) => [url, options.method ?? "GET"]), [
+      ["/v1/code-storage", "GET"],
+      ["/v1/projects/p%20%2F%201/code/clear-branch", "POST"],
+      ["/v1/projects/p%20%2F%201/code/clear-project", "POST"],
+    ]);
+    assert.ok(requests.every(({ options }) => options.credentials === "include" && !options.headers.Authorization));
+    assert.deepEqual(JSON.parse(requests[1].options.body), {
+      expected_head_commit: "a".repeat(40), idempotency_key: "clear-one",
+    });
+    assert.deepEqual(JSON.parse(requests[2].options.body), {
+      expected_main_commit: "b".repeat(40), expected_branches: [], idempotency_key: "clear-all",
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("mock authentication derives the user from a token", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
   await assert.rejects(() => api.authenticate("wrong"), (error) => {
@@ -11,6 +65,20 @@ test("mock authentication derives the user from a token", async () => {
     return true;
   });
   assert.equal((await api.authenticate("demo-token")).username, "Avery Chen");
+});
+
+test("mock remembered account remains selectable after logout and can be forgotten", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  await api.authenticate("demo-token", { rememberDevice: true, displayName: "Avery", deviceName: "Safari" });
+  await api.logout();
+  assert.deepEqual(await api.listRememberedAccounts(), [{
+    id: "mock-remembered-account", display_name: "Avery", device_name: "Safari",
+  }]);
+  assert.equal((await api.activateRememberedAccount("mock-remembered-account", {
+    displayName: "Avery Chen", deviceName: "Mac",
+  })).username, "Avery Chen");
+  await api.forgetRememberedAccount("mock-remembered-account");
+  assert.deepEqual(await api.listRememberedAccounts(), []);
 });
 
 test("append is idempotent and chat never fabricates an agent response", async () => {
@@ -85,6 +153,7 @@ test("DeepSeek Harness requests target one exact runtime without Codex fallback 
         harness: "deepseek-harness",
         provider: "Local Provider",
         model: "CaseSensitive/Model-X",
+        reasoningEffort: "high",
         runtimeId: "runtime-dsh-1",
       },
     });
@@ -95,9 +164,10 @@ test("DeepSeek Harness requests target one exact runtime without Codex fallback 
       harness: "deepseek-harness",
       provider: "Local Provider",
       model: "CaseSensitive/Model-X",
+      reasoning_effort: "high",
       runtime_id: "runtime-dsh-1",
     });
-    assert.doesNotMatch(captured.options.body, /reasoning|token|authorization/iu);
+    assert.doesNotMatch(captured.options.body, /token|authorization/iu);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -111,6 +181,10 @@ test("DeepSeek Harness discovery, pairing approval, and revocation use Cookie-au
       id: "runtime-dsh-1", device_id: "device-dsh-1", harness: "deepseek-harness",
       provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
       last_seen_at: "2026-09-06T00:00:00.000Z",
+      execution_profiles: [{
+        provider: "deepseek-official", model: "deepseek-v4-flash",
+        reasoning_efforts: ["low", "max"], default_reasoning_effort: "max",
+      }],
     }] } },
     { data: { pairing: {
       pairing_id: "dshp-one-use", user_code: "ABCD-2345", device_name: "Studio DSH",
@@ -132,6 +206,10 @@ test("DeepSeek Harness discovery, pairing approval, and revocation use Cookie-au
       id: "runtime-dsh-1", deviceId: "device-dsh-1", harness: "deepseek-harness",
       provider: "Local Provider", model: "CaseSensitive/Model-X", status: "online",
       lastSeenAt: "2026-09-06T00:00:00.000Z",
+      executionProfiles: [{
+        provider: "deepseek-official", model: "deepseek-v4-flash",
+        reasoningEfforts: ["low", "max"], defaultReasoningEffort: "max",
+      }],
     }]);
     assert.equal((await api.approveDshPairing("ABCD-2345")).status, "approved");
     await api.revokeDevice("device / dsh");
@@ -325,7 +403,7 @@ test("HTTP project rename uses the project PATCH contract", async () => {
   }
 });
 
-test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
+test("HTTP cloud deletion uses explicit branch decisions for member removal", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];
   globalThis.fetch = async (url, options = {}) => {
@@ -336,13 +414,27 @@ test("HTTP cloud deletion uses bodyless DELETE routes", async () => {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
     await api.deleteSession("session / one");
     await api.deleteProject("project / one");
+    await api.leaveProject("project / one", "user / me");
     assert.deepEqual(requests.map(([url, options]) => [url, options.method, options.body]), [
       ["https://gatherthread.example/v1/sessions/session%20%2F%20one", "DELETE", undefined],
       ["https://gatherthread.example/v1/projects/project%20%2F%20one", "DELETE", undefined],
+      ["https://gatherthread.example/v1/projects/project%20%2F%20one/members/user%20%2F%20me", "DELETE", "{}"],
     ]);
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("mock participants and viewers can leave their own project without deleting local work", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const projectId = "project-orbit";
+  await assert.rejects(() => api.leaveProject(projectId, api.currentUser.id), (error) => error.status === 403);
+  api.currentUser = { id: "user-maya", username: "Maya Ortiz", can_create_projects: false };
+  api.projects[0].role = "participant";
+  await assert.rejects(() => api.leaveProject(projectId, "user-jon"), (error) => error.status === 403);
+  await api.leaveProject(projectId, "user-maya");
+  assert.equal((await api.listProjects()).length, 0);
+  assert.equal((await api.listSessions()).length, 0);
 });
 
 test("mock cloud deletion allows session or project creators and clears only cloud state", async () => {
@@ -601,6 +693,7 @@ test("new-user invitation claim requests a browser session without retaining the
       deviceName: "Work laptop",
     });
     assert.equal(claimed.actor.username, "New User");
+    assert.equal(claimed.actor.can_create_projects, false);
     assert.equal(claimed.invitation.status, "claimed");
     assert.equal(claimed.accessToken, "new-device-token");
     assert.equal(api.token, "");
@@ -619,6 +712,38 @@ test("new-user invitation claim requests a browser session without retaining the
   }
 });
 
+test("test access activation uses a separate route and returns only the new device credential once", async () => {
+  const originalFetch = globalThis.fetch;
+  const qualificationCode = ["fixture", "qualification", "code"].join("-");
+  let captured;
+  globalThis.fetch = async (url, options = {}) => {
+    captured = { url: String(url), options };
+    return new Response(JSON.stringify({ data: {
+      actor: { user_id: "qualified", display_name: "Qualified", device_id: "qualified-device", can_create_projects: true },
+      token: "new-qualified-device-token",
+    } }), { status: 201, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    const result = await api.claimTestAccess({
+      accessToken: qualificationCode,
+      displayName: "Qualified", deviceName: "Work laptop", rememberDevice: true,
+    });
+    assert.equal(result.actor.can_create_projects, true);
+    assert.equal(result.accessToken, "new-qualified-device-token");
+    assert.equal(api.token, "");
+    assert.equal(captured.url, "https://gatherthread.example/v1/test-access/claim");
+    assert.equal(captured.options.headers.Authorization, undefined);
+    assert.equal(captured.options.headers["X-GatherThread-Browser-Session"], "1");
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      access_token: qualificationCode,
+      display_name: "Qualified", device_name: "Work laptop", remember_device: true,
+    });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("browser login sends the remember-device choice without retaining the bearer", async () => {
   const originalFetch = globalThis.fetch;
   let captured;
@@ -631,9 +756,43 @@ test("browser login sends the remember-device choice without retaining the beare
   };
   try {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    await api.authenticate("device-token", { rememberDevice: true });
-    assert.deepEqual(JSON.parse(captured.options.body), { remember_device: true });
+    await api.authenticate("device-token", {
+      rememberDevice: true, displayName: "Alice renamed", deviceName: "Office Mac",
+    });
+    assert.deepEqual(JSON.parse(captured.options.body), {
+      remember_device: true, display_name: "Alice renamed", device_name: "Office Mac",
+    });
     assert.equal(captured.options.headers.Authorization, "Bearer device-token");
+    assert.equal(api.token, "");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("remembered accounts are listed, selected and forgotten without exposing a device token to JavaScript", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const responses = [
+    new Response(JSON.stringify({ data: { accounts: [{ id: "saved-1", username: "Alice", device_name: "Mac", display_name: "Alice" }] } }), { status: 200 }),
+    new Response(JSON.stringify({ data: { actor: { id: "u1", username: "Alice B", device_id: "d1" } } }), { status: 200 }),
+    new Response(null, { status: 204 }),
+  ];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return responses.shift();
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.listRememberedAccounts())[0].device_name, "Mac");
+    assert.equal((await api.activateRememberedAccount("saved-1", { displayName: "Alice B", deviceName: "Laptop" })).username, "Alice B");
+    await api.forgetRememberedAccount("saved-1");
+    assert.deepEqual(requests.map(({ url, options }) => [options.method ?? "GET", url]), [
+      ["GET", "https://gatherthread.example/v1/remembered-accounts"],
+      ["POST", "https://gatherthread.example/v1/remembered-accounts/saved-1/activate"],
+      ["DELETE", "https://gatherthread.example/v1/remembered-accounts/saved-1"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[1].options.body), { display_name: "Alice B", device_name: "Laptop" });
+    assert.ok(requests.every(({ options }) => options.credentials === "include" && options.headers.Authorization === undefined));
     assert.equal(api.token, "");
   } finally {
     globalThis.fetch = originalFetch;
@@ -647,6 +806,9 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
     new Response(JSON.stringify({ data: { id: "u1", username: "Alice", device_id: "d1" } }), {
       status: 200,
       headers: { "content-type": "application/json" },
+    }),
+    new Response(JSON.stringify({ data: { adopted: true } }), {
+      status: 200, headers: { "content-type": "application/json" },
     }),
     new Response(null, { status: 204 }),
     new Response(JSON.stringify({ error: { code: "unauthorized", message: "Unauthorized" } }), {
@@ -665,6 +827,7 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
     assert.equal(await api.restoreSession(), null);
     assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
       ["GET", "https://gatherthread.example/v1/me"],
+      ["POST", "https://gatherthread.example/v1/remembered-accounts/adopt-current-session"],
       ["DELETE", "https://gatherthread.example/v1/browser-sessions/current"],
       ["GET", "https://gatherthread.example/v1/me"],
     ]);
@@ -673,6 +836,22 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("optional remembered-session adoption failure does not log out a restored session", async () => {
+  const originalFetch = globalThis.fetch;
+  const paths = [];
+  globalThis.fetch = async (url) => {
+    paths.push(String(url));
+    return paths.length === 1
+      ? Response.json({ data: { id: "u1", username: "Alice", device_id: "d1" } })
+      : Response.json({ error: { code: "remembered_session_required", message: "Not remembered" } }, { status: 403 });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    assert.equal((await api.restoreSession()).username, "Alice");
+    assert.equal(paths.length, 2);
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("realtime ticket is carried by WebSocket subprotocol and never placed in the URL", async () => {

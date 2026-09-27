@@ -22,6 +22,7 @@ import type {
 
 export interface DshManagedConnector {
   readonly stopped: boolean;
+  readonly executionRuntimeId?: string | undefined;
   start(): Promise<void>;
   stop(): Promise<void>;
   localSyncStatus?(): LocalConversationSyncStatus;
@@ -467,6 +468,14 @@ export function projectSessionConfig(
     statePath: path.join(config.stateRoot, `${dshSessionId}.json`),
     provider: config.provider,
     model: config.model,
+    ...(config.executionProfiles === undefined ? {} : {
+      executionProfiles: config.executionProfiles.map((profile) => ({
+        ...profile,
+        ...(profile.reasoningEfforts === undefined ? {} : {
+          reasoningEfforts: [...profile.reasoningEfforts],
+        }),
+      })),
+    }),
     pollIntervalMs: config.pollIntervalMs,
     pollLimit: config.pollLimit,
     shareToolEvents: config.shareToolEvents,
