@@ -1,4 +1,4 @@
-export type HarnessName = "codex" | "claude-code";
+export type HarnessName = "codex" | "claude-code" | "zcode";
 
 export type CaptureFidelity =
   | "canonical_history"

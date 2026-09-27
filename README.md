@@ -51,9 +51,10 @@ An MCP server cannot independently read an entire host conversation. Therefore r
 | `apps/web` | Bilingual, resizable solo/multi workspace with Agent settings, chat/request controls, and gap recovery |
 | `site` | Bilingual product home that introduces GatherThread and opens the same-origin application |
 | `packages/protocol` | Canonical event and API schemas |
-| `packages/adapters` | Authorized Codex and Claude Code transcript discovery, parsing, and redaction |
+| `packages/adapters` | Authorized Codex, Claude Code, and ZCode transcript discovery, parsing, and redaction |
 | `packages/bridge` | Local runtime registration, cursoring, context upload, claim/complete workflow |
 | `packages/dsh-host` | Opt-in DeepSeek Harness Host/Client plugin, pairing, project binding, recovery, and redaction |
+| `packages/zcode-connect` | Standalone local ZCode headless connector: CLI discovery, preflight probe, and claimed Web Agent execution |
 | `packages/mcp` | MCP tools, resources, and stateless Streamable HTTP JSON-RPC handler |
 | `tests` | Contract, security, backup, and real server-to-bridge integration tests |
 
@@ -131,6 +132,14 @@ DeepSeek Harness uses the same four-step shape:
 One explicit pairing connects every active Project visible to that identity and discovers new access later. Writable GatherThread sessions appear as editable native DSH conversations; completed DSH turns upload once, and canonical server history projects back in order. DSH Settings exposes a per-conversation automatic-upload switch and manual upload action. A successful first turn in a new DSH conversation creates a creator-owned cloud Solo; empty, failed, and viewer conversations remain local. When the connected DSH route exposes DeepSeek model metadata, the GatherThread workspace can choose any advertised model and reasoning effort for each Agent request. The temporary choice applies only to that GatherThread-driven turn, so model selection inside DSH remains independent. Older or non-advertising routes keep their fixed model. Only the explicitly selected runtime handles an Agent request, with no Codex fallback.
 
 In the current DSH plugin build, the **official service** shortcut is disabled unless an official URL is configured. The invitation-only hosted Alpha is nevertheless reachable by entering `https://gatherthread.cn` manually; local, LAN, and Tailscale origins also work. See the [DSH connection guide](docs/DSH_CONNECT.md) for package and source-checkout paths.
+
+## Connect ZCode
+
+ZCode connects through the standalone `@gatherthread/zcode-connect` connector:
+
+1. Choose ZCode in the workspace Agent settings and copy the generated macOS/Linux or PowerShell connector command. The command includes no credential; the CLI requests the device token with a hidden prompt.
+2. Keep a local ZCode installation available. The connector discovers the `zcode` CLI on `PATH` or the desktop bundle, probes its headless capabilities, and refuses unsupported builds.
+3. Keep the connector terminal open. Every writable session registers one exact ZCode runtime; a claimed Web Agent request runs once in a headless ZCode child inside the project workspace and shares public commentary, allowed redacted tool events, and the final answer. Hidden reasoning never leaves the child, and direct local ZCode turns stay local until the reviewed-hooks upload path ships.
 
 ## Security and current limits
 

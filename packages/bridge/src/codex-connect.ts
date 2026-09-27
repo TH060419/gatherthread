@@ -747,7 +747,8 @@ export function formatConnectedCodexSessionOutput(_projectName: string, session:
   return `Connected session: ${sessionName} [${session.mode}] as ${terminalQuoted(managedCodexThreadName(session))}\n`;
 }
 
-function terminalQuoted(value: string): string {
+/** Terminal-safe quoting for server-controlled names printed to a console. */
+export function terminalQuoted(value: string): string {
   return JSON.stringify(value).replace(/[\u007f-\u009f]/gu, (character) =>
     `\\u${character.codePointAt(0)?.toString(16).padStart(4, "0")}`,
   );

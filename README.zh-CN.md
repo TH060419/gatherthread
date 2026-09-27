@@ -61,9 +61,10 @@ Alpha 7 还支持**手动总结部分会话历史**：只有该会话的写入�
 | `apps/web` | 支持中英文、区域调节、Agent 设置、solo/multi、聊天/Agent 请求和断线补偿的响应式工作区 |
 | `site` | 介绍 GatherThread 并进入同源应用的中英文产品首页 |
 | `packages/protocol` | 规范事件和 API schema |
-| `packages/adapters` | 已授权的 Codex、Claude Code 会话发现、解析和脱敏 |
+| `packages/adapters` | 已授权的 Codex、Claude Code、ZCode 会话发现、解析和脱敏 |
 | `packages/bridge` | 本地 runtime 注册、游标、上下文上传和请求领取/完成流程 |
 | `packages/dsh-host` | 默认关闭的 DeepSeek Harness Host/Client 插件、配对、项目绑定、恢复与脱敏 |
+| `packages/zcode-connect` | 独立的本地 ZCode headless 连接器：CLI 发现、预检探测和已领取 Web Agent 请求执行 |
 | `packages/mcp` | MCP 工具、资源和无状态 Streamable HTTP JSON-RPC handler |
 | `tests` | 契约、安全、备份和真实 server-to-bridge 集成测试 |
 
@@ -141,6 +142,14 @@ DeepSeek Harness 使用四步流程：
 一次明确配对会连接该身份可见的全部活跃项目，并继续发现后续新增权限。可写的 GatherThread 会话会成为可编辑的 DSH 原生会话；完成的 DSH 回合只上传一次，服务器规范历史按顺序投影回来。DSH 设置页会为每个已连接对话提供“自动上传”开关和“手动上传”。在 DSH 新会话中完成首个成功回合会创建本人所有的云端 Solo；空会话、失败回合和访者会话继续留在本地。连接的 DSH 路由公开 DeepSeek 模型元数据时，GatherThread 工作页可为每次 Agent 请求选择该 runtime 实际支持的模型和推理强度；该选择只作用于本次 GatherThread 回合，不会永久改写 DSH 内的模型设置。旧版或未声明动态能力的路由继续使用固定模型。Agent 请求只交给用户明确选择的 runtime，不会回退到 Codex。
 
 当前 DSH 插件若未配置官方服务 URL，“共序官方服务”快捷按钮仍处于禁用状态，但可手动输入 `https://gatherthread.cn` 连接邀请制服务器 Alpha；本机、局域网和 Tailscale 地址也可使用。包与源码测试路径见[DSH 接入指南](docs/DSH_CONNECT.zh-CN.md)。
+
+## 接入 ZCode
+
+ZCode 通过独立的 `@gatherthread/zcode-connect` 连接器接入：
+
+1. 在工作区 Agent 设置中选择 ZCode，并复制生成的 macOS/Linux 或 PowerShell 连接命令。命令本身不含凭据；设备 token 由 CLI 在隐藏提示中读取。
+2. 保留本机安装的 ZCode。连接器会在 `PATH` 或桌面安装目录中发现 `zcode` CLI，结构化探测其 headless 能力，并拒绝不受支持的版本。
+3. 保持连接器终端运行。每个可写会话都会注册一个明确的 ZCode runtime；被领取的 Web Agent 请求在项目工作区内以 headless ZCode 子进程运行一次，共享公开过程说明、允许的脱敏工具事件和最终回答。隐藏推理绝不会离开子进程；在受审阅的 hooks 上传路径发布之前，本地直接进行的 ZCode 回合始终留在本地。
 
 ## 安全机制与当前限制
 

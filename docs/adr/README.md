@@ -35,3 +35,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0029](0029-separate-remembered-browser-vault-from-active-sessions.md) | Separate remembered-browser choices from active sessions | proposed | 2026-09-24 |
 | [0030](0030-resolve-cloud-branches-before-project-member-removal.md) | Resolve cloud branches before project-member removal | proposed | 2026-09-24 |
 | [0031](0031-in-session-quotes-and-member-mentions.md) | In-session quote references and member mentions | proposed | 2026-09-27 |
+| [0032](0032-add-zcode-as-a-third-harness-through-a-standalone-headless-connector.md) | Add ZCode as a third harness through a standalone headless connector | accepted | 2026-09-20 |

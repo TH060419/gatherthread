@@ -15,7 +15,7 @@ await mkdir(output, { recursive: true, mode: 0o700 });
 const cacheRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-npm-pack-"));
 
 try {
-  for (const workspace of ["@gatherthread/codex-connect", "@gatherthread/dsh-host"]) {
+  for (const workspace of ["@gatherthread/codex-connect", "@gatherthread/dsh-host", "@gatherthread/zcode-connect"]) {
     await runNpm(["--cache", cacheRoot, "pack", "--workspace", workspace, "--pack-destination", output], root);
   }
 } finally {
