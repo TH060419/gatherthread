@@ -16,6 +16,7 @@ import {
 import type { EnabledDshHostConfig } from "./config.js";
 import type {
   ConnectorOutboxOperation,
+  ConnectorActiveRequest,
   ConnectorState,
   ConnectorStateStore,
   DshAgentStatus,
@@ -38,6 +39,8 @@ import type {
   LocalConversationSyncStatus,
   LocalConversationUploadResult,
 } from "@gatherthread/bridge";
+
+const INTERRUPTED_REQUEST_CONTINUATION = "Continue the interrupted GatherThread request using the DSH Session context already restored by the Host. Return only the public final answer.";
 
 export interface DshHostConnectorOptions {
   config: EnabledDshHostConfig;
@@ -380,7 +383,7 @@ export class DshHostConnector {
     const state = this.#requireState();
     if (state.activeRequest !== undefined) {
       await this.#withExecutionPermit(() => this.#recoverActiveRequest());
-      return { scanned: 0, claimed: 0, completed: 1 };
+      return { scanned: 0, claimed: 0, completed: state.activeRequest === undefined ? 1 : 0 };
     }
     await this.#flushOutbox(state.automaticUpload);
     await this.#finalizeDeliveredRequest();
@@ -564,6 +567,50 @@ export class DshHostConnector {
     return false;
   }
 
+  /**
+   * Release everything this connector was holding for a request it may no longer
+   * execute, whether the server fenced it with a terminal conflict or the author
+   * paused it. The outbox entries for that request are dropped because their
+   * writes would be rejected anyway, and the published sequence advances only
+   * when the turn had already settled.
+   */
+  async #retireFencedActiveRequest(state: ConnectorState, active: ConnectorActiveRequest): Promise<void> {
+    state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
+    if (active.contextExecution === undefined) {
+      await this.#host.flush();
+      const nativeEvents = this.#host.snapshotFrom(active.dshFromSequence);
+      // A prompt may have completed before its reply/flush acknowledgement was
+      // lost. Its native user message is NOT a new local turn. Retain the fence
+      // until the first owned turn closes; never skip the entire current head,
+      // which can already contain later, genuine local conversation turns.
+      const endIndex = nativeEvents.findIndex((event) => event.type === "turn/end");
+      const firstTurn = endIndex < 0 ? nativeEvents : nativeEvents.slice(0, endIndex + 1);
+      const userMessages = firstTurn.filter((event) => event.type === "user/message");
+      const owned = userMessages.some((event) => {
+        const text = publicMessageText(event);
+        return digest(text) === active.promptDigest
+          || text === INTERRUPTED_REQUEST_CONTINUATION;
+      });
+      // Preparation can fail before followup() creates any cloud turn. Do not
+      // discard the first genuine local conversation that happens afterward.
+      const unrelatedLocalTurn = userMessages.length > 0 && !owned;
+      const boundary = endIndex < 0 ? undefined : nativeEvents[endIndex]?.seq;
+      if (active.dshToSequence === undefined && !unrelatedLocalTurn
+        && boundary === undefined && nativeEvents.length > 0) {
+        await this.#stateStore.save(state);
+        return;
+      }
+      const through = active.dshToSequence
+        ?? (unrelatedLocalTurn || boundary === undefined ? active.dshFromSequence : boundary + 1);
+      state.publishedDshSequence = Math.max(state.publishedDshSequence, through);
+    }
+    delete state.activeRequest;
+    this.#activeStatuses = [];
+    this.#activeExecutionSelection = undefined;
+    this.#liveEventSequences.clear();
+    await this.#stateStore.save(state);
+  }
+
   async #recoverActiveRequest(): Promise<void> {
     if (this.#stopped) throw new Error("DSH connector stopped before recovering an Agent request");
     const state = this.#requireState();
@@ -578,15 +625,14 @@ export class DshHostConnector {
       );
     } catch (error) {
       if (!isTerminalClaimConflict(error)) throw error;
-      state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
-      if (active.dshToSequence !== undefined && active.contextExecution === undefined) {
-        state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
-      }
-      delete state.activeRequest;
-      this.#activeStatuses = [];
-      this.#activeExecutionSelection = undefined;
-      this.#liveEventSequences.clear();
-      await this.#stateStore.save(state);
+      await this.#retireFencedActiveRequest(state, active);
+      return;
+    }
+    if (claim.status === "paused") {
+      // The author stopped this request. That is terminal for it — asking again
+      // is a new request — so the connector releases the local work instead of
+      // re-driving a fenced execution on every poll.
+      await this.#retireFencedActiveRequest(state, active);
       return;
     }
     if (claim.status === "completed" && active.dshToSequence !== undefined) {
@@ -662,7 +708,7 @@ export class DshHostConnector {
     }
 
     const continuation = settlement === "interrupted"
-      ? "Continue the interrupted GatherThread request using the DSH Session context already restored by the Host. Return only the public final answer."
+      ? INTERRUPTED_REQUEST_CONTINUATION
       : prompt;
     const baseline = this.#host.currentSequence(execution?.sessionId);
     state.activeRequest = {

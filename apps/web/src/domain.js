@@ -318,17 +318,30 @@ export function eventBubbleRole(event, currentUserId) {
   return "default";
 }
 
+function responseTargetId(event) {
+  return event?.replyTo ?? event?.reply_to_event_id ?? event?.payload?.reply_to_event_id;
+}
+
+/**
+ * The request a lifecycle marker belongs to, when the marker ends that request's
+ * life. A pause is terminal for its request — the author stopped it, and asking
+ * again is a new request — so a paused agent must not keep displaying as queued.
+ */
+function isTerminalAgentMarker(event) {
+  return event?.type === "agent_progress" && event?.payload?.status === "paused";
+}
+
 export function pendingAgentRequests(events) {
-  const answeredRequestIds = new Set(
+  const settledRequestIds = new Set(
     (events ?? [])
-      .filter((event) => event?.type === "agent_response")
-      .map((event) => event.replyTo ?? event.reply_to_event_id ?? event?.payload?.reply_to_event_id)
+      .filter((event) => event?.type === "agent_response" || isTerminalAgentMarker(event))
+      .map(responseTargetId)
       .filter((eventId) => typeof eventId === "string" && eventId.length > 0),
   );
   return (events ?? []).filter((event) =>
     event?.type === "agent_request"
     && typeof event.id === "string"
-    && !answeredRequestIds.has(event.id),
+    && !settledRequestIds.has(event.id),
   );
 }
 

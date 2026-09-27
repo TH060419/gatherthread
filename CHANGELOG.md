@@ -4,6 +4,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Keep maximum-size cloud Git checkpoints usable on slower Windows hosts: only the two bounded batch-write commands receive a 60-second Windows deadline; other Git deadlines, snapshot limits and atomic failure/retry semantics remain unchanged.
+- Pause safety: full event quotas no longer block the one bounded server pause marker; DSH lost-settlement recovery excludes fenced native work from both automatic and manual uploads while preserving subsequent local turns.
 - Separate realtime delivery from read/write permissions in the top status badge. Make summary-section arrows reveal originals, reset local overrides when switching all history, and preserve the reading anchor during explicit view changes. Add concise localized icon guidance and a roomier, responsive summary versions dialog; display changes never alter Agent context policy.
 
 - Add message-body copy controls, public in-session quotes and member mentions with a project-scoped inbox and jump-to-message navigation. Preserve raw history and existing human-chat / Agent-request separation. Mentions do not grant access or automatically run an Agent.
@@ -74,6 +76,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Added
 
+- Let the author of an Agent request pause it over `POST /v1/sessions/:session_id/agent-requests/:event_id/pause`. A paused request is fenced from every execution that held it, is never re-dispatched, and announces itself as an ordered canonical lifecycle marker so the whole room reads it. Continuing is a new request.
 - Lease Agent claims and bound exact-runtime recovery. A claim is renewed only by accepted progress, a lapsed claim may be reclaimed only by its recorded runtime, stale attempts are fenced, and a request that exhausts its recovery budget fails visibly instead of staying pending.
 - Show a failed Agent response as a failure in the timeline, with a retry that replays the request's exact recorded harness, provider, model, and runtime.
 - Let compatible DeepSeek Harness runtimes advertise executable model and reasoning-effort combinations so each new Agent request can select them directly from the GatherThread work page.

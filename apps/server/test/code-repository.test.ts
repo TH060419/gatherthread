@@ -7,7 +7,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { CodeClearResultSchema, CodeFilesSchema, CodeMutationResultSchema, CodeSnapshotResultSchema, CodeStatusSchema,
   CodeStorageSummarySchema, type CodeFile } from "@gatherthread/protocol";
-import { CodeRepository, MAX_USER_CODE_BYTES } from "../src/code-repository.js";
+import { CodeRepository, MAX_USER_CODE_BYTES, codeGitTimeoutMs } from "../src/code-repository.js";
 import { CollaborationDatabase } from "../src/database.js";
 import { CollaborationService } from "../src/service.js";
 import { ApiError } from "../src/errors.js";
@@ -627,6 +627,48 @@ test("HTTP code mutations retain cookie CSRF checks and revoked devices cannot r
     assert.equal((await fetch(`${running.origin}${path}/snapshot`, { headers: { authorization: `Bearer ${identity.token}` } })).status, 401);
     assert.equal((running.database.sqlite.prepare("SELECT count(*) AS count FROM code_mutations").get() as { count: number }).count, 1);
   } finally { await running.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("only bounded Git batch writes have a longer Windows deadline", () => {
+  for (const platform of ["win32", "darwin", "linux"] as const) {
+    for (const command of ["hash-object", "update-index"]) {
+      assert.equal(codeGitTimeoutMs(command, platform), platform === "win32" ? 60_000 : 30_000);
+    }
+    for (const command of [undefined, "", "hash-object-other", "read-tree", "write-tree", "cat-file", "merge-tree", "update-ref"]) {
+      assert.equal(codeGitTimeoutMs(command, platform), 15_000);
+    }
+  }
+  assert.equal(codeGitTimeoutMs("hash-object"), process.platform === "win32" ? 60_000 : 30_000);
+});
+
+test("a failed Git batch leaves authoritative heads and retry receipts unchanged", () => {
+  const f = fixture();
+  try {
+    class FailingBatchRepository extends CodeRepository {
+      failBatch = true;
+      protected override git(projectId: string, args: string[], input?: string | Buffer, extraEnv?: Record<string, string>, allowConflict = false): Buffer {
+        if (this.failBatch && args[0] === "hash-object") {
+          throw new ApiError(503, "code_git_unavailable", "Simulated batch timeout");
+        }
+        return super.git(projectId, args, input, extraEnv, allowConflict);
+      }
+    }
+    const repo = new FailingBatchRepository(f.database, join(f.directory, "code"));
+    const enabled = repo.enable(f.owner, f.project.id, { idempotency_key: "failed-batch-enable" });
+    const input = { base_commit: enabled.commit, files: [file("src/retained.ts", "export const retained = true;\n")],
+      message: "Retry batch", idempotency_key: "failed-batch-checkpoint" };
+    const before = repo.status(f.owner, f.project.id);
+    const usageBefore = repo.storageSummary(f.owner).used_bytes;
+    assert.throws(() => repo.checkpoint(f.owner, f.project.id, input), hasCode("code_git_unavailable"));
+    assert.deepEqual(repo.status(f.owner, f.project.id), before);
+    assert.equal(repo.storageSummary(f.owner).used_bytes, usageBefore);
+    assert.equal((f.database.sqlite.prepare("SELECT COUNT(*) AS count FROM code_mutations WHERE idempotency_key=?")
+      .get(input.idempotency_key) as { count: number }).count, 0);
+    repo.failBatch = false;
+    const uploaded = repo.checkpoint(f.owner, f.project.id, input);
+    assert.deepEqual(repo.checkpoint(f.owner, f.project.id, input), uploaded);
+    assert.deepEqual(repo.snapshot(f.owner, f.project.id, uploaded.status.own_branch_id!).snapshot.files, input.files);
+  } finally { f.close(); }
 });
 
 test("the maximum 1000-file snapshot uses batch Git processes rather than per-file subprocesses", () => {
