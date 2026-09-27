@@ -2765,7 +2765,7 @@ export class CollaborationDatabase {
       SELECT e.id, e.session_id, e.sequence, e.created_at, e.actor_display_name, s.title AS session_title,
         coalesce(substr(CAST(json_extract(e.payload_json, '$.content') AS TEXT), 1, 180), '') AS excerpt
       FROM events e JOIN sessions s ON s.id = e.session_id
-      JOIN memberships m ON m.session_id = s.id AND m.user_id = ?
+      JOIN project_memberships m ON m.project_id = s.project_id AND m.user_id = ?
       WHERE s.project_id = ? AND (e.visibility = 'session' OR ? = 'owner')
         AND e.type IN ('human_chat', 'agent_request')
         AND (? IS NULL OR e.rowid < (SELECT rowid FROM events WHERE id = ?))

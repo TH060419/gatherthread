@@ -90,6 +90,31 @@ test("quotes stay in-session and cannot expose owner-only history; mentions are 
   } finally { f.close(); }
 });
 
+test("project mentions include sessions created after invitation and participant-owned Solo", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, { session_id: "mention-first",
+      idempotency_key: "mention-first-create", mode: "multi", title: "First" });
+    const invitation = f.service.createInvitation(f.owner, session.id, { role: "participant" });
+    const guest = f.database.claimInvitation({ invite_token: invitation.invite_token,
+      display_name: "Guest", device_name: "Browser", user_id: "mention-guest", device_id: "mention-guest-device" }).actor;
+    const other = f.service.createSession(f.owner, { session_id: "mention-later", project_id: session.project_id,
+      idempotency_key: "mention-later-create", mode: "multi", title: "Later" }).session;
+    const mention = f.service.appendEvent(f.owner, other.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-later-send", payload: { content: "@Guest hello",
+        mentions: [{ user_id: guest.user_id, start: 0, end: 6 }] } });
+    assert.equal(f.service.listProjectMentions(guest, session.project_id).mentions[0]?.id, mention.id);
+    const solo = f.service.createSession(guest, { session_id: "mention-guest-solo", project_id: session.project_id,
+      idempotency_key: "mention-solo-create", mode: "solo", title: "Guest Solo" }).session;
+    const soloMention = f.service.appendEvent(guest, solo.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-solo-send", payload: { content: "@Owner hello",
+        mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } });
+    assert.equal(f.service.listProjectMentions(f.owner, session.project_id).mentions[0]?.id, soloMention.id);
+    f.service.removeProjectMembership(f.owner, session.project_id, guest.user_id, {});
+    assert.throws(() => f.service.listProjectMentions(guest, session.project_id), ApiError);
+  } finally { f.close(); }
+});
+
 test("SQLite WAL assigns ordered sequences and replays an idempotent event", () => {
   const f = fixture();
   try {

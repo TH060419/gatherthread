@@ -34,6 +34,7 @@ test("message controls keep nullable startup safe and all rendered message bodie
   const [main, styles, html] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8"), readFile(htmlPath, "utf8")]);
   assert.match(main, /if \(pendingHistoryTarget && state\.session &&/);
   assert.match(main, /body\.classList\.add\("event-content"\)/);
+  assert.match(styles, /\.agent-worklog-list time[^\{]*\{\s*-webkit-user-select: none;\s*user-select: none;/);
   assert.match(styles, /-webkit-user-select: none/);
   assert.match(html, /id="mentions-dialog"[^>]*aria-labelledby="mentions-title"/);
   assert.match(html, /id="cancel-message-quote"[^>]*aria-label="Cancel quote"/);

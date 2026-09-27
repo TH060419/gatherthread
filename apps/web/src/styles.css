@@ -4925,7 +4925,7 @@ html[lang="zh-CN"] .project-select {
 }
 
 /* Keep selectable conversation text separate from Safari's selection metadata. */
-.event-card > header, .event-card > .provenance, .message-actions, .quoted-message {
+.event-card > header, .event-card > .provenance, .agent-worklog-list time, .message-actions, .quoted-message {
   -webkit-user-select: none;
   user-select: none;
 }

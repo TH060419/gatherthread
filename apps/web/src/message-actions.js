@@ -49,7 +49,7 @@ export function mountMessageActions({ document, api, localizer, getContext, sele
   const t = (value) => localizer.t(value);
   let quote = null, mentions = [], previous = input.value, choices = [], active = 0, generation = 0, nextBeforeId = null;
   const seen = new Set(); // Session-only: no message content or private identity stored in Web Storage.
-  let latest = [], refreshSequence = 0, initialized = false;
+  let latest = [], inboxEntries = [], paginated = false, pageLoading = false, refreshSequence = 0, initialized = false;
   function icon(label, path, action) {
     const button = document.createElement("button");
     button.type = "button"; button.className = "icon-button message-action";
@@ -63,7 +63,7 @@ export function mountMessageActions({ document, api, localizer, getContext, sele
   function reset() {
     generation++; quote = null; mentions = []; previous = input.value; picker.hidden = true;
     input.setAttribute("aria-expanded", "false"); input.removeAttribute("aria-activedescendant"); initialized = false;
-    el("composer-quote").hidden = true; latest = []; nextBeforeId = null;
+    el("composer-quote").hidden = true; latest = []; inboxEntries = []; paginated = false; pageLoading = false; nextBeforeId = null;
     el("mentions-count").textContent = ""; el("mentions-list").replaceChildren();
     if (dialog.open) dialog.close();
   }
@@ -114,9 +114,10 @@ export function mountMessageActions({ document, api, localizer, getContext, sele
   input.addEventListener("blur", () => { picker.hidden = true; input.setAttribute("aria-expanded", "false"); });
   el("cancel-message-quote").addEventListener("click", () => { quote = null; el("composer-quote").hidden = true; input.focus(); });
   async function refresh({ append = false } = {}) {
+    if (pageLoading) return;
     const context = getContext(), stamp = generation, request = ++refreshSequence, cursor = append ? nextBeforeId : undefined;
     if (!context.projectId || !context.userId) return;
-    if (append) el("mentions-more").disabled = true;
+    if (append) { pageLoading = true; el("mentions-more").disabled = true; }
     try {
       const result = await api.listProjectMentions(context.projectId, cursor);
       if (request !== refreshSequence || stamp !== generation || getContext().projectId !== context.projectId || getContext().userId !== context.userId) return;
@@ -125,15 +126,22 @@ export function mountMessageActions({ document, api, localizer, getContext, sele
       }
       initialized = true;
       if (!append) latest = result.mentions;
-      nextBeforeId = result.next_before_id;
+      if (append || !paginated) nextBeforeId = result.next_before_id;
       const unread = latest.filter((event) => !seen.has(event.id));
       el("mentions-count").textContent = unread.length ? String(unread.length) : "";
       el("mentions-button").title = t("Mentions");
       if (dialog.open) {
-        if (!append) el("mentions-list").replaceChildren();
-        for (const event of result.mentions) {
+        const ids = new Set(result.mentions.map((event) => event.id));
+        inboxEntries = append ? [...inboxEntries, ...result.mentions.filter((event) => !inboxEntries.some((old) => old.id === event.id))]
+          : [...result.mentions, ...inboxEntries.filter((event) => !ids.has(event.id))];
+        if (append) paginated = true;
+        const scrollTop = el("mentions-list").scrollTop;
+        const focusedId = document.activeElement?.dataset?.mentionEventId;
+        el("mentions-list").replaceChildren();
+        for (const event of inboxEntries) {
           const item = document.createElement("li"), button = document.createElement("button");
           button.type = "button"; button.className = "mention-inbox-entry";
+          button.dataset.mentionEventId = event.id;
           const heading = document.createElement("strong"); heading.textContent = `${event.session_title} · ${event.actor_display_name}`;
           const excerpt = document.createElement("span"); excerpt.textContent = event.excerpt;
           button.append(heading, excerpt);
@@ -147,17 +155,23 @@ export function mountMessageActions({ document, api, localizer, getContext, sele
             } catch { announce(t("Unable to locate this message.")); }
           });
           item.append(button); el("mentions-list").append(item);
+          if (event.id === focusedId) button.focus({ preventScroll: true });
         }
-        el("mentions-empty").hidden = result.mentions.length > 0 || append;
+        el("mentions-list").scrollTop = scrollTop;
+        el("mentions-empty").hidden = inboxEntries.length > 0;
         el("mentions-more").hidden = !nextBeforeId;
       }
     } catch {
       if (request === refreshSequence && stamp === generation && dialog.open) el("mentions-error").textContent = t("Unable to load mentions.");
     } finally {
-      if (request === refreshSequence && stamp === generation) el("mentions-more").disabled = false;
+      if (request === refreshSequence && stamp === generation) { pageLoading = false; el("mentions-more").disabled = false; }
     }
   }
-  el("mentions-button").addEventListener("click", () => { dialog.showModal(); el("mentions-error").textContent = ""; void refresh(); });
+  el("mentions-button").addEventListener("click", () => {
+    refreshSequence++; inboxEntries = []; paginated = false; pageLoading = false; nextBeforeId = null;
+    el("mentions-list").replaceChildren(); el("mentions-list").scrollTop = 0;
+    dialog.showModal(); el("mentions-error").textContent = ""; void refresh();
+  });
   el("mentions-close").addEventListener("click", () => dialog.close());
   el("mentions-more").addEventListener("click", () => void refresh({ append: true }));
   dialog.addEventListener("close", () => el("mentions-button").focus({ preventScroll: true }));
