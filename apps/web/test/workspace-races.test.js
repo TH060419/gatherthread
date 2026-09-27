@@ -42,6 +42,7 @@ function harness(names, overrides = {}) {
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },
+    onboarding: { cancel: noop, offer: noop, refreshLanguage: noop },
     location: { hash: "" }, URLSearchParams, initials: () => "U", localizer: { t: (value) => value },
     renderProjectSelect: noop, renderSessionList: noop, maybeOpenPendingDshPairing: noop,
     renderMembers: noop, renderTimeline: noop, renderComposerPermissions: noop,

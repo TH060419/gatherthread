@@ -1,4 +1,10 @@
 const ZH_CN = Object.freeze({
+  "Step-by-step guides": "分步使用引导",
+  "Choose a short guide. It only shows controls and never sends or uploads anything.": "选一个简短引导。仅介绍按钮，不会发送或上传任何内容。",
+  "Start here": "从这里开始",
+  "Share conversation history": "分享会话历史",
+  "Share project files": "分享项目文件",
+  "Work with people": "与他人协作",
   "Select history to summarize": "选择历史生成摘要",
   "Show original messages": "显示原始消息",
   "Show summaries": "显示摘要",

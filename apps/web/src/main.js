@@ -1,5 +1,6 @@
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
+import { mountOnboarding } from "./onboarding.js?v=20260927-1";
 import {
   canAppend,
   canRetryFailedAgentRequest,
@@ -253,6 +254,24 @@ const codeSyncUi = mountCodeSync({
 const codeStorageSettings = mountCodeStorageSettings({
   document, api, localizer, getUserId: () => state.currentUser?.id ?? null,
 });
+const onboarding = mountOnboarding({
+  document,
+  getContext: () => ({
+    userId: state.currentUser?.id, deviceId: state.currentUser?.device_id,
+    origin: location.origin, locale: document.documentElement.lang,
+    project: state.project, session: state.session,
+    writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+  }),
+  openSettings: openSettingsDialog,
+});
+for (const button of document.querySelectorAll("[data-onboarding-topic]")) {
+  button.addEventListener("click", () => {
+    const topic = button.dataset.onboardingTopic;
+    cancelSettingsDialog();
+    // close() dispatches its focus-restoration event asynchronously.
+    requestAnimationFrame(() => onboarding.start(topic));
+  });
+}
 const historySummaryUi = mountHistorySummaries({
   document, api, localizer, renderMarkdown,
   getContext: () => ({
@@ -1247,6 +1266,7 @@ async function restoreBrowserSession() {
 }
 
 function resetWorkspaceToAuth() {
+  onboarding.cancel();
   messageActions.reset();
   authenticationGeneration += 1;
   workspaceLoadGeneration += 1;
@@ -1316,6 +1336,7 @@ function captureWorkspaceScope() {
 }
 
 async function enterWorkspace(preferredProjectId) {
+  onboarding.cancel();
   const authentication = authenticationGeneration;
   const load = ++workspaceLoadGeneration;
   const selection = selectedSessionGeneration;
@@ -1366,10 +1387,12 @@ async function enterWorkspace(preferredProjectId) {
   }
   if (!isCurrent()) return;
   maybeOpenPendingDshPairing();
+  onboarding.offer();
 }
 
 async function selectProject(projectId) {
   if (!state.currentUser) return;
+  onboarding.cancel();
   selectionRetry = null;
   codeSyncUi.close();
   historySummaryUi.reset();
@@ -1441,6 +1464,7 @@ async function selectProject(projectId) {
 
 async function selectSession(sessionId) {
   if (!state.currentUser || !state.project) return;
+  onboarding.cancel();
   selectionRetry = null;
   codeSyncUi.close();
   historySummaryUi.reset();
@@ -3123,6 +3147,7 @@ function applyVisualSettings(settings) {
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  onboarding.refreshLanguage();
   element("auth-language-button").textContent = normalized.general.locale === "zh-CN" ? "EN" : "中";
   if (localeChanged && state.session) renderTimeline();
   if (localeChanged && state.project) renderMembers();

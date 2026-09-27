@@ -22,6 +22,8 @@ test("Web build publishes the product home above the existing application", asyn
     access(new URL("styles.css", dist)),
     access(new URL("assets/lockup-color-transparent-light.svg", dist)),
     access(new URL("app/src/main.js", dist)),
+    access(new URL("app/src/onboarding.js", dist)),
+    access(new URL("app/licenses/driver.js.txt", dist)),
     access(new URL("app/src/styles.css", dist)),
     access(new URL("app/brand/lockup-color-transparent-light.svg", dist)),
   ]);

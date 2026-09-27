@@ -31,6 +31,7 @@ await cp(resolve(root, "brand"), resolve(applicationDist, "brand"), { recursive:
 await build({
   entryPoints: {
     markdown: resolve(root, "src/markdown.js"),
+    onboarding: resolve(root, "src/onboarding.js"),
     "history-summary-policy": resolve(root, "src/history-summary-policy.js"),
     styles: resolve(root, "src/styles.css"),
   },
@@ -48,6 +49,8 @@ await build({
   minify: true,
   sourcemap: false,
 });
+await mkdir(resolve(applicationDist, "licenses"), { recursive: true });
+await cp(resolve(repositoryRoot, "node_modules/driver.js/license"), resolve(applicationDist, "licenses/driver.js.txt"));
 for (const asset of [
   "android-chrome-192x192.png",
   "android-chrome-512x512.png",
