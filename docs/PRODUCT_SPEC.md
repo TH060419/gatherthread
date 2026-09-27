@@ -43,6 +43,8 @@ Project owners and participants can append human chat and agent requests. A huma
 
 Every event has a server-assigned monotonic sequence, stable event ID, idempotency key, actor identity, frozen actor display name, timestamp, visibility, reply target, and optional runtime provenance.
 
+The Web conversation timeline groups displayed messages by the reader's local calendar day, including the position of a shared history summary. Date dividers use Today, Yesterday, a weekday within the preceding week, or a month/day with the year when needed; they follow the selected Chinese or English language. Each message retains its local hour and minute, with the full local date and time available from the time control. Switching between summary and original history recalculates the dividers without changing canonical events.
+
 `agent_progress` records a bounded execution lifecycle marker and any public harness commentary emitted during a claimed Web Agent request. It remains pending state rather than request completion. The Web client shows it live while work is active, then places all linked progress under a closed-by-default work log beside the final Markdown-rendered `agent_response`. GFM tables and bundled KaTeX inline/display formulas are supported. Hidden model reasoning and chain-of-thought are never canonical events.
 
 Internal runtime provenance binds `user_id`, `device_id`, runtime identity, `harness`, `provider`, `model`, native-session identity, and capture fidelity. Shared attribution exposes the username, harness, provider, model, and fidelity while replacing local device, runtime, and native-session identifiers outside the owning user or authorized owner view.
