@@ -1,5 +1,7 @@
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
+import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
+import { ExampleCollaborationApi } from "./example-api.js";
 import { mountOnboarding } from "./onboarding.js?v=20260927-1";
 import {
   canAppend,
@@ -96,8 +98,9 @@ import {
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
-const mockEnabled = query.get("mock") === "1";
-const api = mockEnabled
+const exampleMode = document.documentElement.dataset.example === "true";
+const mockEnabled = exampleMode || query.get("mock") === "1";
+const api = exampleMode ? new ExampleCollaborationApi(window.__examplePresentation?.locale) : mockEnabled
   ? new MockCollaborationApi()
   : new HttpCollaborationApi({ baseUrl: configuredApiUrl });
 const sync = new SessionSync(api);
@@ -263,6 +266,7 @@ const onboarding = mountOnboarding({
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
   }),
   openSettings: openSettingsDialog,
+  prepareScenario: exampleMode ? prepareExampleScenario : undefined,
 });
 for (const button of document.querySelectorAll("[data-onboarding-topic]")) {
   button.addEventListener("click", () => {
@@ -285,6 +289,32 @@ const historySummaryUi = mountHistorySummaries({
   }),
   onChange: (options) => renderTimeline(options),
 });
+function prepareExampleScenario(item) {
+  if (!exampleMode || !state.project || !state.session) return;
+  if (item.view?.startsWith("code-")) {
+    const repository = api.codeRepositories.get(state.project.id)?.repository;
+    if (repository && repository.enabled !== (item.view !== "code-enable")) {
+      repository.enabled = item.view !== "code-enable";
+      if (element("project-code-dialog").open) void codeSyncUi.refresh();
+    }
+  }
+  const selection = element("history-summary-select-button");
+  const selecting = item.view === "summary-selection";
+  if ((selection.getAttribute("aria-pressed") === "true") !== selecting) {
+    if (selecting) historySummaryUi.selectSources();
+    else { historySummaryUi.reset(); renderTimeline(); }
+  }
+  const role = item.id === "leave" ? "participant" : "owner";
+  if (state.project.role !== role || state.session.mode !== (item.view === "snapshot" ? "solo" : "multi")) {
+    state.project.role = role;
+    api.projects.find((project) => project.id === state.project.id).role = role;
+    state.session.mode = item.view === "snapshot" ? "solo" : "multi";
+    state.session.ownerUserId = item.view === "snapshot" ? "user-maya" : state.currentUser.id;
+    state.session.members.find((member) => member.userId === state.currentUser.id).role = role;
+    state.projectMembers.find((member) => member.userId === state.currentUser.id).role = role;
+    renderProjectSelect(); renderSessionHeader(); renderComposerPermissions(); renderSessionDeliveryControls(); renderMembers();
+  }
+}
 let connectCodexReturnFocus = null;
 let pendingHistoryTarget = null;
 const messageActions = mountMessageActions({ document, api, localizer, announce, selectSession,
@@ -1187,6 +1217,7 @@ element("retry-sync-button").addEventListener("click", () => sync.retry());
 toggleSessionRailButton.addEventListener("click", toggleSessionRail);
 toggleMemberPanelButton.addEventListener("click", toggleMemberPanel);
 sessionContextDetails.addEventListener("toggle", updateSessionContextDisclosure);
+bindSessionContextPanel(document);
 const handleWorkspaceBreakpointChange = () => {
   memberPanel.classList.remove("member-panel-open");
   updateSidebarControls();
@@ -1243,10 +1274,13 @@ function updateSessionContextDisclosure() {
   summary.setAttribute("aria-expanded", String(expanded));
   summary.setAttribute("aria-label", label);
   summary.title = label;
+  positionSessionContextPanel(document);
 }
+window.addEventListener("resize", () => positionSessionContextPanel(document));
+document.addEventListener("scroll", () => { if (sessionContextDetails.open) positionSessionContextPanel(document); }, true);
 
 async function restoreBrowserSession() {
-  if (mockEnabled) return;
+  if (mockEnabled && !exampleMode) return;
   const generation = ++authenticationGeneration;
   try {
     const actor = await api.restoreSession();
@@ -1267,6 +1301,8 @@ async function restoreBrowserSession() {
 
 function resetWorkspaceToAuth() {
   onboarding.cancel();
+  sessionContextDetails.open = false;
+  updateSessionContextDisclosure();
   messageActions.reset();
   authenticationGeneration += 1;
   workspaceLoadGeneration += 1;
@@ -1346,7 +1382,7 @@ async function enterWorkspace(preferredProjectId) {
   authView.hidden = true;
   workspace.hidden = false;
   const noticeDeviceId = state.currentUser.device_id;
-  if (deviceCredentialDialog.open) {
+  if (exampleMode) { /* The isolated example has no real cloud upload notice. */ } else if (deviceCredentialDialog.open) {
     deviceCredentialDialog.addEventListener("close", () => {
       if (authentication === authenticationGeneration && state.currentUser?.device_id === noticeDeviceId && !workspace.hidden) {
         codeSyncUi.showFirstLoginNotice(noticeDeviceId);
@@ -1393,6 +1429,8 @@ async function enterWorkspace(preferredProjectId) {
 async function selectProject(projectId) {
   if (!state.currentUser) return;
   onboarding.cancel();
+  sessionContextDetails.open = false;
+  updateSessionContextDisclosure();
   selectionRetry = null;
   codeSyncUi.close();
   historySummaryUi.reset();

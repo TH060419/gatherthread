@@ -29,16 +29,19 @@ test("storage denial retains completion within the page and never breaks sign-in
   assert.equal(progress.has(null), true);
 });
 
-test("empty workspace uses a short setup tour, while every core guide remains available", () => {
-  const empty = guideSteps("basics");
-  assert.deepEqual(empty.map((step) => step.id), ["welcome", "project", "conversation", "connect", "finish"]);
-  const full = guideSteps("basics", { session: { id: "s" } });
-  assert.ok(full.find((step) => step.id === "chat"));
-  assert.ok(full.find((step) => step.id === "request"));
-  assert.equal(full.length, 9);
-  assert.equal(guideSteps("history").length, 7);
-  assert.equal(guideSteps("files").length, 6);
-  assert.equal(guideSteps("members").length, 5);
+test("all account states get the complete isolated example guides", () => {
+  for (const context of [{}, { session: { id: "s" } }, { project: null, session: null }, { writable: false }]) {
+    assert.equal(guideSteps("basics", context).length, 9);
+  }
+  assert.equal(guideSteps("history").length, 5);
+  assert.equal(guideSteps("files").length, 7);
+  assert.equal(guideSteps("members").length, 6);
+  assert.equal(guideSteps("summaries").length, 5);
+  assert.equal(guideSteps("basics")[0].target, "");
+  assert.equal(guideSteps("history")[0].target, "");
+  assert.deepEqual(Object.keys(GUIDE_LABELS), ["basics", "members", "history", "files", "summaries"]);
+  assert.ok(guideSteps("basics").find((item) => item.id === "project").note);
+  assert.ok(guideSteps("members").find((item) => item.id === "join").note);
 });
 
 test("every guide and navigation label has authored Chinese and English copy", () => {
@@ -52,10 +55,10 @@ test("every guide and navigation label has authored Chinese and English copy", (
     const items = guideSteps(topic, { session: { id: "s" } });
     assert.equal(new Set(items.map((item) => item.id)).size, items.length);
     for (const item of items) {
-      assert.ok(item.target);
+      assert.equal(typeof item.target, "string");
       for (const pair of [item.title, item.text]) {
         assert.ok(pair[0]); assert.match(pair[1], /[\u4e00-\u9fff]/u);
-        assert.doesNotMatch(pair.join(" ").replaceAll("DeepSeek Harness", "DSH"), /\b(?:harness|git|context)\b|上下文|字体|动态背景/iu);
+        assert.doesNotMatch(pair[1], /助手|助理|只打名字|不要分享自己的登录凭证/u);
       }
     }
   }

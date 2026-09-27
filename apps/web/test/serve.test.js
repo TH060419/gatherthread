@@ -55,6 +55,7 @@ test("Web preview serves the product home and nested application entry", async (
   await mkdir(join(root, "assets"));
   await writeFile(join(root, "index.html"), "<!doctype html><title>Product home</title>");
   await writeFile(join(root, "app", "index.html"), "<!doctype html><title>Application</title>");
+  await writeFile(join(root, "app", "example.html"), "<!doctype html><title>Isolated example</title>");
   await writeFile(join(root, "assets", "mark.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
   const server = createWebServer({ ...loadWebServerConfig({}), root });
   await new Promise((resolve, reject) => {
@@ -74,11 +75,20 @@ test("Web preview serves the product home and nested application entry", async (
         request.end();
       });
       assert.equal(response.statusCode, 200);
+      assert.equal(response.headers['x-frame-options'], 'DENY');
+      assert.match(response.headers['content-security-policy'], /frame-ancestors 'none'/u);
       let body = "";
       response.setEncoding("utf8");
       for await (const chunk of response) body += chunk;
       assert.match(body, new RegExp(title));
     }
+
+    const example = await fetch(`http://127.0.0.1:${server.address().port}/app/example.html`);
+    assert.equal(example.status, 200);
+    assert.equal(example.headers.get('x-frame-options'), null);
+    assert.match(example.headers.get('content-security-policy'), /frame-ancestors 'self'/u);
+    assert.match(example.headers.get('content-security-policy'), /connect-src 'none'/u);
+    assert.match(example.headers.get('content-security-policy'), /sandbox allow-scripts/u);
 
     const asset = await new Promise((resolve, reject) => {
       const request = httpRequest({

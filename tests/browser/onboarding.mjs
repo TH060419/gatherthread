@@ -1,178 +1,193 @@
-// Run against the built, local mock preview. No real account or assistant is used.
-// PLAYWRIGHT_MODULE may point at an existing Playwright installation.
+// Local mock-only checks. The example always uses its own fresh opaque-origin
+// iframe, memory storage and Mock API; no real credential/runtime is used.
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { guideSteps } from '../../apps/web/src/onboarding-content.js';
 const { chromium, webkit } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright');
 const origin = process.env.ONBOARDING_ORIGIN ?? 'http://127.0.0.1:4173';
 const artifacts = process.env.ONBOARDING_ARTIFACTS ?? '/tmp/gatherthread-onboarding';
 await mkdir(artifacts, { recursive: true });
-const errors = [];
 const browserName = process.env.ONBOARDING_BROWSER ?? 'chrome';
 const browser = browserName === 'webkit' ? await webkit.launch() : await chromium.launch({ headless: true, channel: browserName });
+const errors = [];
 const popup = '.onboarding-popover';
-const next = '.driver-popover-next-btn';
-async function settle(page) { await page.waitForTimeout(90); }
-async function assertCard(page) {
-  await page.locator(popup).waitFor(); await settle(page);
-  const box = await page.locator(popup).boundingBox(); const size = page.viewportSize();
-  assert.ok(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= size.width + 1 && box.y + box.height <= size.height + 1, JSON.stringify(box));
-  assert.equal(await page.evaluate(() => document.querySelector('.onboarding-popover')?.contains(document.activeElement)), true, 'focus stays in guide');
+async function example(page) {
+  await page.locator('.onboarding-example-dialog iframe').waitFor();
+  const frame = await (await page.locator('.onboarding-example-dialog iframe').elementHandle()).contentFrame();
+  await frame.locator('#session-view:not([hidden])').waitFor();
+  return frame;
 }
-async function launchPage({ locale = 'en', width = 1440, height = 900, fixture = 'normal', user = 'user-avery', device = 'device-demo', deniedStorage = false } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, locale, reducedMotion: 'reduce' });
+async function launchPage({ locale = 'en', width = 1440, height = 900, empty = false, viewer = false, deniedStorage = false } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce' });
   const page = await context.newPage();
-  if (deniedStorage) await page.addInitScript(() => {
-    for (const name of ['getItem', 'setItem']) {
-      const original = Storage.prototype[name];
-      Storage.prototype[name] = function (key, ...args) {
-        if (key.startsWith('gatherthread.onboarding.')) throw new DOMException('Storage denied', 'SecurityError');
-        return original.call(this, key, ...args);
-      };
-    }
-  });
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`${origin}/app/?mock=1`);
-  await page.evaluate(async ({ locale, fixture, user, device }) => {
+  await page.evaluate(async ({ locale, empty, viewer, deniedStorage }) => {
     if (locale === 'zh-CN') document.querySelector('#auth-language-button').click();
-    window.guideWrites = [];
+    window.realWrites = [];
     const { MockCollaborationApi } = await import('./src/api.js?v=20260927-1');
     const proto = MockCollaborationApi.prototype;
-    const auth = proto.authenticate;
-    proto.authenticate = async function (...args) { const actor = await auth.apply(this, args); return { ...actor, id: user, device_id: device }; };
-    for (const name of ['appendHumanChat','appendAgentRequest','createHistorySummary','createSnapshotRequest','createProject','createSession','mutateProjectCode','clearOwnCodeBranch','clearProjectCode','setProjectMemberRole','createInvitation','acceptInvitation','setProjectContextPolicy']) {
-      const fn = proto[name];
-      proto[name] = function (...args) { window.guideWrites.push(name === 'createSnapshotRequest' ? `${name}:${args[1]}` : name); return fn.apply(this, args); };
+    for (const name of ['appendHumanChat', 'appendAgentRequest', 'createHistorySummary', 'createSnapshotRequest', 'createProject', 'createSession', 'mutateProjectCode', 'clearOwnCodeBranch', 'clearProjectCode', 'setProjectMemberRole', 'createInvitation', 'acceptInvitation', 'setProjectContextPolicy']) {
+      const original = proto[name];
+      proto[name] = function (...args) { window.realWrites.push(name); return original.apply(this, args); };
     }
-    const getCode = proto.getProjectCode;
-    proto.getProjectCode = async function (...args) {
-      await new Promise((resolve) => setTimeout(resolve, 400));
-      return fixture === 'files' ? { repository: { enabled: true, main_commit: 'mock-main' }, branches: [], own_branch_id: null } : getCode.apply(this, args);
-    };
-    if (fixture === 'empty') proto.listProjects = async () => [];
-    if (fixture === 'viewer') {
+    if (empty) {
+      proto.listProjects = async () => [];
+      const auth = proto.authenticate;
+      proto.authenticate = async function (...args) { return { ...await auth.apply(this, args), can_create_projects: false }; };
+    }
+    if (viewer) {
       const getProject = proto.getProject;
       proto.getProject = async function (...args) { return { ...await getProject.apply(this, args), role: 'viewer' }; };
-      const getSession = proto.getSession;
-      proto.getSession = async function (...args) { const session = await getSession.apply(this, args); session.members = session.members.map((m) => m.userId === user ? { ...m, role: 'viewer' } : m); return session; };
-      const members = proto.listMembers;
-      proto.listMembers = async function (...args) { return (await members.apply(this, args)).map((m) => m.userId === user ? { ...m, role: 'viewer' } : m); };
     }
-  }, { locale, fixture, user, device });
+    if (deniedStorage) {
+      const get = Storage.prototype.getItem, set = Storage.prototype.setItem;
+      Storage.prototype.getItem = function (key) { if (key.startsWith('gatherthread.onboarding.')) throw Error('Denied'); return get.call(this, key); };
+      Storage.prototype.setItem = function (key, value) { if (key.startsWith('gatherthread.onboarding.')) throw Error('Denied'); return set.call(this, key, value); };
+    }
+  }, { locale, empty, viewer, deniedStorage });
   await page.locator('#auth-select-login').click(); await page.locator('#token').fill('demo-token');
   await page.locator('#login-form button[type=submit]').click();
   await page.locator('#code-notice-dialog[open]').waitFor();
-  assert.equal(await page.locator(popup).count(), 0, 'privacy notice comes first');
-  await page.locator('#code-notice-continue').click(); await assertCard(page);
-  await page.waitForTimeout(500);
-  await page.evaluate(() => { window.guideWrites = []; });
-  return { page, context };
+  assert.equal(await page.locator('iframe').count(), 0, 'required notice precedes guide');
+  await page.locator('#code-notice-continue').click();
+  const frame = await example(page); await frame.locator(popup).waitFor();
+  await page.waitForTimeout(500); await page.evaluate(() => { window.realWrites = []; });
+  assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-scripts');
+  const isolation = await frame.evaluate(() => {
+    let parentReadable = true;
+    try { void parent.document.body; } catch { parentReadable = false; }
+    return { parentReadable, storageLength: localStorage.length, forbidden: document.querySelector('meta[http-equiv="Content-Security-Policy"]').content.includes("connect-src 'none'") };
+  });
+  assert.equal(isolation.parentReadable, false); assert.equal(isolation.forbidden, true);
+  return { page, context, frame };
 }
-async function guide(page, topic) {
-  await page.locator('#settings-button').click();
-  await page.locator(`[data-onboarding-topic=${topic}]`).click(); await assertCard(page);
+async function start(page, topic) {
+  await page.locator('#settings-button').click(); await page.locator(`[data-onboarding-topic="${topic}"]`).click();
+  const frame = await example(page); if (topic !== 'browse') await frame.locator(popup).waitFor(); return frame;
 }
-async function walk(page, count, prefix, { finish = true } = {}) {
-  const before = await page.locator('#timeline-region').evaluate((node) => node.scrollTop);
-  for (let i = 0; i < count; i++) {
-    await assertCard(page);
-    if (prefix === 'mobile-320' && i >= 4 && i <= 6) {
-      const target = ['send-chat-button', 'agent-request-profile', 'send-agent-button'][i - 4];
-      assert.equal(await page.locator(`#${target}.driver-active-element`).count(), 1, 'short populated screen highlights core action');
-    }
-    if (i === 1 || i === count - 2) await page.screenshot({ path: `${artifacts}/${prefix}-${i + 1}.png` });
-    if (i < count - 1 || finish) await page.locator(next).click();
+async function assertStep(frame, item, size) {
+  await frame.locator(popup).waitFor();
+  await frame.waitForFunction(({ target }) => !target || document.querySelector('.driver-active-element:not(#driver-dummy-element)'), item);
+  await frame.waitForTimeout(90);
+  const state = await frame.evaluate(() => {
+    const card = document.querySelector('.onboarding-popover'), target = document.querySelector('.driver-active-element');
+    const a = card.getBoundingClientRect(), b = target?.getBoundingClientRect();
+    const ring = document.querySelector('.onboarding-ring');
+    const panel = target?.closest('.session-context-panel')?.getBoundingClientRect();
+    return { card: [a.x, a.y, a.width, a.height], target: target?.id, hint: card.innerText.includes('正在准备') || card.innerText.includes('Preparing this example'),
+      overlap: b && Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)),
+      panelOverlap: panel && Math.max(0, Math.min(a.right, panel.right) - Math.max(a.left, panel.left)) * Math.max(0, Math.min(a.bottom, panel.bottom) - Math.max(a.top, panel.top)),
+      targetBox: b && [b.x, b.y, b.width, b.height], ring: ring && ['x', 'y', 'width', 'height'].map((name) => Number(ring.getAttribute(name))),
+      focus: card.contains(document.activeElement) || Boolean(document.activeElement.closest('.example-toolbar')),
+      closeOutline: getComputedStyle(card.querySelector('.driver-popover-close-btn')).outlineStyle };
+  });
+  assert.equal(state.hint, false, item.id);
+  const [x, y, w, h] = state.card;
+  assert.ok(x >= 0 && y >= 0 && x + w <= size.width + 1 && y + h <= size.height + 1, `${item.id}: ${JSON.stringify(state)}`);
+  // Narrow WebKit suppresses scripted button focus before user activation.
+  // Require genuine keyboard entry and a working focus cycle in that case.
+  if (!state.focus && browserName === 'webkit' && size.width <= 760) {
+    assert.equal(await frame.evaluate(() => document.activeElement === document.body), true);
+    await frame.page().keyboard.press('Tab');
+    state.focus = await frame.evaluate(() => Boolean(document.activeElement.closest('.onboarding-popover')));
+    await frame.page().keyboard.press('Shift+Tab');
+    assert.equal(await frame.evaluate(() => Boolean(document.activeElement.closest('.example-toolbar'))), true);
+    await frame.page().keyboard.press('Tab');
+    assert.equal(await frame.evaluate(() => Boolean(document.activeElement.closest('.onboarding-popover'))), true);
   }
-  if (finish) { await page.locator(popup).waitFor({ state: 'detached' }); await settle(page); }
-  assert.equal(await page.locator('#timeline-region').evaluate((node) => node.scrollTop), before, 'history scroll is preserved');
+  assert.equal(state.focus, true, `${item.id} focus`);
+  assert.equal(state.closeOutline, 'none', 'close has no green outline');
+  if (item.target) {
+    assert.notEqual(state.target, 'driver-dummy-element', item.id);
+    assert.ok(state.overlap < 1, `${item.id} card covers control: ${JSON.stringify(state)}`);
+    if (size.width >= 1440 && state.panelOverlap !== undefined) assert.ok(state.panelOverlap < 1, `${item.id} card covers disclosure`);
+    for (let index = 0; index < 4; index++) assert.ok(Math.abs(state.ring[index] - (state.targetBox[index] + (index < 2 ? -7 : 14))) < 1, `${item.id} ring follows target`);
+  } else assert.equal(state.target, 'driver-dummy-element', 'overview centered');
+}
+async function walk(page, frame, topic, prefix) {
+  const steps = guideSteps(topic), size = page.viewportSize();
+  for (let index = 0; index < steps.length; index++) {
+    await assertStep(frame, steps[index], size);
+    if (['welcome', 'model', 'answer', 'upload', 'roles', 'enable', 'original'].includes(steps[index].id)) await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}.png` });
+    await frame.locator('.driver-popover-next-btn').click();
+  }
+  await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
+  assert.deepEqual(await page.evaluate(() => window.realWrites), [], 'guides never write to parent API');
 }
 try {
-  const { page, context } = await launchPage();
-  await page.locator(next).click(); await assertCard(page);
-  assert.ok(await page.locator('.onboarding-line').count(), 'arrow points at actual project control');
-  await page.locator('#project-select').evaluate((node) => { node.hidden = true; });
-  await page.waitForFunction(() => !document.querySelector('#project-select.driver-active-element'));
-  await page.locator('#project-select').evaluate((node) => { node.hidden = false; });
-  await page.waitForFunction(() => document.querySelector('#project-select.driver-active-element'));
-  await page.keyboard.press('ArrowLeft'); await settle(page);
-  assert.match(await page.locator('.driver-popover-title').innerText(), /A place/);
-  await page.keyboard.press('Tab'); await assertCard(page);
-  if (browserName === 'chrome') {
-    await page.emulateMedia({ colorScheme: 'dark', contrast: 'more' }); await assertCard(page);
-    await page.screenshot({ path: `${artifacts}/dark-contrast.png` });
-    await page.emulateMedia({ forcedColors: 'active' }); await assertCard(page);
-    await page.screenshot({ path: `${artifacts}/forced-colors.png` });
-    await page.emulateMedia({ colorScheme: 'light', contrast: 'no-preference', forcedColors: 'none' });
+  for (const options of [
+    { locale: 'en', width: 1440, height: 900 },
+    { locale: 'zh-CN', width: 1440, height: 900, empty: true },
+    { locale: 'zh-CN', width: 390, height: 844, viewer: true },
+    { locale: 'zh-CN', width: 320, height: 568, empty: true, deniedStorage: true },
+  ]) {
+    console.log(`${browserName}: checking ${options.locale} ${options.width}×${options.height}${options.empty ? ' empty' : ''}${options.viewer ? ' viewer' : ''}`);
+    const { page, context, frame } = await launchPage(options);
+    const prefix = `${options.locale}-${options.width}`;
+    await walk(page, frame, 'basics', prefix);
+    for (const topic of ['members', 'history', 'files', 'summaries']) await walk(page, await start(page, topic), topic, prefix);
+    // Free practice may mutate only fresh mock data inside the frame.
+    const before = await page.evaluate(() => ({ hash: location.hash, title: document.querySelector('#session-title').textContent,
+      timeline: document.querySelector('#event-timeline').innerHTML, draft: document.querySelector('#message-input').value }));
+    const practice = await start(page, 'browse');
+    await practice.locator('#message-input').fill('Demo practice only'); await practice.locator('#send-chat-button').click();
+    await practice.getByText('Demo practice only', { exact: true }).waitFor();
+    await practice.evaluate(() => localStorage.setItem('example-only-value', 'temporary'));
+    assert.equal(await page.evaluate(() => localStorage.getItem('example-only-value')), null);
+    await practice.locator('.example-toolbar button').last().click();
+    await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
+    assert.deepEqual(await page.evaluate(() => ({ hash: location.hash, title: document.querySelector('#session-title').textContent,
+      timeline: document.querySelector('#event-timeline').innerHTML, draft: document.querySelector('#message-input').value })), before);
+    assert.deepEqual(await page.evaluate(() => window.realWrites), []);
+    await context.close();
   }
-  await walk(page, 9, 'desktop');
-  const seen = await page.evaluate(() => Object.entries(localStorage).filter(([key]) => key.startsWith('gatherthread.onboarding.')));
-  assert.equal(seen.length, 1); assert.equal(seen[0][1], 'completed');
-  assert.equal(await page.locator('#settings-button').getAttribute('aria-controls'), 'settings-dialog');
-  await page.locator('#toggle-session-rail-button').click();
-  await guide(page, 'basics'); await walk(page, 9, 'collapsed');
-  assert.equal(await page.locator('#workspace').getAttribute('data-left-rail-collapsed'), 'true', 'sidebar state restored');
-  await guide(page, 'history');
-  await page.locator(next).click(); await settle(page);
-  const idleMutations = await page.evaluate(async () => {
-    let count = 0;
-    const observer = new MutationObserver((records) => { count += records.length; });
-    observer.observe(document.querySelector('#session-context-details'), { attributes: true, attributeFilter: ['open'] });
-    await new Promise((resolve) => setTimeout(resolve, 300)); observer.disconnect(); return count;
-  });
-  assert.equal(idleMutations, 0, 'idle presentation does not mutate itself continuously');
-  await page.locator('.driver-popover-prev-btn').click();
-  await walk(page, 7, 'history');
-  assert.equal(await page.locator('#session-context-details').evaluate((node) => node.open), false, 'details restored');
-  await guide(page, 'files');
-  await page.locator(next).click();
-  await page.waitForFunction(() => document.querySelector('#code-enable-section.driver-active-element'));
-  assert.ok(await page.locator('.onboarding-line').count(), 'delayed file status resolves a real target');
-  await page.locator('.driver-popover-prev-btn').click(); await assertCard(page);
-  assert.equal(await page.locator('#project-code-dialog').evaluate((node) => node.open), false, 'back closes owned file dialog');
-  assert.equal(await page.locator('#project-code-button.driver-active-element').count(), 1);
-  await walk(page, 6, 'files');
-  assert.equal(await page.locator('#project-code-dialog').evaluate((node) => node.open), false);
-  await guide(page, 'members'); await walk(page, 5, 'members');
-  await guide(page, 'basics');
-  await page.evaluate(() => document.querySelector('#auth-language-button').click());
-  await assertCard(page); assert.match(await page.locator('.driver-popover-title').innerText(), /一起/);
+  // Toolbar navigation, fresh example after edits, spoofed messages, language,
+  // theme, Escape, replay and native-dialog focus all remain usable.
+  const { page, context, frame } = await launchPage({ locale: 'en' });
+  await page.evaluate(() => dispatchEvent(new MessageEvent('message', { data: { type: 'example-exit', channel: 'forged' } })));
+  assert.equal(await page.locator('.onboarding-example-dialog').count(), 1);
+  await frame.locator('.example-toolbar button').first().click(); assert.equal(await frame.locator(popup).count(), 0);
+  await frame.locator('#message-input').fill('Temporary change'); await frame.locator('#send-chat-button').click();
+  await frame.getByText('Temporary change', { exact: true }).waitFor();
+  await frame.locator('.example-toolbar button').nth(1).click();
+  let fresh = await example(page); assert.equal(await fresh.getByText('Temporary change', { exact: true }).count(), 0);
+  await page.evaluate(() => { localStorage.setItem('gt-lang', 'zh'); dispatchEvent(new StorageEvent('storage', { key: 'gt-lang', newValue: 'zh' })); });
+  await page.waitForTimeout(250); fresh = await example(page);
+  await fresh.waitForFunction(() => document.documentElement.lang === 'zh-CN');
+  await fresh.locator('.example-toolbar select').selectOption('files');
+  fresh = await example(page); await fresh.locator(popup).waitFor();
+  await fresh.locator('.driver-popover-next-btn').click(); await fresh.locator('#project-code-dialog[open]').waitFor();
+  await fresh.locator('.example-toolbar button').first().click(); assert.equal(await fresh.locator(popup).count(), 0);
+  assert.equal(await fresh.locator('#project-code-dialog[open]').count(), 0);
+  await fresh.locator('.example-toolbar select').selectOption('basics'); fresh = await example(page);
+  await fresh.locator(popup).waitFor(); await fresh.locator('.driver-popover-next-btn').press('Escape');
+  await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
+  await start(page, 'basics'); fresh = await example(page); await fresh.locator('.driver-popover-close-btn').click();
+  await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
+  // The ordinary disclosure stays unclipped and preserves keyboard order.
+  const disclosure = page.locator('#session-context-details > summary');
+  await disclosure.click();
+  await page.waitForFunction(() => document.querySelector('.session-context-panel').parentElement === document.body);
+  await disclosure.press('Tab');
+  assert.equal(await page.evaluate(() => document.querySelector('.session-context-panel').contains(document.activeElement)), true);
+  await page.keyboard.press('Shift+Tab');
+  assert.equal(await disclosure.evaluate((node) => node === document.activeElement), true);
+  await disclosure.press('Escape');
+  assert.equal(await page.locator('#session-context-details').getAttribute('open'), null);
+  await disclosure.click(); await page.locator('#history-summary-select-button').evaluate((node) => { node.disabled = true; });
+  await page.locator('#upload-local-turns-button').focus(); await page.keyboard.press('Tab');
+  assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true, 'disabled summary never traps focus');
+  await page.locator('#mentions-button').press('Shift+Tab');
+  assert.equal(await page.locator('#upload-local-turns-button').evaluate((node) => node === document.activeElement), true);
   await page.keyboard.press('Escape');
-  assert.deepEqual(await page.evaluate(() => window.guideWrites), [], 'tour performs no protected mutation');
-  await page.locator('#logout-button').click();
-  await page.locator('#auth-select-login').click(); await page.locator('#token').fill('demo-token');
-  await page.locator('#login-form button[type=submit]').click(); await page.locator('#session-view:not([hidden])').waitFor();
-  await page.waitForFunction(() => !document.querySelector('#login-form button[type=submit]').disabled); await settle(page);
-  assert.equal(await page.locator(popup).count(), 0, 'same identity is not prompted again');
-  await page.locator('#logout-button').click();
-  await page.evaluate(async () => { const { MockCollaborationApi } = await import('./src/api.js?v=20260927-1'); const auth = MockCollaborationApi.prototype.authenticate; MockCollaborationApi.prototype.authenticate = async function (...args) { return { ...await auth.apply(this, args), id: 'another-user' }; }; });
-  await page.locator('#auth-select-login').click(); await page.locator('#token').fill('demo-token'); await page.locator('#login-form button[type=submit]').click();
-  await assertCard(page); await page.keyboard.press('Escape');
-  assert.equal(await page.evaluate(() => Object.entries(localStorage).filter(([key]) => key.startsWith('gatherthread.onboarding.')).length), 2, 'another account gets its own tour');
-  await page.locator('#logout-button').click();
-  await page.evaluate(async () => { const { MockCollaborationApi } = await import('./src/api.js?v=20260927-1'); const auth = MockCollaborationApi.prototype.authenticate; MockCollaborationApi.prototype.authenticate = async function (...args) { return { ...await auth.apply(this, args), device_id: 'another-device' }; }; });
-  await page.locator('#auth-select-login').click(); await page.locator('#token').fill('demo-token'); await page.locator('#login-form button[type=submit]').click();
-  await page.locator('#code-notice-continue').click(); await assertCard(page); await page.keyboard.press('Escape');
-  assert.equal(await page.evaluate(() => Object.entries(localStorage).filter(([key]) => key.startsWith('gatherthread.onboarding.')).length), 3, 'another device gets its own tour');
+  await disclosure.click(); await page.locator('#logout-button').click();
+  await page.locator('#auth-view:not([hidden])').waitFor();
+  assert.equal(await page.locator('.session-context-panel').isVisible(), false, 'logout hides private disclosure');
+  assert.equal(await page.locator('#session-context-details .session-context-panel').count(), 1, 'logout restores panel ownership');
   await context.close();
-  for (const options of [{ locale: 'zh-CN', width: 390, height: 844 }, { locale: 'en', width: 320, height: 568 }, { locale: 'en', width: 320, height: 568, fixture: 'empty' }, { locale: 'zh-CN', fixture: 'viewer' }, { fixture: 'files' }]) {
-    const current = await launchPage(options);
-    await walk(current.page, options.fixture === 'empty' ? 5 : 9, `${options.fixture ?? 'mobile'}-${options.width ?? 1440}`);
-    if (options.fixture === 'files') { await guide(current.page, 'files'); await walk(current.page, 6, 'enabled-files'); }
-    await guide(current.page, 'members'); await current.page.keyboard.press('Escape');
-    await current.page.locator(popup).waitFor({ state: 'detached' });
-    assert.deepEqual(await current.page.evaluate(() => window.guideWrites), []);
-    await current.context.close();
-  }
-  const denied = await launchPage({ deniedStorage: true });
-  await denied.page.keyboard.press('Escape');
-  await denied.page.locator('#logout-button').click();
-  await denied.page.locator('#auth-select-login').click(); await denied.page.locator('#token').fill('demo-token'); await denied.page.locator('#login-form button[type=submit]').click();
-  await denied.page.locator('#session-view:not([hidden])').waitFor();
-  await denied.page.waitForFunction(() => !document.querySelector('#login-form button[type=submit]').disabled); await settle(denied.page);
-  assert.equal(await denied.page.locator(popup).count(), 0, 'storage denial retains same-page progress');
-  await guide(denied.page, 'basics'); await denied.page.keyboard.press('Escape');
-  await denied.context.close();
   assert.deepEqual(errors, []);
-  console.log(`PASS ${browserName}: bilingual desktop/mobile/empty/viewer, all guides, modal layers, arrows, keyboard, progress isolation, no mutations, focus and scroll restoration. Screenshots: ${artifacts}`);
+  console.log(`${browserName}: full guides on populated, empty and viewer accounts; isolated free practice; 1440/390/320 layouts, focus, ring geometry, privacy, toolbar, reset and language passed.`);
 } finally { await browser.close(); }

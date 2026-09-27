@@ -199,7 +199,7 @@
           </div>
           <span class="avatar" id="current-user-avatar" aria-hidden="true"></span>
           <span id="current-username" class="current-username"></span>
-          <button id="project-code-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Code collaboration" title="Code collaboration" data-tooltip aria-haspopup="dialog" aria-controls="project-code-dialog">
+          <button id="project-code-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Project file collaboration" title="Project file collaboration" data-tooltip aria-haspopup="dialog" aria-controls="project-code-dialog">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 7.5v9M18 7.5v1a6 6 0 0 1-6 6H6"/></svg>
           </button>
           <button id="settings-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Open Settings" title="Settings" data-tooltip aria-haspopup="dialog" aria-controls="settings-dialog">
@@ -592,10 +592,10 @@
     <dialog id="project-code-dialog" class="create-dialog project-code-dialog" aria-labelledby="project-code-title" aria-describedby="project-code-description">
       <div class="code-dialog-content">
         <div class="dialog-heading">
-          <div><p id="code-project-name" class="eyebrow" data-i18n-skip></p><h2 id="project-code-title">Code collaboration</h2></div>
-          <button id="close-project-code-button" class="icon-button" type="button" aria-label="Close code collaboration">×</button>
+          <div><p id="code-project-name" class="eyebrow" data-i18n-skip></p><h2 id="project-code-title">Project file collaboration</h2></div>
+          <button id="close-project-code-button" class="icon-button" type="button" aria-label="Close project file collaboration">×</button>
         </div>
-        <p id="project-code-description" class="code-help">Share code through personal Git branches. Conversation synchronization stays separate.</p>
+        <p id="project-code-description" class="code-help">Share project files through personal versions, review changes and integrate shared work. Conversation history sync is separate.</p>
         <section id="code-no-project" class="code-section" hidden>
           <p>Create or join a project before using Git code collaboration. You can still adjust appearance and language in Settings.</p>
           <button id="code-create-project-button" class="button button-primary compact-button" type="button">Create your first project</button>
@@ -608,13 +608,13 @@
         </section>
         <section id="code-enable-section" class="code-section" hidden>
           <p>Uploaded code is visible to all project members. Only the project owner can merge into main. Private files and changes not yet uploaded are not backed up.</p>
-          <button id="code-enable-button" class="button button-primary" type="button">Enable project code storage</button>
-          <p id="code-owner-note" class="code-help" hidden>Ask the project owner to enable code storage.</p>
+          <button id="code-enable-button" class="button button-primary" type="button">Enable project file sharing</button>
+          <p id="code-owner-note" class="code-help" hidden>Ask the project owner to enable file sharing.</p>
         </section>
         <div id="code-enabled-content" hidden>
           <section id="code-enabled-home" class="code-overview" aria-label="Cloud Git settings">
-            <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off Git synchronization</button><span class="code-help">Cloud branches remain stored; conversations keep syncing.</span></div>
-            <p id="code-paused-note" class="code-help" hidden>Cloud Git is off. Conversations still sync. Resume code sharing here; local automatic upload can be turned off under device sync.</p>
+            <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off project file sharing</button><span class="code-help">File collaboration pauses; text still syncs. Stored cloud versions remain.</span></div>
+            <p id="code-paused-note" class="code-help" hidden>Project file sharing is off: only text syncs, and new file collaboration is paused. Enable sharing for full AI agent collaboration. Local automatic upload is a separate device preference.</p>
             <p class="code-help">Choose what you want to do. Uploaded code is visible to every project member and is used only for this project's collaboration.</p>
             <div class="code-navigation-list">
               <button id="code-open-device-view" class="code-navigation-card" type="button" aria-controls="code-device-view"><span><strong>This device · sync &amp; recovery</strong><small>Choose an Agent device, upload or download code, and manage automatic upload.</small></span><span aria-hidden="true">→</span></button>
@@ -656,9 +656,9 @@
     </dialog>
 
     <dialog id="code-notice-dialog" class="create-dialog code-notice-dialog" aria-labelledby="code-notice-title" aria-describedby="code-notice-description">
-      <div class="dialog-heading"><h2 id="code-notice-title">About cloud Git collaboration</h2></div>
-      <p id="code-notice-description">Cloud Git stores project code on this server so project members can share, review and merge it. Uploaded code is readable by every member of that project. It is used for that project's collaboration, not for developing GatherThread or other unrelated purposes. Review files for secrets before upload.</p>
-      <p>Code upload is optional and automatic upload starts off. You can turn off cloud Git for a project; its conversations still work, but code sharing and recovery through the server are then unavailable. Turning it off alone retains existing cloud branches until they are cleared in Settings.</p>
+      <div class="dialog-heading"><h2 id="code-notice-title">About project file collaboration</h2></div>
+      <p id="code-notice-description">Project members and their AI agents can share, review, modify and manage files together. Uploaded files are readable within the project, not public, and used only for this project's collaboration. Each local device needs separate file access authorization. Review files for secrets before upload.</p>
+      <p>We recommend enabling project file sharing for full AI agent collaboration: members can share, modify and manage project files together. Turn it off only for strict privacy needs; only text will sync, without file exchange or cloud recovery. Automatic file upload starts off and is a separate choice. Stored versions remain until explicitly cleared in Settings.</p>
       <div class="dialog-actions"><button id="code-notice-continue" class="button button-primary" type="button">Got it</button></div>
     </dialog>
 
@@ -988,12 +988,14 @@ codex plugin add gatherthread@gatherthread</code>
               </label>
               <div class="onboarding-guides" role="group" aria-labelledby="onboarding-guides-title">
                 <strong id="onboarding-guides-title">Step-by-step guides</strong>
-                <p>Choose a short guide. It only shows controls and never sends or uploads anything.</p>
+                <p>Learn in an isolated example, or browse it freely. No real project, conversation, file or AI agent is affected.</p>
                 <div class="onboarding-guide-buttons">
                   <button class="button button-secondary" type="button" data-onboarding-topic="basics">Start here</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="members">Work with people</button>
                   <button class="button button-secondary" type="button" data-onboarding-topic="history">Share conversation history</button>
                   <button class="button button-secondary" type="button" data-onboarding-topic="files">Share project files</button>
-                  <button class="button button-secondary" type="button" data-onboarding-topic="members">Work with people</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="summaries">Organize history with summaries</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="browse">Browse example project</button>
                 </div>
               </div>
             </section>
@@ -1066,6 +1068,7 @@ codex plugin add gatherthread@gatherthread</code>
                 <button id="code-storage-refresh" class="text-button" type="button">Refresh</button>
               </div>
               <div id="code-storage-overview">
+                <p class="field-help">Enable project file sharing for complete AI agent team collaboration. When disabled, only text is shared; files cannot be exchanged. Reserve disabling it for strict privacy requirements.</p>
                 <p id="code-storage-summary" class="field-help" role="status" aria-live="polite">Loading cloud Git storage…</p>
                 <p class="field-help">View your quota and choose when to remove cloud copies. Your local Git history is always left alone.</p>
                 <button id="code-storage-open" class="button button-secondary" type="button">Manage cloud Git data</button>

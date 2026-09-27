@@ -30,7 +30,7 @@ With an existing Playwright installation and Chrome, build the app and keep `nod
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tests/browser/onboarding.mjs
 ```
 
-The script uses only `/app/?mock=1`, disposable browser profiles and mock API fixtures. It checks bilingual desktop and mobile, empty/read-only accounts, delayed file status, enabled file sharing, dynamic visibility, dialog layers, keyboard/focus/scroll restoration, identity isolation and absence of protected business writes. Screenshots go to `/tmp/gatherthread-onboarding` by default. `ONBOARDING_ORIGIN`, `ONBOARDING_ARTIFACTS` and `ONBOARDING_BROWSER` override the preview, output directory and installed browser channel. `webkit` exercises Playwright WebKit and must not be reported as a real Safari check.
+The script uses only `/app/?mock=1`, disposable browser profiles and mock API fixtures. It walks all five guides at 1440×900, 390×844 and 320×568, including Chinese/English and empty/read-only accounts. It checks target visibility, ring geometry, cards beside controls, native-dialog layering, focus, example storage/origin isolation, absence of parent business writes, free practice, reset, toolbar navigation and language updates. Screenshots go to `/tmp/gatherthread-onboarding` by default. `ONBOARDING_ORIGIN`, `ONBOARDING_ARTIFACTS` and `ONBOARDING_BROWSER` override the preview, output directory and installed browser channel. `webkit` exercises Playwright WebKit and must not be reported as a real Safari check.
 
 ## Client contract
 

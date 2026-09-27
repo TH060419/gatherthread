@@ -1603,6 +1603,7 @@ test("owner host serves only the configured static tree without authentication",
   mkdirSync(join(staticDirectory, "app"), { recursive: true });
   writeFileSync(join(staticDirectory, "index.html"), "<!doctype html><title>GatherThread</title>");
   writeFileSync(join(staticDirectory, "app", "index.html"), "<!doctype html><title>GatherThread app</title>");
+  writeFileSync(join(staticDirectory, "app", "example.html"), "<!doctype html><title>Isolated example</title>");
   writeFileSync(join(staticDirectory, "assets", "app.js"), "export const ready = true;\n");
   writeFileSync(join(directory, "private.txt"), "must not leak");
   const running = await startCollaborationServer({
@@ -1621,7 +1622,16 @@ test("owner host serves only the configured static tree without authentication",
     assert.equal(application.status, 200);
     assert.equal(application.headers.get("content-type"), "text/html; charset=utf-8");
     assert.equal(application.headers.get("cache-control"), "no-store");
+    assert.equal(application.headers.get("x-frame-options"), "DENY");
+    assert.match(application.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/u);
     assert.match(await application.text(), /GatherThread app/);
+
+    const example = await fetch(`${running.origin}/app/example.html`);
+    assert.equal(example.status, 200);
+    assert.equal(example.headers.get("x-frame-options"), null);
+    assert.match(example.headers.get("content-security-policy") ?? "", /frame-ancestors 'self'/u);
+    assert.match(example.headers.get("content-security-policy") ?? "", /connect-src 'none'/u);
+    assert.match(example.headers.get("content-security-policy") ?? "", /sandbox allow-scripts/u);
 
     const applicationRedirect = await fetch(`${running.origin}/app`, { redirect: "manual" });
     assert.equal(applicationRedirect.status, 308);

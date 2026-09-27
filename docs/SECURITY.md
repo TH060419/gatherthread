@@ -22,6 +22,8 @@ The main trust boundaries are:
 
 The collaboration service never inherits authority to approve local tools. Transcript access is opt-in and path-scoped. A remote request cannot broaden filesystem access or bypass the harness approval boundary.
 
+The beginner example has a separate opaque-origin sandbox, fresh mock API state and memory-only browser preferences. It receives only locale, theme, an authored topic and a random message channel. Parent messages must match the frame's `contentWindow`, channel and allowed presentation action. No credentials, private context or local runtime reach the example. Its CSP disallows network connections and form submissions; the example bootstrap also rejects fetch/WebSocket use. Resetting or exiting cannot mutate the real workspace. Only the self-contained `/app/example.html` allows same-site embedding and enforces a response-level sandbox. All real application, product and API routes retain their framing denial. See [ADR-0032](adr/0032-isolated-onboarding-example.md).
+
 ## Security invariants
 
 - Projects are private by default. Public discovery and anonymous access are disabled.

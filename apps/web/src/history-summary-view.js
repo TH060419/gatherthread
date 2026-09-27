@@ -299,7 +299,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     if (context().sessionId) el("history-summary-versions-button").focus({ preventScroll: true });
   });
   return {
-    reset, updateContext, sourceControl, card,
+    reset, updateContext, sourceControl, card, selectSources: changeSelection,
     revealOriginal: (eventId) => { original = true; revealedSummaryId = eventId; },
     timeline: () => {
       const view = historySummaryTimeline(events(), { original, selecting, expanded });

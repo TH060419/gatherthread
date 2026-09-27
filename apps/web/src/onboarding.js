@@ -1,3 +1,5 @@
+import { positionSessionContextPanel } from "./session-context-panel.js";
+import { mountExampleGateway, exampleToolbar } from "./onboarding-example.js";
 import { driver } from "driver.js";
 import { GUIDE_COPY, guideSteps, guideText, onboardingKey, createOnboardingProgress } from "./onboarding-content.js";
 
@@ -30,7 +32,8 @@ export function visibleGuideTarget(doc, selectors) {
   return undefined;
 }
 
-export function mountOnboarding({ document: doc, getContext, openSettings, storage = browserStorage(), createDriver = driver }) {
+export function mountOnboarding({ document: doc, getContext, openSettings, storage = browserStorage(), createDriver = driver, prepareScenario }) {
+  if (doc.documentElement.dataset.example !== "true") return mountExampleGateway({ document: doc, getContext, openSettings, storage });
   const win = doc.defaultView;
   const el = (id) => doc.getElementById(id);
   const progress = createOnboardingProgress(storage);
@@ -41,6 +44,8 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   let returnFocus;
   let restorePresentation;
   let ownedCodeDialog = false;
+  let ownedSettingsDialog = false;
+  let initialOffer = true;
   let pendingKey = null;
   let autoFrame;
   let layoutFrame;
@@ -53,8 +58,17 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   const key = () => onboardingKey(getContext());
   const modal = () => [...doc.querySelectorAll("dialog[open]")].at(-1);
 
-  function prepare(view) {
+  function prepare(item) {
+    prepareScenario?.(item);
+    const view = item.view;
+    if (view !== "summary-settings" && ownedSettingsDialog) { ownedSettingsDialog = false; el("settings-dialog").close(); }
+    if (view === "summary-settings" && !el("settings-dialog").open) {
+      ownedSettingsDialog = true; openSettings();
+      el("settings-sync").scrollIntoView({ block: "start", behavior: "instant" });
+    }
+
     const workspace = el("workspace");
+    workspace.dataset.onboardingStep = item.id;
     if (workspace.dataset.onboardingView !== (view ?? "")) workspace.dataset.onboardingView = view ?? "";
     if (!view?.startsWith("code-") && ownedCodeDialog) {
       ownedCodeDialog = false;
@@ -64,13 +78,20 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       el("workspace").dataset.leftRailCollapsed = "false";
       el("toggle-session-rail-button").setAttribute("aria-expanded", "true");
     }
-    if (view === "conversation" && win.innerWidth <= 760) {
+    if (["conversation", "details", "snapshot", "summary-selection"].includes(view) && win.innerWidth <= 760) {
       el("workspace").dataset.leftRailCollapsed = "true";
       el("toggle-session-rail-button").setAttribute("aria-expanded", "false");
       if (el("member-panel").classList.contains("member-panel-open")) el("member-panel").classList.remove("member-panel-open");
       el("mobile-members-button").setAttribute("aria-expanded", "false");
     }
-    if (view === "details" && getContext().session && !el("session-context-details").open) el("session-context-details").open = true;
+    if (view === "details" && getContext().session) {
+      if (!el("session-context-details").open) el("session-context-details").open = true;
+      positionDetailsPanel();
+    } else if (el("session-context-details").open) el("session-context-details").open = false;
+    if (view === "leave") {
+      el("workspace").dataset.leftRailCollapsed = "false";
+      el("toggle-session-rail-button").setAttribute("aria-expanded", "true");
+    }
     if (view === "members") {
       el("workspace").dataset.rightPanelCollapsed = "false";
       if (!el("member-panel").classList.contains("member-panel-open")) el("member-panel").classList.add("member-panel-open");
@@ -92,10 +113,15 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
 
   function cleanup() {
     tour = null;
+    const toolbar = doc.querySelector(".example-toolbar"); if (toolbar) doc.body.append(toolbar);
     line?.remove(); line = null;
     doc.removeEventListener("keydown", handleKey, true);
     doc.removeEventListener("focusin", containFocus, true);
     if (ownedCodeDialog) { ownedCodeDialog = false; el("project-code-dialog").close(); }
+    if (ownedSettingsDialog) { ownedSettingsDialog = false; el("settings-dialog").close(); }
+    positionSessionContextPanel(doc);
+    delete el("workspace").dataset.onboardingStep;
+    doc.documentElement.style.removeProperty("--example-guide-height");
     restorePresentation?.(); restorePresentation = null;
     for (const [node, attributes] of originalAttributes) {
       if (!node.isConnected) continue;
@@ -118,11 +144,17 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     instance.destroy();
     if (tour === instance) cleanup();
     ending = false;
+    if (status) exitExample(status);
   }
+
+  function exitExample(status, settings = false) {
+    win.parent.postMessage({ type: "example-exit", channel: win.__examplePresentation?.channel, status, settings }, "*");
+  }
+  function positionDetailsPanel() { positionSessionContextPanel(doc); }
 
   function containFocus(event) {
     const popup = tour?.getState("popover")?.wrapper;
-    if (popup && !popup.contains(event.target)) popup.querySelector("button:not([disabled])")?.focus({ preventScroll: true });
+    if (popup && !popup.contains(event.target) && !event.target.closest?.(".example-toolbar")) popup.querySelector(".driver-popover-next-btn")?.focus({ preventScroll: true });
   }
 
   function handleKey(event) {
@@ -136,7 +168,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     }
     if (event.key !== "Tab") return;
     const popup = tour.getState("popover")?.wrapper;
-    const buttons = [...(popup?.querySelectorAll("button:not([disabled])") ?? [])].filter((node) => node.getClientRects().length);
+    const buttons = [...(popup?.querySelectorAll("button:not([disabled])") ?? []), ...doc.querySelectorAll(".example-toolbar button, .example-toolbar select")].filter((node) => node.getClientRects().length);
     if (!buttons.length) return;
     event.preventDefault(); event.stopImmediatePropagation();
     const position = buttons.indexOf(doc.activeElement);
@@ -152,6 +184,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     if (popup && popup.parentElement !== parent) parent.append(popup);
     if (overlay && overlay.parentElement !== parent) parent.append(overlay);
     if (line && line.parentElement !== parent) parent.append(line);
+    const toolbar = doc.querySelector(".example-toolbar"); if (toolbar && toolbar.parentElement !== parent) parent.append(toolbar);
   }
 
   function drawLine() {
@@ -160,16 +193,20 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     const popup = tour.getState("popover")?.wrapper;
     const target = tour.getActiveElement();
     if (!popup || !target || target.id === "driver-dummy-element" || !target.isConnected) { line?.remove(); line = null; return; }
+    positionCard(popup, target);
     const box = target.getBoundingClientRect();
     const card = popup.getBoundingClientRect();
     if (!line) {
       line = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
       line.classList.add("onboarding-connector");
       line.setAttribute("aria-hidden", "true");
-      line.innerHTML = '<defs><marker id="onboarding-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><path class="onboarding-line" marker-end="url(#onboarding-arrow)"/>';
+      line.innerHTML = '<defs><marker id="onboarding-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><rect class="onboarding-ring"/><path class="onboarding-line" marker-end="url(#onboarding-arrow)"/>';
       (modal() ?? doc.body).append(line);
     }
     line.setAttribute("viewBox", `0 0 ${win.innerWidth} ${win.innerHeight}`);
+    const ring = line.querySelector(".onboarding-ring");
+    const radius = tour.getConfig().stageRadius;
+    for (const [name, value] of Object.entries({ x: box.left - 7, y: box.top - 7, width: box.width + 14, height: box.height + 14, rx: radius, ry: radius })) ring.setAttribute(name, String(value));
     const cx = box.left + box.width / 2, cy = box.top + box.height / 2;
     const x = Math.max(card.left + 12, Math.min(card.right - 12, cx));
     const y = cy < card.top ? card.top : cy > card.bottom ? card.bottom : Math.max(card.top + 12, Math.min(card.bottom - 12, cy));
@@ -180,9 +217,38 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     line.querySelector(".onboarding-line").setAttribute("d", `M ${startX} ${y} L ${endX} ${endY}`);
   }
 
+  function positionCard(popup, target) {
+    popup.style.right = "auto"; popup.style.bottom = "auto";
+    const width = popup.offsetWidth, height = popup.offsetHeight, margin = 14, gap = 24;
+    if (target?.id === "timeline-region" && activeItems[tour.getActiveIndex()]?.id === "answer") {
+      doc.documentElement.style.setProperty("--example-guide-height", `${height}px`);
+    }
+    const box = target?.getBoundingClientRect();
+    const topLimit = 54;
+    if (!box || target.id === "driver-dummy-element") {
+      popup.style.setProperty("--guide-left", `${Math.max(margin, (win.innerWidth - width) / 2)}px`);
+      popup.style.setProperty("--guide-top", `${Math.max(topLimit, (win.innerHeight - height) / 2)}px`);
+      return;
+    }
+    const clampX = (x) => Math.max(margin, Math.min(win.innerWidth - width - margin, x));
+    const clampY = (y) => Math.max(topLimit, Math.min(win.innerHeight - height - margin, y));
+    // Prefer the outside of the whole disclosure, keeping its other controls
+    // readable. On short/narrow screens fall back beside the highlighted control.
+    const panel = target.closest('.session-context-panel');
+    const anchors = panel ? [panel.getBoundingClientRect(), box] : [box];
+    const candidates = anchors.flatMap((anchor) => [
+      [anchor.right + gap, clampY(anchor.top)], [anchor.left - width - gap, clampY(anchor.top)],
+      [clampX(anchor.left + (anchor.width - width) / 2), anchor.bottom + gap],
+      [clampX(anchor.left + (anchor.width - width) / 2), anchor.top - height - gap],
+    ]);
+    const fit = candidates.find(([x, y]) => x >= margin && y >= topLimit && x + width <= win.innerWidth - margin && y + height <= win.innerHeight - margin);
+    const [x, y] = fit ?? [clampX(box.left), clampY(box.bottom + gap)];
+    popup.style.setProperty("--guide-left", `${x}px`); popup.style.setProperty("--guide-top", `${y}px`);
+  }
+
   function start(topic = "basics") {
     if (el("workspace").hidden || !getContext().userId) return;
-    if (modal()) return; // Let credential, privacy and business dialogs finish first.
+    if (modal()) return; // Finish a practice dialog before starting another guide.
     pendingKey = null;
     end(null);
     activeTopic = topic;
@@ -209,8 +275,19 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     const items = activeItems = guideSteps(topic, getContext());
     const makeSteps = () => items.map((item) => ({
       element: () => {
-        prepare(item.view);
-        lastTarget = visibleGuideTarget(doc, item.target);
+        prepare(item);
+        // All scrolling happens inside the disposable example, never real history.
+        if (item.target) {
+          const node = [...doc.querySelectorAll(item.target)].find((candidate) => !candidate.closest("[hidden]"));
+          node?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+        }
+        lastTarget = item.target ? visibleGuideTarget(doc, item.target) : undefined;
+        if (lastTarget) {
+          const box = lastTarget.getBoundingClientRect();
+          const circular = item.id === "quote" || item.id === "mention";
+          const radius = circular ? Math.min(box.width, box.height) / 2 + 7 : Math.max(12, Math.min(24, parseFloat(win.getComputedStyle(lastTarget).borderRadius) + 7 || 12));
+          tour.setConfig({ ...tour.getConfig(), stageRadius: radius });
+        }
         if (lastTarget && !originalAttributes.has(lastTarget)) originalAttributes.set(lastTarget,
           ["aria-haspopup", "aria-expanded", "aria-controls"].map((name) => [name, lastTarget.getAttribute(name)]));
         return lastTarget;
@@ -231,11 +308,13 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
         popover.wrapper.setAttribute("aria-modal", "true");
         popover.progress.setAttribute("aria-live", "polite");
         popover.closeButton.setAttribute("aria-label", text(GUIDE_COPY.skip));
-        if (!lastTarget) {
+        if (!lastTarget && items[tour.getActiveIndex()]?.target) {
           const hint = doc.createElement("p"); hint.className = "onboarding-hint";
-          hint.textContent = text(getContext().session ? GUIDE_COPY.missing : GUIDE_COPY.empty);
+          hint.textContent = getContext().locale === "zh-CN" ? "正在准备示例中的功能…" : "Preparing this example control…";
           popover.description.append(hint);
         }
+        const note = items[tour.getActiveIndex()]?.note;
+        if (note) { const small = doc.createElement("p"); small.className = "onboarding-hint"; small.textContent = text(note); popover.description.append(small); }
         if (topic === "basics" && ["chat", "request"].includes(items[tour.getActiveIndex()]?.id) && !getContext().writable) {
           const hint = doc.createElement("p"); hint.className = "onboarding-hint"; hint.textContent = text(GUIDE_COPY.readonly);
           popover.description.append(hint);
@@ -245,11 +324,16 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
         popover.wrapper.append(skip);
         if (topic === "basics" && tour.isLastStep()) {
           const more = doc.createElement("button"); more.type = "button"; more.className = "onboarding-more";
-          more.textContent = text(GUIDE_COPY.more); more.addEventListener("click", () => { end("completed"); openSettings(); });
+          more.textContent = text(GUIDE_COPY.more); more.addEventListener("click", () => { end(null); exitExample("completed", true); });
           popover.description.append(more);
         }
         const parent = modal(); if (parent) parent.append(popover.wrapper);
-        win.requestAnimationFrame(drawLine);
+        win.requestAnimationFrame(() => {
+          if (!tour || tour.getState("popover")?.wrapper !== popover.wrapper) return;
+          positionCard(popover.wrapper, tour.getActiveElement()); drawLine();
+          popover.nextButton.focus({ preventScroll: true });
+          win.requestAnimationFrame(drawLine);
+        });
       },
       onHighlighted: () => { attachLayers(); win.requestAnimationFrame(drawLine); },
     });
@@ -271,12 +355,12 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     layoutFrame = win.requestAnimationFrame(() => {
       if (!tour) return;
       const item = activeItems[tour.getActiveIndex()];
-      prepare(item.view);
+      prepare(item);
       const active = tour.getActiveElement();
-      const resolved = visibleGuideTarget(doc, item.target);
+      const resolved = item.target ? visibleGuideTarget(doc, item.target) : undefined;
       // Loading, live updates, and scrolling may reveal, replace or hide a target.
       if (resolved !== (active?.id === "driver-dummy-element" ? undefined : active)) tour.drive(tour.getActiveIndex());
-      else tour.refresh();
+      else { tour.refresh(); positionCard(tour.getState("popover").wrapper, active); }
       drawLine();
     });
   }
@@ -290,9 +374,15 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   win.addEventListener("resize", reconcileLayout);
   doc.addEventListener("scroll", reconcileLayout, true);
   el("project-code-dialog").addEventListener("close", () => { if (tour && ownedCodeDialog && !el("project-code-dialog").open) end("skipped"); });
-  return {
+  const controls = {
     start,
-    offer() { pendingKey = key(); autoStart(); },
+    offer() {
+      if (!initialOffer) return;
+      initialOffer = false;
+      const topic = win.__examplePresentation?.topic;
+      exampleToolbar(doc, { start, cancel: () => end(null), onExit: (status) => exitExample(status) });
+      if (topic && topic !== "browse") win.requestAnimationFrame(() => start(topic));
+    },
     cancel() { pendingKey = null; win.cancelAnimationFrame(autoFrame); end(null); },
     refreshLanguage() {
       if (tour && language !== getContext().locale) {
@@ -301,4 +391,5 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       }
     },
   };
+  return controls;
 }

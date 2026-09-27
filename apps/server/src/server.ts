@@ -208,6 +208,11 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) return false;
   const stat = statSync(resolved);
   if (!stat.isFile()) return false;
+  // Only the public mock example is embeddable. Real UI/API framing stays denied.
+  if (relative === "app/example.html") {
+    response.removeHeader("x-frame-options");
+    response.setHeader("content-security-policy", "default-src 'none'; script-src 'nonce-gatherthread-example-v1'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; sandbox allow-scripts");
+  }
   response.writeHead(200, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
     "content-length": stat.size,
