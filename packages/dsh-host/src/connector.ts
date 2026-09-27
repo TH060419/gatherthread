@@ -16,6 +16,7 @@ import {
 import type { EnabledDshHostConfig } from "./config.js";
 import type {
   ConnectorOutboxOperation,
+  ConnectorActiveRequest,
   ConnectorState,
   ConnectorStateStore,
   DshAgentStatus,
@@ -564,6 +565,25 @@ export class DshHostConnector {
     return false;
   }
 
+  /**
+   * Release everything this connector was holding for a request it may no longer
+   * execute, whether the server fenced it with a terminal conflict or the author
+   * paused it. The outbox entries for that request are dropped because their
+   * writes would be rejected anyway, and the published sequence advances only
+   * when the turn had already settled.
+   */
+  async #retireFencedActiveRequest(state: ConnectorState, active: ConnectorActiveRequest): Promise<void> {
+    state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
+    if (active.dshToSequence !== undefined && active.contextExecution === undefined) {
+      state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
+    }
+    delete state.activeRequest;
+    this.#activeStatuses = [];
+    this.#activeExecutionSelection = undefined;
+    this.#liveEventSequences.clear();
+    await this.#stateStore.save(state);
+  }
+
   async #recoverActiveRequest(): Promise<void> {
     if (this.#stopped) throw new Error("DSH connector stopped before recovering an Agent request");
     const state = this.#requireState();
@@ -578,15 +598,14 @@ export class DshHostConnector {
       );
     } catch (error) {
       if (!isTerminalClaimConflict(error)) throw error;
-      state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
-      if (active.dshToSequence !== undefined && active.contextExecution === undefined) {
-        state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
-      }
-      delete state.activeRequest;
-      this.#activeStatuses = [];
-      this.#activeExecutionSelection = undefined;
-      this.#liveEventSequences.clear();
-      await this.#stateStore.save(state);
+      await this.#retireFencedActiveRequest(state, active);
+      return;
+    }
+    if (claim.status === "paused") {
+      // The author stopped this request. That is terminal for it — asking again
+      // is a new request — so the connector releases the local work instead of
+      // re-driving a fenced execution on every poll.
+      await this.#retireFencedActiveRequest(state, active);
       return;
     }
     if (claim.status === "completed" && active.dshToSequence !== undefined) {

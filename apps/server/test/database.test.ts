@@ -1639,6 +1639,39 @@ test("an execution fenced by a pause can never publish, however it ends", () => 
   }
 });
 
+test("a reserved idempotency key cannot suppress the canonical pause", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0007");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // Any writer with session access can guess a predictable key and reserve it
+    // with an ordinary event. If the pause reused that key the insert would
+    // collide, the whole pause transaction would roll back, and the author would
+    // be unable to fence the execution that is still running.
+    f.service.appendEvent(f.member, sessionId, {
+      idempotency_key: `agent-request-paused:${event.id}`,
+      type: "human_chat",
+      visibility: "session",
+      payload: { content: "reserved before the pause" },
+    });
+    const paused = f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    assert.equal(paused.status, "paused", "the pause must survive a reserved key");
+    const markers = f.service.replay(f.member, sessionId, 0, 200).events.filter((candidate) =>
+      candidate.type === "agent_progress"
+      && candidate.reply_to_event_id === event.id
+      && (candidate.payload as { status?: string }).status === "paused");
+    assert.equal(markers.length, 1, "the pause must still be announced once");
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status,
+      "paused",
+      "the claim must actually be fenced",
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("only the requesting user may pause an agent request", () => {
   const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
   const { f, sessionId, first, request } = claimLeaseFixture(nowMs);

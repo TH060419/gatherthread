@@ -247,6 +247,17 @@ export interface AgentClaimRecord {
 export type AgentClaimOutcome =
   | { claim: AgentClaimRecord }
   | { failed: true; event?: CanonicalEvent };
+
+/**
+ * A pause always reports the claim, and carries the canonical marker only when
+ * this call is the one that committed it. The service publishes whatever comes
+ * back; without that the pause would sit in the log unseen by anyone already
+ * connected.
+ */
+export interface AgentPauseOutcome {
+  claim: AgentClaimRecord;
+  event?: CanonicalEvent;
+}
 interface InvitationRow extends InvitationRecord { token_digest: string }
 interface ProjectInvitationRow extends ProjectInvitationRecord { token_digest: string }
 interface DeviceAuthorizationRow extends DeviceAuthorizationRecord { token_digest: string }
@@ -2973,7 +2984,7 @@ export class CollaborationDatabase {
    * whatever execution was holding it — and because a paused request is never
    * reclaimed, nothing can outlive that fence.
    */
-  pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string): AgentClaimRecord {
+  pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string): AgentPauseOutcome {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
       const event = this.getEvent(sessionId, requestEventId);
@@ -2985,7 +2996,7 @@ export class CollaborationDatabase {
       if (!claim) throw conflict("Only an Agent request a runtime has already claimed can be paused");
       if (claim.status === "completed") throw agentRequestAlreadyCompleted();
       if (claim.status === "failed") throw agentRequestFailed();
-      if (claim.status === "paused") return this.claimRecord(requestEventId, claim);
+      if (claim.status === "paused") return { claim: this.claimRecord(requestEventId, claim) };
       this.sqlite.prepare(`
         UPDATE agent_request_claims
         SET status = 'paused', lease_expires_at = NULL
@@ -2994,8 +3005,13 @@ export class CollaborationDatabase {
       // The claim row is a control-plane fact; the room reads the canonical log.
       // Without an event the other members would keep believing the agent is
       // working, and the timeline could not show the pause where it happened.
-      this.appendInsideTransaction(actor.user_id, sessionId, {
-        idempotency_key: `agent-request-paused:${requestEventId}`,
+      const marker = this.appendInsideTransaction(actor.user_id, sessionId, {
+        // Server-generated and unguessable, exactly like the abandoned-claim
+        // failure: a predictable key can be reserved by any session writer, and
+        // the collision would roll back this transaction — leaving the author
+        // unable to fence an execution that is still running. Repeat calls are
+        // already idempotent through the `paused` status check above.
+        idempotency_key: `server:agent-request-paused:${randomUUID()}`,
         type: "agent_progress",
         visibility: "session",
         reply_to_event_id: requestEventId,
@@ -3007,10 +3023,13 @@ export class CollaborationDatabase {
       }, null);
       // Report the row as it now stands, not as it was read before the update.
       return {
-        request_event_id: requestEventId,
-        runtime_id: claim.runtime_id,
-        status: "paused",
-        attempt_count: claim.attempt_count ?? 1,
+        claim: {
+          request_event_id: requestEventId,
+          runtime_id: claim.runtime_id,
+          status: "paused",
+          attempt_count: claim.attempt_count ?? 1,
+        },
+        event: marker,
       };
     });
   }

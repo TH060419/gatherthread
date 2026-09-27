@@ -112,7 +112,7 @@ class FakeApi implements DshCollaborationApi {
   readonly events: DshCanonicalEvent[] = [];
   readonly registrations: DshRuntimeRegistration[] = [];
   readonly returnedRuntimeIds: string[] = [];
-  readonly claims = new Map<string, "claimed" | "completed">();
+  readonly claims = new Map<string, "claimed" | "completed" | "paused">();
   readonly progress: CompleteAgentRequestInput[] = [];
   readonly appended: DshAppendEventInput[] = [];
   readonly completions: CompleteAgentRequestInput[] = [];
@@ -1477,6 +1477,58 @@ test("terminal failure while recovering retires durable active state and resumes
   recovered = await store.load();
   assert.equal(recovered?.serverCursor, 2);
   assert.equal(persistence.prompts.length, 0);
+  await connector.stop();
+});
+
+test("a paused active request is retired instead of retried on every poll", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  const activeRequest = request(1);
+  api.events.push(activeRequest);
+  api.claims.set(activeRequest.id, "paused");
+  const state: ConnectorState = {
+    version: 3,
+    binding: { projectId: cfg.projectId, sessionId: cfg.sessionId, dshSessionId: cfg.dshSessionId },
+    serverCursor: 0,
+    projectionCursor: 0,
+    publishedDshSequence: 0,
+    automaticUpload: true,
+    activeRequest: {
+      requestId: activeRequest.id,
+      requestSequence: activeRequest.sequence,
+      dshFromSequence: 0,
+      promptDigest: "a".repeat(64),
+      claimAttempt: 1,
+    },
+    outbox: [{
+      id: "pending-progress",
+      kind: "progress",
+      requestId: activeRequest.id,
+      input: {
+        runtimeId: "runtime-1",
+        claimAttempt: 1,
+        idempotencyKey: "pending-progress",
+        payload: { content: "fenced progress" },
+      },
+    }],
+  };
+  const store = new MemoryConnectorStateStore(state);
+  const persistence = freshPersistence();
+  persistence.exists = true;
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host: new FakeHost(cfg.dshSessionId, persistence),
+    stateStore: store,
+  });
+  // The author paused while this connector held the request. That is terminal
+  // for this request, not an unknown state to retry: the connector must release
+  // the local work instead of driving a fenced execution for ever.
+  await connector.start({ schedule: false });
+  const settled = await store.load();
+  assert.equal(settled?.activeRequest, undefined, "a paused request must not stay active");
+  assert.deepEqual(settled?.outbox, [], "its fenced outbox work must be dropped");
+  assert.equal(persistence.prompts.length, 0, "a paused request must never be driven");
   await connector.stop();
 });
 
