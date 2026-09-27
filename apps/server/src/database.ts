@@ -3020,7 +3020,7 @@ export class CollaborationDatabase {
           phase: "lifecycle",
           status: "paused",
         },
-      }, null);
+      }, null, "pause");
       // Report the row as it now stands, not as it was read before the update.
       return {
         claim: {
@@ -4303,20 +4303,33 @@ export class CollaborationDatabase {
     `);
   }
 
-  private enforceEventStorageQuota(sessionId: string, actorUserId: string, eventBytes: number): void {
+  private enforceEventStorageQuota(sessionId: string, actorUserId: string, eventBytes: number, pauseMarker = false): void {
+    // One fixed server marker per paused, already-accepted request. Charge it
+    // normally, but allow at most 1 KiB per such request beyond the ordinary
+    // quota so a full timeline cannot prevent its author from fencing work.
+    // Ordinary writes never receive this allowance, including client progress.
+    const allowance = pauseMarker ? this.sqlite.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN e.session_id = ? THEN 1 ELSE 0 END), 0) * 1024 AS session_bytes,
+        COALESCE(SUM(CASE WHEN e.actor_user_id = ? THEN 1 ELSE 0 END), 0) * 1024 AS user_bytes,
+        COUNT(*) * 1024 AS total_bytes
+      FROM agent_request_claims c JOIN events e ON e.id = c.request_event_id
+      WHERE c.status = 'paused'
+    `).get(sessionId, actorUserId) as { session_bytes: number; user_bytes: number; total_bytes: number }
+      : { session_bytes: 0, user_bytes: 0, total_bytes: 0 };
     const sessionUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage WHERE session_id = ?")
       .get(sessionId) as unknown as BytesRow;
-    if (sessionUsage.bytes + eventBytes > this.maxSessionEventBytes) {
+    if (sessionUsage.bytes + eventBytes > this.maxSessionEventBytes + allowance.session_bytes) {
       throw storageQuotaExceeded("session", this.maxSessionEventBytes);
     }
     const userUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage WHERE actor_user_id = ?")
       .get(actorUserId) as unknown as BytesRow;
-    if (userUsage.bytes + eventBytes > this.maxUserEventBytes) {
+    if (userUsage.bytes + eventBytes > this.maxUserEventBytes + allowance.user_bytes) {
       throw storageQuotaExceeded("user", this.maxUserEventBytes);
     }
     const totalUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage")
       .get() as unknown as BytesRow;
-    if (totalUsage.bytes + eventBytes > this.maxTotalEventBytes) {
+    if (totalUsage.bytes + eventBytes > this.maxTotalEventBytes + allowance.total_bytes) {
       throw storageQuotaExceeded("deployment", this.maxTotalEventBytes);
     }
   }
@@ -4404,6 +4417,7 @@ export class CollaborationDatabase {
     sessionId: string,
     input: Omit<AppendEventInput, "visibility"> & { visibility?: EventVisibility },
     provenance: RuntimeProvenance | null,
+    lifecycleAllowance?: "pause",
   ): CanonicalEvent {
     const session = this.requireSession(sessionId);
     const sequence = session.next_sequence + 1;
@@ -4426,7 +4440,17 @@ export class CollaborationDatabase {
     const provenanceJson = event.runtime_provenance === null ? null : JSON.stringify(event.runtime_provenance);
     const eventBytes = Buffer.byteLength(payloadJson) + (provenanceJson === null ? 0 : Buffer.byteLength(provenanceJson)) + 512;
     if (eventBytes > this.maxEventBytes) throw storageQuotaExceeded("event", this.maxEventBytes);
-    this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes);
+    if (lifecycleAllowance === "pause") {
+      const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
+      const claim = request === undefined ? undefined : this.requireClaimRow(request.id);
+      if (eventBytes > 1024 || provenance !== null || request?.type !== "agent_request"
+        || request.actor_user_id !== actorUserId || claim?.status !== "paused"
+        || input.type !== "agent_progress" || input.visibility !== "session"
+        || stableJson(input.payload) !== stableJson({
+          content: "The author paused this Agent request.", phase: "lifecycle", status: "paused",
+        })) throw conflict("Invalid server pause marker");
+    }
+    this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes, lifecycleAllowance === "pause");
     this.sqlite.prepare(`
       INSERT INTO events(id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name, created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

@@ -40,6 +40,8 @@ import type {
   LocalConversationUploadResult,
 } from "@gatherthread/bridge";
 
+const INTERRUPTED_REQUEST_CONTINUATION = "Continue the interrupted GatherThread request using the DSH Session context already restored by the Host. Return only the public final answer.";
+
 export interface DshHostConnectorOptions {
   config: EnabledDshHostConfig;
   api: DshCollaborationApi;
@@ -381,7 +383,7 @@ export class DshHostConnector {
     const state = this.#requireState();
     if (state.activeRequest !== undefined) {
       await this.#withExecutionPermit(() => this.#recoverActiveRequest());
-      return { scanned: 0, claimed: 0, completed: 1 };
+      return { scanned: 0, claimed: 0, completed: state.activeRequest === undefined ? 1 : 0 };
     }
     await this.#flushOutbox(state.automaticUpload);
     await this.#finalizeDeliveredRequest();
@@ -574,8 +576,33 @@ export class DshHostConnector {
    */
   async #retireFencedActiveRequest(state: ConnectorState, active: ConnectorActiveRequest): Promise<void> {
     state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
-    if (active.dshToSequence !== undefined && active.contextExecution === undefined) {
-      state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
+    if (active.contextExecution === undefined) {
+      await this.#host.flush();
+      const nativeEvents = this.#host.snapshotFrom(active.dshFromSequence);
+      // A prompt may have completed before its reply/flush acknowledgement was
+      // lost. Its native user message is NOT a new local turn. Retain the fence
+      // until the first owned turn closes; never skip the entire current head,
+      // which can already contain later, genuine local conversation turns.
+      const endIndex = nativeEvents.findIndex((event) => event.type === "turn/end");
+      const firstTurn = endIndex < 0 ? nativeEvents : nativeEvents.slice(0, endIndex + 1);
+      const userMessages = firstTurn.filter((event) => event.type === "user/message");
+      const owned = userMessages.some((event) => {
+        const text = publicMessageText(event);
+        return digest(text) === active.promptDigest
+          || text === INTERRUPTED_REQUEST_CONTINUATION;
+      });
+      // Preparation can fail before followup() creates any cloud turn. Do not
+      // discard the first genuine local conversation that happens afterward.
+      const unrelatedLocalTurn = userMessages.length > 0 && !owned;
+      const boundary = endIndex < 0 ? undefined : nativeEvents[endIndex]?.seq;
+      if (active.dshToSequence === undefined && !unrelatedLocalTurn
+        && boundary === undefined && nativeEvents.length > 0) {
+        await this.#stateStore.save(state);
+        return;
+      }
+      const through = active.dshToSequence
+        ?? (unrelatedLocalTurn || boundary === undefined ? active.dshFromSequence : boundary + 1);
+      state.publishedDshSequence = Math.max(state.publishedDshSequence, through);
     }
     delete state.activeRequest;
     this.#activeStatuses = [];
@@ -681,7 +708,7 @@ export class DshHostConnector {
     }
 
     const continuation = settlement === "interrupted"
-      ? "Continue the interrupted GatherThread request using the DSH Session context already restored by the Host. Return only the public final answer."
+      ? INTERRUPTED_REQUEST_CONTINUATION
       : prompt;
     const baseline = this.#host.currentSequence(execution?.sessionId);
     state.activeRequest = {

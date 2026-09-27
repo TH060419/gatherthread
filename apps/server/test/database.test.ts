@@ -1672,6 +1672,47 @@ test("a reserved idempotency key cannot suppress the canonical pause", () => {
   }
 });
 
+for (const scope of ["session", "user", "deployment"] as const) {
+  test(`a full ${scope} quota still permits one bounded pause but no ordinary writes`, () => {
+    const limit = 5000;
+    const f = fixture({ maxEventBytes: limit,
+      maxSessionEventBytes: scope === "session" ? limit : 20000,
+      maxUserEventBytes: scope === "user" ? limit : 20000,
+      maxTotalEventBytes: scope === "deployment" ? limit : 20000,
+      // Aggregate limits cannot exceed the deployment limit.
+      ...(scope === "deployment" ? { maxSessionEventBytes: limit, maxUserEventBytes: limit } : {}),
+    });
+    try {
+      const session = f.service.createSession(f.owner, { session_id: `pause-full-${scope}`,
+        idempotency_key: `pause-full-create-${scope}`, mode: "solo", title: "Full" }).session;
+      const runtime = f.service.registerRuntime(f.owner, { runtime_id: `pause-full-runtime-${scope}`,
+        session_id: session.id, device_id: f.owner.device_id, harness: "codex", provider: "local", model: "test",
+        local_session_id: "pause-full-local", capture_fidelity: "canonical_history", purpose: "execution" });
+      const request = f.service.appendEvent(f.owner, session.id, { type: "agent_request", visibility: "session",
+        idempotency_key: `pause-full-request-${scope}`, payload: { content: "work",
+          execution_profile: { harness: "codex", provider: "local", model: "test", runtime_id: runtime.id } } });
+      f.service.claimAgentRequest(f.owner, session.id, request.id, runtime.id);
+      const usage = f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM event_storage_usage").get() as { bytes: number };
+      f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "session",
+        idempotency_key: `pause-full-fill-${scope}`,
+        payload: { content: "x".repeat(limit - usage.bytes - 512 - Buffer.byteLength(JSON.stringify({ content: "" }))) } });
+      assert.equal(f.service.pauseAgentRequest(f.owner, session.id, request.id).status, "paused");
+      assert.equal(f.service.claimAgentRequest(f.owner, session.id, request.id, runtime.id).status, "paused");
+      f.service.pauseAgentRequest(f.owner, session.id, request.id);
+      const markers = f.service.replay(f.owner, session.id, 0, 100).events.filter((event) =>
+        event.type === "agent_progress" && event.reply_to_event_id === request.id);
+      assert.equal(markers.length, 1);
+      const after = f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM event_storage_usage").get() as { bytes: number };
+      assert.ok(after.bytes > limit && after.bytes <= limit + 1024);
+      assert.throws(() => f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "session",
+        idempotency_key: `pause-full-extra-${scope}`, payload: { content: "still refused" } }),
+      (error: unknown) => error instanceof ApiError && error.code === "storage_quota_exceeded");
+      assert.throws(() => f.service.completeAgentRequest(f.owner, session.id, request.id, runtime.id,
+        `pause-full-late-${scope}`, { text: "late answer" }), ApiError);
+    } finally { f.close(); }
+  });
+}
+
 test("only the requesting user may pause an agent request", () => {
   const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
   const { f, sessionId, first, request } = claimLeaseFixture(nowMs);

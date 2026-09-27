@@ -4,6 +4,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Pause safety: full event quotas no longer block the one bounded server pause marker; DSH lost-settlement recovery excludes fenced native work from both automatic and manual uploads while preserving subsequent local turns.
 - Separate realtime delivery from read/write permissions in the top status badge. Make summary-section arrows reveal originals, reset local overrides when switching all history, and preserve the reading anchor during explicit view changes. Add concise localized icon guidance and a roomier, responsive summary versions dialog; display changes never alter Agent context policy.
 
 - Add message-body copy controls, public in-session quotes and member mentions with a project-scoped inbox and jump-to-message navigation. Preserve raw history and existing human-chat / Agent-request separation. Mentions do not grant access or automatically run an Agent.
