@@ -54,6 +54,7 @@ import {
   withoutDshPairingHash,
 } from "./dsh.js?v=20260925-3";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
+import { calendarDayKey, formatFullTimestamp, formatTimelineDay } from "./timeline-dates.js?v=20260927-1";
 import {
   captureTimelineScroll,
   isTimelineAtBottom,
@@ -2059,9 +2060,27 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
   }
   const pendingRequestIds = new Set(pendingAgentRequests(state.sync.events).map((event) => event.id));
   timelineEmpty.hidden = events.length > 0;
+  const locale = state.settings.general.locale;
+  const today = new Date();
+  let currentDay = null;
+
+  function appendDayDivider(createdAt) {
+    const day = calendarDayKey(createdAt);
+    if (!day || day === currentDay) return;
+    currentDay = day;
+    const item = document.createElement("li");
+    const time = document.createElement("time");
+    item.className = "timeline-date-divider";
+    time.dateTime = day;
+    time.textContent = formatTimelineDay(createdAt, locale, today);
+    time.title = new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { dateStyle: "full" }).format(new Date(createdAt));
+    item.append(time);
+    timeline.append(item);
+  }
 
   for (const event of events) {
     for (const version of summaryView.before.get(event.id) ?? []) {
+      appendDayDivider(event.createdAt);
       const summaryItem = document.createElement("li");
       const card = historySummaryUi.card(version);
       if (version.response && version.status === "completed") {
@@ -2073,6 +2092,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     }
     if (summaryView.hidden.has(event.id)) continue;
     if (event.type === "agent_progress") continue;
+    appendDayDivider(event.createdAt);
     const item = document.createElement("li");
     const article = document.createElement("article");
     const header = document.createElement("header");
@@ -2082,6 +2102,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     const actor = document.createElement("strong");
     const type = document.createElement("span");
     const sequence = document.createElement("span");
+    const timeButton = document.createElement("button");
     const time = document.createElement("time");
 
     article.className = `event-card event-${event.type}`;
@@ -2109,10 +2130,15 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     sequence.textContent = `#${event.sequence}`;
     time.dateTime = event.createdAt;
     time.textContent = formatTimestamp(event.createdAt);
+    timeButton.className = "event-time-button";
+    timeButton.type = "button";
+    timeButton.dataset.fullTime = formatFullTimestamp(event.createdAt, locale) ?? time.textContent;
+    timeButton.setAttribute("aria-label", timeButton.dataset.fullTime);
+    timeButton.append(time);
     meta.append(actor, type);
     identity.className = "event-identity";
     identity.append(avatar, meta);
-    header.append(identity, sequence, time);
+    header.append(identity, sequence, timeButton);
     const sourceControl = historySummaryUi.sourceControl(event);
     if (sourceControl) identity.prepend(sourceControl);
     const content = eventContent(event);
