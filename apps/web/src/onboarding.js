@@ -280,12 +280,12 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
         // All scrolling happens inside the disposable example, never real history.
         if (item.target) {
           const node = [...doc.querySelectorAll(item.target)].find((candidate) => !candidate.closest("[hidden]"));
-          node?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "instant" });
+          node?.scrollIntoView({ block: ["invite", "join"].includes(item.id) ? "center" : "nearest", inline: "nearest", behavior: "instant" });
         }
         lastTarget = item.target ? visibleGuideTarget(doc, item.target) : undefined;
         if (lastTarget) {
           const box = lastTarget.getBoundingClientRect();
-          const circular = item.id === "quote" || item.id === "mention";
+          const circular = ["quote", "mention", "create-conversation"].includes(item.id);
           const radius = circular ? Math.min(box.width, box.height) / 2 + 7 : Math.max(12, Math.min(24, parseFloat(win.getComputedStyle(lastTarget).borderRadius) + 7 || 12));
           tour.setConfig({ ...tour.getConfig(), stageRadius: radius });
         }

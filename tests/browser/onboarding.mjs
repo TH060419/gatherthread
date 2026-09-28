@@ -128,7 +128,7 @@ async function assertStep(frame, item, size) {
     const a = card.getBoundingClientRect(), b = target?.getBoundingClientRect();
     const ring = document.querySelector('.onboarding-ring');
     const panel = target?.closest('.session-context-panel')?.getBoundingClientRect();
-    return { card: [a.x, a.y, a.width, a.height], target: target?.id, hint: card.innerText.includes('正在准备') || card.innerText.includes('Preparing this example'),
+    return { card: [a.x, a.y, a.width, a.height], target: target?.id, inviteSubmit: target?.matches('#create-invitation-form button[type=submit]'), hint: card.innerText.includes('正在准备') || card.innerText.includes('Preparing this example'),
       overlap: b && Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)),
       panelOverlap: panel && Math.max(0, Math.min(a.right, panel.right) - Math.max(a.left, panel.left)) * Math.max(0, Math.min(a.bottom, panel.bottom) - Math.max(a.top, panel.top)),
       targetBox: b && [b.x, b.y, b.width, b.height], ring: ring && ['x', 'y', 'width', 'height'].map((name) => Number(ring.getAttribute(name))),
@@ -153,6 +153,8 @@ async function assertStep(frame, item, size) {
   assert.equal(state.closeOutline, 'none', 'close has no green outline');
   if (item.target) {
     assert.notEqual(state.target, 'driver-dummy-element', item.id);
+    if (item.id === 'create-conversation') assert.equal(state.target, 'new-session-button');
+    if (item.id === 'invite') assert.equal(state.inviteSubmit, true);
     assert.ok(state.overlap < 1, `${item.id} card covers control: ${JSON.stringify(state)}`);
     if (size.width >= 1440 && state.panelOverlap !== undefined) assert.ok(state.panelOverlap < 1, `${item.id} card covers disclosure`);
     for (let index = 0; index < 4; index++) assert.ok(Math.abs(state.ring[index] - (state.targetBox[index] + (index < 2 ? -7 : 14))) < 1, `${item.id} ring follows target`);
@@ -163,8 +165,9 @@ async function walk(page, frame, topic, prefix) {
   for (let index = 0; index < steps.length; index++) {
     try { await assertStep(frame, steps[index], size); }
     catch (error) { await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}-failure.png` }); error.message = `${prefix} ${topic}/${steps[index].id}: ${error.message}`; throw error; }
-    if (['welcome', 'model', 'answer', 'upload', 'roles', 'enable', 'original'].includes(steps[index].id)) await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}.png` });
-    await frame.locator('.driver-popover-next-btn').click();
+    if (['welcome', 'create-conversation', 'model', 'answer', 'upload', 'roles', 'invite', 'enable', 'original'].includes(steps[index].id)) await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}.png` });
+    if (['create-conversation', 'invite'].includes(steps[index].id)) await page.keyboard.press('ArrowRight');
+    else await frame.locator('.driver-popover-next-btn').click();
   }
   await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
   assert.deepEqual(await page.evaluate(() => window.realWrites), [], 'guides never write to parent API');

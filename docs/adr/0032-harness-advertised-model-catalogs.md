@@ -1,7 +1,7 @@
 # ADR-0032: Discover offered models from each connected harness
 
-**Date**: 2026-09-27
-**Status**: proposed
+**Date**: 2026-09-27  
+**Status**: proposed  
 **Deciders**: T.H.
 
 ## Context

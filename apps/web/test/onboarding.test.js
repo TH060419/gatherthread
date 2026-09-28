@@ -31,17 +31,19 @@ test("storage denial retains completion within the page and never breaks sign-in
 
 test("all account states get the complete isolated example guides", () => {
   for (const context of [{}, { session: { id: "s" } }, { project: null, session: null }, { writable: false }]) {
-    assert.equal(guideSteps("basics", context).length, 9);
+    assert.equal(guideSteps("basics", context).length, 10);
   }
   assert.equal(guideSteps("history").length, 5);
   assert.equal(guideSteps("files").length, 7);
-  assert.equal(guideSteps("members").length, 6);
+  assert.equal(guideSteps("members").length, 7);
   assert.equal(guideSteps("summaries").length, 5);
   assert.equal(guideSteps("basics")[0].target, "");
   assert.equal(guideSteps("history")[0].target, "");
   assert.deepEqual(Object.keys(GUIDE_LABELS), ["basics", "members", "history", "files", "summaries"]);
   assert.ok(guideSteps("basics").find((item) => item.id === "project").note);
   assert.ok(guideSteps("members").find((item) => item.id === "join").note);
+  assert.equal(guideSteps("basics").find((item) => item.id === "create-conversation").target, "#new-session-button");
+  assert.equal(guideSteps("members").find((item) => item.id === "invite").target, "#create-invitation-form button[type=submit]");
 });
 
 test("beginner copy explains shared history and summary limits without technical units", () => {
