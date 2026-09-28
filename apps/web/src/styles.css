@@ -4987,9 +4987,54 @@ html[lang="zh-CN"] .project-select {
 .message-mentions-me { outline: 1px solid var(--teal); outline-offset: -1px; }
 .message-located { outline: 2px solid var(--teal); outline-offset: -2px; }
 .mentions-count { font-size: 11px; color: var(--teal); }
-.mentions-list { padding: 0; list-style: none; max-height: 55vh; overflow-y: auto; }
-.mention-inbox-entry { width: 100%; display: grid; gap: 4px; padding: 12px; text-align: start; white-space: normal; overflow-wrap: anywhere; margin-block: 5px; }
-.mention-inbox-entry span { color: var(--ink-soft); font-size: .9em; }
+#mentions-dialog {
+  width: min(600px, calc(100vw - 28px));
+  max-height: min(82vh, 760px);
+  max-height: min(82dvh, 760px);
+  padding: clamp(18px, 3vw, 28px);
+  overflow: hidden;
+}
+
+#mentions-dialog[open] { display: flex; flex-direction: column; gap: 12px; }
+#mentions-dialog .dialog-heading { flex: 0 0 auto; }
+#mentions-dialog .dialog-heading h2 { font-size: clamp(1.2rem, 2vw, 1.45rem); }
+#mentions-empty, #mentions-error { margin: 0; }
+#mentions-error:empty { display: none; }
+#mentions-more { align-self: flex-start; }
+
+.mentions-list {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: min(56vh, 520px);
+  max-height: min(56dvh, 520px);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+.mentions-list li + li { border-top: 1px solid var(--line); }
+.mention-inbox-entry {
+  display: grid;
+  gap: 6px;
+  width: 100%;
+  margin: 0;
+  padding: 14px 4px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--ink);
+  text-align: start;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+
+.mention-inbox-entry:hover, .mention-inbox-entry:focus-visible { background: var(--paper-muted); }
+.mention-inbox-entry strong { font-size: .86rem; line-height: 1.4; }
+.mention-inbox-entry span { color: var(--ink-soft); font-size: .78rem; line-height: 1.55; }
 .message-draft { position: relative; min-height: 0; display: flex; flex-direction: column; gap: 5px; }
 .message-draft textarea { width: 100%; min-height: 40px; height: 100%; flex: 1; resize: none; overflow-y: auto; }
 .composer-quote { display: flex; align-items: center; gap: 6px; font-size: .8em; color: var(--ink-soft); }
