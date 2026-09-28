@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, realpathSync, rmSync, utimesSync } from 'node:fs'
+import { existsSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -39,12 +39,15 @@ test('code retention keeps authoritative heads, prunes old loose garbage, and re
     service.deleteProject(owner, deleted.id)
     database.sqlite.prepare('UPDATE code_repository_deletions SET deleted_at=? WHERE repository_hash=?')
       .run(old.toISOString(), deletedHash)
+    const crashedIndex = mkdtempSync(join(codeRoot, '.index-'))
+    writeFileSync(join(crashedIndex, 'blob-0'), 'abandoned private source')
+    utimesSync(crashedIndex, old, old)
     database.sqlite.exec('BEGIN IMMEDIATE')
     try {
-      await assert.rejects(pruneCodeObjects(databasePath), /database is locked/u)
-      assert.equal(existsSync(deletedPath), true, 'maintenance never acts on an uncommitted head snapshot')
+      assert.deepEqual(await pruneCodeObjects(databasePath), { compacted: 1, removed: 2 })
+      assert.equal(existsSync(crashedIndex), false, 'abandoned plaintext index is retired')
     } finally { database.sqlite.exec('ROLLBACK') }
-    assert.deepEqual(await pruneCodeObjects(databasePath), { compacted: 1, removed: 1 })
+    assert.deepEqual(await pruneCodeObjects(databasePath), { compacted: 1, removed: 0 })
     assert.equal(existsSync(livePath), true)
     assert.equal(existsSync(deletedPath), false)
     assert.equal(spawnSync('git', [`--git-dir=${livePath}`, 'cat-file', '-e', hash]).status, 1)

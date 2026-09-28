@@ -1669,6 +1669,16 @@ export class CollaborationDatabase {
         .run(timestamp, projectId, actor.user_id);
       this.sqlite.prepare("UPDATE project_memberships SET role = 'owner', updated_at = ? WHERE project_id = ? AND user_id = ?")
         .run(timestamp, projectId, targetUserId);
+      // Keep legacy per-session role mirrors aligned for shared sessions.
+      // Solo ownership remains with its original creator until deletion.
+      this.sqlite.prepare(`INSERT INTO memberships(session_id,user_id,role,created_at,updated_at)
+        SELECT id,?,'participant',?,? FROM sessions WHERE project_id = ? AND mode = 'multi'
+        ON CONFLICT(session_id,user_id) DO UPDATE SET role='participant',updated_at=excluded.updated_at`)
+        .run(actor.user_id, timestamp, timestamp, projectId);
+      this.sqlite.prepare(`INSERT INTO memberships(session_id,user_id,role,created_at,updated_at)
+        SELECT id,?,'owner',?,? FROM sessions WHERE project_id = ? AND mode = 'multi'
+        ON CONFLICT(session_id,user_id) DO UPDATE SET role='owner',updated_at=excluded.updated_at`)
+        .run(targetUserId, timestamp, timestamp, projectId);
       this.sqlite.prepare(`
         INSERT INTO project_ownership_transfers(project_id,idempotency_key,from_user_id,to_user_id,created_at)
         VALUES (?,?,?,?,?)
@@ -1710,10 +1720,11 @@ export class CollaborationDatabase {
       this.sqlite.prepare("DELETE FROM sessions WHERE owner_user_id = ? AND mode = 'solo'").run(actor.user_id);
       const devices = this.sqlite.prepare("SELECT id FROM devices WHERE user_id = ?")
         .all(actor.user_id) as Array<{ id: string }>;
-      const runtimes = this.sqlite.prepare("SELECT id FROM runtimes WHERE user_id = ?")
-        .all(actor.user_id) as Array<{ id: string }>;
+      const runtimes = this.sqlite.prepare("SELECT id,local_session_id FROM runtimes WHERE user_id = ?")
+        .all(actor.user_id) as Array<{ id: string; local_session_id: string }>;
       const deviceIds = new Set(devices.map((row) => row.id));
       const runtimeIds = new Set(runtimes.map((row) => row.id));
+      const localSessionIds = new Set(runtimes.map((row) => row.local_session_id));
       const scrub = (value: unknown): unknown => {
         if (Array.isArray(value)) return value.map(scrub);
         if (!value || typeof value !== "object") return value;
@@ -1721,7 +1732,7 @@ export class CollaborationDatabase {
           if (key === "user_id" && item === actor.user_id) return [key, deletedUserId];
           if (key === "device_id" && typeof item === "string" && deviceIds.has(item)) return [key, "deleted-device"];
           if (key === "runtime_id" && typeof item === "string" && runtimeIds.has(item)) return [key, "deleted-runtime"];
-          if (key === "local_session_id" && typeof item === "string") return [key, "private"];
+          if (key === "local_session_id" && typeof item === "string" && localSessionIds.has(item)) return [key, "private"];
           return [key, scrub(item)];
         }));
       };
@@ -1734,7 +1745,9 @@ export class CollaborationDatabase {
         const payload = event.payload_json;
         const provenance = event.runtime_provenance_json;
         if (!payload.includes(actor.user_id) && !provenance?.includes(actor.user_id)
-          && !devices.some((device) => payload.includes(device.id) || provenance?.includes(device.id))) continue;
+          && !devices.some((device) => payload.includes(device.id) || provenance?.includes(device.id))
+          && !runtimes.some((runtime) => payload.includes(runtime.id) || provenance?.includes(runtime.id)
+            || payload.includes(runtime.local_session_id) || provenance?.includes(runtime.local_session_id))) continue;
         updateEventJson.run(JSON.stringify(scrub(JSON.parse(payload))),
           provenance === null ? null : JSON.stringify(scrub(JSON.parse(provenance))), event.id);
       }

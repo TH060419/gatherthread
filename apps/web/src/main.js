@@ -3833,13 +3833,22 @@ async function loadAccountDeletionPreview() {
           state.projects = await api.listProjects();
           if (state.project?.id === project.id) {
             state.project.role = "participant";
-            if (state.session) state.session.role = "participant";
             state.projectMembers = await api.listProjectMembers(project.id);
-            renderProjectPermissions();
-            renderSessionHeader();
-            renderComposerPermissions();
-            renderSessionDeliveryControls();
-            renderMembers();
+            const activeSessionId = state.session?.projectId === project.id ? state.session.id : null;
+            if (activeSessionId) {
+              const members = await api.listMembers(activeSessionId);
+              if (state.session?.id === activeSessionId) {
+                state.session.role = "participant";
+                state.session.members = members;
+              }
+            }
+            if (state.project?.id === project.id) {
+              renderProjectPermissions();
+              if (state.session) renderSessionHeader();
+              renderComposerPermissions();
+              renderSessionDeliveryControls();
+              renderMembers();
+            }
           }
           renderProjectSelect();
           void loadAccountDeletionPreview();

@@ -17,6 +17,7 @@ const RETENTION_MS = 13 * 24 * 60 * 60 * 1000
 const REPOSITORY_NAME = /^[a-f0-9]{64}\.git$/u
 const COMMIT = /^[a-f0-9]{40}$/u
 const BRANCH = /^gt\/[a-f0-9]{24}$/u
+const TEMPORARY_INDEX = /^\.index-[A-Za-z0-9]+$/u
 
 function git(directory, args, input) {
   const env = { PATH: process.env.PATH, ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
@@ -54,20 +55,21 @@ async function rejectUnsafeEntries(directory) {
 export async function pruneCodeObjects(databasePath, codeRoot = `${databasePath}.code`, now = Date.now()) {
   const database = await assertBackupPath(databasePath)
   const root = await assertBackupPath(codeRoot)
-  // The service already holds the Git maintenance flock. Acquire SQLite's
-  // writer lock before reading heads and keep it through GC. If a server code
-  // mutation holds SQLite while waiting for the flock, fail quickly instead
-  // of deadlocking; the next timer run can retry safely.
+  // The caller holds the shared Git maintenance flock. Read one consistent
+  // SQLite snapshot, then release the transaction before filesystem scans and
+  // Git GC. A concurrent mutation cannot write Git objects while we hold the
+  // flock; a metadata-only deletion may leave extra objects until next run.
   const sql = new DatabaseSync(database)
   sql.exec('PRAGMA busy_timeout=1000')
   let repositories
   let branches
   let deletions
   try {
-    sql.exec('BEGIN IMMEDIATE')
+    sql.exec('BEGIN')
     repositories = sql.prepare('SELECT project_id,main_commit FROM code_repositories ORDER BY project_id').all()
     branches = sql.prepare('SELECT project_id,name,head_commit FROM code_branches ORDER BY project_id,name').all()
     deletions = sql.prepare('SELECT repository_hash,deleted_at FROM code_repository_deletions').all()
+    sql.exec('COMMIT')
   } catch (error) {
     if (sql.isTransaction) sql.exec('ROLLBACK')
     sql.close()
@@ -84,7 +86,17 @@ export async function pruneCodeObjects(databasePath, codeRoot = `${databasePath}
   let compacted = 0
   let removed = 0
   for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (entry.name === '.maintenance.lock' || entry.name.startsWith('.index-')) continue
+    if (entry.name === '.maintenance.lock') continue
+    if (TEMPORARY_INDEX.test(entry.name)) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error('Unsafe temporary code index')
+      const temporary = await assertBackupPath(join(root, entry.name))
+      await rejectUnsafeEntries(temporary)
+      if (now - (await lstat(temporary)).mtimeMs >= RETENTION_MS) {
+        await rm(temporary, { recursive: true, force: false })
+        removed += 1
+      }
+      continue
+    }
     if (!REPOSITORY_NAME.test(entry.name) || !entry.isDirectory() || entry.isSymbolicLink()) {
       throw new Error('Unexpected entry in private code repository storage')
     }
@@ -97,6 +109,12 @@ export async function pruneCodeObjects(databasePath, codeRoot = `${databasePath}
       const deadlineBase = tombstoneTime ?? lastChange
       if (!Number.isFinite(deadlineBase)) throw new Error('Invalid deleted repository timestamp')
       if (now - deadlineBase >= RETENTION_MS) {
+        // A project ID may be reused after deletion. Recheck the live DB
+        // before removal; the caller's flock prevents a new Git enable from
+        // completing between this check and the filesystem operation.
+        const currentlyLive = sql.prepare('SELECT project_id FROM code_repositories').all()
+          .some((row) => `${createHash('sha256').update(row.project_id).digest('hex')}.git` === entry.name)
+        if (currentlyLive) continue
         await rm(directory, { recursive: true, force: false })
         removed += 1
       }
@@ -125,7 +143,6 @@ export async function pruneCodeObjects(databasePath, codeRoot = `${databasePath}
     for (const head of heads) git(directory, ['cat-file', '-e', `${head.commit}^{commit}`])
     compacted += 1
   }
-  sql.exec('COMMIT')
   return { compacted, removed }
   } catch (error) {
     if (sql.isTransaction) sql.exec('ROLLBACK')
