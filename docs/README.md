@@ -28,7 +28,7 @@ This index separates current product contracts, operator guidance, connection gu
 
 ## Release and contribution records
 
-- [Changelog](../CHANGELOG.md): Alpha 7 changes and subsequent version history.
+- [Changelog](../CHANGELOG.md): Alpha 8 changes and subsequent version history.
 - [Release record index](releases/README.md): which version records have tags or GitHub Releases.
 - [Contributing guide](../CONTRIBUTING.md): review, verification, and ownership rules.
 - [Repository security policy](../SECURITY.md): private reporting entry point shown by GitHub.

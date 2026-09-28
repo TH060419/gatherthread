@@ -131,7 +131,7 @@
         <article class="card card-multi fx">
           <p class="mono card-tag">[ MULTI ]</p>
           <h3 data-i18n="sessions.multi.h3">Multi · 协作会话</h3>
-          <p data-i18n="sessions.multi.p">多人共享一个有序的项目会话。普通聊天消息只进入共享会话，不会调用 Agent；Agent 请求只由发送者自己的本地 runtime 领取。</p>
+          <p data-i18n="sessions.multi.p">多人共享一个有序的项目会话。普通聊天不调用 Agent；也可引用消息、@成员，快速找到讨论。Agent 请求只由发送者自己的本地设备处理。</p>
         </article>
       </div>
     </div>
@@ -142,7 +142,7 @@
     <div class="wrap">
       <p class="mono label fx">[ COMPLETE CONTEXT ]</p>
       <h2 class="h2 fx" data-i18n="context.h2">三种上下文保真度。</h2>
-      <p class="lead fx" data-i18n="context.lead">根据历史重建的上下文绝不会被标记为 provider_request；上下文压缩由每个本地 Agent 自行处理，共享的规范事件日志保持完整和持久。</p>
+      <p class="lead fx" data-i18n="context.lead">可选取部分历史请自己的 Agent 生成共享总结，随时切回原文。原始记录始终保留；本地 Agent 仍自行管理上下文压缩。</p>
       <div class="rows fx">
         <div class="row">
           <p class="mono row-tag">[ CANONICAL_HISTORY ]</p>
@@ -217,7 +217,7 @@
           <p class="mono card-tag">[ CODEX ]</p>
           <ol class="steps">
             <li data-i18n="setup.codex.1">一次性安装固定版本的「共序 / GatherThread」Codex 插件。</li>
-            <li data-i18n="setup.codex.2">复制网页生成的 macOS / Linux 或 PowerShell 连接命令。</li>
+            <li data-i18n="setup.codex.2">复制连接命令；官方站点的 Windows / macOS 用户也可选用本地启动器。</li>
             <li data-i18n="setup.codex.3">重启 Codex Desktop，审查并启用插件 Hooks，然后保持连接器终端运行。</li>
           </ol>
         </article>

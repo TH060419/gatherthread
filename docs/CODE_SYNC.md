@@ -1,8 +1,8 @@
 # Project code collaboration / 项目代码协作
 
-Project code collaboration is included in the `0.1.0-alpha.7` Alpha. The invitation-only hosted service at `https://gatherthread.cn` may use it only after project and local-device opt-in; public registration and public Git transport remain closed. Use the matching Codex connector and DSH plugin if their packages are available, or build a reviewed source checkout.
+Project code collaboration is included in the `0.1.0-alpha.8` Alpha. The invitation-only hosted service at `https://gatherthread.cn` may use it only after project and local-device opt-in; public registration and public Git transport remain closed. Use the matching Codex connector and DSH plugin if their packages are available, or build a reviewed source checkout.
 
-项目代码协作已纳入 `0.1.0-alpha.7` Alpha。邀请制服务器 `https://gatherthread.cn` 仅在项目与本地设备分别授权后使用该功能；公众注册和公开 Git 传输仍未开放。若匹配的 Codex 连接器与 DSH 插件包可用，可直接安装；否则从经过审核的源码构建。
+项目代码协作已纳入 `0.1.0-alpha.8` Alpha。邀请制服务器 `https://gatherthread.cn` 仅在项目与本地设备分别授权后使用该功能；公众注册和公开 Git 传输仍未开放。若匹配的 Codex 连接器与 DSH 插件包可用，可直接安装；否则从经过审核的源码构建。
 
 ## What is synchronized
 
@@ -33,7 +33,7 @@ npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --cre
 
 Use your actual server URL, project ID and configured port. The token remains in the hidden terminal prompt. `--code-sync` authorizes only this bound project's source directory; it does not enable automatic upload. The connector requires reviewed Hooks so it can observe Desktop work before code operations. In the Web code dialog, select this exact Codex runtime before upload/download actions.
 
-Without `--code-sync`, existing Codex workflows are unchanged and remote code jobs fail with an actionable local-authorization error. Use `0.1.0-alpha.7` or newer; older published connectors do not recognize this flag.
+Without `--code-sync`, existing Codex workflows are unchanged and remote code jobs fail with an actionable local-authorization error. Use `0.1.0-alpha.7` or newer; earlier published connectors do not recognize this flag.
 
 ### DeepSeek Harness
 

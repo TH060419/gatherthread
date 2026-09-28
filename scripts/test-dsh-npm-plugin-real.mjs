@@ -724,6 +724,17 @@ async function main() {
       { waitUntil: "load" },
     );
     await gatherthreadPage.locator("#workspace:not([hidden])").waitFor({ timeout: 30_000 });
+    // A fresh browser/device must acknowledge the first-workspace cloud-code notice
+    // before opening Settings. This is a real modal, not a dismissible test overlay.
+    const codeNotice = gatherthreadPage.locator("#code-notice-dialog[open]");
+    await codeNotice.waitFor({ timeout: 30_000 });
+    await gatherthreadPage.locator("#code-notice-continue").click();
+    await codeNotice.waitFor({ state: "hidden", timeout: 30_000 });
+    const firstUseGuide = gatherthreadPage.locator(".onboarding-example-dialog[open]");
+    await firstUseGuide.waitFor({ timeout: 30_000 });
+    await gatherthreadPage.frameLocator(".onboarding-example-dialog iframe")
+      .getByRole("button", { name: /^(?:Exit example|退出示例)/u }).click();
+    await firstUseGuide.waitFor({ state: "hidden", timeout: 30_000 });
     await gatherthreadPage.locator("#settings-button").click();
     await gatherthreadPage.locator("#settings-dialog[open]").waitFor({ timeout: 30_000 });
     await gatherthreadPage.locator("#settings-enabled-dsh").check();
@@ -772,16 +783,19 @@ async function main() {
       runtime_id: selectedRuntime.id,
     });
     const outputs = completed.events.filter((event) => event.reply_to_event_id === completed.request.id);
-    assert.deepEqual(outputs.map((event) => event.type), [
-      "agent_progress",
-      "agent_progress",
-      "agent_progress",
-      "agent_response",
-    ]);
+    assert.equal(outputs.at(-1)?.type, "agent_response");
+    assert.ok(outputs.slice(0, -1).every((event) => event.type === "agent_progress"));
     assert.equal(
-      outputs.filter((event) => event.type === "agent_progress" && event.payload?.phase === "activity").length,
+      outputs.filter((event) => event.type === "agent_progress"
+        && event.payload?.phase === "activity" && event.payload?.dsh_event_sequence !== undefined).length,
       1,
       "a burst of durable DSH events should produce one bounded activity renewal",
+    );
+    assert.equal(
+      outputs.filter((event) => event.type === "agent_progress"
+        && event.payload?.phase === "activity" && event.payload?.dsh_event_sequence === undefined).length,
+      1,
+      "the native running transition should be visible independently of durable-event renewal",
     );
     assert.equal(new Set(outputs.map((event) => event.id)).size, outputs.length);
     assert.ok(outputs.every((event) => event.runtime_provenance?.runtime_id === selectedRuntime.id));
@@ -888,6 +902,8 @@ async function main() {
     // part of its deliberately narrow public DTO.
     const codeRuntime = codeRuntimes.find((runtime) => runtime.harness === "deepseek-harness" && runtime.status === "online");
     assert.ok(codeRuntime);
+    await gatherthreadPage.locator("#code-open-device-view").click();
+    await gatherthreadPage.locator("#code-device-view").waitFor({ state: "visible", timeout: 30_000 });
     await gatherthreadPage.locator("#code-runtime-select").selectOption(codeRuntime.id);
     await waitUntil("Web exact DSH device source status", async () => !(await gatherthreadPage.locator("#code-upload-button").isDisabled()));
     await writeFile(path.join(codeRoot, "README.md"), "DSH_WEB_DEVICE_CODE_V3\n");

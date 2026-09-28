@@ -114,14 +114,14 @@ test("product home uses the shared workspace language and follows changes from a
   assert.match(app, /applyLang\(event\.newValue, false, false\)/u);
 });
 
-test("product home labels the current invitation-only preview without claiming Unreleased features shipped in alpha.7", async () => {
+test("product home labels the invitation-only preview without pinning a release version", async () => {
   const [html, app] = await Promise.all([
     readFile(new URL("index.html", productRoot), "utf8"),
     readFile(new URL("app.js", productRoot), "utf8"),
   ]);
   assert.match(html, /\[ ALPHA 预览版 · 邀请制测试 \]/u);
   assert.match(app, /\[ ALPHA PREVIEW · BY INVITATION \]/u);
-  assert.doesNotMatch(html, /0\.1\.0-alpha\.7/u);
+  assert.doesNotMatch(html, /0\.1\.0-alpha\.8/u);
 });
 
 test("product home exposes canonical and bilingual social discovery metadata", async () => {

@@ -16,7 +16,7 @@ from tkinter import messagebox, ttk
 from urllib.parse import parse_qs, urlparse
 
 
-PACKAGE = "@gatherthread/codex-connect@0.1.0-alpha.7"
+PACKAGE = "@gatherthread/codex-connect@0.1.0-alpha.8"
 SERVER_ORIGIN = "https://gatherthread.cn"
 PROJECT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 SCHEME = "gatherthread-connect"
