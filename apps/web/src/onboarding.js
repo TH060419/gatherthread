@@ -65,7 +65,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     if (view !== "summary-settings" && ownedSettingsDialog) { ownedSettingsDialog = false; el("settings-dialog").close(); }
     if (view === "summary-settings" && !el("settings-dialog").open) {
       ownedSettingsDialog = true; openSettings();
-      el("settings-sync").scrollIntoView({ block: "start", behavior: "instant" });
+      el("settings-summaries").scrollIntoView({ block: "start", behavior: "instant" });
     }
 
     const workspace = el("workspace");

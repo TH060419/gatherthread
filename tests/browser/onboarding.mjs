@@ -69,6 +69,44 @@ async function start(page, topic) {
   await page.locator('#settings-button').click(); await page.locator(`[data-onboarding-topic="${topic}"]`).click();
   const frame = await example(page); if (topic !== 'browse') await frame.locator(popup).waitFor(); return frame;
 }
+async function checkSummarySettingsNavigation(page, locale) {
+  await page.locator('#settings-button').click();
+  await page.locator('#settings-dialog[open]').waitFor();
+  const syncLink = page.locator('.settings-navigation a[href="#settings-sync"]');
+  const link = page.locator('.settings-navigation a[href="#settings-summaries"]');
+  assert.equal(await link.innerText(), locale === 'zh-CN' ? '摘要' : 'Summaries');
+  assert.equal(await page.locator('#settings-summaries').getAttribute('aria-labelledby'), 'settings-summary-title');
+  assert.equal(await page.locator('#settings-summary-title').evaluate(node => node.tagName), 'H3');
+  assert.equal(await page.locator('#settings-sync').evaluate(node => node.nextElementSibling?.id), 'settings-summaries');
+  assert.equal(await page.locator('#settings-sync #settings-history-context-mode').count(), 0, 'summary controls are in their own section');
+  const originalUrl = page.url();
+  await syncLink.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement?.id === 'settings-sync');
+  const syncPosition = await page.evaluate(() => {
+    const scroller = document.querySelector('.settings-sections');
+    const section = document.querySelector('#settings-sync');
+    const bounds = scroller.getBoundingClientRect();
+    return { top: section.getBoundingClientRect().top, viewportTop: bounds.top, viewportBottom: bounds.bottom };
+  });
+  assert.ok(syncPosition.top >= syncPosition.viewportTop && syncPosition.top < syncPosition.viewportBottom, `sync section is visible: ${JSON.stringify(syncPosition)}`);
+  await link.click();
+  await page.waitForFunction(() => document.activeElement?.id === 'settings-summaries');
+  const position = await page.evaluate(() => {
+    const scroller = document.querySelector('.settings-sections');
+    const heading = document.querySelector('#settings-summary-title');
+    const bounds = scroller.getBoundingClientRect();
+    return { scrollTop: scroller.scrollTop, top: heading.getBoundingClientRect().top, viewportTop: bounds.top, viewportBottom: bounds.bottom };
+  });
+  assert.ok(position.scrollTop > 0, 'summary navigation scrolls the Settings content');
+  assert.ok(position.top >= position.viewportTop && position.top < position.viewportBottom, `summary heading is visible: ${JSON.stringify(position)}`);
+  assert.equal(page.url(), originalUrl, 'Settings navigation keeps the project/session URL');
+  await syncLink.click();
+  await link.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement?.id === 'settings-summaries');
+  await page.locator('#close-settings-button').click();
+}
 async function assertStep(frame, item, size) {
   await frame.locator(popup).waitFor();
   await frame.waitForFunction(({ target }) => !target || document.querySelector('.driver-active-element:not(#driver-dummy-element)'), item);
@@ -147,6 +185,7 @@ try {
     const prefix = `${options.locale}-${options.width}`;
     await walk(page, frame, 'basics', prefix);
     for (const topic of ['members', 'history', 'files', 'summaries']) await walk(page, await start(page, topic), topic, prefix);
+    await checkSummarySettingsNavigation(page, options.locale);
     // Free practice may mutate only fresh mock data inside the frame.
     const before = await page.evaluate(() => ({ hash: location.hash, title: document.querySelector('#session-title').textContent,
       timeline: document.querySelector('#event-timeline').innerHTML, draft: document.querySelector('#message-input').value }));

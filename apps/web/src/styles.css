@@ -2251,24 +2251,6 @@ time,
   line-height: 1.45;
 }
 
-.settings-summary-heading {
-  margin-top: 24px;
-  padding-top: 18px;
-  border-top: 1px solid var(--line);
-}
-
-.settings-summary-heading h4 {
-  margin: 0 0 8px;
-  font-size: 1.1rem;
-}
-
-.settings-summary-heading p {
-  margin: 0;
-  color: var(--ink-soft);
-  font-size: 0.8rem;
-  line-height: 1.55;
-}
-
 .code-storage-projects {
   margin: 18px 0;
   border-top: 1px solid var(--line);

@@ -71,3 +71,8 @@ The reproducible mock-only check is `tests/browser/onboarding.mjs`; invocation i
 - The first-use guides now explain shared messages directly instead of relying on "context" terminology. The summary selection step expresses its existing text limit in approximate English and Chinese character counts and tells users how to recover if they select too much.
 - The guide exposes when its current step has attempted to focus the Next button. Browser checks wait for that step-specific signal before asserting focus, avoiding a fixed-delay race while retaining the keyboard assertion. Full Chrome and repeated Playwright WebKit guide runs passed across populated, empty and viewer accounts at 1440×900, 390×844 and 320×568.
 - Native Safari opened the local mock workspace and Settings, but the UI automation stopped with `noWindowsAvailable` before entering a guide. Microsoft Edge was not installed on this machine. Neither platform is counted as a completed native-browser tutorial check.
+
+### Separate Summary Settings section, 2026-09-28
+
+- The ordinary Settings navigation now has a bilingual Summaries entry beside Sync & context. Summary policy and instructions live in their own labelled section with the existing control IDs and handlers. Navigation scrolls and focuses the target section inside the dialog without replacing the project/session URL fragment.
+- Chrome and Playwright WebKit checks click the Settings navigation at 1440×900, 390×844 and 320×568 in English and Chinese, verify both section targets, keyboard activation, translated labels, and the unchanged project URL. Native Safari and Edge remain unverified as noted above.

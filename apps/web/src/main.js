@@ -232,6 +232,16 @@ const invitationList = element("invitation-list");
 const deviceCredentialDialog = element("device-credential-dialog");
 const settingsDialog = element("settings-dialog");
 const settingsForm = element("settings-form");
+settingsDialog.querySelector(".settings-navigation").addEventListener("click", (event) => {
+  const link = event.target.closest("a[href^='#']");
+  if (!link) return;
+  const target = settingsDialog.querySelector(link.getAttribute("href"));
+  if (!target) return;
+  event.preventDefault();
+  if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+  target.scrollIntoView({ block: "start", behavior: "instant" });
+  target.focus({ preventScroll: true });
+});
 const agentModelSelect = element("agent-model-select");
 const agentEffortSelect = element("agent-effort-select");
 const agentHarnessSelect = element("agent-harness-select");
