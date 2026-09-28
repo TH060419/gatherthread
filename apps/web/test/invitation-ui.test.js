@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
+import { projectInvitationShareText } from "../src/invitation-share.js";
 
 const htmlPath = fileURLToPath(new URL("../index.html", import.meta.url));
 const mainPath = fileURLToPath(new URL("../src/main.js", import.meta.url));
@@ -30,10 +31,50 @@ test("project invitation role control always offers participant and viewer", asy
 test("owner secret is rendered only from create response and cleared on session changes and logout", async () => {
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /createdInvitationSecret = result\.inviteToken/);
-  assert.match(main, /element\("created-invite-secret"\)\.textContent = createdInvitationSecret/);
+  assert.match(main, /createdInvitationDetails = result\.invitation/);
+  assert.match(main, /createdInvitationShareText = projectInvitationShareText\(createdInvitationSecret, createdInvitationDetails, locale\)/);
+  assert.match(main, /element\("created-invite-secret"\)\.textContent = createdInvitationShareText/);
+  assert.match(main, /navigator\.clipboard\.writeText\(createdInvitationShareText\)/);
+  assert.match(main, /if \(localeChanged\) updateCreatedInvitationShareText\(normalized\.general\.locale\)/);
   assert.match(main, /async function selectSession\(sessionId\)[\s\S]*?clearCreatedInvitationSecret\(\)/);
   assert.match(main, /logout-button[\s\S]*?clearCreatedInvitationSecret\(\)/);
   assert.doesNotMatch(main, /state\.invitations[^\n]*inviteToken/);
+});
+
+test("project invitation copy includes one secret, joining instructions and exact Beijing expiry range", async () => {
+  const html = await readFile(htmlPath, "utf8");
+  assert.match(html, /id="created-invite-secret"[^>]*data-i18n-skip/);
+  assert.match(html, /id="copy-invite-secret-button"[^>]*>Copy invitation<\/button>/);
+  const secret = "gti_test-only-example-not-a-real-secret";
+  const text = projectInvitationShareText(secret, {
+    createdAt: "2026-09-28T00:00:00.000Z",
+    expiresAt: "2026-09-29T00:00:00.000Z",
+  });
+  assert.equal(text.split(secret).length - 1, 1);
+  assert.match(text, /^邀请密钥：gti_test-only-example-not-a-real-secret\n/u);
+  assert.match(text, /登录共序后.*右侧栏.*加入其他项目/u);
+  assert.match(text, /有效期：2026\/09\/28 08:00 至 2026\/09\/29 08:00（北京时间）/u);
+});
+
+test("one-time invitation secret remains shareable if the server omits validity dates", () => {
+  const secret = "gti_test-only-example-not-a-real-secret";
+  const text = projectInvitationShareText(secret, {});
+  assert.match(text, /^邀请密钥：gti_test-only-example-not-a-real-secret\n/u);
+  assert.match(text, /有效期：请向邀请者确认/u);
+});
+
+test("English interface copies English invitation guidance and Beijing validity", () => {
+  const secret = "gti_test-only-example-not-a-real-secret";
+  const invitation = {
+    createdAt: "2026-09-28T00:00:00.000Z",
+    expiresAt: "2026-09-29T00:00:00.000Z",
+  };
+  const english = projectInvitationShareText(secret, invitation, "en");
+  assert.match(english, /^Invitation secret: gti_test-only-example-not-a-real-secret\n/u);
+  assert.match(english, /Join another project.*right sidebar/u);
+  assert.match(english, /Valid: 2026-09-28 08:00 to 2026-09-29 08:00 \(China Standard Time\)/u);
+  assert.doesNotMatch(english, /邀请密钥|有效期/u);
+  assert.match(projectInvitationShareText(secret, {}, "en"), /Valid: Please confirm with the inviter/u);
 });
 
 test("new and existing user forms route to project-level claim and accept methods", async () => {

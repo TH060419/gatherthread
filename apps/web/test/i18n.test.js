@@ -5,6 +5,7 @@ import { memberRemovalAriaLabel, memberRoleAriaLabel, translateUiText } from "..
 
 test("Git back buttons translate their complete labels including the arrow", () => {
   assert.equal(translateUiText("← Back to code settings", "zh-CN"), "← 返回代码设置");
+  assert.equal(translateUiText("Copy invitation", "zh-CN"), "复制邀请信息");
 });
 
 test("remove-member accessible name preserves names and follows the active language", () => {

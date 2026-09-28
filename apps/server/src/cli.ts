@@ -19,14 +19,14 @@ interface BootstrapArguments {
 const HELP = `Usage:
   npm start [-- start]
   npm run owner-host:init -- --display-name NAME --device-name NAME [--user-id ID] [--device-id ID]
-  npm run owner-host:issue-test-access -- [--ttl 1h|24h|7d]
+  npm run owner-host:issue-test-access -- [--ttl 1h|24h|7d] [--count 1..50] [--format json|share]
   npm run owner-host:revoke-test-access -- --grant-id ID
 
 Commands:
   start       Start the loopback-only owner host (default)
   bootstrap   Create the first owner directly in SQLite and print its credential once
   init        Alias for bootstrap
-  issue-test-access  Issue one single-use test qualification token locally
+  issue-test-access  Issue up to 50 single-use test qualifications locally (JSON by default)
   revoke-test-access Revoke an unclaimed test qualification token locally
 
 Configuration is read from NODE_ENV and the GATHERTHREAD_* variables documented in .env.example.
@@ -106,18 +106,52 @@ function withOperatorDatabase(config: ServerConfig, operation: (database: Collab
 }
 
 function issueTestAccess(config: ServerConfig, args: string[]): void {
-  if (args.length !== 0 && (args.length !== 2 || args[0] !== "--ttl")) {
-    throw new ConfigurationError("Usage: issue-test-access [--ttl 1h|24h|7d]");
-  }
-  const ttl = args.length === 2 ? args[1] : "7d";
-  if (ttl !== "1h" && ttl !== "24h" && ttl !== "7d") {
-    throw new ConfigurationError("--ttl must be 1h, 24h, or 7d");
+  let ttl: "1h" | "24h" | "7d" = "7d";
+  let count = 1;
+  let format: "json" | "share" = "json";
+  const seen = new Set<string>();
+  for (let index = 0; index < args.length; index += 2) {
+    const option = args[index];
+    const value = args[index + 1];
+    if (!option || !new Set(["--ttl", "--count", "--format"]).has(option) || seen.has(option) || !value || value.startsWith("--")) {
+      throw new ConfigurationError("Usage: issue-test-access [--ttl 1h|24h|7d] [--count 1..50] [--format json|share]");
+    }
+    seen.add(option);
+    if (option === "--ttl") {
+      if (value !== "1h" && value !== "24h" && value !== "7d") throw new ConfigurationError("--ttl must be 1h, 24h, or 7d");
+      ttl = value;
+    } else if (option === "--count") {
+      if (!/^[1-9][0-9]*$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) > 50) {
+        throw new ConfigurationError("--count must be an integer from 1 to 50");
+      }
+      count = Number(value);
+    } else {
+      if (value !== "json" && value !== "share") throw new ConfigurationError("--format must be json or share");
+      format = value;
+    }
   }
   withOperatorDatabase(config, (database) => {
-    const grant = database.issueTestAccess(ttl);
-    process.stderr.write("Single-use test access issued. Send it privately; it will not be shown again.\n");
-    process.stdout.write(`${JSON.stringify(grant, null, 2)}\n`);
+    const grants = database.issueTestAccessBatch(ttl, count);
+    process.stdout.write(format === "json"
+      ? `${JSON.stringify(count === 1 ? grants[0] : grants, null, 2)}\n`
+      : `${grants.map((grant) => [
+        `测试资格码：${grant.access_token}`,
+        "初次登录请使用上述资格码激活账号。激活后会获得仅显示一次的设备访问令牌，请妥善保存；以后可用该令牌登录，也可勾选「记住此设备」快捷登录。",
+        `有效期：${formatBeijingDateTime(grant.created_at)} 至 ${formatBeijingDateTime(grant.expires_at)}（北京时间）`,
+      ].join("\n")).join("\n\n")}\n`);
+    process.stderr.write(`${count} single-use test access code(s) issued. Send each privately; they will not be shown again.\n`);
+    for (const [index, grant] of grants.entries()) {
+      process.stderr.write(`Revoke ID ${index + 1}/${count}: ${grant.grant_id}\n`);
+    }
   });
+}
+
+function formatBeijingDateTime(value: string): string {
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(new Date(value));
 }
 
 function revokeTestAccess(config: ServerConfig, args: string[]): void {
