@@ -64,8 +64,8 @@ test("manual summary controls, shared quota boundaries and context policy are bi
     ["Select summary #42", "选择摘要 #42"],
     ["Summary versions", "摘要版本"],
     ["Show original messages", "显示原始消息"],
-    ["Summary · less context, lossy", "摘要 · 更省上下文，有损"],
-    ["Original · more detail and context", "原文 · 更多细节与上下文"],
+    ["Summary · focus (recommended)", "摘要 · 推荐，聚焦核心结论"],
+    ["Original · wording & details", "原文 · 完整表达与细节"],
     ["Unable to save Agent context policy. Retry saving settings.", "无法保存 Agent 上下文策略，请重试保存设置。"],
   ];
   for (const [source, expected] of cases) {

@@ -36,12 +36,15 @@ function element() {
 function harness(names, overrides = {}) {
   const nodes = new Map();
   const context = vm.createContext({
+    exampleMode: false,
     authenticationGeneration: 1, selectedSessionGeneration: 1, workspaceLoadGeneration: 0,
     state: { currentUser: { id: "u1", username: "User", device_id: "d1" }, project: { id: "p1" },
       projects: [], session: { id: "s1" }, settings: { composer: {} }, invitations: [], snapshotRequests: [] },
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },
+    onboarding: { cancel: noop, offer: noop, refreshLanguage: noop },
+    sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
     location: { hash: "" }, URLSearchParams, initials: () => "U", localizer: { t: (value) => value },
     renderProjectSelect: noop, renderSessionList: noop, maybeOpenPendingDshPairing: noop,
     renderMembers: noop, renderTimeline: noop, renderComposerPermissions: noop,

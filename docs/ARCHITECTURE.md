@@ -18,6 +18,8 @@ Significant architectural choices and their rationale are recorded in the [ADR i
 
 ## Components
 
+Browser onboarding reuses the application shell in a disposable iframe with `sandbox="allow-scripts"` and no same-origin capability. `example-entry.js` initializes memory-only storage and `ExampleCollaborationApi` before the shell starts. A restrictive CSP blocks backend connections and form submission; presentation-only messages select an authored tutorial or exit. The parent receives no mock project state, and only the public, self-contained example permits same-site framing; real application/API framing remains denied. See [ADR-0033](adr/0033-isolated-onboarding-example.md).
+
 ```text
 Same-device client ── loopback HTTP (local mode) ──────────────────────┐
 LAN client ── Caddy private HTTPS + WSS (LAN mode) ────────────────────┤

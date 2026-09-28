@@ -224,7 +224,7 @@ test("mock preview supports enable, exact code controls, review and merge withou
 test("code dialog has named controls, a one-time notice, and a safe review surface", async () => {
   const html = await readFile(new URL("../index.html", import.meta.url), "utf8");
   const view = await readFile(new URL("../src/code-sync-view.js", import.meta.url), "utf8");
-  assert.match(html, /id="project-code-button"[^>]*aria-label="Code collaboration"[^>]*aria-controls="project-code-dialog"/);
+  assert.match(html, /id="project-code-button"[^>]*aria-label="Project file collaboration"[^>]*aria-controls="project-code-dialog"/);
   assert.match(html, /id="project-code-dialog"[^>]*aria-labelledby="project-code-title"/);
   assert.match(html, /id="code-notice-dialog"[^>]*aria-labelledby="code-notice-title"[^>]*aria-describedby="code-notice-description"/);
   assert.match(html, /id="code-error"[^>]*role="alert"/);
@@ -233,7 +233,7 @@ test("code dialog has named controls, a one-time notice, and a safe review surfa
   assert.doesNotMatch(view, /innerHTML|insertAdjacentHTML|localStorage|sessionStorage/);
   assert.match(view, /selected\?\.head_commit === reviewed.head/);
   assert.match(view, /repository\.repository\.main_commit === reviewed.main/);
-  for (const text of ["Code collaboration", "Automatically upload local code changes", "Restore to a new folder", "Approve and merge into main", "Selected device is offline"]) {
+  for (const text of ["Project file collaboration", "Automatically upload local code changes", "Restore to a new folder", "Approve and merge into main", "Selected device is offline"]) {
     assert.notEqual(translateUiText(text, "zh-CN"), text);
   }
 });

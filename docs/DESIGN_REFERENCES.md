@@ -1,6 +1,6 @@
 # Design references and tooling
 
-GatherThread's interface is original application code. No third-party visual component source is bundled by this redesign.
+GatherThread's interface shell is original application code. The beginner-guide runtime uses the published Driver.js dependency; its version, license and build notice are recorded in [REFERENCES.md](REFERENCES.md).
 
 The following open-source projects were used as design-process references or reusable local tooling:
 
