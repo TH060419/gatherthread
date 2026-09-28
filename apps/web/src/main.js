@@ -136,6 +136,7 @@ const state = {
 
 let createdInvitationSecret = "";
 let createdInvitationShareText = "";
+let createdInvitationDetails = null;
 let newDeviceAccessToken = "";
 let authenticationGeneration = 0;
 let workspaceLoadGeneration = 0;
@@ -709,10 +710,9 @@ createInvitationForm.addEventListener("submit", async (event) => {
       ttl: data.get("ttl")?.toString() ?? "24h",
     });
     if (!isCurrent()) return;
-    const shareText = projectInvitationShareText(result.inviteToken, result.invitation);
     createdInvitationSecret = result.inviteToken;
-    createdInvitationShareText = shareText;
-    element("created-invite-secret").textContent = shareText;
+    createdInvitationDetails = result.invitation;
+    updateCreatedInvitationShareText();
     element("created-invitation").hidden = false;
     state.invitations = [result.invitation, ...state.invitations.filter((item) => item.id !== result.invitation.id)];
     renderInvitations();
@@ -1993,9 +1993,16 @@ async function revokeInvitation(invitation, button) {
 function clearCreatedInvitationSecret() {
   createdInvitationSecret = "";
   createdInvitationShareText = "";
+  createdInvitationDetails = null;
   element("created-invite-secret").textContent = "";
   element("copy-invite-status").textContent = "";
   element("created-invitation").hidden = true;
+}
+
+function updateCreatedInvitationShareText(locale = state.settings.general.locale) {
+  if (!createdInvitationSecret) return;
+  createdInvitationShareText = projectInvitationShareText(createdInvitationSecret, createdInvitationDetails, locale);
+  element("created-invite-secret").textContent = createdInvitationShareText;
 }
 
 function showNewDeviceAccessToken(token) {
@@ -3162,6 +3169,7 @@ function applyVisualSettings(settings) {
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  if (localeChanged) updateCreatedInvitationShareText(normalized.general.locale);
   element("auth-language-button").textContent = normalized.general.locale === "zh-CN" ? "EN" : "中";
   if (localeChanged && state.session) renderTimeline();
   if (localeChanged && state.project) renderMembers();
