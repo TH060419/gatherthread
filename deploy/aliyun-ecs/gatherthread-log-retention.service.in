@@ -1,0 +1,9 @@
+[Unit]
+Description=Rotate and prune ECS journal files containing GatherThread identifiers
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/journalctl --rotate --vacuum-time=29d
+NoNewPrivileges=true
+ProtectHome=true
+ProtectSystem=full

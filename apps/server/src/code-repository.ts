@@ -474,8 +474,14 @@ export class CodeRepository {
     // A bounded 1000-file batch can exceed 30 seconds on a busy Windows host.
     // Only its two batch-write commands get the platform-specific deadline.
     const timeout = codeGitTimeoutMs(args[0]);
-    const result = spawnSync("git", [`--git-dir=${this.repoPath(projectId)}`, ...args], {
-      env, input, timeout, maxBuffer: 16 * 1024 * 1024, windowsHide: true,
+    const lockPath = join(this.root, ".maintenance.lock");
+    const command = process.platform === "linux" ? "flock" : "git";
+    const argv = process.platform === "linux"
+      ? ["-x", "-w", "30", lockPath, "git", `--git-dir=${this.repoPath(projectId)}`, ...args]
+      : [`--git-dir=${this.repoPath(projectId)}`, ...args];
+    const result = spawnSync(command, argv, {
+      env, input, timeout: timeout + (process.platform === "linux" ? 30_000 : 0),
+      maxBuffer: 16 * 1024 * 1024, windowsHide: true,
     });
     if (allowConflict && result.status === 1) throw new ApiError(409, "code_merge_conflict", "These branches conflict. Resolve the files locally and upload a new checkpoint; neither branch was changed.");
     if (result.error || result.status !== 0) throw new ApiError(503, "code_git_unavailable", "The server Git operation failed. Verify Git 2.38+ and code storage access.");

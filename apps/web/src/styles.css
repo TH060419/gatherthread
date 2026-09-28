@@ -2251,6 +2251,38 @@ time,
   line-height: 1.45;
 }
 
+#settings-account > p {
+  color: var(--ink-soft);
+  font-size: 0.79rem;
+  line-height: 1.55;
+}
+
+.account-projects {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+}
+
+.account-transfer-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(140px, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--paper-raised);
+}
+
+.account-transfer-row strong { overflow-wrap: anywhere; }
+.account-transfer-row small { grid-column: 1 / -1; color: var(--ink-soft); }
+.account-transfer-row select { min-width: 0; }
+
+@media (max-width: 720px) {
+  .account-transfer-row { grid-template-columns: minmax(0, 1fr); }
+  .account-transfer-row small { grid-column: 1; }
+}
+
 .code-storage-projects {
   margin: 18px 0;
   border-top: 1px solid var(--line);
@@ -4253,6 +4285,8 @@ html[lang="zh-CN"] .project-select {
 .code-view-back { min-height: 32px; padding: 4px 0; }
 .auth-request-access { margin: 8px 2px 0; color: var(--ink-soft); font-size: .69rem; line-height: 1.45; }
 .auth-request-link { width: fit-content; color: var(--teal); font-size: .76rem; font-weight: 700; }
+.auth-privacy-link { margin: 16px 0 0; text-align: center; font-size: .72rem; }
+.auth-privacy-link a { color: var(--ink-soft); }
 .auth-entry-panel > form { margin-top: 12px; }
 
 .remembered-account-control {

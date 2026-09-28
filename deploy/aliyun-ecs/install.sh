@@ -201,6 +201,14 @@ fi
 install -o root -g root -m 0644 "$script_directory/gatherthread.service.in" /etc/systemd/system/gatherthread.service
 install -o root -g root -m 0644 "$script_directory/gatherthread-backup.service.in" /etc/systemd/system/gatherthread-backup.service
 install -o root -g root -m 0644 "$script_directory/gatherthread-backup.timer" /etc/systemd/system/gatherthread-backup.timer
+install -o root -g root -m 0644 "$script_directory/gatherthread-retention.service.in" /etc/systemd/system/gatherthread-retention.service
+install -o root -g root -m 0644 "$script_directory/gatherthread-retention.timer" /etc/systemd/system/gatherthread-retention.timer
+install -o root -g root -m 0644 "$script_directory/gatherthread-code-retention.service.in" /etc/systemd/system/gatherthread-code-retention.service
+install -o root -g root -m 0644 "$script_directory/gatherthread-code-retention.timer" /etc/systemd/system/gatherthread-code-retention.timer
+install -o root -g root -m 0644 "$script_directory/gatherthread-log-retention.service.in" /etc/systemd/system/gatherthread-log-retention.service
+install -o root -g root -m 0644 "$script_directory/gatherthread-log-retention.timer" /etc/systemd/system/gatherthread-log-retention.timer
+install -d -o root -g root -m 0755 /etc/systemd/journald.conf.d
+install -o root -g root -m 0644 "$script_directory/gatherthread-journal-retention.conf" /etc/systemd/journald.conf.d/gatherthread-retention.conf
 
 sed -e "s|@@DOMAIN@@|$domain|g" "$script_directory/Caddyfile.in" > "$temporary_directory/Caddyfile"
 caddy validate --config "$temporary_directory/Caddyfile" --adapter caddyfile
@@ -210,10 +218,12 @@ ln -sfn "$repository_root" /opt/gatherthread/current.next
 mv -Tf /opt/gatherthread/current.next /opt/gatherthread/current
 
 systemctl daemon-reload
-systemctl enable --now gatherthread.service gatherthread-backup.timer
+systemctl restart systemd-journald.service
+systemctl enable --now gatherthread.service gatherthread-backup.timer gatherthread-retention.timer gatherthread-code-retention.timer gatherthread-log-retention.timer
 systemctl enable --now caddy.service
 systemctl restart gatherthread.service
 systemctl reload caddy.service
+systemctl start gatherthread-retention.service gatherthread-code-retention.service gatherthread-log-retention.service
 
 for _ in {1..30}; do
   if curl --fail --silent --show-error http://127.0.0.1:18787/health/ready >/dev/null; then

@@ -73,20 +73,20 @@ Every preflight check must pass: candidate version, systemd, Caddy, loopback liv
 ## 6. Operations
 
 ```sh
-sudo systemctl status gatherthread caddy gatherthread-backup.timer
+sudo systemctl status gatherthread caddy gatherthread-backup.timer gatherthread-retention.timer gatherthread-code-retention.timer gatherthread-log-retention.timer
 sudo journalctl -u gatherthread -f
 sudo ls -lh /var/backups/gatherthread
 curl -fsS http://127.0.0.1:18787/health/ready
 ```
 
-The database is `/var/lib/gatherthread/collaboration.sqlite`; configuration and the credential pepper are in `/etc/gatherthread/gatherthread.env`. The daily backup unit prunes eligible complete top-level sets with `-mtime +14` after a successful backup; this does not guarantee a strict 14-day maximum or cover restore-drill, incomplete, or off-host copies. If cloud Git repositories exist, each SQLite backup has a matching `.db.code` companion: verify, move off-host, restore, and eventually rotate them together. The updated backup unit calls `scripts/prune-sqlite-backups.sh` to retire eligible sets; an old installed unit will not gain this behavior by changing `/opt/gatherthread/current` alone. Copy encrypted backup sets and the pepper separately to another failure domain, or device credentials cannot be verified after total host loss. Set and verify expiry for every copy location before stating a fixed retention period.
+The database is `/var/lib/gatherthread/collaboration.sqlite`; configuration and the credential pepper are in `/etc/gatherthread/gatherthread.env`. Independent retention timers prune backup sets and unreachable/deleted cloud Git after 13 days, and rotate/vacuum host journals after 29 days. These margins target the published 14/30-day maxima; verify actual timer success and alert on failures. If cloud Git repositories exist, each SQLite backup has a matching `.db.code` companion: verify, move off-host, restore, and rotate them together. Apply the same expiry to off-host copies, restore drills, provider snapshots, Caddy access logs, and any log exports. Copy encrypted backup sets and the pepper separately to another failure domain, or device credentials cannot be verified after total host loss. Before restoring an older backup, reapply subsequent account/content deletions from an independent restricted deletion register; never resurrect deleted accounts.
 
 ## 7. Upgrade and rollback
 
 Use a new `/opt/gatherthread/releases/<version>` for every upgrade; never overwrite an old release:
 
 1. Run current preflight and create a verified online backup.
-2. Upload and verify the new candidate, then run its reviewed installer. Check that `/etc/systemd/system/gatherthread-backup.service` now calls the companion-aware prune script and that `systemctl daemon-reload` completed; a release symlink switch alone does not refresh this unit.
+2. Upload and verify the new candidate, then run its reviewed installer. Check backup, backup-retention, code-retention, and log-retention units and timers, and confirm `systemctl daemon-reload` completed; a release symlink switch alone does not refresh installed units.
 3. Repeat preflight and the two-browser smoke test.
 4. Repoint `/opt/gatherthread/current` to old code only if it supports the resulting database schema. Otherwise stop the service and restore the verified pre-upgrade backup to a new database path.
 

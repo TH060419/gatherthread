@@ -1,0 +1,15 @@
+:root{color-scheme:light dark;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.65;background:#f5f8f7;color:#172321}
+*{box-sizing:border-box}
+body{margin:0}
+a{color:#087d73}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem max(1rem,calc((100vw - 760px)/2));border-bottom:1px solid #dae3e1;background:#fff}
+.brand{font-weight:700;text-decoration:none;color:inherit}
+button{border:1px solid #cbd9d6;background:#fff;border-radius:12px;padding:.45rem .8rem;color:inherit;font:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:3px solid #1b9c8d;outline-offset:3px}
+main{max-width:760px;margin:auto;padding:clamp(1.5rem,4vw,3rem) 1rem 5rem}
+.eyebrow{font-size:.76rem;letter-spacing:.14em;font-weight:750;color:#087d73}
+h1{font-size:clamp(2rem,5vw,3rem);line-height:1.15;margin:.5rem 0 1.5rem}
+h2{font-size:1.25rem;margin:2rem 0 .4rem}
+p{margin:.5rem 0 1rem}
+[hidden]{display:none!important}
+@media(prefers-color-scheme:dark){:root{background:#141b1b;color:#e8f0ed}.topbar,button{background:#1c2826;border-color:#3a4e49}a,.eyebrow{color:#70d7c9}}

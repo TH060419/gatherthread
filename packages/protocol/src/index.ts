@@ -231,6 +231,15 @@ export const UpdateProjectInputSchema = z.object({
   idempotency_key: IdempotencyKeySchema,
 });
 
+export const TransferProjectOwnershipInputSchema = z.object({
+  target_user_id: IdSchema,
+  idempotency_key: IdempotencyKeySchema,
+}).strict();
+
+export const DeleteAccountInputSchema = z.object({
+  confirmation: z.literal("DELETE"),
+}).strict();
+
 export type UpdateProjectInput = z.infer<typeof UpdateProjectInputSchema>;
 
 export const ProjectRecordSchema = z.object({

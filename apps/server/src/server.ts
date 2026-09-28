@@ -41,6 +41,8 @@ import {
   UpdateDeviceInputSchema,
   UpdateContextPolicyInputSchema,
   UpdateProjectInputSchema,
+  TransferProjectOwnershipInputSchema,
+  DeleteAccountInputSchema,
   UpdateSessionInputSchema,
   type ApiErrorBody,
   type CanonicalEvent,
@@ -747,6 +749,31 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (url.pathname === "/v1/account/deletion-preview" && request.method === "GET") {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Account deletion requires a browser session");
+        sendJson(response, 200, { data: service.accountDeletionPreview(actor) });
+        return;
+      }
+
+      if (url.pathname === "/v1/account" && request.method === "DELETE") {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Account deletion requires a browser session");
+        DeleteAccountInputSchema.parse(await readAuthenticatedJson());
+        const result = service.deleteAccount(actor);
+        dshPairings.revokeUser(actor.user_id);
+        for (const [ticketValue, ticket] of realtimeTickets) {
+          if (ticket.actor.user_id === actor.user_id) realtimeTickets.delete(ticketValue);
+        }
+        for (const [activeSocket, state] of sockets) {
+          if (state.actor.user_id === actor.user_id) activeSocket.close(1008, "account_deleted");
+        }
+        response.setHeader("set-cookie", [
+          serializeClearedBrowserSessionCookie(browserCookieName, secureTransport),
+          serializeClearedBrowserSessionCookie(rememberedCookieName, secureTransport),
+        ]);
+        sendJson(response, 200, { data: result });
+        return;
+      }
+
       if (request.method === "POST" && url.pathname === "/v1/remembered-accounts/adopt-current-session") {
         z.object({}).strict().parse(await readAuthenticatedJson());
         if (authentication.kind !== "browser_session" || !authentication.rememberedBrowserSession) {
@@ -912,6 +939,14 @@ export async function startCollaborationServer(
         service.deleteProject(actor, projectId);
         closeRealtimeWithoutMembership();
         response.writeHead(204).end();
+        return;
+      }
+
+      if (projectId && parts[3] === "transfer-ownership" && parts.length === 4 && request.method === "POST") {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Ownership transfer requires a browser session");
+        const input = TransferProjectOwnershipInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: { project: service.transferProjectOwnership(actor, projectId,
+          input.target_user_id, input.idempotency_key) } });
         return;
       }
 

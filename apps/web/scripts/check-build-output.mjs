@@ -31,6 +31,19 @@ test("Web build publishes the product home above the existing application", asyn
   ]);
 });
 
+test("built home and login link to the bilingual privacy and account-deletion notice", async () => {
+  const [home, application, privacy] = await Promise.all([
+    readFile(new URL("index.html", dist), "utf8"),
+    readFile(new URL("app/index.html", dist), "utf8"),
+    readFile(new URL("privacy/index.html", dist), "utf8"),
+  ]);
+  assert.match(home, /href="\.\/privacy\/"/u);
+  assert.match(application, /href="\.\.\/privacy\/"/u);
+  assert.match(privacy, /id="privacy-zh"/u);
+  assert.match(privacy, /id="privacy-en"/u);
+  await Promise.all([access(new URL("privacy/privacy.css", dist)), access(new URL("privacy/privacy.js", dist))]);
+});
+
 test("isolated example uses a classic bundle and forbids backend connections", async () => {
   const example = await readFile(new URL("app/example.html", dist), "utf8");
   assert.match(example, /connect-src 'none'/u);

@@ -411,6 +411,14 @@ CREATE TABLE IF NOT EXISTS project_mutations (
   created_at TEXT NOT NULL,
   PRIMARY KEY (project_id, idempotency_key)
 ) STRICT;
+CREATE TABLE IF NOT EXISTS project_ownership_transfers (
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  from_user_id TEXT NOT NULL REFERENCES users(id),
+  to_user_id TEXT NOT NULL REFERENCES users(id),
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (project_id, idempotency_key)
+) STRICT;
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
@@ -1564,6 +1572,8 @@ export class CollaborationDatabase {
         INSERT INTO project_memberships(project_id, user_id, role, created_at, updated_at)
         VALUES (?, ?, 'owner', ?, ?)
       `).run(projectId, actor.user_id, timestamp, timestamp);
+      this.sqlite.prepare("DELETE FROM code_repository_deletions WHERE repository_hash = ?")
+        .run(createHash("sha256").update(projectId).digest("hex"));
       return this.projectCreationResult(this.requireProject(projectId));
     });
   }
@@ -1573,6 +1583,12 @@ export class CollaborationDatabase {
       this.requireProjectOwnedBy(projectId, actor.user_id);
       const sessions = this.sqlite.prepare("SELECT id FROM sessions WHERE project_id = ? ORDER BY id")
         .all(projectId) as Array<{ id: string }>;
+      if (this.sqlite.prepare("SELECT 1 FROM code_repositories WHERE project_id = ?").get(projectId)) {
+        this.sqlite.prepare(`
+          INSERT INTO code_repository_deletions(repository_hash,deleted_at) VALUES (?,?)
+          ON CONFLICT(repository_hash) DO UPDATE SET deleted_at=excluded.deleted_at
+        `).run(createHash("sha256").update(projectId).digest("hex"), this.now());
+      }
       const result = this.sqlite.prepare("DELETE FROM projects WHERE id = ? AND owner_user_id = ?")
         .run(projectId, actor.user_id);
       if (Number(result.changes) !== 1) throw notFound("Project");
@@ -1606,6 +1622,161 @@ export class CollaborationDatabase {
         VALUES (?, ?, ?, ?, ?)
       `).run(projectId, input.idempotency_key, actor.user_id, input.title, timestamp);
       return this.requireProject(projectId);
+    });
+  }
+
+  transferProjectOwnership(actor: Actor, projectId: string, targetUserId: string, idempotencyKey: string): ProjectRecord {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const previous = this.sqlite.prepare(`
+        SELECT from_user_id, to_user_id FROM project_ownership_transfers
+        WHERE project_id = ? AND idempotency_key = ?
+      `).get(projectId, idempotencyKey) as { from_user_id: string; to_user_id: string } | undefined;
+      if (previous) {
+        if (previous.from_user_id !== actor.user_id || previous.to_user_id !== targetUserId) {
+          throw idempotencyConflict("Ownership transfer retry does not match the original request");
+        }
+        return this.requireProject(projectId);
+      }
+      this.requireProjectOwnedBy(projectId, actor.user_id);
+      if (targetUserId === actor.user_id) throw conflict("Choose another project member");
+      if (this.projectMembershipRole(projectId, targetUserId) !== "participant") {
+        throw conflict("New owner must be an existing participant");
+      }
+      const existingMain = this.sqlite.prepare(`
+        SELECT COALESCE(SUM(r.main_logical_bytes), 0) AS bytes,
+          SUM(CASE WHEN r.main_logical_bytes < 0 THEN 1 ELSE 0 END) AS invalid_count
+        FROM code_repositories r JOIN projects p ON p.id = r.project_id
+        WHERE p.owner_user_id = ?
+      `).get(targetUserId) as { bytes: number; invalid_count: number };
+      const branches = this.sqlite.prepare(`
+        SELECT COALESCE(SUM(logical_bytes), 0) AS bytes FROM code_branches WHERE user_id = ?
+      `).get(targetUserId) as { bytes: number };
+      const invalidBranches = this.sqlite.prepare(`
+        SELECT COUNT(*) AS count FROM code_branches WHERE user_id = ? AND logical_bytes < 0
+      `).get(targetUserId) as { count: number };
+      const incoming = this.sqlite.prepare(`
+        SELECT COALESCE(main_logical_bytes, 0) AS bytes FROM code_repositories WHERE project_id = ?
+      `).get(projectId) as { bytes: number } | undefined;
+      if ((existingMain.invalid_count > 0 || invalidBranches.count > 0 || (incoming?.bytes ?? 0) < 0)
+        || existingMain.bytes + branches.bytes + (incoming?.bytes ?? 0) > 128 * 1024 * 1024) {
+        throw conflict("New owner needs enough reconciled cloud code capacity before transfer");
+      }
+      const timestamp = this.now();
+      this.sqlite.prepare("UPDATE projects SET owner_user_id = ?, updated_at = ? WHERE id = ?")
+        .run(targetUserId, timestamp, projectId);
+      this.sqlite.prepare("UPDATE project_memberships SET role = 'participant', updated_at = ? WHERE project_id = ? AND user_id = ?")
+        .run(timestamp, projectId, actor.user_id);
+      this.sqlite.prepare("UPDATE project_memberships SET role = 'owner', updated_at = ? WHERE project_id = ? AND user_id = ?")
+        .run(timestamp, projectId, targetUserId);
+      this.sqlite.prepare(`
+        INSERT INTO project_ownership_transfers(project_id,idempotency_key,from_user_id,to_user_id,created_at)
+        VALUES (?,?,?,?,?)
+      `).run(projectId, idempotencyKey, actor.user_id, targetUserId, timestamp);
+      return this.requireProject(projectId);
+    });
+  }
+
+  accountDeletionPreview(actor: Actor): {
+    owned_projects: Array<{ id: string; title: string }>;
+    solo_sessions: number;
+    shared_events: number;
+    cloud_branches: number;
+    devices: number;
+  } {
+    this.assertActiveDevice(actor);
+    const count = (sql: string): number => (this.sqlite.prepare(sql).get(actor.user_id) as { count: number }).count;
+    return {
+      owned_projects: this.sqlite.prepare("SELECT id,title FROM projects WHERE owner_user_id = ? ORDER BY title,id")
+        .all(actor.user_id) as Array<{ id: string; title: string }>,
+      solo_sessions: count("SELECT COUNT(*) AS count FROM sessions WHERE owner_user_id = ? AND mode = 'solo'"),
+      shared_events: count("SELECT COUNT(*) AS count FROM events WHERE actor_user_id = ? AND session_id IN (SELECT id FROM sessions WHERE mode = 'multi')"),
+      cloud_branches: count("SELECT COUNT(*) AS count FROM code_branches WHERE user_id = ?"),
+      devices: count("SELECT COUNT(*) AS count FROM devices WHERE user_id = ?"),
+    };
+  }
+
+  deleteAccount(actor: Actor): { deleted_solo_sessions: number; retained_shared_events: number; revoked_devices: number } {
+    return this.transaction(() => {
+      const preview = this.accountDeletionPreview(actor);
+      if (preview.owned_projects.length) throw conflict("Transfer or delete every owned project before deleting the account");
+      if (preview.cloud_branches) throw conflict("Resolve every personal cloud code branch before deleting the account");
+      const deletedUserId = "deleted-account";
+      this.sqlite.prepare(`
+        INSERT INTO users(id,display_name,created_at,can_create_projects)
+        VALUES (?, 'Deleted member', ?, 0) ON CONFLICT(id) DO NOTHING
+      `).run(deletedUserId, this.now());
+      // Solo cloud history belongs to the departing account; shared Multi sequences stay stable.
+      this.sqlite.prepare("DELETE FROM sessions WHERE owner_user_id = ? AND mode = 'solo'").run(actor.user_id);
+      const devices = this.sqlite.prepare("SELECT id FROM devices WHERE user_id = ?")
+        .all(actor.user_id) as Array<{ id: string }>;
+      const runtimes = this.sqlite.prepare("SELECT id FROM runtimes WHERE user_id = ?")
+        .all(actor.user_id) as Array<{ id: string }>;
+      const deviceIds = new Set(devices.map((row) => row.id));
+      const runtimeIds = new Set(runtimes.map((row) => row.id));
+      const scrub = (value: unknown): unknown => {
+        if (Array.isArray(value)) return value.map(scrub);
+        if (!value || typeof value !== "object") return value;
+        return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+          if (key === "user_id" && item === actor.user_id) return [key, deletedUserId];
+          if (key === "device_id" && typeof item === "string" && deviceIds.has(item)) return [key, "deleted-device"];
+          if (key === "runtime_id" && typeof item === "string" && runtimeIds.has(item)) return [key, "deleted-runtime"];
+          if (key === "local_session_id" && typeof item === "string") return [key, "private"];
+          return [key, scrub(item)];
+        }));
+      };
+      const events = this.sqlite.prepare(`
+        SELECT id,payload_json,runtime_provenance_json FROM events
+        WHERE session_id IN (SELECT id FROM sessions WHERE mode = 'multi')
+      `).all() as Array<{ id: string; payload_json: string; runtime_provenance_json: string | null }>;
+      const updateEventJson = this.sqlite.prepare("UPDATE events SET payload_json = ?, runtime_provenance_json = ? WHERE id = ?");
+      for (const event of events) {
+        const payload = event.payload_json;
+        const provenance = event.runtime_provenance_json;
+        if (!payload.includes(actor.user_id) && !provenance?.includes(actor.user_id)
+          && !devices.some((device) => payload.includes(device.id) || provenance?.includes(device.id))) continue;
+        updateEventJson.run(JSON.stringify(scrub(JSON.parse(payload))),
+          provenance === null ? null : JSON.stringify(scrub(JSON.parse(provenance))), event.id);
+      }
+      this.sqlite.prepare("UPDATE events SET actor_user_id = ?, actor_display_name = 'Deleted member' WHERE actor_user_id = ?")
+        .run(deletedUserId, actor.user_id);
+      this.sqlite.prepare("UPDATE sessions SET owner_user_id = ? WHERE owner_user_id = ? AND mode = 'multi'")
+        .run(deletedUserId, actor.user_id);
+      this.sqlite.prepare("UPDATE project_mutations SET actor_user_id = ? WHERE actor_user_id = ?")
+        .run(deletedUserId, actor.user_id);
+      this.sqlite.prepare("UPDATE project_ownership_transfers SET from_user_id = ? WHERE from_user_id = ?")
+        .run(deletedUserId, actor.user_id);
+      this.sqlite.prepare("UPDATE project_ownership_transfers SET to_user_id = ? WHERE to_user_id = ?")
+        .run(deletedUserId, actor.user_id);
+      for (const table of ["invitations", "project_invitations"] as const) {
+        this.sqlite.prepare(`DELETE FROM ${table} WHERE inviter_user_id = ? OR claimed_by_user_id = ?`)
+          .run(actor.user_id, actor.user_id);
+      }
+      for (const table of ["invitation_audit", "project_invitation_audit"] as const) {
+        this.sqlite.prepare(`UPDATE ${table} SET subject_user_id = ?, subject_device_id = NULL WHERE subject_user_id = ?`)
+          .run(deletedUserId, actor.user_id);
+      }
+      this.sqlite.prepare("DELETE FROM test_access_grants WHERE claimed_by_user_id = ?").run(actor.user_id);
+      this.sqlite.prepare("DELETE FROM agent_request_claims WHERE runtime_id IN (SELECT id FROM runtimes WHERE user_id = ?)")
+        .run(actor.user_id);
+      this.sqlite.prepare(`
+        DELETE FROM snapshot_requests WHERE requested_by_user_id = ?
+          OR target_runtime_id IN (SELECT id FROM runtimes WHERE user_id = ?)
+          OR claimed_by_runtime_id IN (SELECT id FROM runtimes WHERE user_id = ?)
+      `).run(actor.user_id, actor.user_id, actor.user_id);
+      this.sqlite.prepare("DELETE FROM code_mutations WHERE user_id = ?").run(actor.user_id);
+      this.sqlite.prepare("DELETE FROM devices WHERE user_id = ?").run(actor.user_id);
+      this.sqlite.prepare("DELETE FROM users WHERE id = ?").run(actor.user_id);
+      // Rebuild attribution charges after ownership and JSON redaction; old account charges must not remain.
+      this.sqlite.prepare("DELETE FROM event_storage_usage").run();
+      this.sqlite.prepare(`
+        INSERT INTO event_storage_usage(session_id,actor_user_id,bytes)
+        SELECT session_id,actor_user_id,SUM(length(CAST(payload_json AS BLOB))
+          + COALESCE(length(CAST(runtime_provenance_json AS BLOB)),0) + 512)
+        FROM events GROUP BY session_id,actor_user_id
+      `).run();
+      return { deleted_solo_sessions: preview.solo_sessions,
+        retained_shared_events: preview.shared_events, revoked_devices: preview.devices };
     });
   }
 
@@ -1763,8 +1934,10 @@ export class CollaborationDatabase {
                projects.owner_user_id AS project_owner_user_id
         FROM sessions
         JOIN projects ON projects.id = sessions.project_id
+        JOIN project_memberships ON project_memberships.project_id = projects.id
+          AND project_memberships.user_id = ?
         WHERE sessions.id = ?
-      `).get(sessionId) as {
+      `).get(actor.user_id, sessionId) as {
         project_id: string;
         session_owner_user_id: string;
         project_owner_user_id: string;

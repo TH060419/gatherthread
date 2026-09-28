@@ -172,6 +172,7 @@
             <button class="button button-secondary button-wide" type="submit">Join project</button>
           </form>
         </section>
+        <p class="auth-privacy-link"><a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy &amp; account deletion</a></p>
       </section>
     </main>
 
@@ -972,6 +973,7 @@ codex plugin add gatherthread@gatherthread</code>
           <nav class="settings-navigation" aria-label="Settings sections">
             <a href="#settings-general">General</a>
             <a href="#settings-device">This device</a>
+            <a href="#settings-account">Account &amp; privacy</a>
             <a href="#settings-appearance">Appearance</a>
             <a href="#settings-layout">Layout</a>
             <a href="#settings-sync">Sync &amp; context</a>
@@ -1016,6 +1018,23 @@ codex plugin add gatherthread@gatherthread</code>
                 <input id="settings-device-name" name="device-name" type="text" autocomplete="off" maxlength="120" required />
               </label>
               <p id="settings-device-status" class="field-help" role="status" aria-live="polite"></p>
+            </section>
+
+            <section id="settings-account" class="settings-section" aria-labelledby="settings-account-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">Account &amp; privacy</p><h3 id="settings-account-title">Delete my account</h3></div>
+                <p>Permanent for this account. Review the effects before confirming.</p>
+              </div>
+              <p>Transfer or delete projects you own first. Your Solo cloud conversations will be deleted; shared Multi messages remain but are shown as from a deleted member. All your device credentials and browser sessions are revoked. Local Codex and DSH files are not changed.</p>
+              <p><a href="../privacy/" target="_blank" rel="noopener noreferrer">Read privacy &amp; retention details ↗</a></p>
+              <div id="settings-account-projects" class="account-projects" aria-live="polite"></div>
+              <p id="settings-account-impact" class="field-help" role="status" aria-live="polite"></p>
+              <label class="settings-row" for="settings-account-confirmation">
+                <span><strong>Type DELETE to confirm</strong><small>This cannot be undone from the live service.</small></span>
+                <input id="settings-account-confirmation" type="text" autocomplete="off" spellcheck="false" maxlength="6" />
+              </label>
+              <button id="settings-delete-account" class="button button-danger" type="button" disabled>Delete my account</button>
+              <p id="settings-account-status" class="form-error" role="alert"></p>
             </section>
 
             <section id="settings-appearance" class="settings-section" aria-labelledby="settings-appearance-title">

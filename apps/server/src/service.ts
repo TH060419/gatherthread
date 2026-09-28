@@ -61,6 +61,18 @@ export class CollaborationService {
     return this.database.updateProject(actor, projectId, input);
   }
 
+  transferProjectOwnership(actor: Actor, projectId: string, targetUserId: string, idempotencyKey: string) {
+    return this.database.transferProjectOwnership(actor, projectId, targetUserId, idempotencyKey);
+  }
+
+  accountDeletionPreview(actor: Actor) {
+    return this.database.accountDeletionPreview(actor);
+  }
+
+  deleteAccount(actor: Actor) {
+    return this.database.deleteAccount(actor);
+  }
+
   getProject(actor: Actor, projectId: string) {
     const role = this.requireProjectMembership(actor, projectId);
     return { project: this.database.requireProject(projectId), role };

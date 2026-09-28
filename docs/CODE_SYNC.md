@@ -72,13 +72,13 @@ Cloud code has a **128 MiB per-user logical active-snapshot quota**, counting th
 
 In Settings, a member can see projects with cloud Git data and select **Clear my cloud branch** for their own branch; an owner may choose either their own branch or **Clear project cloud Git**. A participant cannot clear `main` or another member's branch. Clearing a personal branch does not undo content already merged into `main`. Project-wide cleanup makes all that project's cloud Git data inaccessible through GatherThread. Confirm the selected project and scope before proceeding; local Git history, branch, index, files, and Agent conversations are untouched. Clearing cloud code can limit or stop future cloud code collaboration until the project is re-enabled and a new baseline is established.
 
-Cloud cleanup immediately revokes API access and releases the active logical quota. It **does not immediately erase physical Git objects or prior backups**. Object cleanup requires separate operator-approved retention maintenance. The ECS online backup includes a companion `.db.code` directory for reachable Git objects; keep, verify, restore and rotate it together with the SQLite backup (see [OPERATIONS.md](OPERATIONS.md)). Do not describe a cleanup result as secure erasure of every old copy.
+Cloud cleanup immediately revokes API access and releases the active logical quota. It **does not immediately erase physical Git objects or prior backups**. The updated ECS profile schedules retention maintenance for deleted/unreachable objects and backup copies, with a 14-day maximum only after all on-host and off-host jobs are deployed, monitored, and verified. The ECS online backup includes a companion `.db.code` directory for reachable Git objects; keep, verify, restore and rotate it together with the SQLite backup (see [OPERATIONS.md](OPERATIONS.md)). Do not describe a cleanup result as secure erasure of every old copy.
 
 云端代码按**每用户 128 MiB 有效快照逻辑用量**计费，包括本人分支；项目创建者还承担其项目共享 `main` 的用量。既有**每项目 256 MiB**、**整个部署 1 GiB** 配额仍适用。超限上传不会只写入一半。这些是逻辑计费上限，不代表磁盘空间立刻回收。
 
 设置中会列出有云端 Git 数据的项目。成员可选择清理自己的云端分支，项目创建者既可只清理自己的分支，也可清理整个项目的云端 Git；参与者不能清理共享 `main` 或其他成员分支。清理个人分支不会撤销已合入 `main` 的内容；清理整个项目会让所有成员无法继续读取该项目的云端代码。操作前应核对项目与范围。本地 Git 历史、分支、暂存区、文件和 Agent 对话均不受影响；之后若要恢复云端代码协作，需重新启用并建立基线。
 
-清理会立即撤销云端 API 访问并释放有效逻辑配额，**不会立刻抹除物理 Git 对象或此前的备份**。对象清理需要运维人员另行批准并遵守保留策略。ECS 在线备份会生成包含可达 Git 对象的配套 `.db.code` 目录，必须与 SQLite 备份一同保留、校验、恢复和轮换（见 [OPERATIONS.md](OPERATIONS.md)）。不能把页面上的“清理成功”理解为所有旧副本已经安全擦除。
+清理会立即撤销云端 API 访问并释放有效逻辑配额，**不会立刻抹除物理 Git 对象或此前的备份**。新版 ECS 配置会定时清理删除后不可达的对象和备份；只有本机与异地副本清理均已部署、监控和验证，才可承诺最多 14 天。ECS 在线备份会生成包含可达 Git 对象的配套 `.db.code` 目录，必须与 SQLite 备份一同保留、校验、恢复和轮换（见 [OPERATIONS.md](OPERATIONS.md)）。不能把页面上的“清理成功”理解为所有旧副本已经安全擦除。
 
 ## Lost local files
 
