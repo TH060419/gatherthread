@@ -50,6 +50,8 @@ The script uses only `/app/?mock=1`, disposable browser profiles and mock API fi
 
 The project rail also exposes **Connect Codex**, which generates separate macOS/Linux and Windows PowerShell commands from the validated same-origin server URL and current project ID. These commands contain no credential; the CLI requests the device token through hidden terminal input, creates or reuses the same-name local workspace, opens that workspace in Codex Desktop, and materializes all writable sessions as named tasks. After a synchronized Agent turn creates renderable native content, the connector launches the exact registered task link. Current Desktop builds have been observed to associate it with the project for the verified workspace, but the launcher returns no project-assignment receipt. No fake Agent turn is created merely to display an empty session. Activation failure is fail-soft and retryable while synchronization remains active.
 
+The same dialog offers an optional Windows/macOS Launcher button on the official HTTPS origin. Its `gatherthread-connect:` URL contains the validated server URL, project ID, model, context-window limit, and history-import mode, but no credential. The Windows ZIP bundles Python and Node; the native macOS `.app` bundles Node. Both include the fixed connector and local plugin source and still ask for the existing device token in their own GUI because the server does not yet expose a Codex browser pairing grant. The manual terminal commands remain available for other platforms, self-hosting, and recovery. Launcher build and installation notes are in `prototypes/codex-launcher/README.md` and `prototypes/codex-launcher/macos/README.md`.
+
 The production HTTP/WS endpoints are:
 
 ```text

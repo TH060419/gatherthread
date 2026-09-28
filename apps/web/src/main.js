@@ -7,6 +7,7 @@ import { projectInvitationShareText } from "./invitation-share.js?v=20260928-1";
 import {
   canAppend,
   canRetryFailedAgentRequest,
+  canOpenCodexLauncher,
   createIdempotencyKey,
   createSelectionGuard,
   emptyProjectState,
@@ -23,6 +24,7 @@ import {
   normalizeConnectorState,
   pendingAgentRequests,
   projectCodexConnectionCommands,
+  projectCodexLauncherUrl,
   provenanceSummary,
   invitationStatusLabel,
   invitationRolePolicy,
@@ -970,6 +972,25 @@ deleteCloudDialog.addEventListener("close", () => {
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
 });
 connectCodexButton.addEventListener("click", openConnectCodexDialog);
+element("open-codex-launcher-button").addEventListener("click", () => {
+  if (!state.project || !canOpenCodexLauncher({
+    origin: location.origin,
+    platform: navigator.userAgentData?.platform ?? navigator.platform,
+    maxTouchPoints: navigator.maxTouchPoints,
+  })) return;
+  try {
+    const deepLink = projectCodexLauncherUrl({
+      baseUrl: location.origin,
+      projectId: state.project.id,
+      model: currentProjectProfile().model,
+      contextWindowTokens: contextBudgetToTokenCeiling(state.settings),
+      visibleHistorySync: state.settings.sync.visibleHistorySync,
+    });
+    window.location.href = deepLink;
+  } catch (error) {
+    element("connect-codex-error").textContent = error.message ?? "Unable to open the Codex launcher.";
+  }
+});
 element("close-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 element("done-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 connectCodexDialog.addEventListener("close", () => {
@@ -2976,6 +2997,13 @@ function openDeleteCloudDialog(type) {
 
 function openConnectCodexDialog() {
   if (!state.project) return;
+  const launcherAvailable = canOpenCodexLauncher({
+    origin: location.origin,
+    platform: navigator.userAgentData?.platform ?? navigator.platform,
+    maxTouchPoints: navigator.maxTouchPoints,
+  });
+  element("codex-launcher-option").hidden = !launcherAvailable;
+  element("open-codex-launcher-button").disabled = !launcherAvailable;
   const errorNode = element("connect-codex-error");
   errorNode.textContent = "";
   for (const status of connectCodexDialog.querySelectorAll("[data-copy-status]")) status.textContent = "";
@@ -2994,6 +3022,7 @@ function openConnectCodexDialog() {
   } catch (error) {
     errorNode.textContent = error.message ?? "Unable to create a safe connector command.";
     for (const button of connectCodexDialog.querySelectorAll("button[data-copy-command]")) button.disabled = true;
+    element("open-codex-launcher-button").disabled = true;
   }
   connectCodexReturnFocus = document.activeElement;
   connectCodexDialog.showModal();

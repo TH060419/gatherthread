@@ -26,6 +26,7 @@ Alpha status never permits silent reinterpretation of persisted data, identity, 
 | DSH native plugin RPC and persisted state | Public Alpha package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
 | Browser entry routes and legacy deep-link forwarding | Public Alpha | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
 | Stable Web control IDs and accessible names | Internal versioned | `apps/web/index.html`, `apps/web/test/static-accessibility.test.js` | Web event bindings, accessibility, browser tests |
+| Codex Launcher URI (Windows/macOS) | Internal versioned | `apps/web/src/domain.js`, `prototypes/codex-launcher/launcher.py`, `prototypes/codex-launcher/macos/Launcher.swift`, shared `contract-vectors.json` | GatherThread Web, per-user Windows and macOS URL Scheme handlers |
 | Opt-in code repository snapshots, review and merge | Public Alpha, Alpha 7 | `packages/protocol/src/code-sync.ts`, `apps/server/src/code-repository.ts` | Web, shared local code-sync module, Codex, DSH |
 | Shared manual history summaries and derived context | Public Alpha, Alpha 7 | `packages/protocol/src/history-summary.ts`, `apps/server/src/database.ts` | Web, bridge, MCP, Codex, DSH |
 
@@ -176,6 +177,14 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - Upstream version support is explicit. An unsupported Codex App Server or DSH Host API must fail safely and preserve local/cloud data.
 
 ## Web presentation boundary
+
+### Windows/macOS Codex Launcher URI v1
+
+The optional Windows and macOS Launchers use `gatherthread-connect://connect?v=1&origin=...&project=...&model=...&context_window_tokens=...&visible_history_sync=...`. Web offers this action only when the browser reports Windows or macOS and `location.origin` is exactly `https://gatherthread.cn`. Other platforms and origins retain the manual terminal commands. The Windows handler is registered per user by the installer; macOS registers the `.app` through Launch Services when it is opened. The browser cannot assume either is installed.
+
+`v` must be `1`. `origin` must be exactly `https://gatherthread.cn`. `project` follows the existing bounded project-ID syntax (1–128 ASCII letters, digits, `.`, `_`, `:`, `-`, beginning with a letter or digit). `model` is a nonempty string of at most 120 characters, without control characters or a leading `-`. `context_window_tokens` is a decimal integer from 4096 to 2000000. `visible_history_sync` is `first-connect` or `never`. The complete URI is bounded to 2048 UTF-8 bytes. All six parameters are required exactly once; unknown parameters, fragments, missing/blank values, unsupported versions, and invalid values fail closed in both Launchers. The Web producer applies the corresponding validation before navigation. `prototypes/codex-launcher/contract-vectors.json` is the shared producer/consumer test set.
+
+The URI carries no device token, browser cookie, or other credential. It opens a local form; the user enters the existing device token there. No cloud pairing or state migration occurs. Invalid links show a local error and do not start a connector. Manual commands remain available if the Launcher is absent or the link is refused. Changing this URI requires a new version and tests on both OS handlers; a v1 handler intentionally rejects a link without `v=1`. The optional installer/`.app` is not yet Developer ID signed and notarized for public distribution; see [ADR-0034](adr/0034-optional-local-codex-launchers.md).
 
 Web HTML IDs, form names, accessible labels, dialog relationships, and the separate chat/Agent actions are integration points between static markup, JavaScript, tests, assistive technology, and browser automation.
 

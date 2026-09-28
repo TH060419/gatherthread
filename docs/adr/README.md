@@ -21,7 +21,7 @@ Architecture Decision Records document significant technical choices, their rati
 | [0015](0015-create-personal-solos-from-first-local-prompt.md) | Create creator-owned Solo sessions from the first local prompt | accepted | 2026-08-26 |
 | [0016](0016-independent-cloud-and-local-session-titles.md) | Keep cloud and local session titles independent | accepted | 2026-08-28 |
 | [0017](0017-private-connection-profiles.md) | Support local, private LAN, and tailnet connection profiles | accepted | 2026-08-30 |
-| [0018](0018-unified-codex-plugin-and-connector.md) | Pair a Codex plugin with the persistent npm connector | accepted | 2026-09-06 |
+| [0018](0018-unified-codex-plugin-and-connector.md) | Pair a Codex plugin with the persistent npm connector | partially superseded by 0034 | 2026-09-06 |
 | [0019](0019-native-history-projection-across-harness-switches.md) | Project canonical history into native sessions across harness switches | accepted | 2026-09-06 |
 | [0020](0020-per-conversation-upload-consent-and-manual-recovery.md) | Add per-conversation upload consent and manual recovery | accepted | 2026-09-15 |
 | [0021](0021-import-visible-codex-history-as-a-new-task.md) | Import visible Codex history as a new task | compact policy clarified by 0026 | 2026-09-16 |
@@ -36,4 +36,5 @@ Architecture Decision Records document significant technical choices, their rati
 | [0030](0030-resolve-cloud-branches-before-project-member-removal.md) | Resolve cloud branches before project-member removal | proposed | 2026-09-24 |
 | [0031](0031-in-session-quotes-and-member-mentions.md) | In-session quote references and member mentions | proposed | 2026-09-27 |
 | [0032](0032-harness-advertised-model-catalogs.md) | Discover offered models from each connected harness | proposed | 2026-09-27 |
+| [0034](0034-optional-local-codex-launchers.md) | Use optional local Codex Launchers on Windows and macOS | proposed / source preview | 2026-09-28 |
 | [0033](0033-isolated-onboarding-example.md) | Isolate onboarding in a disposable example project | proposed | 2026-09-28 |
