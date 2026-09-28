@@ -80,8 +80,23 @@ async function checkSummarySettingsNavigation(page, locale) {
   assert.equal(await page.locator('#settings-sync').evaluate(node => node.nextElementSibling?.id), 'settings-summaries');
   assert.equal(await page.locator('#settings-sync #settings-history-context-mode').count(), 0, 'summary controls are in their own section');
   const originalUrl = page.url();
-  await syncLink.focus();
+  await page.waitForFunction(() => document.activeElement?.id === 'close-settings-button');
+  let reachedSummaryLink = false;
+  for (let index = 0; index < 12; index++) {
+    // Safari's default Tab behavior skips links; Option+Tab traverses them.
+    await page.keyboard.press(browserName === 'webkit' ? 'Alt+Tab' : 'Tab');
+    const focus = await page.evaluate(() => ({
+      insideDialog: document.querySelector('#settings-dialog').contains(document.activeElement),
+      href: document.activeElement?.getAttribute('href'),
+    }));
+    assert.equal(focus.insideDialog, true, 'Tab stays inside the Settings dialog');
+    if (focus.href === '#settings-summaries') { reachedSummaryLink = true; break; }
+  }
+  assert.equal(reachedSummaryLink, true, 'Tab reaches the Summaries navigation link');
   await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.activeElement?.id === 'settings-summaries');
+  assert.equal(page.url(), originalUrl, 'keyboard navigation keeps the project/session URL');
+  await syncLink.click();
   await page.waitForFunction(() => document.activeElement?.id === 'settings-sync');
   const syncPosition = await page.evaluate(() => {
     const scroller = document.querySelector('.settings-sections');
@@ -101,10 +116,6 @@ async function checkSummarySettingsNavigation(page, locale) {
   assert.ok(position.scrollTop > 0, 'summary navigation scrolls the Settings content');
   assert.ok(position.top >= position.viewportTop && position.top < position.viewportBottom, `summary heading is visible: ${JSON.stringify(position)}`);
   assert.equal(page.url(), originalUrl, 'Settings navigation keeps the project/session URL');
-  await syncLink.click();
-  await link.focus();
-  await page.keyboard.press('Enter');
-  await page.waitForFunction(() => document.activeElement?.id === 'settings-summaries');
   await page.locator('#close-settings-button').click();
 }
 async function assertStep(frame, item, size) {
