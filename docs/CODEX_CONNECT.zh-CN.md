@@ -2,7 +2,7 @@
 
 共序通过一个轻量本地连接器，把当前选中的云端项目连接到 Codex Desktop。网页不会直接启动 Codex，也不会把任何凭据写进复制的命令。
 
-> 邀请制 Alpha：服务器地址是 `https://gatherthread.cn`。固定 `v0.1.0-alpha.7` Git 引用已存在；`npx` 命令还需要匹配的 npm 包已发布。若包不可用，请使用下方源码路径。测试资格仅通过 [GitHub Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml) 申请，切勿在 Issue 中发布 Token。
+> 邀请制 Alpha：服务器地址是 `https://gatherthread.cn`。使用固定 `v0.1.0-alpha.8` 命令前，请核对 Git 引用和同版 npm 包均已发布；否则使用下方源码路径。测试资格仅通过 [GitHub Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml) 申请，切勿在 Issue 中发布 Token。
 
 ## 正常连接只需三步
 
@@ -23,7 +23,7 @@ npm install -g @openai/codex
 运行 `codex plugin --help`，确认当前 Codex 版本支持插件后，再安装共序：
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.7 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -34,7 +34,7 @@ codex plugin add gatherthread@gatherthread
 在共序网页打开目标项目，选择 **连接 Codex**，复制与系统对应的命令。命令形式如下：
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.7 \
+npx --yes @gatherthread/codex-connect@0.1.0-alpha.8 \
   --url 'https://你的共序服务器地址' \
   --project 'PROJECT_ID' \
   --create-workspace \
@@ -63,7 +63,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-服务器地址和项目 ID 以网页显示内容为准；服务器 Alpha 的地址是 `https://gatherthread.cn`。固定 `v0.1.0-alpha.7` 插件引用已存在，而连接器 `npx` 命令仍需 npm 包发布。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
+服务器地址和项目 ID 以网页显示内容为准；服务器 Alpha 的地址是 `https://gatherthread.cn`。使用 `npx` 前请核对 `v0.1.0-alpha.8` 插件引用和同版连接器包均已发布。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
 
 ## 会同步什么
 
@@ -77,7 +77,7 @@ npm run codex:connect -- \
 
 规范历史始终会注入模型上下文。连接器还会单独导入经过验证的原生历史快照，让本地任务具有可直接阅读的 Desktop 气泡。设置只保留两档：`first-connect` 默认在每个会话首次于本地建立时导入一次；`never` 关闭自动可见历史导入。可随时在工作页选择“导入 Codex 历史”，或通过已审查插件调用 `collaboration_import_codex_history`。每次手动导入都会创建一个新的本地 Codex 任务；在独立快照资源限额内保留公开消息，需要时交给 Codex 原生压缩，验证新任务后再切换持久绑定和 Hook 许可。系统不会覆盖、删除或归档旧任务，请用户检查后自行归档。在旧任务继续工作的内容仅留在本地，不会创建新的共序任务或云端会话。实时增量上下文注入始终独立保持启用，包括关闭自动可见历史导入时。
 
-Alpha 7 支持在共序网页选取已完成的公开消息，由**本人已连接的 Codex runtime**生成有作者和来源的共享总结。原文与旧版本仍可查看。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图；需要精确细节时可改用原文。这只调整连接器私有的后台执行上下文，不改写已有的 Desktop 可见任务、气泡或本地文件。Codex 自身的自动压缩与本地回合上传开关互不受影响。总结可能遗漏细节，应对照来源核查；提示词也不构成禁止 Agent 使用工作区工具或文件的安全保证。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
+Alpha 8 支持在共序网页选取已完成的公开消息，由**本人已连接的 Codex runtime**生成有作者和来源的共享总结。原文与旧版本仍可查看。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图；需要精确细节时可改用原文。这只调整连接器私有的后台执行上下文，不改写已有的 Desktop 可见任务、气泡或本地文件。Codex 自身的自动压缩与本地回合上传开关互不受影响。总结可能遗漏细节，应对照来源核查；提示词也不构成禁止 Agent 使用工作区工具或文件的安全保证。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
 
 ## 项目与工作区规则
 

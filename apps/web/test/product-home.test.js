@@ -121,7 +121,7 @@ test("product home labels the current invitation-only preview without claiming U
   ]);
   assert.match(html, /\[ ALPHA 预览版 · 邀请制测试 \]/u);
   assert.match(app, /\[ ALPHA PREVIEW · BY INVITATION \]/u);
-  assert.doesNotMatch(html, /0\.1\.0-alpha\.7/u);
+  assert.doesNotMatch(html, /0\.1\.0-alpha\.8/u);
 });
 
 test("product home exposes canonical and bilingual social discovery metadata", async () => {

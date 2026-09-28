@@ -2,15 +2,17 @@
 
 **GatherThread（共序）** 是面向多人联机协作、各自使用本地 AI 编程 Agent 的开源、可自托管工作区。Codex Desktop 与 DeepSeek Harness 可以接入同一项目的有序历史和共享上下文：会话按参与者标注、可重放并实时同步，Solo/Multi 模式有明确的角色权限。每位成员保留自己的本地 Agent 和凭据；Git 代码检查点需单独主动授权，不是默认上传。
 
+**Alpha 8** 新增中英文初次使用引导与隔离练习项目、消息引用和 @成员、会话阅读与定位优化、由本地 Agent 声明的模型选择、可选的 Windows/macOS Codex 启动器原型、批量测试资格码和账号自行注销。限制与验证要求见 [Alpha 8 说明](docs/releases/0.1.0-alpha.8.md)。
+
 > **Alpha 7：可选的项目代码协作。** 云端 Git 代码检查点支持每位成员独立分支、手动/空闲时自动上传、安全下载、恢复到新目录，以及创建者审核合并。Codex 需显式添加 `--code-sync` 授权，DSH 可在插件设置中逐项目授权并操作。聊天上传与实时上下文注入不受影响，原有本地 Git 分支和暂存区不被改动。所有项目成员均可读取代码分支，Solo 不提供代码隐私隔离。详见[使用流程、边界与测试清单](docs/CODE_SYNC.md)。
 
 > **Alpha 7：云端代码配额与清理。** 每用户有效云端代码快照限额为 128 MiB；成员可在设置中清理自己的云端分支，项目创建者还可选择清理整个项目的云端 Git。清理个人分支不会撤销已合入共享 `main` 的代码；任何云端清理都不会改动本地 Git 或 Agent 文件。它会撤销云端访问并释放逻辑配额，但物理 Git 对象和旧备份需另行按运维保留策略清理。详见[代码协作指南](docs/CODE_SYNC.md)。
 
-> **原生上下文管理与审计修复。** Alpha 7 优先使用 Codex 原生窗口与用量，保留 DSH 自身模型及压缩设置，不再直接裁剪限额内接收的公开历史。原生压缩不是无限或无损记忆，特殊恢复仍有限制；详见 [Codex 指南](docs/CODEX_CONNECT.zh-CN.md)和 [DSH 指南](docs/DSH_CONNECT.zh-CN.md)。
+> **原生上下文管理与审计修复。** Alpha 8 优先使用 Codex 原生窗口与用量，保留 DSH 自身模型及压缩设置，不再直接裁剪限额内接收的公开历史。原生压缩不是无限或无损记忆，特殊恢复仍有限制；详见 [Codex 指南](docs/CODEX_CONNECT.zh-CN.md)和 [DSH 指南](docs/DSH_CONNECT.zh-CN.md)。
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/badge/release-0.1.0--alpha.7-0f766e.svg)](docs/releases/0.1.0-alpha.7.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Alpha](https://img.shields.io/badge/alpha-0.1.0--alpha.8-0f766e.svg)](docs/releases/0.1.0-alpha.8.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **一个空间，汇聚众智。**
 
@@ -18,7 +20,7 @@
 
 > **邀请制 Alpha 测试。** [gatherthread.cn](https://gatherthread.cn/) 已进行小规模服务器测试，尚未开放公众注册或公共 Beta。每位测试者需要一次性测试资格码来激活账号；仅凭项目邀请，只能进入被邀请的项目。本机、局域网和 Tailscale 自托管方式仍可使用。
 
-服务器当前运行源码，以及 Git 标签、npm 包和 GitHub Release 的对应状态，请查看[发布记录索引](docs/releases/README.md)。仓库 `main` 分支可能包含尚未部署的改动。
+Git 标签、npm 包和 GitHub Release 的对应信息见[发布记录索引](docs/releases/README.md)。
 
 ## 申请 Alpha 测试资格
 
@@ -121,13 +123,13 @@ npm run owner-host
 如果 `codex --version` 不可用或终端提示 `codex: command not found`，请先运行 `npm install -g @openai/codex` 安装或更新官方 Codex CLI。重新打开终端，确认 `codex plugin --help` 可用后再继续。
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.7 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
 连接器会在终端隐藏提示中读取设备 token，创建或复用本地项目，打开 Codex Desktop，并自动发现后续会话。可编辑的 GatherThread 会话会成为 Codex 任务；网页 Agent 请求在隔离的后台投影中运行，经信任的 Hooks 则把 Desktop 直接回合写回同一份规范历史。工作页为当前对话提供“本地回合自动上传至云端”开关和“立即从本地上传至云端”保底操作，Codex 插件也提供相同控制；Hook 漏记或失效时可扫描并补传已完成回合，且不会擅自重新开启自动上传。默认在每个会话首次于本地建立时导入一次经过验证、可直接阅读的原生历史快照；设置中可以关闭这次初始导入。“导入 Codex 历史”每次都会创建一个经过验证的新本地任务，公开消息不再按备用预算直接裁剪；在独立快照资源限额内，长历史由 Codex 原生压缩，后续 Hook 和上下文投递会切换到新任务。GatherThread 不覆盖或归档旧任务，请用户检查后自行归档。无论是否启用初次导入或执行手动导入，实时上下文注入都继续独立运行。本地新任务只有在首个回合成功完成后才会创建个人 Solo，访者任务始终留在本地。
 
-固定 Alpha 命令见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。匹配的 `v0.1.0-alpha.7` Git 引用已存在；registry 命令还需要对应 npm 包已经发布。若 npm 包不可用，请使用同一指南中的源码路径。
+固定 Alpha 命令见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。安装前请核对 `v0.1.0-alpha.8` Git 引用与同版 npm 包均已发布；同一指南也提供源码路径。
 
 ## 接入 DeepSeek Harness
 
@@ -140,7 +142,7 @@ DeepSeek Harness 使用四步流程：
 
 一次明确配对会连接该身份可见的全部活跃项目，并继续发现后续新增权限。可写的 GatherThread 会话会成为可编辑的 DSH 原生会话；完成的 DSH 回合只上传一次，服务器规范历史按顺序投影回来。DSH 设置页会为每个已连接对话提供“自动上传”开关和“手动上传”。在 DSH 新会话中完成首个成功回合会创建本人所有的云端 Solo；空会话、失败回合和访者会话继续留在本地。连接的 DSH 路由公开 DeepSeek 模型元数据时，GatherThread 工作页可为每次 Agent 请求选择该 runtime 实际支持的模型和推理强度；该选择只作用于本次 GatherThread 回合，不会永久改写 DSH 内的模型设置。旧版或未声明动态能力的路由继续使用固定模型。Agent 请求只交给用户明确选择的 runtime，不会回退到 Codex。
 
-当前 DSH 插件若未配置官方服务 URL，“共序官方服务”快捷按钮仍处于禁用状态，但可手动输入 `https://gatherthread.cn` 连接邀请制服务器 Alpha；本机、局域网和 Tailscale 地址也可使用。包与源码测试路径见[DSH 接入指南](docs/DSH_CONNECT.zh-CN.md)。
+获批测试者可在 DSH 插件中选择共序官方服务，或输入 `https://gatherthread.cn`；本机、局域网、自托管和 Tailscale 地址也可使用。包与源码测试路径见[DSH 接入指南](docs/DSH_CONNECT.zh-CN.md)。
 
 ## 安全机制与当前限制
 
@@ -148,9 +150,9 @@ DeepSeek Harness 使用四步流程：
 
 [gatherthread.cn](https://gatherthread.cn/) 已向获批测试者开放邀请制 Alpha；公众注册和公共 Beta 仍未开放。本机、局域网 HTTPS 与私有 Tailscale Serve 也可使用。[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)说明当前服务器部署模式。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
 
-尚未实现：主机自动故障转移、多进程 WebSocket fan-out、Agent token 级流式显示、附件对象存储、通用会话保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。本候选版本增加账号注销及 ECS 备份、云端 Git、日志保留期任务；仅在更新后的任务和异地副本策略均部署并验证后，才能认为服务器满足相应期限。参见[隐私说明](site/privacy/)与[运维指南](docs/OPERATIONS.md)。
+尚未实现：主机自动故障转移、多进程 WebSocket fan-out、Agent token 级流式显示、附件对象存储、通用会话保留期清理任务、Web 离线 outbox、会话搜索，以及经正式签名的原生安装包。Alpha 8 增加账号注销及 ECS 备份、云端 Git、日志保留期任务；仅在更新后的任务和异地副本策略均部署并验证后，才能认为服务器满足相应期限。参见[隐私说明](site/privacy/)与[运维指南](docs/OPERATIONS.md)。
 
-更多信息请参阅[文档索引](docs/README.md)、[`0.1.0-alpha.7` 说明](docs/releases/0.1.0-alpha.7.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
+更多信息请参阅[文档索引](docs/README.md)、[`0.1.0-alpha.8` 说明](docs/releases/0.1.0-alpha.8.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
 
 ## 参与开发与版本治理
 

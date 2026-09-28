@@ -2,15 +2,17 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-[![Release](https://img.shields.io/badge/release-0.1.0--alpha.7-0f766e.svg)](docs/releases/0.1.0-alpha.7.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![Alpha](https://img.shields.io/badge/alpha-0.1.0--alpha.8-0f766e.svg)](docs/releases/0.1.0-alpha.8.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
 **One room, many minds.**
 
 **GatherThread** is an open-source, self-hostable workspace for real-time online collaboration among people using their own local AI coding agents. Codex Desktop and DeepSeek Harness connect to the same ordered project history and shared context: conversations are attributable, replayable, and delivered live across role-based Solo and Multi sessions. Each person keeps their local Agent and credentials; Git-backed code checkpoints are a separate, opt-in feature. The collaboration layer remains harness-neutral rather than requiring everyone to use one Agent or model.
 
+**Alpha 8** adds a bilingual first-use guide and isolated practice project, quotes and member mentions, clearer conversation navigation, runtime-advertised model choices, optional Windows/macOS Codex Launcher prototypes, batch test-access issuance, and self-service account deletion. See the [Alpha 8 notes](docs/releases/0.1.0-alpha.8.md) for limits and verification gates.
+
 > **Invitation-only Alpha.** [gatherthread.cn](https://gatherthread.cn/) is running a small hosted Alpha. Public registration and the public Beta are not open. Each tester needs a one-use test qualification to activate an account; a project invitation alone grants access only to that project. The local, LAN, and Tailscale self-hosting options remain available.
 
-For the current hosted source and the separate Git tag, npm package, and GitHub Release status, see the [release record index](docs/releases/README.md). The repository's `main` branch may contain changes that have not been deployed.
+Git tag, npm package, and GitHub Release details are recorded in the [release index](docs/releases/README.md).
 
 ## Request Alpha test access
 
@@ -111,13 +113,13 @@ One-time plugin install:
 If `codex --version` is unavailable or Terminal reports `codex: command not found`, first install or update the official Codex CLI with `npm install -g @openai/codex`. Reopen Terminal and confirm `codex plugin --help` works before continuing.
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.7 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
 The connector asks for the device token in a hidden terminal prompt, creates or reuses the local project, opens Codex Desktop, and discovers later sessions automatically. Editable GatherThread sessions become Codex tasks; Web Agent requests run in an isolated background projection, while trusted Hooks return direct Desktop turns to the same canonical history. The workspace provides a per-conversation **Auto-upload local turns to cloud** switch and **Upload local turns to cloud now** recovery action; the Codex plugin exposes the same controls. Manual upload scans completed turns when a Hook was missed or failed without turning automation back on. By default, each session imports one verified, readable native-history snapshot the first time it is established locally; Settings can disable that initial import. **Import Codex history** always creates a new verified local task, retains public text within a separate snapshot resource limit and uses Codex's native compaction when needed, and switches future Hook and context delivery to it. GatherThread neither overwrites nor archives the previous local task; review and archive it yourself. Continuing that previous task stays local and cannot create a replacement binding or cloud session. Realtime context injection remains active regardless of the visible-history setting or manual imports. A genuinely new local task creates a personal Solo only after its first completed turn; viewer tasks remain local.
 
-The fixed Alpha commands are documented in the [Codex connection guide](docs/CODEX_CONNECT.md). The matching `v0.1.0-alpha.7` Git ref exists; registry commands additionally require the corresponding package to be published. If the package is unavailable, use the source-checkout path in that guide.
+The fixed Alpha commands are documented in the [Codex connection guide](docs/CODEX_CONNECT.md). Verify the matching `v0.1.0-alpha.8` Git ref and npm package before installing; the source-checkout path is also documented there.
 
 ## Connect DeepSeek Harness
 
@@ -130,15 +132,15 @@ DeepSeek Harness uses the same four-step shape:
 
 One explicit pairing connects every active Project visible to that identity and discovers new access later. Writable GatherThread sessions appear as editable native DSH conversations; completed DSH turns upload once, and canonical server history projects back in order. DSH Settings exposes a per-conversation automatic-upload switch and manual upload action. A successful first turn in a new DSH conversation creates a creator-owned cloud Solo; empty, failed, and viewer conversations remain local. When the connected DSH route exposes DeepSeek model metadata, the GatherThread workspace can choose any advertised model and reasoning effort for each Agent request. The temporary choice applies only to that GatherThread-driven turn, so model selection inside DSH remains independent. Older or non-advertising routes keep their fixed model. Only the explicitly selected runtime handles an Agent request, with no Codex fallback.
 
-In the current DSH plugin build, the **official service** shortcut is disabled unless an official URL is configured. The invitation-only hosted Alpha is nevertheless reachable by entering `https://gatherthread.cn` manually; local, LAN, and Tailscale origins also work. See the [DSH connection guide](docs/DSH_CONNECT.md) for package and source-checkout paths.
+Enter the current server URL in DSH Settings. Approved testers can use `https://gatherthread.cn`; local, LAN, and Tailscale origins also work. See the [DSH connection guide](docs/DSH_CONNECT.md) for package and source-checkout paths.
 
 ## Security and current limits
 
 ### Optional code collaboration and shared summaries
 
-Alpha 7 adds opt-in Git-backed project code checkpoints: a separate branch per member, manual/idle automatic upload, clean download, new-directory recovery, change review and owner-only merge. Codex requires explicit `--code-sync` authorization; DSH exposes project code consent and controls in its plugin settings. Existing conversation uploads and context injection remain independent. Cloud Git is used only to synchronize code with members of the same project, never for GatherThread product development or unrelated purposes. This does not alter your original Git branch/index or provide a public `git push` endpoint. All project readers can read code branches, including branches associated with Solo work. Project members can disable cloud code synchronization, at the cost of cloud code-collaboration features. See the bilingual [setup, limitations and acceptance checklist](docs/CODE_SYNC.md).
+Alpha 7 introduced opt-in Git-backed project code checkpoints: a separate branch per member, manual/idle automatic upload, clean download, new-directory recovery, change review and owner-only merge. Codex requires explicit `--code-sync` authorization; DSH exposes project code consent and controls in its plugin settings. Existing conversation uploads and context injection remain independent. Cloud Git is used only to synchronize code with members of the same project, never for GatherThread product development or unrelated purposes. This does not alter your original Git branch/index or provide a public `git push` endpoint. All project readers can read code branches, including branches associated with Solo work. Project members can disable cloud code synchronization, at the cost of cloud code-collaboration features. See the bilingual [setup, limitations and acceptance checklist](docs/CODE_SYNC.md).
 
-The **Alpha 7** source adds a 128 MiB per-user active cloud-code quota and Settings cleanup. Members may clear their own cloud branch; project owners may clear their own branch or the entire project's cloud Git data. A branch cleanup does not undo changes already merged into shared `main`. These operations do not touch anyone's local Git or Agent files. They revoke cloud access and release logical quota, but physical Git objects and backup copies remain until separate operator retention cleanup. See [the current code-sync guide](docs/CODE_SYNC.md) before using deletion.
+The **Alpha 7** source added a 128 MiB per-user active cloud-code quota and Settings cleanup. Members may clear their own cloud branch; project owners may clear their own branch or the entire project's cloud Git data. A branch cleanup does not undo changes already merged into shared `main`. These operations do not touch anyone's local Git or Agent files. They revoke cloud access and release logical quota, but physical Git objects and backup copies remain until separate operator retention cleanup. See [the current code-sync guide](docs/CODE_SYNC.md) before using deletion.
 
 Native context accounting no longer applies application-side clipping to accepted incoming history. Codex prioritizes its reported model capacity; DSH keeps native model/compaction settings. Native summaries are not lossless or unlimited, and exceptional recovery limits still apply; see [Codex context management](docs/CODEX_CONNECT.md#native-context-management) and [DSH guidance](docs/DSH_CONNECT.md).
 
@@ -148,9 +150,9 @@ The first release includes peppered device credentials, HMAC-protected and revoc
 
 The hosted [gatherthread.cn](https://gatherthread.cn/) Alpha is open only to approved testers; public registration and public Beta remain closed. Local-only, private LAN HTTPS, and private Tailscale Serve are also available. The [Alibaba Cloud ECS profile](docs/ALIYUN_ECS.md) documents the live deployment pattern. Every mode keeps the application on loopback; only the documented Caddy edge may accept public traffic.
 
-Not yet implemented: automatic host failover, multi-process WebSocket fan-out, token-by-token agent streaming, attachment blob storage, general conversation-retention workers, offline Web outbox, reply/search UI, and packaged native installers. This candidate adds account deletion and ECS backup, cloud-Git, and journal retention jobs; those guarantees apply to a host only after the updated units and every off-host copy policy are deployed and verified. See the [privacy notice](site/privacy/) and [operations guide](docs/OPERATIONS.md). Current progress delivery is item-level public commentary rather than token streaming.
+Not yet implemented: automatic host failover, multi-process WebSocket fan-out, token-by-token agent streaming, attachment blob storage, general conversation-retention workers, offline Web outbox, conversation search and production-signed native installers. Alpha 8 adds account deletion and ECS backup, cloud-Git, and journal retention jobs; those guarantees apply to a host only after the updated units and every off-host copy policy are deployed and verified. See the [privacy notice](site/privacy/) and [operations guide](docs/OPERATIONS.md). Current progress delivery is item-level public commentary rather than token streaming.
 
-See the [documentation index](docs/README.md), [`0.1.0-alpha.7` notes](docs/releases/0.1.0-alpha.7.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [connection modes](docs/CONNECTION_MODES.md), [Codex guide](docs/CODEX_CONNECT.md), [DSH guide](docs/DSH_CONNECT.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), and [operations](docs/OPERATIONS.md).
+See the [documentation index](docs/README.md), [`0.1.0-alpha.8` notes](docs/releases/0.1.0-alpha.8.md), [product specification](docs/PRODUCT_SPEC.md), [architecture](docs/ARCHITECTURE.md), [connection modes](docs/CONNECTION_MODES.md), [Codex guide](docs/CODEX_CONNECT.md), [DSH guide](docs/DSH_CONNECT.md), [owner hosting](docs/SELF_HOSTING.md), [security model](docs/SECURITY.md), and [operations](docs/OPERATIONS.md).
 
 ## Contributing and release governance
 

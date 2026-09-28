@@ -2,7 +2,7 @@
 
 共序 DSH 插件运行在 DeepSeek Harness 的 Web profile 中，并由 DSH 主动连接到选定的共序服务器。网页不会探测 `localhost`，也不会尝试启动本地进程。
 
-> 邀请制 Alpha：`https://gatherthread.cn` 已对获批测试者开放，但当前 DSH 插件若未配置官方 URL，“共序官方服务”快捷按钮仍禁用。请手动输入该 HTTPS 地址。固定 npm 命令还需对应包已经发布；否则使用下方源码路径。
+> 邀请制 Alpha：获批测试者可连接 `https://gatherthread.cn`，暂未开放公众注册。插件中可选择共序官方服务，也可输入自托管服务器地址。固定 npm 命令需对应包已经发布；否则使用下方源码路径。
 
 ## 正常连接只需四步
 
@@ -17,7 +17,7 @@ npm install --global pnpm@10
 再把固定版本的共序插件加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.7
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.8
 ```
 
 ### 2. 打开 DSH
@@ -44,7 +44,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.7.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.8.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -63,7 +63,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 
 DSH 使用其自身配置的 Provider 额度。`Insufficient Balance` 或 `QUOTA` 表示所选 DSH 模型账户当前无法运行，不是共序同步故障。
 
-Alpha 7 还允许会话写入者在共序网页选取已完成的公开消息，由**本人已连接的 DSH Agent**生成有作者和来源的共享总结。原文和旧版本均保留。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图，也可切换为原文。需要总结视图时，网页请求使用共序自有、同工作区且已验证原生工具预设继承的 DSH 辅助执行会话；没有总结的普通会话仍走原有原生路径。DSH 原会话、本地回合及原生自动压缩不会被改写。远端 Agent 回复在 DSH 中显示为带明确来源标签的插件引用，而非伪造成本机模型回合；这样可保持下一个本地回合的原生编号。共序规范事件仍保留原有作者与类型。若无法验证兼容的原生接口或预设继承，请求会明确失败，不会偷偷回退到原文注入。总结可能遗漏细节，提示词也不是限制工作区工具或文件访问的安全沙箱。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
+Alpha 8 还允许会话写入者在共序网页选取已完成的公开消息，由**本人已连接的 DSH Agent**生成有作者和来源的共享总结。原文和旧版本均保留。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图，也可切换为原文。需要总结视图时，网页请求使用共序自有、同工作区且已验证原生工具预设继承的 DSH 辅助执行会话；没有总结的普通会话仍走原有原生路径。DSH 原会话、本地回合及原生自动压缩不会被改写。远端 Agent 回复在 DSH 中显示为带明确来源标签的插件引用，而非伪造成本机模型回合；这样可保持下一个本地回合的原生编号。共序规范事件仍保留原有作者与类型。若无法验证兼容的原生接口或预设继承，请求会明确失败，不会偷偷回退到原文注入。总结可能遗漏细节，提示词也不是限制工作区工具或文件访问的安全沙箱。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
 
 ## 上下文与原生压缩
 

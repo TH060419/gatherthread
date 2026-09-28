@@ -4,9 +4,16 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+## [0.1.0-alpha.8] - 2026-09-28
+
+### Added
+
 - Add complete bilingual beginner guides and freely browsable, isolated example projects for all account states. Separate collaboration, history, file-sharing and summary guidance; align highlight shapes and cards with visible controls. Clarify member-only file collaboration and local authorization, and keep all practice state separate from real projects, credentials and runtimes.
 - Let the self-hosted operator issue up to 50 independent, single-use Alpha test qualifications in one transaction. Keep the single-code JSON CLI response compatible, add an optional Chinese share format with a validity range for each code, and make the ECS helper print that share format by default. The Web project-invitation copy action now includes joining guidance and the validity range in the selected interface language; its original control IDs and one-time secret handling remain intact.
 - Keep maximum-size cloud Git checkpoints usable on slower Windows hosts: only the two bounded batch-write commands receive a 60-second Windows deadline; other Git deadlines, snapshot limits and atomic failure/retry semantics remain unchanged.
+
+### Changed and fixed
+
 - Pause safety: full event quotas no longer block the one bounded server pause marker; DSH lost-settlement recovery excludes fenced native work from both automatic and manual uploads while preserving subsequent local turns.
 - Separate realtime delivery from read/write permissions in the top status badge. Make summary-section arrows reveal originals, reset local overrides when switching all history, and preserve the reading anchor during explicit view changes. Add concise localized icon guidance and a roomier, responsive summary versions dialog; display changes never alter Agent context policy.
 
@@ -18,7 +25,9 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 - Add a back-to-bottom control to the shared conversation timeline. It appears once the reader scrolls away from the newest event, hides again at the bottom, and follows the reader's reduced-motion preference when it jumps.
 - Prepared public-repository documentation and discoverability updates: bilingual README introductions, documentation/release indexes, private security-reporting policy, product-home metadata, and clearer Alpha access guidance. This does not itself deploy the hosted site or publish a new package.
-- The npm Alpha 7 packages were published separately and were not rebuilt when the Git tag moved to the verified server source.
+- Add an optional, credential-free Codex Launcher link for Windows and macOS on the official HTTPS origin. Both local Launchers validate the URI and still require deliberate local token entry; terminal setup remains available everywhere. These prototype installers are not signed for public distribution.
+- Add self-service account deletion with owner-project handoff and cloud-branch preflight. Deletion removes the account's Solo cloud sessions and credentials, retains shared Multi content under a deleted-member attribution, and does not remove local files or tasks. Pair this with bounded ECS backup, unreachable cloud Git, and identifying-log retention jobs and a bilingual privacy notice. These operator jobs do not become effective on the hosted service until it is separately upgraded and verified.
+- Align source, package, plugin, documentation, and product-home references with `0.1.0-alpha.8` without conflating release artifacts with deployment verification.
 
 ## [0.1.0-alpha.7] - 2026-09-24
 
@@ -228,6 +237,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 - Public npm scope ownership, public plugin-directory distribution, and remote OAuth 2.1/PKCE MCP remain release follow-ups.
 
 [0.1.0-alpha.7]: docs/releases/0.1.0-alpha.7.md
+[0.1.0-alpha.8]: docs/releases/0.1.0-alpha.8.md
 [0.1.0-alpha.6]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.6
 [0.1.0-alpha.5]: https://github.com/TH060419/gatherthread/releases/tag/v0.1.0-alpha.5
 [0.1.0-alpha.4]: docs/releases/0.1.0-alpha.4.md

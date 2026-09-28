@@ -3,7 +3,7 @@
 For the corresponding native macOS app, see [macOS README](macos/README.md).
 
 This folder builds a Windows x64 ZIP containing a private Python runtime, a
-private Node 24 runtime, the repository's `@gatherthread/codex-connect@0.1.0-alpha.7`
+private Node 24 runtime, the repository's `@gatherthread/codex-connect@0.1.0-alpha.8`
 bundle, and the matching GatherThread Codex plugin. End users do not need to
 install Python, Node, npm, or clone this repository. Codex Desktop / CLI must
 already be installed and signed in.

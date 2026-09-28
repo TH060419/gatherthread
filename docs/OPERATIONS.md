@@ -2,7 +2,7 @@
 
 ## Release state
 
-This guide covers the executable single-process `0.1.0-alpha.7` Alpha profile, including the invitation-only Alibaba Cloud ECS deployment serving `https://gatherthread.cn`. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. Supported edges are local-only loopback, private LAN HTTPS, private Tailscale Serve, and the operator-managed ECS profile. The application remains on loopback in every mode. Public registration and public Beta are not open.
+This guide covers the executable single-process `0.1.0-alpha.8` Alpha profile, including the invitation-only Alibaba Cloud ECS deployment serving `https://gatherthread.cn`. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. Supported edges are local-only loopback, private LAN HTTPS, private Tailscale Serve, and the operator-managed ECS profile. The application remains on loopback in every mode. Public registration and public Beta are not open.
 
 ## Private-by-default startup
 
