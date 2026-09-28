@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily GatherThread cloud Git retention check
+
+[Timer]
+OnCalendar=*-*-* 19:00:00 UTC
+Persistent=true
+Unit=gatherthread-code-retention.service
+
+[Install]
+WantedBy=timers.target

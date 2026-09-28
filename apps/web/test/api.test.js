@@ -26,6 +26,30 @@ test("browser API overrides cannot send credentials to another origin", async ()
   }
 });
 
+test("account settings use browser-session routes and an explicit deletion confirmation", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return Response.json({ data: { owned_projects: [], solo_sessions: 0, shared_events: 0,
+      cloud_branches: 0, devices: 1, project: { id: "p1" } } });
+  };
+  try {
+    const api = new HttpCollaborationApi();
+    await api.accountDeletionPreview();
+    await api.transferProjectOwnership("p / 1", "member-1", "transfer-12345678");
+    await api.deleteAccount();
+    assert.deepEqual(requests.map(({ url, options }) => [url, options.method ?? "GET"]), [
+      ["/v1/account/deletion-preview", "GET"],
+      ["/v1/projects/p%20%2F%201/transfer-ownership", "POST"],
+      ["/v1/account", "DELETE"],
+    ]);
+    assert.equal(JSON.parse(requests[1].options.body).target_user_id, "member-1");
+    assert.deepEqual(JSON.parse(requests[2].options.body), { confirmation: "DELETE" });
+    assert.equal(requests.every(({ options }) => !options.headers?.Authorization), true);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("cloud Git quota and cleanup use cookie-authenticated endpoints with explicit CAS inputs", async () => {
   const originalFetch = globalThis.fetch;
   const requests = [];

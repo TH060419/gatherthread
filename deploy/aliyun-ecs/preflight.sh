@@ -25,6 +25,10 @@ check "active release is $release_version" bash -c \
 check "GatherThread systemd service is active" systemctl is-active --quiet gatherthread.service
 check "Caddy systemd service is active" systemctl is-active --quiet caddy.service
 check "daily backup timer is active" systemctl is-active --quiet gatherthread-backup.timer
+check "backup retention timer is active" systemctl is-active --quiet gatherthread-retention.timer
+check "code object retention timer is active" systemctl is-active --quiet gatherthread-code-retention.timer
+check "journal retention timer is active" systemctl is-active --quiet gatherthread-log-retention.timer
+check "journal retention ceiling is configured" grep -Fxq MaxRetentionSec=30day /etc/systemd/journald.conf.d/gatherthread-retention.conf
 check "Caddy configuration is valid" caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 check "loopback liveness responds" curl --fail --silent --show-error http://127.0.0.1:18787/health/live
 check "loopback readiness confirms WAL, foreign keys, and writes" bash -c \

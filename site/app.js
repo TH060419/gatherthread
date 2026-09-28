@@ -123,6 +123,7 @@
     "foot.3": { zh: "³ Alpha 测试资格通过公开 GitHub Issue 申请；邮箱选填，愿意公开时建议填写。请勿发布资格码、设备 Token、密码、密钥或私有代码。",
                 en: "³ Request Alpha access through a public GitHub Issue. Email is optional and recommended if you are comfortable sharing it publicly. Never post qualification codes, device tokens, passwords, keys, or private source." },
     "foot.contact": { zh: "联系与反馈：", en: "Contact & feedback:" },
+    "foot.privacy": { zh: "隐私说明与账号注销", en: "Privacy & account deletion" },
     "foot.icp": { zh: "gatherthread.cn 备案：", en: "gatherthread.cn ICP filing:" },
 
     "doc.title": { zh: "GatherThread — 一个空间，汇聚众智。", en: "GatherThread — One room, many minds." },

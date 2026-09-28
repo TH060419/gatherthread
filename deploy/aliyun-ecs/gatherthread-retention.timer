@@ -1,0 +1,10 @@
+[Unit]
+Description=Check GatherThread backup retention every six hours
+
+[Timer]
+OnCalendar=*-*-* 00,06,12,18:00:00 UTC
+Persistent=true
+Unit=gatherthread-retention.service
+
+[Install]
+WantedBy=timers.target

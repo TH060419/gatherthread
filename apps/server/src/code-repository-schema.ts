@@ -28,4 +28,8 @@ CREATE TABLE IF NOT EXISTS code_mutations (
   invalidated_at TEXT,
   PRIMARY KEY(project_id,idempotency_key)
 );
+CREATE TABLE IF NOT EXISTS code_repository_deletions (
+  repository_hash TEXT PRIMARY KEY,
+  deleted_at TEXT NOT NULL
+);
 `;

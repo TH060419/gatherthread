@@ -24,6 +24,7 @@ await cp(resolve(productRoot, "index.html"), resolve(dist, "index.html"));
 await cp(resolve(productRoot, "boot.js"), resolve(dist, "boot.js"));
 await cp(resolve(productRoot, "app.js"), resolve(dist, "app.js"));
 await cp(resolve(productRoot, "styles.css"), resolve(dist, "styles.css"));
+await cp(resolve(productRoot, "privacy"), resolve(dist, "privacy"), { recursive: true });
 await cp(resolve(productRoot, "assets"), resolve(dist, "assets"), { recursive: true });
 await cp(resolve(root, "index.html"), resolve(applicationDist, "index.html"));
 await cp(resolve(root, "src"), resolve(applicationDist, "src"), { recursive: true });

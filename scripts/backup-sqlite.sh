@@ -23,6 +23,16 @@ command -v node >/dev/null || { echo "Node.js 24 or newer is required" >&2; exit
 script_directory="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 node "$script_directory/backup-code-repositories.mjs" --check-paths "$database_path" "$backup_directory" "${code_repository_directory:-}"
 
+# The Linux host coordinates online Git packing with scheduled GC. The Node
+# server takes this lock for each Git command; retain it through backup copy.
+if [[ "$(uname -s)" == "Linux" ]]; then
+  command -v flock >/dev/null || { echo "flock is required for safe code backups" >&2; exit 69; }
+  code_lock_root="${code_repository_directory:-$database_path.code}"
+  mkdir -p -- "$code_lock_root"
+  exec 9>"$code_lock_root/.maintenance.lock"
+  flock -x -w 120 9 || { echo "code maintenance lock is busy" >&2; exit 75; }
+fi
+
 mkdir -p -- "$backup_directory"
 backup_directory="$(cd -- "$backup_directory" && pwd -P)"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"

@@ -10,7 +10,7 @@ const oldTime = new Date(Date.now() - 17 * 24 * 60 * 60 * 1000);
 
 function old(path) { utimesSync(path, oldTime, oldTime); }
 
-test("backup retention prunes old SQLite and Git companions together but preserves young and incomplete backups",
+test("backup retention prunes old complete and incomplete sets while preserving young backups",
   { skip: process.platform === "win32" ? "The ECS retention script requires POSIX sh" : false }, () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-prune-test-"));
   const make = (stem, { age = "old", incomplete = false } = {}) => {
@@ -22,6 +22,7 @@ test("backup retention prunes old SQLite and Git companions together but preserv
     if (incomplete) writeFileSync(`${db}.incomplete`, "operator review");
     if (age === "old") {
       old(db); old(`${db}.sha256`); old(join(`${db}.code`, "object")); old(`${db}.code`);
+      if (incomplete) old(`${db}.incomplete`);
     }
     return db;
   };
@@ -42,8 +43,9 @@ test("backup retention prunes old SQLite and Git companions together but preserv
     assert.equal(existsSync(`${orphan}.code`), false);
     assert.equal(existsSync(young), true);
     assert.equal(existsSync(`${young}.code`), true);
-    assert.equal(existsSync(incomplete), true);
-    assert.equal(existsSync(`${incomplete}.code`), true);
+    assert.equal(existsSync(incomplete), false);
+    assert.equal(existsSync(`${incomplete}.code`), false);
+    assert.equal(existsSync(`${incomplete}.incomplete`), false);
     assert.equal(existsSync(unrelated), true);
   } finally {
     rmSync(directory, { recursive: true, force: true });

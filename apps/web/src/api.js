@@ -137,6 +137,24 @@ export class HttpCollaborationApi {
     }
   }
 
+  async accountDeletionPreview() {
+    return this.request("/v1/account/deletion-preview");
+  }
+
+  async transferProjectOwnership(projectId, targetUserId, idempotencyKey) {
+    const { project } = await this.request(`/v1/projects/${encodeURIComponent(projectId)}/transfer-ownership`, {
+      method: "POST",
+      body: JSON.stringify({ target_user_id: targetUserId, idempotency_key: idempotencyKey }),
+    });
+    return project;
+  }
+
+  async deleteAccount() {
+    return this.request("/v1/account", {
+      method: "DELETE", body: JSON.stringify({ confirmation: "DELETE" }),
+    });
+  }
+
   clearCredential() {
     this.token = "";
   }

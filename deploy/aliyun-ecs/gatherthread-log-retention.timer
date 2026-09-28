@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily ECS journal retention check
+
+[Timer]
+OnCalendar=*-*-* 20:00:00 UTC
+Persistent=true
+Unit=gatherthread-log-retention.service
+
+[Install]
+WantedBy=timers.target

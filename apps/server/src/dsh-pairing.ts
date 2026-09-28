@@ -190,6 +190,12 @@ export class DshDevicePairingBroker {
     this.#idByUserCode.clear();
   }
 
+  revokeUser(userId: string): void {
+    for (const pairing of this.#byId.values()) {
+      if (pairing.approvedBy?.user_id === userId) this.#delete(pairing);
+    }
+  }
+
   get pendingCount(): number {
     this.#prune(this.#now());
     return this.#byId.size;

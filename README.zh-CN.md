@@ -148,7 +148,7 @@ DeepSeek Harness 使用四步流程：
 
 [gatherthread.cn](https://gatherthread.cn/) 已向获批测试者开放邀请制 Alpha；公众注册和公共 Beta 仍未开放。本机、局域网 HTTPS 与私有 Tailscale Serve 也可使用。[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)说明当前服务器部署模式。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
 
-尚未实现：主机自动故障转移、多进程 WebSocket fan-out、Agent token 级流式显示、附件对象存储、保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。
+尚未实现：主机自动故障转移、多进程 WebSocket fan-out、Agent token 级流式显示、附件对象存储、通用会话保留期清理任务、Web 离线 outbox、回复/搜索界面，以及原生安装包。本候选版本增加账号注销及 ECS 备份、云端 Git、日志保留期任务；仅在更新后的任务和异地副本策略均部署并验证后，才能认为服务器满足相应期限。参见[隐私说明](site/privacy/)与[运维指南](docs/OPERATIONS.md)。
 
 更多信息请参阅[文档索引](docs/README.md)、[`0.1.0-alpha.7` 说明](docs/releases/0.1.0-alpha.7.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
 

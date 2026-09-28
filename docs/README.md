@@ -8,6 +8,7 @@ This index separates current product contracts, operator guidance, connection gu
 - [Architecture](ARCHITECTURE.md): components, persistence, and data flow.
 - [Interface contracts](INTERFACE_CONTRACTS.md): protocol and integration compatibility boundaries.
 - [Security model](SECURITY.md): trust model, threats, authentication, redaction, and incident expectations.
+- [Privacy notice](../site/privacy/): account deletion, shared data, and deletion/retention boundaries.
 - [Architecture decisions](adr/README.md): accepted ADRs and their status.
 
 ## Connect local Agent harnesses

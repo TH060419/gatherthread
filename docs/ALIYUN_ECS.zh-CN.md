@@ -75,20 +75,20 @@ sudo journalctl -u gatherthread -n 100 --no-pager
 ## 6. 日常管理
 
 ```sh
-sudo systemctl status gatherthread caddy gatherthread-backup.timer
+sudo systemctl status gatherthread caddy gatherthread-backup.timer gatherthread-retention.timer gatherthread-code-retention.timer gatherthread-log-retention.timer
 sudo journalctl -u gatherthread -f
 sudo ls -lh /var/backups/gatherthread
 curl -fsS http://127.0.0.1:18787/health/ready
 ```
 
-数据库位于 `/var/lib/gatherthread/collaboration.sqlite`；环境与 Pepper 位于 `/etc/gatherthread/gatherthread.env`。每日备份任务仅在成功后使用 `-mtime +14` 清理符合条件的顶层完整备份组，不能保证严格的 14 天上限，也不覆盖恢复演练、不完整或异地副本。若使用云端 Git，SQLite 备份须与同名 `.db.code` 目录一起校验、异地保存、恢复和轮换。新版备份单元调用 `scripts/prune-sqlite-backups.sh` 清理符合条件的备份组；仅切换 `/opt/gatherthread/current` 不会更新已安装的 systemd 单元。备份组和 Pepper 必须分别加密保存到另一故障域，否则服务器丢失后设备凭据无法继续验证。在对外声明固定保留期限前，须为所有副本位置设置并验证到期清理。
+数据库位于 `/var/lib/gatherthread/collaboration.sqlite`；环境与 Pepper 位于 `/etc/gatherthread/gatherthread.env`。本候选版本新增独立保留期任务：备份与删除后不可达的云端 Git 对象按 13 天阈值清理，主机日志按 29 天阈值轮换，以便为公开说明的 14/30 天上限留出调度余量。必须监控定时任务实际成功运行；失败不会自动满足保留承诺。SQLite 备份须与同名 `.db.code` 目录一起校验、异地保存、恢复和轮换；异地副本、恢复演练、副本快照、Caddy 日志及日志外送也须设置同等或更短的期限。旧备份恢复前，必须用数据库以外的受限删除登记重新应用备份创建后发生的账号和内容删除，不能让已注销账号复活。备份组和 Pepper 分别加密保存在另一故障域。
 
 ## 7. 升级与回滚
 
 每次升级都使用新的 `/opt/gatherthread/releases/<版本>`，不要覆盖旧 release：
 
 1. 运行当前版本预检并执行一次在线备份。
-2. 上传并验证新候选，运行经过审核的新版本 `install.sh`。确认 `/etc/systemd/system/gatherthread-backup.service` 已调用配套备份清理脚本、`systemctl daemon-reload` 已完成；仅切换 release 符号链接不会刷新这个单元。
+2. 上传并验证新候选，运行经过审核的新版本 `install.sh`。确认备份、备份保留、云端 Git 保留和日志保留的单元与定时器均已安装，且 `systemctl daemon-reload` 已完成；仅切换 release 符号链接不会刷新这些单元。
 3. 再运行预检和双浏览器冒烟测试。
 4. 只有确认旧代码兼容新数据库 schema 时，才可把 `/opt/gatherthread/current` 指回旧 release 并重启；否则停止服务，将已验证的升级前备份恢复到新数据库路径后再启动。
 
@@ -96,4 +96,4 @@ curl -fsS http://127.0.0.1:18787/health/ready
 
 ## 当前 Alpha 限制
 
-这是单进程、单 SQLite 实例，不具备自动故障转移或多机扩容；没有公开注册、附件存储、自动保留期清理、Agent token 级流式输出和无人领取任务恢复。后续对外预览应保持小规模、仅邀请加入，并设置 ECS 磁盘、内存、证书、服务退出、备份失败和数据库完整性告警。
+这是单进程、单 SQLite 实例，不具备自动故障转移或多机扩容；没有公开注册、附件存储、通用会话保留期清理、Agent token 级流式输出和无人领取任务恢复。后续对外预览应保持小规模、仅邀请加入，并设置 ECS 磁盘、内存、证书、服务退出、备份及保留任务失败和数据库完整性告警。

@@ -1214,6 +1214,28 @@ element("add-custom-model-button").addEventListener("click", addCustomModelFromS
 settingsForm.addEventListener("input", handleSettingsControlInput);
 settingsForm.addEventListener("change", handleSettingsControlChange);
 settingsForm.addEventListener("submit", saveSettings);
+element("settings-account-confirmation").addEventListener("input", updateAccountDeleteButton);
+element("settings-delete-account").addEventListener("click", async () => {
+  const button = element("settings-delete-account");
+  const status = element("settings-account-status");
+  if (button.disabled || !state.currentUser || !settingsDialog.open) return;
+  button.disabled = true;
+  status.textContent = "";
+  try {
+    await api.deleteAccount();
+    resetWorkspaceToAuth();
+    void refreshRememberedAccounts();
+    loginError.textContent = localizer.t("Your account was deleted. Shared Multi content remains without your account identity.");
+  } catch (error) {
+    if (error?.status === 401) {
+      resetWorkspaceToAuth();
+      void refreshRememberedAccounts();
+      return;
+    }
+    status.textContent = error.message ?? localizer.t("Could not confirm account deletion. Refresh or sign in again before retrying.");
+    void loadAccountDeletionPreview();
+  }
+});
 settingsDialog.addEventListener("close", () => {
   const returnFocus = settingsReturnFocus;
   settingsReturnFocus = null;
@@ -3716,8 +3738,132 @@ function openSettingsDialog() {
   settingsDialog.showModal();
   void codeStorageSettings.load();
   void loadCurrentDeviceSettings();
+  void loadAccountDeletionPreview();
   void loadHistoryContextPolicy();
   requestAnimationFrame(() => element("close-settings-button").focus());
+}
+
+let accountDeletionGeneration = 0;
+let accountDeletionPreview = null;
+
+function updateAccountDeleteButton() {
+  element("settings-delete-account").disabled = !accountDeletionPreview
+    || accountDeletionPreview.owned_projects.length > 0 || accountDeletionPreview.cloud_branches > 0
+    || element("settings-account-confirmation").value !== "DELETE";
+}
+
+async function loadAccountDeletionPreview() {
+  const generation = ++accountDeletionGeneration;
+  const list = element("settings-account-projects");
+  const impact = element("settings-account-impact");
+  const status = element("settings-account-status");
+  list.replaceChildren();
+  accountDeletionPreview = null;
+  element("settings-account-confirmation").value = "";
+  updateAccountDeleteButton();
+  if (mockEnabled) {
+    element("settings-account").hidden = true;
+    return;
+  }
+  element("settings-account").hidden = false;
+  impact.textContent = localizer.t("Checking account data…");
+  status.textContent = "";
+  try {
+    const preview = await api.accountDeletionPreview();
+    if (generation !== accountDeletionGeneration || !settingsDialog.open) return;
+    accountDeletionPreview = preview;
+    impact.textContent = localizer.t("Solo cloud conversations: {solo}. Shared records retained without your identity: {shared}. Devices revoked: {devices}. Personal cloud code branches to resolve: {branches}.")
+      .replace("{solo}", preview.solo_sessions).replace("{shared}", preview.shared_events)
+      .replace("{devices}", preview.devices).replace("{branches}", preview.cloud_branches);
+    if (preview.cloud_branches) {
+      const note = document.createElement("p");
+      note.textContent = localizer.t("Resolve your personal cloud code branches in Cloud Git storage before deleting the account.");
+      list.append(note);
+    }
+    if (preview.owned_projects.length) {
+      const intro = document.createElement("p");
+      intro.textContent = localizer.t("Transfer each owned project to a participant, or delete that project. Transferring changes who manages the project, not its shared history.");
+      list.append(intro);
+    }
+    for (const project of preview.owned_projects) {
+      const row = document.createElement("div");
+      row.className = "account-transfer-row";
+      const name = document.createElement("strong");
+      name.textContent = project.title;
+      const select = document.createElement("select");
+      select.setAttribute("aria-label", `${localizer.t("New owner for")} ${project.title}`);
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = localizer.t("Choose a participant");
+      select.append(placeholder);
+      const transfer = document.createElement("button");
+      transfer.type = "button";
+      transfer.className = "button button-secondary";
+      transfer.textContent = localizer.t("Transfer ownership");
+      transfer.disabled = true;
+      select.addEventListener("change", () => { transfer.disabled = !select.value; });
+      row.append(name, select, transfer);
+      list.append(row);
+      try {
+        const members = await api.listProjectMembers(project.id);
+        if (generation !== accountDeletionGeneration || !settingsDialog.open) return;
+        for (const member of members.filter((item) => item.role === "participant")) {
+          const option = document.createElement("option");
+          option.value = member.id;
+          option.textContent = member.username;
+          select.append(option);
+        }
+        if (select.options.length === 1) {
+          const note = document.createElement("small");
+          note.textContent = localizer.t("Invite a participant before transferring this project.");
+          row.append(note);
+        }
+      } catch {
+        const note = document.createElement("small");
+        note.textContent = localizer.t("Unable to load project participants. Refresh settings and try again.");
+        row.append(note);
+      }
+      transfer.addEventListener("click", async () => {
+        if (!select.value || generation !== accountDeletionGeneration) return;
+        transfer.disabled = true;
+        status.textContent = "";
+        try {
+          await api.transferProjectOwnership(project.id, select.value, createIdempotencyKey("transfer-project"));
+          if (generation !== accountDeletionGeneration || !settingsDialog.open) return;
+          state.projects = await api.listProjects();
+          if (state.project?.id === project.id) {
+            state.project.role = "participant";
+            state.projectMembers = await api.listProjectMembers(project.id);
+            const activeSessionId = state.session?.projectId === project.id ? state.session.id : null;
+            if (activeSessionId) {
+              const members = await api.listMembers(activeSessionId);
+              if (state.session?.id === activeSessionId) {
+                state.session.role = "participant";
+                state.session.members = members;
+              }
+            }
+            if (state.project?.id === project.id) {
+              renderProjectPermissions();
+              if (state.session) renderSessionHeader();
+              renderComposerPermissions();
+              renderSessionDeliveryControls();
+              renderMembers();
+            }
+          }
+          renderProjectSelect();
+          void loadAccountDeletionPreview();
+        } catch (error) {
+          status.textContent = error.message ?? localizer.t("Could not transfer ownership.");
+          transfer.disabled = false;
+        }
+      });
+    }
+    updateAccountDeleteButton();
+  } catch (error) {
+    if (generation !== accountDeletionGeneration || !settingsDialog.open) return;
+    impact.textContent = "";
+    status.textContent = error.message ?? localizer.t("Unable to check account data.");
+  }
 }
 
 async function loadHistoryContextPolicy() {
@@ -3774,6 +3920,8 @@ async function loadCurrentDeviceSettings() {
 }
 
 function cancelSettingsDialog() {
+  accountDeletionGeneration += 1;
+  accountDeletionPreview = null;
   codeStorageSettings.cancel();
   settingsDeviceLoadGeneration += 1;
   settingsHistoryPolicyGeneration += 1;
