@@ -712,7 +712,7 @@ createInvitationForm.addEventListener("submit", async (event) => {
     const shareText = projectInvitationShareText(result.inviteToken, result.invitation);
     createdInvitationSecret = result.inviteToken;
     createdInvitationShareText = shareText;
-    element("created-invite-share-text").textContent = shareText;
+    element("created-invite-secret").textContent = shareText;
     element("created-invitation").hidden = false;
     state.invitations = [result.invitation, ...state.invitations.filter((item) => item.id !== result.invitation.id)];
     renderInvitations();
@@ -739,7 +739,7 @@ element("copy-invite-secret-button").addEventListener("click", async () => {
     const selection = window.getSelection();
     if (selection) {
       const range = document.createRange();
-      range.selectNodeContents(element("created-invite-share-text"));
+      range.selectNodeContents(element("created-invite-secret"));
       selection.removeAllRanges();
       selection.addRange(range);
     }
@@ -1993,7 +1993,7 @@ async function revokeInvitation(invitation, button) {
 function clearCreatedInvitationSecret() {
   createdInvitationSecret = "";
   createdInvitationShareText = "";
-  element("created-invite-share-text").textContent = "";
+  element("created-invite-secret").textContent = "";
   element("copy-invite-status").textContent = "";
   element("created-invitation").hidden = true;
 }

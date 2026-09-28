@@ -32,7 +32,7 @@ test("owner secret is rendered only from create response and cleared on session 
   const main = await readFile(mainPath, "utf8");
   assert.match(main, /createdInvitationSecret = result\.inviteToken/);
   assert.match(main, /createdInvitationShareText = shareText/);
-  assert.match(main, /element\("created-invite-share-text"\)\.textContent = shareText/);
+  assert.match(main, /element\("created-invite-secret"\)\.textContent = shareText/);
   assert.match(main, /navigator\.clipboard\.writeText\(createdInvitationShareText\)/);
   assert.match(main, /async function selectSession\(sessionId\)[\s\S]*?clearCreatedInvitationSecret\(\)/);
   assert.match(main, /logout-button[\s\S]*?clearCreatedInvitationSecret\(\)/);
@@ -41,7 +41,7 @@ test("owner secret is rendered only from create response and cleared on session 
 
 test("project invitation copy includes one secret, joining instructions and exact Beijing expiry range", async () => {
   const html = await readFile(htmlPath, "utf8");
-  assert.match(html, /id="created-invite-share-text"[^>]*data-i18n-skip/);
+  assert.match(html, /id="created-invite-secret"[^>]*data-i18n-skip/);
   assert.match(html, /id="copy-invite-secret-button"[^>]*>Copy invitation<\/button>/);
   const secret = "gti_test-only-example-not-a-real-secret";
   const text = projectInvitationShareText(secret, {
