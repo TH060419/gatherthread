@@ -12,6 +12,12 @@ SPEC.loader.exec_module(launcher)
 
 
 class NativeCodexCommandTests(unittest.TestCase):
+    def test_hook_command_rejects_windows_shell_expansion_in_install_path(self):
+        self.assertIn('"${PLUGIN_ROOT}/scripts/hook-forwarder.mjs"', launcher.hook_node_command(Path('C:/Users/Test/node.exe')))
+        for path in ('C:/Users/%USERNAME%/node.exe', 'C:/Users/!NAME!/node.exe', 'C:/Users/$(whoami)/node.exe', 'C:/Users/Bad"Name/node.exe'):
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, "Hook"):
+                launcher.hook_node_command(Path(path))
+
     def test_deep_link_accepts_only_fixed_server(self):
         accepted = "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect"
         rejected = "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fexample.com&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect"

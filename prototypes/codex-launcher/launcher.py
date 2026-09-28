@@ -105,6 +105,14 @@ def bundled_connector() -> Path:
     return runtime_dir() / "connector" / "codex-connect.js"
 
 
+def hook_node_command(node: Path) -> str:
+    """Fail closed on cmd.exe expansions in the installed Node path."""
+    value = str(node)
+    if not value or any(char in value for char in ('"', '%', '!', '$', '\0', '\r', '\n')):
+        raise ValueError("插件安装路径包含 Windows Hook 命令不支持的字符")
+    return f'"{value}" "${{PLUGIN_ROOT}}/scripts/hook-forwarder.mjs"'
+
+
 def find_codex() -> str:
     from shutil import which
     found = which("codex.exe")
@@ -190,6 +198,7 @@ def register_windows_scheme(directory: Path) -> None:
 def install_bundle() -> Path:
     """Copy the portable folder to a stable per-user location and wire the plugin."""
     source, target = runtime_dir(), installed_dir()
+    hook_command = hook_node_command(target / "runtime" / "node.exe")
     if source != target:
         shutil.copytree(source, target, dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("*.pyc", "__pycache__"))
@@ -203,9 +212,8 @@ def install_bundle() -> Path:
     (plugin / ".mcp.json").write_text(json.dumps(mcp, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     hooks_path = plugin / "hooks" / "hooks.json"
     hooks = json.loads(hooks_path.read_text(encoding="utf-8"))
-    command = f'"{node}" "${{PLUGIN_ROOT}}/scripts/hook-forwarder.mjs"'
     for event in ("UserPromptSubmit", "Stop"):
-        hooks["hooks"][event][0]["hooks"][0]["command"] = command
+        hooks["hooks"][event][0]["hooks"][0]["command"] = hook_command
     hooks_path.write_text(json.dumps(hooks, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     register_windows_scheme(target)
     return target

@@ -68,6 +68,10 @@ private func validModel(_ value: String) -> Bool {
     !value.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 })
 }
 
+private func shellQuote(_ value: String) -> String {
+    "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+}
+
 private func bundled(_ path: String) -> URL {
     Bundle.main.resourceURL!.appendingPathComponent(path)
 }
@@ -234,22 +238,27 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         let plugin = root.appendingPathComponent("plugins/gatherthread", isDirectory: true)
         let source = bundled("plugins/gatherthread")
         guard manager.fileExists(atPath: source.path) else { throw LinkError.invalid("安装包缺少插件源码") }
-        try manager.createDirectory(at: plugin.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if manager.fileExists(atPath: plugin.path) { try manager.removeItem(at: plugin) }
-        try manager.copyItem(at: source, to: plugin)
         let marketplace = root.appendingPathComponent(".agents/plugins/marketplace.json")
-        try manager.createDirectory(at: marketplace.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let stage = root.appendingPathComponent(".install-stage-\(UUID().uuidString)", isDirectory: true)
+        let stagedPlugin = stage.appendingPathComponent("gatherthread", isDirectory: true)
+        let stagedMarketplace = stage.appendingPathComponent("marketplace.json")
+        let oldPlugin = stage.appendingPathComponent("previous-gatherthread", isDirectory: true)
+        let oldMarketplace = stage.appendingPathComponent("previous-marketplace.json")
+        try manager.createDirectory(at: stage, withIntermediateDirectories: true)
+        var preserveStage = false
+        defer { if !preserveStage { try? manager.removeItem(at: stage) } }
+        try manager.copyItem(at: source, to: stagedPlugin)
         guard var listing = try JSONSerialization.jsonObject(with: Data(contentsOf: bundled("marketplace.json"))) as? [String: Any] else {
             throw LinkError.invalid("插件市场清单格式无效")
         }
         listing["name"] = "gatherthread-launcher"
-        try JSONSerialization.data(withJSONObject: listing, options: [.prettyPrinted, .sortedKeys]).write(to: marketplace)
-        let mcpFile = plugin.appendingPathComponent(".mcp.json")
+        try JSONSerialization.data(withJSONObject: listing, options: [.prettyPrinted, .sortedKeys]).write(to: stagedMarketplace)
+        let mcpFile = stagedPlugin.appendingPathComponent(".mcp.json")
         let node = bundled("runtime/node").path
         let connector = bundled("connector/codex-connect.js").path
         let mcp: [String: Any] = ["mcpServers": ["gatherthread": ["command": node, "args": [connector, "mcp"]]]]
         try JSONSerialization.data(withJSONObject: mcp, options: [.prettyPrinted, .sortedKeys]).write(to: mcpFile)
-        let hooksFile = plugin.appendingPathComponent("hooks/hooks.json")
+        let hooksFile = stagedPlugin.appendingPathComponent("hooks/hooks.json")
         guard var hooks = try JSONSerialization.jsonObject(with: Data(contentsOf: hooksFile)) as? [String: Any] else {
             throw LinkError.invalid("插件 Hooks 格式无效")
         }
@@ -259,12 +268,38 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
                   var inner = entries[0]["hooks"] as? [[String: Any]], !inner.isEmpty else {
                 throw LinkError.invalid("插件 Hooks 格式无效")
             }
-            inner[0]["command"] = "\"\(node)\" \"${PLUGIN_ROOT}/scripts/hook-forwarder.mjs\""
+            inner[0]["command"] = "\(shellQuote(node)) \"${PLUGIN_ROOT}/scripts/hook-forwarder.mjs\""
             entries[0]["hooks"] = inner
             events[event] = entries
         }
         hooks["hooks"] = events
         try JSONSerialization.data(withJSONObject: hooks, options: [.prettyPrinted, .sortedKeys]).write(to: hooksFile)
+        try manager.createDirectory(at: plugin.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try manager.createDirectory(at: marketplace.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let hadPlugin = manager.fileExists(atPath: plugin.path)
+        let hadMarketplace = manager.fileExists(atPath: marketplace.path)
+        var installedPlugin = false
+        do {
+            if hadPlugin { try manager.moveItem(at: plugin, to: oldPlugin) }
+            try manager.moveItem(at: stagedPlugin, to: plugin)
+            installedPlugin = true
+            if hadMarketplace { try manager.moveItem(at: marketplace, to: oldMarketplace) }
+            try manager.moveItem(at: stagedMarketplace, to: marketplace)
+        } catch {
+            do {
+                if hadMarketplace && manager.fileExists(atPath: oldMarketplace.path) {
+                    try manager.moveItem(at: oldMarketplace, to: marketplace)
+                }
+                if installedPlugin { try manager.removeItem(at: plugin) }
+                if hadPlugin && manager.fileExists(atPath: oldPlugin.path) {
+                    try manager.moveItem(at: oldPlugin, to: plugin)
+                }
+            } catch {
+                preserveStage = true
+                throw LinkError.invalid("插件安装失败，旧版备份保留在 \(stage.path)：\(error.localizedDescription)")
+            }
+            throw error
+        }
         return root
     }
 
@@ -327,6 +362,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         process.standardError = output
         process.terminationHandler = { [weak self] finished in
             DispatchQueue.main.async {
+                guard self?.connector === finished else { return }
                 self?.connector = nil
                 self?.status.stringValue = "连接器已退出（代码 \(finished.terminationStatus)）。可检查日志后重试。"
             }
@@ -398,6 +434,19 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
 }
 
 private func runContractTests(at path: String) throws {
+    let hostilePath = "/tmp/app'$(printf UNSAFE)`printf UNSAFE`/node"
+    let shell = Process()
+    shell.executableURL = URL(fileURLWithPath: "/bin/sh")
+    shell.arguments = ["-c", "printf %s \(shellQuote(hostilePath))"]
+    let quotedOutput = Pipe()
+    shell.standardOutput = quotedOutput
+    try shell.run()
+    let shellResult = quotedOutput.fileHandleForReading.readDataToEndOfFile()
+    shell.waitUntilExit()
+    guard shell.terminationStatus == 0,
+          String(data: shellResult, encoding: .utf8) == hostilePath else {
+        throw LinkError.invalid("Hook 执行路径转义不安全")
+    }
     let data = try Data(contentsOf: URL(fileURLWithPath: path))
     guard let vectors = try JSONSerialization.jsonObject(with: data) as? [String: Any],
           let accepted = vectors["accepted"] as? [[String: Any]],
