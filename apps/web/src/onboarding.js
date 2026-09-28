@@ -306,6 +306,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       onDestroyed: cleanup,
       onPopoverRender: (popover) => {
         popover.wrapper.setAttribute("data-i18n-skip", "");
+        popover.wrapper.removeAttribute("data-onboarding-focus-ready");
         popover.wrapper.setAttribute("aria-modal", "true");
         popover.progress.setAttribute("aria-live", "polite");
         popover.closeButton.setAttribute("aria-label", text(GUIDE_COPY.skip));
@@ -333,6 +334,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
           if (!tour || tour.getState("popover")?.wrapper !== popover.wrapper) return;
           positionCard(popover.wrapper, tour.getActiveElement()); drawLine();
           popover.nextButton.focus({ preventScroll: true });
+          popover.wrapper.setAttribute("data-onboarding-focus-ready", items[tour.getActiveIndex()]?.id ?? "");
           win.requestAnimationFrame(drawLine);
         });
       },

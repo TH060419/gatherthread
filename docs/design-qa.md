@@ -65,3 +65,9 @@ The reproducible mock-only check is `tests/browser/onboarding.mjs`; invocation i
 
 - The open session-status panel stays visually portalled outside clipped ancestors. Its controls leave native document tab order while open; explicit Tab and Shift+Tab handling preserves the logical order from the header button through the panel and back to the remaining page. Closing it restores original tab indices. A mutation observer applies the same rule to controls added while open.
 - Browser coverage traverses each visible panel control, continues through the rest of the page to document end, and checks that the panel is not revisited. Chrome and WebKit are checked separately. The onboarding ADR is now 0033 because current main uses 0032 for harness model catalogs.
+
+### Beginner copy and focus readiness, 2026-09-28
+
+- The first-use guides now explain shared messages directly instead of relying on "context" terminology. The summary selection step expresses its existing text limit in approximate English and Chinese character counts and tells users how to recover if they select too much.
+- The guide exposes when its current step has attempted to focus the Next button. Browser checks wait for that step-specific signal before asserting focus, avoiding a fixed-delay race while retaining the keyboard assertion. Full Chrome and repeated Playwright WebKit guide runs passed across populated, empty and viewer accounts at 1440×900, 390×844 and 320×568.
+- Native Safari opened the local mock workspace and Settings, but the UI automation stopped with `noWindowsAvailable` before entering a guide. Microsoft Edge was not installed on this machine. Neither platform is counted as a completed native-browser tutorial check.

@@ -44,6 +44,21 @@ test("all account states get the complete isolated example guides", () => {
   assert.ok(guideSteps("members").find((item) => item.id === "join").note);
 });
 
+test("beginner copy explains shared history and summary limits without technical units", () => {
+  for (const topic of ["basics", "history", "summaries"]) {
+    for (const item of guideSteps(topic)) {
+      for (const copy of item.text) assert.doesNotMatch(copy, /20 KiB|上下文|context\b/iu);
+    }
+  }
+  const chat = guideSteps("basics").find((item) => item.id === "chat");
+  const request = guideSteps("basics").find((item) => item.id === "request");
+  const selection = guideSteps("summaries").find((item) => item.id === "selection");
+  assert.match(chat.text[1], /AI agent.*共享消息/u);
+  assert.match(request.text[1], /AI agent.*之前的共享会话消息/u);
+  assert.match(selection.text[0], /1–100.*20,000.*6,000/u);
+  assert.match(selection.text[1], /1–100.*2 万.*6000/u);
+});
+
 test("every guide and navigation label has authored Chinese and English copy", () => {
   for (const pair of [...Object.values(GUIDE_LABELS), ...Object.values(GUIDE_COPY)]) {
     assert.equal(pair.length, 2); assert.notEqual(pair[0], pair[1]);

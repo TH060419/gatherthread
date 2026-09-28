@@ -72,6 +72,7 @@ async function start(page, topic) {
 async function assertStep(frame, item, size) {
   await frame.locator(popup).waitFor();
   await frame.waitForFunction(({ target }) => !target || document.querySelector('.driver-active-element:not(#driver-dummy-element)'), item);
+  await frame.waitForFunction((stepId) => document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready') === stepId, item.id);
   await frame.waitForTimeout(90);
   const state = await frame.evaluate(() => {
     const card = document.querySelector('.onboarding-popover'), target = document.querySelector('.driver-active-element');
