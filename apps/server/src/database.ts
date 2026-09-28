@@ -816,17 +816,27 @@ function agentRequestTarget(event: Pick<CanonicalEvent, "payload">): AgentReques
 
 function runtimeSupportsAgentTarget(runtime: RuntimeRecord, target: AgentRequestTarget): boolean {
   if (runtime.harness.trim().toLowerCase() !== target.harness) return false;
-  if (target.harness === "codex") {
-    return target.provider === undefined || runtime.provider === target.provider;
-  }
   if (runtime.execution_profiles !== undefined) {
-    if (target.runtimeId === undefined || target.runtimeId !== runtime.id
-      || target.provider === undefined || target.model === undefined) return false;
+    // A runtime that declares its exact profiles is matched against that
+    // declaration for every harness, not just DeepSeek Harness. Otherwise a direct
+    // API caller could submit a model or effort this runtime never advertised and
+    // bypass the fail-closed promise the declaration exists to make.
+    if (target.runtimeId === undefined || target.runtimeId !== runtime.id) return false;
+    if (target.model === undefined) return false;
+    // A targeted request may omit the provider; the runtime's own provider is then
+    // the only one its declaration can describe.
+    const provider = target.provider ?? runtime.provider;
     const advertised = runtime.execution_profiles.find((profile) =>
-      profile.provider === target.provider && profile.model === target.model);
+      profile.provider === provider && profile.model === target.model);
     if (advertised === undefined) return false;
     return target.reasoningEffort === undefined
       || advertised.reasoning_efforts?.includes(target.reasoningEffort) === true;
+  }
+  if (target.harness === "codex") {
+    // A Codex runtime without a declaration keeps the fixed-route rule: it is
+    // registered for one provider, and the browser may still target the model it
+    // resolved for that provider.
+    return target.provider === undefined || runtime.provider === target.provider;
   }
   return (target.provider === undefined || runtime.provider === target.provider)
     && (target.model === undefined || runtime.model === target.model);

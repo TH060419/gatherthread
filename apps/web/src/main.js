@@ -41,6 +41,7 @@ import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
 import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260927-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
+  CODEX_HARNESS,
   codexExecutionProfile,
   DSH_HARNESS,
   DSH_INSTALL_COMMAND,
@@ -54,8 +55,9 @@ import {
   resolveCodexRuntime,
   resolveDshRuntime,
   withoutDshPairingHash,
-} from "./dsh.js?v=20260922-1";
+} from "./dsh.js?v=20260925-3";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
+import { calendarDayKey, formatFullTimestamp, formatTimelineDay } from "./timeline-dates.js?v=20260927-1";
 import {
   captureTimelineScroll,
   isTimelineAtBottom,
@@ -94,7 +96,7 @@ import {
   withProjectCodexProfile,
   withProjectDshProfile,
   withProjectEnabledHarnesses,
-} from "./settings.js?v=20260925-2";
+} from "./settings.js?v=20260925-4";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
@@ -2120,9 +2122,27 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
   }
   const pendingRequestIds = new Set(pendingAgentRequests(state.sync.events).map((event) => event.id));
   timelineEmpty.hidden = events.length > 0;
+  const locale = state.settings.general.locale;
+  const today = new Date();
+  let currentDay = null;
+
+  function appendDayDivider(createdAt) {
+    const day = calendarDayKey(createdAt);
+    if (!day || day === currentDay) return;
+    currentDay = day;
+    const item = document.createElement("li");
+    const time = document.createElement("time");
+    item.className = "timeline-date-divider";
+    time.dateTime = day;
+    time.textContent = formatTimelineDay(createdAt, locale, today);
+    time.title = new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { dateStyle: "full" }).format(new Date(createdAt));
+    item.append(time);
+    timeline.append(item);
+  }
 
   for (const event of events) {
     for (const version of summaryView.before.get(event.id) ?? []) {
+      appendDayDivider(event.createdAt);
       const summaryItem = document.createElement("li");
       const card = historySummaryUi.card(version);
       if (version.response && version.status === "completed") {
@@ -2134,6 +2154,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     }
     if (summaryView.hidden.has(event.id)) continue;
     if (event.type === "agent_progress") continue;
+    appendDayDivider(event.createdAt);
     const item = document.createElement("li");
     const article = document.createElement("article");
     const header = document.createElement("header");
@@ -2143,6 +2164,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     const actor = document.createElement("strong");
     const type = document.createElement("span");
     const sequence = document.createElement("span");
+    const timeButton = document.createElement("button");
     const time = document.createElement("time");
 
     article.className = `event-card event-${event.type}`;
@@ -2170,10 +2192,15 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     sequence.textContent = `#${event.sequence}`;
     time.dateTime = event.createdAt;
     time.textContent = formatTimestamp(event.createdAt);
+    timeButton.className = "event-time-button";
+    timeButton.type = "button";
+    timeButton.dataset.fullTime = formatFullTimestamp(event.createdAt, locale) ?? time.textContent;
+    timeButton.setAttribute("aria-label", timeButton.dataset.fullTime);
+    timeButton.append(time);
     meta.append(actor, type);
     identity.className = "event-identity";
     identity.append(avatar, meta);
-    header.append(identity, sequence, time);
+    header.append(identity, sequence, timeButton);
     const sourceControl = historySummaryUi.sourceControl(event);
     if (sourceControl) identity.prepend(sourceControl);
     const content = eventContent(event);
@@ -3214,11 +3241,39 @@ function setAutomaticClaimDeviceName({ force = false } = {}) {
   input.dataset.automatic = "true";
 }
 
-function renderModelOptions(select, selectedModel, settings = settingsPreview) {
-  const models = [
-    ...CODEX_MODELS.map((entry) => entry.id),
-    ...settings.agents.customCodexModels.filter((model) => !CODEX_MODELS.some((entry) => entry.id === model)),
-  ];
+/**
+ * Codex models the connected runtimes advertise.
+ *
+ * A Codex installation publishes its own catalog, so this is the authoritative
+ * source for the model picker; the built-in list in settings.js stays only as a
+ * fallback for a workspace whose connector has not reported a catalog (an older
+ * Codex, or no connection yet). Offline runtimes are ignored because their models
+ * cannot run in this session.
+ */
+function advertisedCodexModels() {
+  const entries = [];
+  for (const runtime of state.executionRuntimes) {
+    if (runtime.harness !== CODEX_HARNESS || runtime.status !== "online") continue;
+    for (const profile of runtime.executionProfiles ?? []) {
+      entries.push({
+        id: profile.model,
+        efforts: profile.reasoningEfforts,
+        defaultEffort: profile.defaultReasoningEffort,
+      });
+    }
+  }
+  return entries;
+}
+
+function renderModelOptions(select, selectedModel, settings = settingsPreview, advertised = advertisedCodexModels()) {
+  const advertisedIds = uniqueModelIds(advertised.map((entry) => entry.id));
+  // An advertised catalog is the authority on what this connection can run, so
+  // nothing else is offered while one exists. The stored selection stays listed
+  // even then: repointing a project at a different model silently would be worse
+  // than showing it, and submission still fails closed for an unadvertised model.
+  const models = uniqueModelIds(advertisedIds.length > 0
+    ? [...advertisedIds, selectedModel]
+    : [...CODEX_MODELS.map((entry) => entry.id), ...settings.agents.customCodexModels, selectedModel]);
   select.replaceChildren();
   for (const model of models) {
     const option = document.createElement("option");
@@ -3229,25 +3284,43 @@ function renderModelOptions(select, selectedModel, settings = settingsPreview) {
   }
 }
 
-function effortOptionsForModel(model, settings = state.settings) {
+function effortOptionsForModel(model, settings = state.settings, advertised = advertisedCodexModels()) {
+  const runtimeAdvertised = advertised.find((entry) => entry.id === model);
+  // A connected runtime is the authority for a model it declares — including a model
+  // whose effort metadata is absent, which advertises no effort selection rather
+  // than the built-in fallback set.
+  if (runtimeAdvertised) return runtimeAdvertised.efforts ?? [];
   const known = CODEX_MODELS.find((entry) => entry.id === model);
   return known?.efforts ?? CODEX_REASONING_EFFORTS;
 }
 
-function updateEffortControl(modelSelect, effortSelect, requestedEffort, settings = state.settings) {
-  const profile = normalizeCodexProfile({ model: modelSelect.value, effort: requestedEffort }, settings.agents.customCodexModels);
+function updateEffortControl(modelSelect, effortSelect, requestedEffort, settings = state.settings, advertised = advertisedCodexModels()) {
+  const profile = normalizeCodexProfile(
+    { model: modelSelect.value, effort: requestedEffort },
+    settings.agents.customCodexModels,
+    advertised,
+  );
+  const options = effortOptionsForModel(profile.model, settings, advertised);
   effortSelect.replaceChildren();
-  for (const effort of effortOptionsForModel(profile.model, settings)) {
+  for (const effort of options) {
     const option = document.createElement("option");
     option.value = effort;
     option.textContent = effort;
     option.selected = effort === profile.effort;
     effortSelect.append(option);
   }
+  // No declared effort means no selection is offered, so the request omits it
+  // instead of sending a value the harness never advertised.
+  return options.length > 0;
+}
+
+function uniqueModelIds(models) {
+  return [...new Set(models.filter((model) => typeof model === "string" && model))];
 }
 
 function currentProjectProfile(settings = state.settings) {
-  return state.project ? projectCodexProfile(settings, state.project.id) : normalizeCodexProfile(undefined);
+  if (!state.project) return normalizeCodexProfile(undefined);
+  return projectCodexProfile(settings, state.project.id, advertisedCodexModels());
 }
 
 function currentProjectHarness(settings = state.settings) {
@@ -3355,7 +3428,7 @@ function renderAgentProfileControls() {
   }
   agentHarnessSelect.value = harness;
   renderModelOptions(agentModelSelect, profile.model, state.settings);
-  updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
+  const hasEffortChoice = updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
   renderDshRuntimeOptions(agentDshRuntimeSelect, state.settings);
   const dshResolution = currentDshResolution();
   renderDshExecutionControls(
@@ -3365,7 +3438,11 @@ function renderAgentProfileControls() {
   const disabled = !state.project;
   agentHarnessSelect.disabled = disabled;
   agentModelSelect.disabled = disabled;
-  agentEffortSelect.disabled = disabled;
+  // The runtime advertised no reasoning effort for this model, so the control is
+  // hidden rather than offering values the harness never declared.
+  element("agent-effort-label").hidden = !hasEffortChoice;
+  agentEffortSelect.hidden = !hasEffortChoice;
+  agentEffortSelect.disabled = disabled || !hasEffortChoice;
   element("codex-agent-profile-fields").hidden = harness !== "codex";
   element("dsh-agent-profile-fields").hidden = harness !== DSH_HARNESS;
   if (harness !== DSH_HARNESS) element("agent-request-profile").dataset.layout = "codex";
@@ -3378,7 +3455,15 @@ function updateComposerAgentProfile(changed) {
     model: agentModelSelect.value,
     effort: changed === "model" ? previous.effort : agentEffortSelect.value,
   };
-  state.settings = settingsStore.set(withProjectCodexProfile(state.settings, state.project.id, requested));
+  // The connected runtime's declaration validates and stores this choice: the
+  // built-in fallback list does not know an advertised model's effort set, and
+  // normalizing against it would silently reset a supported selection.
+  state.settings = settingsStore.set(withProjectCodexProfile(
+    state.settings,
+    state.project.id,
+    requested,
+    advertisedCodexModels(),
+  ));
   renderAgentProfileControls();
 }
 
@@ -3545,7 +3630,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
     next = withProjectCodexProfile(next, state.project.id, {
       model: element("settings-default-model").value,
       effort: element("settings-default-effort").value,
-    });
+    }, advertisedCodexModels());
     next = withProjectEnabledHarnesses(next, state.project.id, settingsEnabledHarnesses());
     next = withProjectAgentHarness(next, state.project.id, element("settings-agent-harness").value);
     if (element("settings-agent-harness").value === DSH_HARNESS) {

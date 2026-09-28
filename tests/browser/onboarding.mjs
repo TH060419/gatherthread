@@ -233,12 +233,43 @@ try {
   // focusing a child, otherwise moving that child can clear its focus.
   await page.waitForFunction(() => document.querySelector('.session-context-panel').parentElement === document.body);
   await page.locator('#history-summary-select-button').evaluate((node) => { node.disabled = true; });
-  await page.locator('#upload-local-turns-button').focus(); await page.keyboard.press('Tab');
+  await disclosure.focus();
+  const visitedPanelControls = new Set();
+  let reachedLastPanelControl = false;
+  for (let i = 0; i < 20; i++) {
+    await page.keyboard.press('Tab');
+    const focus = await page.evaluate(() => ({ id: document.activeElement.id,
+      inPanel: document.querySelector('.session-context-panel').contains(document.activeElement) }));
+    assert.equal(focus.inPanel, true, 'Tab from the details button must traverse the panel');
+    assert.equal(visitedPanelControls.has(focus.id), false, 'Panel controls must not cycle');
+    visitedPanelControls.add(focus.id);
+    if (focus.id === 'upload-local-turns-button') { reachedLastPanelControl = true; break; }
+  }
+  assert.equal(reachedLastPanelControl, true, 'Tab must reach the last panel control');
+  await page.keyboard.press('Tab');
   assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true, 'disabled summary never traps focus');
   await page.locator('#mentions-button').press('Shift+Tab');
   assert.equal(await page.locator('#upload-local-turns-button').evaluate((node) => node === document.activeElement), true,
     JSON.stringify(await page.evaluate(() => ({ active: document.activeElement?.id, driverActive: document.body.classList.contains('driver-active'), open: document.querySelector('#session-context-details').open,
       controls: [...document.querySelector('.session-context-panel').querySelectorAll('button, input, select, a[href]')].map(node => ({ id: node.id, disabled: node.disabled, hidden: Boolean(node.closest('[hidden]')), rects: node.getClientRects().length })) }))));
+  await page.locator('#upload-local-turns-button').press('Tab');
+  assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true);
+  let reachedDocumentEnd = false;
+  for (let i = 0; i < 200; i++) {
+    const focus = await page.evaluate(() => {
+      window.__focusSeen ??= new WeakSet();
+      const element = document.activeElement;
+      const repeated = window.__focusSeen.has(element);
+      window.__focusSeen.add(element);
+      return { repeated, inPanel: document.querySelector('.session-context-panel').contains(element),
+        atBody: element === document.body, id: element.id || element.tagName };
+    });
+    if (focus.atBody) { reachedDocumentEnd = true; break; }
+    assert.equal(focus.inPanel, false, 'Tab must not re-enter the portalled details after leaving it');
+    assert.equal(focus.repeated, false, `Tab must not cycle through page controls (${focus.id})`);
+    await page.keyboard.press('Tab');
+  }
+  assert.equal(reachedDocumentEnd, true, 'Tab must reach the end of the document');
   await page.keyboard.press('Escape');
   await disclosure.click(); await page.locator('#logout-button').click();
   await page.locator('#auth-view:not([hidden])').waitFor();

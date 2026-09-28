@@ -18,6 +18,7 @@ import type {
   DshExecutionGate,
   DshLocalSessionCandidate,
   DshProjectCollaborationApi,
+  DshRuntimeExecutionProfile,
 } from "./types.js";
 
 export interface DshManagedConnector {
@@ -25,6 +26,13 @@ export interface DshManagedConnector {
   readonly executionRuntimeId?: string | undefined;
   start(): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Re-register the runtime after the harness published a new model catalog.
+   *
+   * Absent on connectors that never discover a catalog, such as the legacy
+   * single-model binding: those keep their existing declaration unchanged.
+   */
+  updateExecutionProfiles?(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void>;
   localSyncStatus?(): LocalConversationSyncStatus;
   setLocalAutoUpload?(enabled: boolean): Promise<LocalConversationSyncStatus>;
   uploadLocalTurns?(): Promise<LocalConversationUploadResult>;
@@ -137,6 +145,39 @@ export class DshProjectManager {
 
   get stopped(): boolean {
     return this.#stopped;
+  }
+
+  /**
+   * Adopt a refreshed execution-profile catalog for this project.
+   *
+   * The manager owns the catalog every session connector is created from, so a
+   * refresh updates that source first and then asks each running connector to
+   * re-register. Every connector gets its chance before failures are reported and
+   * rejected together, so one unhealthy session cannot block its peers and the
+   * native owner retains the publication for retry until all sessions confirm it.
+   */
+  async updateExecutionProfiles(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void> {
+    const cloned = profiles.map((profile) => ({
+      ...profile,
+      ...(profile.reasoningEfforts === undefined ? {} : { reasoningEfforts: [...profile.reasoningEfforts] }),
+    }));
+    this.#config.executionProfiles = cloned;
+    const failures: Error[] = [];
+    for (const binding of this.#managed.values()) {
+      if (binding.phase !== "active" || binding.connector.stopped) continue;
+      if (binding.connector.updateExecutionProfiles === undefined) continue;
+      try {
+        await binding.connector.updateExecutionProfiles(cloned);
+      } catch (error) {
+        failures.push(error instanceof Error ? error : new Error("DSH runtime profile refresh failed"));
+      }
+    }
+    // Reported after every session had its chance, so a caller awaiting this can
+    // still observe that the refresh only partly applied.
+    for (const failure of failures) this.#reportError(failure);
+    if (failures.length > 0) {
+      throw new AggregateError(failures, "DSH execution profile publication was not confirmed by every session");
+    }
   }
 
   activeSessionIds(): string[] {

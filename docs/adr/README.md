@@ -35,4 +35,5 @@ Architecture Decision Records document significant technical choices, their rati
 | [0029](0029-separate-remembered-browser-vault-from-active-sessions.md) | Separate remembered-browser choices from active sessions | proposed | 2026-09-24 |
 | [0030](0030-resolve-cloud-branches-before-project-member-removal.md) | Resolve cloud branches before project-member removal | proposed | 2026-09-24 |
 | [0031](0031-in-session-quotes-and-member-mentions.md) | In-session quote references and member mentions | proposed | 2026-09-27 |
-| [0032](0032-isolated-onboarding-example.md) | Isolate onboarding in a disposable example project | proposed | 2026-09-28 |
+| [0032](0032-harness-advertised-model-catalogs.md) | Discover offered models from each connected harness | proposed | 2026-09-27 |
+| [0033](0033-isolated-onboarding-example.md) | Isolate onboarding in a disposable example project | proposed | 2026-09-28 |

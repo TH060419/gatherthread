@@ -75,6 +75,68 @@ test("project Agent profiles are isolated and custom models remain safe data", (
   assert.throws(() => withProjectCodexProfile(settings, "bad project", { model: "deepseek-chat", effort: "high" }), /safe project ID/);
 });
 
+test("a model a connected runtime advertises is selectable and never resets to the fallback", () => {
+  const advertised = [{ id: "gpt-6-sol", efforts: ["low", "high", "max"], defaultEffort: "high" }];
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-6-sol", effort: "max" }, [], advertised),
+    { model: "gpt-6-sol", effort: "max" },
+  );
+  // The runtime's own effort set governs the model it advertises.
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-6-sol", effort: "ultra" }, [], advertised),
+    { model: "gpt-6-sol", effort: "high" },
+  );
+  // An advertised model is a legitimate project choice even though the built-in
+  // fallback list has never heard of it.
+  const settings = normalizeSettings({
+    ...DEFAULT_SETTINGS,
+    agents: {
+      ...DEFAULT_SETTINGS.agents,
+      projectProfiles: { "project-alpha": { codex: { model: "gpt-6-sol", effort: "low" } } },
+    },
+  });
+  assert.deepEqual(projectCodexProfile(settings, "project-alpha"), { model: "gpt-6-sol", effort: "low" });
+  assert.deepEqual(projectCodexProfile(settings, "project-alpha", advertised), { model: "gpt-6-sol", effort: "low" });
+  // A malformed stored model still falls back instead of being trusted.
+  assert.deepEqual(normalizeCodexProfile({ model: "bad\nmodel" }), { model: "gpt-5.6-sol", effort: "low" });
+  assert.deepEqual(normalizeCodexProfile({ model: "--danger" }, [], advertised), { model: "gpt-5.6-sol", effort: "low" });
+});
+
+test("a runtime-advertised model and effort survive saving and reloading", () => {
+  const advertised = [{ id: "gpt-5.5", efforts: ["low", "max"], defaultEffort: "max" }];
+  const saved = withProjectCodexProfile(
+    DEFAULT_SETTINGS,
+    "project-alpha",
+    { model: "gpt-5.5", effort: "max" },
+    advertised,
+  );
+  assert.deepEqual(projectCodexProfile(saved, "project-alpha", advertised), { model: "gpt-5.5", effort: "max" });
+  // A reload re-normalizes stored settings with no runtime knowledge at all. The
+  // saved choice must survive: the built-in list for gpt-5.5 has no `max`, so
+  // normalizing against it here silently replaced a supported selection.
+  const reloaded = normalizeSettings(JSON.parse(JSON.stringify(saved)));
+  assert.deepEqual(reloaded.agents.projectProfiles["project-alpha"].codex, { model: "gpt-5.5", effort: "max" });
+  assert.deepEqual(projectCodexProfile(reloaded, "project-alpha", advertised), { model: "gpt-5.5", effort: "max" });
+});
+
+test("a model a runtime declares without efforts advertises no effort selection", () => {
+  // Absence is not evidence of support, so no effort is chosen for this model and
+  // the request omits one instead of substituting a built-in value.
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-6-luna", effort: "high" }, [], [{ id: "gpt-6-luna" }]),
+    { model: "gpt-6-luna" },
+  );
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-5.6-sol", effort: "ultra" }, [], [{ id: "gpt-5.6-sol", efforts: [] }]),
+    { model: "gpt-5.6-sol" },
+  );
+  // A malformed stored effort is still dropped rather than carried forward.
+  assert.deepEqual(
+    normalizeCodexProfile({ model: "gpt-6-luna", effort: "bad\neffort" }, [], [{ id: "gpt-6-luna" }]),
+    { model: "gpt-6-luna" },
+  );
+});
+
 test("project harness and DSH runtime selections are exact, isolated, and credential-free", () => {
   let settings = withProjectAgentHarness(DEFAULT_SETTINGS, "project-alpha", "deepseek-harness");
   settings = withProjectDshProfile(settings, "project-alpha", {

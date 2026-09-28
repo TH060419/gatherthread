@@ -85,6 +85,14 @@ const MAX_CATALOG_PROVIDERS = 64;
 const MAX_CATALOG_MODELS = 256;
 const MAX_EXECUTION_PROFILES = 32;
 const MAX_REASONING_EFFORTS = 16;
+/**
+ * How long a discovered model catalog stays authoritative before it is re-read.
+ *
+ * The catalog lives in the running DSH profile and can change while this process
+ * stays connected, so a connect-time snapshot is not enough. Re-reading costs one
+ * metadata call per provider and only when the refresh interval elapses.
+ */
+const EXECUTION_PROFILE_REFRESH_INTERVAL_MS = 5 * 60 * 1_000;
 
 export interface DshNativePluginConfig {
   readonly enabled: boolean;
@@ -133,6 +141,8 @@ export interface DshNativeCatalog {
 
 interface NativeOwner {
   stop(): Promise<void>;
+  /** Republish a refreshed model catalog; absent for owners that captured one already. */
+  updateExecutionProfiles?(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void>;
   localSyncStatuses?(): LocalConversationSyncStatus[];
   setLocalAutoUpload?(sessionId: string, enabled: boolean): Promise<LocalConversationSyncStatus>;
   uploadLocalTurns?(sessionId: string): Promise<LocalConversationUploadResult>;
@@ -209,6 +219,8 @@ export interface DshNativeHostControllerOptions {
     signal: AbortSignal,
   ) => Promise<void>;
   readonly projectRefreshIntervalMs?: number;
+  /** Monotonic clock used only to expire a cached model catalog. */
+  readonly now?: () => number;
 }
 
 /**
@@ -220,6 +232,7 @@ export class DshNativeHostController {
   readonly #credentials: DshNativeCredentialStore;
   readonly #abort = new AbortController();
   readonly #sleep: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+  readonly #now: () => number;
   readonly #owners = new Map<string, NativeOwner>();
   readonly #projects = new Map<string, ProjectSummary>();
   readonly #projectStatuses = new Map<string, DshProjectManagerStatusUpdate>();
@@ -241,11 +254,15 @@ export class DshNativeHostController {
   #projectRefreshTimer: ReturnType<typeof setTimeout> | undefined;
   #executionProfileRouteKey: string | undefined;
   #executionProfiles: readonly DshRuntimeExecutionProfile[] | undefined;
+  #executionProfilesDiscoveredAt: number | undefined;
+  /** Owners that have not yet confirmed the current execution-profile catalog. */
+  readonly #pendingProfileOwners = new Set<NativeOwner>();
 
   constructor(options: DshNativeHostControllerOptions) {
     this.#options = options;
     this.#credentials = new DshNativeCredentialStore(options.context);
     this.#sleep = options.sleep ?? abortableSleep;
+    this.#now = options.now ?? Date.now;
   }
 
   async start(): Promise<void> {
@@ -449,6 +466,7 @@ export class DshNativeHostController {
     await this.#validateModel(provider, model, operationSignal);
     this.#executionProfileRouteKey = undefined;
     this.#executionProfiles = undefined;
+    this.#executionProfilesDiscoveredAt = undefined;
     const route: DshNativeRoute = { provider, model };
     const nextGrant: DshNativeGrant = { ...grant, route };
     try {
@@ -517,6 +535,7 @@ export class DshNativeHostController {
       this.#grant = undefined;
       this.#executionProfileRouteKey = undefined;
       this.#executionProfiles = undefined;
+      this.#executionProfilesDiscoveredAt = undefined;
       this.#recoverableError = undefined;
       this.#options.status.setProjectName("GatherThread / 共序");
       this.#options.status.setConnection("stopped");
@@ -675,6 +694,7 @@ export class DshNativeHostController {
     this.#projectRefreshTimer = undefined;
     const owners = [...this.#owners.values()];
     this.#owners.clear();
+    this.#pendingProfileOwners.clear();
     this.#projects.clear();
     this.#projectStatuses.clear();
     await Promise.allSettled(owners.map((owner) => owner.stop()));
@@ -694,8 +714,15 @@ export class DshNativeHostController {
     const route = grant.route;
     if (route === undefined) return;
     throwIfAborted(signal);
-    await this.#refreshExecutionProfiles(route, signal);
+    const profilesChanged = await this.#refreshExecutionProfiles(route, signal);
     throwIfAborted(signal);
+    if (profilesChanged) {
+      // Owners already running still advertise the catalog from before this
+      // discovery. Owners activated below receive the new one at creation, so they
+      // are deliberately not marked pending.
+      for (const owner of this.#owners.values()) this.#pendingProfileOwners.add(owner);
+    }
+    if (this.#executionProfiles === undefined) this.#pendingProfileOwners.clear();
     const nextIds = new Set(projects.map((project) => project.id));
     const previousRoles = new Map([...this.#projects].map(([id, project]) => [id, project.role]));
     this.#projects.clear();
@@ -726,20 +753,40 @@ export class DshNativeHostController {
       }
     }
     this.#refreshAggregateStatus();
-    this.#recoverableError = failures > 0 ? "connection_failed" : undefined;
+    const catalogsPending = await this.#publishPendingExecutionProfiles();
+    this.#recoverableError = failures > 0 || catalogsPending ? "connection_failed" : undefined;
   }
 
+  /**
+   * Re-read the harness catalog when the route changed or the entry went stale.
+   *
+   * Returns whether the catalog differs from the one already advertised. Discovery
+   * is cached per route and also time-bounded: DSH publishes a model metadata
+   * catalog that can gain models while a connection stays open, so a connect-time
+   * snapshot would otherwise keep offering the old list for the life of the process.
+   */
   async #refreshExecutionProfiles(
     route: DshNativeRoute,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const routeKey = `${route.provider}\u0000${route.model}`;
-    if (this.#executionProfileRouteKey === routeKey) return;
-    if (route.provider !== "deepseek-official") {
-      this.#executionProfiles = undefined;
-      this.#executionProfileRouteKey = routeKey;
-      return;
+    const discoveredAt = this.#executionProfilesDiscoveredAt;
+    if (this.#executionProfileRouteKey === routeKey
+      && discoveredAt !== undefined
+      && this.#now() - discoveredAt < EXECUTION_PROFILE_REFRESH_INTERVAL_MS) {
+      return false;
     }
+    const previous = this.#executionProfiles;
+    const remember = (profiles: readonly DshRuntimeExecutionProfile[] | undefined): boolean => {
+      // A first discovery is not a change: nothing was advertised before it, and
+      // owners created from it during this same reconcile already received it.
+      const changed = previous !== undefined && !sameExecutionProfiles(previous, profiles);
+      this.#executionProfiles = profiles;
+      this.#executionProfileRouteKey = routeKey;
+      this.#executionProfilesDiscoveredAt = this.#now();
+      return changed;
+    };
+    if (route.provider !== "deepseek-official") return remember(undefined);
     const discovered = this.#options.listExecutionProfiles === undefined
       ? await listNativeExecutionProfiles(this.#options.context, route.provider, signal)
       : await this.#options.listExecutionProfiles(route.provider, signal);
@@ -748,8 +795,47 @@ export class DshNativeHostController {
     if (!profiles.some((profile) => profile.model === route.model)) {
       throw new Error("DeepSeek Harness did not advertise the configured model as an execution profile");
     }
-    this.#executionProfiles = profiles;
-    this.#executionProfileRouteKey = routeKey;
+    return remember(profiles);
+  }
+
+  /**
+   * Republish the current catalog to every owner that has not confirmed it.
+   *
+   * Owners capture the catalog when they start, so an existing Project keeps
+   * advertising the models DSH listed at connect time until it is updated. An owner
+   * that fails stays pending rather than being dropped: discovery has already cached
+   * this catalog, so waiting for the next *change* would mean a transient
+   * publication failure is never retried. Returns whether anything is still
+   * unconfirmed.
+   */
+  async #publishPendingExecutionProfiles(): Promise<boolean> {
+    const profiles = this.#executionProfiles;
+    if (profiles === undefined) {
+      this.#pendingProfileOwners.clear();
+      return false;
+    }
+    const current = new Set(this.#owners.values());
+    for (const owner of [...this.#pendingProfileOwners]) {
+      if (this.#disposed) return true;
+      if (!current.has(owner)) {
+        // The owner was replaced or removed during this reconcile; the replacement
+        // received the current catalog when it was created.
+        this.#pendingProfileOwners.delete(owner);
+        continue;
+      }
+      if (owner.updateExecutionProfiles === undefined) {
+        // Nothing to republish to; this deployment keeps its previous declaration.
+        this.#pendingProfileOwners.delete(owner);
+        continue;
+      }
+      try {
+        await owner.updateExecutionProfiles(profiles);
+        this.#pendingProfileOwners.delete(owner);
+      } catch {
+        // Kept pending so the next refresh interval retries it.
+      }
+    }
+    return this.#pendingProfileOwners.size > 0;
   }
 
   #currentBindings(route: DshNativeRoute): DshNativeBinding[] {
@@ -1075,6 +1161,7 @@ async function createProductionOwner(options: {
   codeTimer.unref();
   let stopPromise: Promise<void> | undefined;
   return {
+    updateExecutionProfiles: (profiles) => manager.updateExecutionProfiles(profiles),
     localSyncStatuses: () => manager.localSyncStatuses(),
     setLocalAutoUpload: (sessionId, enabled) => manager.setLocalAutoUpload(sessionId, enabled),
     uploadLocalTurns: (sessionId) => manager.uploadLocalTurns(sessionId),
@@ -1161,6 +1248,7 @@ function createNativeManagedConnector(options: {
     get stopped() { return connector.stopped; },
     get executionRuntimeId() { return connector.executionRuntimeId; },
     async start() { await connector.start(); },
+    updateExecutionProfiles: (profiles) => connector.updateExecutionProfiles(profiles),
     localSyncStatus: () => connector.localSyncStatus(),
     setLocalAutoUpload: (enabled) => connector.setLocalAutoUpload(enabled),
     uploadLocalTurns: () => connector.uploadLocalTurns(),
@@ -1384,6 +1472,13 @@ function cloneExecutionProfiles(
       defaultReasoningEffort: value.defaultReasoningEffort,
     }),
   }));
+}
+
+function sameExecutionProfiles(
+  actual: readonly DshRuntimeExecutionProfile[] | undefined,
+  expected: readonly DshRuntimeExecutionProfile[] | undefined,
+): boolean {
+  return JSON.stringify(actual ?? null) === JSON.stringify(expected ?? null);
 }
 
 function requireConnection(contextValue: unknown): NativeRpcConnectionLike {

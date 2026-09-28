@@ -114,7 +114,7 @@ Automatic upload, manual upload, realtime projection, and Web-triggered Agent ex
 An `agent_request` names an exact harness/model profile and eligible runtime. The selected same-user execution runtime may claim it once, append public `agent_progress`, and complete it with one final `agent_response`.
 
 - Runtime selection never falls back silently.
-- A runtime may advertise a bounded set of exact provider/model profiles and adapter-owned reasoning efforts. The server accepts a targeted DSH request only when the complete requested profile appears in that declaration. A legacy runtime without the declaration retains fixed-provider/model matching.
+- A runtime may advertise a bounded set of exact provider/model profiles and adapter-owned reasoning efforts. The server accepts a targeted request only when the complete requested profile appears in that declaration — for every harness that publishes one, so a direct API caller cannot bypass it. A model declared without efforts accepts only a request that omits the effort. A legacy runtime without the declaration retains fixed-provider/model matching. See [ADR-0032](adr/0032-harness-advertised-model-catalogs.md).
 - Claims and completions are idempotent and bound to the request and runtime.
 - Public commentary may be uploaded; hidden reasoning is excluded.
 - The final response does not close the claim until it is durably committed.
@@ -165,6 +165,7 @@ The published MCP surface is intentionally narrower than the internal collaborat
 
 ## Codex and DSH native boundaries
 
+- Codex and DSH model selection both use exact metadata advertised by the connected runtime. The Codex connector reads its installation's own catalog through the App Server's documented `model/list` method; DSH re-reads its native LLM metadata on a bounded interval. A request may name only an advertised model and, for that model, only an advertised reasoning effort. A harness that cannot be queried advertises nothing and keeps fixed-model routing; a harness or provider that configures models elsewhere keeps its own catalog as the source of truth.
 - Codex Hooks are limited to reviewed `UserPromptSubmit` and `Stop` definitions. Hook payloads, output limits, registry purpose, and workspace path checks are security contracts.
 - Codex Desktop projection, background execution, and snapshot tasks have separate purposes and single-writer rules. Never mutate an active or ambiguously owned native task.
 - Native context capacity and transport bounds are separate. Codex context accounting uses fresh last-request usage, not cumulative lifetime billing; a reported model window takes precedence over a fallback estimate. Ordinary native automatic compaction remains enabled according to the user's harness configuration. GatherThread must not overwrite that configuration or label local truncation as native compaction. See [ADR-0026](adr/0026-native-first-context-management.md).

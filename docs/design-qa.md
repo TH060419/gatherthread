@@ -26,7 +26,7 @@
 
 ## Beginner guides, 2026-09-28
 
-The reproducible mock-only check is `tests/browser/onboarding.mjs`; invocation is documented in [the web client README](../apps/web/README.md#beginner-guide-browser-regression). Product behavior and isolation are recorded in [PRODUCT_SPEC.md](PRODUCT_SPEC.md#browser-entry-flow) and [ADR-0032](adr/0032-isolated-onboarding-example.md).
+The reproducible mock-only check is `tests/browser/onboarding.mjs`; invocation is documented in [the web client README](../apps/web/README.md#beginner-guide-browser-regression). Product behavior and isolation are recorded in [PRODUCT_SPEC.md](PRODUCT_SPEC.md#browser-entry-flow) and [ADR-0033](adr/0033-isolated-onboarding-example.md).
 
 - All five guides contain 32 steps in a fresh example: basics 9, collaboration 6, history 5, files 7, summaries 5. Empty accounts, invite-only guests and read-only memberships receive the same complete demonstration. Settings also opens free practice; reset and exit discard it.
 - Chrome 153 and Playwright WebKit on macOS passed English/Chinese, 1440×900, 390×844 and 320×568, including actual target visibility, card/target separation, circular or rounded ring geometry, native-dialog layers, toolbar navigation, keyboard/focus and language updates. Desktop history cards stay outside the entire disclosure. Parent API spies found no protected business writes; parent drafts, timeline and selection remained unchanged after free practice.
@@ -60,3 +60,8 @@ The reproducible mock-only check is `tests/browser/onboarding.mjs`; invocation i
 
 - `npm run release:verify` passed on the final application code: 612 unit tests (607 pass, 5 existing skips), 47 script tests, 270 Web tests, 2 build-output checks, 4 integration tests and 9 end-to-end tests; audits and Git-less package verification passed, with zero dependency vulnerabilities.
 - Full Chrome and WebKit browser runs passed all authored guide scenarios and produced-page variants. Chrome's late disclosure keyboard assertion intermittently failed before a standalone and full rerun passed. The test now waits for the native disclosure toggle to portal the panel before focusing its children, and includes active-element diagnostics on failure. Native Safari and Edge remain manual follow-ups.
+
+### PR #48 review fixes, 2026-09-28
+
+- The open session-status panel stays visually portalled outside clipped ancestors. Its controls leave native document tab order while open; explicit Tab and Shift+Tab handling preserves the logical order from the header button through the panel and back to the remaining page. Closing it restores original tab indices. A mutation observer applies the same rule to controls added while open.
+- Browser coverage traverses each visible panel control, continues through the rest of the page to document end, and checks that the panel is not revisited. Chrome and WebKit are checked separately. The onboarding ADR is now 0033 because current main uses 0032 for harness model catalogs.

@@ -1,16 +1,20 @@
 // Portal the disclosure out of clipped/backdrop-filtered conversation ancestors.
 // Geometry is read from the current conversation, including collapsed sidebars.
+const focusControllers = new WeakMap();
+
 export function positionSessionContextPanel(doc) {
   const details = doc.getElementById('session-context-details');
   const panel = doc.querySelector('.session-context-panel');
   if (!details || !panel) return;
   if (details.open && (doc.getElementById('workspace').hidden || doc.getElementById('session-view').hidden)) details.open = false;
   if (!details.open) {
+    focusControllers.get(doc)?.setPortalled(false);
     if (panel.parentElement !== details) details.append(panel);
     panel.removeAttribute('style');
     return;
   }
   if (panel.parentElement !== doc.body) doc.body.append(panel);
+  focusControllers.get(doc)?.setPortalled(true);
   const win = doc.defaultView;
   const region = doc.getElementById('session-view').getBoundingClientRect();
   const trigger = details.getBoundingClientRect();
@@ -26,6 +30,26 @@ export function bindSessionContextPanel(doc) {
   const details = doc.getElementById('session-context-details');
   const summary = details.querySelector('summary');
   const panel = details.querySelector('.session-context-panel');
+  const originalTabIndex = new Map();
+  const interactive = () => [...panel.querySelectorAll('button, input, select, a[href]')];
+  const setPortalled = (portalled) => {
+    if (portalled) {
+      for (const node of interactive()) {
+        if (!originalTabIndex.has(node)) originalTabIndex.set(node, node.getAttribute('tabindex'));
+        node.setAttribute('tabindex', '-1');
+      }
+      return;
+    }
+    for (const [node, value] of originalTabIndex) {
+      if (value === null) node.removeAttribute('tabindex');
+      else node.setAttribute('tabindex', value);
+    }
+    originalTabIndex.clear();
+  };
+  focusControllers.set(doc, { setPortalled });
+  // Controls can appear after the panel opens as connection state changes.
+  new MutationObserver(() => { if (details.open && panel.parentElement === doc.body) setPortalled(true); })
+    .observe(panel, { childList: true, subtree: true });
   const usable = (node) => node && !node.disabled && !node.closest('[hidden]') && node.getClientRects().length;
   const controls = () => [...panel.querySelectorAll('button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href]')]
     .filter((node) => !node.closest('[hidden]') && node.getClientRects().length);
@@ -41,6 +65,11 @@ export function bindSessionContextPanel(doc) {
     let destination;
     if (!event.shiftKey && event.target === summary) destination = nodes[0];
     if (event.shiftKey && event.target === nodes[0]) destination = summary;
+    if (panel.contains(event.target) && nodes.includes(event.target)) {
+      const index = nodes.indexOf(event.target);
+      if (!event.shiftKey && index < nodes.length - 1) destination = nodes[index + 1];
+      if (event.shiftKey && index > 0) destination = nodes[index - 1];
+    }
     if (!event.shiftKey && event.target === nodes.at(-1)) destination = following;
     if (event.shiftKey && event.target === following) destination = nodes.at(-1);
     if (usable(destination)) { event.preventDefault(); destination.focus(); }

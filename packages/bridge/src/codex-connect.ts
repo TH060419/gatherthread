@@ -788,6 +788,12 @@ export async function initializeProjectSession(options: {
       harness: descriptor.harness,
       provider: descriptor.provider,
       model: descriptor.model,
+      // Preflight discovered this from the App Server's own catalog. Without a
+      // declaration the server keeps matching requests against the single
+      // configured model, so an unsupported Codex version stays fail-closed.
+      ...(descriptor.executionProfiles === undefined ? {} : {
+        executionProfiles: descriptor.executionProfiles,
+      }),
       localSessionId: binding.localSessionId,
       captureFidelity: descriptor.captureFidelity,
       capabilities: descriptor.capabilities,

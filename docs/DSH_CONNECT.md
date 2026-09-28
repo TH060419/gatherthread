@@ -60,7 +60,8 @@ Do not add `--offline` unless the complete dependency metadata is already cached
 - In **Settings → GatherThread / 共序**, every connected conversation has its own **Automatic upload** switch and **Manual upload** action. Turning automation off keeps subsequent local turns private until the user uploads them; manual upload does not change the switch.
 - A new DSH conversation creates a creator-owned cloud Solo only after its first successful human/assistant turn.
 - Empty conversations, failed turns, and viewer conversations remain local-only.
-- Web Agent requests target the exact selected DSH device and one provider/model/reasoning profile that runtime advertised. Unsupported values are not offered and fail closed if submitted. Legacy and non-advertising routes keep the connection's fixed model; no request silently falls back to Codex.
+- Web Agent requests target the exact selected DSH device and one provider/model/reasoning profile that runtime advertised. Unsupported values are not offered and fail closed if submitted. The advertised catalog is re-read periodically, so a model DSH publishes after you connect appears without reconnecting. Legacy and non-advertising routes keep the connection's fixed model; no request silently falls back to Codex.
+- The advertised catalog is DSH's own model metadata. A model that DSH does not list — for example one your DSH version has not been released with, or one your provider configuration omits — cannot be selected here, because GatherThread does not invent models a harness cannot run. Update DSH, or add the model to your DSH provider catalog, and it appears after the next refresh. See [ADR-0032](adr/0032-harness-advertised-model-catalogs.md).
 
 DSH uses its configured provider quota. `Insufficient Balance` or `QUOTA` means the selected DSH model account cannot run the turn; it is not a GatherThread synchronization failure.
 

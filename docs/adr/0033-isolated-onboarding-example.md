@@ -1,7 +1,7 @@
-# ADR-0032: Isolate onboarding in a disposable example project
+# ADR-0033: Isolate onboarding in a disposable example project
 
-**Date**: 2026-09-28  
-**Status**: proposed  
+**Date**: 2026-09-28
+**Status**: proposed
 **Deciders**: Project maintainer review
 
 ## Context
