@@ -1,5 +1,7 @@
 # GatherThread Codex Launcher for Windows
 
+For the corresponding native macOS app, see [macOS README](macos/README.md).
+
 This folder builds a Windows x64 ZIP containing a private Python runtime, a
 private Node 24 runtime, the repository's `@gatherthread/codex-connect@0.1.0-alpha.7`
 bundle, and the matching GatherThread Codex plugin. End users do not need to

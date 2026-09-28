@@ -172,10 +172,14 @@ test("Codex launcher links contain validated, credential-free connection setting
   assert.throws(() => projectCodexLauncherUrl({ baseUrl: "https://bad.example?token=secret", projectId: "project-1" }));
 });
 
-test("Windows Launcher appears only on the supported HTTPS origin and Windows", () => {
+test("Launcher appears only on the supported HTTPS origin and Windows or macOS", () => {
   assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "Windows" }), true);
   assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "Win32" }), true);
-  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "MacIntel" }), false);
+  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "MacIntel" }), true);
+  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "Macintosh" }), true);
+  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "macOS" }), true);
+  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "MacIntel", maxTouchPoints: 5 }), false);
+  assert.equal(canOpenCodexLauncher({ origin: "https://gatherthread.cn", platform: "Linux x86_64" }), false);
   assert.equal(canOpenCodexLauncher({ origin: "http://localhost:3000", platform: "Win32" }), false);
   assert.equal(canOpenCodexLauncher({ origin: "https://self-hosted.example", platform: "Windows" }), false);
 });

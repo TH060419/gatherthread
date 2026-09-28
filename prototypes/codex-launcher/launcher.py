@@ -36,7 +36,7 @@ def safe_origin(value: str) -> str:
 
 
 def parse_link(value: str) -> tuple[str, str, str, int, str]:
-    if len(value) > 2048:
+    if len(value.encode("utf-8")) > 2048:
         raise ValueError("GatherThread 连接链接过长")
     parsed = urlparse(value)
     if parsed.scheme != SCHEME or parsed.netloc != "connect" or parsed.path not in {"", "/"} or parsed.fragment:
@@ -49,7 +49,7 @@ def parse_link(value: str) -> tuple[str, str, str, int, str]:
     if query["v"][0] != LINK_VERSION:
         raise ValueError("不支持的 GatherThread 连接链接版本")
     origin = safe_origin(query["origin"][0])
-    if origin != SERVER_ORIGIN:
+    if origin != SERVER_ORIGIN or query["origin"][0] != SERVER_ORIGIN:
         raise ValueError("连接链接的网页地址不是 https://gatherthread.cn")
     project = query["project"][0]
     if not PROJECT_RE.fullmatch(project):

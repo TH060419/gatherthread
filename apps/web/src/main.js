@@ -976,6 +976,7 @@ element("open-codex-launcher-button").addEventListener("click", () => {
   if (!state.project || !canOpenCodexLauncher({
     origin: location.origin,
     platform: navigator.userAgentData?.platform ?? navigator.platform,
+    maxTouchPoints: navigator.maxTouchPoints,
   })) return;
   try {
     const deepLink = projectCodexLauncherUrl({
@@ -2999,6 +3000,7 @@ function openConnectCodexDialog() {
   const launcherAvailable = canOpenCodexLauncher({
     origin: location.origin,
     platform: navigator.userAgentData?.platform ?? navigator.platform,
+    maxTouchPoints: navigator.maxTouchPoints,
   });
   element("codex-launcher-option").hidden = !launcherAvailable;
   element("open-codex-launcher-button").disabled = !launcherAvailable;

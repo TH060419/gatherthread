@@ -8,10 +8,10 @@ export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-alp
 export const CODEX_LAUNCHER_ORIGIN = "https://gatherthread.cn";
 export const CODEX_LAUNCHER_LINK_VERSION = "1";
 
-export function canOpenCodexLauncher({ origin, platform }) {
-  return origin === CODEX_LAUNCHER_ORIGIN
-    && typeof platform === "string"
-    && /^(?:windows|win32|win64)$/i.test(platform);
+export function canOpenCodexLauncher({ origin, platform, maxTouchPoints = 0 }) {
+  if (origin !== CODEX_LAUNCHER_ORIGIN || typeof platform !== "string") return false;
+  if (/^(?:windows|win32|win64)$/i.test(platform)) return true;
+  return /^(?:macos|macintel|macintosh|macppc|mac68k)$/i.test(platform) && maxTouchPoints <= 1;
 }
 
 export function emptyProjectState(canCreateProjects) {
@@ -111,7 +111,7 @@ export function projectCodexLauncherUrl({
   // an OS protocol handler. Never put an auth token or browser cookie here.
   projectCodexConnectionCommands({ baseUrl, projectId, model, contextWindowTokens, visibleHistorySync });
   if (baseUrl !== CODEX_LAUNCHER_ORIGIN) {
-    throw new Error("The Windows Launcher supports only https://gatherthread.cn.");
+    throw new Error("The Launcher supports only https://gatherthread.cn.");
   }
   const parameters = new URLSearchParams({
     v: CODEX_LAUNCHER_LINK_VERSION,

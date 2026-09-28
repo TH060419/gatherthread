@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
@@ -39,3 +39,9 @@ jobs:
         run: |
           python prototypes/codex-launcher/build_dist.py
           python prototypes/codex-launcher/verify_dist.py
+      - if: matrix.os == 'macos-latest'
+        name: Test and build macOS Codex Launcher
+        run: |
+          python3 -m unittest discover -s prototypes/codex-launcher -p test_launcher.py -v
+          python3 prototypes/codex-launcher/macos/build_dist.py
+          codesign --verify --deep --strict 'prototypes/codex-launcher/.build-macos/GatherThread Launcher.app'
