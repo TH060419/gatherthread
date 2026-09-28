@@ -15,6 +15,71 @@
     />
     <title>GatherThread</title>
     <link rel="stylesheet" href="./src/styles.css?v=20260927-2" />
+    <style>
+      /* ----------------------------------------------------------------------
+       * Mobile & small-tablet adaptation.
+       * Goals on narrow screens: a simple, single-row top bar with no
+       * overlapping text, a compact session rail whose controls never cover
+       * each other, and a conversation area that gets priority over
+       * secondary chrome. Kept inline so the rules also reach the sandboxed
+       * example page, whose CSP allows only unsafe-inline styles.
+       * -------------------------------------------------------------------- */
+
+      /* Phones and small tablets in portrait. */
+      @media (max-width: 900px) {
+        .topbar { gap: 8px; padding: 0 12px; }
+        .account-cluster { gap: 5px; }
+        /* The conversation header already shows the project and session
+           names, so the centered top-bar context only crowds the bar on
+           narrow screens. */
+        .topbar-session-context { display: none; }
+        .wordmark .brand-lockup-image { width: 128px; }
+        /* Keep the sign-out label on one line so it never grows taller
+           than the bar. */
+        #logout-button { white-space: nowrap; }
+      }
+
+      @media (max-width: 760px) {
+        .wordmark .brand-lockup-image { width: 116px; }
+        #logout-button { padding-inline: 6px; font-size: 0.78rem; }
+
+        /* Compact session rail: the project picker and its create button
+           sit on one row instead of the button floating over the select.
+           The rail becomes a capped, scrollable strip above the
+           conversation instead of overlapping it. */
+        .workspace-grid { grid-template-rows: auto minmax(0, 1fr); }
+        .session-rail { max-height: 280px; overflow-y: auto; padding: 10px 14px 12px; }
+        .session-rail > .rail-heading:first-child { display: flex; align-items: center; gap: 10px; }
+        .session-rail > .rail-heading:first-child > div { flex: 1 1 auto; }
+        .session-rail > .rail-heading:first-child #new-project-button { position: static; flex: 0 0 auto; }
+        .session-rail > .rail-heading:first-child .project-select { margin-top: 0; min-height: 44px; }
+
+        /* The session chips already say what the strip is; drop the
+           duplicated heading and keep only the create-session button on
+           the chips row. */
+        .session-heading { margin-top: 10px; justify-content: flex-end; }
+        .session-heading h2 { display: none; }
+        .session-heading + .session-list { margin-top: 8px; }
+
+        /* Tighten the rail's secondary controls so the session chips stay
+           visible without scrolling in the common case. */
+        .session-rail .project-connect-button { min-height: 0; margin-top: 8px; padding-block: 8px; }
+        .session-rail .project-action-row { margin-top: 6px; }
+        .session-rail .project-action-row .text-button { padding-block: 2px; font-size: 0.78rem; }
+        .session-rail .session-button { min-width: 150px; padding: 8px 12px; }
+
+        /* Let the conversation header wrap instead of squeezing its
+           action buttons. */
+        .session-header { flex-wrap: wrap; row-gap: 8px; }
+      }
+
+      /* Very small phones: trade the wordmark for breathing room in the
+         top bar. */
+      @media (max-width: 420px) {
+        .wordmark .brand-lockup-image { width: 100px; }
+        .topbar { padding: 0 8px; }
+      }
+    </style>
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
