@@ -12,6 +12,7 @@ import {
   ApproveDshPairingInputSchema,
   BeginDshPairingInputSchema,
   ClaimAgentRequestInputSchema,
+  PauseAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
   ClaimInvitationInputSchema,
   ClaimTestAccessInputSchema,
@@ -30,6 +31,7 @@ import {
   FailSnapshotRequestInputSchema,
   DetachedCodeClearResultSchema,
   ListSnapshotRequestsQuerySchema,
+  ProjectMentionsPageSchema,
   RegisterRuntimeInputSchema,
   RemoveProjectMembershipInputSchema,
   RemoveSessionMembershipInputSchema,
@@ -206,6 +208,11 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   if (resolved !== root && !resolved.startsWith(`${root}${sep}`)) return false;
   const stat = statSync(resolved);
   if (!stat.isFile()) return false;
+  // Only the public mock example is embeddable. Real UI/API framing stays denied.
+  if (relative === "app/example.html") {
+    response.removeHeader("x-frame-options");
+    response.setHeader("content-security-policy", "default-src 'none'; script-src 'nonce-gatherthread-example-v1'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; sandbox allow-scripts");
+  }
   response.writeHead(200, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
     "content-length": stat.size,
@@ -913,6 +920,15 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (projectId && parts[3] === "mentions" && parts.length === 4 && request.method === "GET") {
+        const beforeId = url.searchParams.get("before_event_id") ?? undefined;
+        if (beforeId !== undefined && !/^[A-Za-z0-9_.:-]{1,200}$/u.test(beforeId)) {
+          throw new ApiError(400, "invalid_cursor", "Invalid mention cursor");
+        }
+        sendJson(response, 200, { data: ProjectMentionsPageSchema.parse(service.listProjectMentions(actor, projectId, beforeId)) });
+        return;
+      }
+
       if (projectId && parts[3] === "sessions" && parts.length === 4 && request.method === "POST") {
         const body = await readAuthenticatedJson();
         const input = parseTitleMutationInput(() => CreateSessionInputSchema.parse(body));
@@ -1140,6 +1156,12 @@ export async function startCollaborationServer(
       if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "claim" && parts.length === 6 && request.method === "POST") {
         const input = ClaimAgentRequestInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 200, { data: service.claimAgentRequest(actor, sessionId, parts[4], input.runtime_id) });
+        return;
+      }
+
+      if (sessionId && parts[3] === "agent-requests" && parts[4] && parts[5] === "pause" && parts.length === 6 && request.method === "POST") {
+        PauseAgentRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: service.pauseAgentRequest(actor, sessionId, parts[4]) });
         return;
       }
 

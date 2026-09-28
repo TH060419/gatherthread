@@ -36,12 +36,15 @@ function element() {
 function harness(names, overrides = {}) {
   const nodes = new Map();
   const context = vm.createContext({
+    exampleMode: false,
     authenticationGeneration: 1, selectedSessionGeneration: 1, workspaceLoadGeneration: 0,
     state: { currentUser: { id: "u1", username: "User", device_id: "d1" }, project: { id: "p1" },
       projects: [], session: { id: "s1" }, settings: { composer: {} }, invitations: [], snapshotRequests: [] },
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },
+    onboarding: { cancel: noop, offer: noop, refreshLanguage: noop },
+    sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
     location: { hash: "" }, URLSearchParams, initials: () => "U", localizer: { t: (value) => value },
     renderProjectSelect: noop, renderSessionList: noop, maybeOpenPendingDshPairing: noop,
     renderMembers: noop, renderTimeline: noop, renderComposerPermissions: noop,
@@ -53,6 +56,26 @@ function harness(names, overrides = {}) {
   vm.runInContext(names.map(functionSource).join("\n"), context);
   return context;
 }
+
+test("the global badge reports live delivery regardless of viewer-to-participant transitions", () => {
+  const nodes = new Map();
+  const el = (id) => {
+    if (!nodes.has(id)) nodes.set(id, { ...element(), dataset: {} });
+    return nodes.get(id);
+  };
+  const app = harness(["renderSyncState"], { element: el, timelineRegion: element(),
+    sessionDeliveryMode: ({ role }) => role === "viewer" ? "read_only" : "live" });
+  app.state.sync = { phase: "live", cursor: 161, detail: "Connected", bufferedCount: 0 };
+  for (const role of ["viewer", "participant", "viewer", "participant"]) {
+    app.state.session = { id: "s1", role, members: [{ userId: "u1", role }] };
+    app.renderSyncState();
+    assert.equal(el("global-connection-label").textContent, "Live · #161");
+    assert.equal(el("sync-title").textContent, "Live");
+  }
+  app.state.sync.phase = "offline";
+  app.renderSyncState();
+  assert.equal(el("global-connection-label").textContent, "Offline");
+});
 
 test("a project list response after logout cannot reopen a workspace", async () => {
   const pending = deferred();
@@ -203,6 +226,7 @@ function messageHarness(pending) {
     api: { appendHumanChat: () => { writes += 1; return pending.promise; } },
     messageInput: input, sendError: element(), sendChatButton: element(), sendAgentButton: element(),
     pendingMessageSend: null, createIdempotencyKey: () => "fixture-message", window: {},
+    messageActions: { metadata: () => ({ replyTo: null, mentions: [] }), sent: noop },
   });
   return { app, input, writes: () => writes };
 }
@@ -225,6 +249,18 @@ test("a successful send for an old session cannot clear an identical new-session
   const work = app.sendMessage("human_chat");
   app.selectedSessionGeneration += 1;
   app.state.session = { id: "s2" };
+  pending.resolve({});
+  await work;
+  assert.equal(input.value, "First draft");
+});
+
+test("a newer quote attached during send is not cleared by the previous acknowledgement", async () => {
+  const pending = deferred();
+  const { app, input } = messageHarness(pending);
+  let replyTo = "old-quote";
+  app.messageActions.metadata = () => ({ replyTo, mentions: [] });
+  const work = app.sendMessage("human_chat");
+  replyTo = "new-quote";
   pending.resolve({});
   await work;
   assert.equal(input.value, "First draft");

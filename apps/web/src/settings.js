@@ -6,6 +6,15 @@ export const SHARED_LANGUAGE_STORAGE_KEY = "gt-lang";
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 
+/**
+ * The model a Codex project falls back to when nothing usable is stored.
+ *
+ * This list is a fallback catalog for a workspace with no connected runtime, not
+ * the source of truth. A connected connector advertises the models its Codex
+ * installation actually offers, and those take precedence.
+ */
+export const DEFAULT_CODEX_MODEL = "gpt-5.6-sol";
+
 export const CODEX_MODELS = Object.freeze([
   Object.freeze({ id: "gpt-5.6-sol", defaultEffort: "low", efforts: Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]) }),
   Object.freeze({ id: "gpt-5.6-terra", defaultEffort: "medium", efforts: Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]) }),
@@ -35,6 +44,25 @@ const DEVICE_ID_PATTERN = PROJECT_ID_PATTERN;
 const DSH_PROVIDER_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,80}$/u;
 const DSH_MODEL_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,160}$/u;
 export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness"]);
+
+export const MOTION_PREFERENCES = Object.freeze(["system", "reduce", "full"]);
+
+/**
+ * The motion the reader actually gets.
+ *
+ * `system` is not a preference in its own right — it defers to the device, the
+ * same way only an explicit theme overrides a system theme. So an explicit
+ * choice wins, and only `system` consults the device; anything the schema does
+ * not recognise behaves like the default rather than claiming motion is unwanted.
+ *
+ * This exists because the default is `system`: code that tests
+ * `motion === "reduce"` directly hands a long animated scroll to every reader who
+ * asked their operating system for reduced motion and never opened this setting.
+ */
+export function effectiveMotion(motion, prefersReducedMotion) {
+  if (motion === "reduce" || motion === "full") return motion;
+  return prefersReducedMotion === true ? "reduce" : "full";
+}
 
 export const DEFAULT_SETTINGS = deepFreeze({
   version: SETTINGS_VERSION,
@@ -93,7 +121,6 @@ export function normalizeSettings(input) {
   const customCodexModels = uniqueStrings(agents.customCodexModels)
     .filter((model) => MODEL_ID_PATTERN.test(model))
     .slice(0, 40);
-  const availableModels = new Set([...CODEX_MODELS.map((model) => model.id), ...customCodexModels]);
   const activeHarness = oneOf(agents.activeHarness, AGENT_HARNESSES, DEFAULT_SETTINGS.agents.activeHarness);
   const enabledHarnesses = normalizeEnabledHarnesses(agents.enabledHarnesses, activeHarness);
   const projectProfiles = {};
@@ -101,13 +128,12 @@ export function normalizeSettings(input) {
     for (const [projectId, profile] of Object.entries(agents.projectProfiles)) {
       if (!PROJECT_ID_PATTERN.test(projectId) || !isObject(profile)) continue;
       const legacyCodex = isObject(profile.codex) ? profile.codex : profile;
-      const model = availableModels.has(legacyCodex.model) ? legacyCodex.model : "gpt-5.6-sol";
       const harness = oneOf(profile.harness, AGENT_HARNESSES, activeHarness);
       const enabledHarnesses = normalizeEnabledHarnesses(profile.enabledHarnesses, harness);
       projectProfiles[projectId] = {
         harness,
         enabledHarnesses,
-        codex: normalizeCodexProfile({ model, effort: legacyCodex.effort }, customCodexModels),
+        codex: normalizeStoredCodexProfile(legacyCodex, customCodexModels),
         dsh: normalizeDshProfile(profile.dsh),
       };
     }
@@ -166,22 +192,103 @@ export function normalizeSettings(input) {
   };
 }
 
-export function normalizeCodexProfile(profile, customModels = []) {
+export function normalizeCodexProfile(profile, customModels = [], advertisedModels = []) {
   const available = new Map(CODEX_MODELS.map((entry) => [entry.id, entry]));
   for (const model of uniqueStrings(customModels).filter((value) => MODEL_ID_PATTERN.test(value))) {
     if (!available.has(model)) available.set(model, { id: model, defaultEffort: "medium", efforts: CODEX_REASONING_EFFORTS });
   }
-  const selected = available.get(profile?.model) ?? available.get("gpt-5.6-sol");
+  // A connected runtime is the authority on its own models and reasoning efforts,
+  // including any model the built-in fallback list has never heard of.
+  for (const entry of runtimeAdvertisedModels(advertisedModels)) available.set(entry.id, entry);
+  const requested = selectableModelId(profile?.model);
+  const selected = available.get(requested)
+    ?? (requested
+      ? { id: requested, defaultEffort: "medium", efforts: CODEX_REASONING_EFFORTS }
+      : available.get(DEFAULT_CODEX_MODEL));
   const effort = selected.efforts.includes(profile?.effort) ? profile.effort : selected.defaultEffort;
-  return { model: selected.id, effort };
+  // No effort is chosen when the declaration offers none, so callers omit it from
+  // the request instead of substituting a value the harness never advertised.
+  return effort === undefined ? { model: selected.id } : { model: selected.id, effort };
 }
 
-export function projectCodexProfile(settings, projectId) {
+/**
+ * Preserve a stored Codex choice instead of re-deriving it.
+ *
+ * Which efforts a model accepts is a runtime fact that the built-in list cannot
+ * know, so normalizing a stored choice against that list silently replaced an
+ * advertised effort (for example `max` on `gpt-5.5`) with the static fallback.
+ * Persistence keeps a well-formed choice; the connected runtime's declaration
+ * validates it while the controls render and again before submission.
+ */
+function normalizeStoredCodexProfile(profile, customModels) {
+  const model = selectableModelId(profile?.model);
+  if (!model) return normalizeCodexProfile(profile, customModels);
+  const effort = safeEffort(profile?.effort);
+  return effort === undefined ? { model } : { model, effort };
+}
+
+function safeEffort(value) {
+  const effort = typeof value === "string" ? value.trim() : "";
+  return MODEL_ID_PATTERN.test(effort) ? effort : undefined;
+}
+
+/**
+ * A model identifier that is safe to hand to the harness, or `""`.
+ *
+ * The harness receives it as a `--model` argument, so a leading dash would be read
+ * as another command-line flag rather than a model name. This mirrors the rule the
+ * settings form already applies to custom models.
+ */
+function selectableModelId(value) {
+  const model = typeof value === "string" ? value.trim() : "";
+  if (!MODEL_ID_PATTERN.test(model) || model.startsWith("-")) return "";
+  return model;
+}
+
+export function projectCodexProfile(settings, projectId, advertisedModels = []) {
   const normalized = normalizeSettings(settings);
-  return normalizeCodexProfile(normalized.agents.projectProfiles[projectId]?.codex, normalized.agents.customCodexModels);
+  return normalizeCodexProfile(
+    normalized.agents.projectProfiles[projectId]?.codex,
+    normalized.agents.customCodexModels,
+    advertisedModels,
+  );
 }
 
-export function withProjectCodexProfile(settings, projectId, profile) {
+/**
+ * Normalize the model list a connected runtime advertised into picker entries.
+ *
+ * The built-in list cannot enumerate every model a Codex installation may offer,
+ * so an identifier outside it is a legitimate runtime-advertised choice, while a
+ * malformed one is dropped rather than becoming selectable.
+ */
+function runtimeAdvertisedModels(advertisedModels) {
+  if (!Array.isArray(advertisedModels)) return [];
+  const entries = [];
+  const seen = new Set();
+  for (const candidate of advertisedModels.slice(0, 32)) {
+    if (!isObject(candidate)) continue;
+    const id = selectableModelId(candidate.id);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const efforts = Array.isArray(candidate.efforts)
+      ? candidate.efforts.filter((effort) => typeof effort === "string" && effort.trim())
+      : [];
+    const defaultEffort = typeof candidate.defaultEffort === "string" && efforts.includes(candidate.defaultEffort)
+      ? candidate.defaultEffort
+      : undefined;
+    // The runtime declares exactly which efforts its model accepts. An absent or
+    // empty list means no effort selection is advertised, never the built-in set:
+    // absence is not evidence that the harness supports those values.
+    entries.push({
+      id,
+      efforts,
+      ...(defaultEffort === undefined ? {} : { defaultEffort }),
+    });
+  }
+  return entries;
+}
+
+export function withProjectCodexProfile(settings, projectId, profile, advertisedModels = []) {
   if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
   const normalized = normalizeSettings(settings);
   return normalizeSettings({
@@ -192,7 +299,7 @@ export function withProjectCodexProfile(settings, projectId, profile) {
         ...normalized.agents.projectProfiles,
         [projectId]: {
           ...(normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized)),
-          codex: normalizeCodexProfile(profile, normalized.agents.customCodexModels),
+          codex: normalizeCodexProfile(profile, normalized.agents.customCodexModels, advertisedModels),
         },
       },
     },

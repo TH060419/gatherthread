@@ -1,6 +1,6 @@
 # GatherThread web client
 
-This package is a dependency-free first-release client for the collaboration protocol described in `../../docs`. It uses the real, same-origin `/v1` API by default. The in-memory mock is available only when explicitly requested.
+This package is a plain JavaScript first-release client for the collaboration protocol described in `../../docs`. It uses the real, same-origin `/v1` API by default. The in-memory mock is available only when explicitly requested.
 
 ## Run
 
@@ -22,6 +22,16 @@ npm run build
 
 The static build is written to `apps/web/dist`.
 
+## Beginner guide browser regression
+
+With an existing Playwright installation and Chrome, build the app and keep `node apps/web/scripts/serve.mjs` running from the repository root. In another terminal run:
+
+```bash
+PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tests/browser/onboarding.mjs
+```
+
+The script uses only `/app/?mock=1`, disposable browser profiles and mock API fixtures. It walks all five guides at 1440×900, 390×844 and 320×568, including Chinese/English and empty/read-only accounts. It checks target visibility, ring geometry, cards beside controls, native-dialog layering, focus, example storage/origin isolation, absence of parent business writes, free practice, reset, toolbar navigation and language updates. Screenshots go to `/tmp/gatherthread-onboarding` by default. `ONBOARDING_ORIGIN`, `ONBOARDING_ARTIFACTS` and `ONBOARDING_BROWSER` override the preview, output directory and installed browser channel. `webkit` exercises Playwright WebKit and must not be reported as a real Safari check.
+
 ## Client contract
 
 `src/api.js` defines the replaceable transport boundary. `MockCollaborationApi` and `HttpCollaborationApi` expose the same operations:
@@ -40,7 +50,7 @@ The static build is written to `apps/web/dist`.
 
 The project rail also exposes **Connect Codex**, which generates separate macOS/Linux and Windows PowerShell commands from the validated same-origin server URL and current project ID. These commands contain no credential; the CLI requests the device token through hidden terminal input, creates or reuses the same-name local workspace, opens that workspace in Codex Desktop, and materializes all writable sessions as named tasks. After a synchronized Agent turn creates renderable native content, the connector launches the exact registered task link. Current Desktop builds have been observed to associate it with the project for the verified workspace, but the launcher returns no project-assignment receipt. No fake Agent turn is created merely to display an empty session. Activation failure is fail-soft and retryable while synchronization remains active.
 
-The same dialog offers an explicit Windows Launcher button. Its `gatherthread-connect:` URL contains only the validated same-origin server URL and project ID. The separately installed, per-user Launcher bundles Python, Node, the connector, and a local plugin source; it still asks for the existing device token in its own GUI because the server does not yet expose a Codex browser pairing grant. The manual terminal commands remain available for other platforms and recovery. Launcher build and installation notes are in `prototypes/codex-launcher/README.md`.
+The same dialog offers an explicit Windows Launcher button. Its `gatherthread-connect:` URL contains the validated server URL, project ID, model, context-window limit, and history-import mode, but no credential. The separately installed, per-user Launcher bundles Python, Node, the connector, and a local plugin source; it still asks for the existing device token in its own GUI because the server does not yet expose a Codex browser pairing grant. The manual terminal commands remain available for other platforms and recovery. Launcher build and installation notes are in `prototypes/codex-launcher/README.md`.
 
 The production HTTP/WS endpoints are:
 

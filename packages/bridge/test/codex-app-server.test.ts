@@ -1,4 +1,12 @@
 import assert from "node:assert/strict";
+import { codexActivityStatus } from "../src/codex-app-server.js";
+
+test("native work activity reports thinking without reading hidden reasoning", () => {
+  assert.equal(codexActivityStatus("item/reasoning/textDelta", { delta: "secret reasoning" }), "thinking");
+  assert.equal(codexActivityStatus("item/started", { item: { type: "commandExecution", command: "secret command" } }), "running");
+  assert.equal(codexActivityStatus("thread/tokenUsage/updated", {}), null);
+  assert.equal(codexActivityStatus("unknown/private", {}), null);
+});
 import { createHash } from "node:crypto";
 import { getEventListeners } from "node:events";
 import { mkdir, mkdtemp, readFile, realpath, writeFile } from "node:fs/promises";
@@ -13,11 +21,16 @@ import {
   buildVisibleHistoryImport,
   codexSessionKey,
   discoverCompletedLocalTurns,
+  executionProfilesFromModelList,
   splitUtf8,
   type CanonicalEvent,
   type CollaborationApi,
   type RegisteredRuntime,
 } from "../src/index.js";
+
+/** Written out rather than imported so an accidental change to the catalog's own
+ * effort list fails this contract instead of silently travelling with it. */
+const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
 test("shared summaries rebuild only hidden Codex model context and original mode restores source", async (t) => {
   const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gt-summary-codex-")));
@@ -1573,7 +1586,9 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
     commandArgs: [fakeCodex],
     cwd: directory,
     env: { ...process.env, CAPTURE: capturePath, GENERATION: generationPath },
-    requestTimeoutMs: 1_000,
+    // Only `thread/start` is meant to expire here, so keep that budget deliberately
+    // short while giving process startup room on a loaded machine.
+    requestTimeoutMs: 5_000,
     threadStartTimeoutMs: 250,
   });
   t.after(() => client.dispose());
@@ -1743,7 +1758,11 @@ for await (const line of createInterface({ input: process.stdin })) {
 `);
   const client = new CodexAppServerClient({
     command: process.execPath, commandArgs: [fakeCodex], cwd: directory,
-    requestTimeoutMs: 250, turnTimeoutMs: 300,
+    // The RPC budget must outlast spawning this child and its `initialize`, which
+    // a loaded machine can push past a quarter second and turn into an
+    // "initialize request timed out" failure that has nothing to do with the
+    // terminal-notification ordering this test asserts.
+    requestTimeoutMs: 5_000, turnTimeoutMs: 300,
   });
   t.after(() => client.dispose());
   await assert.rejects(client.compactThread("thread-1"), /terminal native failure without RPC ack/);
@@ -3774,6 +3793,10 @@ for await (const line of lines) {
       },
     }) + "\\n");
   } else if (message.id === 99) {
+    process.stdout.write(JSON.stringify({ method: "item/reasoning/textDelta", params: {
+      threadId: "other-thread", turnId: "turn-1", delta: "must not report other work" } }) + "\\n");
+    process.stdout.write(JSON.stringify({ method: "item/reasoning/textDelta", params: {
+      threadId: "thread-1", turnId: "turn-1", delta: "private reasoning must never reach progress" } }) + "\\n");
     process.stdout.write(JSON.stringify({
       method: "item/completed",
       params: {
@@ -3806,13 +3829,16 @@ function respond(id, result) { process.stdout.write(JSON.stringify({ id, result 
   });
   t.after(() => client.dispose());
   const completedItems: unknown[] = [];
+  const activity: unknown[] = [];
   const completed = await client.runTurn({
     threadId: "thread-1",
     prompt: "continue without interactive input",
     clientUserMessageId: "elicitation-turn",
     onItemCompleted: async (item) => { completedItems.push(item); },
+    onWorkActivity: async (status) => { activity.push(status); },
   });
   assert.deepEqual(completed.items, [{ type: "agentMessage", text: "continued safely" }]);
+  assert.deepEqual(activity, ["thinking", "running"]);
   assert.deepEqual(completedItems, [{
     id: "commentary-1",
     type: "agentMessage",
@@ -3874,6 +3900,10 @@ for await (const line of lines) {
     respond(message.id, {});
   } else if (message.method === "thread/inject_items" || message.method === "thread/unsubscribe") {
     respond(message.id, {});
+  } else if (message.method === "model/list") {
+    // Refuse the catalog the way an App Server that predates the method does, so
+    // discovery fails fast instead of waiting for its own request timeout.
+    fail(message.id, "Method not found");
   } else if (message.method === "thread/compact/start") {
     respond(message.id, {});
     process.stdout.write(JSON.stringify({ method: "thread/tokenUsage/updated", params: {
@@ -4001,7 +4031,7 @@ function fail(id, message) {
   assert.equal(first.events.at(-1)?.content, "first app answer");
   assert.equal(first.observedModel, "gpt-5.6-terra");
   assert.equal(first.observedReasoningEffort, "high");
-  assert.deepEqual(progress, [{ id: "commentary-1", content: "Checking turn 1" }]);
+  assert.deepEqual(progress, [{ id: "activity-1", phase: "activity", status: "running", content: "Agent is working." }, { id: "commentary-1", content: "Checking turn 1" }]);
   assert.deepEqual(revealedThreads, [], "background execution tasks must never be opened in Desktop");
 
   const secondRequest = canonical(5, "agent_request", { content: "implement second" });
@@ -4271,3 +4301,209 @@ async function waitForCapturedMethod(capturePath: string, method: string, expect
   }
   throw new Error(`Timed out waiting for ${method}`);
 }
+
+test("Codex model catalog parsing keeps only usable picker models and bounds the declaration", () => {
+  // An unusable catalog must retain legacy routing, not publish a restrictive declaration.
+  assert.equal(executionProfilesFromModelList([], "openai", "gpt-5.6-sol"), undefined);
+  assert.equal(executionProfilesFromModelList([
+    { id: "-p" }, { id: "hidden", hidden: true }, "invalid",
+  ], "openai", "gpt-5.6-sol"), undefined);
+  const profiles = executionProfilesFromModelList([
+    {
+      id: "gpt-6-sol",
+      hidden: false,
+      supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }],
+      defaultReasoningEffort: "high",
+    },
+    // Object and plain-string effort spellings both yield usable metadata.
+    { id: "gpt-6-terra", supportedReasoningEfforts: ["low", "max"] },
+    // Malformed entries are dropped rather than advertised.
+    { id: "gpt-6-luna", supportedReasoningEfforts: { nope: true } },
+    { id: "", supportedReasoningEfforts: [] },
+    { id: "   ", supportedReasoningEfforts: [] },
+    { id: "-p", supportedReasoningEfforts: [] },
+    { id: "control\u0007id", supportedReasoningEfforts: [] },
+    { id: "hidden-canary", hidden: true, supportedReasoningEfforts: [] },
+    { id: "gpt-6-sol", supportedReasoningEfforts: [] },
+    "not-an-entry",
+  ], "openai", "gpt-5.6-sol");
+  assert.deepEqual(profiles, [
+    { provider: "openai", model: "gpt-6-sol", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
+    { provider: "openai", model: "gpt-6-terra", reasoningEfforts: ["low", "max"] },
+    // Effort metadata is absent for this model, so no effort is advertised for it:
+    // absence is not evidence that the harness supports the built-in set.
+    { provider: "openai", model: "gpt-6-luna" },
+    { provider: "openai", model: "gpt-5.6-sol" },
+  ]);
+  // A default the model does not advertise is never propagated.
+  assert.deepEqual(
+    executionProfilesFromModelList(
+      [{ id: "gpt-6-sol", supportedReasoningEfforts: ["low"], defaultReasoningEffort: "max" }],
+      "openai",
+      "gpt-6-sol",
+    ),
+    [{ provider: "openai", model: "gpt-6-sol", reasoningEfforts: ["low"] }],
+  );
+  // A catalog identifier longer than the protocol's model bound cannot be registered.
+  assert.deepEqual(
+    executionProfilesFromModelList([{ id: `long-${"x".repeat(170)}` }], "openai", "gpt-6-sol"),
+    undefined,
+  );
+});
+
+test("a full Codex catalog still leaves the configured model claimable", () => {
+  const many = Array.from({ length: 40 }, (_, index) => ({
+    id: `model-${index}`,
+    supportedReasoningEfforts: ["low"],
+  }));
+  // The protocol accepts at most 32 exact profiles for one runtime, so one slot is
+  // reserved for the configured model rather than letting the catalog consume them
+  // all and making this runtime's own previous route unclaimable.
+  const profiles = executionProfilesFromModelList(many, "openai", "gpt-5.6-sol");
+  assert.equal(profiles?.length, 32);
+  assert.deepEqual(profiles?.at(-1), { provider: "openai", model: "gpt-5.6-sol" });
+  assert.equal(profiles?.filter((profile) => profile.model === "gpt-5.6-sol").length, 1);
+  assert.deepEqual(profiles?.[0], { provider: "openai", model: "model-0", reasoningEfforts: ["low"] });
+  assert.equal(profiles?.some((profile) => profile.model === "model-31"), false,
+    "the last catalog entry gives way to the configured model");
+
+  // When the catalog already names the configured model, every slot stays usable for
+  // catalog entries and the model keeps the efforts that entry declares.
+  const withConfigured = executionProfilesFromModelList([
+    ...many.slice(0, 31),
+    { id: "gpt-5.6-sol", supportedReasoningEfforts: ["low", "medium"] },
+    ...many.slice(31),
+  ], "openai", "gpt-5.6-sol");
+  assert.equal(withConfigured?.length, 32);
+  assert.equal(withConfigured?.filter((profile) => profile.model === "gpt-5.6-sol").length, 1);
+  assert.deepEqual(
+    withConfigured?.find((profile) => profile.model === "gpt-5.6-sol")?.reasoningEfforts,
+    ["low", "medium"],
+  );
+  for (const position of [32, 39]) {
+    const entries: Array<{ id: string; supportedReasoningEfforts: string[]; defaultReasoningEffort?: string }> = [...many];
+    entries.splice(position, 0, {
+      id: "gpt-5.6-sol", supportedReasoningEfforts: ["low", "high"], defaultReasoningEffort: "high",
+    });
+    const selected = executionProfilesFromModelList(entries, "openai", "gpt-5.6-sol");
+    assert.equal(selected?.length, 32);
+    assert.deepEqual(selected?.find((profile) => profile.model === "gpt-5.6-sol"), {
+      provider: "openai", model: "gpt-5.6-sol", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high",
+    });
+  }
+});
+
+test("Codex catalog efforts agree with the connector execution boundary", () => {
+  assert.deepEqual(executionProfilesFromModelList([{
+    id: "gpt-5.6-sol", supportedReasoningEfforts: ["none", "minimal", "future", "low", "high"],
+    defaultReasoningEffort: "future",
+  }], "openai", "gpt-5.6-sol"), [{
+    provider: "openai", model: "gpt-5.6-sol", reasoningEfforts: ["low", "high"],
+  }]);
+  assert.deepEqual(executionProfilesFromModelList([{
+    id: "gpt-5.6-sol", supportedReasoningEfforts: CODEX_EFFORTS,
+  }], "openai", "gpt-5.6-sol")?.[0]?.reasoningEfforts, CODEX_EFFORTS);
+});
+
+test("Codex preflight advertises the App Server's own model catalog", async (t) => {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gt-codex-catalog-")));
+  const stateRoot = path.join(directory, "state");
+  const fake = path.join(directory, "fake-codex-catalog.mjs");
+  const capturePath = path.join(directory, "rpc.jsonl");
+  await mkdir(stateRoot, { recursive: true });
+  await writeFile(fake, `
+import { appendFileSync } from "node:fs";
+import { createInterface } from "node:readline";
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("codex-cli test-version");
+  process.exit(0);
+}
+if (args[0] === "login" && args[1] === "status") {
+  console.log("Logged in using test account");
+  process.exit(0);
+}
+if (args[0] !== "app-server") process.exit(2);
+for await (const line of createInterface({ input: process.stdin })) {
+  if (!line.trim()) continue;
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  appendFileSync(process.env.CAPTURE, JSON.stringify(message) + String.fromCharCode(10));
+  if (message.method === "initialize") console.log(JSON.stringify({ id: message.id, result: { userAgent: "fake", codexHome: "/tmp/fake" } }));
+  else if (message.method === "model/list") {
+    console.log(JSON.stringify({ id: message.id, result: { data: [
+      { id: "gpt-6-sol", hidden: false,
+        supportedReasoningEfforts: [{ reasoningEffort: "low" }, { reasoningEffort: "high" }],
+        defaultReasoningEffort: "high" },
+      { id: "hidden-canary", hidden: true, supportedReasoningEfforts: [{ reasoningEffort: "low" }] },
+    ], nextCursor: null } }));
+  }
+}
+`);
+  const harness = new CodexProjectHarness({
+    workspacePath: directory,
+    stateRoot,
+    mappingId: "mapping-1",
+    projectName: "Project Atlas",
+    model: "gpt-5.6-sol",
+    command: process.execPath,
+    commandArgs: [fake],
+    env: { ...process.env, CAPTURE: capturePath },
+  });
+  t.after(() => harness.close());
+  const preflight = await harness.preflight();
+  assert.match(preflight.version, /test-version/u);
+  assert.deepEqual(harness.descriptor.executionProfiles, [
+    { provider: "openai", model: "gpt-6-sol", reasoningEfforts: ["low", "high"], defaultReasoningEffort: "high" },
+    // The configured model is kept claimable, but the catalog describes no efforts
+    // for it, so none are advertised on its behalf.
+    { provider: "openai", model: "gpt-5.6-sol" },
+  ]);
+  const requests = (await readFile(capturePath, "utf8")).trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(line) as { method?: string; params?: { includeHidden?: boolean } });
+  // Hidden entries are excluded by the server rather than filtered by hand here.
+  assert.equal(requests.find((request) => request.method === "model/list")?.params?.includeHidden, false);
+});
+
+test("an App Server that cannot list models leaves the connection on its configured model", async (t) => {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gt-codex-no-catalog-")));
+  const stateRoot = path.join(directory, "state");
+  const fake = path.join(directory, "fake-codex-no-catalog.mjs");
+  await mkdir(stateRoot, { recursive: true });
+  await writeFile(fake, `
+import { createInterface } from "node:readline";
+const args = process.argv.slice(2);
+if (args.includes("--version")) {
+  console.log("codex-cli test-version");
+  process.exit(0);
+}
+if (args[0] === "login" && args[1] === "status") {
+  console.log("Logged in using test account");
+  process.exit(0);
+}
+if (args[0] !== "app-server") process.exit(2);
+for await (const line of createInterface({ input: process.stdin })) {
+  if (!line.trim()) continue;
+  const message = JSON.parse(line);
+  if (message.method === "initialized") continue;
+  if (message.method === "initialize") console.log(JSON.stringify({ id: message.id, result: { userAgent: "fake", codexHome: "/tmp/fake" } }));
+  else console.log(JSON.stringify({ id: message.id, error: { code: -32601, message: "Method not found" } }));
+}
+`);
+  const harness = new CodexProjectHarness({
+    workspacePath: directory,
+    stateRoot,
+    mappingId: "mapping-1",
+    projectName: "Project Atlas",
+    model: "gpt-5.6-sol",
+    command: process.execPath,
+    commandArgs: [fake],
+    env: process.env,
+  });
+  t.after(() => harness.close());
+  // An older App Server must not fail the connection: it advertises nothing and
+  // keeps exact fixed-model routing.
+  const preflight = await harness.preflight();
+  assert.match(preflight.version, /test-version/u);
+  assert.equal(harness.descriptor.executionProfiles, undefined);
+});

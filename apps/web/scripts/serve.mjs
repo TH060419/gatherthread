@@ -129,13 +129,14 @@ async function serveStatic(request, response, root) {
     }
     const info = await stat(resolvedFile);
     if (!info.isFile()) throw new Error("Not a file");
+    const example = requestedPath === "/app/example.html";
     response.writeHead(200, {
       "Content-Type": types[extname(filePath)] ?? "application/octet-stream",
       "Cache-Control": "no-store",
-      "Content-Security-Policy": "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
+      "Content-Security-Policy": example ? "default-src 'none'; script-src 'nonce-gatherthread-example-v1'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; frame-ancestors 'self'; form-action 'none'; sandbox allow-scripts" : "default-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
       "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
-      "X-Frame-Options": "DENY",
+      ...(example ? {} : { "X-Frame-Options": "DENY" }),
     });
     if (request.method === "HEAD") response.end();
     else createReadStream(resolvedFile).pipe(response);

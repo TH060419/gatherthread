@@ -13,8 +13,8 @@ SPEC.loader.exec_module(launcher)
 
 class NativeCodexCommandTests(unittest.TestCase):
     def test_deep_link_accepts_only_fixed_server(self):
-        accepted = "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example"
-        rejected = "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fexample.com&project=project-example"
+        accepted = "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect"
+        rejected = "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fexample.com&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect"
         self.assertEqual(launcher.parse_link(accepted)[:2], (launcher.SERVER_ORIGIN, "project-example"))
         with self.assertRaisesRegex(ValueError, "gatherthread.cn"):
             launcher.parse_link(rejected)

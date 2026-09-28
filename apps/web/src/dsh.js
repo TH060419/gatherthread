@@ -108,11 +108,29 @@ export function codexExecutionProfile(runtime, { model, reasoningEffort }) {
   if (!normalized || normalized.harness !== CODEX_HARNESS || normalized.status !== "online") {
     throw new Error("A matching online Codex runtime is required.");
   }
-  if (!safeModel || !safeEffort) throw new Error("A valid Codex model and reasoning effort are required.");
+  if (!safeModel) throw new Error("A valid Codex model is required.");
+  const profiles = normalized.executionProfiles ?? [];
+  if (profiles.length === 0) {
+    // No declaration exists, so the previous fixed-model rule still applies and
+    // still requires an explicit effort.
+    if (!safeEffort) throw new Error("A valid Codex model and reasoning effort are required.");
+  } else {
+    // The runtime published its own catalog, so a request may only name a model
+    // and effort that catalog declares.
+    const advertised = profiles.find((profile) => profile.model === safeModel);
+    if (!advertised) throw new Error("Choose a Codex model this runtime advertises.");
+    if (advertised.reasoningEfforts.length === 0) {
+      // The catalog describes no efforts for this model, so the request must not
+      // send one: absence is not evidence that any value is supported.
+      if (safeEffort) throw new Error("This Codex model does not advertise a reasoning effort.");
+    } else if (!safeEffort || !advertised.reasoningEfforts.includes(safeEffort)) {
+      throw new Error("Choose a reasoning effort this Codex model advertises.");
+    }
+  }
   return {
     harness: CODEX_HARNESS,
     model: safeModel,
-    reasoningEffort: safeEffort,
+    ...(safeEffort ? { reasoningEffort: safeEffort } : {}),
     runtimeId: normalized.id,
   };
 }

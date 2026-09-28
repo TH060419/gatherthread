@@ -37,6 +37,7 @@ export interface CanonicalEvent {
   type: CanonicalEventType;
   actorId: string;
   actorDisplayName?: string;
+  replyTo?: string;
   timestamp: string;
   payload: unknown;
   runtime?: RuntimeProvenance;
@@ -174,7 +175,7 @@ export interface CurrentActor {
 
 export interface AgentRequestClaim {
   claimed: boolean;
-  status: "claimed" | "completed";
+  status: "claimed" | "completed" | "paused";
   requestId: string;
   runtimeId: string;
   attemptCount?: number;
@@ -195,6 +196,8 @@ export interface HarnessProgressUpdate {
   id: string;
   content: string;
   occurredAt?: string;
+  phase?: "commentary" | "activity";
+  status?: "thinking" | "running";
 }
 
 export interface CollaborationApi {

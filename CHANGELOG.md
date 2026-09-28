@@ -4,6 +4,19 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Add complete bilingual beginner guides and freely browsable, isolated example projects for all account states. Separate collaboration, history, file-sharing and summary guidance; align highlight shapes and cards with visible controls. Clarify member-only file collaboration and local authorization, and keep all practice state separate from real projects, credentials and runtimes.
+- Let the self-hosted operator issue up to 50 independent, single-use Alpha test qualifications in one transaction. Keep the single-code JSON CLI response compatible, add an optional Chinese share format with a validity range for each code, and make the ECS helper print that share format by default. The Web project-invitation copy action now includes joining guidance and the validity range in the selected interface language; its original control IDs and one-time secret handling remain intact.
+- Keep maximum-size cloud Git checkpoints usable on slower Windows hosts: only the two bounded batch-write commands receive a 60-second Windows deadline; other Git deadlines, snapshot limits and atomic failure/retry semantics remain unchanged.
+- Pause safety: full event quotas no longer block the one bounded server pause marker; DSH lost-settlement recovery excludes fenced native work from both automatic and manual uploads while preserving subsequent local turns.
+- Separate realtime delivery from read/write permissions in the top status badge. Make summary-section arrows reveal originals, reset local overrides when switching all history, and preserve the reading anchor during explicit view changes. Add concise localized icon guidance and a roomier, responsive summary versions dialog; display changes never alter Agent context policy.
+
+- Add message-body copy controls, public in-session quotes and member mentions with a project-scoped inbox and jump-to-message navigation. Preserve raw history and existing human-chat / Agent-request separation. Mentions do not grant access or automatically run an Agent.
+- Fix Safari body selection, hidden required branch fields blocking member removal, and the untranslated cloud Git back link. Remove outdated service-unavailable copy from connector guides.
+- Keep Codex execution runtimes online through an independent ten-second heartbeat loop, including initialization. Publish throttled, content-free busy/thinking signals from actual native work; presence alone never renews a request claim lease.
+- Preserve DSH's independent heartbeat during long prompts, recover idle/running status immediately after a transient heartbeat failure, and publish the native busy transition before the final answer. Late heartbeat failures cannot resurrect stopped connectors; presence never fabricates work or renews inactive claims.
+- Offer the models a connected harness actually provides. A Codex connector reads its installation's own catalog and declares it to the server, so a newly published model becomes selectable in the Web workspace without editing browser code; the DeepSeek Harness connector re-reads its native model metadata on a bounded interval and republishes changes on the same runtime identity. The server enforces the declaration for each harness that publishes one, a model declared without effort metadata advertises no effort selection instead of guessing one, the runtime's own configured model always keeps a slot, and a refresh that the server has not confirmed is retried rather than dropped. A runtime that cannot be queried keeps its previous fixed-model behavior, and a request may still name only an advertised model and reasoning effort.
+
+- Add a back-to-bottom control to the shared conversation timeline. It appears once the reader scrolls away from the newest event, hides again at the bottom, and follows the reader's reduced-motion preference when it jumps.
 - Prepared public-repository documentation and discoverability updates: bilingual README introductions, documentation/release indexes, private security-reporting policy, product-home metadata, and clearer Alpha access guidance. This does not itself deploy the hosted site or publish a new package.
 - The npm Alpha 7 packages were published separately and were not rebuilt when the Git tag moved to the verified server source.
 
@@ -66,6 +79,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Added
 
+- Let the author of an Agent request pause it over `POST /v1/sessions/:session_id/agent-requests/:event_id/pause`. A paused request is fenced from every execution that held it, is never re-dispatched, and announces itself as an ordered canonical lifecycle marker so the whole room reads it. Continuing is a new request.
 - Lease Agent claims and bound exact-runtime recovery. A claim is renewed only by accepted progress, a lapsed claim may be reclaimed only by its recorded runtime, stale attempts are fenced, and a request that exhausts its recovery budget fails visibly instead of staying pending.
 - Show a failed Agent response as a failure in the timeline, with a retry that replays the request's exact recorded harness, provider, model, and runtime.
 - Let compatible DeepSeek Harness runtimes advertise executable model and reasoning-effort combinations so each new Agent request can select them directly from the GatherThread work page.

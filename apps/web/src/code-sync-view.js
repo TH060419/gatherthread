@@ -93,7 +93,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     }
     const enabled = repository?.repository?.enabled === true;
     const hasStoredRepository = Boolean(repository?.repository?.main_commit);
-    el("code-repository-status").textContent = t(state.loading ? "Reading code status…" : !repository ? "Code status unavailable" : enabled ? "Git code storage enabled" : "Code storage is not enabled");
+    el("code-repository-status").textContent = t(state.loading ? "Reading code status…" : !repository ? "Code status unavailable" : enabled ? "Project file sharing enabled" : "Project file sharing is off");
     el("code-enable-section").hidden = !repository || enabled;
     el("code-enable-button").hidden = context?.project?.role !== "owner";
     el("code-enable-button").disabled = !permissions.enable;
@@ -268,10 +268,10 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   el("code-confirm-accept").addEventListener("click", () => finishConfirmation(true));
   el("code-confirm-cancel").addEventListener("click", () => finishConfirmation(false));
   el("code-enable-button").addEventListener("click", async () => {
-    if (await confirm(t("Enable Git storage for this project? Uploaded code will be readable by every project member. No local files are uploaded until you authorize a connector and choose an upload action."))) void controller.mutate("enable");
+    if (await confirm(t("Enable project file sharing? Uploaded files will be readable by every project member, but are not public. Local file access requires separate connector authorization and an upload choice."))) void controller.mutate("enable");
   });
   el("code-disable-active-button").addEventListener("click", async () => {
-    if (await confirm(t("Turn off Git synchronization for this project? Existing cloud branches stay stored and can be re-enabled later. Local files and conversation sync are unchanged."))) void controller.mutate("disable");
+    if (await confirm(t("Turn off project file sharing? Collaboration will be limited to text, with file exchange and recovery paused. We recommend this only for strict privacy needs. Stored versions remain until explicitly cleared; local files are retained."))) void controller.mutate("disable");
   });
   el("code-upload-button").addEventListener("click", async () => {
     if (await confirm(t("Upload selected local project files to your cloud branch? All project members can read them. Check exclusions and credentials before continuing."))) void controller.queue("code_upload");
@@ -297,7 +297,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     if (preview && !el("code-merge-button").disabled && await confirm(t("Approve these reviewed changes and merge them into main? Other members can then download this version.")) && reviewed === preview && !el("code-merge-button").disabled) void controller.mutate("merge", preview.branchId);
   });
   return {
-    updateContext,
+    updateContext, refresh: () => controller.refresh(),
     showFirstLoginNotice(deviceId) {
       if (hasSeenCodeNotice(storage, deviceId) || noticeDialog.open) return;
       noticeDeviceId = deviceId;

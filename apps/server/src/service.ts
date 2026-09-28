@@ -89,6 +89,11 @@ export class CollaborationService {
     return this.database.listProjectMembers(projectId);
   }
 
+  listProjectMentions(actor: Actor, projectId: string, beforeId?: string) {
+    this.requireProjectMembership(actor, projectId);
+    return this.database.listProjectMentions(actor, projectId, beforeId);
+  }
+
   createProjectInvitation(
     actor: Actor,
     projectId: string,
@@ -347,6 +352,16 @@ export class CollaborationService {
       if (outcome.event !== undefined) this.publish(outcome.event);
       throw agentRequestFailed();
     }
+    return outcome.claim;
+  }
+
+  pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string) {
+    const { session } = this.requireWrite(actor, sessionId);
+    if (session.state !== "active") throw conflict("Archived sessions do not accept Agent request control");
+    const outcome = this.database.pauseAgentRequest(actor, sessionId, requestEventId);
+    // The row is private state; the marker is the shared fact. Members already
+    // connected would otherwise not see the pause until their next replay.
+    if (outcome.event !== undefined) this.publish(outcome.event);
     return outcome.claim;
   }
 

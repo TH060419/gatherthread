@@ -201,7 +201,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       method: "POST",
       body: JSON.stringify({ runtime_id: runtimeId }),
     }));
-    if (body.status !== "claimed" && body.status !== "completed") {
+    if (body.status !== "claimed" && body.status !== "completed" && body.status !== "paused") {
       throw new Error("Collaboration API omitted claim.status");
     }
     const attemptCount = body.attempt_count === undefined
@@ -521,6 +521,7 @@ function fromWireEvent(value: unknown): CanonicalEvent {
     type: requiredString(input.type, "event.type") as CanonicalEvent["type"],
     actorId: requiredString(input.actor_user_id, "event.actor_user_id"),
     ...(actorDisplayName === undefined ? {} : { actorDisplayName }),
+    ...(typeof input.reply_to_event_id === "string" ? { replyTo: input.reply_to_event_id } : {}),
     timestamp: requiredString(input.created_at, "event.created_at"),
     payload: input.payload,
     ...(runtime === undefined ? {} : { runtime }),

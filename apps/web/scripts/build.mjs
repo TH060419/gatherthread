@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
@@ -31,6 +31,7 @@ await cp(resolve(root, "brand"), resolve(applicationDist, "brand"), { recursive:
 await build({
   entryPoints: {
     markdown: resolve(root, "src/markdown.js"),
+    onboarding: resolve(root, "src/onboarding.js"),
     "history-summary-policy": resolve(root, "src/history-summary-policy.js"),
     styles: resolve(root, "src/styles.css"),
   },
@@ -48,6 +49,25 @@ await build({
   minify: true,
   sourcemap: false,
 });
+// A self-contained classic bundle avoids WebKit's opaque-origin 'self' asset
+// restriction. The only script is authored build output; no backend is reachable.
+const exampleScript = await build({ entryPoints: [resolve(root, "src/example-entry.js")], outfile: "example.js", write: false,
+  bundle: true, format: "iife", platform: "browser", target: ["safari15", "chrome100", "firefox100"], minify: true });
+const exampleStyle = await build({ entryPoints: [resolve(root, "src/styles.css")], outfile: "example.css", write: false,
+  bundle: true, minify: true, loader: { ".ttf": "dataurl", ".woff": "dataurl", ".woff2": "dataurl" } });
+const policy = "default-src 'none'; script-src 'nonce-gatherthread-example-v1'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; object-src 'none'";
+let exampleHtml = index.replace('<head>', `<head><meta http-equiv="Content-Security-Policy" content="${policy}">`)
+  .replace(/<link[^>]+rel="(?:icon|apple-touch-icon|manifest)"[^>]*>/gu, '')
+  .replace(/<link[^>]+rel="stylesheet"[^>]*>/u, () => `<style>${exampleStyle.outputFiles[0].text}</style>`)
+  .replace(/<script type="module" src="\.\/src\/main\.js[^" ]*"><\/script>/u,
+    () => `<script nonce="gatherthread-example-v1">${exampleScript.outputFiles[0].text.replace(/<\/script/giu, '<\\/script')}</script>`);
+for (const path of new Set([...exampleHtml.matchAll(/src="(\.\/brand\/[^" ]+)"/gu)].map((match) => match[1]))) {
+  const svg = await readFile(resolve(root, path.slice(2)));
+  exampleHtml = exampleHtml.replaceAll(path, `data:image/svg+xml;base64,${svg.toString('base64')}`);
+}
+await writeFile(resolve(applicationDist, "example.html"), exampleHtml);
+await mkdir(resolve(applicationDist, "licenses"), { recursive: true });
+await cp(resolve(repositoryRoot, "node_modules/driver.js/license"), resolve(applicationDist, "licenses/driver.js.txt"));
 for (const asset of [
   "android-chrome-192x192.png",
   "android-chrome-512x512.png",

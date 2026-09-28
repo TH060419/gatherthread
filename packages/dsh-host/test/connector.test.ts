@@ -112,7 +112,7 @@ class FakeApi implements DshCollaborationApi {
   readonly events: DshCanonicalEvent[] = [];
   readonly registrations: DshRuntimeRegistration[] = [];
   readonly returnedRuntimeIds: string[] = [];
-  readonly claims = new Map<string, "claimed" | "completed">();
+  readonly claims = new Map<string, "claimed" | "completed" | "paused">();
   readonly progress: CompleteAgentRequestInput[] = [];
   readonly appended: DshAppendEventInput[] = [];
   readonly completions: CompleteAgentRequestInput[] = [];
@@ -125,8 +125,12 @@ class FakeApi implements DshCollaborationApi {
   failNextKind: "progress" | "append" | "complete" | "local_turn" | undefined;
   failNextHeartbeat = false;
   readGate: Promise<void> | undefined;
+  /** Holds heartbeat responses in flight so a refresh can race one. */
+  heartbeatGate: Promise<void> | undefined;
   forcedRuntimeId: string | undefined;
   forcedHeartbeatRuntimeId: string | undefined;
+  /** Mimic a server that stores and echoes the latest declaration, as the real one does. */
+  echoRegistrations = false;
   #runtime: DshRegisteredRuntime | undefined;
 
   async listProjectSessions(): Promise<SessionSummary[]> {
@@ -157,10 +161,10 @@ class FakeApi implements DshCollaborationApi {
 
   async registerRuntime(input: DshRuntimeRegistration): Promise<DshRegisteredRuntime> {
     this.registrations.push(structuredClone(input));
-    if (this.#runtime === undefined || this.forcedRuntimeId !== undefined) {
+    if (this.#runtime === undefined || this.forcedRuntimeId !== undefined || this.echoRegistrations) {
       this.#runtime = {
         ...structuredClone(input),
-        id: this.forcedRuntimeId ?? "runtime-1",
+        id: this.forcedRuntimeId ?? this.#runtime?.id ?? "runtime-1",
         userId: "user-1",
         registeredAt: now,
       };
@@ -175,12 +179,17 @@ class FakeApi implements DshCollaborationApi {
       this.failNextHeartbeat = false;
       throw new Error("simulated heartbeat transport failure");
     }
-    if (this.#runtime === undefined || runtimeId !== this.#runtime.id) {
+    // Snapshot before waiting: a real heartbeat reads the stored row when the
+    // request is served, so a gated response carries the declaration the server
+    // held before any later registration.
+    const observed = this.#runtime === undefined ? undefined : structuredClone(this.#runtime);
+    await this.heartbeatGate;
+    if (observed === undefined || runtimeId !== observed.id) {
       throw new Error("unknown fake runtime");
     }
     return {
-      ...structuredClone(this.#runtime),
-      id: this.forcedHeartbeatRuntimeId ?? this.#runtime.id,
+      ...observed,
+      id: this.forcedHeartbeatRuntimeId ?? observed.id,
     };
   }
 
@@ -1480,6 +1489,162 @@ test("terminal failure while recovering retires durable active state and resumes
   await connector.stop();
 });
 
+test("a paused active request is retired instead of retried on every poll", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  const activeRequest = request(1);
+  api.events.push(activeRequest);
+  api.claims.set(activeRequest.id, "paused");
+  const state: ConnectorState = {
+    version: 3,
+    binding: { projectId: cfg.projectId, sessionId: cfg.sessionId, dshSessionId: cfg.dshSessionId },
+    serverCursor: 0,
+    projectionCursor: 0,
+    publishedDshSequence: 0,
+    automaticUpload: true,
+    activeRequest: {
+      requestId: activeRequest.id,
+      requestSequence: activeRequest.sequence,
+      dshFromSequence: 0,
+      promptDigest: "a".repeat(64),
+      claimAttempt: 1,
+    },
+    outbox: [{
+      id: "pending-progress",
+      kind: "progress",
+      requestId: activeRequest.id,
+      input: {
+        runtimeId: "runtime-1",
+        claimAttempt: 1,
+        idempotencyKey: "pending-progress",
+        payload: { content: "fenced progress" },
+      },
+    }],
+  };
+  const store = new MemoryConnectorStateStore(state);
+  const persistence = freshPersistence();
+  persistence.exists = true;
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host: new FakeHost(cfg.dshSessionId, persistence),
+    stateStore: store,
+  });
+  // The author paused while this connector held the request. That is terminal
+  // for this request, not an unknown state to retry: the connector must release
+  // the local work instead of driving a fenced execution for ever.
+  await connector.start({ schedule: false });
+  const settled = await store.load();
+  assert.equal(settled?.activeRequest, undefined, "a paused request must not stay active");
+  assert.deepEqual(settled?.outbox, [], "its fenced outbox work must be dropped");
+  assert.equal(persistence.prompts.length, 0, "a paused request must never be driven");
+  await connector.stop();
+});
+
+for (const automaticUpload of [true, false]) {
+  test(`paused completed native work is not recaptured; later local work is preserved (auto=${automaticUpload})`, async () => {
+    const cfg = config();
+    const api = new FakeApi();
+    const activeRequest = request(1);
+    api.events.push(activeRequest);
+    api.claims.set(activeRequest.id, "paused");
+    const persistence = freshPersistence();
+    persistence.exists = true;
+    const host = new FakeHost(cfg.dshSessionId, persistence);
+    // Native completion existed, but its acknowledgement was lost before the
+    // connector could persist dshToSequence. Production cloud prompts also use
+    // source.kind=user, so they otherwise qualify for local capture.
+    host.emitLocalTurn("CLOUD_REQUEST", "FENCED_COMPLETED_ANSWER");
+    const cloudEnd = host.currentSequence();
+    host.emitLocalTurn("GENUINE_LOCAL_REQUEST", "GENUINE_LOCAL_ANSWER");
+    const store = new MemoryConnectorStateStore({ version: 3,
+      binding: { projectId: cfg.projectId, sessionId: cfg.sessionId, dshSessionId: cfg.dshSessionId },
+      serverCursor: 0, projectionCursor: 0, publishedDshSequence: 0, automaticUpload,
+      activeRequest: { requestId: activeRequest.id, requestSequence: 1,
+        dshFromSequence: 0, promptDigest: createHash("sha256").update("CLOUD_REQUEST").digest("hex"), claimAttempt: 1 }, outbox: [] });
+    const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+    await connector.start({ schedule: false, runImmediately: false });
+    assert.equal((await store.load())?.publishedDshSequence, cloudEnd);
+    assert.equal((await store.load())?.activeRequest, undefined);
+    await connector.pollOnce();
+    if (!automaticUpload) await connector.uploadLocalTurns();
+    assert.equal(api.localTurns.length, 1);
+    assert.deepEqual(api.localTurns[0]?.requestPayload, { content: "GENUINE_LOCAL_REQUEST",
+      capture_fidelity: "harness_transcript", source_harness: "deepseek-harness" });
+    assert.deepEqual(api.localTurns[0]?.responsePayload, { text: "GENUINE_LOCAL_ANSWER",
+      capture_fidelity: "harness_transcript", source_harness: "deepseek-harness" });
+    assert.equal(persistence.prompts.length, 0);
+    await connector.stop();
+  });
+}
+
+test("an open paused native turn retains its fence across restart until its own end", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  const activeRequest = request(1);
+  api.events.push(activeRequest);
+  api.claims.set(activeRequest.id, "paused");
+  const persistence = freshPersistence();
+  persistence.exists = true;
+  const firstHost = new FakeHost(cfg.dshSessionId, persistence);
+  firstHost.emitLocalTurn("CLOUD_REQUEST", "FENCED_COMPLETED_ANSWER");
+  const closingEvents = persistence.events.splice(4);
+  const store = new MemoryConnectorStateStore({ version: 3,
+    binding: { projectId: cfg.projectId, sessionId: cfg.sessionId, dshSessionId: cfg.dshSessionId },
+    serverCursor: 0, projectionCursor: 0, publishedDshSequence: 0, automaticUpload: true,
+    activeRequest: { requestId: activeRequest.id, requestSequence: 1,
+      dshFromSequence: 0, promptDigest: createHash("sha256").update("CLOUD_REQUEST").digest("hex"), claimAttempt: 1 }, outbox: [] });
+  const first = new DshHostConnector({ config: cfg, api, host: firstHost, stateStore: store });
+  await first.start({ schedule: false });
+  await first.uploadLocalTurns();
+  assert.ok((await store.load())?.activeRequest);
+  assert.equal(api.localTurns.length, 0);
+  await first.stop();
+  const nextHost = new FakeHost(cfg.dshSessionId, persistence);
+  const next = new DshHostConnector({ config: cfg, api, host: nextHost, stateStore: store });
+  await next.start({ schedule: false });
+  assert.ok((await store.load())?.activeRequest);
+  // Even an interrupted turn closes the excluded execution range.
+  const last = closingEvents.at(-1)!;
+  persistence.events.push(...closingEvents.slice(0, -1), { ...last, data: { turn: 99, reason: { kind: "interrupted" } } });
+  nextHost.emitLocalTurn("LATER_LOCAL", "LATER_ANSWER");
+  await next.pollOnce();
+  await next.pollOnce();
+  assert.equal((await store.load())?.activeRequest, undefined);
+  assert.equal(api.localTurns.length, 1);
+  assert.deepEqual(api.localTurns[0]?.requestPayload, { content: "LATER_LOCAL",
+    capture_fidelity: "harness_transcript", source_harness: "deepseek-harness" });
+  assert.equal(persistence.prompts.length, 0);
+  await next.stop();
+});
+
+test("pausing a prompt that never began does not discard subsequent genuine local work", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  const activeRequest = request(1);
+  api.events.push(activeRequest);
+  api.claims.set(activeRequest.id, "paused");
+  const persistence = freshPersistence();
+  persistence.exists = true;
+  const host = new FakeHost(cfg.dshSessionId, persistence);
+  host.emitLocalTurn("GENUINE_LOCAL_REQUEST", "GENUINE_LOCAL_ANSWER");
+  const store = new MemoryConnectorStateStore({ version: 3,
+    binding: { projectId: cfg.projectId, sessionId: cfg.sessionId, dshSessionId: cfg.dshSessionId },
+    serverCursor: 0, projectionCursor: 0, publishedDshSequence: 0, automaticUpload: false,
+    activeRequest: { requestId: activeRequest.id, requestSequence: 1,
+      dshFromSequence: 0, promptDigest: createHash("sha256").update("CLOUD_REQUEST").digest("hex"), claimAttempt: 1 }, outbox: [] });
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false, runImmediately: false });
+  assert.equal((await store.load())?.publishedDshSequence, 0);
+  assert.equal((await store.load())?.activeRequest, undefined);
+  await connector.uploadLocalTurns();
+  assert.equal(api.localTurns.length, 1);
+  assert.deepEqual(api.localTurns[0]?.requestPayload, { content: "GENUINE_LOCAL_REQUEST",
+    capture_fidelity: "harness_transcript", source_harness: "deepseek-harness" });
+  assert.equal(persistence.prompts.length, 0);
+  await connector.stop();
+});
+
 test("live durable DSH events renew the claim before the prompt returns", async () => {
   const cfg = config();
   const api = new FakeApi();
@@ -1631,6 +1796,7 @@ test("runtime heartbeat is independent of polling, retries transport failure, an
   const api = new FakeApi();
   api.failNextHeartbeat = true;
   const errors: Error[] = [];
+  const states: string[] = [];
   const host = new FakeHost(cfg.dshSessionId, freshPersistence());
   const connector = new DshHostConnector({
     config: cfg,
@@ -1639,12 +1805,14 @@ test("runtime heartbeat is independent of polling, retries transport failure, an
     stateStore: new MemoryConnectorStateStore(),
     heartbeatIntervalMs: 5,
     onBackgroundError: (error) => errors.push(error),
+    onLifecycle: (update) => states.push(update.state),
   });
 
   await connector.start({ runImmediately: false, schedule: true });
   await waitFor(() => api.heartbeatCount >= 2);
   assert.equal(api.readCount, 0, "heartbeat must not depend on the canonical-event poll interval");
   assert.match(errors[0]?.message ?? "", /simulated heartbeat transport failure/);
+  assert.equal(states.at(-1), "idle", "an idle connector also recovers its connection state");
   await connector.stop();
   const heartbeatsAtUnload = api.heartbeatCount;
   await new Promise<void>((resolve) => setTimeout(resolve, 30));
@@ -1678,6 +1846,85 @@ test("runtime heartbeat starts before a blocked initial DSH prompt completes", a
   await connector.stop();
 });
 
+test("long DSH execution publishes busy immediately and keeps presence without fabricating work", async (t) => {
+  t.mock.timers.enable({ apis: ["Date", "setInterval"], now: eventTime });
+  const cfg = config({ pollIntervalMs: 60_000 });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  let release!: () => void;
+  host.promptGate = new Promise<void>((resolve) => { release = resolve; });
+  const connector = new DshHostConnector({ config: cfg, api, host,
+    stateStore: new MemoryConnectorStateStore() });
+  t.after(async () => { release(); await connector.stop(); });
+  await connector.start({ runImmediately: false });
+  api.events.push(request(1));
+  const pending = connector.pollOnce();
+  await waitFor(() => host.prompts.length === 1);
+  // Native running is observable before the first durable tool/answer event.
+  await Promise.resolve();
+  assert.ok(api.progress.some((item) => (item.payload as { status?: string }).status === "running"));
+  const progressCount = api.progress.length;
+  for (let i = 0; i < 36; i += 1) {
+    t.mock.timers.tick(10_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+  }
+  assert.equal(api.heartbeatCount, 36, "presence must survive both the 30s TTL and a six-minute blocked prompt");
+  assert.equal(api.progress.length, progressCount, "idle heartbeats must not fabricate work or renew an inactive claim");
+  assert.equal(api.completions.length, 0);
+  release();
+  await pending;
+  assert.equal(api.completions.length, 1);
+});
+
+test("DSH heartbeat recovery restores running before a long prompt settles", async (t) => {
+  const cfg = config({ pollIntervalMs: 60_000 });
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  let release!: () => void;
+  host.promptGate = new Promise<void>((resolve) => { release = resolve; });
+  const states: string[] = [];
+  const connector = new DshHostConnector({ config: cfg, api, host,
+    stateStore: new MemoryConnectorStateStore(), heartbeatIntervalMs: 5,
+    onLifecycle: (update) => states.push(update.state) });
+  t.after(async () => { release(); await connector.stop(); });
+  await connector.start({ runImmediately: false });
+  api.events.push(request(1));
+  const pending = connector.pollOnce();
+  await waitFor(() => host.prompts.length === 1);
+  api.failNextHeartbeat = true;
+  await waitFor(() => states.at(-1) === "offline");
+  const atFailure = api.heartbeatCount;
+  await waitFor(() => api.heartbeatCount > atFailure);
+  assert.equal(states.at(-1), "running", "successful heartbeat must not leave a busy Agent stuck offline until completion");
+  assert.equal(api.completions.length, 0);
+  release();
+  await pending;
+});
+
+test("a late DSH heartbeat failure cannot change a stopped connector back to offline", async () => {
+  let rejectHeartbeat!: (error: Error) => void;
+  let heartbeatStarted = false;
+  class PendingHeartbeatApi extends FakeApi {
+    override heartbeatRuntime(): Promise<DshRegisteredRuntime> {
+      heartbeatStarted = true;
+      return new Promise((_, reject) => { rejectHeartbeat = reject; });
+    }
+  }
+  const cfg = config({ pollIntervalMs: 60_000 });
+  const states: string[] = [];
+  const connector = new DshHostConnector({ config: cfg, api: new PendingHeartbeatApi(),
+    host: new FakeHost(cfg.dshSessionId, freshPersistence()), stateStore: new MemoryConnectorStateStore(),
+    heartbeatIntervalMs: 5, onLifecycle: (update) => states.push(update.state) });
+  await connector.start({ runImmediately: false });
+  await waitFor(() => heartbeatStarted);
+  const stopped = connector.stop();
+  rejectHeartbeat(new Error("late transport error"));
+  await stopped;
+  assert.equal(states.at(-1), "stopped");
+});
+
 test("runtime identity drift during heartbeat fails closed without changing durable state", async () => {
   const cfg = config({ pollIntervalMs: 60_000 });
   const api = new FakeApi();
@@ -1704,7 +1951,7 @@ test("runtime identity drift during heartbeat fails closed without changing dura
   await connector.stop();
 });
 
-test("runtime identity drift interrupts a blocked initial prompt and rejects start without publishing", async () => {
+test("runtime identity drift interrupts a blocked initial prompt without publishing a result or further work", async () => {
   const cfg = config({ pollIntervalMs: 60_000 });
   const api = new FakeApi();
   api.events.push(request(1));
@@ -1737,7 +1984,8 @@ test("runtime identity drift interrupts a blocked initial prompt and rejects sta
   assert.match(errors[0]?.message ?? "", /changed the DSH runtime identity/);
   assert.equal(host.disposeCount, 1);
   assert.equal(host.listenerCount(), 0);
-  assert.equal(api.progress.length, 0);
+  assert.equal(api.progress.length, 1, "only the native start observed before identity drift may be published");
+  assert.equal((api.progress[0]?.payload as { status?: string }).status, "running");
   assert.equal(api.appended.length, 0);
   assert.equal(api.completions.length, 0);
   const after = await store.load();
@@ -1797,6 +2045,117 @@ test("ambiguous state/session identity and viewer access fail closed", async () 
   });
   await assert.rejects(rewound.start({ schedule: false }), /head precedes the persisted DSH cursor/);
   assert.equal(rewoundHost.openCount, 0);
+});
+
+test("a catalog refresh waits for an in-flight heartbeat instead of reading it as identity drift", async () => {
+  const cfg = config({
+    executionProfiles: [{ provider: "deepseek-official", model: "deepseek-v4-flash" }],
+  });
+  const api = new FakeApi();
+  api.echoRegistrations = true;
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+    heartbeatIntervalMs: 5,
+  });
+  await connector.start({ runImmediately: false });
+
+  // Park a heartbeat mid-flight so its response still carries the previous
+  // declaration when the refresh below tries to replace it.
+  let release: () => void = () => {};
+  api.heartbeatGate = new Promise<void>((resolve) => { release = resolve; });
+  await waitFor(() => api.heartbeatCount >= 1);
+
+  const refreshed = [
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    { provider: "deepseek-official", model: "deepseek-v4.1", reasoningEfforts: ["low"] },
+  ];
+  const update = connector.updateExecutionProfiles(refreshed);
+  assert.equal(api.registrations.length, 1, "the refresh must not commit while a heartbeat can still answer");
+  release();
+  await update;
+
+  // The stale heartbeat answer is the declaration this connector held when the
+  // request was served, so it must not be treated as identity drift.
+  assert.equal(connector.stopped, false);
+  assert.deepEqual(api.registrations.at(-1)?.executionProfiles, refreshed);
+  assert.deepEqual(api.returnedRuntimeIds, ["runtime-1", "runtime-1"]);
+  await connector.stop();
+});
+
+test("a refreshed DSH model catalog is re-registered on the same runtime identity", async () => {
+  const cfg = config({
+    executionProfiles: [{ provider: "deepseek-official", model: "deepseek-v4-flash" }],
+  });
+  const api = new FakeApi();
+  api.echoRegistrations = true;
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await connector.start({ runImmediately: false, schedule: false });
+
+  // An unchanged catalog costs nothing: the server already has this declaration.
+  await connector.updateExecutionProfiles([{ provider: "deepseek-official", model: "deepseek-v4-flash" }]);
+  assert.equal(api.registrations.length, 1);
+
+  // A model published after connect is declared without changing the identity, so
+  // an in-flight claim on this runtime stays valid.
+  const refreshed = [
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    { provider: "deepseek-official", model: "deepseek-v4.1", reasoningEfforts: ["low", "high"] },
+  ];
+  await connector.updateExecutionProfiles(refreshed);
+  assert.equal(api.registrations.length, 2);
+  assert.deepEqual(api.registrations[1]?.executionProfiles, refreshed);
+  assert.deepEqual(api.returnedRuntimeIds, ["runtime-1", "runtime-1"]);
+  await connector.stop();
+});
+
+test("a server that does not confirm a refreshed catalog keeps the previous declaration", async () => {
+  const cfg = config({
+    executionProfiles: [{ provider: "deepseek-official", model: "deepseek-v4-flash" }],
+  });
+  // The echo stays stale, the way a server that ignored the new field would reply.
+  const api = new FakeApi();
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({
+    config: cfg,
+    api,
+    host,
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await connector.start({ runImmediately: false, schedule: false });
+  const refreshed = [
+    { provider: "deepseek-official", model: "deepseek-v4-flash" },
+    { provider: "deepseek-official", model: "deepseek-v4.1" },
+  ];
+  await assert.rejects(connector.updateExecutionProfiles(refreshed), /did not confirm/u);
+  // Nothing was committed, so the next refresh tries again instead of pretending
+  // this runtime offers a model the server never recorded.
+  await assert.rejects(connector.updateExecutionProfiles(refreshed), /did not confirm/u);
+  assert.equal(api.registrations.length, 3);
+  await connector.stop();
+});
+
+test("a connector that has not started refuses a catalog update", async () => {
+  const cfg = config();
+  const connector = new DshHostConnector({
+    config: cfg,
+    api: new FakeApi(),
+    host: new FakeHost(cfg.dshSessionId, freshPersistence()),
+    stateStore: new MemoryConnectorStateStore(),
+  });
+  await assert.rejects(
+    connector.updateExecutionProfiles([{ provider: "deepseek-official", model: "deepseek-v4.1" }]),
+    /not running/u,
+  );
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {

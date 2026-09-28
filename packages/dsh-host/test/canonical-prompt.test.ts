@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildDshCanonicalPrompt,
+  buildDshRequestPrompt,
   requestedDshProfile,
 } from "../src/canonical-prompt.js";
 import type { DshCanonicalEvent } from "../src/types.js";
@@ -22,6 +23,14 @@ function canonical(
     payload,
   };
 }
+
+test("quoted DSH requests preserve attribution and public quote text without exposing secrets", () => {
+  const target = canonical(1, "human_chat", { content: "Earlier public instructions" });
+  const request = { ...canonical(2, "agent_request", { content: "Explain this" }), replyTo: target.id };
+  assert.match(buildDshRequestPrompt(request, target), /Quoted message event-1 · User: Earlier public instructions/);
+  assert.match(buildDshRequestPrompt(request, target), /Explain this$/);
+  assert.match(buildDshRequestPrompt(request), /Quoted message event-1/);
+});
 
 test("only explicit DeepSeek Harness requests are eligible", () => {
   assert.equal(requestedDshProfile(canonical(1, "agent_request", { content: "default" })), undefined);

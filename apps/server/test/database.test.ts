@@ -51,6 +51,70 @@ function workerMessage(worker: Worker): Promise<Record<string, unknown>> {
   });
 }
 
+test("quotes stay in-session and cannot expose owner-only history; mentions are membership validated", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "quote-session", idempotency_key: "quote-create-session", mode: "multi", title: "Quotes",
+    });
+    const invitation = f.service.createInvitation(f.owner, session.id, { role: "participant" });
+    const guest = f.database.claimInvitation({ invite_token: invitation.invite_token,
+      display_name: "Guest", device_name: "Browser", user_id: "quote-guest", device_id: "quote-device" }).actor;
+    const original = f.service.appendEvent(f.owner, session.id, { type: "human_chat",
+      idempotency_key: "quote-original", visibility: "session", payload: { content: "original" } });
+    const reply = f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "quote-reply", reply_to_event_id: original.id,
+      payload: { content: "@Owner hello", mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } });
+    assert.equal(reply.reply_to_event_id, original.id);
+    assert.equal(f.service.listProjectMentions(f.owner, session.project_id).mentions[0]?.id, reply.id);
+    assert.deepEqual(f.service.listProjectMentions(guest, session.project_id).mentions, []);
+    assert.equal(f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "quote-reply", reply_to_event_id: original.id,
+      payload: { content: "@Owner hello", mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } }).id, reply.id);
+    const other = f.service.createSession(f.owner, { session_id: "other-quotes", project_id: session.project_id,
+      idempotency_key: "other-quote-session", mode: "multi", title: "Other" }).session;
+    assert.throws(() => f.service.appendEvent(f.owner, other.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "quote-cross-session", reply_to_event_id: original.id, payload: { content: "reply" } }), ApiError);
+    assert.throws(() => f.service.listProjectMentions(f.member, session.project_id), ApiError);
+    const hidden = f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "owner_only",
+      idempotency_key: "quote-hidden", payload: { content: "private" } });
+    assert.throws(() => f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "quote-leak", reply_to_event_id: hidden.id, payload: { content: "leak" } }), ApiError);
+    assert.throws(() => f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-forged", payload: { content: "@Nobody", mentions: [{ user_id: "stranger", start: 0, end: 7 }] } }), ApiError);
+    assert.throws(() => f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-mismatch", payload: { content: "@Guest", mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } }), ApiError);
+    f.service.setProjectMembership(f.owner, session.project_id, guest.user_id, "viewer");
+    assert.throws(() => f.service.appendEvent(guest, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-readonly", payload: { content: "@Owner", mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } }), ApiError);
+  } finally { f.close(); }
+});
+
+test("project mentions include sessions created after invitation and participant-owned Solo", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, { session_id: "mention-first",
+      idempotency_key: "mention-first-create", mode: "multi", title: "First" });
+    const invitation = f.service.createInvitation(f.owner, session.id, { role: "participant" });
+    const guest = f.database.claimInvitation({ invite_token: invitation.invite_token,
+      display_name: "Guest", device_name: "Browser", user_id: "mention-guest", device_id: "mention-guest-device" }).actor;
+    const other = f.service.createSession(f.owner, { session_id: "mention-later", project_id: session.project_id,
+      idempotency_key: "mention-later-create", mode: "multi", title: "Later" }).session;
+    const mention = f.service.appendEvent(f.owner, other.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-later-send", payload: { content: "@Guest hello",
+        mentions: [{ user_id: guest.user_id, start: 0, end: 6 }] } });
+    assert.equal(f.service.listProjectMentions(guest, session.project_id).mentions[0]?.id, mention.id);
+    const solo = f.service.createSession(guest, { session_id: "mention-guest-solo", project_id: session.project_id,
+      idempotency_key: "mention-solo-create", mode: "solo", title: "Guest Solo" }).session;
+    const soloMention = f.service.appendEvent(guest, solo.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "mention-solo-send", payload: { content: "@Owner hello",
+        mentions: [{ user_id: f.owner.user_id, start: 0, end: 6 }] } });
+    assert.equal(f.service.listProjectMentions(f.owner, session.project_id).mentions[0]?.id, soloMention.id);
+    f.service.removeProjectMembership(f.owner, session.project_id, guest.user_id, {});
+    assert.throws(() => f.service.listProjectMentions(guest, session.project_id), ApiError);
+  } finally { f.close(); }
+});
+
 test("SQLite WAL assigns ordered sequences and replays an idempotent event", () => {
   const f = fixture();
   try {
@@ -673,6 +737,29 @@ test("test qualification creates a full account while project invitations create
       new Map([[shared.id, "viewer"], [owned.id, "owner"]]),
     );
     assert.equal(f.service.listProjects(guest).some((project) => project.id === owned.id), false);
+  } finally {
+    f.close();
+  }
+});
+
+test("test qualification batches are bounded and issue distinct digest-only grants", () => {
+  const f = fixture();
+  try {
+    for (const count of [0, 51, 1.5]) {
+      assert.throws(() => f.database.issueTestAccessBatch("7d", count),
+        (error: unknown) => error instanceof ApiError && error.status === 400);
+    }
+    assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM test_access_grants").get() as { count: number }).count, 0);
+    const grants = f.database.issueTestAccessBatch("7d", 3);
+    assert.equal(grants.length, 3);
+    assert.equal(new Set(grants.map((grant) => grant.grant_id)).size, 3);
+    assert.equal(new Set(grants.map((grant) => grant.access_token)).size, 3);
+    assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM test_access_grants").get() as { count: number }).count, 3);
+    const stored = JSON.stringify(f.database.sqlite.prepare("SELECT * FROM test_access_grants").all());
+    for (const grant of grants) {
+      assert.equal(Date.parse(grant.expires_at) - Date.parse(grant.created_at), 604_800_000);
+      assert.equal(stored.includes(grant.access_token), false);
+    }
   } finally {
     f.close();
   }
@@ -1456,6 +1543,217 @@ test("a database written before claim leases migrates its claims into recoverabl
   }
 });
 
+test("pausing fences the execution that was holding the claim", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0001");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count, 1);
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // The paused claim is no longer "claimed", so every write the in-flight
+    // execution could still make is fenced by the existing attempt check.
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-progress-0001", { content: "late" }),
+      (error: unknown) => error instanceof ApiError,
+      "a paused execution must not append progress",
+    );
+    assert.throws(
+      () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "pause-complete-0001", { text: "late" }),
+      (error: unknown) => error instanceof ApiError,
+      "a paused execution must not publish a final answer",
+    );
+    const responses = f.service.replay(f.member, sessionId, 0, 100).events
+      .filter((candidate) => candidate.type === "agent_response");
+    assert.deepEqual(responses, [], "the discarded in-flight answer must never reach canonical history");
+  } finally {
+    f.close();
+  }
+});
+
+test("a paused request is never resumed by the lease on its own", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0002");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // Long past the lease. Automatic recovery must not treat an explicit pause
+    // as an abandoned execution, or the button would do nothing.
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status,
+      "paused",
+      "a paused request stays paused until the requester resumes it",
+    );
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count,
+      1,
+      "a pause opens no execution and spends no recovery budget",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("pausing is visible to the whole room as an ordered lifecycle marker", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, secondActor, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0006");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // Everyone reads the same canonical log, so a pause has to be an event and
+    // not just a control-plane row: otherwise the room still believes the agent
+    // is working.
+    const marker = f.service.replay(f.member, sessionId, 0, 100).events
+      .find((candidate) => candidate.type === "agent_progress" && candidate.reply_to_event_id === event.id);
+    assert.ok(marker, "a pause must leave a canonical marker on the request");
+    assert.equal((marker.payload as { status?: string }).status, "paused");
+    assert.equal((marker.payload as { phase?: string }).phase, "lifecycle");
+    assert.equal(marker.actor_user_id, f.member.user_id, "the pause is attributed to the person who asked for it");
+    assert.ok(marker.sequence > event.sequence, "the marker is ordered after the request it pauses");
+    // Repeating the pause must not spam the timeline.
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    assert.equal(
+      f.service.replay(f.member, sessionId, 0, 100).events
+        .filter((candidate) => candidate.type === "agent_progress"
+          && (candidate.payload as { status?: string }).status === "paused").length,
+      1,
+      "pausing an already paused request is idempotent",
+    );
+    // A second member reads the same marker.
+    assert.ok(f.service.replay(secondActor, sessionId, 0, 100).events
+      .some((candidate) => candidate.reply_to_event_id === event.id
+        && (candidate.payload as { status?: string }).status === "paused"));
+  } finally {
+    f.close();
+  }
+});
+
+test("an execution fenced by a pause can never publish, however it ends", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request, keepAlive } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0005");
+    const heldAttempt = f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).attempt_count;
+    f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    // The execution that was running when the author paused must never publish,
+    // whether it reports the generation it holds or omits it as a legacy client.
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-fence-progress-0001", { content: "late" },
+        undefined, undefined, heldAttempt),
+      (error: unknown) => error instanceof ApiError,
+    );
+    assert.throws(
+      () => f.service.appendAgentProgress(f.member, sessionId, event.id, first.id, "pause-fence-progress-0002", { content: "late" }),
+      (error: unknown) => error instanceof ApiError,
+    );
+    assert.throws(
+      () => f.service.completeAgentRequest(f.member, sessionId, event.id, first.id, "pause-fence-complete-0001", { text: "late" }),
+      (error: unknown) => error instanceof ApiError,
+    );
+    // And no amount of waiting turns it back into work.
+    nowMs.value += PAST_LEASE_MS;
+    keepAlive();
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "paused");
+  } finally {
+    f.close();
+  }
+});
+
+test("a reserved idempotency key cannot suppress the canonical pause", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0007");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // Any writer with session access can guess a predictable key and reserve it
+    // with an ordinary event. If the pause reused that key the insert would
+    // collide, the whole pause transaction would roll back, and the author would
+    // be unable to fence the execution that is still running.
+    f.service.appendEvent(f.member, sessionId, {
+      idempotency_key: `agent-request-paused:${event.id}`,
+      type: "human_chat",
+      visibility: "session",
+      payload: { content: "reserved before the pause" },
+    });
+    const paused = f.service.pauseAgentRequest(f.member, sessionId, event.id);
+    assert.equal(paused.status, "paused", "the pause must survive a reserved key");
+    const markers = f.service.replay(f.member, sessionId, 0, 200).events.filter((candidate) =>
+      candidate.type === "agent_progress"
+      && candidate.reply_to_event_id === event.id
+      && (candidate.payload as { status?: string }).status === "paused");
+    assert.equal(markers.length, 1, "the pause must still be announced once");
+    assert.equal(
+      f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status,
+      "paused",
+      "the claim must actually be fenced",
+    );
+  } finally {
+    f.close();
+  }
+});
+
+for (const scope of ["session", "user", "deployment"] as const) {
+  test(`a full ${scope} quota still permits one bounded pause but no ordinary writes`, () => {
+    const limit = 5000;
+    const f = fixture({ maxEventBytes: limit,
+      maxSessionEventBytes: scope === "session" ? limit : 20000,
+      maxUserEventBytes: scope === "user" ? limit : 20000,
+      maxTotalEventBytes: scope === "deployment" ? limit : 20000,
+      // Aggregate limits cannot exceed the deployment limit.
+      ...(scope === "deployment" ? { maxSessionEventBytes: limit, maxUserEventBytes: limit } : {}),
+    });
+    try {
+      const session = f.service.createSession(f.owner, { session_id: `pause-full-${scope}`,
+        idempotency_key: `pause-full-create-${scope}`, mode: "solo", title: "Full" }).session;
+      const runtime = f.service.registerRuntime(f.owner, { runtime_id: `pause-full-runtime-${scope}`,
+        session_id: session.id, device_id: f.owner.device_id, harness: "codex", provider: "local", model: "test",
+        local_session_id: "pause-full-local", capture_fidelity: "canonical_history", purpose: "execution" });
+      const request = f.service.appendEvent(f.owner, session.id, { type: "agent_request", visibility: "session",
+        idempotency_key: `pause-full-request-${scope}`, payload: { content: "work",
+          execution_profile: { harness: "codex", provider: "local", model: "test", runtime_id: runtime.id } } });
+      f.service.claimAgentRequest(f.owner, session.id, request.id, runtime.id);
+      const usage = f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM event_storage_usage").get() as { bytes: number };
+      f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "session",
+        idempotency_key: `pause-full-fill-${scope}`,
+        payload: { content: "x".repeat(limit - usage.bytes - 512 - Buffer.byteLength(JSON.stringify({ content: "" }))) } });
+      assert.equal(f.service.pauseAgentRequest(f.owner, session.id, request.id).status, "paused");
+      assert.equal(f.service.claimAgentRequest(f.owner, session.id, request.id, runtime.id).status, "paused");
+      f.service.pauseAgentRequest(f.owner, session.id, request.id);
+      const markers = f.service.replay(f.owner, session.id, 0, 100).events.filter((event) =>
+        event.type === "agent_progress" && event.reply_to_event_id === request.id);
+      assert.equal(markers.length, 1);
+      const after = f.database.sqlite.prepare("SELECT SUM(bytes) AS bytes FROM event_storage_usage").get() as { bytes: number };
+      assert.ok(after.bytes > limit && after.bytes <= limit + 1024);
+      assert.throws(() => f.service.appendEvent(f.owner, session.id, { type: "human_chat", visibility: "session",
+        idempotency_key: `pause-full-extra-${scope}`, payload: { content: "still refused" } }),
+      (error: unknown) => error instanceof ApiError && error.code === "storage_quota_exceeded");
+      assert.throws(() => f.service.completeAgentRequest(f.owner, session.id, request.id, runtime.id,
+        `pause-full-late-${scope}`, { text: "late answer" }), ApiError);
+    } finally { f.close(); }
+  });
+}
+
+test("only the requesting user may pause an agent request", () => {
+  const nowMs = { value: Date.parse("2026-09-20T00:00:00.000Z") };
+  const { f, sessionId, first, request } = claimLeaseFixture(nowMs);
+  try {
+    const event = request("agent-request-pause-0003");
+    assert.equal(f.service.claimAgentRequest(f.member, sessionId, event.id, first.id).status, "claimed");
+    // The project owner holds write access to this multi session and is still
+    // not the author of the request.
+    assert.throws(
+      () => f.service.pauseAgentRequest(f.owner, sessionId, event.id),
+      (error: unknown) => error instanceof ApiError,
+      "another member must not be able to stop someone else's agent",
+    );
+  } finally {
+    f.close();
+  }
+});
+
 test("a database written before dynamic execution profiles migrates legacy runtimes as fixed routes", () => {
   const f = fixture();
   const path = join(f.directory, "test.sqlite");
@@ -1718,6 +2016,131 @@ test("DeepSeek Harness dynamic execution profiles accept only exact advertised m
     assert.throws(
       () => f.service.claimAgentRequest(f.member, session.id, legacyWrongModel.id, runtime.id),
       (error: unknown) => error instanceof ApiError && error.status === 409,
+    );
+  } finally {
+    f.close();
+  }
+});
+
+test("an advertised Codex catalog is enforced for a direct API caller too", () => {
+  const f = fixture();
+  try {
+    const { session } = f.service.createSession(f.owner, {
+      session_id: "codex-catalog-routing",
+      idempotency_key: "create-codex-catalog-routing",
+      mode: "multi",
+      title: "Codex catalog routing",
+    });
+    f.service.setMembership(f.owner, session.id, f.member.user_id, "participant", "codex-catalog-member");
+    const runtime = f.service.registerRuntime(f.member, {
+      runtime_id: "codex-catalog-runtime",
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      local_session_id: "codex-catalog-local",
+      capture_fidelity: "harness_transcript",
+      execution_profiles: [
+        { provider: "openai", model: "gpt-6-sol", reasoning_efforts: ["low", "high"] },
+        // Declared without effort metadata, so no effort selection is advertised.
+        { provider: "openai", model: "gpt-5.6-sol" },
+      ],
+    });
+    assert.equal(runtime.execution_profiles?.length, 2);
+
+    // The Web's Codex target carries no provider, and an exact runtime is required
+    // once the runtime declares its own catalog.
+    const accepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "codex-catalog-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use an advertised Codex model",
+        execution_profile: {
+          harness: "codex",
+          model: "gpt-6-sol",
+          reasoning_effort: "high",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, accepted.id, runtime.id).runtime_id,
+      runtime.id,
+    );
+    f.service.completeAgentRequest(
+      f.member, session.id, accepted.id, runtime.id, "codex-catalog-complete", { content: "done" },
+    );
+
+    // A model declared without efforts accepts a request that omits the effort.
+    const effortlessModel = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "codex-catalog-effortless",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Use the model whose efforts were not declared",
+        execution_profile: { harness: "codex", model: "gpt-5.6-sol", runtime_id: runtime.id },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, effortlessModel.id, runtime.id).runtime_id,
+      runtime.id,
+    );
+    f.service.completeAgentRequest(
+      f.member, session.id, effortlessModel.id, runtime.id, "codex-catalog-effortless-complete", { content: "done" },
+    );
+
+    for (const [suffix, profile] of [
+      ["unadvertised-model", { harness: "codex", model: "gpt-6-terra", reasoning_effort: "high", runtime_id: runtime.id }],
+      ["unadvertised-effort", { harness: "codex", model: "gpt-6-sol", reasoning_effort: "max", runtime_id: runtime.id }],
+      ["wrong-provider", { harness: "codex", provider: "other", model: "gpt-6-sol", reasoning_effort: "low", runtime_id: runtime.id }],
+      ["undeclared-effort", { harness: "codex", model: "gpt-5.6-sol", reasoning_effort: "low", runtime_id: runtime.id }],
+      ["untargeted", { harness: "codex", model: "gpt-6-sol", reasoning_effort: "low" }],
+    ] as const) {
+      const rejected = f.service.appendEvent(f.member, session.id, {
+        idempotency_key: `codex-catalog-rejected-${suffix}`,
+        type: "agent_request",
+        visibility: "session",
+        payload: { content: "Reject an unadvertised Codex route", execution_profile: profile },
+      });
+      assert.throws(
+        () => f.service.claimAgentRequest(f.member, session.id, rejected.id, runtime.id),
+        (error: unknown) => error instanceof ApiError && error.status === 409,
+        `${suffix} must not be claimable`,
+      );
+    }
+
+    // A runtime that declares nothing keeps the previous fixed-route behavior,
+    // including a browser-selected model that differs from the registered one.
+    const downgraded = f.service.registerRuntime(f.member, {
+      runtime_id: runtime.id,
+      session_id: session.id,
+      device_id: f.member.device_id,
+      harness: "codex",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      local_session_id: "codex-catalog-local",
+      capture_fidelity: "harness_transcript",
+    });
+    assert.equal(downgraded.execution_profiles, undefined);
+    const legacyAccepted = f.service.appendEvent(f.member, session.id, {
+      idempotency_key: "codex-catalog-legacy-accepted",
+      type: "agent_request",
+      visibility: "session",
+      payload: {
+        content: "Keep the fixed Codex route",
+        execution_profile: {
+          harness: "codex",
+          model: "gpt-6-terra",
+          reasoning_effort: "ultra",
+          runtime_id: runtime.id,
+        },
+      },
+    });
+    assert.equal(
+      f.service.claimAgentRequest(f.member, session.id, legacyAccepted.id, runtime.id).runtime_id,
+      runtime.id,
     );
   } finally {
     f.close();

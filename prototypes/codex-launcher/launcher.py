@@ -42,7 +42,7 @@ def parse_link(value: str) -> tuple[str, str, str, int, str]:
     if parsed.scheme != SCHEME or parsed.netloc != "connect" or parsed.path not in {"", "/"} or parsed.fragment:
         raise ValueError("无效的 GatherThread 连接链接")
     query = parse_qs(parsed.query, strict_parsing=True, keep_blank_values=True)
-    if not {"v", "origin", "project"} <= set(query) or set(query) - {
+    if set(query) != {
         "v", "origin", "project", "model", "context_window_tokens", "visible_history_sync"
     } or any(len(item) != 1 for item in query.values()):
         raise ValueError("连接链接包含不支持的参数")
@@ -54,9 +54,9 @@ def parse_link(value: str) -> tuple[str, str, str, int, str]:
     project = query["project"][0]
     if not PROJECT_RE.fullmatch(project):
         raise ValueError("无效的项目 ID")
-    model = valid_model(query.get("model", ["gpt-5.6-sol"])[0])
-    tokens = valid_context_tokens(query.get("context_window_tokens", ["128000"])[0])
-    mode = valid_history_sync(query.get("visible_history_sync", ["first-connect"])[0])
+    model = valid_model(query["model"][0])
+    tokens = valid_context_tokens(query["context_window_tokens"][0])
+    mode = valid_history_sync(query["visible_history_sync"][0])
     return origin, project, model, tokens, mode
 
 

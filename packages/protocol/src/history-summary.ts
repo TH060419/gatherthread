@@ -145,6 +145,8 @@ export function historySummarySourceJson(sources: readonly HistorySummaryEvent[]
   return JSON.stringify(sources.map((event) => ({
     event_id: event.id, sequence: event.sequence, actor_user_id: event.actor_user_id,
     type: event.type, content: historySummaryText(event.payload),
+    ...(["human_chat", "agent_request"].includes(event.type) && event.reply_to_event_id
+      ? { reply_to_event_id: event.reply_to_event_id } : {}),
   })));
 }
 

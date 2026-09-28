@@ -33,13 +33,13 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import {
-  MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, isCodeSyncRequestKind,
+  MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, MessageMentionsSchema, isCodeSyncRequestKind,
   HISTORY_SUMMARY_MAX_CONTEXT_BYTES, HistorySummaryError, buildHistoryContext,
   buildHistorySummaryPrompt, historySummaryMarker, historySummarySourceJson, historySummaryText,
   isHistorySummaryRequest, selectHistorySummarySources,
 } from "@gatherthread/protocol";
 import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
-import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
+import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
 
 export interface Actor {
@@ -234,19 +234,30 @@ interface SequenceRow { next_sequence: number }
 interface MembershipRow { role: MembershipRole }
 interface ClaimRow {
   runtime_id: string;
-  status: "claimed" | "completed" | "failed";
+  status: "claimed" | "completed" | "failed" | "paused";
   attempt_count?: number;
   lease_expires_at?: string | null;
 }
 export interface AgentClaimRecord {
   request_event_id: string;
   runtime_id: string;
-  status: "claimed" | "completed";
+  status: "claimed" | "completed" | "paused";
   attempt_count: number;
 }
 export type AgentClaimOutcome =
   | { claim: AgentClaimRecord }
   | { failed: true; event?: CanonicalEvent };
+
+/**
+ * A pause always reports the claim, and carries the canonical marker only when
+ * this call is the one that committed it. The service publishes whatever comes
+ * back; without that the pause would sit in the log unseen by anyone already
+ * connected.
+ */
+export interface AgentPauseOutcome {
+  claim: AgentClaimRecord;
+  event?: CanonicalEvent;
+}
 interface InvitationRow extends InvitationRecord { token_digest: string }
 interface ProjectInvitationRow extends ProjectInvitationRecord { token_digest: string }
 interface DeviceAuthorizationRow extends DeviceAuthorizationRecord { token_digest: string }
@@ -465,7 +476,7 @@ CREATE TABLE IF NOT EXISTS agent_request_claims (
   runtime_id TEXT NOT NULL REFERENCES runtimes(id),
   claimed_at TEXT NOT NULL,
   completed_at TEXT,
-  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed')),
+  status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed', 'paused')),
   attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
   lease_expires_at TEXT
 ) STRICT;
@@ -805,17 +816,27 @@ function agentRequestTarget(event: Pick<CanonicalEvent, "payload">): AgentReques
 
 function runtimeSupportsAgentTarget(runtime: RuntimeRecord, target: AgentRequestTarget): boolean {
   if (runtime.harness.trim().toLowerCase() !== target.harness) return false;
-  if (target.harness === "codex") {
-    return target.provider === undefined || runtime.provider === target.provider;
-  }
   if (runtime.execution_profiles !== undefined) {
-    if (target.runtimeId === undefined || target.runtimeId !== runtime.id
-      || target.provider === undefined || target.model === undefined) return false;
+    // A runtime that declares its exact profiles is matched against that
+    // declaration for every harness, not just DeepSeek Harness. Otherwise a direct
+    // API caller could submit a model or effort this runtime never advertised and
+    // bypass the fail-closed promise the declaration exists to make.
+    if (target.runtimeId === undefined || target.runtimeId !== runtime.id) return false;
+    if (target.model === undefined) return false;
+    // A targeted request may omit the provider; the runtime's own provider is then
+    // the only one its declaration can describe.
+    const provider = target.provider ?? runtime.provider;
     const advertised = runtime.execution_profiles.find((profile) =>
-      profile.provider === target.provider && profile.model === target.model);
+      profile.provider === provider && profile.model === target.model);
     if (advertised === undefined) return false;
     return target.reasoningEffort === undefined
       || advertised.reasoning_efforts?.includes(target.reasoningEffort) === true;
+  }
+  if (target.harness === "codex") {
+    // A Codex runtime without a declaration keeps the fixed-route rule: it is
+    // registered for one provider, and the browser may still target the model it
+    // resolved for that provider.
+    return target.provider === undefined || runtime.provider === target.provider;
   }
   return (target.provider === undefined || runtime.provider === target.provider)
     && (target.model === undefined || runtime.model === target.model);
@@ -937,6 +958,7 @@ export class CollaborationDatabase {
     this.migrateSnapshotStorageLedger();
     this.migrateSnapshotControlRequests();
     this.migrateAgentClaimLease();
+    this.migrateAgentClaimPause();
     this.initializeEventStorageUsage();
   }
 
@@ -1010,7 +1032,7 @@ export class CollaborationDatabase {
     return row.can_create_projects === 1;
   }
 
-  issueTestAccess(ttl: InvitationTtl = "7d"): { grant_id: string; access_token: string; expires_at: string } {
+  issueTestAccess(ttl: InvitationTtl = "7d"): { grant_id: string; access_token: string; created_at: string; expires_at: string } {
     const ttlMs = INVITATION_TTL_MS[ttl];
     if (ttlMs === undefined) throw new ApiError(400, "invalid_ttl", "Test access TTL must be 1h, 24h, or 7d");
     const count = this.sqlite.prepare("SELECT count(*) AS count FROM users").get() as unknown as CountRow;
@@ -1023,7 +1045,14 @@ export class CollaborationDatabase {
       INSERT INTO test_access_grants(id, token_digest, created_at, expires_at)
       VALUES (?, ?, ?, ?)
     `).run(grantId, this.tokenDigest(accessToken), createdAt.toISOString(), expiresAt);
-    return { grant_id: grantId, access_token: accessToken, expires_at: expiresAt };
+    return { grant_id: grantId, access_token: accessToken, created_at: createdAt.toISOString(), expires_at: expiresAt };
+  }
+
+  issueTestAccessBatch(ttl: InvitationTtl, count: number): ReturnType<CollaborationDatabase["issueTestAccess"]>[] {
+    if (!Number.isInteger(count) || count < 1 || count > 50) {
+      throw new ApiError(400, "invalid_count", "Test access batch count must be between 1 and 50");
+    }
+    return this.transaction(() => Array.from({ length: count }, () => this.issueTestAccess(ttl)));
   }
 
   revokeTestAccess(grantId: string): void {
@@ -2719,6 +2748,27 @@ export class CollaborationDatabase {
         input.visibility ?? "session",
         provenance?.runtime_id ?? null,
       );
+      if (replyTarget && ["human_chat", "agent_request"].includes(input.type)
+        && replyTarget.visibility === "owner_only"
+        && (this.membershipRole(sessionId, actor.user_id) !== "owner" || input.visibility !== "owner_only")) {
+        throw forbidden("Cannot quote private history in a shared message");
+      }
+      if (input.payload && typeof input.payload === "object" && !Array.isArray(input.payload) && "mentions" in input.payload) {
+        if (!["human_chat", "agent_request"].includes(input.type)) throw conflict("Mentions require a user-authored message");
+        const result = MessageMentionsSchema.safeParse(input.payload.mentions);
+        const content = input.payload.content;
+        if (!result.success || typeof content !== "string") throw conflict("Invalid message mentions");
+        let previousEnd = 0;
+        for (const mention of result.data) {
+          const user = this.sqlite.prepare("SELECT display_name FROM users WHERE id = ?").get(mention.user_id) as { display_name: string } | undefined;
+          if (!user || !this.membershipRole(sessionId, mention.user_id)
+            || mention.start < previousEnd || mention.end <= mention.start
+            || content.slice(mention.start, mention.end) !== `@${user.display_name}`) {
+            throw conflict("Mention must match a current session member and its exact text range");
+          }
+          previousEnd = mention.end;
+        }
+      }
       if ((input.type === "tool_call" || input.type === "tool_result")
         && replyTarget !== undefined) {
         if (replyTarget.type === "agent_request") {
@@ -2734,6 +2784,28 @@ export class CollaborationDatabase {
       }
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
     });
+  }
+
+  listProjectMentions(actor: Actor, projectId: string, beforeId?: string) {
+    this.assertActiveDevice(actor);
+    const role = this.projectMembershipRole(projectId, actor.user_id);
+    if (!role) throw notFound("Project");
+    const rows = this.sqlite.prepare(`
+      SELECT e.id, e.session_id, e.sequence, e.created_at, e.actor_display_name, s.title AS session_title,
+        coalesce(substr(CAST(json_extract(e.payload_json, '$.content') AS TEXT), 1, 180), '') AS excerpt
+      FROM events e JOIN sessions s ON s.id = e.session_id
+      JOIN project_memberships m ON m.project_id = s.project_id AND m.user_id = ?
+      WHERE s.project_id = ? AND (e.visibility = 'session' OR ? = 'owner')
+        AND e.type IN ('human_chat', 'agent_request')
+        AND (? IS NULL OR e.rowid < (SELECT rowid FROM events WHERE id = ?))
+        AND EXISTS (SELECT 1 FROM json_each(e.payload_json, '$.mentions') entry
+          WHERE CASE WHEN entry.type = 'object' THEN json_extract(entry.value, '$.user_id') END = ?)
+      ORDER BY e.rowid DESC LIMIT 51
+    `).all(actor.user_id, projectId, role, beforeId ?? null, beforeId ?? null, actor.user_id) as unknown as Array<{
+      id: string; session_id: string; sequence: number; created_at: string;
+      actor_display_name: string; session_title: string; excerpt: string;
+    }>;
+    return { mentions: rows.slice(0, 50), next_before_id: rows.length > 50 ? rows[49]?.id ?? null : null };
   }
 
   replay(
@@ -2868,6 +2940,16 @@ export class CollaborationDatabase {
         .get(requestEventId) as unknown as ClaimRow | undefined;
       if (existing) {
         if (existing.status === "failed") return { failed: true };
+        // A pause is a decision, not a lapsed lease. Handing the request back to
+        // a runtime here would make the button do nothing at all.
+        if (existing.status === "paused") {
+          return { claim: {
+            request_event_id: requestEventId,
+            runtime_id: existing.runtime_id,
+            status: "paused",
+            attempt_count: existing.attempt_count ?? 1,
+          } };
+        }
         if (existing.status === "completed" || !claimLeaseLapsed(existing.lease_expires_at, now)) {
           if (existing.runtime_id !== runtimeId) throw agentRequestAlreadyClaimed();
           return { claim: {
@@ -2909,6 +2991,80 @@ export class CollaborationDatabase {
         attempt_count: 1,
       } };
     });
+  }
+
+  /**
+   * Stop an Agent request on its author's instruction.
+   *
+   * No counter moves. `isCurrentClaimAttempt` already refuses every write from a
+   * claim that is not `claimed`, so flipping the status is enough to fence out
+   * whatever execution was holding it — and because a paused request is never
+   * reclaimed, nothing can outlive that fence.
+   */
+  pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string): AgentPauseOutcome {
+    this.assertActiveDevice(actor);
+    return this.transaction(() => {
+      const event = this.getEvent(sessionId, requestEventId);
+      if (event.type !== "agent_request") throw conflict("Only agent_request events can be paused");
+      if (event.actor_user_id !== actor.user_id) {
+        throw forbidden("Only the author of an Agent request may pause it");
+      }
+      const claim = this.requireClaimRow(requestEventId);
+      if (!claim) throw conflict("Only an Agent request a runtime has already claimed can be paused");
+      if (claim.status === "completed") throw agentRequestAlreadyCompleted();
+      if (claim.status === "failed") throw agentRequestFailed();
+      if (claim.status === "paused") return { claim: this.claimRecord(requestEventId, claim) };
+      this.sqlite.prepare(`
+        UPDATE agent_request_claims
+        SET status = 'paused', lease_expires_at = NULL
+        WHERE request_event_id = ?
+      `).run(requestEventId);
+      // The claim row is a control-plane fact; the room reads the canonical log.
+      // Without an event the other members would keep believing the agent is
+      // working, and the timeline could not show the pause where it happened.
+      const marker = this.appendInsideTransaction(actor.user_id, sessionId, {
+        // Server-generated and unguessable, exactly like the abandoned-claim
+        // failure: a predictable key can be reserved by any session writer, and
+        // the collision would roll back this transaction — leaving the author
+        // unable to fence an execution that is still running. Repeat calls are
+        // already idempotent through the `paused` status check above.
+        idempotency_key: `server:agent-request-paused:${randomUUID()}`,
+        type: "agent_progress",
+        visibility: "session",
+        reply_to_event_id: requestEventId,
+        payload: {
+          content: "The author paused this Agent request.",
+          phase: "lifecycle",
+          status: "paused",
+        },
+      }, null, "pause");
+      // Report the row as it now stands, not as it was read before the update.
+      return {
+        claim: {
+          request_event_id: requestEventId,
+          runtime_id: claim.runtime_id,
+          status: "paused",
+          attempt_count: claim.attempt_count ?? 1,
+        },
+        event: marker,
+      };
+    });
+  }
+
+  private requireClaimRow(requestEventId: string): ClaimRow | undefined {
+    return this.sqlite.prepare("SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?")
+      .get(requestEventId) as unknown as ClaimRow | undefined;
+  }
+
+  private claimRecord(requestEventId: string, claim: ClaimRow): AgentClaimRecord {
+    // A terminally failed request is not a claim anyone can hold or resume.
+    if (claim.status === "failed") throw agentRequestFailed();
+    return {
+      request_event_id: requestEventId,
+      runtime_id: claim.runtime_id,
+      status: claim.status,
+      attempt_count: claim.attempt_count ?? 1,
+    };
   }
 
   private assertRuntimeClaimSlotAvailable(runtimeId: string, requestEventId: string, now: string): void {
@@ -4015,6 +4171,49 @@ export class CollaborationDatabase {
     if (violations.length > 0) throw new Error("Agent claim lease migration failed foreign-key validation");
   }
 
+  /**
+   * Let the author of an Agent request stop it. A paused claim stays paused: the
+   * request is a record, and asking again is a new request rather than a
+   * resurrection of this one, exactly as a terminally failed request is.
+   */
+  private migrateAgentClaimPause(): void {
+    const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_request_claims'")
+      .get() as { sql?: string } | undefined;
+    if (table?.sql === undefined || table.sql.includes("'paused'")) return;
+    this.sqlite.exec("PRAGMA foreign_keys = OFF");
+    try {
+      this.sqlite.exec(`
+        BEGIN IMMEDIATE;
+        CREATE TABLE agent_request_claims_next (
+          request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+          runtime_id TEXT NOT NULL REFERENCES runtimes(id),
+          claimed_at TEXT NOT NULL,
+          completed_at TEXT,
+          status TEXT NOT NULL CHECK (status IN ('claimed', 'completed', 'failed', 'paused')),
+          attempt_count INTEGER NOT NULL DEFAULT 1 CHECK (attempt_count >= 1),
+          lease_expires_at TEXT
+        ) STRICT;
+        INSERT INTO agent_request_claims_next(
+          request_event_id, runtime_id, claimed_at, completed_at, status,
+          attempt_count, lease_expires_at
+        ) SELECT
+          request_event_id, runtime_id, claimed_at, completed_at, status,
+          COALESCE(attempt_count, 1), lease_expires_at
+        FROM agent_request_claims;
+        DROP TABLE agent_request_claims;
+        ALTER TABLE agent_request_claims_next RENAME TO agent_request_claims;
+        COMMIT;
+      `);
+    } catch (error) {
+      try { this.sqlite.exec("ROLLBACK"); } catch { /* The migration may have failed before BEGIN. */ }
+      throw error;
+    } finally {
+      this.sqlite.exec("PRAGMA foreign_keys = ON");
+    }
+    const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
+    if (violations.length > 0) throw new Error("Agent claim pause migration failed foreign-key validation");
+  }
+
   private migrateSnapshotStorageLedger(): void {
     const columns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all() as Array<{ name: string }>).map((row) => row.name),
@@ -4121,20 +4320,33 @@ export class CollaborationDatabase {
     `);
   }
 
-  private enforceEventStorageQuota(sessionId: string, actorUserId: string, eventBytes: number): void {
+  private enforceEventStorageQuota(sessionId: string, actorUserId: string, eventBytes: number, pauseMarker = false): void {
+    // One fixed server marker per paused, already-accepted request. Charge it
+    // normally, but allow at most 1 KiB per such request beyond the ordinary
+    // quota so a full timeline cannot prevent its author from fencing work.
+    // Ordinary writes never receive this allowance, including client progress.
+    const allowance = pauseMarker ? this.sqlite.prepare(`
+      SELECT
+        COALESCE(SUM(CASE WHEN e.session_id = ? THEN 1 ELSE 0 END), 0) * 1024 AS session_bytes,
+        COALESCE(SUM(CASE WHEN e.actor_user_id = ? THEN 1 ELSE 0 END), 0) * 1024 AS user_bytes,
+        COUNT(*) * 1024 AS total_bytes
+      FROM agent_request_claims c JOIN events e ON e.id = c.request_event_id
+      WHERE c.status = 'paused'
+    `).get(sessionId, actorUserId) as { session_bytes: number; user_bytes: number; total_bytes: number }
+      : { session_bytes: 0, user_bytes: 0, total_bytes: 0 };
     const sessionUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage WHERE session_id = ?")
       .get(sessionId) as unknown as BytesRow;
-    if (sessionUsage.bytes + eventBytes > this.maxSessionEventBytes) {
+    if (sessionUsage.bytes + eventBytes > this.maxSessionEventBytes + allowance.session_bytes) {
       throw storageQuotaExceeded("session", this.maxSessionEventBytes);
     }
     const userUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage WHERE actor_user_id = ?")
       .get(actorUserId) as unknown as BytesRow;
-    if (userUsage.bytes + eventBytes > this.maxUserEventBytes) {
+    if (userUsage.bytes + eventBytes > this.maxUserEventBytes + allowance.user_bytes) {
       throw storageQuotaExceeded("user", this.maxUserEventBytes);
     }
     const totalUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage")
       .get() as unknown as BytesRow;
-    if (totalUsage.bytes + eventBytes > this.maxTotalEventBytes) {
+    if (totalUsage.bytes + eventBytes > this.maxTotalEventBytes + allowance.total_bytes) {
       throw storageQuotaExceeded("deployment", this.maxTotalEventBytes);
     }
   }
@@ -4222,6 +4434,7 @@ export class CollaborationDatabase {
     sessionId: string,
     input: Omit<AppendEventInput, "visibility"> & { visibility?: EventVisibility },
     provenance: RuntimeProvenance | null,
+    lifecycleAllowance?: "pause",
   ): CanonicalEvent {
     const session = this.requireSession(sessionId);
     const sequence = session.next_sequence + 1;
@@ -4244,7 +4457,17 @@ export class CollaborationDatabase {
     const provenanceJson = event.runtime_provenance === null ? null : JSON.stringify(event.runtime_provenance);
     const eventBytes = Buffer.byteLength(payloadJson) + (provenanceJson === null ? 0 : Buffer.byteLength(provenanceJson)) + 512;
     if (eventBytes > this.maxEventBytes) throw storageQuotaExceeded("event", this.maxEventBytes);
-    this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes);
+    if (lifecycleAllowance === "pause") {
+      const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
+      const claim = request === undefined ? undefined : this.requireClaimRow(request.id);
+      if (eventBytes > 1024 || provenance !== null || request?.type !== "agent_request"
+        || request.actor_user_id !== actorUserId || claim?.status !== "paused"
+        || input.type !== "agent_progress" || input.visibility !== "session"
+        || stableJson(input.payload) !== stableJson({
+          content: "The author paused this Agent request.", phase: "lifecycle", status: "paused",
+        })) throw conflict("Invalid server pause marker");
+    }
+    this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes, lifecycleAllowance === "pause");
     this.sqlite.prepare(`
       INSERT INTO events(id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name, created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

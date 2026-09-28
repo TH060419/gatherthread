@@ -17,6 +17,29 @@ const brandDarkPath = fileURLToPath(new URL("../brand/lockup-color-transparent-d
 const aliyunGuidePath = fileURLToPath(new URL("../../../docs/ALIYUN_ECS.md", import.meta.url));
 const selfHostingGuidePath = fileURLToPath(new URL("../../../docs/SELF_HOSTING.md", import.meta.url));
 
+test("summary versions retain dialog spacing and inward tooltips on narrow screens", async () => {
+  const styles = await readFile(stylesPath, "utf8");
+  assert.match(styles, /\.create-dialog\.history-summary-versions-dialog\s*\{[^}]*padding: clamp\(16px, 3vw, 28px\)/);
+  assert.match(styles, /\.history-summary-actions \.workspace-icon-button\[data-tooltip\]::after\s*\{\s*right: 0;\s*left: auto;/);
+});
+
+test("member removal disables the hidden branch requirement and service guides avoid unavailable claims", async () => {
+  const [main, html] = await Promise.all([readFile(mainPath, "utf8"), readFile(htmlPath, "utf8")]);
+  assert.match(main, /choice\.required = Boolean\(branch\)/);
+  assert.match(main, /choice\.disabled = !branch/);
+  assert.doesNotMatch(html, /Official service is not open yet/);
+});
+
+test("message controls keep nullable startup safe and all rendered message bodies selectable", async () => {
+  const [main, styles, html] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8"), readFile(htmlPath, "utf8")]);
+  assert.match(main, /if \(pendingHistoryTarget && state\.session &&/);
+  assert.match(main, /body\.classList\.add\("event-content"\)/);
+  assert.match(styles, /\.agent-worklog-list time[^\{]*\{\s*-webkit-user-select: none;\s*user-select: none;/);
+  assert.match(styles, /-webkit-user-select: none/);
+  assert.match(html, /id="mentions-dialog"[^>]*aria-labelledby="mentions-title"/);
+  assert.match(html, /id="cancel-message-quote"[^>]*aria-label="Cancel quote"/);
+});
+
 test("Cloud Git subviews move keyboard focus to focusable headings", async () => {
   const html = await readFile(htmlPath, "utf8");
   assert.match(html, /id="code-local-title" tabindex="-1"/);
@@ -49,7 +72,9 @@ test("manual summaries use accessible icon entries, explicit paid confirmation a
   assert.match(html, /id="settings-history-summary-instructions"[^>]*maxlength="4000"/);
   assert.match(html, /id="settings-history-context-mode" disabled/);
   assert.match(html, /may consume model quota.*Only the selected records.*does not guarantee sandbox isolation/u);
-  assert.match(html, /Display toggles do not change your Agent context policy/u);
+  assert.match(html, /Display changes do not change Agent context/u);
+  assert.match(html, /Toolbar arrows switch all history; arrows on a summary switch only that section/u);
+  assert.match(html, /id="history-summary-view-label"/u);
   assert.match(styles, /\.history-summary-confirm-dialog > div \{ padding: 24px;/u);
   assert.match(main, /if \(localeChanged && state\.session\) renderTimeline\(\)/u);
   assert.match(main, /if \(localeChanged && state\.project\) renderMembers\(\)/u);
@@ -146,6 +171,9 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
     '<span>Connect Codex</span>',
     'id="settings-button"',
     'id="settings-dialog"',
+    '<a href="#settings-summaries">Summaries</a>',
+    'id="settings-summaries" class="settings-section" aria-labelledby="settings-summary-title" tabindex="-1"',
+    '<h3 id="settings-summary-title">Summaries</h3>',
     'id="attention-notice" class="attention-notice" role="status" aria-live="assertive" aria-atomic="true" hidden',
     'id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification"',
     'id="settings-locale"',
@@ -339,7 +367,7 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
     readFile(i18nPath, "utf8"),
   ]);
   assert.match(html, /Alpha preview/i);
-  assert.match(html, /Official service is not open yet/i);
+  assert.doesNotMatch(html, /Official service is not open yet/i);
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Connect this project<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Confirm in Codex<\/h3>/);
   assert.match(html, /A local connector keeps this project connected/i);
   assert.match(html, /Review and enable the GatherThread Hooks/i);
@@ -406,7 +434,7 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(html, /value="deepseek-harness">DeepSeek Harness<\/option>/);
   assert.match(html, /Alpha preview/i);
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Open DSH<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Pair this server<\/h3>/);
-  assert.match(html, /Official service is not open yet/i);
+  assert.doesNotMatch(html, /Official service is not open yet/i);
   assert.match(html, /The plugin connects outward/i);
   assert.match(html, /Verified DSH version: 0\.1\.2-rc\.1/);
   assert.match(html, /current local, LAN, self-hosted, or Tailscale server/i);
@@ -476,7 +504,7 @@ test("runtime presence refreshes while a session is open and stops with the page
 test("timeline auto-follow runs only for appended events and preserves a reader's position", async () => {
   const [main, styles] = await Promise.all([readFile(mainPath, "utf8"), readFile(stylesPath, "utf8")]);
   assert.match(main, /renderTimeline\(\{ followNewEvents: snapshot\.events\.length > previousCount \}\)/);
-  assert.match(main, /function renderTimeline\(\{ followNewEvents = false \} = \{\}\)/);
+  assert.match(main, /function renderTimeline\(\{ followNewEvents = false, preserveAnchor = false/);
   assert.match(main, /const scrollSnapshot = captureTimelineScroll\([\s\S]*?followNewEvents/);
   assert.match(main, /settleTimelineScroll\(timelineRegion, \{[\s\S]*?\.\.\.scrollSnapshot/);
   const timelineRule = styles.match(/\.timeline-region \{[\s\S]*?\}/)?.[0] ?? "";
@@ -789,4 +817,35 @@ test("a failed Agent response is shown as a failure with an explicit retry", asy
   assert.match(main, /button\.disabled = true/);
   assert.match(styles, /\.event-agent_response-failed/);
   assert.match(styles, /\.agent-retry-button/);
+});
+
+test("the timeline offers a labelled jump back to the newest event", async () => {
+  const [html, main, styles] = await Promise.all([
+    readFile(htmlPath, "utf8"),
+    readFile(mainPath, "utf8"),
+    readFile(stylesPath, "utf8"),
+  ]);
+  // The control lives inside the scrolling region so it can stick to the edge,
+  // and it starts hidden because a fresh timeline is already at the bottom.
+  // A single opening tag, not a lazy span that starts at the first <button> in
+  // the document and swallows everything up to the next </button>.
+  const buttonTag = html.match(/<button(?=[^>]*id="timeline-bottom-button")[^>]*>/)?.[0] ?? "";
+  assert.match(buttonTag, /class="timeline-bottom-button"/);
+  assert.match(buttonTag, /aria-label="Back to the newest message"/);
+  // Bounded to the tag, and anchored so it cannot be satisfied by `aria-hidden`.
+  assert.match(buttonTag, /(?:^|\s)hidden(?:\s|>)/);
+  // Bounded to this one rule, so a later `position: sticky` cannot stand in.
+  const buttonRule = styles.match(/\.timeline-bottom-button \{[\s\S]*?\}/)?.[0] ?? "";
+  assert.match(buttonRule, /position: sticky;/);
+  assert.match(buttonRule, /bottom: 12px;/);
+  // Visibility is the shared bottom rule, not a second opinion about it.
+  assert.match(main, /timelineBottomButton\.hidden = isTimelineAtBottom\(timelineRegion\)/);
+  assert.match(main, /timelineRegion\.addEventListener\("scroll", renderTimelineBottomControl, \{ passive: true \}\)/);
+  assert.match(main, /timelineBottomButton\.addEventListener\("click", returnToNewestEvent\)/);
+  // A reader who asked for reduced motion gets the jump without the glide — and
+  // the setting defaults to `system`, so the decision has to resolve the device
+  // preference rather than compare the setting to the literal `reduce`.
+  assert.match(main, /effectiveMotion\(state\.settings\.appearance\.motion, reducedMotion\)/);
+  assert.match(main, /window\.matchMedia\?\.\("\(prefers-reduced-motion: reduce\)"\)\.matches === true/);
+  assert.doesNotMatch(main, /appearance\.motion === "reduce" \? "auto"/);
 });

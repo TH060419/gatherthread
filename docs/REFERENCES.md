@@ -18,5 +18,8 @@ This project studies public repositories and open-source work. Unless a future f
 | [micromark](https://github.com/micromark/micromark) | CommonMark parsing with raw HTML and dangerous URL protocols disabled for Web Agent output | MIT |
 | [micromark-extension-gfm](https://github.com/micromark/micromark-extension-gfm) | GFM tables, task lists, autolinks, and strikethrough for Web Agent output | MIT |
 | [KaTeX](https://github.com/KaTeX/KaTeX) | Bundled, accessible inline and display math rendering for Web Agent Markdown | MIT |
+| [Driver.js](https://github.com/nilbuild/driver.js) | Published `driver.js@1.8.0` dependency for existing-control highlights and guide cards; application copy, arrows, visibility checks, dialog/focus integration and progress storage are original | MIT |
+
+For beginner guides, [Driver.js configuration](https://driverjs.com/docs/configuration) supports vanilla JavaScript, target callbacks, lifecycle hooks and custom popovers without runtime dependencies. It was selected over [Shepherd](https://github.com/shipshapecode/shepherd) and [Intro.js](https://introjs.com/), whose current AGPL/commercial licensing adds obligations unnecessary for this client. The dependency is pinned rather than loaded from a CDN, and its published license is copied verbatim to `apps/web/dist/app/licenses/driver.js.txt`. No upstream source is copied into application source files.
 
 Any later adaptation must record the exact upstream path, commit, applicable license, and modifications in this document and in the adapted source file.

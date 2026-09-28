@@ -58,6 +58,18 @@ The same-origin API is rooted at `/v1`.
 - Cookie-authenticated writes require an allowed `Origin`. Bearer-authenticated connectors remain device- and role-scoped.
 - Retryable mutations carry a stable `idempotency_key`. An exact same-actor retry returns the original result; a changed actor, operation, target, or canonical payload conflicts.
 
+### Message quotes and mentions
+
+`human_chat` and ordinary `agent_request` events may quote an existing event in the same session using `reply_to_event_id`. This does not change Agent-response linkage or claim fencing. Shared messages cannot quote owner-only history. A quote is a reference, not a new copy of the source event; its original content remains authoritative.
+
+An optional `payload.mentions` array uses `MessageMentionsSchema`: at most 32 strict `{ user_id, start, end }` records, ordered and non-overlapping. Offsets are JavaScript UTF-16 indices in the exact submitted `payload.content`; each range must equal `@` plus the recipient's current display name and the recipient must be a current session member. Plain typed `@name` without a selected member is ordinary text. Changed names or removed members can cause a stale draft to be rejected instead of notifying the wrong person. Mention metadata is additive; older consumers still read the content normally.
+
+`GET /v1/projects/:id/mentions?before_event_id=...` returns `{ data: { mentions, next_before_id } }`, newest first, at most 50 entries. Each entry contains `id`, `session_id`, `sequence`, `created_at`, `actor_display_name`, `session_title`, and a 180-character `excerpt`. It is an authenticated inbox for only the caller, filtered by current project/session membership and event visibility. It grants no new access and does not send third-party push notifications. Pagination reads canonical storage; WebSocket remains advisory.
+
+Codex runtime presence now runs independently of the execution loop every ten seconds. Only matched native thread/turn work may publish throttled `agent_progress` with `phase: activity`, `status: thinking|running` and generic public text. No reasoning text or tool parameters are shared by this signal. Existing claim attempts and five-minute work-based lease expiry remain unchanged.
+
+DSH also retains its independent ten-second heartbeat. A transient heartbeat failure recovers the plugin's idle/running state on the next successful heartbeat without waiting for prompt settlement. A matched native running transition publishes generic activity immediately; durable work keeps its separate throttle. Activity idempotency keys include the claim attempt, and neither idle presence nor a persistent busy label fabricates periodic work. A completely silent five-minute request may still lose its claim lease; this is distinct from runtime presence. Native reasoning text remains private.
+
 ### Route families
 
 | Family | Purpose | Contract notes |
@@ -103,7 +115,7 @@ Automatic upload, manual upload, realtime projection, and Web-triggered Agent ex
 An `agent_request` names an exact harness/model profile and eligible runtime. The selected same-user execution runtime may claim it once, append public `agent_progress`, and complete it with one final `agent_response`.
 
 - Runtime selection never falls back silently.
-- A runtime may advertise a bounded set of exact provider/model profiles and adapter-owned reasoning efforts. The server accepts a targeted DSH request only when the complete requested profile appears in that declaration. A legacy runtime without the declaration retains fixed-provider/model matching.
+- A runtime may advertise a bounded set of exact provider/model profiles and adapter-owned reasoning efforts. The server accepts a targeted request only when the complete requested profile appears in that declaration — for every harness that publishes one, so a direct API caller cannot bypass it. A model declared without efforts accepts only a request that omits the effort. A legacy runtime without the declaration retains fixed-provider/model matching. See [ADR-0032](adr/0032-harness-advertised-model-catalogs.md).
 - Claims and completions are idempotent and bound to the request and runtime.
 - Public commentary may be uploaded; hidden reasoning is excluded.
 - The final response does not close the claim until it is durably committed.
@@ -112,6 +124,10 @@ An `agent_request` names an exact harness/model profile and eligible runtime. Th
 - A lapsed exact-runtime claim may be reclaimed only by the runtime recorded in the request profile. Reclaim never changes device, harness, provider, model, or runtime implicitly. Legacy requests without a runtime target retain their existing fail-closed selection rules. Only a live claim occupies a runtime's single active slot.
 - Claim success includes `attempt_count`. Progress and completion may send it as `claim_attempt`; current connectors always do. The server rejects an expired lease or a superseded attempt. For compatibility with Alpha connectors, omission is accepted only on attempt 1.
 - Reclaim is bounded. A request past the attempt budget terminates as `failed`: claiming it returns `agent_request_failed`, the server commits and publishes exactly one canonical `agent_response` with `status: "failed"` and no capture-fidelity or runtime-provenance claim, and a connector treats that conflict as terminal rather than retrying it.
+- The author of a request may **pause** it. Pausing is authorized to that author alone — a project owner who did not ask has no more right to stop it than to have asked it — and it is idempotent. A paused request is never handed to a runtime: claiming it returns `status: "paused"`, which is neither an execution nor a failure. A connector skips it, and no later lease lapse re-opens it.
+- A pause is announced as one canonical `agent_progress` lifecycle marker (`phase: "lifecycle"`, `status: "paused"`) linked to the request, so every member reads it in the ordered log rather than only the pausing client learning it from a control-plane response.
+- The fixed server pause marker remains quota-charged but can use a bounded 1 KiB control allowance per paused accepted request in each storage scope; ordinary writes cannot use it. DSH retains the owned native-turn fence across lost completion acknowledgement so automatic and manual local upload cannot republish a paused answer. See [ADR-0023](adr/0023-lease-and-bounded-redispatch-agent-claims.md).
+- A paused request is a record, not a queue entry. Continuing is a **new** `agent_request`, exactly as retrying a failed one is: the new request's position in the log is what lets the resumed run see anything said while it was stopped.
 
 ## Snapshot and visible-history boundary
 
@@ -150,6 +166,7 @@ The published MCP surface is intentionally narrower than the internal collaborat
 
 ## Codex and DSH native boundaries
 
+- Codex and DSH model selection both use exact metadata advertised by the connected runtime. The Codex connector reads its installation's own catalog through the App Server's documented `model/list` method; DSH re-reads its native LLM metadata on a bounded interval. A request may name only an advertised model and, for that model, only an advertised reasoning effort. A harness that cannot be queried advertises nothing and keeps fixed-model routing; a harness or provider that configures models elsewhere keeps its own catalog as the source of truth.
 - Codex Hooks are limited to reviewed `UserPromptSubmit` and `Stop` definitions. Hook payloads, output limits, registry purpose, and workspace path checks are security contracts.
 - Codex Desktop projection, background execution, and snapshot tasks have separate purposes and single-writer rules. Never mutate an active or ambiguously owned native task.
 - Native context capacity and transport bounds are separate. Codex context accounting uses fresh last-request usage, not cumulative lifetime billing; a reported model window takes precedence over a fallback estimate. Ordinary native automatic compaction remains enabled according to the user's harness configuration. GatherThread must not overwrite that configuration or label local truncation as native compaction. See [ADR-0026](adr/0026-native-first-context-management.md).

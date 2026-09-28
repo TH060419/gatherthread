@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260925-2" />
+    <link rel="stylesheet" href="./src/styles.css?v=20260927-2" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -199,7 +199,7 @@
           </div>
           <span class="avatar" id="current-user-avatar" aria-hidden="true"></span>
           <span id="current-username" class="current-username"></span>
-          <button id="project-code-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Code collaboration" title="Code collaboration" data-tooltip aria-haspopup="dialog" aria-controls="project-code-dialog">
+          <button id="project-code-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Project file collaboration" title="Project file collaboration" data-tooltip aria-haspopup="dialog" aria-controls="project-code-dialog">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 7.5v9M18 7.5v1a6 6 0 0 1-6 6H6"/></svg>
           </button>
           <button id="settings-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Open Settings" title="Settings" data-tooltip aria-haspopup="dialog" aria-controls="settings-dialog">
@@ -356,13 +356,15 @@
                 </div>
               </div>
               <div class="session-header-actions">
-                <button id="history-summary-select-button" class="icon-button workspace-icon-button" type="button" aria-label="Select history to summarize" title="Select history to summarize" aria-pressed="false" aria-controls="history-summary-toolbar" hidden>
+                <button id="history-summary-select-button" class="icon-button workspace-icon-button" type="button" aria-label="Select history to summarize" title="Select history to summarize" aria-pressed="false" aria-controls="history-summary-toolbar" data-tooltip hidden>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h10M4 10h10M4 15h5M4 20h5M15 14l2 2 4-5M15 20h6"/></svg>
                 </button>
-                <button id="history-summary-view-button" class="icon-button workspace-icon-button" type="button" aria-label="Show original messages" title="Show original messages" aria-pressed="false" hidden>
+                <button id="mentions-button" class="icon-button workspace-icon-button" type="button" aria-label="Mentions" title="Mentions" aria-haspopup="dialog" aria-controls="mentions-dialog"><span aria-hidden="true">@</span><span id="mentions-count" class="mentions-count"></span></button>
+                <button id="history-summary-view-button" class="icon-button workspace-icon-button history-view-toggle" type="button" aria-label="Show all original messages" title="Show all original messages" aria-pressed="false" data-tooltip hidden>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16m-4-4 4 4-4 4M20 16H4m4-4-4 4 4 4"/></svg>
+                  <span id="history-summary-view-label" class="history-view-label" aria-hidden="true">Summary view</span>
                 </button>
-                <button id="history-summary-versions-button" class="icon-button workspace-icon-button" type="button" aria-label="Summary versions" title="Summary versions" aria-haspopup="dialog" aria-controls="history-summary-versions-dialog" hidden>
+                <button id="history-summary-versions-button" class="icon-button workspace-icon-button" type="button" aria-label="Summary versions" title="Summary versions" aria-haspopup="dialog" aria-controls="history-summary-versions-dialog" data-tooltip hidden>
                   <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="3" width="13" height="15" rx="2"/><path d="M4 7v13a1 1 0 0 0 1 1h11M10 8h7M10 12h7"/></svg>
                 </button>
                 <button
@@ -424,6 +426,14 @@
                 <span aria-hidden="true">✦</span>
                 <p>No events yet. Start the conversation below.</p>
               </div>
+              <button
+                id="timeline-bottom-button"
+                class="timeline-bottom-button"
+                type="button"
+                aria-label="Back to the newest message"
+                title="Back to the newest message"
+                hidden
+              ><span aria-hidden="true">↓</span></button>
             </section>
 
             <div
@@ -439,14 +449,19 @@
 
             <form id="composer" class="composer">
               <label for="message-input">Message</label>
+              <div class="message-draft">
+                <div id="composer-quote" class="composer-quote" hidden><span id="composer-quote-text"></span><button id="cancel-message-quote" class="icon-button message-action" type="button" aria-label="Cancel quote" title="Cancel quote">×</button></div>
+                <div id="mention-picker" class="mention-picker" role="listbox" aria-label="Mention a member" hidden></div>
               <textarea
                 id="message-input"
+                aria-controls="mention-picker" aria-expanded="false" aria-autocomplete="list"
                 name="message"
                 rows="3"
                 maxlength="12000"
                 placeholder="Write to the room…"
                 aria-describedby="composer-permission send-chat-help send-agent-help"
               ></textarea>
+              </div>
               <p id="composer-permission" class="permission-note"></p>
               <fieldset id="agent-request-profile" class="agent-request-profile">
                 <legend>Agent request settings</legend>
@@ -458,7 +473,7 @@
                 <div id="codex-agent-profile-fields" class="agent-profile-fields">
                   <label for="agent-model-select">Model</label>
                   <select id="agent-model-select" name="agent-model"></select>
-                  <label for="agent-effort-select">Reasoning</label>
+                  <label id="agent-effort-label" for="agent-effort-select">Reasoning</label>
                   <select id="agent-effort-select" name="agent-effort"></select>
                 </div>
                 <div id="dsh-agent-profile-fields" class="agent-profile-fields dsh-agent-profile-fields" hidden>
@@ -552,11 +567,11 @@
               <button class="button button-primary button-wide" type="submit">Create invitation</button>
             </form>
             <div id="created-invitation" class="created-invitation" role="status" aria-live="polite" hidden>
-              <strong>Copy this secret now</strong>
+              <strong>Copy this invitation now</strong>
               <p>It is shown once and cannot be retrieved later.</p>
-              <div class="secret-copy-row">
-                <code id="created-invite-secret"></code>
-                <button id="copy-invite-secret-button" class="button button-secondary" type="button">Copy</button>
+              <div class="secret-copy-row invitation-share-row">
+                <pre id="created-invite-secret" class="invitation-share-text" data-i18n-skip></pre>
+                <button id="copy-invite-secret-button" class="button button-secondary" type="button">Copy invitation</button>
               </div>
               <p id="copy-invite-status" class="field-help" aria-live="polite"></p>
             </div>
@@ -577,10 +592,10 @@
     <dialog id="project-code-dialog" class="create-dialog project-code-dialog" aria-labelledby="project-code-title" aria-describedby="project-code-description">
       <div class="code-dialog-content">
         <div class="dialog-heading">
-          <div><p id="code-project-name" class="eyebrow" data-i18n-skip></p><h2 id="project-code-title">Code collaboration</h2></div>
-          <button id="close-project-code-button" class="icon-button" type="button" aria-label="Close code collaboration">×</button>
+          <div><p id="code-project-name" class="eyebrow" data-i18n-skip></p><h2 id="project-code-title">Project file collaboration</h2></div>
+          <button id="close-project-code-button" class="icon-button" type="button" aria-label="Close project file collaboration">×</button>
         </div>
-        <p id="project-code-description" class="code-help">Share code through personal Git branches. Conversation synchronization stays separate.</p>
+        <p id="project-code-description" class="code-help">Share project files through personal versions, review changes and integrate shared work. Conversation history sync is separate.</p>
         <section id="code-no-project" class="code-section" hidden>
           <p>Create or join a project before using Git code collaboration. You can still adjust appearance and language in Settings.</p>
           <button id="code-create-project-button" class="button button-primary compact-button" type="button">Create your first project</button>
@@ -593,13 +608,13 @@
         </section>
         <section id="code-enable-section" class="code-section" hidden>
           <p>Uploaded code is visible to all project members. Only the project owner can merge into main. Private files and changes not yet uploaded are not backed up.</p>
-          <button id="code-enable-button" class="button button-primary" type="button">Enable project code storage</button>
-          <p id="code-owner-note" class="code-help" hidden>Ask the project owner to enable code storage.</p>
+          <button id="code-enable-button" class="button button-primary" type="button">Enable project file sharing</button>
+          <p id="code-owner-note" class="code-help" hidden>Ask the project owner to enable file sharing.</p>
         </section>
         <div id="code-enabled-content" hidden>
           <section id="code-enabled-home" class="code-overview" aria-label="Cloud Git settings">
-            <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off Git synchronization</button><span class="code-help">Cloud branches remain stored; conversations keep syncing.</span></div>
-            <p id="code-paused-note" class="code-help" hidden>Cloud Git is off. Conversations still sync. Resume code sharing here; local automatic upload can be turned off under device sync.</p>
+            <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off project file sharing</button><span class="code-help">File collaboration pauses; text still syncs. Stored cloud versions remain.</span></div>
+            <p id="code-paused-note" class="code-help" hidden>Project file sharing is off: only text syncs, and new file collaboration is paused. Enable sharing for full AI agent collaboration. Local automatic upload is a separate device preference.</p>
             <p class="code-help">Choose what you want to do. Uploaded code is visible to every project member and is used only for this project's collaboration.</p>
             <div class="code-navigation-list">
               <button id="code-open-device-view" class="code-navigation-card" type="button" aria-controls="code-device-view"><span><strong>This device · sync &amp; recovery</strong><small>Choose an Agent device, upload or download code, and manage automatic upload.</small></span><span aria-hidden="true">→</span></button>
@@ -641,9 +656,9 @@
     </dialog>
 
     <dialog id="code-notice-dialog" class="create-dialog code-notice-dialog" aria-labelledby="code-notice-title" aria-describedby="code-notice-description">
-      <div class="dialog-heading"><h2 id="code-notice-title">About cloud Git collaboration</h2></div>
-      <p id="code-notice-description">Cloud Git stores project code on this server so project members can share, review and merge it. Uploaded code is readable by every member of that project. It is used for that project's collaboration, not for developing GatherThread or other unrelated purposes. Review files for secrets before upload.</p>
-      <p>Code upload is optional and automatic upload starts off. You can turn off cloud Git for a project; its conversations still work, but code sharing and recovery through the server are then unavailable. Turning it off alone retains existing cloud branches until they are cleared in Settings.</p>
+      <div class="dialog-heading"><h2 id="code-notice-title">About project file collaboration</h2></div>
+      <p id="code-notice-description">Project members and their AI agents can share, review, modify and manage files together. Uploaded files are readable within the project, not public, and used only for this project's collaboration. Each local device needs separate file access authorization. Review files for secrets before upload.</p>
+      <p>We recommend enabling project file sharing for full AI agent collaboration: members can share, modify and manage project files together. Turn it off only for strict privacy needs; only text will sync, without file exchange or cloud recovery. Automatic file upload starts off and is a separate choice. Stored versions remain until explicitly cleared in Settings.</p>
       <div class="dialog-actions"><button id="code-notice-continue" class="button button-primary" type="button">Got it</button></div>
     </dialog>
 
@@ -761,13 +776,21 @@
       </form>
     </dialog>
 
+    <dialog id="mentions-dialog" class="create-dialog" aria-labelledby="mentions-title">
+      <div class="dialog-heading"><h2 id="mentions-title">Mentions</h2><button id="mentions-close" class="icon-button" type="button" aria-label="Close mentions">×</button></div>
+      <p id="mentions-empty" class="field-help">No mentions in this project.</p>
+      <p id="mentions-error" class="form-error" role="alert"></p>
+      <ul id="mentions-list" class="mentions-list"></ul>
+      <button id="mentions-more" class="text-button" type="button" hidden>Earlier mentions</button>
+    </dialog>
+
     <dialog id="leave-project-dialog" class="create-dialog" aria-labelledby="leave-project-title" aria-describedby="leave-project-description">
       <form id="leave-project-form" method="dialog">
         <div class="dialog-heading"><h2 id="leave-project-title">Leave this project?</h2><button id="close-leave-project-button" class="icon-button" type="button" aria-label="Close">×</button></div>
         <p id="leave-project-description">You will lose access to its cloud sessions and code. Your local files and Agent conversations will not be deleted. Ask the owner for a new invitation if you want to rejoin.</p>
         <div id="leave-project-branch-choice" class="field" hidden>
           <label for="leave-project-branch-resolution">Resolve this member's cloud Git branch</label>
-          <select id="leave-project-branch-resolution" required></select>
+          <select id="leave-project-branch-resolution" required disabled></select>
           <p id="leave-project-branch-note" class="field-help"></p>
         </div>
         <p id="leave-project-error" class="form-error" role="alert"></p>
@@ -798,7 +821,6 @@
         <div class="connection-preview-banner" role="note">
           <span class="connection-preview-badge">Alpha preview</span>
           <span>Current server only</span>
-          <button class="button button-secondary" type="button" disabled>Official service is not open yet</button>
         </div>
         <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
           <li>
@@ -871,7 +893,6 @@ codex plugin add gatherthread@gatherthread</code>
         <div class="connection-preview-banner" role="note">
           <span class="connection-preview-badge">Alpha preview</span>
           <span>Current server only</span>
-          <button class="button button-secondary" type="button" disabled>Official service is not open yet</button>
         </div>
         <ol class="connection-guide dsh-connect-steps">
           <li>
@@ -954,6 +975,7 @@ codex plugin add gatherthread@gatherthread</code>
             <a href="#settings-appearance">Appearance</a>
             <a href="#settings-layout">Layout</a>
             <a href="#settings-sync">Sync &amp; context</a>
+            <a href="#settings-summaries">Summaries</a>
             <a href="#settings-code-storage">Cloud Git storage</a>
             <a href="#settings-agents">Agents</a>
             <a href="#settings-composer">Composer</a>
@@ -970,6 +992,18 @@ codex plugin add gatherthread@gatherthread</code>
                 <span><strong>Language</strong><small>English is the default. Product names stay in English.</small></span>
                 <select id="settings-locale" name="locale"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
               </label>
+              <div class="onboarding-guides" role="group" aria-labelledby="onboarding-guides-title">
+                <strong id="onboarding-guides-title">Step-by-step guides</strong>
+                <p>Learn in an isolated example. Browse it freely at any time to see complete usage examples. No real project, conversation, file or AI agent is affected.</p>
+                <div class="onboarding-guide-buttons">
+                  <button class="button button-secondary" type="button" data-onboarding-topic="basics">Start here</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="members">Work with people</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="history">Share conversation history</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="files">Share project files</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="summaries">Organize history with summaries</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="browse">Browse example project</button>
+                </div>
+              </div>
             </section>
 
             <section id="settings-device" class="settings-section" aria-labelledby="settings-device-title">
@@ -1024,7 +1058,14 @@ codex plugin add gatherthread@gatherthread</code>
                 <div class="numeric-setting numeric-setting-context"><select id="settings-context-preset" aria-label="Context budget preset"><option value="8192">8 KiB</option><option value="32768">32 KiB</option><option value="131072">128 KiB</option><option value="524288">512 KiB</option><option value="2097152">2 MiB</option><option value="5242880">5 MiB</option><option value="custom">Custom</option></select><label><input id="settings-context-budget" name="context-budget" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="7" autocomplete="off" aria-label="Exact context budget" /><select id="settings-context-unit" aria-label="Context budget unit"><option value="KiB">KiB</option><option value="MiB">MiB</option></select></label></div>
               </div>
               <div id="settings-context-diagnostic" class="capability-diagnostic" role="status"></div>
-              <label class="settings-row" for="settings-history-context-mode"><span><strong>My Agent context for this project</strong><small>Summary uses the newest non-overlapping summaries and less context, but may omit detail. Original uses full public messages and more context. This is saved on the server for your user and project, not shared as another member's preference.</small></span><select id="settings-history-context-mode" disabled><option value="summary">Summary · less context, lossy</option><option value="original">Original · more detail and context</option></select></label>
+            </section>
+
+            <section id="settings-summaries" class="settings-section" aria-labelledby="settings-summary-title" tabindex="-1">
+              <div class="settings-section-heading">
+                <div><h3 id="settings-summary-title">Summaries</h3></div>
+                <p>Summaries organize conversations for easier reading and help your AI agent focus on key conclusions. Generating a summary consumes model quota; token savings are not guaranteed.</p>
+              </div>
+              <label class="settings-row" for="settings-history-context-mode"><span><strong>My Agent context for this project</strong><small>Summary is recommended: it supplies the newest non-overlapping summaries, helping your AI agent focus on agreed conclusions and reducing distraction from unrelated discussion. Summaries may omit detail; choose Original when exact wording or full details matter. This preference is saved for your user and project and does not change other members' choices.</small></span><select id="settings-history-context-mode" disabled><option value="summary">Summary · focus (recommended)</option><option value="original">Original · wording &amp; details</option></select></label>
               <p>Applies to future Agent requests started from GatherThread and explicit MCP context reads. It does not rewrite a running turn, remove existing Codex Desktop task history, or replace history already injected into ordinary DSH sessions.</p>
               <p id="settings-history-context-status" class="field-help" role="status"></p>
               <button id="settings-history-context-retry" class="text-button" type="button" hidden>Retry context policy</button>
@@ -1040,6 +1081,7 @@ codex plugin add gatherthread@gatherthread</code>
                 <button id="code-storage-refresh" class="text-button" type="button">Refresh</button>
               </div>
               <div id="code-storage-overview">
+                <p class="field-help">Enable project file sharing for complete AI agent team collaboration. When disabled, only text is shared; files cannot be exchanged. Reserve disabling it for strict privacy requirements.</p>
                 <p id="code-storage-summary" class="field-help" role="status" aria-live="polite">Loading cloud Git storage…</p>
                 <p class="field-help">View your quota and choose when to remove cloud copies. Your local Git history is always left alone.</p>
                 <button id="code-storage-open" class="button button-secondary" type="button">Manage cloud Git data</button>
@@ -1122,7 +1164,7 @@ codex plugin add gatherthread@gatherthread</code>
 
     <dialog id="history-summary-versions-dialog" class="create-dialog history-summary-versions-dialog" aria-labelledby="history-summary-versions-title">
       <div class="history-summary-versions-heading"><h2 id="history-summary-versions-title">Summary versions</h2><button id="history-summary-versions-close" class="icon-button workspace-icon-button" type="button" aria-label="Close summary versions" title="Close summary versions"><span aria-hidden="true">×</span></button></div>
-      <p>Newest non-overlapping summaries are shown by default. Earlier versions and all originals remain available. Display toggles do not change your Agent context policy.</p>
+      <p class="history-summary-versions-help">Toolbar arrows switch all history; arrows on a summary switch only that section. Originals are preserved. Display changes do not change Agent context.</p>
       <ol id="history-summary-versions" class="history-summary-versions"></ol>
     </dialog>
 
@@ -1150,6 +1192,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260925-2"></script>
+    <script type="module" src="./src/main.js?v=20260927-4"></script>
   </body>
 </html>

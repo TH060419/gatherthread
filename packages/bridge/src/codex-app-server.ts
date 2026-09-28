@@ -30,6 +30,7 @@ import type {
   HarnessExecutionResult,
   HarnessExecutor,
   RegisteredRuntime,
+  RuntimeExecutionProfile,
   SessionSummary,
 } from "./types.js";
 
@@ -40,6 +41,25 @@ interface JsonRpcResponse {
 }
 
 const CODEX_THREAD_NAME_MAX_LENGTH = 240;
+
+/** Reasoning efforts a Codex turn may request; the catalog reports a subset per model. */
+const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
+
+/**
+ * Catalog discovery bounds. The collaboration protocol accepts at most 32 exact
+ * execution profiles per runtime, and paging stops after a fixed number of pages
+ * so a misbehaving App Server cannot keep the connector in a discovery loop.
+ */
+const MAX_MODEL_LIST_PAGES = 4;
+const MODEL_LIST_PAGE_LIMIT = 100;
+const MAX_ADVERTISED_MODELS = 32;
+const MAX_ADVERTISED_REASONING_EFFORTS = 16;
+/**
+ * Catalog discovery is best-effort startup work, so it gets a shorter deadline
+ * than an ordinary request: an App Server that ignores the method without
+ * answering would otherwise stall connector startup for the full request timeout.
+ */
+const MODEL_LIST_TIMEOUT_MS = 5_000;
 
 export function managedCodexThreadName(
   session: Pick<SessionSummary, "id" | "name" | "mode">,
@@ -562,6 +582,7 @@ export class CodexAppServerClient {
     effort?: string;
     onStarted?: (turnId: string) => Promise<void> | void;
     onItemCompleted?: (item: unknown) => Promise<void> | void;
+    onWorkActivity?: (status: "thinking" | "running") => Promise<void> | void;
   }): Promise<{ turnId: string; items: unknown[]; modelContextWindow?: number; totalTokens?: number }> {
     await this.start();
     this.#threadTokenUsage.delete(input.threadId);
@@ -587,6 +608,12 @@ export class CodexAppServerClient {
     let completedItems = Promise.resolve();
     const listener = (notification: JsonRpcNotification) => {
       if (!isObject(notification.params) || notification.params.threadId !== input.threadId) return;
+      const activity = codexActivityStatus(notification.method, notification.params);
+      const activityTurnId = notification.params.turnId;
+      if (activity && input.onWorkActivity
+        && (expectedTurnId === undefined || activityTurnId === expectedTurnId)) {
+        completedItems = completedItems.then(async () => input.onWorkActivity?.(activity)).catch(() => undefined);
+      }
       if (notification.method === "thread/tokenUsage/updated") {
         const usage = objectValue(notification.params, "tokenUsage");
         const context = usage?.modelContextWindow;
@@ -859,6 +886,37 @@ export class CodexAppServerClient {
         pending.reject(new Error("Codex App Server request could not be written"));
       });
     });
+  }
+
+  /**
+   * Read the model catalog this Codex installation currently advertises.
+   *
+   * `model/list` is the documented discovery method for model pickers, and its
+   * own documentation is explicit that clients must render the returned values
+   * instead of a hard-coded list. The method is version-sensitive: an older App
+   * Server fails this call (including the "restart Codex" refusal it returns when
+   * the managed provider no longer complies), and the caller then advertises
+   * nothing rather than inventing a catalog.
+   */
+  async listModels(): Promise<readonly unknown[]> {
+    const entries: unknown[] = [];
+    let cursor: string | null = null;
+    for (let page = 0; page < MAX_MODEL_LIST_PAGES; page += 1) {
+      const result = await this.request("model/list", {
+        limit: MODEL_LIST_PAGE_LIMIT,
+        // Hidden entries are excluded by the server, and callers that ignore the
+        // flag would still have to filter them, so ask for the picker list only.
+        includeHidden: false,
+        ...(cursor === null ? {} : { cursor }),
+      }, MODEL_LIST_TIMEOUT_MS);
+      if (!isObject(result) || !Array.isArray(result.data)) {
+        throw new Error("Codex App Server returned an invalid model catalog");
+      }
+      entries.push(...result.data);
+      cursor = typeof result.nextCursor === "string" && result.nextCursor ? result.nextCursor : null;
+      if (cursor === null) break;
+    }
+    return entries;
   }
 
   close(): Promise<void> {
@@ -2074,7 +2132,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         );
       }
 
-      const renderedRequest = renderProjectionEvent(input.request, input.runtime);
+      const renderedRequest = renderProjectionEvent(input.request, input.runtime,
+        input.canonicalHistory.find((event) => event.id === input.request.replyTo));
       const requestChunks = splitUtf8(renderedRequest.text, this.#maxPromptBytes - 64);
       if (requestChunks.length === 0) requestChunks.push(renderedRequest.text);
       state = await this.#compactBeforeHighWater(state, estimateTokens(renderedRequest.text));
@@ -2107,6 +2166,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       await this.#saveState(state);
       const connectorState = state;
       let turn;
+      let lastActivityAt = 0;
+      let activityIndex = 0;
+      let lastActivityStatus = "";
       try {
         turn = await this.#client.runTurn({
           threadId: connectorState.threadId,
@@ -2126,6 +2188,14 @@ export class CodexAppServerExecutor implements HarnessExecutor {
             await this.#saveState(connectorState);
           },
           ...(input.publishProgress === undefined ? {} : {
+            onWorkActivity: async (status: "thinking" | "running") => {
+              const now = Date.now();
+              if (now - lastActivityAt < (status === lastActivityStatus ? 30_000 : 2_000)) return;
+              // No hidden reasoning, tool arguments or notification body is shared.
+              lastActivityAt = now; lastActivityStatus = status;
+              await input.publishProgress?.({ id: `activity-${++activityIndex}`, phase: "activity", status,
+                content: status === "thinking" ? "Agent is thinking." : "Agent is working." });
+            },
             onItemCompleted: async (item: unknown) => {
               if (!isObject(item) || item.type !== "agentMessage" || item.phase !== "commentary") return;
               if (typeof item.text !== "string" || !item.text.trim()) return;
@@ -3144,6 +3214,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
     const client = this.#createClient();
     try {
       await client.start();
+      await this.#discoverExecutionProfiles(client);
     } finally {
       try {
         await client.dispose();
@@ -3152,6 +3223,35 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
       }
     }
     return result;
+  }
+
+  /**
+   * Learn the model catalog this Codex installation offers, so the Web workspace
+   * can offer exactly what this connection can run.
+   *
+   * Discovery runs during preflight because the descriptor must carry the
+   * declaration before the first runtime registration. The App Server method is
+   * version-sensitive, so a failure here is not fatal: the descriptor keeps no
+   * declaration, the runtime falls back to its configured single model, and the
+   * connection stays usable against an older Codex.
+   */
+  async #discoverExecutionProfiles(client: CodexAppServerClient): Promise<void> {
+    let entries: readonly unknown[];
+    try {
+      entries = await client.listModels();
+    } catch (error) {
+      process.stderr.write(`gatherthread-codex: Codex model catalog discovery was skipped (${safeText(
+        error instanceof Error ? error.message : "unknown error",
+      )}); this connection keeps its configured model "${this.descriptor.model}"\n`);
+      return;
+    }
+    const profiles = executionProfilesFromModelList(entries, this.descriptor.provider, this.descriptor.model);
+    if (profiles === undefined) {
+      process.stderr.write("gatherthread-codex: Codex advertised no selectable models; this connection keeps its configured model\n");
+      return;
+    }
+    this.descriptor.executionProfiles = profiles;
+    process.stdout.write(`Codex model catalog: ${profiles.map((profile) => profile.model).join(", ")}\n`);
   }
 
   createSessionBinding(input: {
@@ -3737,16 +3837,32 @@ function parseThreadTurn(value: unknown): CodexThreadTurn[] {
   }];
 }
 
+/** Only evidence of native work renews a claim; idle presence is not evidence. */
+export function codexActivityStatus(method: string, params: unknown): "thinking" | "running" | null {
+  if (method.startsWith("item/reasoning/") && method.endsWith("Delta")) return "thinking";
+  if (["item/agentMessage/delta", "item/commandExecution/outputDelta", "item/fileChange/outputDelta"].includes(method)) return "running";
+  if (method === "item/started" || method === "item/completed") {
+    const item = isObject(params) && isObject(params.item) ? params.item : undefined;
+    if (item?.type === "reasoning") return "thinking";
+    if (["agentMessage", "commandExecution", "fileChange", "mcpToolCall", "webSearch"].includes(String(item?.type))) return "running";
+  }
+  return null;
+}
+
 function renderProjectionEvent(
   event: CanonicalEvent,
   _fallbackRuntime?: RegisteredRuntime,
+  quotedEvent?: CanonicalEvent,
 ): { role: "user" | "assistant"; text: string } {
   const payload = isObject(event.payload) ? event.payload : undefined;
   const username = event.actorDisplayName
     ?? objectOptionalString(payload, "actor_display_name")
     ?? objectOptionalString(payload, "username")
     ?? event.actorId;
-  const content = payloadText(event.payload);
+  const quote = ["human_chat", "agent_request"].includes(event.type) && event.replyTo
+    ? `[Quoted message ${event.replyTo}${quotedEvent ? ` · ${quotedEvent.actorDisplayName ?? quotedEvent.actorId}: ${payloadText(quotedEvent.payload)}` : ""}]\n`
+    : "";
+  const content = quote + payloadText(event.payload);
   if (event.type === "human_chat") {
     return { role: "user", text: `${username} · Human Chat：${content}` };
   }
@@ -3837,6 +3953,93 @@ function visibleImportTokens(messages: readonly VisibleHistoryImportMessage[]): 
   return messages.reduce((total, message) => total + estimateTokens(message.text), 0);
 }
 
+/**
+ * Turn a raw `model/list` page into the bounded execution-profile declaration the
+ * server and Web workspace accept.
+ *
+ * Everything here is defensive because the catalog is upstream data: entries are
+ * bounded, malformed entries are dropped instead of advertised, and the result is
+ * `undefined` when nothing survived so the caller keeps the previous fixed-model
+ * behavior. The configured model is always kept — the runtime registers for it, so
+ * a request naming it must stay claimable even when the catalog hides or omits it.
+ */
+export function executionProfilesFromModelList(
+  entries: readonly unknown[],
+  provider: string,
+  configuredModel: string,
+): readonly RuntimeExecutionProfile[] | undefined {
+  const catalog: RuntimeExecutionProfile[] = [];
+  const advertised = new Set<string>();
+  let configuredProfile: RuntimeExecutionProfile | undefined;
+  for (const entry of entries) {
+    if (!isObject(entry) || entry.hidden === true) continue;
+    const id = normalizableCodexModel(entry.id);
+    if (id === undefined || advertised.has(id)) continue;
+    advertised.add(id);
+    const reasoningEfforts = advertisedReasoningEfforts(entry.supportedReasoningEfforts);
+    const defaultReasoningEffort = typeof entry.defaultReasoningEffort === "string"
+      ? entry.defaultReasoningEffort.trim()
+      : "";
+    // A model whose effort metadata is missing or empty is advertised without any
+    // efforts. Absence is not evidence of support, so nothing is invented for it.
+    const profile: RuntimeExecutionProfile = {
+      provider,
+      model: id,
+      ...(reasoningEfforts.length === 0 ? {} : { reasoningEfforts }),
+      ...(reasoningEfforts.includes(defaultReasoningEffort) ? { defaultReasoningEffort } : {}),
+    };
+    if (id === configuredModel) configuredProfile = profile;
+    if (catalog.length < MAX_ADVERTISED_MODELS) catalog.push(profile);
+  }
+  if (catalog.length === 0) return undefined;
+  if (catalog.some((profile) => profile.model === configuredModel)) return catalog;
+  // This runtime is registered for the configured model, so a request naming it must
+  // stay claimable: one slot is reserved for it when the catalog does not name it,
+  // which also keeps the whole declaration inside the protocol's profile bound. Its
+  // efforts stay undeclared only when no catalog entry describes them.
+  const profiles = catalog.slice(0, MAX_ADVERTISED_MODELS - 1);
+  profiles.push(configuredProfile ?? { provider, model: configuredModel });
+  return profiles;
+}
+
+/**
+ * A catalog identifier is only advertised when the same value would also survive
+ * request validation, so the Web workspace can never offer a model this connector
+ * would refuse to run.
+ */
+function normalizableCodexModel(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    validateCodexModel(value.trim());
+  } catch {
+    return undefined;
+  }
+  const model = value.trim();
+  // Apply the same predicate the request boundary uses, plus the protocol's
+  // 160-character identifier bound, so the catalog can never advertise a model
+  // this connector would refuse to run.
+  if (!isSafeExecutionProfileText(model, 160)) return undefined;
+  return model;
+}
+
+function advertisedReasoningEfforts(value: unknown): readonly string[] {
+  if (!Array.isArray(value)) return [];
+  const efforts: string[] = [];
+  for (const candidate of value) {
+    if (efforts.length >= MAX_ADVERTISED_REASONING_EFFORTS) break;
+    // Effort options are objects in the current schema; plain strings are accepted
+    // so a catalog that only sends ids still yields usable effort metadata.
+    const raw = isObject(candidate) ? candidate.reasoningEffort : candidate;
+    if (typeof raw !== "string") continue;
+    const effort = raw.trim();
+    if (!isSafeExecutionProfileText(effort, 80)) continue;
+    if (!CODEX_REASONING_EFFORTS.includes(effort)) continue;
+    if (efforts.includes(effort)) continue;
+    efforts.push(effort);
+  }
+  return efforts;
+}
+
 function executionProfileForRequest(
   request: CanonicalEvent,
   fallbackModel: string,
@@ -3849,7 +4052,7 @@ function executionProfileForRequest(
   const model = typeof raw.model === "string" ? raw.model.trim() : "";
   validateCodexModel(model);
   const reasoningEffort = typeof raw.reasoning_effort === "string" ? raw.reasoning_effort.trim() : undefined;
-  if (reasoningEffort !== undefined && !new Set(["low", "medium", "high", "xhigh", "max", "ultra"]).has(reasoningEffort)) {
+  if (reasoningEffort !== undefined && !CODEX_REASONING_EFFORTS.includes(reasoningEffort)) {
     throw new Error("Codex Agent request contains an unsupported reasoning effort");
   }
   return {

@@ -1,4 +1,9 @@
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260922-1";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
+import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
+import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
+import { ExampleCollaborationApi } from "./example-api.js";
+import { mountOnboarding } from "./onboarding.js?v=20260927-1";
+import { projectInvitationShareText } from "./invitation-share.js?v=20260928-1";
 import {
   canAppend,
   canRetryFailedAgentRequest,
@@ -6,6 +11,7 @@ import {
   createIdempotencyKey,
   createSelectionGuard,
   emptyProjectState,
+  eventBubbleRole,
   eventContent,
   eventLabel,
   failedRequestFor,
@@ -28,16 +34,17 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20260925-2";
+} from "./domain.js?v=20260925-1";
 import { SessionSync } from "./realtime.js";
 import { mountCodeSync } from "./code-sync-view.js?v=20260924-1";
 import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-2";
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260925-1";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20260927-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
+  CODEX_HARNESS,
   codexExecutionProfile,
   DSH_HARNESS,
   DSH_INSTALL_COMMAND,
@@ -51,9 +58,15 @@ import {
   resolveCodexRuntime,
   resolveDshRuntime,
   withoutDshPairingHash,
-} from "./dsh.js?v=20260922-1";
+} from "./dsh.js?v=20260925-3";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
-import { captureTimelineScroll, settleTimelineScroll } from "./timeline-scroll.js?v=20260917-1";
+import { calendarDayKey, formatFullTimestamp, formatTimelineDay } from "./timeline-dates.js?v=20260927-1";
+import {
+  captureTimelineScroll,
+  isTimelineAtBottom,
+  scrollTimelineToBottom,
+  settleTimelineScroll,
+} from "./timeline-scroll.js?v=20260925-1";
 import {
   INITIAL_CONNECTION_NOTICE_STATE,
   advanceConnectionNotice,
@@ -75,6 +88,7 @@ import {
   SHARED_LANGUAGE_STORAGE_KEY,
   DEFAULT_SETTINGS,
   effectiveContextBudget,
+  effectiveMotion,
   normalizeCodexProfile,
   normalizeSettings,
   projectAgentHarness,
@@ -85,12 +99,13 @@ import {
   withProjectCodexProfile,
   withProjectDshProfile,
   withProjectEnabledHarnesses,
-} from "./settings.js?v=20260922-1";
+} from "./settings.js?v=20260925-4";
 
 const query = new URLSearchParams(location.search);
 const configuredApiUrl = query.get("api") ?? "";
-const mockEnabled = query.get("mock") === "1";
-const api = mockEnabled
+const exampleMode = document.documentElement.dataset.example === "true";
+const mockEnabled = exampleMode || query.get("mock") === "1";
+const api = exampleMode ? new ExampleCollaborationApi(window.__examplePresentation?.locale) : mockEnabled
   ? new MockCollaborationApi()
   : new HttpCollaborationApi({ baseUrl: configuredApiUrl });
 const sync = new SessionSync(api);
@@ -126,6 +141,8 @@ const state = {
 };
 
 let createdInvitationSecret = "";
+let createdInvitationShareText = "";
+let createdInvitationDetails = null;
 let newDeviceAccessToken = "";
 let authenticationGeneration = 0;
 let workspaceLoadGeneration = 0;
@@ -174,6 +191,7 @@ const sessionView = element("session-view");
 const emptyState = element("empty-state");
 const timeline = element("event-timeline");
 const timelineRegion = element("timeline-region");
+const timelineBottomButton = element("timeline-bottom-button");
 const timelineEmpty = element("timeline-empty");
 const messageInput = element("message-input");
 const sendChatButton = element("send-chat-button");
@@ -219,6 +237,16 @@ const invitationList = element("invitation-list");
 const deviceCredentialDialog = element("device-credential-dialog");
 const settingsDialog = element("settings-dialog");
 const settingsForm = element("settings-form");
+settingsDialog.querySelector(".settings-navigation").addEventListener("click", (event) => {
+  const link = event.target.closest("a[href^='#']");
+  if (!link) return;
+  const target = settingsDialog.querySelector(link.getAttribute("href"));
+  if (!target) return;
+  event.preventDefault();
+  if (!target.hasAttribute("tabindex")) target.setAttribute("tabindex", "-1");
+  target.scrollIntoView({ block: "start", behavior: "instant" });
+  target.focus({ preventScroll: true });
+});
 const agentModelSelect = element("agent-model-select");
 const agentEffortSelect = element("agent-effort-select");
 const agentHarnessSelect = element("agent-harness-select");
@@ -246,6 +274,25 @@ const codeSyncUi = mountCodeSync({
 const codeStorageSettings = mountCodeStorageSettings({
   document, api, localizer, getUserId: () => state.currentUser?.id ?? null,
 });
+const onboarding = mountOnboarding({
+  document,
+  getContext: () => ({
+    userId: state.currentUser?.id, deviceId: state.currentUser?.device_id,
+    origin: location.origin, locale: document.documentElement.lang,
+    project: state.project, session: state.session,
+    writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+  }),
+  openSettings: openSettingsDialog,
+  prepareScenario: exampleMode ? prepareExampleScenario : undefined,
+});
+for (const button of document.querySelectorAll("[data-onboarding-topic]")) {
+  button.addEventListener("click", () => {
+    const topic = button.dataset.onboardingTopic;
+    cancelSettingsDialog();
+    // close() dispatches its focus-restoration event asynchronously.
+    requestAnimationFrame(() => onboarding.start(topic));
+  });
+}
 const historySummaryUi = mountHistorySummaries({
   document, api, localizer, renderMarkdown,
   getContext: () => ({
@@ -257,9 +304,47 @@ const historySummaryUi = mountHistorySummaries({
     executionProfile: historySummaryExecutionProfile(),
     instructions: state.settings.historySummaries.instructions,
   }),
-  onChange: () => renderTimeline(),
+  onChange: (options) => renderTimeline(options),
 });
+function prepareExampleScenario(item) {
+  if (!exampleMode || !state.project || !state.session) return;
+  if (item.view?.startsWith("code-")) {
+    const repository = api.codeRepositories.get(state.project.id)?.repository;
+    if (repository && repository.enabled !== (item.view !== "code-enable")) {
+      repository.enabled = item.view !== "code-enable";
+      if (element("project-code-dialog").open) void codeSyncUi.refresh();
+    }
+  }
+  const selection = element("history-summary-select-button");
+  const selecting = item.view === "summary-selection";
+  if ((selection.getAttribute("aria-pressed") === "true") !== selecting) {
+    if (selecting) historySummaryUi.selectSources();
+    else { historySummaryUi.reset(); renderTimeline(); }
+  }
+  const role = item.id === "leave" ? "participant" : "owner";
+  if (state.project.role !== role || state.session.mode !== (item.view === "snapshot" ? "solo" : "multi")) {
+    state.project.role = role;
+    api.projects.find((project) => project.id === state.project.id).role = role;
+    state.session.mode = item.view === "snapshot" ? "solo" : "multi";
+    state.session.ownerUserId = item.view === "snapshot" ? "user-maya" : state.currentUser.id;
+    state.session.members.find((member) => member.userId === state.currentUser.id).role = role;
+    state.projectMembers.find((member) => member.userId === state.currentUser.id).role = role;
+    renderProjectSelect(); renderSessionHeader(); renderComposerPermissions(); renderSessionDeliveryControls(); renderMembers();
+  }
+}
 let connectCodexReturnFocus = null;
+let pendingHistoryTarget = null;
+const messageActions = mountMessageActions({ document, api, localizer, announce, selectSession,
+  getContext: () => ({ projectId: state.project?.id, sessionId: state.session?.id,
+    userId: state.currentUser?.id, members: state.session?.members ?? [],
+    writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed }),
+  revealEvent: (id, sequence) => {
+    pendingHistoryTarget = { id, sequence, sessionId: state.session?.id };
+    const progress = state.sync.events.find((event) => event.id === id && event.type === "agent_progress");
+    if (progress?.replyTo) expandedWorklogs.add(progress.replyTo);
+    historySummaryUi.revealOriginal(id); renderTimeline();
+  },
+});
 let connectDshReturnFocus = null;
 let renameSessionReturnFocus = null;
 let renameProjectReturnFocus = null;
@@ -334,6 +419,7 @@ sync.subscribe((snapshot) => {
   renderTimeline({ followNewEvents: snapshot.events.length > previousCount });
   renderComposerPermissions();
   renderSessionDeliveryControls();
+  renderMembers();
   if (connectionTransition.notify) notifyConnectionLost();
   if (snapshot.phase === "live" && snapshot.events.length > previousCount && previousCount > 0) {
     const latest = snapshot.events.at(-1);
@@ -686,11 +772,12 @@ createInvitationForm.addEventListener("submit", async (event) => {
     });
     if (!isCurrent()) return;
     createdInvitationSecret = result.inviteToken;
-    element("created-invite-secret").textContent = createdInvitationSecret;
+    createdInvitationDetails = result.invitation;
+    updateCreatedInvitationShareText();
     element("created-invitation").hidden = false;
     state.invitations = [result.invitation, ...state.invitations.filter((item) => item.id !== result.invitation.id)];
     renderInvitations();
-    announce("Invitation created. Copy the secret now.");
+    announce("Invitation created. Copy the invitation now.");
   } catch (error) {
     if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to create an invitation.";
@@ -703,14 +790,21 @@ createInvitationForm.addEventListener("submit", async (event) => {
 element("refresh-invitations-button").addEventListener("click", () => loadInvitations());
 element("copy-invite-secret-button").addEventListener("click", async () => {
   const status = element("copy-invite-status");
-  if (!createdInvitationSecret) return;
+  if (!createdInvitationSecret || !createdInvitationShareText) return;
   try {
     if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
-    await navigator.clipboard.writeText(createdInvitationSecret);
+    await navigator.clipboard.writeText(createdInvitationShareText);
     status.textContent = "Copied to clipboard.";
-    announce("Invitation secret copied.");
+    announce("Invitation information copied.");
   } catch {
-    status.textContent = "Clipboard access is unavailable. Select and copy the secret manually.";
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(element("created-invite-secret"));
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    status.textContent = "Clipboard access is unavailable. Copy the selected invitation manually.";
   }
 });
 
@@ -775,6 +869,7 @@ async function openMemberRemovalDialog(userId, username, isSelf) {
   element("confirm-leave-project-button").textContent = localizer.t(isSelf ? "Leave project" : "Remove member");
   element("leave-project-error").textContent = "";
   element("leave-project-branch-choice").hidden = true;
+  element("leave-project-branch-resolution").disabled = true;
   element("confirm-leave-project-button").disabled = true;
   leaveProjectDialog.showModal();
   try {
@@ -783,6 +878,8 @@ async function openMemberRemovalDialog(userId, username, isSelf) {
     const branch = status.branches.find((item) => item.user_id === userId) ?? null;
     pendingMemberRemoval.branch = branch;
     const choice = element("leave-project-branch-resolution");
+    choice.required = Boolean(branch);
+    choice.disabled = !branch;
     choice.replaceChildren();
     element("leave-project-branch-choice").hidden = !branch;
     if (branch) {
@@ -831,14 +928,15 @@ leaveProjectForm.addEventListener("submit", async (event) => {
     if (state.project?.id !== projectId) return;
     leaveProjectDialog.close();
     if (!isSelf) {
+      const sessionId = state.session?.id;
       const [members, sessions, sessionMembers] = await Promise.all([
         api.listProjectMembers(projectId), api.listProjectSessions(projectId),
-        state.session ? api.listMembers(state.session.id) : Promise.resolve([]),
+        sessionId ? api.listMembers(sessionId) : Promise.resolve([]),
       ]);
       if (state.project?.id !== projectId) return;
       state.projectMembers = members;
       state.sessions = sessions;
-      if (state.session) state.session = { ...state.session, members: sessionMembers };
+      if (state.session && state.session.id === sessionId) state.session = { ...state.session, members: sessionMembers };
       renderMembers();
       renderSessionList();
       announce(localizer.t("Member removed. Their local Git was not changed."));
@@ -1162,6 +1260,7 @@ element("retry-sync-button").addEventListener("click", () => sync.retry());
 toggleSessionRailButton.addEventListener("click", toggleSessionRail);
 toggleMemberPanelButton.addEventListener("click", toggleMemberPanel);
 sessionContextDetails.addEventListener("toggle", updateSessionContextDisclosure);
+bindSessionContextPanel(document);
 const handleWorkspaceBreakpointChange = () => {
   memberPanel.classList.remove("member-panel-open");
   updateSidebarControls();
@@ -1218,10 +1317,13 @@ function updateSessionContextDisclosure() {
   summary.setAttribute("aria-expanded", String(expanded));
   summary.setAttribute("aria-label", label);
   summary.title = label;
+  positionSessionContextPanel(document);
 }
+window.addEventListener("resize", () => positionSessionContextPanel(document));
+document.addEventListener("scroll", () => { if (sessionContextDetails.open) positionSessionContextPanel(document); }, true);
 
 async function restoreBrowserSession() {
-  if (mockEnabled) return;
+  if (mockEnabled && !exampleMode) return;
   const generation = ++authenticationGeneration;
   try {
     const actor = await api.restoreSession();
@@ -1241,6 +1343,10 @@ async function restoreBrowserSession() {
 }
 
 function resetWorkspaceToAuth() {
+  onboarding.cancel();
+  sessionContextDetails.open = false;
+  updateSessionContextDisclosure();
+  messageActions.reset();
   authenticationGeneration += 1;
   workspaceLoadGeneration += 1;
   pendingMessageSend?.restore?.();
@@ -1309,6 +1415,7 @@ function captureWorkspaceScope() {
 }
 
 async function enterWorkspace(preferredProjectId) {
+  onboarding.cancel();
   const authentication = authenticationGeneration;
   const load = ++workspaceLoadGeneration;
   const selection = selectedSessionGeneration;
@@ -1318,7 +1425,7 @@ async function enterWorkspace(preferredProjectId) {
   authView.hidden = true;
   workspace.hidden = false;
   const noticeDeviceId = state.currentUser.device_id;
-  if (deviceCredentialDialog.open) {
+  if (exampleMode) { /* The isolated example has no real cloud upload notice. */ } else if (deviceCredentialDialog.open) {
     deviceCredentialDialog.addEventListener("close", () => {
       if (authentication === authenticationGeneration && state.currentUser?.device_id === noticeDeviceId && !workspace.hidden) {
         codeSyncUi.showFirstLoginNotice(noticeDeviceId);
@@ -1359,10 +1466,14 @@ async function enterWorkspace(preferredProjectId) {
   }
   if (!isCurrent()) return;
   maybeOpenPendingDshPairing();
+  onboarding.offer();
 }
 
 async function selectProject(projectId) {
   if (!state.currentUser) return;
+  onboarding.cancel();
+  sessionContextDetails.open = false;
+  updateSessionContextDisclosure();
   selectionRetry = null;
   codeSyncUi.close();
   historySummaryUi.reset();
@@ -1434,9 +1545,12 @@ async function selectProject(projectId) {
 
 async function selectSession(sessionId) {
   if (!state.currentUser || !state.project) return;
+  onboarding.cancel();
   selectionRetry = null;
   codeSyncUi.close();
   historySummaryUi.reset();
+  messageActions.reset();
+  pendingHistoryTarget = null;
   if (state.session?.id !== sessionId) expandedWorklogs.clear();
   const generation = ++selectedSessionGeneration;
   const projectId = state.project.id;
@@ -1477,6 +1591,7 @@ async function selectSession(sessionId) {
     renderMembers();
     renderComposerPermissions();
     renderSessionDeliveryControls();
+    void messageActions.refresh();
     await refreshDshRuntimes({ sessionId, generation });
     if (generation !== selectedSessionGeneration) return;
     startDshRuntimePolling();
@@ -1657,6 +1772,7 @@ async function refreshMembers(sessionId) {
     renderTimeline();
     renderComposerPermissions();
     renderSessionDeliveryControls();
+    void messageActions.refresh();
   } catch (error) {
     if (!isCurrent() || state.session?.id !== sessionId) return;
     if (error?.status === 403 || error?.status === 404) {
@@ -1820,7 +1936,7 @@ function renderMembers() {
     if (member.runtime?.purpose === "snapshot_connector") {
       presence.textContent = member.runtime.status === "online" ? "Snapshot connector" : "Connector offline";
     } else {
-      presence.textContent = isExecutionRuntime(member.runtime) ? "Agent online" : member.runtime ? "Offline" : "No runtime";
+      presence.textContent = isExecutionRuntime(member.runtime) ? agentWorkStatus(state.sync.events, member.runtime?.id) ?? "Agent online" : member.runtime ? "Offline" : "No runtime";
     }
     item.append(avatar, details, presence);
 
@@ -1968,9 +2084,17 @@ async function revokeInvitation(invitation, button) {
 
 function clearCreatedInvitationSecret() {
   createdInvitationSecret = "";
+  createdInvitationShareText = "";
+  createdInvitationDetails = null;
   element("created-invite-secret").textContent = "";
   element("copy-invite-status").textContent = "";
   element("created-invitation").hidden = true;
+}
+
+function updateCreatedInvitationShareText(locale = state.settings.general.locale) {
+  if (!createdInvitationSecret) return;
+  createdInvitationShareText = projectInvitationShareText(createdInvitationSecret, createdInvitationDetails, locale);
+  element("created-invite-secret").textContent = createdInvitationShareText;
 }
 
 function showNewDeviceAccessToken(token) {
@@ -2012,14 +2136,9 @@ function renderSyncState() {
     blocked: "History incomplete",
   }[phase];
   banner.dataset.state = phase;
-  const membership = state.session?.members.find((member) => member.userId === state.currentUser?.id);
-  const isLive = sessionDeliveryMode({
-    role: membership?.role ?? state.session?.role,
-    mode: state.session?.mode,
-    ownerUserId: state.session?.ownerUserId,
-    currentUserId: state.currentUser?.id,
-  }) === "live";
-  element("sync-title").textContent = isLive ? title : phase === "live" ? "Read-only history" : title;
+  // Delivery freshness is independent of write permission. Access is shown
+  // in session status details, never as a substitute for connection state.
+  element("sync-title").textContent = title;
   element("sync-detail").textContent = bufferedCount
     ? `${detail} ${bufferedCount} later event${bufferedCount === 1 ? " is" : "s are"} buffered.`
     : detail;
@@ -2029,14 +2148,15 @@ function renderSyncState() {
   element("sequence-label").textContent = `Contiguous through sequence #${cursor}`;
   element("global-connection").dataset.state = phase;
   element("global-connection-label").textContent = phase === "live"
-    ? isLive ? `Live · #${cursor}` : `Read only · #${cursor}`
+    ? `Live · #${cursor}`
     : title;
 }
 
-function renderTimeline({ followNewEvents = false } = {}) {
+function renderTimeline({ followNewEvents = false, preserveAnchor = false, focusSummaryId = null } = {}) {
   const scrollSnapshot = captureTimelineScroll(timelineRegion, {
     automatic: state.settings.composer.autoScroll,
     followNewEvents,
+    preserveAnchor,
   });
   timeline.replaceChildren();
   historySummaryUi.updateContext();
@@ -2051,15 +2171,39 @@ function renderTimeline({ followNewEvents = false } = {}) {
   }
   const pendingRequestIds = new Set(pendingAgentRequests(state.sync.events).map((event) => event.id));
   timelineEmpty.hidden = events.length > 0;
+  const locale = state.settings.general.locale;
+  const today = new Date();
+  let currentDay = null;
+
+  function appendDayDivider(createdAt) {
+    const day = calendarDayKey(createdAt);
+    if (!day || day === currentDay) return;
+    currentDay = day;
+    const item = document.createElement("li");
+    const time = document.createElement("time");
+    item.className = "timeline-date-divider";
+    time.dateTime = day;
+    time.textContent = formatTimelineDay(createdAt, locale, today);
+    time.title = new Intl.DateTimeFormat(locale === "zh-CN" ? "zh-CN" : "en", { dateStyle: "full" }).format(new Date(createdAt));
+    item.append(time);
+    timeline.append(item);
+  }
 
   for (const event of events) {
     for (const version of summaryView.before.get(event.id) ?? []) {
+      appendDayDivider(event.createdAt);
       const summaryItem = document.createElement("li");
-      summaryItem.append(historySummaryUi.card(version));
+      const card = historySummaryUi.card(version);
+      if (version.response && version.status === "completed") {
+        card.id = `message-${version.response.id}`; card.tabIndex = -1;
+        card.append(messageActions.actions(version.response));
+      }
+      summaryItem.append(card);
       timeline.append(summaryItem);
     }
     if (summaryView.hidden.has(event.id)) continue;
     if (event.type === "agent_progress") continue;
+    appendDayDivider(event.createdAt);
     const item = document.createElement("li");
     const article = document.createElement("article");
     const header = document.createElement("header");
@@ -2069,9 +2213,20 @@ function renderTimeline({ followNewEvents = false } = {}) {
     const actor = document.createElement("strong");
     const type = document.createElement("span");
     const sequence = document.createElement("span");
+    const timeButton = document.createElement("button");
     const time = document.createElement("time");
 
     article.className = `event-card event-${event.type}`;
+    article.id = `message-${event.id}`;
+    article.dataset.historyAnchor = event.id;
+    article.tabIndex = -1;
+    if (Array.isArray(event.payload?.mentions) && event.payload.mentions.some((mention) => mention?.user_id === state.currentUser?.id)) article.classList.add("message-mentions-me");
+    // Bubble tint is presentation only: self-authored messages get the green
+    // bubble, agent-produced events get the yellow one, and everyone else
+    // keeps the theme's default card.
+    const bubbleRole = eventBubbleRole(event, state.currentUser?.id ?? null);
+    if (bubbleRole === "self") article.classList.add("event-bubble-self");
+    if (bubbleRole === "agent") article.classList.add("event-bubble-agent");
     const failedResponse = isFailedAgentResponse(event);
     if (failedResponse) article.classList.add("event-agent_response-failed");
     article.setAttribute("aria-labelledby", `event-${event.id}-actor`);
@@ -2086,23 +2241,33 @@ function renderTimeline({ followNewEvents = false } = {}) {
     sequence.textContent = `#${event.sequence}`;
     time.dateTime = event.createdAt;
     time.textContent = formatTimestamp(event.createdAt);
+    timeButton.className = "event-time-button";
+    timeButton.type = "button";
+    timeButton.dataset.fullTime = formatFullTimestamp(event.createdAt, locale) ?? time.textContent;
+    timeButton.setAttribute("aria-label", timeButton.dataset.fullTime);
+    timeButton.append(time);
     meta.append(actor, type);
     identity.className = "event-identity";
     identity.append(avatar, meta);
-    header.append(identity, sequence, time);
+    header.append(identity, sequence, timeButton);
     const sourceControl = historySummaryUi.sourceControl(event);
     if (sourceControl) identity.prepend(sourceControl);
     const content = eventContent(event);
+    const quoted = messageActions.quoted(event, events);
     article.append(header);
+    if (quoted) article.append(quoted);
     if (content) {
+      let body;
       if (event.type === "agent_response") {
-        article.append(renderMarkdown(content));
+        body = renderMarkdown(content);
       } else {
-        const body = document.createElement("p");
+        body = document.createElement("p");
         body.textContent = content;
-        article.append(body);
       }
+      body.classList.add("event-content");
+      article.append(body);
     }
+    article.append(messageActions.actions(event));
 
     if (failedResponse) {
       // A failure that no runtime finished has to look like one, and it has to
@@ -2160,7 +2325,45 @@ function renderTimeline({ followNewEvents = false } = {}) {
     ...scrollSnapshot,
     follow: scrollSnapshot.follow && events.length > 0,
   });
+  renderTimelineBottomControl();
+  if (focusSummaryId) element(`message-${focusSummaryId}`)?.querySelector("[data-summary-view-toggle]")?.focus({ preventScroll: true });
+  if (pendingHistoryTarget && state.session && pendingHistoryTarget.sessionId === state.session.id) {
+    const target = element(`message-${pendingHistoryTarget.id}`);
+    if (target) {
+      timelineRegion.scrollTop += target.getBoundingClientRect().top - timelineRegion.getBoundingClientRect().top - 16;
+      target.focus({ preventScroll: true }); target.classList.add("message-located");
+      pendingHistoryTarget = null;
+    }
+  }
 }
+
+/**
+ * Offer the jump back to the newest event exactly when the reader is not at it.
+ * The rule is the same one auto-follow uses, so the control never offers to
+ * scroll somewhere the reader already is.
+ */
+function renderTimelineBottomControl() {
+  timelineBottomButton.hidden = isTimelineAtBottom(timelineRegion);
+}
+
+/**
+ * The scroll this reader actually wants. `appearance.motion` defaults to
+ * `system`, so comparing it to the literal `reduce` would hand a long animated
+ * jump to every reader whose device asks for reduced motion and who never opened
+ * the setting.
+ */
+function timelineScrollBehavior() {
+  const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  return effectiveMotion(state.settings.appearance.motion, reducedMotion) === "reduce" ? "auto" : "smooth";
+}
+
+function returnToNewestEvent() {
+  scrollTimelineToBottom(timelineRegion, timelineScrollBehavior());
+  renderTimelineBottomControl();
+}
+
+timelineRegion.addEventListener("scroll", renderTimelineBottomControl, { passive: true });
+timelineBottomButton.addEventListener("click", returnToNewestEvent);
 
 function renderProgressDisclosure(progressEvents, live) {
   const details = document.createElement("details");
@@ -2179,10 +2382,13 @@ function renderProgressDisclosure(progressEvents, live) {
   list.className = "agent-worklog-list";
   for (const progress of progressEvents) {
     const item = document.createElement("li");
+    item.id = `message-${progress.id}`; item.tabIndex = -1;
     const timestamp = document.createElement("time");
     timestamp.dateTime = progress.createdAt;
     timestamp.textContent = formatTimestamp(progress.createdAt);
-    item.append(timestamp, renderMarkdown(localizer.t(eventContent(progress))));
+    const body = renderMarkdown(localizer.t(eventContent(progress)));
+    body.classList.add("event-content");
+    item.append(timestamp, body, messageActions.actions(progress));
     list.append(item);
   }
   details.append(summary, list);
@@ -2645,13 +2851,17 @@ async function sendMessage(kind) {
   const isCurrent = captureWorkspaceScope();
   const sessionId = state.session.id;
   const draft = messageInput.value;
+  const metadata = messageActions.metadata();
+  const metadataFingerprint = JSON.stringify(metadata);
   const original = [...button.childNodes];
   isCurrent.restore = () => button.replaceChildren(...original);
   pendingMessageSend = isCurrent;
   renderComposerPermissions();
   button.textContent = "Sending…";
   try {
-    const input = { content, idempotencyKey: createIdempotencyKey(kind) };
+    const leading = messageInput.value.length - messageInput.value.trimStart().length;
+    const input = { content, idempotencyKey: createIdempotencyKey(kind), replyTo: metadata.replyTo,
+      mentions: metadata.mentions.map((mention) => ({ ...mention, start: mention.start - leading, end: mention.end - leading })) };
     if (kind === "human_chat") await api.appendHumanChat(sessionId, input);
     else {
       const harness = currentProjectHarness();
@@ -2669,8 +2879,9 @@ async function sendMessage(kind) {
         });
       await api.appendAgentRequest(sessionId, { ...input, executionProfile });
     }
-    if (isCurrent() && messageInput.value === draft) {
+    if (isCurrent() && messageInput.value === draft && JSON.stringify(messageActions.metadata()) === metadataFingerprint) {
       messageInput.value = "";
+      messageActions.sent();
       messageInput.focus();
     }
   } catch (error) {
@@ -3055,8 +3266,21 @@ function applyVisualSettings(settings) {
   root.style.setProperty("--right-panel-width", `${normalized.layout.rightPanelPixels}px`);
   root.style.setProperty("--composer-height", `min(${normalized.layout.composerPixels}px, 44vh)`);
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
+  if (exampleMode && localeChanged) {
+    api.setLocale(normalized.general.locale, { ...state, events: sync.events });
+    window.__examplePresentation.locale = normalized.general.locale;
+    if (state.currentUser) {
+      element("current-username").textContent = state.currentUser.username;
+      element("current-user-avatar").textContent = initials(state.currentUser.username);
+    }
+    renderProjectSelect();
+    renderSessionList();
+    if (state.session) renderSessionHeader();
+  }
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  onboarding.refreshLanguage();
+  if (localeChanged) updateCreatedInvitationShareText(normalized.general.locale);
   element("auth-language-button").textContent = normalized.general.locale === "zh-CN" ? "EN" : "中";
   if (localeChanged && state.session) renderTimeline();
   if (localeChanged && state.project) renderMembers();
@@ -3074,11 +3298,39 @@ function setAutomaticClaimDeviceName({ force = false } = {}) {
   input.dataset.automatic = "true";
 }
 
-function renderModelOptions(select, selectedModel, settings = settingsPreview) {
-  const models = [
-    ...CODEX_MODELS.map((entry) => entry.id),
-    ...settings.agents.customCodexModels.filter((model) => !CODEX_MODELS.some((entry) => entry.id === model)),
-  ];
+/**
+ * Codex models the connected runtimes advertise.
+ *
+ * A Codex installation publishes its own catalog, so this is the authoritative
+ * source for the model picker; the built-in list in settings.js stays only as a
+ * fallback for a workspace whose connector has not reported a catalog (an older
+ * Codex, or no connection yet). Offline runtimes are ignored because their models
+ * cannot run in this session.
+ */
+function advertisedCodexModels() {
+  const entries = [];
+  for (const runtime of state.executionRuntimes) {
+    if (runtime.harness !== CODEX_HARNESS || runtime.status !== "online") continue;
+    for (const profile of runtime.executionProfiles ?? []) {
+      entries.push({
+        id: profile.model,
+        efforts: profile.reasoningEfforts,
+        defaultEffort: profile.defaultReasoningEffort,
+      });
+    }
+  }
+  return entries;
+}
+
+function renderModelOptions(select, selectedModel, settings = settingsPreview, advertised = advertisedCodexModels()) {
+  const advertisedIds = uniqueModelIds(advertised.map((entry) => entry.id));
+  // An advertised catalog is the authority on what this connection can run, so
+  // nothing else is offered while one exists. The stored selection stays listed
+  // even then: repointing a project at a different model silently would be worse
+  // than showing it, and submission still fails closed for an unadvertised model.
+  const models = uniqueModelIds(advertisedIds.length > 0
+    ? [...advertisedIds, selectedModel]
+    : [...CODEX_MODELS.map((entry) => entry.id), ...settings.agents.customCodexModels, selectedModel]);
   select.replaceChildren();
   for (const model of models) {
     const option = document.createElement("option");
@@ -3089,25 +3341,43 @@ function renderModelOptions(select, selectedModel, settings = settingsPreview) {
   }
 }
 
-function effortOptionsForModel(model, settings = state.settings) {
+function effortOptionsForModel(model, settings = state.settings, advertised = advertisedCodexModels()) {
+  const runtimeAdvertised = advertised.find((entry) => entry.id === model);
+  // A connected runtime is the authority for a model it declares — including a model
+  // whose effort metadata is absent, which advertises no effort selection rather
+  // than the built-in fallback set.
+  if (runtimeAdvertised) return runtimeAdvertised.efforts ?? [];
   const known = CODEX_MODELS.find((entry) => entry.id === model);
   return known?.efforts ?? CODEX_REASONING_EFFORTS;
 }
 
-function updateEffortControl(modelSelect, effortSelect, requestedEffort, settings = state.settings) {
-  const profile = normalizeCodexProfile({ model: modelSelect.value, effort: requestedEffort }, settings.agents.customCodexModels);
+function updateEffortControl(modelSelect, effortSelect, requestedEffort, settings = state.settings, advertised = advertisedCodexModels()) {
+  const profile = normalizeCodexProfile(
+    { model: modelSelect.value, effort: requestedEffort },
+    settings.agents.customCodexModels,
+    advertised,
+  );
+  const options = effortOptionsForModel(profile.model, settings, advertised);
   effortSelect.replaceChildren();
-  for (const effort of effortOptionsForModel(profile.model, settings)) {
+  for (const effort of options) {
     const option = document.createElement("option");
     option.value = effort;
     option.textContent = effort;
     option.selected = effort === profile.effort;
     effortSelect.append(option);
   }
+  // No declared effort means no selection is offered, so the request omits it
+  // instead of sending a value the harness never advertised.
+  return options.length > 0;
+}
+
+function uniqueModelIds(models) {
+  return [...new Set(models.filter((model) => typeof model === "string" && model))];
 }
 
 function currentProjectProfile(settings = state.settings) {
-  return state.project ? projectCodexProfile(settings, state.project.id) : normalizeCodexProfile(undefined);
+  if (!state.project) return normalizeCodexProfile(undefined);
+  return projectCodexProfile(settings, state.project.id, advertisedCodexModels());
 }
 
 function currentProjectHarness(settings = state.settings) {
@@ -3215,7 +3485,7 @@ function renderAgentProfileControls() {
   }
   agentHarnessSelect.value = harness;
   renderModelOptions(agentModelSelect, profile.model, state.settings);
-  updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
+  const hasEffortChoice = updateEffortControl(agentModelSelect, agentEffortSelect, profile.effort, state.settings);
   renderDshRuntimeOptions(agentDshRuntimeSelect, state.settings);
   const dshResolution = currentDshResolution();
   renderDshExecutionControls(
@@ -3225,7 +3495,11 @@ function renderAgentProfileControls() {
   const disabled = !state.project;
   agentHarnessSelect.disabled = disabled;
   agentModelSelect.disabled = disabled;
-  agentEffortSelect.disabled = disabled;
+  // The runtime advertised no reasoning effort for this model, so the control is
+  // hidden rather than offering values the harness never declared.
+  element("agent-effort-label").hidden = !hasEffortChoice;
+  agentEffortSelect.hidden = !hasEffortChoice;
+  agentEffortSelect.disabled = disabled || !hasEffortChoice;
   element("codex-agent-profile-fields").hidden = harness !== "codex";
   element("dsh-agent-profile-fields").hidden = harness !== DSH_HARNESS;
   if (harness !== DSH_HARNESS) element("agent-request-profile").dataset.layout = "codex";
@@ -3238,7 +3512,15 @@ function updateComposerAgentProfile(changed) {
     model: agentModelSelect.value,
     effort: changed === "model" ? previous.effort : agentEffortSelect.value,
   };
-  state.settings = settingsStore.set(withProjectCodexProfile(state.settings, state.project.id, requested));
+  // The connected runtime's declaration validates and stores this choice: the
+  // built-in fallback list does not know an advertised model's effort set, and
+  // normalizing against it would silently reset a supported selection.
+  state.settings = settingsStore.set(withProjectCodexProfile(
+    state.settings,
+    state.project.id,
+    requested,
+    advertisedCodexModels(),
+  ));
   renderAgentProfileControls();
 }
 
@@ -3405,7 +3687,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
     next = withProjectCodexProfile(next, state.project.id, {
       model: element("settings-default-model").value,
       effort: element("settings-default-effort").value,
-    });
+    }, advertisedCodexModels());
     next = withProjectEnabledHarnesses(next, state.project.id, settingsEnabledHarnesses());
     next = withProjectAgentHarness(next, state.project.id, element("settings-agent-harness").value);
     if (element("settings-agent-harness").value === DSH_HARNESS) {

@@ -16,6 +16,7 @@ import {
 import type { EnabledDshHostConfig } from "./config.js";
 import type {
   ConnectorOutboxOperation,
+  ConnectorActiveRequest,
   ConnectorState,
   ConnectorStateStore,
   DshAgentStatus,
@@ -31,6 +32,7 @@ import type {
   DshMappedEvent,
   DshRegisteredRuntime,
   DshRuntimeExecutionProfile,
+  DshRuntimeRegistration,
   DshSessionEventRecord,
 } from "./types.js";
 import type { SessionSummary } from "@gatherthread/bridge";
@@ -38,6 +40,8 @@ import type {
   LocalConversationSyncStatus,
   LocalConversationUploadResult,
 } from "@gatherthread/bridge";
+
+const INTERRUPTED_REQUEST_CONTINUATION = "Continue the interrupted GatherThread request using the DSH Session context already restored by the Host. Return only the public final answer.";
 
 export interface DshHostConnectorOptions {
   config: EnabledDshHostConfig;
@@ -91,6 +95,9 @@ export class DshHostConnector {
   #pollPromise: Promise<DshPollResult> | undefined;
   #localSyncControlPromise: Promise<void> | undefined;
   #heartbeatPromise: Promise<void> | undefined;
+  /** An in-flight execution-profile re-registration owns the runtime declaration. */
+  #publicationPromise: Promise<void> | undefined;
+  #heartbeatOffline = false;
   #liveProgressPromise: Promise<void> = Promise.resolve();
   #lastLiveProgressKey: string | undefined;
   #lastLiveProgressAt = 0;
@@ -129,6 +136,85 @@ export class DshHostConnector {
 
   get stopped(): boolean {
     return this.#stopped;
+  }
+
+  /**
+   * Adopt a refreshed execution-profile catalog on a running connection.
+   *
+   * Discovery reads the live DSH catalog, so a model published after this
+   * connection started has to become selectable without reconnecting. The runtime
+   * is re-registered because the server stores the declaration at registration
+   * time; that registration is idempotent per device, harness, and local session,
+   * so the runtime identity and any in-flight claim survive the refresh.
+   *
+   * Publication is serialized with heartbeat validation. A heartbeat that was
+   * already in flight answers with the declaration the server stored before this
+   * refresh, so committing the new config first would make that answer look like
+   * identity drift and stop the connector; heartbeats that arrive during the
+   * refresh wait for it instead of racing it.
+   *
+   * The catalog is only ever replaced wholesale: a refresh that reports the same
+   * routes does nothing, and a not-yet-started connector refuses the update rather
+   * than recording a declaration it never sent.
+   */
+  async updateExecutionProfiles(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void> {
+    if (!this.#started || this.#stopped) throw new Error("DSH connector is not running");
+    if (this.#publicationPromise !== undefined) {
+      throw new Error("A DSH execution profile publication is already in flight");
+    }
+    const runtime = this.#requireRuntime();
+    if (sameExecutionProfiles(runtime.executionProfiles, profiles)) return;
+    const cloned = cloneExecutionProfiles(profiles);
+    const publication = (async () => {
+      // Let an in-flight heartbeat finish validating against the current
+      // declaration before this refresh replaces it.
+      await this.#heartbeatPromise?.catch(() => undefined);
+      if (this.#stopped) throw new Error("DSH connector is not running");
+      const registration = await this.#api.registerRuntime(this.#runtimeRegistration(cloned));
+      // The declaration only counts once the server confirms it. Committing before
+      // that would let this connector accept requests for models the server has not
+      // recorded for this runtime, so a stale echo fails closed instead.
+      if (registration.executionProfiles === undefined
+        || !sameExecutionProfiles(registration.executionProfiles, cloned)) {
+        throw new Error("GatherThread did not confirm the refreshed DSH execution profiles");
+      }
+      this.#config.executionProfiles = cloned;
+      this.#runtime = registration;
+      this.#assertRuntime(registration);
+    })();
+    this.#publicationPromise = publication;
+    try {
+      await publication;
+    } finally {
+      if (this.#publicationPromise === publication) this.#publicationPromise = undefined;
+    }
+  }
+
+  #runtimeRegistration(
+    executionProfiles: readonly DshRuntimeExecutionProfile[] | undefined = this.#config.executionProfiles,
+  ): DshRuntimeRegistration {
+    return {
+      sessionId: this.#config.sessionId,
+      deviceId: this.#config.deviceId,
+      harness: "deepseek-harness",
+      provider: this.#config.provider,
+      model: this.#config.model,
+      localSessionId: this.#config.dshSessionId,
+      captureFidelity: "harness_transcript",
+      capabilities: [
+        "agent_request",
+        "agent_progress",
+        "durable_session_events",
+        "native_session_resume",
+        "outbox_replay",
+        "canonical_history_projection",
+        "bidirectional_local_turns",
+      ],
+      ...(executionProfiles === undefined ? {} : {
+        executionProfiles: cloneExecutionProfiles(executionProfiles),
+      }),
+      purpose: "execution",
+    };
   }
 
   get executionRuntimeId(): string | undefined {
@@ -232,6 +318,17 @@ export class DshHostConnector {
       if (active === undefined || (active.contextExecution !== undefined && sourceSessionId !== active.contextExecution.sessionId)) return;
       if (this.#activeStatuses.at(-1) !== status) {
         this.#activeStatuses.push(status);
+        if (status === "running") {
+          // Publish this native transition once, independently of the durable
+          // event throttle. A busy label is not periodic proof of progress.
+          this.#queueLiveProgress(`dsh-running-${String(this.#activeStatuses.length)}`, {
+            content: "DeepSeek Harness is processing the active request.",
+            phase: "activity",
+            status: "running",
+            capture_fidelity: "harness_transcript",
+            source_harness: "deepseek-harness",
+          }, false);
+        }
       }
       this.#notifyLifecycle(status);
     }));
@@ -249,28 +346,7 @@ export class DshHostConnector {
       const mode = await this.#host.open();
       this.#state = this.#reconcileState(storedState, mode);
       await this.#stateStore.save(this.#state);
-      this.#runtime = await this.#api.registerRuntime({
-        sessionId: this.#config.sessionId,
-        deviceId: this.#config.deviceId,
-        harness: "deepseek-harness",
-        provider: this.#config.provider,
-        model: this.#config.model,
-        localSessionId: this.#config.dshSessionId,
-        captureFidelity: "harness_transcript",
-        capabilities: [
-          "agent_request",
-          "agent_progress",
-          "durable_session_events",
-          "native_session_resume",
-          "outbox_replay",
-          "canonical_history_projection",
-          "bidirectional_local_turns",
-        ],
-        ...(this.#config.executionProfiles === undefined ? {} : {
-          executionProfiles: cloneExecutionProfiles(this.#config.executionProfiles),
-        }),
-        purpose: "execution",
-      });
+      this.#runtime = await this.#api.registerRuntime(this.#runtimeRegistration());
       this.#assertRuntime(this.#runtime);
       this.#notifyLifecycle("idle");
       if (options.schedule !== false) this.#scheduleHeartbeat();
@@ -305,6 +381,7 @@ export class DshHostConnector {
         return result;
       })
       .catch((error: unknown) => {
+        this.#heartbeatOffline = false;
         if (!this.#stopped) this.#notifyLifecycle("offline");
         throw error;
       })
@@ -367,7 +444,7 @@ export class DshHostConnector {
     const state = this.#requireState();
     if (state.activeRequest !== undefined) {
       await this.#withExecutionPermit(() => this.#recoverActiveRequest());
-      return { scanned: 0, claimed: 0, completed: 1 };
+      return { scanned: 0, claimed: 0, completed: state.activeRequest === undefined ? 1 : 0 };
     }
     await this.#flushOutbox(state.automaticUpload);
     await this.#finalizeDeliveredRequest();
@@ -463,7 +540,9 @@ export class DshHostConnector {
       return { claimed: false, completed: false };
     }
 
-    const prompt = buildDshRequestPrompt(request);
+    const quotedEvent = request.replyTo ? (await this.#readThroughRequest(request.id, request.sequence))
+      .find((event) => event.id === request.replyTo) : undefined;
+    const prompt = buildDshRequestPrompt(request, quotedEvent);
     const context = await this.#contextForRequest(request);
     const prepared = context === undefined ? undefined : await this.#host.prepareContextExecution!({
       requestId: request.id, requestSequence: request.sequence, ...context,
@@ -549,6 +628,50 @@ export class DshHostConnector {
     return false;
   }
 
+  /**
+   * Release everything this connector was holding for a request it may no longer
+   * execute, whether the server fenced it with a terminal conflict or the author
+   * paused it. The outbox entries for that request are dropped because their
+   * writes would be rejected anyway, and the published sequence advances only
+   * when the turn had already settled.
+   */
+  async #retireFencedActiveRequest(state: ConnectorState, active: ConnectorActiveRequest): Promise<void> {
+    state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
+    if (active.contextExecution === undefined) {
+      await this.#host.flush();
+      const nativeEvents = this.#host.snapshotFrom(active.dshFromSequence);
+      // A prompt may have completed before its reply/flush acknowledgement was
+      // lost. Its native user message is NOT a new local turn. Retain the fence
+      // until the first owned turn closes; never skip the entire current head,
+      // which can already contain later, genuine local conversation turns.
+      const endIndex = nativeEvents.findIndex((event) => event.type === "turn/end");
+      const firstTurn = endIndex < 0 ? nativeEvents : nativeEvents.slice(0, endIndex + 1);
+      const userMessages = firstTurn.filter((event) => event.type === "user/message");
+      const owned = userMessages.some((event) => {
+        const text = publicMessageText(event);
+        return digest(text) === active.promptDigest
+          || text === INTERRUPTED_REQUEST_CONTINUATION;
+      });
+      // Preparation can fail before followup() creates any cloud turn. Do not
+      // discard the first genuine local conversation that happens afterward.
+      const unrelatedLocalTurn = userMessages.length > 0 && !owned;
+      const boundary = endIndex < 0 ? undefined : nativeEvents[endIndex]?.seq;
+      if (active.dshToSequence === undefined && !unrelatedLocalTurn
+        && boundary === undefined && nativeEvents.length > 0) {
+        await this.#stateStore.save(state);
+        return;
+      }
+      const through = active.dshToSequence
+        ?? (unrelatedLocalTurn || boundary === undefined ? active.dshFromSequence : boundary + 1);
+      state.publishedDshSequence = Math.max(state.publishedDshSequence, through);
+    }
+    delete state.activeRequest;
+    this.#activeStatuses = [];
+    this.#activeExecutionSelection = undefined;
+    this.#liveEventSequences.clear();
+    await this.#stateStore.save(state);
+  }
+
   async #recoverActiveRequest(): Promise<void> {
     if (this.#stopped) throw new Error("DSH connector stopped before recovering an Agent request");
     const state = this.#requireState();
@@ -563,15 +686,14 @@ export class DshHostConnector {
       );
     } catch (error) {
       if (!isTerminalClaimConflict(error)) throw error;
-      state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, active.requestId));
-      if (active.dshToSequence !== undefined && active.contextExecution === undefined) {
-        state.publishedDshSequence = Math.max(state.publishedDshSequence, active.dshToSequence);
-      }
-      delete state.activeRequest;
-      this.#activeStatuses = [];
-      this.#activeExecutionSelection = undefined;
-      this.#liveEventSequences.clear();
-      await this.#stateStore.save(state);
+      await this.#retireFencedActiveRequest(state, active);
+      return;
+    }
+    if (claim.status === "paused") {
+      // The author stopped this request. That is terminal for it — asking again
+      // is a new request — so the connector releases the local work instead of
+      // re-driving a fenced execution on every poll.
+      await this.#retireFencedActiveRequest(state, active);
       return;
     }
     if (claim.status === "completed" && active.dshToSequence !== undefined) {
@@ -608,7 +730,7 @@ export class DshHostConnector {
     if (request === undefined || request.type !== "agent_request") {
       throw new Error("Active GatherThread request is unavailable during DSH resume");
     }
-    const prompt = buildDshRequestPrompt(request);
+    const prompt = buildDshRequestPrompt(request, history.find((event) => event.id === request.replyTo));
     const profile = requestedDshProfile(request);
     if (profile === undefined) {
       throw new Error("Active GatherThread request lost its DeepSeek Harness execution profile");
@@ -647,7 +769,7 @@ export class DshHostConnector {
     }
 
     const continuation = settlement === "interrupted"
-      ? "Continue the interrupted GatherThread request using the DSH Session context already restored by the Host. Return only the public final answer."
+      ? INTERRUPTED_REQUEST_CONTINUATION
       : prompt;
     const baseline = this.#host.currentSequence(execution?.sessionId);
     state.activeRequest = {
@@ -696,7 +818,7 @@ export class DshHostConnector {
     await this.#finalizeDeliveredRequest();
   }
 
-  #queueLiveProgress(idSuffix: string, payload: Record<string, unknown>): void {
+  #queueLiveProgress(idSuffix: string, payload: Record<string, unknown>, throttle = true): void {
     const active = this.#state?.activeRequest;
     const runtime = this.#runtime;
     if (active === undefined || runtime === undefined) return;
@@ -704,13 +826,15 @@ export class DshHostConnector {
     const claimAttempt = active.claimAttempt ?? 1;
     const progressKey = `${requestId}:${String(claimAttempt)}`;
     const now = Date.now();
-    if (this.#lastLiveProgressKey === progressKey
+    if (throttle && this.#lastLiveProgressKey === progressKey
       && now - this.#lastLiveProgressAt < LIVE_PROGRESS_MIN_INTERVAL_MS) {
       return;
     }
-    this.#lastLiveProgressKey = progressKey;
-    this.#lastLiveProgressAt = now;
-    const idempotencyKey = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${idSuffix}`;
+    if (throttle) {
+      this.#lastLiveProgressKey = progressKey;
+      this.#lastLiveProgressAt = now;
+    }
+    const idempotencyKey = `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${String(claimAttempt)}:${idSuffix}`;
     this.#liveProgressPromise = this.#liveProgressPromise
       .then(async () => {
         const current = this.#state?.activeRequest;
@@ -1189,7 +1313,9 @@ export class DshHostConnector {
     if (this.#stopped) return;
     this.#heartbeatTimer = setInterval(() => {
       void this.#heartbeat().catch((error: unknown) => {
+        if (this.#stopped) return;
         const publicFailure = publicError(error);
+        this.#heartbeatOffline = !(error instanceof RuntimeIdentityError);
         this.#notifyLifecycle(error instanceof RuntimeIdentityError ? "error" : "offline");
         this.#onBackgroundError?.(publicFailure);
         if (error instanceof RuntimeIdentityError) {
@@ -1203,6 +1329,12 @@ export class DshHostConnector {
 
   #heartbeat(): Promise<void> {
     if (this.#stopped) return Promise.reject(new Error("DSH connector is not running"));
+    // A profile refresh is replacing the runtime declaration. A heartbeat started
+    // now would read the declaration the server has not stored yet and be rejected
+    // as identity drift, so wait for the refresh and then validate the new one.
+    if (this.#publicationPromise !== undefined) {
+      return this.#publicationPromise.catch(() => undefined).then(() => this.#heartbeat());
+    }
     if (this.#heartbeatPromise !== undefined) return this.#heartbeatPromise;
     const current = this.#requireRuntime();
     this.#heartbeatPromise = (async () => {
@@ -1214,6 +1346,16 @@ export class DshHostConnector {
         this.#assertRuntime(refreshed);
       } catch {
         throw new RuntimeIdentityError("GatherThread returned incompatible DSH runtime heartbeat data");
+      }
+      // A transient presence failure must recover without waiting for a
+      // potentially minutes-long prompt/poll. Never treat heartbeat as work:
+      // it does not publish progress, advance cursors or renew the claim lease.
+      if (!this.#stopped && this.#heartbeatOffline) {
+        this.#heartbeatOffline = false;
+        if (this.#visibleState === "offline") {
+          this.#notifyLifecycle(this.#state?.activeRequest === undefined
+            ? "idle" : this.#activeStatuses.at(-1) ?? "running");
+        }
       }
     })().finally(() => {
       this.#heartbeatPromise = undefined;
