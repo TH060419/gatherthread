@@ -1,4 +1,5 @@
 const ZH_CN = Object.freeze({
+  "Copy invitation": "复制邀请信息",
   "Select history to summarize": "选择历史生成摘要",
   "Show original messages": "显示原始消息",
   "Show summaries": "显示摘要",
@@ -431,7 +432,10 @@ const ZH_CN = Object.freeze({
   "24 hours": "24 小时",
   "7 days": "7 天",
   "Create invitation": "创建邀请",
-  "Copy this secret now": "立即复制此密钥",
+  "Copy this invitation now": "立即复制邀请信息",
+  "Invitation created. Copy the invitation now.": "邀请已创建，请立即复制邀请信息。",
+  "Invitation information copied.": "邀请信息已复制。",
+  "Clipboard access is unavailable. Copy the selected invitation manually.": "无法访问剪贴板，请手动复制已选中的邀请信息。",
   "It is shown once and cannot be retrieved later.": "它只显示一次，之后无法找回。",
   "Copy": "复制",
   "Project invitations": "项目邀请",

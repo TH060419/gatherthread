@@ -213,7 +213,7 @@ test("an invitation created for a previous selection cannot reveal its secret", 
   await work;
   assert.equal(app.createdInvitationSecret, "");
   assert.equal(app.state.invitations.length, 0);
-  assert.notEqual(app.element("created-invite-secret").textContent, "fixture-old-invitation");
+  assert.notEqual(app.element("created-invite-share-text").textContent, "fixture-old-invitation");
 });
 
 function messageHarness(pending) {

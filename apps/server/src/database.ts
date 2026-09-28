@@ -1032,7 +1032,7 @@ export class CollaborationDatabase {
     return row.can_create_projects === 1;
   }
 
-  issueTestAccess(ttl: InvitationTtl = "7d"): { grant_id: string; access_token: string; expires_at: string } {
+  issueTestAccess(ttl: InvitationTtl = "7d"): { grant_id: string; access_token: string; created_at: string; expires_at: string } {
     const ttlMs = INVITATION_TTL_MS[ttl];
     if (ttlMs === undefined) throw new ApiError(400, "invalid_ttl", "Test access TTL must be 1h, 24h, or 7d");
     const count = this.sqlite.prepare("SELECT count(*) AS count FROM users").get() as unknown as CountRow;
@@ -1045,7 +1045,14 @@ export class CollaborationDatabase {
       INSERT INTO test_access_grants(id, token_digest, created_at, expires_at)
       VALUES (?, ?, ?, ?)
     `).run(grantId, this.tokenDigest(accessToken), createdAt.toISOString(), expiresAt);
-    return { grant_id: grantId, access_token: accessToken, expires_at: expiresAt };
+    return { grant_id: grantId, access_token: accessToken, created_at: createdAt.toISOString(), expires_at: expiresAt };
+  }
+
+  issueTestAccessBatch(ttl: InvitationTtl, count: number): ReturnType<CollaborationDatabase["issueTestAccess"]>[] {
+    if (!Number.isInteger(count) || count < 1 || count > 50) {
+      throw new ApiError(400, "invalid_count", "Test access batch count must be between 1 and 50");
+    }
+    return this.transaction(() => Array.from({ length: count }, () => this.issueTestAccess(ttl)));
   }
 
   revokeTestAccess(grantId: string): void {

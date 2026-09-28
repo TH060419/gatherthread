@@ -567,11 +567,11 @@
               <button class="button button-primary button-wide" type="submit">Create invitation</button>
             </form>
             <div id="created-invitation" class="created-invitation" role="status" aria-live="polite" hidden>
-              <strong>Copy this secret now</strong>
+              <strong>Copy this invitation now</strong>
               <p>It is shown once and cannot be retrieved later.</p>
-              <div class="secret-copy-row">
-                <code id="created-invite-secret"></code>
-                <button id="copy-invite-secret-button" class="button button-secondary" type="button">Copy</button>
+              <div class="secret-copy-row invitation-share-row">
+                <pre id="created-invite-share-text" class="invitation-share-text" data-i18n-skip></pre>
+                <button id="copy-invite-secret-button" class="button button-secondary" type="button">Copy invitation</button>
               </div>
               <p id="copy-invite-status" class="field-help" aria-live="polite"></p>
             </div>

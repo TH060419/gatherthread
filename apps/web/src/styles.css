@@ -2888,6 +2888,20 @@ time,
   flex: none;
 }
 
+.invitation-share-row { flex-direction: column; }
+.invitation-share-row .button { align-self: flex-end; }
+.invitation-share-text {
+  width: 100%;
+  margin: 0;
+  padding: 10px;
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+
 .device-credential-dialog > div {
   display: grid;
   gap: 1rem;
