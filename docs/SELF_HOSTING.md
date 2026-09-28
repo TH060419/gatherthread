@@ -68,13 +68,15 @@ The command prints the first device credential once. Put it in a password manage
 
 ## Issue private test qualification
 
-After bootstrapping the first owner, the host operator can issue one test qualification at a time from the host terminal:
+After bootstrapping the first owner, the host operator can issue one or up to 50 independent test qualifications from a private host terminal:
 
 ```bash
 npm run owner-host:issue-test-access -- --ttl 7d
+# Optional: issue up to 50 codes with one Chinese share block per recipient
+npm run owner-host:issue-test-access -- --ttl 7d --count 5 --format share
 ```
 
-The output contains a `grant_id`, expiry and one-use `gtq_` activation token. Send the token privately to exactly one tester; do not paste it into chat, a URL, shell command argument, issue or repository. On the login page, the tester sets their display and device names above the forms, selects **First-time activation** (中文：**首次使用 · 激活资格**), and enters the code in **Test qualification code** (中文：**测试资格码**). It does not belong in the existing-account device-token field. They receive a distinct `gta_` device token once, use **Existing account** to sign in later, and can create their own projects. A leaked, unclaimed qualification can be revoked by metadata ID without reprinting the secret:
+The default CLI output remains JSON: one object for one code, an array for a batch, each containing `grant_id`, creation/expiry times and a one-use `gtq_` activation token. `--format share` prints one Chinese ready-to-send block per code, separated by blank lines; revocation IDs appear only in terminal diagnostics. Deliver each block privately to exactly one tester, not a whole batch; do not paste codes into any chat, URL, shell command argument, issue or repository, and do not run issuance in an Agent terminal that may retain the transcript. On the login page, the tester sets their display and device names above the forms, selects **First-time activation** (中文：**首次使用 · 激活资格**), and enters the code in **Test qualification code** (中文：**测试资格码**). It does not belong in the existing-account device-token field. They receive a distinct `gta_` device token once, use **Existing account** to sign in later, and can create their own projects. A leaked, unclaimed qualification can be revoked by metadata ID without reprinting the secret:
 
 ```bash
 npm run owner-host:revoke-test-access -- --grant-id GRANT_ID

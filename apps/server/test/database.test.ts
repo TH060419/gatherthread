@@ -742,6 +742,29 @@ test("test qualification creates a full account while project invitations create
   }
 });
 
+test("test qualification batches are bounded and issue distinct digest-only grants", () => {
+  const f = fixture();
+  try {
+    for (const count of [0, 51, 1.5]) {
+      assert.throws(() => f.database.issueTestAccessBatch("7d", count),
+        (error: unknown) => error instanceof ApiError && error.status === 400);
+    }
+    assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM test_access_grants").get() as { count: number }).count, 0);
+    const grants = f.database.issueTestAccessBatch("7d", 3);
+    assert.equal(grants.length, 3);
+    assert.equal(new Set(grants.map((grant) => grant.grant_id)).size, 3);
+    assert.equal(new Set(grants.map((grant) => grant.access_token)).size, 3);
+    assert.equal((f.database.sqlite.prepare("SELECT count(*) AS count FROM test_access_grants").get() as { count: number }).count, 3);
+    const stored = JSON.stringify(f.database.sqlite.prepare("SELECT * FROM test_access_grants").all());
+    for (const grant of grants) {
+      assert.equal(Date.parse(grant.expires_at) - Date.parse(grant.created_at), 604_800_000);
+      assert.equal(stored.includes(grant.access_token), false);
+    }
+  } finally {
+    f.close();
+  }
+});
+
 test("a test qualification claim and revocation cannot both succeed across database connections", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-race-"));
   const databasePath = join(directory, "test.sqlite");

@@ -1,5 +1,6 @@
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
+import { projectInvitationShareText } from "./invitation-share.js?v=20260928-1";
 import {
   canAppend,
   canRetryFailedAgentRequest,
@@ -134,6 +135,8 @@ const state = {
 };
 
 let createdInvitationSecret = "";
+let createdInvitationShareText = "";
+let createdInvitationDetails = null;
 let newDeviceAccessToken = "";
 let authenticationGeneration = 0;
 let workspaceLoadGeneration = 0;
@@ -708,11 +711,12 @@ createInvitationForm.addEventListener("submit", async (event) => {
     });
     if (!isCurrent()) return;
     createdInvitationSecret = result.inviteToken;
-    element("created-invite-secret").textContent = createdInvitationSecret;
+    createdInvitationDetails = result.invitation;
+    updateCreatedInvitationShareText();
     element("created-invitation").hidden = false;
     state.invitations = [result.invitation, ...state.invitations.filter((item) => item.id !== result.invitation.id)];
     renderInvitations();
-    announce("Invitation created. Copy the secret now.");
+    announce("Invitation created. Copy the invitation now.");
   } catch (error) {
     if (!isCurrent()) return;
     errorNode.textContent = error.message ?? "Unable to create an invitation.";
@@ -725,14 +729,21 @@ createInvitationForm.addEventListener("submit", async (event) => {
 element("refresh-invitations-button").addEventListener("click", () => loadInvitations());
 element("copy-invite-secret-button").addEventListener("click", async () => {
   const status = element("copy-invite-status");
-  if (!createdInvitationSecret) return;
+  if (!createdInvitationSecret || !createdInvitationShareText) return;
   try {
     if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
-    await navigator.clipboard.writeText(createdInvitationSecret);
+    await navigator.clipboard.writeText(createdInvitationShareText);
     status.textContent = "Copied to clipboard.";
-    announce("Invitation secret copied.");
+    announce("Invitation information copied.");
   } catch {
-    status.textContent = "Clipboard access is unavailable. Select and copy the secret manually.";
+    const selection = window.getSelection();
+    if (selection) {
+      const range = document.createRange();
+      range.selectNodeContents(element("created-invite-secret"));
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    status.textContent = "Clipboard access is unavailable. Copy the selected invitation manually.";
   }
 });
 
@@ -1981,9 +1992,17 @@ async function revokeInvitation(invitation, button) {
 
 function clearCreatedInvitationSecret() {
   createdInvitationSecret = "";
+  createdInvitationShareText = "";
+  createdInvitationDetails = null;
   element("created-invite-secret").textContent = "";
   element("copy-invite-status").textContent = "";
   element("created-invitation").hidden = true;
+}
+
+function updateCreatedInvitationShareText(locale = state.settings.general.locale) {
+  if (!createdInvitationSecret) return;
+  createdInvitationShareText = projectInvitationShareText(createdInvitationSecret, createdInvitationDetails, locale);
+  element("created-invite-secret").textContent = createdInvitationShareText;
 }
 
 function showNewDeviceAccessToken(token) {
@@ -3150,6 +3169,7 @@ function applyVisualSettings(settings) {
   composerLayoutResizer.setAttribute("aria-valuenow", String(normalized.layout.composerPixels));
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  if (localeChanged) updateCreatedInvitationShareText(normalized.general.locale);
   element("auth-language-button").textContent = normalized.general.locale === "zh-CN" ? "EN" : "中";
   if (localeChanged && state.session) renderTimeline();
   if (localeChanged && state.project) renderMembers();

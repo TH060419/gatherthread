@@ -3,7 +3,7 @@ set -euo pipefail
 umask 077
 
 usage() {
-  printf '%s\n' 'Usage: sudo deploy/aliyun-ecs/test-access.sh issue [--ttl 1h|24h|7d]'
+  printf '%s\n' 'Usage: sudo deploy/aliyun-ecs/test-access.sh issue [--ttl 1h|24h|7d] [--count 1..50]'
   printf '%s\n' '       sudo deploy/aliyun-ecs/test-access.sh revoke --grant-id ID'
 }
 
@@ -26,14 +26,23 @@ cd /opt/gatherthread/current
 case "$action" in
   issue)
     ttl="7d"
-    if (($# > 1)); then
-      [[ $# -eq 3 && "$2" == "--ttl" ]] || { usage >&2; exit 64; }
-      ttl="$3"
-    fi
+    count="1"
+    seen_ttl=0
+    seen_count=0
+    shift
+    while (($# > 0)); do
+      case "$1" in
+        --ttl) (($# >= 2 && !seen_ttl)) || { usage >&2; exit 64; }; ttl="$2"; seen_ttl=1; shift 2 ;;
+        --count) (($# >= 2 && !seen_count)) || { usage >&2; exit 64; }; count="$2"; seen_count=1; shift 2 ;;
+        *) usage >&2; exit 64 ;;
+      esac
+    done
     [[ "$ttl" == "1h" || "$ttl" == "24h" || "$ttl" == "7d" ]] || { usage >&2; exit 64; }
+    [[ "$count" =~ ^([1-9]|[1-4][0-9]|50)$ ]] || { usage >&2; exit 64; }
     runuser -u gatherthread -- /usr/bin/env \
       GATHERTHREAD_ENV_FILE=/etc/gatherthread/gatherthread.env \
       GATHERTHREAD_TEST_ACCESS_TTL="$ttl" \
+      GATHERTHREAD_TEST_ACCESS_COUNT="$count" \
       /bin/bash -c '
         set -euo pipefail
         set -a
@@ -41,7 +50,7 @@ case "$action" in
         source "$GATHERTHREAD_ENV_FILE"
         set +a
         exec /usr/local/bin/node /opt/gatherthread/current/apps/server/dist/src/cli.js issue-test-access \
-          --ttl "$GATHERTHREAD_TEST_ACCESS_TTL"
+          --ttl "$GATHERTHREAD_TEST_ACCESS_TTL" --count "$GATHERTHREAD_TEST_ACCESS_COUNT" --format share
       '
     ;;
   revoke)
