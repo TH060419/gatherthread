@@ -29,7 +29,9 @@
     "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Fgatherthread.cn&project=project-example",
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fexample.com&project=project-example",
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&project=project-other",
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&project=",
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&token=secret",
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&token=",
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example#fragment"
   ],
   "rejected_inputs": [

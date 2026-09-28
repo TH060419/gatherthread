@@ -41,7 +41,7 @@ def parse_link(value: str) -> tuple[str, str, str, int, str]:
     parsed = urlparse(value)
     if parsed.scheme != SCHEME or parsed.netloc != "connect" or parsed.path not in {"", "/"} or parsed.fragment:
         raise ValueError("无效的 GatherThread 连接链接")
-    query = parse_qs(parsed.query, strict_parsing=True)
+    query = parse_qs(parsed.query, strict_parsing=True, keep_blank_values=True)
     if not {"v", "origin", "project"} <= set(query) or set(query) - {
         "v", "origin", "project", "model", "context_window_tokens", "visible_history_sync"
     } or any(len(item) != 1 for item in query.values()):
