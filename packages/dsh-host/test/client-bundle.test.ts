@@ -19,6 +19,7 @@ async function loadClient(options: {
   fetch?: typeof fetch;
   setTimeout?: typeof setTimeout;
   clearTimeout?: typeof clearTimeout;
+  locale?: string;
 } = {}) {
   const source = await readFile(path.join(packageRoot, "client", "client.js"), "utf8");
   let handoff: Handoff | undefined;
@@ -54,6 +55,7 @@ async function loadClient(options: {
   };
   const context = vm.createContext({
     window: { __ModuleLoader__: { load(value: Handoff) { handoff = value; } } },
+    navigator: options.locale ? { language: options.locale } : undefined,
     fetch: options.fetch ?? globalThis.fetch,
     setTimeout: options.setTimeout ?? globalThis.setTimeout,
     clearTimeout: options.clearTimeout ?? globalThis.clearTimeout,
@@ -221,7 +223,73 @@ test("Client primary actions keep a visible system foreground in light, dark, an
 });
 
 test("Client renders separate project code consent, manual actions and disabled-by-default automatic upload", async () => {
+  const calls: Array<{ endpoint: string; payload: unknown }> = [];
   const loaded = await loadClient({
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: { rpc: { async call(_channel: string, endpoint: string, payload: unknown) { calls.push({ endpoint, payload }); return { ok: true, value: {
+      schemaVersion: 2, integration: "gatherthread", authorization: "paired",
+      serverUrl: "http://127.0.0.1:18787", deviceName: "DSH",
+      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+      runtime: { schemaVersion: 1, integration: "gatherthread", connection: "connected", bindingMode: "project",
+        projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
+      route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
+      bindings: [{ projectId: "project-code", projectName: "Code project", provider: "deepseek", model: "deepseek-chat" }],
+      localSync: [], codeSync: [{ projectId: "project-code", projectName: "Code project", authorized: true,
+        status: { enabled: true, automatic_upload: false, local_changes: 1, file_count: 2, excluded_count: 3,
+          base_commit: null, cloud_commit: null, branch_id: null, needs_download: false,
+          recovery_directory: "project-recovered-20260922", local_status_unknown: true } }],
+      githubSync: [{ projectId: "project-code", projectName: "Code project", authorized: false,
+        connection: { repository: "example/source", base_branch: "development", enabled: true, revision: "revision-1" },
+        branch: "gatherthread/project/user" }],
+    } }; } } },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  loaded.render(component as () => unknown);
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const tree = loaded.render(component as () => unknown);
+  const text = collectedText(tree);
+  for (const label of ["项目代码 · GatherThread 云端", "项目代码 · GitHub（推荐）", "example/source", "development",
+    "连接 GitHub · 打开浏览器", "允许此 DSH 同步该项目代码", "上传代码", "下载更新", "恢复到新目录", "项目成员均可读取代码"]) {
+    assert.ok(text.includes(label), `${label}: ${text}`);
+  }
+  assert.match(text, /project-recovered-20260922/u);
+  assert.match(text, /原工作区状态未知/u);
+  assert.doesNotMatch(text, /2 个源文件/u);
+  const checkedValues: boolean[] = [];
+  const toggles: Array<(event: { target: { checked: boolean } }) => void> = [];
+  function collect(node: unknown): void {
+    if (Array.isArray(node)) { for (const child of node) collect(child); return; }
+    if (!node || typeof node !== "object") return;
+    const item = node as { props?: { type?: string; checked?: boolean; onChange?: (event: { target: { checked: boolean } }) => void }; children?: unknown };
+    if (item.props?.type === "checkbox") {
+      checkedValues.push(item.props.checked === true);
+      if (item.props.onChange) toggles.push(item.props.onChange);
+    }
+    collect(item.children);
+  }
+  collect(tree);
+  assert.deepEqual(checkedValues, [false, true, false], "GitHub consent does not inherit cloud permission");
+  toggles[0]!({ target: { checked: true } });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.find((call) => call.endpoint === "github/authorize"))), {
+    endpoint: "github/authorize", payload: {
+      projectId: "project-code", enabled: true, repository: "example/source", base_branch: "development", revision: "revision-1",
+    },
+  });
+  cleanup?.();
+});
+
+test("Client renders GitHub sync actions in English when DSH uses an English locale", async () => {
+  const loaded = await loadClient({
+    locale: "en-US",
     setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
   });
   let component: (() => unknown) | undefined;
@@ -235,10 +303,13 @@ test("Client renders separate project code consent, manual actions and disabled-
         projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
       route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
       bindings: [{ projectId: "project-code", projectName: "Code project", provider: "deepseek", model: "deepseek-chat" }],
-      localSync: [], codeSync: [{ projectId: "project-code", projectName: "Code project", authorized: true,
-        status: { enabled: true, automatic_upload: false, local_changes: 1, file_count: 2, excluded_count: 3,
+      localSync: [], codeSync: [],
+      githubSync: [{ projectId: "project-code", projectName: "Code project", authorized: true,
+        connection: { repository: "example/source", base_branch: "main", enabled: true, revision: "revision-1" },
+        branch: "gatherthread/project/user", error: "code_sync_dirty",
+        status: { enabled: true, automatic_upload: false, local_changes: 1, file_count: 2, excluded_count: 0,
           base_commit: null, cloud_commit: null, branch_id: null, needs_download: false,
-          recovery_directory: "project-recovered-20260922", local_status_unknown: true } }],
+          local_status_unknown: false } }],
     } }; } } },
     slots: {
       inject(_name: string, create: () => unknown) { create(); },
@@ -248,24 +319,12 @@ test("Client renders separate project code consent, manual actions and disabled-
   loaded.render(component as () => unknown);
   const cleanup = loaded.getEffect()?.();
   await new Promise<void>((resolve) => setImmediate(resolve));
-  const tree = loaded.render(component as () => unknown);
-  const text = collectedText(tree);
-  for (const label of ["项目代码 · Git", "允许此 DSH 同步该项目代码", "上传代码", "下载更新", "恢复到新目录", "项目成员均可读取代码"]) {
-    assert.ok(text.includes(label), label);
+  const text = collectedText(loaded.render(component as () => unknown));
+  for (const label of ["Project code · GitHub (recommended)", "Connect GitHub · Open browser",
+    "Upload code", "Download updates", "Recover to a new folder", "Local changes are not uploaded."]) {
+    assert.ok(text.includes(label), `${label}: ${text}`);
   }
-  assert.match(text, /project-recovered-20260922/u);
-  assert.match(text, /原工作区状态未知/u);
-  assert.doesNotMatch(text, /2 个源文件/u);
-  const checkedValues: boolean[] = [];
-  function collect(node: unknown): void {
-    if (Array.isArray(node)) { for (const child of node) collect(child); return; }
-    if (!node || typeof node !== "object") return;
-    const item = node as { props?: { type?: string; checked?: boolean }; children?: unknown };
-    if (item.props?.type === "checkbox") checkedValues.push(item.props.checked === true);
-    collect(item.children);
-  }
-  collect(tree);
-  assert.deepEqual(checkedValues, [true, false]);
+  assert.doesNotMatch(text, /上传代码|本地有未上传修改/u);
   cleanup?.();
 });
 

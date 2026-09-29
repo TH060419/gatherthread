@@ -9,7 +9,9 @@ import { fileURLToPath } from "node:url";
 import { redactText } from "@gatherthread/adapters";
 import { LocalBridge } from "./bridge.js";
 import { CodeSyncError, ProjectCodeSync } from "./code-sync.js";
-import { isCodeSyncRequestKind } from "@gatherthread/protocol";
+import { isCodeSyncRequestKind, isGitHubCodeSyncRequestKind, GitHubRepositorySchema, GitHubBranchSchema, GitHubProjectStatusSchema } from "@gatherthread/protocol";
+import { createGitHubCodeSync } from "./github-code-sync.js";
+import { connectGitHubAccount } from "./github-auth.js";
 import { CodexProjectHarness, codexSessionKey, managedCodexThreadName } from "./codex-app-server.js";
 import {
   CodexHookRelayServer,
@@ -67,6 +69,9 @@ interface CodexConnectOptions {
   preflightOnly: boolean;
   codeSync: boolean;
   recoverCode: boolean;
+  githubCodeSync?: string;
+  githubBaseBranch: string;
+  recoverGitHubCode: boolean;
 }
 
 export type CodexVisibleHistorySyncMode = "first-connect" | "never";
@@ -129,6 +134,11 @@ Options:
   --preflight-only         Validate server access, workspace, Codex login, and App Server, then exit
   --code-sync              Authorize source-file sync for this workspace (manual by default)
   --recover-code           Recover cloud code into a NEW sibling folder, then exit (no Codex required)
+  --github-code-sync <owner/repo>
+                           Authorize direct GitHub file sync (Git + locally authenticated gh required)
+  --github-base-branch <branch>
+                           Shared GitHub base branch (default: main; must match project settings)
+  --recover-github-code    Recover GitHub files into a NEW sibling folder, then exit
   --help                   Show this help
 
 The device access token is read from GATHERTHREAD_TOKEN when set. Otherwise it
@@ -164,8 +174,32 @@ export async function runCodexConnectCli(
       projectName: selected.name,
     })
     : parsed.workspacePath;
-  if (parsed.recoverCode) {
-    const recovery = new ProjectCodeSync({
+  let githubCodeSync: ProjectCodeSync | undefined;
+  if (parsed.githubCodeSync) {
+    try {
+      const response = await fetch(`${parsed.apiUrl}/projects/${encodeURIComponent(selected.id)}/github`, {
+        headers: { authorization: `Bearer ${token}` }, redirect: "error", signal: AbortSignal.timeout(15_000),
+      });
+      const reader = response.body?.getReader(); let size = 0; const chunks: Uint8Array[] = [];
+      if (!response.ok || !reader) { await response.body?.cancel(); throw new Error("Cannot verify project GitHub settings."); }
+      for (;;) { const part = await reader.read(); if (part.done) break; size += part.value.length;
+        if (size > 16_384) { await reader.cancel(); throw new Error("Invalid GitHub settings response."); } chunks.push(part.value); }
+      const state = GitHubProjectStatusSchema.parse(JSON.parse(Buffer.concat(chunks).toString("utf8")).data);
+      if (!state.can_write || !state.connection?.enabled || state.connection.repository.toLowerCase() !== parsed.githubCodeSync.toLowerCase()
+        || state.connection.base_branch !== parsed.githubBaseBranch) throw new Error("GitHub target must match the enabled project settings.");
+      await connectGitHubAccount();
+      githubCodeSync = createGitHubCodeSync({ apiUrl: parsed.apiUrl, token, projectId: selected.id, actorId: actor.id,
+        workspacePath: requestedWorkspacePath, repository: parsed.githubCodeSync, baseBranch: parsed.githubBaseBranch,
+        revision: state.connection.revision,
+        onRecovery: (folder) => process.stdout.write(`Recovered GitHub files into a new local folder: ${folder}\n`),
+      });
+    } catch {
+      if (parsed.recoverGitHubCode) throw new Error("GitHub recovery is unavailable. Check the project target, local authorization and network.");
+      process.stderr.write("GitHub file sync was not authorized: check the project repository/base branch and reconnect. Conversation sync remains available.\n");
+    }
+  }
+  if (parsed.recoverCode || parsed.recoverGitHubCode) {
+    const recovery = parsed.recoverGitHubCode ? githubCodeSync! : new ProjectCodeSync({
       apiUrl: parsed.apiUrl, token, projectId: selected.id, actorId: actor.id,
       workspacePath: requestedWorkspacePath,
       onRecovery: (recoveryPath) => process.stdout.write(`Recovered cloud code: ${recoveryPath}\nOriginal workspaces and Agent task bindings were not changed.\n`),
@@ -327,6 +361,7 @@ export async function runCodexConnectCli(
         hookMode,
         localSync,
         ...(codeSync === undefined ? {} : { codeSync }),
+        ...(githubCodeSync === undefined ? {} : { githubCodeSync }),
       });
     } finally {
       await harness.close();
@@ -518,6 +553,9 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   let preflightOnly = false;
   let codeSync = false;
   let recoverCode = false;
+  let githubCodeSync: string | undefined;
+  let githubBaseBranch = "main";
+  let recoverGitHubCode = false;
   let createWorkspace = false;
   let workspaceSpecified = false;
   for (let index = 0; index < argv.length; index += 1) {
@@ -551,6 +589,7 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
       recoverCode = true;
       continue;
     }
+    if (argument === "--recover-github-code") { recoverGitHubCode = true; continue; }
     if (argument === "--create-workspace") {
       createWorkspace = true;
       continue;
@@ -564,6 +603,8 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
       workspaceSpecified = true;
     }
     else if (argument === "--model") model = value;
+    else if (argument === "--github-code-sync") githubCodeSync = value;
+    else if (argument === "--github-base-branch") githubBaseBranch = value;
     else if (argument === "--context-window-tokens") contextWindowTokens = Number(value);
     else if (argument === "--visible-history-sync") {
       if (value === "every-connect" || value === "every-update") {
@@ -597,6 +638,9 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
   if (codeSync && !recoverCode && !installHooks && !pluginHooks) {
     throw new Error("--code-sync requires --plugin-hooks or --install-hooks so local Agent activity can be checked safely");
   }
+  if (githubCodeSync !== undefined && (!GitHubRepositorySchema.safeParse(githubCodeSync).success || !GitHubBranchSchema.safeParse(githubBaseBranch).success || githubBaseBranch.startsWith("gatherthread/"))) throw new Error("Invalid GitHub repository or base branch; use owner/repository and a shared base branch.");
+  if (githubCodeSync && !recoverGitHubCode && !installHooks && !pluginHooks) throw new Error("--github-code-sync requires --plugin-hooks or --install-hooks to check local Agent activity safely");
+  if (recoverGitHubCode && (!githubCodeSync || recoverCode || preflightOnly)) throw new Error("--recover-github-code requires --github-code-sync and cannot be combined with --recover-code or --preflight-only");
   if (!model.trim() || model.length > 200 || model.startsWith("-") || /[\0\r\n]/.test(model)) {
     throw new Error("--model must be a valid non-empty model identifier");
   }
@@ -626,6 +670,9 @@ export function parseCodexConnectArgs(argv: readonly string[]): CodexConnectOpti
     preflightOnly,
     codeSync,
     recoverCode,
+    ...(githubCodeSync === undefined ? {} : { githubCodeSync }),
+    githubBaseBranch,
+    recoverGitHubCode,
   };
 }
 
@@ -974,6 +1021,7 @@ export async function runProjectConnector(options: {
   hookMode: "disabled" | CodexHookSource;
   localSync?: CodexLocalSyncRegistry;
   codeSync?: ProjectCodeSync;
+  githubCodeSync?: ProjectCodeSync;
   hookRelay?: Pick<CodexHookRelayServer, "start" | "close">;
 }): Promise<void> {
   const hooksEnabled = options.hookMode !== "disabled";
@@ -1180,9 +1228,10 @@ export async function runProjectConnector(options: {
         await processLocalSyncControlJobs({ api: options.api, managed });
         try {
           const codeBusy = async () => activeLocalRuns.size > 0 || await managedCodeRunsBusy(managed);
-          await processCodeSyncControlJobs({ api: options.api, managed, codeSync: options.codeSync, busy: codeBusy });
-          if (options.codeSync && await options.codeSync.automaticUploadEnabled()) {
-            await options.codeSync.tick({ busy: await codeBusy() });
+          await processCodeSyncControlJobs({ api: options.api, managed, codeSync: options.codeSync, githubCodeSync: options.githubCodeSync, busy: codeBusy });
+          for (const [provider, sync] of [["cloud code", options.codeSync], ["GitHub code", options.githubCodeSync]] as const) {
+            try { if (sync && await sync.automaticUploadEnabled()) await sync.tick({ busy: await codeBusy() }); }
+            catch (error) { retryReporter.retrying(provider, error); }
           }
           retryReporter.recovered("code sync");
         } catch (error) {
@@ -1247,24 +1296,33 @@ export async function processCodeSyncControlJobs(input: {
   api: Pick<CollaborationApi, "listSnapshotRequests" | "claimSnapshotRequest" | "completeSnapshotRequest" | "failSnapshotRequest">;
   managed: ReadonlyMap<string, ManagedSession>;
   codeSync?: Pick<ProjectCodeSync, "execute"> | undefined;
+  githubCodeSync?: Pick<ProjectCodeSync, "execute"> | undefined;
   busy: boolean | (() => Promise<boolean>);
+  connectGitHub?: typeof connectGitHubAccount;
 }): Promise<void> {
   const { api } = input;
   if (!api.listSnapshotRequests || !api.claimSnapshotRequest || !api.completeSnapshotRequest || !api.failSnapshotRequest) return;
   const jobs = [...await api.listSnapshotRequests("pending", 40), ...await api.listSnapshotRequests("claimed", 40)]
-    .filter((job, index, all) => isCodeSyncRequestKind(job.kind) && all.findIndex((candidate) => candidate.id === job.id) === index);
+    .filter((job, index, all) => (isCodeSyncRequestKind(job.kind) || isGitHubCodeSyncRequestKind(job.kind)) && all.findIndex((candidate) => candidate.id === job.id) === index);
   for (const job of jobs) {
     const runtime = input.managed.get(job.sessionId)?.bridge.runtime;
     if (!runtime || runtime.harness !== "codex" || job.targetRuntimeId !== runtime.id) continue;
     let claimed;
     try { claimed = await api.claimSnapshotRequest(job.id, runtime.id); } catch { continue; }
-    if (claimed.status !== "claimed") continue;
+    if (claimed.status !== "claimed" || claimed.id !== job.id || claimed.kind !== job.kind || claimed.sessionId !== job.sessionId || claimed.targetRuntimeId !== runtime.id) continue;
     let result;
     try {
-      if (!input.codeSync) throw new CodeSyncError("code_sync_disabled", "Restart this Codex connector with --code-sync to authorize source-file sync for this workspace.");
-      const modifiesFiles = ["code_upload", "code_download", "code_recover", "code_auto_upload_enable"].includes(claimed.kind);
+      const github = isGitHubCodeSyncRequestKind(claimed.kind);
+      if (claimed.kind === "github_auth_connect") {
+        await (input.connectGitHub ?? connectGitHubAccount)();
+        result = { provider: "github", connected: true };
+      } else {
+      const sync = github ? input.githubCodeSync : input.codeSync;
+      if (!sync) throw new CodeSyncError("code_sync_disabled", github ? "Restart this Codex connector with --github-code-sync OWNER/REPO --github-base-branch BRANCH to authorize this exact target locally." : "Restart this Codex connector with --code-sync to authorize source-file sync for this workspace.");
+      const modifiesFiles = !["code_sync_status", "code_auto_upload_disable", "github_code_sync_status", "github_code_auto_upload_disable"].includes(claimed.kind);
       const busy = modifiesFiles && (typeof input.busy === "function" ? await input.busy() : input.busy);
-      result = await input.codeSync.execute(claimed.kind, { busy, operationId: claimed.id });
+      result = await sync.execute(claimed.kind, { busy, operationId: claimed.id });
+      }
     } catch (error) {
       await api.failSnapshotRequest(job.id, runtime.id, {
         code: error instanceof CodeSyncError ? error.code : "code_sync_failed",

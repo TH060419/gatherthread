@@ -1,5 +1,6 @@
 import { codeErrorText, codeRuntimeChoices, createCodeSyncController } from "./code-sync.js";
 import { codeNoticeStorage, hasSeenCodeNotice, markCodeNoticeSeen } from "./code-notice.js";
+import { mountGithubCodeSync } from "./github-code-sync-view.js";
 
 const ACTIVE_JOBS = new Set(["queued", "claimed", "importing", "compacting"]);
 const shortCommit = (value) => typeof value === "string" ? value.slice(0, 9) : "—";
@@ -40,6 +41,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   let pendingConfirmation;
   let noticeDeviceId = null;
   const controller = createCodeSyncController({ api, onChange: render, pollMs: mockEnabled ? 120 : 1800 });
+  const github = mountGithubCodeSync({ document: doc, api, localizer, confirm, mockEnabled });
   const routeKey = (state) => JSON.stringify([state.context?.project?.id, state.context?.sessionId, state.context?.userId, state.runtimeId]);
 
   function showCodeView(view, focusId) {
@@ -61,6 +63,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     finishConfirmation(false);
     el("code-confirmation-message").textContent = message;
     el("code-confirmation").hidden = false;
+    el("code-confirmation").scrollIntoView?.({ block: "nearest" });
     const focus = doc.activeElement;
     el("code-confirm-cancel").focus({ preventScroll: true });
     return new Promise((resolve) => { pendingConfirmation = { resolve, focus, route: routeKey(controller.getState()) }; });
@@ -93,7 +96,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     }
     const enabled = repository?.repository?.enabled === true;
     const hasStoredRepository = Boolean(repository?.repository?.main_commit);
-    el("code-repository-status").textContent = t(state.loading ? "Reading code status…" : !repository ? "Code status unavailable" : enabled ? "Project file sharing enabled" : "Project file sharing is off");
+    el("code-repository-status").textContent = t(state.loading ? "Reading code status…" : !repository ? "Code status unavailable" : enabled ? "GT Cloud file sharing enabled" : "GT Cloud file sharing is off");
     el("code-enable-section").hidden = !repository || enabled;
     el("code-enable-button").hidden = context?.project?.role !== "owner";
     el("code-enable-button").disabled = !permissions.enable;
@@ -229,14 +232,18 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   }
 
   function updateContext() {
-    controller.setContext(getContext());
+    const context = getContext();
+    controller.setContext(context);
+    github.setContext(context);
   }
   trigger.addEventListener("click", () => {
     updateContext();
     showCodeView("overview");
-    returnFocus = doc.activeElement;
+    // Safari mouse clicks do not necessarily focus the button before opening.
+    returnFocus = trigger;
     dialog.showModal();
     controller.open();
+    github.open();
   });
   noticeDialog.addEventListener("cancel", (event) => event.preventDefault());
   el("code-notice-continue").addEventListener("click", () => {
@@ -258,6 +265,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     showCodeView("overview");
     previewGeneration += 1;
     controller.close();
+    github.close();
     returnFocus?.isConnected && returnFocus.focus({ preventScroll: true });
   });
   el("code-runtime-select").addEventListener("change", (event) => void controller.selectRuntime(event.target.value));
@@ -271,7 +279,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     if (await confirm(t("Enable project file sharing? Uploaded files will be readable by every project member, but are not public. Local file access requires separate connector authorization and an upload choice."))) void controller.mutate("enable");
   });
   el("code-disable-active-button").addEventListener("click", async () => {
-    if (await confirm(t("Turn off project file sharing? Collaboration will be limited to text, with file exchange and recovery paused. We recommend this only for strict privacy needs. Stored versions remain until explicitly cleared; local files are retained."))) void controller.mutate("disable");
+    if (await confirm(t("Pause GT Cloud file sharing? GT Cloud transfers and recovery will pause; stored versions and local files remain. GitHub and conversation sync stay independent."))) void controller.mutate("disable");
   });
   el("code-upload-button").addEventListener("click", async () => {
     if (await confirm(t("Upload selected local project files to your cloud branch? All project members can read them. Check exclusions and credentials before continuing."))) void controller.queue("code_upload");
@@ -297,13 +305,13 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     if (preview && !el("code-merge-button").disabled && await confirm(t("Approve these reviewed changes and merge them into main? Other members can then download this version.")) && reviewed === preview && !el("code-merge-button").disabled) void controller.mutate("merge", preview.branchId);
   });
   return {
-    updateContext, refresh: () => controller.refresh(),
+    updateContext, refresh: () => Promise.all([controller.refresh(), github.refresh()]),
     showFirstLoginNotice(deviceId) {
       if (hasSeenCodeNotice(storage, deviceId) || noticeDialog.open) return;
       noticeDeviceId = deviceId;
       noticeDialog.showModal();
     },
     closeNotice() { noticeDeviceId = null; if (noticeDialog.open) noticeDialog.close(); },
-    close() { if (dialog.open) dialog.close(); controller.close(); },
+    close() { if (dialog.open) dialog.close(); controller.close(); github.close(); },
   };
 }

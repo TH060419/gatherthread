@@ -69,7 +69,9 @@ export type SnapshotRequestStatus = "pending" | "claimed" | "completed" | "faile
 export type SnapshotRequestKind = "immutable" | "visible_history_replace"
   | "local_sync_status" | "local_auto_upload_enable" | "local_auto_upload_disable" | "local_turn_upload"
   | "code_sync_status" | "code_upload" | "code_download" | "code_recover"
-  | "code_auto_upload_enable" | "code_auto_upload_disable";
+  | "code_auto_upload_enable" | "code_auto_upload_disable"
+  | "github_auth_connect" | "github_code_sync_status" | "github_code_upload" | "github_code_download" | "github_code_recover"
+  | "github_code_auto_upload_enable" | "github_code_auto_upload_disable" | "github_code_update";
 
 export interface SnapshotRequestSummary {
   id: string;

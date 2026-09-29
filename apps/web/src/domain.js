@@ -176,7 +176,9 @@ export function normalizeSnapshotRequest(payload) {
   ].find((value) => typeof value === "string" && value.length > 0) ?? "";
   const kind = ["immutable", "visible_history_replace", "local_sync_status", "local_auto_upload_enable",
     "local_auto_upload_disable", "local_turn_upload", "code_sync_status", "code_upload", "code_download",
-    "code_recover", "code_auto_upload_enable", "code_auto_upload_disable"].includes(request.kind)
+    "code_recover", "code_auto_upload_enable", "code_auto_upload_disable",
+    "github_auth_connect", "github_code_sync_status", "github_code_upload", "github_code_download", "github_code_recover",
+    "github_code_auto_upload_enable", "github_code_auto_upload_disable", "github_code_update"].includes(request.kind)
     ? request.kind
     : "immutable";
   return {

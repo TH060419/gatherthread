@@ -27,6 +27,14 @@ For direct Codex Desktop turns to synchronize back to GatherThread, install and 
 
 Each bound Desktop conversation keeps its own local-to-cloud automatic-upload preference, enabled by default. The GatherThread workspace and the user MCP tools can show that state, turn automatic upload off or on, and manually scan and upload completed eligible turns to the cloud. Manual upload is the recovery path when a Hook did not run or did not leave a draft; it keeps the preference unchanged and uses the same idempotent local-turn outbox. Turning automatic upload off blocks Hook commits without disabling cloud-to-local context projection or Web Agent requests.
 
+## GitHub code synchronization: unreleased source preview
+
+The GitHub integration is available only in a matching reviewed source build; the `0.1.0-alpha.8` npm command above is not a claim that the published package supports it. The project owner first connects an existing `OWNER/REPO` and base branch in Web. Install Git 2.38+ and GitHub CLI, then restart the source connector with trusted `--plugin-hooks` and `--github-code-sync OWNER/REPO --github-base-branch main`. If this device needs GitHub login, the connector opens browser sign-in through the local CLI; the Web code panel also provides **Connect GitHub on this device** for a selected online Codex runtime. `gh auth login --hostname github.com --git-protocol https --web` remains a local fallback. GitHub consent is separate from GT Cloud `--code-sync`; a new binding automatically uploads settled changes while idle and can be switched off without affecting conversation sync. Configuration changes, including pause/resume, require renewed local authorization.
+
+GitHub code and credentials travel directly from this device to GitHub. GitHub collaborator permissions are independent of GatherThread membership; pausing or deleting a GT project does not revoke GitHub access or delete GitHub data. See [Project code collaboration](../../docs/CODE_SYNC.md#github-source-preview--github-源码预览) for source commands, recovery, limits and workflow-trigger risks.
+
+GitHub 接入仍为**未发布源码预览**，不能假定上方固定版本 npm 包已支持。项目创建者先在网页配置现有仓库和基础分支；每台设备安装 Git 2.38+ 与 GitHub CLI，再为源码连接器添加 `--github-code-sync OWNER/REPO --github-base-branch main`，审阅并信任 `--plugin-hooks`。需要登录时，连接器会调用本机 GitHub CLI 打开浏览器；网页选择在线 Codex 设备后也可点击“在此设备连接 GitHub”，终端命令仍可作为保底。此授权与 GT Cloud `--code-sync` 独立；新绑定会在 Agent 空闲时自动上传稳定的代码改动，可关闭且重连后保持关闭。配置变化及暂停后恢复均需重新本地授权。GitHub 权限独立管理，共序不会删除 GitHub 数据。完整流程见[项目代码协作文档](../../docs/CODE_SYNC.md)。
+
 ## Security boundary
 
 - The connector accepts HTTPS origins or loopback HTTP only. URL credentials, queries, fragments, unsafe project IDs, unsupported sandbox modes, and control characters are rejected.

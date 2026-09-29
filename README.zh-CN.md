@@ -146,6 +146,8 @@ DeepSeek Harness 使用四步流程：
 
 ## 安全机制与当前限制
 
+**未发布源码预览：本机直连 GitHub 同步。** 长期协作和较大源码项目推荐选择 GitHub，原有共序云端检查点适合小项目和初次体验。成员在每台设备用自己的 GitHub CLI 登录并单独授权，上传只推进稳定的个人分支，GitHub 源码和凭据不经过共序服务器。GitHub 权限、Actions 与远端清理仍需独立管理。本说明不代表已发布安装包或线上服务已经支持；配置流程、预览限制和超限时使用原生 Git 的说明见[代码同步指南](docs/CODE_SYNC.md)与 [ADR-0035](docs/adr/0035-direct-local-github-code-synchronization.md)。
+
 首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、按用户/项目/部署限制会话数量、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。新邀请用户的设备 Token 只展示一次，必须在关闭提示前妥善保存。
 
 [gatherthread.cn](https://gatherthread.cn/) 已向获批测试者开放邀请制 Alpha；公众注册和公共 Beta 仍未开放。本机、局域网 HTTPS 与私有 Tailscale Serve 也可使用。[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)说明当前服务器部署模式。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
