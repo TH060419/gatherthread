@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -186,6 +186,27 @@ test("GitHub uploads only my branch without sending files to GT or changing the 
   assert.equal(status.base_commit, result.base_commit);
 });
 
+test("GitHub refuses tracked generated files rather than silently publishing an incomplete tree", async (t) => {
+  const f = await fixture(t); const a = await f.client();
+  await git(["init", "--quiet"], { cwd: a.workspace });
+  await mkdir(path.join(a.workspace, "dist"));
+  await writeFile(path.join(a.workspace, "dist", "output.js"), "generated");
+  await git(["add", "dist/output.js"], { cwd: a.workspace });
+  await assert.rejects(a.sync.upload(), { code: "code_sync_unsupported" });
+  await assert.rejects(git(["rev-parse", "--verify", branch("alice")], { cwd: f.remote }));
+});
+
+test("GitHub refuses a tracked symbolic link rather than omitting it", async (t) => {
+  if (process.platform === "win32") return t.skip("symlink creation requires a Windows developer-capable test environment");
+  const f = await fixture(t); const a = await f.client();
+  await git(["init", "--quiet"], { cwd: a.workspace });
+  await writeFile(path.join(a.workspace, "target.txt"), "source");
+  await symlink("target.txt", path.join(a.workspace, "link.txt"));
+  await git(["add", "target.txt", "link.txt"], { cwd: a.workspace });
+  await assert.rejects(a.sync.upload(), { code: "code_sync_unsupported" });
+  await assert.rejects(git(["rev-parse", "--verify", branch("alice")], { cwd: f.remote }));
+});
+
 test("GitHub supports larger source checkpoints and recovery into a new folder", async (t) => {
   const f = await fixture(t); const a = await f.client();
   const content = "a".repeat(3 * 1024 * 1024);
@@ -218,6 +239,12 @@ test("two users remain on independent branches; base updates need a safe downloa
   assert.notEqual(bob.branch, first.branch);
   await writeFile(path.join(a.workspace, "a.txt"), "new shared"); const newer = await a.sync.upload();
   await git(["update-ref", "refs/heads/main", newer.base_commit!], { cwd: f.remote });
+  const bobHead = (await git(["rev-parse", branch("bob")], { cwd: f.remote })).toString().trim();
+  await writeFile(path.join(b.workspace, "b.txt"), "unuploaded");
+  await assert.rejects(b.sync.execute("github_code_update"), { code: "code_sync_dirty" });
+  assert.equal((await git(["rev-parse", branch("bob")], { cwd: f.remote })).toString().trim(), bobHead,
+    "dirty local files must stop the remote merge before any push");
+  await writeFile(path.join(b.workspace, "b.txt"), "bob work");
   const updated = await b.sync.execute("github_code_update"); assert.equal(updated.needs_download, true);
   await writeFile(path.join(b.workspace, "b.txt"), "unuploaded"); await assert.rejects(b.sync.download(), { code: "code_sync_dirty" });
   await writeFile(path.join(b.workspace, "b.txt"), "bob work"); await b.sync.download();

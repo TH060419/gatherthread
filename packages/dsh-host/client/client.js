@@ -105,7 +105,9 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       }
       onSuccess?.(next);
     } catch {
-      setNotice(endpoint.startsWith("code/") || endpoint.startsWith("github/")
+      setNotice(endpoint.startsWith("github/") && githubEnglish()
+        ? "GitHub sync did not finish. Check local sign-in, project access and the remote version; no files were forcibly overwritten."
+        : endpoint.startsWith("code/") || endpoint.startsWith("github/")
         ? "代码同步未完成。请检查本机授权、项目权限和云端版本；不会强制覆盖文件。"
         : endpoint.startsWith("sync/")
         ? "上传操作未完成。请检查连接和会话权限后重试。"
@@ -188,22 +190,28 @@ function GatherThreadStatusPanel({ connection, sessions }) {
   nativeState === undefined || unavailable ? null : renderCodeSyncControls(nativeState, busy, runAction));
 }
 
+function githubEnglish() {
+  return typeof navigator !== "undefined" && typeof navigator.language === "string"
+    && !/^zh(?:-|$)/iu.test(navigator.language);
+}
+
 function renderCodeSyncControls(state, busy, runAction, github = false) {
   const projects = github ? state.githubSync : state.codeSync;
   if (!projects?.length) return null;
+  const label = (zh, en) => github && githubEnglish() ? en : zh;
   const actions = [
-    ["code_sync_status", "检查状态"],
-    ["code_upload", "上传代码"],
-    ["code_download", "下载更新"],
-    ["code_recover", "恢复到新目录"],
+    ["code_sync_status", label("检查状态", "Check status")],
+    ["code_upload", label("上传代码", "Upload code")],
+    ["code_download", label("下载更新", "Download updates")],
+    ["code_recover", label("恢复到新目录", "Recover to a new folder")],
   ];
-  if (github) actions.push(["code_update", "从主分支更新"]);
+  if (github) actions.push(["code_update", label("从主分支更新", "Update from base branch")]);
   const prefix = github ? "github_" : "";
-  return React.createElement("section", { style: styles.connectionCard, "aria-label": github ? "GitHub 项目代码同步" : "项目代码同步" },
-    React.createElement("h3", { style: styles.sectionTitle }, github ? "项目代码 · GitHub（推荐）" : "项目代码 · GatherThread 云端"),
+  return React.createElement("section", { style: styles.connectionCard, "aria-label": github ? label("GitHub 项目代码同步", "GitHub project code sync") : "项目代码同步" },
+    React.createElement("h3", { style: styles.sectionTitle }, github ? label("项目代码 · GitHub（推荐）", "Project code · GitHub (recommended)") : "项目代码 · GatherThread 云端"),
     React.createElement("p", { style: styles.muted },
-      github ? "本机直接与 GitHub 同步，代码和 GitHub 凭据不经过 GatherThread。GitHub 仓库成员权限独立管理；自动上传可能触发仓库 Actions。" : "代码与会话上传独立。每位成员使用自己的云端分支；项目成员均可读取代码。上传前请检查源文件，不上传密钥或私人资料。"),
-    github ? React.createElement("p", { style: styles.muted }, "先在本机安装 Git 和 GitHub CLI；点击下方按钮会打开浏览器完成 GitHub 登录。") : null,
+      github ? label("本机直接与 GitHub 同步，代码和 GitHub 凭据不经过 GatherThread。GitHub 仓库成员权限独立管理；自动上传可能触发仓库 Actions。", "This device syncs directly with GitHub; source and credentials do not pass through GatherThread. GitHub access is managed separately, and automatic pushes may trigger Actions.") : "代码与会话上传独立。每位成员使用自己的云端分支；项目成员均可读取代码。上传前请检查源文件，不上传密钥或私人资料。"),
+    github ? React.createElement("p", { style: styles.muted }, label("先在本机安装 Git 和 GitHub CLI；点击下方按钮会打开浏览器完成 GitHub 登录。", "Install Git and GitHub CLI on this device, then use the button below to open browser sign-in.")) : null,
     ...projects.map((project) => {
       const invoke = (action) => void runAction(github ? "github/action" : "code/action", { projectId: project.projectId, action: `${prefix}${action}` });
       const status = project.status;
@@ -212,12 +220,12 @@ function renderCodeSyncControls(state, busy, runAction, github = false) {
         React.createElement("summary", { style: styles.sessionTitle }, project.projectName),
         React.createElement("div", { style: styles.form },
           github ? React.createElement("p", { style: styles.sessionMeta }, project.connection
-            ? `${project.connection.repository} · 主分支 ${project.connection.base_branch} · 成员分支 ${project.branch ?? "尚未分配"}${enabled ? "" : " · 已暂停"}`
-            : "请由项目创建者在 GatherThread 的项目代码中绑定 GitHub 仓库。") : null,
+            ? `${project.connection.repository} · ${label("主分支", "Base")} ${project.connection.base_branch} · ${label("成员分支", "My branch")} ${project.branch ?? label("尚未分配", "not assigned")}${enabled ? "" : ` · ${label("已暂停", "paused")}`}`
+            : label("请由项目创建者在 GatherThread 的项目代码中绑定 GitHub 仓库。", "Ask the project owner to connect a GitHub repository in GatherThread project code settings.")) : null,
           github ? React.createElement("button", { type: "button", style: styles.compactButton,
             disabled: busy || !project.connection,
             onClick: () => void runAction("github/connect", { projectId: project.projectId }),
-          }, "连接 GitHub · 打开浏览器") : null,
+          }, label("连接 GitHub · 打开浏览器", "Connect GitHub · Open browser")) : null,
           React.createElement("label", { style: styles.syncToggle },
             React.createElement("input", {
               type: "checkbox", checked: project.authorized, disabled: busy || (github && !project.authorized && !enabled),
@@ -227,37 +235,63 @@ function renderCodeSyncControls(state, busy, runAction, github = false) {
                   repository: project.connection.repository, base_branch: project.connection.base_branch, revision: project.connection.revision,
                 } : {}),
               }),
-            }), github ? "允许此 DSH 将本项目代码同步到上述 GitHub 仓库" : "允许此 DSH 同步该项目代码"),
-          React.createElement("p", { style: styles.muted }, "仅访问此项目已经绑定的本地目录，不改动原 Git 分支或暂存区。下载要求本地没有未上传改动；恢复始终新建目录，不更换当前 Agent 工作目录。"),
+            }), github ? label("允许此 DSH 将本项目代码同步到上述 GitHub 仓库", "Allow this DSH to sync this project's code to the GitHub repository above") : "允许此 DSH 同步该项目代码"),
+          React.createElement("p", { style: styles.muted }, label("仅访问此项目已经绑定的本地目录，不改动原 Git 分支或暂存区。下载要求本地没有未上传改动；恢复始终新建目录，不更换当前 Agent 工作目录。", "Only the local folder already bound to this project is accessed. Your original Git branch and index stay unchanged. Downloads require no unuploaded changes; recovery creates a separate folder.")),
           status ? React.createElement("p", { style: styles.sessionMeta },
-            status.local_status_unknown ? "已恢复云端副本；原工作区状态未知，请单独检查。" : status.enabled
-              ? `${status.file_count} 个源文件 · ${status.local_changes} 项待上传 · ${status.excluded_count} 项已排除 · 云端 ${status.cloud_commit?.slice(0, 8) ?? "尚无版本"}`
-              : github ? "GitHub 同步已暂停，请由项目创建者恢复。" : "请先由项目创建者在 GatherThread 的「项目代码」中启用 Git。") : null,
-          status?.needs_download ? React.createElement("p", { style: styles.notice }, "云端有新版本。请先下载；本地有改动时请恢复到新目录比较，不会自动覆盖。") : null,
+            status.local_status_unknown ? label("已恢复云端副本；原工作区状态未知，请单独检查。", "A remote copy was recovered. Review the original workspace separately; its state is unknown.") : status.enabled
+              ? `${status.file_count} ${label("个源文件", "source files")} · ${status.local_changes} ${label("项待上传", "pending changes")} · ${status.excluded_count} ${label("项已排除", "excluded")} · ${label("云端", "remote")} ${status.cloud_commit?.slice(0, 8) ?? label("尚无版本", "no version yet")}`
+              : github ? label("GitHub 同步已暂停，请由项目创建者恢复。", "GitHub sync is paused; ask the project owner to resume it.") : "请先由项目创建者在 GatherThread 的「项目代码」中启用 Git。") : null,
+          status?.needs_download ? React.createElement("p", { style: styles.notice }, label("云端有新版本。请先下载；本地有改动时请恢复到新目录比较，不会自动覆盖。", "A newer remote version exists. Download when your local files are clean; otherwise recover to a new folder for comparison.")) : null,
           project.authorized ? React.createElement("label", { style: styles.syncToggle },
             React.createElement("input", {
               type: "checkbox", checked: status?.automatic_upload === true,
               disabled: busy || (!enabled && !status?.automatic_upload),
               onChange: (event) => invoke(event.target.checked ? "code_auto_upload_enable" : "code_auto_upload_disable"),
-            }), github ? "空闲时自动上传本地代码至 GitHub" : "空闲时自动上传本地代码至云端") : null,
-          React.createElement("div", { style: styles.syncActions }, ...actions.map(([action, label]) => (
+            }), github ? label("空闲时自动上传本地代码至 GitHub", "Automatically upload local code to GitHub while idle") : "空闲时自动上传本地代码至云端") : null,
+          React.createElement("div", { style: styles.syncActions }, ...actions.map(([action, actionLabel]) => (
             React.createElement("button", {
               key: action, type: "button", style: styles.compactButton,
               disabled: busy || (!project.authorized && !(github && action === "code_sync_status")) || (action !== "code_sync_status" && !enabled),
               onClick: () => {
-                if (action === "code_recover" && !window.confirm("将云端代码恢复到当前项目旁的新目录，原目录和会话保持不变。继续？")) return;
+                if (action === "code_recover" && !window.confirm(label("将云端代码恢复到当前项目旁的新目录，原目录和会话保持不变。继续？", "Recover remote code to a new sibling folder? The original folder and conversations stay unchanged."))) return;
                 invoke(action);
               },
-            }, label)
+            }, actionLabel)
           ))),
           status?.recovery_directory ? React.createElement("p", { role: "status", style: styles.notice },
-            `已恢复至项目同级目录：${status.recovery_directory}。在本地 Agent 中打开该目录继续工作；原会话保持不变。`) : null,
+            `${label("已恢复至项目同级目录：", "Recovered to a sibling folder: ")}${status.recovery_directory}${label("。在本地 Agent 中打开该目录继续工作；原会话保持不变。", ". Open that folder in your local Agent to continue; original conversations remain unchanged.")}`) : null,
           project.error ? React.createElement("p", { role: "status", style: styles.notice }, codeSyncErrorLabel(project.error, github)) : null,
         ));
     }));
 }
 
 function codeSyncErrorLabel(code, github = false) {
+  if (github && githubEnglish()) {
+    const labels = {
+      code_sync_disabled: "Allow this DSH to sync project code first.",
+      code_sync_busy: "The Agent is working. Try again after this turn finishes.",
+      code_workspace_busy: "The Agent is working. Try again after this turn finishes.",
+      code_sync_dirty: "Local changes are not uploaded. Upload them first, or recover remote code to a new folder for comparison.",
+      code_sync_recovery_required: "The local folder is missing or a download was interrupted. Recover remote code to a new folder first.",
+      code_sync_forbidden: "Code access was denied. Check this device's sign-in and project permissions.",
+      code_sync_conflict: "The remote version changed. Download safely or recover to a new folder; nothing was overwritten.",
+      code_conflict: "The remote version conflicted. Check the latest branch while preserving local changes.",
+      code_stale_head: "A newer remote version exists. Recover to a new folder before comparing changes.",
+      code_merge_conflict: "Branches conflict. Preserve local changes and resolve the conflict after comparing versions.",
+      code_git_unavailable: "Git is unavailable. Check this device's Git installation.",
+      code_secret_detected: "A possible secret was detected, so the upload was blocked. Check project files.",
+      code_sync_secret: "A possible secret was detected, so the upload was blocked. Check project files.",
+      code_github_binding_changed: "The GitHub repository changed. Review the repository and base branch, then authorize again.",
+      code_github_not_configured: "Ask the project owner to connect a GitHub repository first.",
+      code_github_unavailable: "GitHub settings are temporarily unavailable. Check the connection and retry.",
+      code_sync_binding: "The code sync target changed. Review the repository and local authorization.",
+      code_sync_unavailable: "Cannot connect to GitHub. Check Git, GitHub CLI sign-in, network and repository access on this device.",
+      code_sync_limit: "Project files exceed this sync method's safety limits. Check large files and exclusions.",
+      code_sync_unsupported: "This repository contains unsupported content; no code was changed.",
+      code_sync_unsafe_path: "The project contains an unsafe or unsupported path. Sync was stopped.",
+    };
+    return labels[code] ?? "Code sync did not finish. Check authorization, files and remote status; conversation sync is unaffected.";
+  }
   const labels = {
     code_sync_disabled: "请先允许此 DSH 同步项目代码。",
     code_sync_busy: "Agent 正在工作，请等待本轮结束后再同步。",

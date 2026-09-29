@@ -19,6 +19,7 @@ async function loadClient(options: {
   fetch?: typeof fetch;
   setTimeout?: typeof setTimeout;
   clearTimeout?: typeof clearTimeout;
+  locale?: string;
 } = {}) {
   const source = await readFile(path.join(packageRoot, "client", "client.js"), "utf8");
   let handoff: Handoff | undefined;
@@ -54,6 +55,7 @@ async function loadClient(options: {
   };
   const context = vm.createContext({
     window: { __ModuleLoader__: { load(value: Handoff) { handoff = value; } } },
+    navigator: options.locale ? { language: options.locale } : undefined,
     fetch: options.fetch ?? globalThis.fetch,
     setTimeout: options.setTimeout ?? globalThis.setTimeout,
     clearTimeout: options.clearTimeout ?? globalThis.clearTimeout,
@@ -256,7 +258,7 @@ test("Client renders separate project code consent, manual actions and disabled-
   const text = collectedText(tree);
   for (const label of ["项目代码 · GatherThread 云端", "项目代码 · GitHub（推荐）", "example/source", "development",
     "连接 GitHub · 打开浏览器", "允许此 DSH 同步该项目代码", "上传代码", "下载更新", "恢复到新目录", "项目成员均可读取代码"]) {
-    assert.ok(text.includes(label), label);
+    assert.ok(text.includes(label), `${label}: ${text}`);
   }
   assert.match(text, /project-recovered-20260922/u);
   assert.match(text, /原工作区状态未知/u);
@@ -282,6 +284,47 @@ test("Client renders separate project code consent, manual actions and disabled-
       projectId: "project-code", enabled: true, repository: "example/source", base_branch: "development", revision: "revision-1",
     },
   });
+  cleanup?.();
+});
+
+test("Client renders GitHub sync actions in English when DSH uses an English locale", async () => {
+  const loaded = await loadClient({
+    locale: "en-US",
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: { rpc: { async call() { return { ok: true, value: {
+      schemaVersion: 2, integration: "gatherthread", authorization: "paired",
+      serverUrl: "http://127.0.0.1:18787", deviceName: "DSH",
+      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+      runtime: { schemaVersion: 1, integration: "gatherthread", connection: "connected", bindingMode: "project",
+        projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
+      route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
+      bindings: [{ projectId: "project-code", projectName: "Code project", provider: "deepseek", model: "deepseek-chat" }],
+      localSync: [], codeSync: [],
+      githubSync: [{ projectId: "project-code", projectName: "Code project", authorized: true,
+        connection: { repository: "example/source", base_branch: "main", enabled: true, revision: "revision-1" },
+        branch: "gatherthread/project/user", error: "code_sync_dirty",
+        status: { enabled: true, automatic_upload: false, local_changes: 1, file_count: 2, excluded_count: 0,
+          base_commit: null, cloud_commit: null, branch_id: null, needs_download: false,
+          local_status_unknown: false } }],
+    } }; } } },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  loaded.render(component as () => unknown);
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const text = collectedText(loaded.render(component as () => unknown));
+  for (const label of ["Project code · GitHub (recommended)", "Connect GitHub · Open browser",
+    "Upload code", "Download updates", "Recover to a new folder", "Local changes are not uploaded."]) {
+    assert.ok(text.includes(label), `${label}: ${text}`);
+  }
+  assert.doesNotMatch(text, /上传代码|本地有未上传修改/u);
   cleanup?.();
 });
 

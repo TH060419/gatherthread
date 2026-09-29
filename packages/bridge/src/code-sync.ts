@@ -382,7 +382,14 @@ export class ProjectCodeSync {
       case "code_update": {
         await this.initialize();
         if (!this.#options.storage) throw new CodeSyncError("code_sync_unsupported", "Use the cloud review controls to update this branch.");
-        return this.#locked(async () => this.#status(await this.#readBinding(), await this.#options.storage!.update(), await this.#inventory()));
+        return this.#locked(async () => {
+          const binding = await this.#readBinding();
+          const inventory = await this.#inventory();
+          if (!sameHashes(binding.baseline, inventory.hashes)) {
+            throw new CodeSyncError("code_sync_dirty", "Local source files have unuploaded changes. Upload them or recover the remote version before updating your GitHub branch.");
+          }
+          return this.#status(binding, await this.#options.storage!.update(), inventory);
+        });
       }
       default: throw new CodeSyncError("code_sync_unsupported", "Unsupported code sync action.");
     }
@@ -503,6 +510,9 @@ export class ProjectCodeSync {
     if (nativeRoot && await realpath(nativeRoot) === this.#root) {
       const trackedEntries = (await git(["ls-files", "--stage", "-z"], this.#root, inventoryOutputLimit)).split("\0").filter(Boolean);
       tracked = new Set(trackedEntries.map((entry) => entry.slice(entry.indexOf("\t") + 1)));
+      if (this.#options.storage?.metadata.provider === "github" && trackedEntries.some((entry) => !/^(?:100644|100755) /u.test(entry))) {
+        throw new CodeSyncError("code_sync_unsupported", "Tracked links or submodules cannot be synchronized to GitHub. Remove them from the native Git index or use native Git.");
+      }
       for (const entry of trackedEntries) if (entry.startsWith("100755 ")) nativeExecutables.add(entry.slice(entry.indexOf("\t") + 1));
       candidates = [...tracked, ...(await git(["ls-files", "--others", "--exclude-standard", "-z"], this.#root, inventoryOutputLimit)).split("\0").filter(Boolean)];
     } else {
@@ -518,14 +528,23 @@ export class ProjectCodeSync {
     let totalBytes = 0;
     for (const name of [...new Set(candidates)].sort()) {
       if (!isCodeSyncPathAllowed(name) || BUILD_PATH.test(name)) {
+        if (this.#options.storage?.metadata.provider === "github" && tracked.has(name)) {
+          throw new CodeSyncError("code_sync_unsupported", "A tracked private, unsafe or generated path cannot be synchronized to GitHub. Remove it from the native Git index or use native Git.");
+        }
         if (tracked.has(name) && !BUILD_PATH.test(name)) throw new CodeSyncError("code_sync_secret", "A tracked private or unsafe file is excluded from code sync. Remove it from version control before uploading.");
         excluded += 1; continue;
       }
       const target = path.join(this.#root, ...name.split("/"));
-      if (!await safeAncestors(this.#root, name)) { excluded += 1; continue; }
+      if (!await safeAncestors(this.#root, name)) {
+        if (this.#options.storage?.metadata.provider === "github" && tracked.has(name)) throw new CodeSyncError("code_sync_unsupported", "A tracked path crosses a link or unsafe directory. Use native Git after reviewing it.");
+        excluded += 1; continue;
+      }
       let info;
       try { info = await lstat(target); } catch (error) { if (isMissing(error)) continue; throw error; }
-      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) { excluded += 1; continue; }
+      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
+        if (this.#options.storage?.metadata.provider === "github" && tracked.has(name)) throw new CodeSyncError("code_sync_unsupported", "A tracked link or non-regular file cannot be synchronized to GitHub. Use native Git after reviewing it.");
+        excluded += 1; continue;
+      }
       if (info.size > this.#limits.maxFileBytes) throw new CodeSyncError("code_sync_limit", "A source file exceeds the selected provider's file limit.");
       const source = await readBoundedSource(target, this.#limits.maxFileBytes);
       const bytes = source.bytes;
