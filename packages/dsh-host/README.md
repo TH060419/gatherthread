@@ -60,6 +60,14 @@ other plugins remain untouched. The repository-level `npm run dsh:connect --
 --help` source-checkout connector and the examples under `bundle/` remain
 advanced/offline diagnostics, not the normal user path.
 
+## GitHub code synchronization: unreleased source preview
+
+GitHub controls require matching reviewed source builds of the server, Web app and native plugin; the `0.1.0-alpha.8` package command above does not imply this unreleased integration is published. The project owner first connects an existing repository and base branch in Web. Install Git 2.38+ and GitHub CLI on the device, then open **Settings → GatherThread / 共序 → 项目代码 · GitHub（推荐）**. Click **连接 GitHub · 打开浏览器** to start local browser sign-in if needed, then authorize that exact project/repository configuration. `gh auth login --hostname github.com --git-protocol https --web` remains a local fallback. This consent is separate from GT Cloud and conversation sync; a new GitHub binding automatically uploads settled changes while idle and can be switched off. Configuration changes, including pause/resume, require renewed local authorization.
+
+The Web app may request code operations only on your selected online runtime and cannot grant this local consent. Code and GitHub credentials travel directly to GitHub. GitHub permissions remain independent of GT membership; removing a GT member or project does not revoke GitHub access or delete GitHub data. See [Project code collaboration](../../docs/CODE_SYNC.md) for setup, recovery, limits and GitHub workflow-trigger risks.
+
+GitHub 接入仍为**未发布源码预览**，需使用匹配的服务端、网页与原生插件源码构建，不能假定固定版本 npm 包已支持。在网页配置现有仓库后，每台设备安装 Git 2.38+ 与 GitHub CLI，再进入 **Settings → GatherThread / 共序 → 项目代码 · GitHub（推荐）**，点击“连接 GitHub · 打开浏览器”完成本机登录，并核对、逐项目授权。终端命令仍可作为保底。GitHub、GT Cloud 和会话同步分别授权；新 GitHub 绑定在 Agent 空闲时会自动上传稳定改动，可关闭且重连后保持关闭。配置变化及暂停后恢复需重新本地授权。网页不能替代本地文件授权，共序成员变化或项目删除不会撤销 GitHub 权限或删除 GitHub 数据。完整流程见[项目代码协作文档](../../docs/CODE_SYNC.md)。
+
 ## Security and recovery
 
 Only allowlisted public text/tool fields leave DSH. Reasoning blocks, raw model

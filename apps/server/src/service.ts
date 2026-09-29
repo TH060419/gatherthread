@@ -61,6 +61,14 @@ export class CollaborationService {
     return this.database.updateProject(actor, projectId, input);
   }
 
+  getProjectGitHub(actor: Actor, projectId: string) {
+    return this.database.getProjectGitHub(actor, projectId);
+  }
+
+  setProjectGitHub(actor: Actor, projectId: string, input: Parameters<CollaborationDatabase["setProjectGitHub"]>[2]) {
+    return this.database.setProjectGitHub(actor, projectId, input);
+  }
+
   transferProjectOwnership(actor: Actor, projectId: string, targetUserId: string, idempotencyKey: string) {
     return this.database.transferProjectOwnership(actor, projectId, targetUserId, idempotencyKey);
   }

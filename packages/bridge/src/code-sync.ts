@@ -6,9 +6,10 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
-  CODE_SYNC_MAX_BODY_BYTES, CODE_SYNC_MAX_FILE_BYTES, CODE_SYNC_MAX_FILES, CODE_SYNC_MAX_SNAPSHOT_BYTES,
-  CodeFilesSchema, CodeMutationResultSchema, CodeSnapshotResultSchema, CodeStatusSchema,
+  CODE_SYNC_MAX_BODY_BYTES, CODE_SYNC_MAX_FILE_BYTES,
+  CodeMutationResultSchema, CodeSnapshotResultSchema, CodeStatusSchema,
   containsCodeSyncSecret, isCodeSyncPathAllowed, type CodeFile, type CodeStatus,
+  CLOUD_CODE_SYNC_LIMITS, createCodeFilesSchema, type CodeSyncLimits, type CodeMutationResult, type CodeCheckpointInput,
 } from "@gatherthread/protocol";
 
 const execFileAsync = promisify(execFile);
@@ -23,6 +24,10 @@ export class CodeSyncError extends Error {
 }
 
 export interface ProjectCodeSyncStatus {
+  provider?: "github";
+  repository?: string;
+  branch?: string;
+  base_branch?: string;
   enabled: boolean;
   automatic_upload: boolean;
   local_changes: number;
@@ -47,6 +52,19 @@ export interface ProjectCodeSyncOptions {
   stateRoot?: string;
   onRecovery?: (absolutePath: string) => void;
   fetch?: typeof globalThis.fetch;
+  /** Internal transport boundary. Never supplied by the browser or server. */
+  storage?: CodeSyncStorage;
+}
+
+export interface CodeSyncStorage {
+  key: string;
+  limits: CodeSyncLimits;
+  metadata: Pick<ProjectCodeSyncStatus, "provider" | "repository" | "branch" | "base_branch">;
+  initialize(privateDirectory: string): Promise<void>;
+  status(): Promise<CodeStatus>;
+  snapshot(status: CodeStatus): Promise<{ commit: string; files: CodeFile[] }>;
+  checkpoint(input: CodeCheckpointInput): Promise<CodeMutationResult>;
+  update(): Promise<CodeStatus>;
 }
 
 interface Binding {
@@ -69,10 +87,12 @@ export class ProjectCodeSync {
   readonly #apiUrl: string;
   #root = "";
   #stateRoot = "";
+  #lockRoot = "";
   #initialized: Promise<void> | undefined;
   #stableDigest = "";
   #stableSince = 0;
   #lastAutomaticAttempt = 0;
+  get #limits(): CodeSyncLimits { return this.#options.storage?.limits ?? CLOUD_CODE_SYNC_LIMITS; }
 
   constructor(options: ProjectCodeSyncOptions) {
     const url = new URL(options.apiUrl);
@@ -107,12 +127,17 @@ export class ProjectCodeSync {
       this.#root = path.join(await realpath(path.dirname(requestedRoot)), path.basename(requestedRoot));
     }
     this.#stateRoot = this.#options.stateRoot ?? path.join(homedir(), ".gatherthread", "code-sync", digest(this.#root));
+    const sharedRoot = this.#stateRoot;
+    if (this.#options.storage) this.#stateRoot = path.join(this.#stateRoot, digest(this.#options.storage.key));
     if (isWithin(this.#root, path.resolve(this.#stateRoot))) throw new CodeSyncError("code_sync_binding", "Code sync state must stay outside source files.");
     await mkdir(this.#stateRoot, { recursive: true, mode: 0o700 });
     if ((await lstat(this.#stateRoot)).isSymbolicLink()) throw new CodeSyncError("code_sync_binding", "Code sync state cannot be a symbolic link.");
     this.#stateRoot = await realpath(this.#stateRoot);
     if (isWithin(this.#root, this.#stateRoot)) throw new CodeSyncError("code_sync_binding", "Private code sync state resolves inside source files.");
     await chmod(this.#stateRoot, 0o700);
+    // Both providers and both harnesses use the same workspace lock. A GitHub
+    // download must not race a hosted-cloud download in another local process.
+    this.#lockRoot = await realpath(sharedRoot);
     // A separate empty Git index implements .gitignore even for non-Git workspaces.
     // It never stages, commits, checks out, or runs hooks inside the user's repository.
     await this.#locked(async () => {
@@ -120,13 +145,17 @@ export class ProjectCodeSync {
       try { if ((await lstat(inventoryPath)).isSymbolicLink()) throw new CodeSyncError("code_sync_binding", "Private Git inventory cannot be a symbolic link."); }
       catch (error) { if (!isMissing(error)) throw error; }
       await git(["init", "--bare", "--quiet", inventoryPath], this.#stateRoot);
+      await this.#options.storage?.initialize(this.#stateRoot);
       const filename = path.join(this.#stateRoot, "binding.json");
       try { await this.#readBinding(); }
       catch (error) {
         if (!isMissing(error)) throw error;
         await writePrivate(filename, JSON.stringify({
           version: 1, api_url: this.#apiUrl, project_id: this.#options.projectId, actor_id: this.#options.actorId,
-          workspace_path: this.#root, base_commit: null, automatic_upload: false, baseline: {},
+          workspace_path: this.#root, base_commit: null,
+          // GitHub authorization is an explicit local action. New GitHub
+          // bindings follow settled source edits automatically thereafter.
+          automatic_upload: this.#options.storage?.metadata.provider === "github", baseline: {},
         } satisfies Binding));
       }
     });
@@ -178,7 +207,8 @@ export class ProjectCodeSync {
         idempotency_key: `code-upload-${digest(JSON.stringify([this.#options.projectId, this.#options.actorId, uploadBase, inventory.hashes]))}`,
       };
       await this.#requireWorkspace();
-      const parsed = CodeMutationResultSchema.safeParse(await this.#request("/checkpoints", body));
+      const parsed = CodeMutationResultSchema.safeParse(this.#options.storage
+        ? await this.#options.storage.checkpoint(body) : await this.#request("/checkpoints", body));
       if (!parsed.success) throw invalidResponse();
       // A committed checkpoint is acknowledged only after reading its exact file tree back.
       const verified = await this.#snapshot(parsed.data.status);
@@ -215,7 +245,7 @@ export class ProjectCodeSync {
         backupRoot: path.join(this.#stateRoot, "download-backups", randomUUID()),
         beforeWrite: async () => { binding.interrupted_download = true; await this.#save(binding); },
         baselineExecutables: new Set(binding.executable_paths ?? []),
-      });
+      }, this.#limits);
       const verified = await this.#inventory(new Set(snapshot.files.filter((file) => file.executable).map((file) => file.path)));
       if (!sameHashes(verified.hashes, nextHashes)) throw new CodeSyncError("code_sync_conflict", "Local files changed during download. Check the workspace before retrying.");
       binding.base_commit = snapshot.commit;
@@ -250,13 +280,20 @@ export class ProjectCodeSync {
       const recoveryName = `${recoveryStem.join("")}-recovered-${new Date().toISOString().replace(/[^0-9]/gu, "").slice(0, 14)}-${randomUUID().slice(0, 8)}`;
       const recoveryPath = path.join(path.dirname(this.#root), recoveryName);
       await mkdir(recoveryPath, { mode: 0o700 });
-      await applySnapshot(recoveryPath, snapshot.files, {});
+      await applySnapshot(recoveryPath, snapshot.files, {}, undefined, this.#limits);
       // Give the recovered directory its own private baseline, without changing
       // the original binding or any native task. Editing it before reconnecting
       // must still upload against this exact restored commit, not cloud main.
       const restored = new ProjectCodeSync({
         ...this.#options, workspacePath: recoveryPath,
-        stateRoot: path.join(path.dirname(this.#stateRoot), digest(recoveryPath)),
+        ...(this.#options.stateRoot ? { stateRoot: path.join(path.dirname(this.#options.stateRoot), digest(recoveryPath)) } : {}),
+        // The transport has private mutable Git state; recovery only seeds the
+        // baseline and does not need another transport initialization here.
+        ...(this.#options.storage ? { storage: { ...this.#options.storage,
+          key: this.#options.storage.key, limits: this.#limits, metadata: this.#options.storage.metadata,
+          initialize: async () => {}, status: () => this.#cloudStatus(), snapshot: (status) => this.#snapshot(status),
+          checkpoint: (input) => this.#options.storage!.checkpoint(input), update: () => this.#options.storage!.update(),
+        } } : {}),
       });
       await restored.initialize();
       await restored.#locked(async () => {
@@ -282,7 +319,16 @@ export class ProjectCodeSync {
     await this.initialize();
     return this.#locked(async () => {
       const binding = await this.#readBinding();
-      const cloud = await this.#cloudStatus();
+      // Local revocation must take effect even while either server or GitHub
+      // is unreachable. A failed status refresh must never restore consent.
+      if (!enabled) { binding.automatic_upload = false; await this.#save(binding); }
+      let cloud: CodeStatus;
+      try { cloud = await this.#cloudStatus(); }
+      catch (error) {
+        if (enabled) throw error;
+        return { ...this.#status(binding, { repository: { enabled: false, main_commit: null }, branches: [], own_branch_id: null },
+          { files: [], hashes: binding.baseline, excluded: 0 }), local_status_unknown: true };
+      }
       if (enabled) assertEnabled(cloud);
       binding.automatic_upload = enabled;
       await this.#save(binding);
@@ -319,7 +365,11 @@ export class ProjectCodeSync {
   }
 
   async execute(kind: string, { busy = false, operationId }: { busy?: boolean; operationId?: string } = {}): Promise<ProjectCodeSyncStatus> {
-    if (busy && ["code_upload", "code_download", "code_recover", "code_auto_upload_enable"].includes(kind)) {
+    if (kind.startsWith("github_") !== (this.#options.storage?.metadata.provider === "github")) {
+      throw new CodeSyncError("code_sync_unsupported", "The requested action belongs to a different code provider.");
+    }
+    if (kind.startsWith("github_")) kind = kind.slice(7);
+    if (busy && ["code_upload", "code_download", "code_recover", "code_auto_upload_enable", "code_update"].includes(kind)) {
       throw new CodeSyncError("code_sync_busy", "An Agent is working in this workspace. Wait until it finishes before syncing code.");
     }
     switch (kind) {
@@ -329,17 +379,24 @@ export class ProjectCodeSync {
       case "code_recover": return this.recover(operationId);
       case "code_auto_upload_enable": return this.setAutomaticUpload(true);
       case "code_auto_upload_disable": return this.setAutomaticUpload(false);
+      case "code_update": {
+        await this.initialize();
+        if (!this.#options.storage) throw new CodeSyncError("code_sync_unsupported", "Use the cloud review controls to update this branch.");
+        return this.#locked(async () => this.#status(await this.#readBinding(), await this.#options.storage!.update(), await this.#inventory()));
+      }
       default: throw new CodeSyncError("code_sync_unsupported", "Unsupported code sync action.");
     }
   }
 
   async #cloudStatus(): Promise<CodeStatus> {
+    if (this.#options.storage) return this.#options.storage.status();
     const parsed = CodeStatusSchema.safeParse(await this.#request(""));
     if (!parsed.success) throw invalidResponse();
     return parsed.data;
   }
   async #snapshot(cloud: CodeStatus) {
     if (!cloud.repository.main_commit && !cloud.own_branch_id) throw new CodeSyncError("code_sync_empty", "No code has been uploaded yet.");
+    if (this.#options.storage) return this.#options.storage.snapshot(cloud);
     const parsed = CodeSnapshotResultSchema.safeParse(await this.#request(`/snapshot?branch_id=${encodeURIComponent(cloud.own_branch_id ?? "main")}`));
     if (!parsed.success) throw invalidResponse();
     return parsed.data.snapshot;
@@ -347,6 +404,7 @@ export class ProjectCodeSync {
   #status(binding: Binding, cloud: CodeStatus, inventory: Inventory): ProjectCodeSyncStatus {
     const cloudCommit = cloud.branches.find((branch) => branch.id === cloud.own_branch_id)?.head_commit ?? cloud.repository.main_commit;
     return {
+      ...this.#options.storage?.metadata,
       enabled: cloud.repository.enabled, automatic_upload: binding.automatic_upload,
       local_changes: changedCount(binding.baseline, inventory.hashes), file_count: inventory.files.length,
       excluded_count: inventory.excluded, base_commit: binding.base_commit, cloud_commit: cloudCommit,
@@ -396,7 +454,7 @@ export class ProjectCodeSync {
   async #readBinding(): Promise<Binding> {
     const file = path.join(this.#stateRoot, "binding.json");
     const info = await lstat(file);
-    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > MAX_BINDING_BYTES) throw new CodeSyncError("code_sync_binding", "Private code sync state is not a regular bounded file.");
+    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.size > MAX_BINDING_BYTES * (this.#options.storage ? 10 : 1)) throw new CodeSyncError("code_sync_binding", "Private code sync state is not a regular bounded file.");
     let binding: Binding;
     try { binding = JSON.parse(await readFile(file, "utf8")) as Binding; }
     catch (error) { if (isMissing(error)) throw error; throw new CodeSyncError("code_sync_binding", "Private code sync state is invalid."); }
@@ -409,10 +467,10 @@ export class ProjectCodeSync {
     }
     if (binding.interrupted_download !== undefined && typeof binding.interrupted_download !== "boolean") throw new CodeSyncError("code_sync_binding", "Private download recovery state is invalid.");
     if (binding.executable_paths !== undefined && (!Array.isArray(binding.executable_paths)
-      || binding.executable_paths.length > CODE_SYNC_MAX_FILES
+      || binding.executable_paths.length > this.#limits.maxFiles
       || binding.executable_paths.some((name) => typeof name !== "string" || !isCodeSyncPathAllowed(name)))) throw new CodeSyncError("code_sync_binding", "Private code file-mode state is invalid.");
     const baseline = Object.entries(binding.baseline);
-    if (baseline.length > CODE_SYNC_MAX_FILES) throw new CodeSyncError("code_sync_binding", "Private code sync baseline exceeds the file limit.");
+    if (baseline.length > this.#limits.maxFiles) throw new CodeSyncError("code_sync_binding", "Private code sync baseline exceeds the file limit.");
     for (const [name, hash] of baseline) {
       if (!isCodeSyncPathAllowed(name) || typeof hash !== "string" || !/^[a-f0-9]{64}$/u.test(hash)) throw new CodeSyncError("code_sync_binding", "Private code sync baseline is invalid.");
     }
@@ -440,14 +498,15 @@ export class ProjectCodeSync {
     const nativeExecutables = new Set<string>();
     let candidates: string[];
     let nativeRoot = "";
+    const inventoryOutputLimit = this.#options.storage ? this.#limits.maxFiles * 2_100 : 2 * 1024 * 1024;
     try { nativeRoot = (await git(["rev-parse", "--show-toplevel"], this.#root)).trim(); } catch { /* Non-Git workspaces use the private inventory index. */ }
     if (nativeRoot && await realpath(nativeRoot) === this.#root) {
-      const trackedEntries = (await git(["ls-files", "--stage", "-z"], this.#root)).split("\0").filter(Boolean);
+      const trackedEntries = (await git(["ls-files", "--stage", "-z"], this.#root, inventoryOutputLimit)).split("\0").filter(Boolean);
       tracked = new Set(trackedEntries.map((entry) => entry.slice(entry.indexOf("\t") + 1)));
       for (const entry of trackedEntries) if (entry.startsWith("100755 ")) nativeExecutables.add(entry.slice(entry.indexOf("\t") + 1));
-      candidates = [...tracked, ...(await git(["ls-files", "--others", "--exclude-standard", "-z"], this.#root)).split("\0").filter(Boolean)];
+      candidates = [...tracked, ...(await git(["ls-files", "--others", "--exclude-standard", "-z"], this.#root, inventoryOutputLimit)).split("\0").filter(Boolean)];
     } else {
-      candidates = (await git([`--git-dir=${path.join(this.#stateRoot, "inventory.git")}`, `--work-tree=${this.#root}`, "ls-files", "--others", "--exclude-standard", "-z"], this.#root)).split("\0").filter(Boolean);
+      candidates = (await git([`--git-dir=${path.join(this.#stateRoot, "inventory.git")}`, `--work-tree=${this.#root}`, "ls-files", "--others", "--exclude-standard", "-z"], this.#root, inventoryOutputLimit)).split("\0").filter(Boolean);
     }
     // Previously uploaded cloud files stay tracked even if a new .gitignore
     // matches them, exactly as normal Git-tracked files do.
@@ -467,21 +526,21 @@ export class ProjectCodeSync {
       let info;
       try { info = await lstat(target); } catch (error) { if (isMissing(error)) continue; throw error; }
       if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) { excluded += 1; continue; }
-      if (info.size > CODE_SYNC_MAX_FILE_BYTES) throw new CodeSyncError("code_sync_limit", "A source file exceeds the 2 MiB code sync limit.");
-      const source = await readBoundedSource(target);
+      if (info.size > this.#limits.maxFileBytes) throw new CodeSyncError("code_sync_limit", "A source file exceeds the selected provider's file limit.");
+      const source = await readBoundedSource(target, this.#limits.maxFileBytes);
       const bytes = source.bytes;
       if (containsCodeSyncSecret(bytes.toString("utf8"))) throw new CodeSyncError("code_sync_secret", "A source file contains a recognizable credential or private key. Remove it before uploading.");
       totalBytes += bytes.byteLength;
-      if (totalBytes > CODE_SYNC_MAX_SNAPSHOT_BYTES || files.length >= CODE_SYNC_MAX_FILES) throw new CodeSyncError("code_sync_limit", "Code sync is limited to 1,000 files and 8 MiB per checkpoint.");
+      if (totalBytes > this.#limits.maxSnapshotBytes || files.length >= this.#limits.maxFiles) throw new CodeSyncError("code_sync_limit", "Source files exceed the selected provider's checkpoint limit.");
       files.push({ path: name, content_base64: bytes.toString("base64"), executable: process.platform === "win32"
         ? executablePaths.has(name) || nativeExecutables.has(name) : source.executable });
     }
-    if (!CodeFilesSchema.safeParse(files).success) throw new CodeSyncError("code_sync_unsafe_path", "Source files contain non-portable or conflicting paths.");
+    if (!createCodeFilesSchema(this.#limits).safeParse(files).success) throw new CodeSyncError("code_sync_unsafe_path", "Source files contain non-portable or conflicting paths.");
     return { files, hashes: fileHashes(files), excluded };
   }
 
   async #locked<T>(operation: () => Promise<T>): Promise<T> {
-    const lockPath = path.join(this.#stateRoot, "operation.lock");
+    const lockPath = path.join(this.#lockRoot, "operation.lock");
     let handle;
     try { handle = await open(lockPath, "wx", 0o600); }
     catch (error) {
@@ -521,12 +580,12 @@ function assertEnabled(status: CodeStatus) { if (!status.repository.enabled) thr
 function isMissing(error: unknown) { return (error as NodeJS.ErrnoException).code === "ENOENT"; }
 function isWithin(root: string, target: string) { const relative = path.relative(root, target); return !relative || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative)); }
 
-async function git(args: string[], cwd: string): Promise<string> {
+async function git(args: string[], cwd: string, maxBuffer = 2 * 1024 * 1024): Promise<string> {
   const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_") && !key.startsWith("GATHERTHREAD_")));
   try {
     const result = await execFileAsync("git", ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", ...args], {
       cwd, env: { ...env, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null", GIT_OPTIONAL_LOCKS: "0", GIT_TERMINAL_PROMPT: "0" },
-      timeout: 15_000, maxBuffer: 2 * 1024 * 1024, encoding: "utf8", windowsHide: true,
+      timeout: 15_000, maxBuffer, encoding: "utf8", windowsHide: true,
     });
     return result.stdout;
   } catch { throw new CodeSyncError("code_sync_unavailable", "Git file inspection failed. Install Git and check the local workspace."); }
@@ -556,22 +615,22 @@ async function safeAncestors(root: string, relative: string, create = false): Pr
   return true;
 }
 
-async function fileHash(root: string, name: string, executableHint?: boolean): Promise<string | undefined> {
+async function fileHash(root: string, name: string, executableHint?: boolean, maxBytes = CODE_SYNC_MAX_FILE_BYTES): Promise<string | undefined> {
   if (!await safeAncestors(root, name)) throw new CodeSyncError("code_sync_unsafe_path", "A destination directory is a symbolic link or not a directory.");
   const target = path.join(root, ...name.split("/"));
   let info;
   try { info = await lstat(target); } catch (error) { if (isMissing(error)) return; throw error; }
-  if (!info.isFile() || info.isSymbolicLink() || info.size > CODE_SYNC_MAX_FILE_BYTES) throw new CodeSyncError("code_sync_unsafe_path", "A destination is not a bounded regular source file.");
-  const source = await readBoundedSource(target);
+  if (!info.isFile() || info.isSymbolicLink() || info.size > maxBytes) throw new CodeSyncError("code_sync_unsafe_path", "A destination is not a bounded regular source file.");
+  const source = await readBoundedSource(target, maxBytes);
   const executable = process.platform === "win32" && executableHint !== undefined ? executableHint : source.executable;
   return digest(`${executable ? "1" : "0"}\0${source.bytes.toString("base64")}`);
 }
 
-async function readBoundedSource(filename: string): Promise<{ bytes: Buffer; executable: boolean }> {
+async function readBoundedSource(filename: string, maxBytes = CODE_SYNC_MAX_FILE_BYTES): Promise<{ bytes: Buffer; executable: boolean }> {
   const handle = await open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const before = await handle.stat();
-    if (!before.isFile() || before.nlink !== 1 || before.size > CODE_SYNC_MAX_FILE_BYTES) throw new CodeSyncError("code_sync_unsafe_path", "A source path is not a bounded regular file.");
+    if (!before.isFile() || before.nlink !== 1 || before.size > maxBytes) throw new CodeSyncError("code_sync_unsafe_path", "A source path is not a bounded regular file.");
     const buffer = Buffer.alloc(before.size + 1);
     const result = await handle.read(buffer, 0, buffer.length, 0);
     const after = await handle.stat();
@@ -584,17 +643,17 @@ async function applySnapshot(root: string, files: CodeFile[], baseline: Record<s
   backupRoot: string;
   beforeWrite: () => Promise<void>;
   baselineExecutables?: ReadonlySet<string>;
-}): Promise<void> {
-  if (!CodeFilesSchema.safeParse(files).success) throw new CodeSyncError("code_sync_unsafe_path", "Cloud code contains unsafe paths.");
+}, limits = CLOUD_CODE_SYNC_LIMITS): Promise<void> {
+  if (!createCodeFilesSchema(limits).safeParse(files).success) throw new CodeSyncError("code_sync_unsafe_path", "Cloud code contains unsafe paths.");
   const names = new Set([...Object.keys(baseline), ...files.map((file) => file.path)]);
   // Check every destination before modifying any file, including ignored local files.
   for (const name of names) {
-    if (await fileHash(root, name, options?.baselineExecutables?.has(name)) !== baseline[name]) throw new CodeSyncError("code_sync_dirty", "Cloud code would overwrite local or ignored files. Recover into a new folder instead.");
+    if (await fileHash(root, name, options?.baselineExecutables?.has(name), limits.maxFileBytes) !== baseline[name]) throw new CodeSyncError("code_sync_dirty", "Cloud code would overwrite local or ignored files. Recover into a new folder instead.");
   }
   if (options) {
     await mkdir(options.backupRoot, { recursive: true, mode: 0o700 });
     for (const name of Object.keys(baseline)) {
-      const source = await readBoundedSource(path.join(root, ...name.split("/")));
+      const source = await readBoundedSource(path.join(root, ...name.split("/")), limits.maxFileBytes);
       if (process.platform === "win32" && options.baselineExecutables) source.executable = options.baselineExecutables.has(name);
       if (digest(`${source.executable ? "1" : "0"}\0${source.bytes.toString("base64")}`) !== baseline[name]) throw new CodeSyncError("code_sync_busy", "Source files changed before the download backup was complete.");
       const destination = path.join(options.backupRoot, ...name.split("/"));
@@ -606,14 +665,14 @@ async function applySnapshot(root: string, files: CodeFile[], baseline: Record<s
   }
   const targetNames = new Set(files.map((file) => file.path));
   for (const file of files) {
-    if (!await safeAncestors(root, file.path, true) || await fileHash(root, file.path, options?.baselineExecutables?.has(file.path)) !== baseline[file.path]) throw new CodeSyncError("code_sync_busy", "Local files changed during download. No further files were applied.");
+    if (!await safeAncestors(root, file.path, true) || await fileHash(root, file.path, options?.baselineExecutables?.has(file.path), limits.maxFileBytes) !== baseline[file.path]) throw new CodeSyncError("code_sync_busy", "Local files changed during download. No further files were applied.");
     const filename = path.join(root, ...file.path.split("/"));
     // Keep the temporary leaf short even when the portable filename is at the
     // filesystem limit. Staying in the same directory preserves atomic rename.
     const temporary = path.join(path.dirname(filename), `.gatherthread-${randomUUID()}.tmp`);
     const handle = await open(temporary, "wx", file.executable ? 0o700 : 0o600);
     try { await handle.writeFile(Buffer.from(file.content_base64, "base64")); await handle.sync(); } finally { await handle.close(); }
-    if (!await safeAncestors(root, file.path) || await fileHash(root, file.path, options?.baselineExecutables?.has(file.path)) !== baseline[file.path]) {
+    if (!await safeAncestors(root, file.path) || await fileHash(root, file.path, options?.baselineExecutables?.has(file.path), limits.maxFileBytes) !== baseline[file.path]) {
       await unlink(temporary);
       throw new CodeSyncError("code_sync_busy", "Source files changed while preparing a download. Original files were backed up; no further files were applied.");
     }
@@ -621,7 +680,7 @@ async function applySnapshot(root: string, files: CodeFile[], baseline: Record<s
   }
   for (const name of Object.keys(baseline)) {
     if (!targetNames.has(name)) {
-      if (await fileHash(root, name, options?.baselineExecutables?.has(name)) !== baseline[name]) throw new CodeSyncError("code_sync_busy", "Local files changed during download. No further files were applied.");
+      if (await fileHash(root, name, options?.baselineExecutables?.has(name), limits.maxFileBytes) !== baseline[name]) throw new CodeSyncError("code_sync_busy", "Local files changed during download. No further files were applied.");
       await unlink(path.join(root, ...name.split("/")));
     }
   }

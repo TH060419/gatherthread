@@ -2,13 +2,17 @@ import {
   ensureProjectWorkspace,
   HttpCollaborationClient,
   ProjectCodeSync,
+  createGitHubCodeSync,
+  connectGitHubAccount,
   type ProjectSummary,
   type LocalConversationSyncStatus,
   type LocalConversationUploadResult,
 } from "@gatherthread/bridge";
 import { createHash } from "node:crypto";
 import path from "node:path";
-import { DshCodeSyncController, type DshCodeSyncView } from "./code-sync-controller.js";
+import { DshCodeSyncController, GITHUB_CODE_ACTIONS, type DshCodeSyncView } from "./code-sync-controller.js";
+import { DshGitHubCodeSyncController, type DshGitHubCodeSyncView, type DshGitHubTarget } from "./github-code-sync-controller.js";
+import { GitHubProjectStatusSchema } from "@gatherthread/protocol";
 import { createHttpDshCollaborationApi } from "./collaboration-api.js";
 import { managedDshSessionTitle } from "./session-title.js";
 import {
@@ -80,6 +84,9 @@ const RPC_ENDPOINTS = new Set([
   "sync/upload",
   "code/authorize",
   "code/action",
+  "github/authorize",
+  "github/action",
+  "github/connect",
 ]);
 const MAX_CATALOG_PROVIDERS = 64;
 const MAX_CATALOG_MODELS = 256;
@@ -121,6 +128,7 @@ export interface DshNativePublicState {
   readonly recoverableError?: "pairing_failed" | "connection_failed";
   readonly localSync?: readonly DshNativeLocalSyncStatus[];
   readonly codeSync?: readonly (DshCodeSyncView & { projectId: string; projectName: string })[];
+  readonly githubSync?: readonly (DshGitHubCodeSyncView & { projectId: string; projectName: string })[];
 }
 
 export interface DshNativeLocalSyncStatus extends LocalConversationSyncStatus {
@@ -149,6 +157,9 @@ interface NativeOwner {
   codeSyncView?(): DshCodeSyncView;
   authorizeCodeSync?(enabled: boolean): Promise<DshCodeSyncView>;
   executeCodeSync?(action: string): Promise<DshCodeSyncView>;
+  githubSyncView?(): DshGitHubCodeSyncView;
+  authorizeGitHubSync?(enabled: boolean, expected?: DshGitHubTarget): Promise<DshGitHubCodeSyncView>;
+  executeGitHubSync?(action: string): Promise<DshGitHubCodeSyncView>;
 }
 
 interface NativeLlmLike {
@@ -322,6 +333,11 @@ export class DshNativeHostController {
               projectName: this.#projects.get(projectId)?.name ?? projectId,
               ...view,
             }];
+          }).slice(0, 100),
+          githubSync: [...this.#owners].flatMap(([projectId, owner]) => {
+            if (this.#projects.get(projectId)?.role === "viewer") return [];
+            const view = owner.githubSyncView?.();
+            return view === undefined ? [] : [{ projectId, projectName: this.#projects.get(projectId)?.name ?? projectId, ...view }];
           }).slice(0, 100),
         }),
       }),
@@ -586,6 +602,41 @@ export class DshNativeHostController {
       ].includes(input.action) || !owner.executeCodeSync) throw new Error("Invalid code sync action");
       await owner.executeCodeSync(input.action);
     }
+    return this.publicState();
+  }
+
+  async githubSyncAction(inputValue: unknown, authorize = false): Promise<DshNativePublicState> {
+    this.#assertAvailable();
+    const input = exactInput(inputValue, new Set(authorize
+      ? ["projectId", "enabled", "repository", "base_branch", "revision"] : ["projectId", "action"]));
+    const projectId = safeInputIdentifier(input.projectId, "projectId");
+    const owner = this.#owners.get(projectId);
+    if (!owner || this.#projects.get(projectId)?.role === "viewer") throw new Error("This Project is not writable on this DSH device");
+    if (authorize) {
+      if (typeof input.enabled !== "boolean" || !owner.authorizeGitHubSync) throw new Error("Invalid GitHub authorization");
+      let expected: DshGitHubTarget | undefined;
+      if (input.enabled) {
+        if (typeof input.repository !== "string" || typeof input.base_branch !== "string" || typeof input.revision !== "string"
+          || input.repository.length > 160 || input.base_branch.length > 255 || input.revision.length > 128) throw new Error("Invalid GitHub target");
+        expected = { repository: input.repository, base_branch: input.base_branch, revision: input.revision };
+      }
+      await owner.authorizeGitHubSync(input.enabled, expected);
+    } else {
+      if (typeof input.action !== "string" || !(GITHUB_CODE_ACTIONS as readonly string[]).includes(input.action)
+        || !owner.executeGitHubSync) throw new Error("Invalid GitHub action");
+      await owner.executeGitHubSync(input.action);
+    }
+    return this.publicState();
+  }
+
+  async connectGitHub(inputValue: unknown): Promise<DshNativePublicState> {
+    this.#assertAvailable();
+    const input = exactInput(inputValue, new Set(["projectId"]));
+    const projectId = safeInputIdentifier(input.projectId, "projectId");
+    if (!this.#owners.has(projectId) || this.#projects.get(projectId)?.role === "viewer") {
+      throw new Error("This Project is not writable on this DSH device");
+    }
+    await connectGitHubAccount();
     return this.publicState();
   }
 
@@ -1009,6 +1060,12 @@ export function registerNativeDshRpc(
           return rpcSuccess(await controller.codeSyncAction(payload, true));
         case "code/action":
           return rpcSuccess(await controller.codeSyncAction(payload));
+        case "github/authorize":
+          return rpcSuccess(await controller.githubSyncAction(payload, true));
+        case "github/action":
+          return rpcSuccess(await controller.githubSyncAction(payload));
+        case "github/connect":
+          return rpcSuccess(await controller.connectGitHub(payload));
         default:
           return rpcFailure("gatherthread/not-found", "GatherThread DSH action is unavailable");
       }
@@ -1157,7 +1214,61 @@ async function createProductionOwner(options: {
   });
   // Invalid consent affects code sync only; existing conversation execution stays available.
   await codeSync.start().catch(() => undefined);
-  const codeTimer = setInterval(() => { void codeSync.poll(); }, 5_000);
+  const githubSync = new DshGitHubCodeSyncController({
+    permissionPath: path.join(config.stateRoot, `github-consent-${createHash("sha256").update(actor.id).digest("hex")}.json`),
+    binding: createHash("sha256").update(JSON.stringify([
+      "github", config.apiUrl, config.projectId, actor.id, config.workspacePath,
+    ])).digest("hex"),
+    readMetadata: async () => {
+      const response = await fetch(`${config.apiUrl}/projects/${encodeURIComponent(config.projectId)}/github`, {
+        headers: { authorization: `Bearer ${options.grant.token}` }, redirect: "error",
+        signal: AbortSignal.any([ownerAbort.signal, AbortSignal.timeout(15_000)]),
+      });
+      if (!response.ok || !response.body) throw Object.assign(new Error("GitHub metadata unavailable"), { code: "code_github_unavailable" });
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      try {
+        for (;;) {
+          const next = await reader.read();
+          if (next.done) break;
+          size += next.value.byteLength;
+          if (size > 16 * 1024) throw new Error("GitHub metadata too large");
+          chunks.push(next.value);
+        }
+      } finally { await reader.cancel().catch(() => undefined); }
+      const envelope = JSON.parse(Buffer.concat(chunks).toString("utf8")) as { data?: unknown };
+      return GitHubProjectStatusSchema.parse(envelope.data);
+    },
+    createEngine: (target) => createGitHubCodeSync({
+      apiUrl: config.apiUrl, token: options.grant.token, projectId: config.projectId,
+      actorId: actor.id, workspacePath: config.workspacePath,
+      repository: target.repository, baseBranch: target.base_branch, revision: target.revision,
+      ...(options.dshHome === undefined ? {} : {
+        stateRoot: path.join(options.dshHome, "gatherthread-code-sync", createHash("sha256").update(config.workspacePath).digest("hex")),
+      }),
+    }),
+    api: new HttpCollaborationClient({ baseUrl: config.apiUrl, bearerToken: options.grant.token, signal: ownerAbort.signal }),
+    runtimes: () => new Map([...codeRuntimes].flatMap(([id, connector]) => (
+      connector.stopped || !connector.executionRuntimeId ? [] : [[id, connector.executionRuntimeId]]
+    ))),
+    isBusy: () => nativeWorkspace.isBusy(),
+  });
+  await githubSync.start().catch(() => undefined);
+  // Manual actions and polls share one queue across both source providers.
+  let localCodeTail: Promise<unknown> = Promise.resolve();
+  function scheduleCode<T>(operation: () => Promise<T>): Promise<T> {
+    const task = localCodeTail.then(operation);
+    localCodeTail = task.catch(() => undefined);
+    return task;
+  }
+  let codePolling = false;
+  const codeTimer = setInterval(() => {
+    if (codePolling) return;
+    codePolling = true;
+    void scheduleCode(async () => { await codeSync.poll(); await githubSync.poll(); })
+      .catch(() => undefined).finally(() => { codePolling = false; });
+  }, 5_000);
   codeTimer.unref();
   let stopPromise: Promise<void> | undefined;
   return {
@@ -1166,14 +1277,19 @@ async function createProductionOwner(options: {
     setLocalAutoUpload: (sessionId, enabled) => manager.setLocalAutoUpload(sessionId, enabled),
     uploadLocalTurns: (sessionId) => manager.uploadLocalTurns(sessionId),
     codeSyncView: () => codeSync.view(),
-    authorizeCodeSync: (enabled) => codeSync.authorize(enabled),
-    executeCodeSync: (action) => codeSync.execute(action),
+    authorizeCodeSync: (enabled) => scheduleCode(() => codeSync.authorize(enabled)),
+    executeCodeSync: (action) => scheduleCode(() => codeSync.execute(action)),
+    githubSyncView: () => githubSync.view(),
+    authorizeGitHubSync: (enabled, expected) => scheduleCode(() => githubSync.authorize(enabled, expected)),
+    executeGitHubSync: (action) => scheduleCode(() => githubSync.execute(action)),
     stop() {
       stopPromise ??= (async () => {
         options.signal.removeEventListener("abort", abortFromRoot);
         clearInterval(codeTimer);
         ownerAbort.abort(new Error("GatherThread native DSH manager stopped"));
+        await localCodeTail;
         await codeSync.stop();
+        await githubSync.stop();
         await manager.stop();
         nativeWorkspace.dispose();
       })();

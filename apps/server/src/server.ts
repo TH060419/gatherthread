@@ -29,6 +29,8 @@ import {
   CreateSessionInputSchema,
   CODE_SYNC_MAX_BODY_BYTES,
   FailSnapshotRequestInputSchema,
+  GitHubConnectionInputSchema,
+  GitHubProjectStatusSchema,
   DetachedCodeClearResultSchema,
   ListSnapshotRequestsQuerySchema,
   ProjectMentionsPageSchema,
@@ -890,6 +892,15 @@ export async function startCollaborationServer(
       }
 
       const projectId = parts[0] === "v1" && parts[1] === "projects" ? parts[2] : undefined;
+      if (projectId && parts[3] === "github" && parts.length === 4 && request.method === "GET") {
+        sendJson(response, 200, { data: GitHubProjectStatusSchema.parse(service.getProjectGitHub(actor, projectId)) });
+        return;
+      }
+      if (projectId && parts[3] === "github" && parts.length === 4 && request.method === "PUT") {
+        const input = GitHubConnectionInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: GitHubProjectStatusSchema.parse(service.setProjectGitHub(actor, projectId, input)) });
+        return;
+      }
       if (projectId && parts[3] === "context-policy" && parts.length === 4 && request.method === "GET") {
         sendJson(response, 200, { data: service.getProjectContextPolicy(actor, projectId) });
         return;

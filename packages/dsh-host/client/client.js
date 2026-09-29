@@ -105,7 +105,7 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       }
       onSuccess?.(next);
     } catch {
-      setNotice(endpoint.startsWith("code/")
+      setNotice(endpoint.startsWith("code/") || endpoint.startsWith("github/")
         ? "代码同步未完成。请检查本机授权、项目权限和云端版本；不会强制覆盖文件。"
         : endpoint.startsWith("sync/")
         ? "上传操作未完成。请检查连接和会话权限后重试。"
@@ -184,50 +184,66 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       setModel,
       runAction,
     }),
+  nativeState === undefined || unavailable ? null : renderCodeSyncControls(nativeState, busy, runAction, true),
   nativeState === undefined || unavailable ? null : renderCodeSyncControls(nativeState, busy, runAction));
 }
 
-function renderCodeSyncControls(state, busy, runAction) {
-  if (!state.codeSync?.length) return null;
+function renderCodeSyncControls(state, busy, runAction, github = false) {
+  const projects = github ? state.githubSync : state.codeSync;
+  if (!projects?.length) return null;
   const actions = [
     ["code_sync_status", "检查状态"],
     ["code_upload", "上传代码"],
     ["code_download", "下载更新"],
     ["code_recover", "恢复到新目录"],
   ];
-  return React.createElement("section", { style: styles.connectionCard, "aria-label": "项目代码同步" },
-    React.createElement("h3", { style: styles.sectionTitle }, "项目代码 · Git"),
+  if (github) actions.push(["code_update", "从主分支更新"]);
+  const prefix = github ? "github_" : "";
+  return React.createElement("section", { style: styles.connectionCard, "aria-label": github ? "GitHub 项目代码同步" : "项目代码同步" },
+    React.createElement("h3", { style: styles.sectionTitle }, github ? "项目代码 · GitHub（推荐）" : "项目代码 · GatherThread 云端"),
     React.createElement("p", { style: styles.muted },
-      "代码与会话上传独立。每位成员使用自己的云端分支；项目成员均可读取代码。上传前请检查源文件，不上传密钥或私人资料。"),
-    ...state.codeSync.map((project) => {
-      const invoke = (action) => void runAction("code/action", { projectId: project.projectId, action });
+      github ? "本机直接与 GitHub 同步，代码和 GitHub 凭据不经过 GatherThread。GitHub 仓库成员权限独立管理；自动上传可能触发仓库 Actions。" : "代码与会话上传独立。每位成员使用自己的云端分支；项目成员均可读取代码。上传前请检查源文件，不上传密钥或私人资料。"),
+    github ? React.createElement("p", { style: styles.muted }, "先在本机安装 Git 和 GitHub CLI；点击下方按钮会打开浏览器完成 GitHub 登录。") : null,
+    ...projects.map((project) => {
+      const invoke = (action) => void runAction(github ? "github/action" : "code/action", { projectId: project.projectId, action: `${prefix}${action}` });
       const status = project.status;
+      const enabled = github ? project.connection?.enabled === true : status?.enabled;
       return React.createElement("details", { key: project.projectId, style: { ...styles.row, display: "block" } },
         React.createElement("summary", { style: styles.sessionTitle }, project.projectName),
         React.createElement("div", { style: styles.form },
+          github ? React.createElement("p", { style: styles.sessionMeta }, project.connection
+            ? `${project.connection.repository} · 主分支 ${project.connection.base_branch} · 成员分支 ${project.branch ?? "尚未分配"}${enabled ? "" : " · 已暂停"}`
+            : "请由项目创建者在 GatherThread 的项目代码中绑定 GitHub 仓库。") : null,
+          github ? React.createElement("button", { type: "button", style: styles.compactButton,
+            disabled: busy || !project.connection,
+            onClick: () => void runAction("github/connect", { projectId: project.projectId }),
+          }, "连接 GitHub · 打开浏览器") : null,
           React.createElement("label", { style: styles.syncToggle },
             React.createElement("input", {
-              type: "checkbox", checked: project.authorized, disabled: busy,
-              onChange: (event) => void runAction("code/authorize", {
+              type: "checkbox", checked: project.authorized, disabled: busy || (github && !project.authorized && !enabled),
+              onChange: (event) => void runAction(github ? "github/authorize" : "code/authorize", {
                 projectId: project.projectId, enabled: event.target.checked,
+                ...(github && event.target.checked && project.connection ? {
+                  repository: project.connection.repository, base_branch: project.connection.base_branch, revision: project.connection.revision,
+                } : {}),
               }),
-            }), "允许此 DSH 同步该项目代码"),
+            }), github ? "允许此 DSH 将本项目代码同步到上述 GitHub 仓库" : "允许此 DSH 同步该项目代码"),
           React.createElement("p", { style: styles.muted }, "仅访问此项目已经绑定的本地目录，不改动原 Git 分支或暂存区。下载要求本地没有未上传改动；恢复始终新建目录，不更换当前 Agent 工作目录。"),
           status ? React.createElement("p", { style: styles.sessionMeta },
             status.local_status_unknown ? "已恢复云端副本；原工作区状态未知，请单独检查。" : status.enabled
               ? `${status.file_count} 个源文件 · ${status.local_changes} 项待上传 · ${status.excluded_count} 项已排除 · 云端 ${status.cloud_commit?.slice(0, 8) ?? "尚无版本"}`
-              : "请先由项目创建者在 GatherThread 的「项目代码」中启用 Git。") : null,
+              : github ? "GitHub 同步已暂停，请由项目创建者恢复。" : "请先由项目创建者在 GatherThread 的「项目代码」中启用 Git。") : null,
           status?.needs_download ? React.createElement("p", { style: styles.notice }, "云端有新版本。请先下载；本地有改动时请恢复到新目录比较，不会自动覆盖。") : null,
           project.authorized ? React.createElement("label", { style: styles.syncToggle },
             React.createElement("input", {
               type: "checkbox", checked: status?.automatic_upload === true,
-              disabled: busy || !status?.enabled,
+              disabled: busy || (!enabled && !status?.automatic_upload),
               onChange: (event) => invoke(event.target.checked ? "code_auto_upload_enable" : "code_auto_upload_disable"),
-            }), "空闲时自动上传本地代码至云端") : null,
+            }), github ? "空闲时自动上传本地代码至 GitHub" : "空闲时自动上传本地代码至云端") : null,
           React.createElement("div", { style: styles.syncActions }, ...actions.map(([action, label]) => (
             React.createElement("button", {
               key: action, type: "button", style: styles.compactButton,
-              disabled: busy || !project.authorized || (action !== "code_sync_status" && !status?.enabled),
+              disabled: busy || (!project.authorized && !(github && action === "code_sync_status")) || (action !== "code_sync_status" && !enabled),
               onClick: () => {
                 if (action === "code_recover" && !window.confirm("将云端代码恢复到当前项目旁的新目录，原目录和会话保持不变。继续？")) return;
                 invoke(action);
@@ -236,12 +252,12 @@ function renderCodeSyncControls(state, busy, runAction) {
           ))),
           status?.recovery_directory ? React.createElement("p", { role: "status", style: styles.notice },
             `已恢复至项目同级目录：${status.recovery_directory}。在本地 Agent 中打开该目录继续工作；原会话保持不变。`) : null,
-          project.error ? React.createElement("p", { role: "status", style: styles.notice }, codeSyncErrorLabel(project.error)) : null,
+          project.error ? React.createElement("p", { role: "status", style: styles.notice }, codeSyncErrorLabel(project.error, github)) : null,
         ));
     }));
 }
 
-function codeSyncErrorLabel(code) {
+function codeSyncErrorLabel(code, github = false) {
   const labels = {
     code_sync_disabled: "请先允许此 DSH 同步项目代码。",
     code_sync_busy: "Agent 正在工作，请等待本轮结束后再同步。",
@@ -259,6 +275,14 @@ function codeSyncErrorLabel(code) {
     code_secret_detected: "检测到可能的密钥，已阻止上传。请检查项目文件。",
     code_not_enabled: "请先由项目创建者在 GatherThread 启用项目 Git。",
     code_sync_secret: "检测到可能的密钥，已阻止上传。请检查项目文件。",
+    code_github_binding_changed: "GitHub 仓库配置已变化，请核对最新仓库和主分支后重新授权。",
+    code_github_not_configured: "请先由项目创建者绑定 GitHub 仓库。",
+    code_github_unavailable: "GitHub 配置信息暂不可用，请检查连接后重试。",
+    code_sync_binding: "代码同步绑定已变化。请核对当前仓库与本地授权后重试。",
+    code_sync_unavailable: github ? "无法连接 GitHub。请检查本机 Git、GitHub CLI 登录状态、网络和仓库访问权限。" : "代码同步暂不可用，请检查本机 Git 与服务连接。",
+    code_sync_limit: "项目文件超过同步限制，未上传。请检查大文件和排除范围。",
+    code_sync_unsupported: "仓库包含当前同步方式不支持的内容，未修改代码。",
+    code_sync_unsafe_path: "项目含不安全或不支持的文件路径，已停止同步。",
   };
   return labels[code] ?? "代码同步未完成。请检查授权、文件和云端状态后重试；会话同步不受影响。";
 }
@@ -499,7 +523,7 @@ function detail(label, value) {
 function parseNativeState(value) {
   exactObject(value, [
     "schemaVersion", "integration", "authorization", "compatibility", "runtime",
-    "officialServerUrl", "serverUrl", "deviceName", "route", "projectCount", "bindings", "localSync", "codeSync", "pairing", "recoverableError",
+    "officialServerUrl", "serverUrl", "deviceName", "route", "projectCount", "bindings", "localSync", "codeSync", "githubSync", "pairing", "recoverableError",
   ]);
   if (value.schemaVersion !== 2 || value.integration !== "gatherthread") throw new Error("invalid native status identity");
   if (!AUTHORIZATION_STATES.has(value.authorization)) throw new Error("invalid native authorization state");
@@ -524,6 +548,7 @@ function parseNativeState(value) {
   let bindings;
   let localSync;
   let codeSync;
+  let githubSync;
   if (value.route !== undefined || value.bindings !== undefined || value.projectCount !== undefined) {
     if (value.route === undefined || !Number.isSafeInteger(value.projectCount) || value.projectCount < 0
       || !Array.isArray(value.bindings) || value.bindings.length > 100
@@ -564,17 +589,34 @@ function parseNativeState(value) {
       }
       return { ...sync };
     });
-    const codeSyncValue = value.codeSync ?? [];
+    const parseCodeProjects = (codeSyncValue, github = false) => {
     if (!Array.isArray(codeSyncValue) || codeSyncValue.length > 100) throw new Error("invalid code sync status");
-    codeSync = codeSyncValue.map((project) => {
-      exactObject(project, ["projectId", "projectName", "authorized", "status", "error"]);
+    return codeSyncValue.map((project) => {
+      exactObject(project, ["projectId", "projectName", "authorized", "status", "error", ...(github ? ["connection", "branch"] : [])]);
       boundedText(project.projectId, 128);
       boundedText(project.projectName, 160);
       if (typeof project.authorized !== "boolean") throw new Error("invalid code sync authorization");
-      if (project.error !== undefined && !/^code_[a-z_]{1,60}$/u.test(project.error)) throw new Error("invalid code sync error");
+      if (project.error !== undefined && !/^(?:github_)?code_[a-z_]{1,60}$/u.test(project.error)) throw new Error("invalid code sync error");
+      if (github) {
+        if (project.connection !== null) {
+          exactObject(project.connection, ["repository", "base_branch", "revision", "enabled"]);
+          boundedText(project.connection.repository, 160);
+          if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u.test(project.connection.repository)) throw new Error("invalid GitHub repository");
+          boundedText(project.connection.base_branch, 255);
+          boundedText(project.connection.revision, 128);
+          if (typeof project.connection.enabled !== "boolean") throw new Error("invalid GitHub state");
+        }
+        if (project.branch !== null) boundedText(project.branch, 255);
+      }
       if (project.status !== undefined) {
         const status = project.status;
-        exactObject(status, ["enabled", "automatic_upload", "local_changes", "file_count", "excluded_count", "base_commit", "cloud_commit", "branch_id", "needs_download", "recovery_directory", "local_status_unknown"]);
+        exactObject(status, ["enabled", "automatic_upload", "local_changes", "file_count", "excluded_count", "base_commit", "cloud_commit", "branch_id", "needs_download", "recovery_directory", "local_status_unknown", ...(github ? ["provider", "repository", "branch", "base_branch"] : [])]);
+        if (github) {
+          if (status.provider !== undefined && status.provider !== "github") throw new Error("invalid code provider");
+          if (status.repository !== undefined && status.repository !== project.connection?.repository) throw new Error("GitHub target mismatch");
+          if (status.base_branch !== undefined && status.base_branch !== project.connection?.base_branch) throw new Error("GitHub base mismatch");
+          if (status.branch !== undefined) boundedText(status.branch, 255);
+        }
         if (status.local_status_unknown !== undefined && typeof status.local_status_unknown !== "boolean") throw new Error("invalid local status flag");
         for (const key of ["enabled", "automatic_upload", "needs_download"]) {
           if (typeof status[key] !== "boolean") throw new Error("invalid code sync flag");
@@ -593,6 +635,9 @@ function parseNativeState(value) {
       }
       return { ...project };
     });
+    };
+    codeSync = parseCodeProjects(value.codeSync ?? []);
+    githubSync = parseCodeProjects(value.githubSync ?? [], true);
   }
   let pairing;
   if (value.pairing !== undefined) {
@@ -628,7 +673,7 @@ function parseNativeState(value) {
     ...(officialServerUrl === undefined ? {} : { officialServerUrl }),
     ...(serverUrl === undefined ? {} : { serverUrl }),
     ...(value.deviceName === undefined ? {} : { deviceName: value.deviceName }),
-    ...(route === undefined ? {} : { route, projectCount: value.projectCount, bindings, localSync, codeSync }),
+    ...(route === undefined ? {} : { route, projectCount: value.projectCount, bindings, localSync, codeSync, githubSync }),
     ...(pairing === undefined ? {} : { pairing }),
     ...(value.recoverableError === undefined ? {} : { recoverableError: value.recoverableError }),
   };

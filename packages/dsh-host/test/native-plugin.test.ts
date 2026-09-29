@@ -470,6 +470,15 @@ test("native code RPC requires project opt-in, rejects arbitrary paths and hides
           invoked.push(`action:${binding.projectId}:${action}`);
           return view();
         },
+        githubSyncView: () => ({ authorized: false, connection: null, branch: null }),
+        async authorizeGitHubSync(enabled, expected) {
+          invoked.push(`github-consent:${enabled}:${expected?.repository}:${expected?.revision}`);
+          return { authorized: enabled, connection: null, branch: null };
+        },
+        async executeGitHubSync(action) {
+          invoked.push(`github-action:${action}`);
+          return { authorized: false, connection: null, branch: null };
+        },
         async stop() {},
       };
     },
@@ -490,6 +499,23 @@ test("native code RPC requires project opt-in, rejects arbitrary paths and hides
     assert.equal((await invoke("code/authorize", { projectId: "project-read", enabled: true })).ok, false);
     assert.equal((await invoke("code/authorize", { projectId: "project-own", enabled: "true" })).ok, false);
     assert.deepEqual(invoked, ["consent:project-own:true", "action:project-own:code_upload"]);
+    assert.equal((await invoke("github/authorize", { projectId: "project-own", enabled: true })).ok, false);
+    assert.equal((await invoke("github/authorize", {
+      projectId: "project-own", enabled: true, repository: "owner/source", base_branch: "main", revision: "r1",
+    })).ok, true);
+    assert.equal((await invoke("github/action", { projectId: "project-own", action: "github_code_upload" })).ok, true);
+    for (const payload of [
+      { projectId: "project-read", action: "github_code_upload" },
+      { projectId: "unknown-project", action: "github_code_upload" },
+      { projectId: "project-own", action: "code_upload" },
+      { projectId: "project-own", action: "github_code_upload", repository: "attacker/redirect" },
+    ]) assert.equal((await invoke("github/action", payload)).ok, false);
+    assert.deepEqual(invoked.slice(2), ["github-consent:true:owner/source:r1", "github-action:github_code_upload"]);
+    for (const payload of [
+      { projectId: "project-read" },
+      { projectId: "unknown-project" },
+      { projectId: "project-own", token: "must-not-be-accepted" },
+    ]) assert.equal((await invoke("github/connect", payload)).ok, false, "GitHub sign-in is unavailable outside an exact writable local project");
     assert.doesNotMatch(JSON.stringify(controller.publicState()), /gta_fixture|\/readonly/u);
   } finally { await disposeRpc(); await controller.dispose(); }
 });

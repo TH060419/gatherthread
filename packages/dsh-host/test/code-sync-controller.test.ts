@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { ProjectCodeSyncStatus, SnapshotRequestSummary } from "@gatherthread/bridge";
-import { DshCodeSyncController, type DshCodeSyncEngine } from "../src/code-sync-controller.js";
+import { DshCodeSyncController, GITHUB_CODE_ACTIONS, type DshCodeSyncEngine } from "../src/code-sync-controller.js";
+import { DshGitHubCodeSyncController, type DshGitHubMetadata } from "../src/github-code-sync-controller.js";
 
 const initialStatus = (): ProjectCodeSyncStatus => ({
   enabled: true, automatic_upload: false, local_changes: 1, file_count: 2, excluded_count: 3,
@@ -183,5 +184,90 @@ test("DSH public code errors never expose native filesystem or credential text",
     const result = await controller.authorize(true);
     assert.equal(result.error, "code_sync_failed");
     assert.doesNotMatch(JSON.stringify(result), /secret|private|sensitive/u);
+  } finally { await controller.stop(); await f.cleanup(); }
+});
+
+test("GitHub controller claims only its exact provider/runtime and permits idle-safe controls while busy", async () => {
+  const f = await fixture();
+  const controller = new DshCodeSyncController({ ...f.options, actionKinds: GITHUB_CODE_ACTIONS });
+  try {
+    await controller.start();
+    await controller.authorize(true);
+    const base = { sessionId: "session-own", targetRuntimeId: "runtime-dsh", throughSequence: 0, status: "pending" as const };
+    f.jobs.push(
+      { ...base, id: "cloud", kind: "code_upload" },
+      { ...base, id: "github", kind: "github_code_upload" },
+      { ...base, id: "foreign", kind: "github_code_download", targetRuntimeId: "runtime-other" },
+    );
+    await controller.poll();
+    assert.deepEqual(f.completed, ["github"]);
+    assert.equal((await controller.execute("code_upload")).error, "code_action_invalid");
+    f.setBusy(true);
+    assert.equal((await controller.execute("github_code_update")).error, "code_sync_busy");
+    assert.equal((await controller.execute("github_code_sync_status")).error, undefined);
+    assert.equal((await controller.execute("github_code_auto_upload_disable")).error, undefined);
+  } finally { await controller.stop(); await f.cleanup(); }
+});
+
+test("GitHub consent is independent and exact-target/revision bound, including restart and A to B to A", async () => {
+  const f = await fixture();
+  const cloud = f.create();
+  let metadata: DshGitHubMetadata = {
+    connection: { repository: "owner/source", base_branch: "main", revision: "revision-a", enabled: true },
+    branch: "gatherthread/project/user", can_configure: true, can_write: true,
+  };
+  let offline = false;
+  const options = {
+    ...f.options, permissionPath: path.join(f.directory, "github-consent.json"),
+    readMetadata: async () => { if (offline) throw new Error("secret connection failure"); return metadata; },
+  };
+  let controller = new DshGitHubCodeSyncController(options);
+  try {
+    await cloud.start();
+    await cloud.authorize(true);
+    f.calls.length = 0;
+    await controller.start();
+    assert.equal(controller.view().authorized, false);
+    assert.deepEqual(f.calls, []);
+    await controller.authorize(true, metadata.connection!);
+    assert.equal(controller.view().authorized, true);
+    await controller.stop();
+    controller = new DshGitHubCodeSyncController(options);
+    await controller.start();
+    assert.equal(controller.view().authorized, true);
+    const stale = metadata.connection!;
+    metadata = { ...metadata, connection: { ...stale, repository: "owner/other", revision: "revision-b" } };
+    await assert.rejects(controller.authorize(true, stale), { code: "code_github_binding_changed" });
+    assert.equal(controller.view().authorized, false);
+    assert.equal(controller.view().connection?.repository, "owner/other");
+    metadata = { ...metadata, connection: { ...stale, revision: "revision-c" } };
+    await controller.poll();
+    assert.equal(controller.view().authorized, false);
+    await controller.authorize(true, metadata.connection!);
+    offline = true;
+    await assert.rejects(controller.execute("github_code_upload"));
+    assert.doesNotMatch(JSON.stringify(controller.view()), /secret connection/u);
+    await controller.authorize(false);
+    assert.equal(controller.view().authorized, false);
+    assert.equal(cloud.view().authorized, true);
+  } finally { await controller.stop(); await cloud.stop(); await f.cleanup(); }
+});
+
+test("GitHub revoked write access invalidates local authorization before executing or ticking", async () => {
+  const f = await fixture();
+  let metadata: DshGitHubMetadata = {
+    connection: { repository: "owner/source", base_branch: "main", revision: "a", enabled: true },
+    branch: "gatherthread/project/user", can_configure: true, can_write: true,
+  };
+  const controller = new DshGitHubCodeSyncController({ ...f.options, readMetadata: async () => metadata });
+  try {
+    await controller.start();
+    await controller.authorize(true, metadata.connection!);
+    f.calls.length = 0;
+    metadata = { ...metadata, can_write: false };
+    await assert.rejects(controller.execute("github_code_upload"), { code: "code_github_not_configured" });
+    await controller.poll();
+    assert.equal(controller.view().authorized, false);
+    assert.deepEqual(f.calls, []);
   } finally { await controller.stop(); await f.cleanup(); }
 });

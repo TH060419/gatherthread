@@ -3,12 +3,15 @@ import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { CollaborationApi, ProjectCodeSyncStatus } from "@gatherthread/bridge";
+import { githubCodeSyncRequestKinds } from "@gatherthread/protocol";
 import { secureDirectoryChain, assertSameDirectoryChain } from "./path-security.js";
 
 const ACTIONS = new Set([
   "code_sync_status", "code_upload", "code_download", "code_recover",
   "code_auto_upload_enable", "code_auto_upload_disable",
 ]);
+
+export const GITHUB_CODE_ACTIONS = githubCodeSyncRequestKinds.filter((kind) => kind !== "github_auth_connect");
 
 export interface DshCodeSyncEngine {
   initialize(): Promise<void>;
@@ -30,6 +33,7 @@ export interface DshCodeSyncControllerOptions {
   api: Pick<CollaborationApi, "listSnapshotRequests" | "claimSnapshotRequest" | "completeSnapshotRequest" | "failSnapshotRequest">;
   runtimes: () => ReadonlyMap<string, string>;
   isBusy: () => boolean;
+  actionKinds?: readonly string[];
 }
 
 /** Project-scoped local consent; remote jobs can never grant filesystem access. */
@@ -42,9 +46,11 @@ export class DshCodeSyncController {
   #poll: Promise<void> | undefined;
   #stopped = false;
   readonly #options: DshCodeSyncControllerOptions;
+  readonly #actions: ReadonlySet<string>;
 
   constructor(options: DshCodeSyncControllerOptions) {
     this.#options = options;
+    this.#actions = options.actionKinds ? new Set(options.actionKinds) : ACTIONS;
   }
 
   view(): DshCodeSyncView {
@@ -112,7 +118,7 @@ export class DshCodeSyncController {
         for (const job of jobs.values()) {
           if (this.#stopped) return;
           const runtime = runtimes.get(job.sessionId);
-          if (!runtime || job.targetRuntimeId !== runtime || !ACTIONS.has(job.kind)) continue;
+          if (!runtime || job.targetRuntimeId !== runtime || !this.#actions.has(job.kind)) continue;
           let claimed;
           try { claimed = await api.claimSnapshotRequest(job.id, runtime); }
           catch { continue; } // A stale/foreign claim must never cause a local mutation.
@@ -153,9 +159,9 @@ export class DshCodeSyncController {
   }
 
   async #execute(kind: string, operationId?: string): Promise<ProjectCodeSyncStatus> {
-    if (!ACTIONS.has(kind)) throw new CodeSyncLocalError("code_action_invalid");
+    if (!this.#actions.has(kind)) throw new CodeSyncLocalError("code_action_invalid");
     if (!this.#authorized) throw new CodeSyncLocalError("code_sync_disabled");
-    if (this.#options.isBusy() && kind !== "code_sync_status" && kind !== "code_auto_upload_disable") {
+    if (this.#options.isBusy() && !["code_sync_status", "code_auto_upload_disable", "github_code_sync_status", "github_code_auto_upload_disable"].includes(kind)) {
       throw new CodeSyncLocalError("code_sync_busy");
     }
     return this.#requireEngine().execute(kind, {
@@ -182,9 +188,9 @@ class CodeSyncLocalError extends Error {
   constructor(readonly code: string) { super(code); }
 }
 
-function codeSyncErrorCode(error: unknown): string {
+export function codeSyncErrorCode(error: unknown): string {
   const code = typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-  return typeof code === "string" && /^code_[a-z_]{1,60}$/u.test(code) ? code : "code_sync_failed";
+  return typeof code === "string" && /^(?:github_)?code_[a-z_]{1,60}$/u.test(code) ? code : "code_sync_failed";
 }
 
 async function loadConsent(file: string, binding: string): Promise<boolean> {

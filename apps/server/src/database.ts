@@ -17,6 +17,8 @@ import type {
   InvitationRole,
   InvitationTtl,
   JsonValue,
+  GitHubConnectionInput,
+  GitHubProjectStatus,
   MembershipRole,
   RemoveProjectMembershipInput,
   ProjectInvitationAuditRecord,
@@ -34,6 +36,7 @@ import type {
 } from "@gatherthread/protocol";
 import {
   MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, MessageMentionsSchema, isCodeSyncRequestKind,
+  GitHubConnectionInputSchema, githubCodeSyncRequestKinds, isGitHubCodeSyncRequestKind,
   HISTORY_SUMMARY_MAX_CONTEXT_BYTES, HistorySummaryError, buildHistoryContext,
   buildHistorySummaryPrompt, historySummaryMarker, historySummarySourceJson, historySummaryText,
   isHistorySummaryRequest, selectHistorySummarySources,
@@ -504,7 +507,7 @@ CREATE TABLE IF NOT EXISTS snapshot_requests (
   id TEXT PRIMARY KEY,
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable')),
+  request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable', 'github_auth_connect', 'github_code_sync_status', 'github_code_upload', 'github_code_download', 'github_code_recover', 'github_code_auto_upload_enable', 'github_code_auto_upload_disable', 'github_code_update')),
   through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
   target_runtime_id TEXT REFERENCES runtimes(id),
@@ -752,7 +755,7 @@ function claimLeaseLapsed(leaseExpiresAt: string | null | undefined, now: string
 }
 
 function isLocalSyncRequestKind(kind: SnapshotRequestKind): boolean {
-  return isCodeSyncRequestKind(kind) || kind === "local_sync_status"
+  return isCodeSyncRequestKind(kind) || isGitHubCodeSyncRequestKind(kind) || kind === "local_sync_status"
     || kind === "local_auto_upload_enable"
     || kind === "local_auto_upload_disable"
     || kind === "local_turn_upload";
@@ -957,6 +960,14 @@ export class CollaborationDatabase {
     this.migrateCodeRepositoryUsageColumns();
     this.migrateDeviceCredentialColumns();
     this.migrateProjectModel();
+    // Additive metadata only: source and GitHub credentials never enter SQLite.
+    this.sqlite.exec(`CREATE TABLE IF NOT EXISTS project_github_connections (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      repository TEXT NOT NULL,
+      base_branch TEXT NOT NULL,
+      enabled INTEGER NOT NULL CHECK (enabled IN (0, 1)),
+      revision TEXT NOT NULL
+    ) STRICT;`);
     this.migrateAccountCapabilities();
     this.migrateRuntimePurposeColumn();
     this.migrateRuntimeExecutionProfilesColumn();
@@ -1817,6 +1828,63 @@ export class CollaborationDatabase {
       SELECT role FROM project_memberships WHERE project_id = ? AND user_id = ?
     `).get(projectId, userId) as unknown as MembershipRow | undefined;
     return row?.role ?? null;
+  }
+
+  getProjectGitHub(actor: Actor, projectId: string): GitHubProjectStatus {
+    this.assertActiveDevice(actor);
+    const role = this.projectMembershipRole(projectId, actor.user_id);
+    if (role === null) throw notFound("Project");
+    const project = this.requireProject(projectId);
+    const row = this.sqlite.prepare("SELECT repository, base_branch, enabled, revision FROM project_github_connections WHERE project_id = ?")
+      .get(projectId) as { repository: string; base_branch: string; enabled: number; revision: string } | undefined;
+    const hash = (id: string) => createHash("sha256").update(id).digest("hex").slice(0, 24);
+    return {
+      connection: row ? { ...row, enabled: row.enabled === 1 } : null,
+      branch: `gatherthread/${hash(projectId)}/${hash(actor.user_id)}`,
+      can_configure: project.owner_user_id === actor.user_id && project.state === "active",
+      can_write: role !== "viewer" && project.state === "active",
+    };
+  }
+
+  setProjectGitHub(actor: Actor, projectId: string, input: GitHubConnectionInput): GitHubProjectStatus {
+    return this.transaction(() => {
+      const current = this.getProjectGitHub(actor, projectId);
+      if (!current.can_configure) throw forbidden("Only the active project owner can configure GitHub");
+      const parsed = GitHubConnectionInputSchema.parse(input);
+      const previous = current.connection;
+      // Content-identical retries are harmless even after losing the first response.
+      if (previous && previous.repository === parsed.repository && previous.base_branch === parsed.base_branch
+        && previous.enabled === parsed.enabled) return current;
+      if ((previous?.revision ?? null) !== parsed.expected_revision) throw conflict("GitHub connection changed; reload before configuring it");
+      this.invalidateGitHubControls(projectId);
+      this.sqlite.prepare(`INSERT INTO project_github_connections(project_id, repository, base_branch, enabled, revision)
+        VALUES (?, ?, ?, ?, ?) ON CONFLICT(project_id) DO UPDATE SET
+        repository = excluded.repository, base_branch = excluded.base_branch, enabled = excluded.enabled, revision = excluded.revision`)
+        .run(projectId, parsed.repository, parsed.base_branch, Number(parsed.enabled), randomUUID());
+      this.touchProject(projectId);
+      return this.getProjectGitHub(actor, projectId);
+    });
+  }
+
+  private invalidateGitHubControls(projectId: string): void {
+    const failure = JSON.stringify({ code: "code_sync_binding", message: "GitHub configuration changed. Review the current target and request this operation again." });
+    const bytes = Buffer.byteLength(failure);
+    const timestamp = this.now();
+    const jobs = this.sqlite.prepare(`SELECT id, session_id, requested_by_user_id FROM snapshot_requests
+      WHERE session_id IN (SELECT id FROM sessions WHERE project_id = ?)
+        AND status IN ('pending', 'claimed') AND request_kind IN (${githubCodeSyncRequestKinds.map(() => "?").join(",")})`)
+      .all(projectId, ...githubCodeSyncRequestKinds) as Array<{ id: string; session_id: string; requested_by_user_id: string }>;
+    // A full storage quota must not prevent revoking an old target. Charge the
+    // fixed control marker normally but allow it past the quota once per active
+    // job; existing active-job caps bound this allowance and block new jobs.
+    const fail = this.sqlite.prepare(`UPDATE snapshot_requests SET status = 'failed', failed_at = ?,
+      failure_json = ?, storage_bytes = storage_bytes + ? WHERE id = ? AND status IN ('pending', 'claimed')`);
+    const charge = this.sqlite.prepare(`INSERT INTO snapshot_storage_usage(session_id, user_id, bytes) VALUES (?, ?, ?)
+      ON CONFLICT(session_id, user_id) DO UPDATE SET bytes = bytes + excluded.bytes`);
+    for (const job of jobs) {
+      fail.run(timestamp, failure, bytes, job.id);
+      charge.run(job.session_id, job.requested_by_user_id, bytes);
+    }
   }
 
   getProjectContextPolicy(actor: Actor, projectId: string): { mode: "summary" | "original" } {
@@ -3736,7 +3804,7 @@ export class CollaborationDatabase {
       const request = this.requireSnapshotRequest(requestId);
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
       const localControl = isLocalSyncRequestKind(request.kind);
-      if (isCodeSyncRequestKind(request.kind)) {
+      if (isCodeSyncRequestKind(request.kind) || isGitHubCodeSyncRequestKind(request.kind)) {
         const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
         this.assertCodeControlEnabled(request.kind, session.project_id);
       }
@@ -3790,10 +3858,18 @@ export class CollaborationDatabase {
 
   private supportsControlHarness(kind: SnapshotRequestKind, harness: string): boolean {
     const normalized = harness.trim().toLowerCase();
-    return normalized === "codex" || (isCodeSyncRequestKind(kind) && normalized === "deepseek-harness");
+    if (kind === "github_auth_connect") return normalized === "codex";
+    return normalized === "codex" || ((isCodeSyncRequestKind(kind) || isGitHubCodeSyncRequestKind(kind)) && normalized === "deepseek-harness");
   }
 
   private assertCodeControlEnabled(kind: SnapshotRequestKind, projectId: string): void {
+    if (isGitHubCodeSyncRequestKind(kind) && this.requireProject(projectId).state !== "active") {
+      throw forbidden("Archived projects cannot run GitHub controls");
+    }
+    if (isGitHubCodeSyncRequestKind(kind) && kind !== "github_auth_connect" && kind !== "github_code_sync_status" && kind !== "github_code_auto_upload_disable"
+      && !this.sqlite.prepare("SELECT 1 FROM project_github_connections WHERE project_id=? AND enabled=1").get(projectId)) {
+      throw conflict("Enable the project GitHub connection before changing local GitHub sync");
+    }
     // Local status and disabling automatic upload remain available while the
     // cloud repository is paused, so a member can turn off an existing local
     // upload preference without first re-enabling cloud transfers.
@@ -4436,7 +4512,7 @@ export class CollaborationDatabase {
     const columns = new Set(
       (this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all() as Array<{ name: string }>).map((row) => row.name),
     );
-    if (table?.sql?.includes("'code_sync_status'") && columns.has("target_runtime_id")) return;
+    if (table?.sql?.includes("'github_auth_connect'") && table.sql.includes("'code_sync_status'") && columns.has("target_runtime_id")) return;
     this.sqlite.exec("PRAGMA foreign_keys = OFF");
     try {
       this.sqlite.exec(`
@@ -4445,7 +4521,7 @@ export class CollaborationDatabase {
           id TEXT PRIMARY KEY,
           session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
           requested_by_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable')),
+          request_kind TEXT NOT NULL DEFAULT 'immutable' CHECK (request_kind IN ('immutable', 'visible_history_replace', 'local_sync_status', 'local_auto_upload_enable', 'local_auto_upload_disable', 'local_turn_upload', 'code_sync_status', 'code_upload', 'code_download', 'code_recover', 'code_auto_upload_enable', 'code_auto_upload_disable', 'github_auth_connect', 'github_code_sync_status', 'github_code_upload', 'github_code_download', 'github_code_recover', 'github_code_auto_upload_enable', 'github_code_auto_upload_disable', 'github_code_update')),
           through_sequence INTEGER NOT NULL CHECK (through_sequence >= 0),
           status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'claimed', 'completed', 'failed')),
           target_runtime_id TEXT REFERENCES runtimes(id),

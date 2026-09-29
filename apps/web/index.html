@@ -601,21 +601,71 @@
           <p>Create or join a project before using Git code collaboration. You can still adjust appearance and language in Settings.</p>
           <button id="code-create-project-button" class="button button-primary compact-button" type="button">Create your first project</button>
         </section>
-        <div class="code-toolbar"><span id="code-repository-status" role="status"></span><button id="code-refresh-button" class="text-button" type="button">Refresh</button></div>
-        <p id="code-error" class="form-error" role="alert"></p>
         <section id="code-confirmation" class="code-confirmation" aria-labelledby="code-confirmation-message" hidden>
           <p id="code-confirmation-message" role="status"></p>
           <div class="code-actions"><button id="code-confirm-accept" class="button button-primary compact-button" type="button">Continue</button><button id="code-confirm-cancel" class="button button-secondary compact-button" type="button">Cancel</button></div>
         </section>
+        <section id="github-code-section" class="code-section" aria-labelledby="github-code-title" hidden>
+          <h3 id="github-code-title">GitHub · larger or long-term projects</h3>
+          <p class="code-help">Use your own GitHub repository for files, branches and pull requests. GT Cloud below is convenient for small trials. These options are independent; connecting GitHub does not migrate or delete GT Cloud files.</p>
+          <p id="github-code-status" role="status" aria-live="polite"></p>
+          <p id="github-code-error" class="form-error" role="alert"></p>
+          <form id="github-code-form" class="github-code-form">
+            <label for="github-code-repository">Existing GitHub repository</label>
+            <input id="github-code-repository" placeholder="OWNER/REPO" required maxlength="140" autocomplete="off" spellcheck="false" data-i18n-skip>
+            <label for="github-code-base">Base branch</label>
+            <input id="github-code-base" value="main" required maxlength="200" autocomplete="off" spellcheck="false" data-i18n-skip>
+            <button id="github-code-save" class="button button-primary compact-button" type="submit">Connect repository</button>
+          </form>
+          <p id="github-code-owner-note" class="code-help">Only the project owner can connect or pause GitHub sync.</p>
+          <div class="code-actions">
+            <button id="github-code-pause" class="text-button" type="button" hidden>Pause GitHub sync</button>
+            <button id="github-code-refresh" class="text-button" type="button">Check GitHub status</button>
+          </div>
+          <nav id="github-code-links" class="code-actions" aria-label="Open GitHub" hidden>
+            <a id="github-code-files" target="_blank" rel="noopener noreferrer">View files on GitHub</a>
+            <a id="github-code-branches" target="_blank" rel="noopener noreferrer">View branches on GitHub</a>
+            <a id="github-code-compare" target="_blank" rel="noopener noreferrer">Compare / open pull request</a>
+          </nav>
+          <p id="github-code-branch" class="code-help github-code-path" data-i18n-skip></p>
+          <details id="github-code-guide" class="code-recovery">
+            <summary>Set up GitHub on your device</summary>
+            <ol class="github-code-guide">
+              <li>Create a private repository on GitHub, add an initial commit, and invite collaborators there. Connect its OWNER/REPO and base branch above.</li>
+              <li><span>Install Git 2.38+ and GitHub CLI on each device. Select your device below and click Connect GitHub to open browser sign-in.</span> <a href="https://cli.github.com/" target="_blank" rel="noopener noreferrer">GitHub CLI installation guide</a></li>
+              <li>Codex: restart the connector with trusted plugin Hooks and these additional flags:<code class="github-code-command" data-i18n-skip>--github-code-sync OWNER/REPO --github-base-branch BRANCH</code><span>GitHub consent is separate from --code-sync. For DSH, enable GitHub access for this project in the local GatherThread settings.</span></li>
+              <li>Select your exact online Agent device below and check status. After local authorization, settled changes upload automatically while the Agent is idle. You can turn this off at any time.</li>
+            </ol>
+            <p class="code-help">GitHub access is managed on GitHub, independently of GT membership. Pausing sync or removing a GT member does not revoke GitHub access or delete GitHub files. Pushes may trigger GitHub workflows.</p>
+            <p class="code-help">GitHub code does not count toward GT Cloud storage quotas. Files and reviews open on GitHub. For local safety, this preview processes up to 10,000 files, 20 MiB each and 128 MiB per checkpoint; larger or LFS repositories can use native Git.</p>
+          </details>
+          <div id="github-code-device" class="code-section" hidden>
+            <label for="github-code-runtime">Local Agent device for GitHub</label>
+            <select id="github-code-runtime" aria-describedby="github-code-local-state"></select>
+            <button id="github-code-auth" class="button button-secondary compact-button" type="button" disabled>Connect GitHub on this device</button>
+            <p id="github-code-local-state" class="code-local-state" role="status" aria-live="polite"></p>
+            <p id="github-code-local-detail" class="code-help github-code-path" data-i18n-skip></p>
+            <label class="code-auto-upload-control"><input id="github-code-auto" type="checkbox" disabled><span>Automatically upload to GitHub while idle</span></label>
+            <div class="code-actions">
+              <button id="github-code-upload" class="button button-primary compact-button" type="button" disabled>Upload to my GitHub branch</button>
+              <button id="github-code-update" class="button button-secondary compact-button" type="button" disabled>Update my GitHub branch from base</button>
+              <button id="github-code-download" class="button button-secondary compact-button" type="button" disabled>Download my GitHub branch</button>
+              <button id="github-code-recover" class="text-button" type="button" disabled>Restore GitHub copy to a new folder</button>
+            </div>
+          </div>
+        </section>
+        <h3 class="code-provider-heading">GT Cloud · small trials</h3>
+        <div class="code-toolbar"><span id="code-repository-status" role="status"></span><button id="code-refresh-button" class="text-button" type="button">Refresh</button></div>
+        <p id="code-error" class="form-error" role="alert"></p>
         <section id="code-enable-section" class="code-section" hidden>
           <p>Uploaded code is visible to all project members. Only the project owner can merge into main. Private files and changes not yet uploaded are not backed up.</p>
-          <button id="code-enable-button" class="button button-primary" type="button">Enable project file sharing</button>
+          <button id="code-enable-button" class="button button-primary" type="button">Enable GT Cloud file sharing</button>
           <p id="code-owner-note" class="code-help" hidden>Ask the project owner to enable file sharing.</p>
         </section>
         <div id="code-enabled-content" hidden>
           <section id="code-enabled-home" class="code-overview" aria-label="Cloud Git settings">
-            <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Turn off project file sharing</button><span class="code-help">File collaboration pauses; text still syncs. Stored cloud versions remain.</span></div>
-            <p id="code-paused-note" class="code-help" hidden>Project file sharing is off: only text syncs, and new file collaboration is paused. Enable sharing for full AI agent collaboration. Local automatic upload is a separate device preference.</p>
+            <div id="code-pause-actions" class="code-actions code-pause-actions"><button id="code-disable-active-button" class="text-button" type="button">Pause GT Cloud file sharing</button><span class="code-help">GT Cloud transfers pause; stored cloud versions remain. GitHub and conversation sync are independent.</span></div>
+            <p id="code-paused-note" class="code-help" hidden>GT Cloud file sharing is paused. GitHub and conversation sync remain independent. Local automatic upload is a separate device preference.</p>
             <p class="code-help">Choose what you want to do. Uploaded code is visible to every project member and is used only for this project's collaboration.</p>
             <div class="code-navigation-list">
               <button id="code-open-device-view" class="code-navigation-card" type="button" aria-controls="code-device-view"><span><strong>This device · sync &amp; recovery</strong><small>Choose an Agent device, upload or download code, and manage automatic upload.</small></span><span aria-hidden="true">→</span></button>
@@ -658,8 +708,8 @@
 
     <dialog id="code-notice-dialog" class="create-dialog code-notice-dialog" aria-labelledby="code-notice-title" aria-describedby="code-notice-description">
       <div class="dialog-heading"><h2 id="code-notice-title">About project file collaboration</h2></div>
-      <p id="code-notice-description">Project members and their AI agents can share, review, modify and manage files together. Uploaded files are readable within the project, not public, and used only for this project's collaboration. Each local device needs separate file access authorization. Review files for secrets before upload.</p>
-      <p>We recommend enabling project file sharing for full AI agent collaboration: members can share, modify and manage project files together. Turn it off only for strict privacy needs; only text will sync, without file exchange or cloud recovery. Automatic file upload starts off and is a separate choice. Stored versions remain until explicitly cleared in Settings.</p>
+      <p id="code-notice-description">Project members and their AI agents can share and review files together. GT Cloud uploads are readable by all project members. GitHub visibility and access are managed separately on GitHub. Each local device needs separate file access authorization. Review files for secrets before upload.</p>
+      <p>Choose GitHub for larger or long-term projects, or GT Cloud for small trials. They are independent options; connecting GitHub does not migrate or delete GT Cloud files. After local GitHub authorization, settled changes upload automatically while idle. Conversation sync stays separate.</p>
       <div class="dialog-actions"><button id="code-notice-continue" class="button button-primary" type="button">Got it</button></div>
     </dialog>
 
