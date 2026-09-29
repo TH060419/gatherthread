@@ -48,16 +48,22 @@ function run(program, args, stdoutLimit) {
   return new Promise((resolve, reject) => {
     const child = spawn(program, args, { cwd: WORKSPACE, stdio: ["ignore", "pipe", "pipe"] });
     let output = "";
+    let errorOutput = "";
     let size = 0;
     child.stdout.on("data", (chunk) => {
       size += chunk.length;
       if (size > stdoutLimit) child.kill("SIGKILL");
       else output += chunk.toString("utf8");
     });
-    child.stderr.on("data", (chunk) => { size += chunk.length; if (size > stdoutLimit) child.kill("SIGKILL"); });
+    child.stderr.on("data", (chunk) => {
+      size += chunk.length;
+      if (process.env.GT_HOSTED_SMOKE_DEBUG === "1") errorOutput += chunk.toString("utf8").slice(0, 4_000);
+      if (size > stdoutLimit) child.kill("SIGKILL");
+    });
     child.once("error", reject);
     child.once("close", (code) => code === 0 && size <= stdoutLimit
-      ? resolve(output) : reject(new Error("agent_failed")));
+      ? resolve(output) : reject(new Error(process.env.GT_HOSTED_SMOKE_DEBUG === "1"
+        ? `agent_failed_${code}: ${errorOutput.slice(-4_000)} ${output.slice(-4_000)}` : "agent_failed")));
   });
 }
 
@@ -81,4 +87,7 @@ async function main() {
   }
 }
 
-main().catch(() => { process.exitCode = 1; });
+main().catch((error) => {
+  if (process.env.GT_HOSTED_SMOKE_DEBUG === "1") process.stderr.write(`${error.message}\n`);
+  process.exitCode = 1;
+});

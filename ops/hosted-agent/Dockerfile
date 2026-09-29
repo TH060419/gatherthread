@@ -1,5 +1,5 @@
 # Build this image in a reviewed CI pipeline, inspect its digest, and set
-# GATHERTHREAD_HOSTED_AGENT_IMAGE to that immutable digest. Runtime containers
+# GATHERTHREAD_HOSTED_AGENT_IMAGE to its immutable local image ID or registry digest. Runtime containers
 # receive no provider credential and have no general network interface.
 FROM node:22-bookworm-slim
 

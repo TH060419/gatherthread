@@ -57,6 +57,11 @@ test("hosted Agent requires explicit Free-plan confirmation and immutable image"
   }, "/srv/gatherthread");
   assert.equal(config.hostedAgent?.image, enabled.GATHERTHREAD_HOSTED_AGENT_IMAGE);
   assert.equal(config.hostedAgent?.defaultUserDailyNeurons, 2_000);
+  const localImage = `sha256:${"c".repeat(64)}`;
+  assert.equal(loadServerConfig({ ...enabled,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: localImage,
+  }, "/srv/gatherthread").hostedAgent?.image, localImage);
 });
 
 test("owner-host credentials require a stable pepper even outside production", () => {

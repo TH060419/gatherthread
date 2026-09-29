@@ -23,7 +23,7 @@ writeFileSync(join(control, "opencode.json"), JSON.stringify({
     options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "local" },
     models: { [HOSTED_MODEL]: { name: "Qwen3 test", limit: { context: 32_000, output: 1024 } } } } },
   permission: { read: "allow", edit: "allow", bash: "allow", task: "deny",
-    external_directory: "deny", webfetch: "deny", websearch: "deny" },
+    external_directory: "allow", webfetch: "deny", websearch: "deny" },
 }), { mode: 0o644 });
 writeFileSync(join(control, "prompt.txt"),
   "Use the terminal to create hello.txt containing READY. Then reply READY.", { mode: 0o644 });
@@ -95,7 +95,7 @@ try {
     "--tmpfs", "/workspace:rw,nosuid,size=32m,mode=1777",
     "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m", "--tmpfs", "/home/agent:rw,nosuid,size=64m",
     "-e", "HOME=/home/agent", "-e", "OPENCODE_CONFIG=/run/gatherthread/opencode.json",
-    "-e", "NO_COLOR=1", "-e", "CI=1", image,
+    "-e", "NO_COLOR=1", "-e", "CI=1", "-e", "GT_HOSTED_SMOKE_DEBUG=1", image,
   ]);
   const result = JSON.parse(answer);
   assert.match(result.answer, /READY/);

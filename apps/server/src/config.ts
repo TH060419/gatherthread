@@ -160,7 +160,7 @@ export function loadServerConfig(
     const apiToken = env.GATHERTHREAD_CLOUDFLARE_AI_TOKEN?.trim() ?? "";
     const image = env.GATHERTHREAD_HOSTED_AGENT_IMAGE?.trim() ?? "";
     if (!hostedFreeConfirmed || !/^[a-f0-9]{32}$/iu.test(accountId) || !apiToken || /[\r\n]/u.test(apiToken)
-      || !/^[-a-z0-9./_]+@sha256:[a-f0-9]{64}$/u.test(image)) {
+      || !/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(image)) {
       throw new ConfigurationError("Cloud Agent requires confirmed Workers Free plan, credentials, and a digest-pinned runner image");
     }
     hostedAgent = { accountId, apiToken, image,

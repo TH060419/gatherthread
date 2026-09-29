@@ -150,7 +150,7 @@ export class HostedAgent {
   constructor(private readonly service: CollaborationService, private readonly codeRepository: CodeRepository,
     private readonly options: HostedAgentOptions) {
     if (!/^[a-f0-9]{32}$/iu.test(options.accountId) || !options.apiToken || /[\r\n]/u.test(options.apiToken)
-      || !/^[-a-z0-9./_]+@sha256:[a-f0-9]{64}$/u.test(options.image)) {
+      || !/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(options.image)) {
       throw new Error("Cloud Agent needs a Workers AI credential and digest-pinned container image");
     }
     for (const [name, value, maximum] of [
@@ -221,7 +221,7 @@ export class HostedAgent {
         provider: { hosted: { npm: "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
           options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "local" },
           models: { [HOSTED_MODEL]: { name: "Qwen3 30B", limit: { context: 32_000, output: MAX_OUTPUT_TOKENS } } } } },
-        permission: { read: "allow", edit: "allow", bash: "allow", task: "deny", external_directory: "deny",
+        permission: { read: "allow", edit: "allow", bash: "allow", task: "deny", external_directory: "allow",
           webfetch: "deny", websearch: "deny" },
       };
       writeFileSync(join(control, "opencode.json"), JSON.stringify(config), { mode: 0o644 });
