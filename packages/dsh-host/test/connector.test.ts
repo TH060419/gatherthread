@@ -20,6 +20,7 @@ import type {
   DshContextExecutionInput,
   DshAppendEventInput,
   DshCanonicalEvent,
+  DshCanonicalProjection,
   DshCollaborationApi,
   DshHostFacade,
   DshPromptResult,
@@ -340,7 +341,7 @@ class FakeHost implements DshHostFacade {
   flushCount = 0;
   failNextProjection = false;
   failNextProjectionFlush = false;
-  readonly projected: Array<{ eventId: string; role: string; content: string }> = [];
+  readonly projected: DshCanonicalProjection[] = [];
 
   constructor(sessionId: string, persistence: FakeDshPersistence) {
     this.sessionId = sessionId;
@@ -443,7 +444,7 @@ class FakeHost implements DshHostFacade {
   }
 
   async projectCanonicalEvents(
-    events: ReadonlyArray<{ eventId: string; role: string; content: string }>,
+    events: readonly DshCanonicalProjection[],
   ): Promise<void> {
     if (this.failNextProjection) {
       this.failNextProjection = false;
@@ -745,10 +746,25 @@ test("ordinary canonical updates are durably projected before a later request wi
   assert.equal(host.projected.filter((event) => event.eventId === "event-1").length, 1);
   assert.equal(host.projected.some((event) => event.eventId === "event-2"), false);
   assert.equal(host.projected[0]?.content, "EARLY_REMOTE_CONTEXT");
+  assert.equal(host.projected[0]?.actorDisplayName, "user-2");
   assert.doesNotMatch(host.projected[0]?.content ?? "", /PRIVATE_/);
   assert.match(host.projected[0]?.role ?? "", /^user$/);
   assert.doesNotMatch(host.prompts.at(-1) ?? "", /EARLY_REMOTE_CONTEXT|canonical context follows/);
   assert.match(host.prompts.at(-1) ?? "", /Do the work password=\[REDACTED\]/);
+  await connector.stop();
+});
+
+test("Solo projections retain the original user bubble text without a sender label", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  api.sessions[0] = { ...api.sessions[0]!, mode: "solo", ownerUserId: "user-1" };
+  api.events.push(canonical(1, "human_chat", { content: "Solo history" }, "user-1"));
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({ config: cfg, api, host, actorUserId: "user-1", stateStore: new MemoryConnectorStateStore() });
+  await connector.start({ runImmediately: false, schedule: false });
+  await connector.pollOnce();
+  assert.equal(host.projected[0]?.content, "Solo history");
+  assert.equal(host.projected[0]?.actorDisplayName, undefined);
   await connector.stop();
 });
 

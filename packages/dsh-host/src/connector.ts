@@ -891,7 +891,7 @@ export class DshHostConnector {
           role: "user",
           content,
           occurredAt: event.timestamp,
-          ...(event.actorDisplayName === undefined ? {} : {
+          ...(this.#session?.mode !== "multi" || event.actorDisplayName === undefined ? {} : {
             actorDisplayName: event.actorDisplayName,
           }),
         });
