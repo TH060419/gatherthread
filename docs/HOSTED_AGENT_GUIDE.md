@@ -6,7 +6,7 @@ The cloud trial Agent is being prepared for preview. Its separate **Try cloud Ag
 
 1. Sign in and open a project session where you may write. Viewers cannot start Agent requests.
 2. Enter a small, clear task, such as “Create `hello.txt` with one greeting and check its content in the terminal.”
-3. For a first try, leave **Use GT Cloud code and save changes to my GT Cloud branch** unchecked. To work on project code, first check that its owner has enabled GT Cloud sharing and that the code is already shared there, then select the checkbox yourself. This runner does not read code from the separate direct GitHub integration.
+3. For a first try, leave **Use GT Cloud code and save changes to my GT Cloud branch** unchecked. To work on project code, first check that its owner has enabled GT Cloud sharing and that the code is already shared there, then select the checkbox yourself. The checkbox clears after submission, so choose again for each run. This runner does not read code from the separate direct GitHub integration.
 4. Choose **Try cloud Agent** and review the confirmation. OpenCode runs in an isolated container, can read and edit files and execute terminal commands, and receives model responses through a server proxy. Its final answer appears in the current session.
 5. With cloud code selected, eligible changes are checkpointed to your own cloud branch. Review that checkpoint in the project's code collaboration view. The owner still reviews merges into shared `main`. This action does not automatically upload or change local files.
 

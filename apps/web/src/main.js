@@ -2914,8 +2914,10 @@ async function sendMessage(kind) {
       mentions: metadata.mentions.map((mention) => ({ ...mention, start: mention.start - leading, end: mention.end - leading })) };
     if (kind === "human_chat") await api.appendHumanChat(sessionId, input);
     else if (kind === "hosted_agent") {
+      const includeCode = element("cloud-agent-include-code").checked;
+      element("cloud-agent-include-code").checked = false;
       await api.appendHostedAgentRequest(sessionId, { ...input,
-        includeCode: element("cloud-agent-include-code").checked });
+        includeCode });
       void api.getHostedAgentStatus().then((status) => {
         if (isCurrent()) { hostedAgentStatus = status; renderComposerPermissions(); }
       }).catch(() => undefined);
