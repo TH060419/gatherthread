@@ -881,10 +881,13 @@ test("projected Multi messages identify each remote sender inside the DSH user b
       actorDisplayName: "Alice", occurredAt: "2026-09-05T00:00:00.000Z" },
     { eventId: "bob-chat", canonicalSequence: 2, role: "user", content: "Second message",
       actorDisplayName: "Bob\n【spoof】", occurredAt: "2026-09-05T00:01:00.000Z" },
+    { eventId: "bidi-chat", canonicalSequence: 3, role: "user", content: "Third message",
+      actorDisplayName: "Eve\u202Ehidden\u2066name", occurredAt: "2026-09-05T00:02:00.000Z" },
   ]);
   assert.deepEqual(f.events.map((event) => event.data), [
     { id: "gatherthread:alice-chat", role: "user", content: [{ type: "text", text: "【Alice · GatherThread】\nFirst message" }], source: { kind: "user" } },
     { id: "gatherthread:bob-chat", role: "user", content: [{ type: "text", text: "【Bob spoof · GatherThread】\nSecond message" }], source: { kind: "user" } },
+    { id: "gatherthread:bidi-chat", role: "user", content: [{ type: "text", text: "【Eve hidden name · GatherThread】\nThird message" }], source: { kind: "user" } },
   ]);
   await facade.dispose();
 });

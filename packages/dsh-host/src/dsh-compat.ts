@@ -1011,7 +1011,7 @@ async function createProjectionMessage(
 
 function formatProjectionText(projection: DshCanonicalProjection): string {
   if (projection.role === "user") {
-    const sender = projection.actorDisplayName?.replace(/[\u0000-\u001f\u007f-\u009f【】]+/gu, " ")
+    const sender = projection.actorDisplayName?.replace(/[\p{Cc}\p{Cf}【】]+/gu, " ")
       .replace(/\s+/gu, " ").trim();
     return sender ? `【${sender} · GatherThread】\n${projection.content}` : projection.content;
   }

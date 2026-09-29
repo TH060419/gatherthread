@@ -1249,6 +1249,7 @@ function createNativeManagedConnector(options: {
     get executionRuntimeId() { return connector.executionRuntimeId; },
     async start() { await connector.start(); },
     updateExecutionProfiles: (profiles) => connector.updateExecutionProfiles(profiles),
+    updateSessionSummary: (session) => connector.updateSessionSummary(session),
     localSyncStatus: () => connector.localSyncStatus(),
     setLocalAutoUpload: (enabled) => connector.setLocalAutoUpload(enabled),
     uploadLocalTurns: () => connector.uploadLocalTurns(),

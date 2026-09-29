@@ -138,6 +138,16 @@ export class DshHostConnector {
     return this.#stopped;
   }
 
+  /** Project refresh is authoritative for the mode of future DSH bubbles. */
+  updateSessionSummary(session: SessionSummary): void {
+    if (!this.#started || this.#stopped) throw new Error("DSH connector is not running");
+    if (session.id !== this.#config.sessionId || session.projectId !== this.#config.projectId
+      || session.state !== "active" || !isSessionWritableBy(session, this.#actorUserId)) {
+      throw new Error("Refreshed GatherThread Session is not this writable binding");
+    }
+    this.#session = session;
+  }
+
   /**
    * Adopt a refreshed execution-profile catalog on a running connection.
    *

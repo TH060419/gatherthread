@@ -768,6 +768,35 @@ test("Solo projections retain the original user bubble text without a sender lab
   await connector.stop();
 });
 
+test("a running connector changes sender labels after both Solo/Multi mode transitions", async () => {
+  const cfg = config();
+  const api = new FakeApi();
+  api.sessions[0] = { ...api.sessions[0]!, mode: "solo", ownerUserId: "user-1" };
+  const host = new FakeHost(cfg.dshSessionId, freshPersistence());
+  const connector = new DshHostConnector({ config: cfg, api, host, actorUserId: "user-1", stateStore: new MemoryConnectorStateStore() });
+  await connector.start({ runImmediately: false, schedule: false });
+
+  api.events.push(canonical(1, "human_chat", { content: "First Solo" }, "user-1"));
+  await connector.pollOnce();
+  api.sessions[0] = { ...api.sessions[0]!, mode: "multi" };
+  connector.updateSessionSummary(api.sessions[0]!);
+  api.events.push(canonical(2, "human_chat", { content: "Now Multi" }, "user-2"));
+  await connector.pollOnce();
+  api.sessions[0] = { ...api.sessions[0]!, mode: "solo" };
+  connector.updateSessionSummary(api.sessions[0]!);
+  api.events.push(canonical(3, "human_chat", { content: "Solo again" }, "user-1"));
+  await connector.pollOnce();
+
+  assert.deepEqual(host.projected.map(({ content, actorDisplayName }) => ({ content, actorDisplayName })), [
+    { content: "First Solo", actorDisplayName: undefined },
+    { content: "Now Multi", actorDisplayName: "user-2" },
+    { content: "Solo again", actorDisplayName: undefined },
+  ]);
+  assert.throws(() => connector.updateSessionSummary({ ...api.sessions[0]!, id: "other-session" }), /not this writable binding/u);
+  assert.throws(() => connector.updateSessionSummary({ ...api.sessions[0]!, role: "viewer" }), /not this writable binding/u);
+  await connector.stop();
+});
+
 test("native DeepSeek runtimes advertise exact profiles and apply the selected model and effort per request", async () => {
   const executionProfiles = [{
     provider: "deepseek-official",

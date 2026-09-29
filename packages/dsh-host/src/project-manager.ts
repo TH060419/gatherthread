@@ -33,6 +33,8 @@ export interface DshManagedConnector {
    * single-model binding: those keep their existing declaration unchanged.
    */
   updateExecutionProfiles?(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void>;
+  /** Apply the latest authorized Session mode without replacing the connector. */
+  updateSessionSummary(session: SessionSummary): void;
   localSyncStatus?(): LocalConversationSyncStatus;
   setLocalAutoUpload?(enabled: boolean): Promise<LocalConversationSyncStatus>;
   uploadLocalTurns?(): Promise<LocalConversationUploadResult>;
@@ -322,6 +324,12 @@ export class DshProjectManager {
     this.#discoveryFailures = 0;
     for (const error of permissions.errors) this.#reportError(error);
     const eligibleSessions = [...permissions.eligibleSessions];
+    for (const session of eligibleSessions) {
+      const binding = this.#managed.get(session.id);
+      if (binding?.phase === "active" && !binding.connector.stopped) {
+        binding.connector.updateSessionSummary(session);
+      }
+    }
     if (this.#discoverLocalSessions !== undefined) {
       try {
         const candidates = await this.#discoverLocalSessions();

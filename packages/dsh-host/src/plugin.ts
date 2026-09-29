@@ -173,6 +173,7 @@ function createManagedConnector(options: {
   let stopPromise: Promise<void> | undefined;
   return {
     get stopped() { return connector.stopped; },
+    updateSessionSummary: (session) => connector.updateSessionSummary(session),
     async start() {
       try {
         await connector.start();
