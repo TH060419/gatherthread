@@ -578,6 +578,18 @@ export class HttpCollaborationApi {
     return this.#append(sessionId, "agent_request", input);
   }
 
+  getHostedAgentStatus() {
+    return this.request("/v1/hosted-agent");
+  }
+
+  appendHostedAgentRequest(sessionId, input) {
+    return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-agent-requests`, {
+      method: "POST",
+      body: JSON.stringify({ content: input.content, include_code: input.includeCode === true,
+        idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null }),
+    });
+  }
+
   async createHistorySummary(sessionId, input) {
     const { historySummaryExecutionWire } = await import("./history-summaries.js");
     const { event } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/history-summaries`, {

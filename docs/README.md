@@ -10,6 +10,9 @@ This index separates current product contracts, operator guidance, connection gu
 - [Security model](SECURITY.md): trust model, threats, authentication, redaction, and incident expectations.
 - [Privacy notice](../site/privacy/): account deletion, shared data, and deletion/retention boundaries.
 - [Architecture decisions](adr/README.md): accepted ADRs and their status.
+- [Hosted trial Agent](HOSTED_AGENT.md): isolated OpenCode runner, provider budget, and operator setup.
+- [Try the cloud Agent](HOSTED_AGENT_GUIDE.md) · [中文](HOSTED_AGENT_GUIDE.zh-CN.md): first run, code choice, and limits.
+- [Hosted model API options](HOSTED_AGENT_PROVIDERS.md): pricing, terms, adapter work, and operator handoff.
 
 ## Connect local Agent harnesses
 

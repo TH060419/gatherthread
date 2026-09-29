@@ -36,7 +36,27 @@ test("development configuration uses a loopback-only, same-origin baseline", () 
   assert.equal(config.maxUserSessions, 512);
   assert.equal(config.maxProjectSessions, 2_048);
   assert.equal(config.maxTotalSessions, 8_192);
+  assert.equal(config.hostedAgent, undefined);
   assert.throws(() => assertPersistentCredentialPepper(config), /credentials remain valid/);
+});
+
+test("hosted Agent requires explicit Free-plan confirmation and immutable image", () => {
+  const enabled = {
+    GATHERTHREAD_HOSTED_AGENT_ENABLED: "true",
+    GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+    GATHERTHREAD_CLOUDFLARE_AI_TOKEN: "private-token",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: `example/hosted@sha256:${"b".repeat(64)}`,
+  };
+  assert.throws(() => loadServerConfig(enabled, "/srv/gatherthread"), ConfigurationError);
+  assert.throws(() => loadServerConfig({ ...enabled,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: "example/hosted:latest",
+  }, "/srv/gatherthread"), ConfigurationError);
+  const config = loadServerConfig({ ...enabled,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+  }, "/srv/gatherthread");
+  assert.equal(config.hostedAgent?.image, enabled.GATHERTHREAD_HOSTED_AGENT_IMAGE);
+  assert.equal(config.hostedAgent?.defaultUserDailyNeurons, 2_000);
 });
 
 test("owner-host credentials require a stable pepper even outside production", () => {

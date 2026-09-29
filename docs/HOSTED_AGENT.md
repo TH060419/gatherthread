@@ -1,0 +1,24 @@
+# Hosted trial Agent
+
+The hosted trial Agent runs [OpenCode](https://github.com/anomalyco/opencode) in a fresh container for each request. OpenCode provides code reading, editing, terminal commands, and local tests. GatherThread keeps the provider credential on the server and exposes only a short-lived, quota-capped model proxy over a Unix socket. The container has no general network interface.
+
+This feature is off by default. It does not replace a member's selected local Codex or DSH runtime. The composer shows a separate **Try cloud Agent** button only when an operator enables the service. GT Cloud code is read only when the user selects **Use GT Cloud code and save changes to my GT Cloud branch**. The project owner must already have enabled GT Cloud file sharing. On success, changed source is checkpointed to the requesting member's own GT Cloud branch; the owner review and merge boundary remains unchanged. The runner does not read GitHub code from the direct local GitHub integration. Without the selection, the Agent works in an empty, disposable project directory and file changes are discarded.
+
+## Operator setup
+
+1. Build `ops/hosted-agent/Dockerfile` in a reviewed build pipeline and record the immutable image digest. The image pins OpenCode 1.18.32 and includes Node.js, Git, and socat. Run an isolated smoke test of `opencode run`, code editing, terminal commands, Unix-socket model access, and container cleanup before setting the feature flag.
+2. Use a Cloudflare Workers **Free** account and create a token limited to Workers AI inference for its account. Verify the current [Workers AI prices and free allocation](https://developers.cloudflare.com/workers-ai/platform/pricing/) and the [Qwen3 model](https://developers.cloudflare.com/workers-ai/models/qwen3-30b-a3b-fp8/) before enabling. The server requires an explicit confirmation flag because provider terms and quotas can change.
+3. Set `GATHERTHREAD_HOSTED_AGENT_ENABLED=true`, `GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED=true`, `GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID`, `GATHERTHREAD_CLOUDFLARE_AI_TOKEN`, and `GATHERTHREAD_HOSTED_AGENT_IMAGE=<repository>@sha256:<digest>` in the private server environment. Never put the provider token in browser settings, project files, or the container.
+4. Optionally set `GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS` (default 2000), `GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS` (default 8000), and `GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT` (default 2). The global default is below Cloudflare's published 10,000 daily free Neurons. Set one user's allowance to zero with `hosted-agent:set-user-limit --user-id ID --neurons 0`.
+
+Each run reserves 2000 Neurons transactionally before it creates a canonical Agent request. The model proxy admits at most eight calls, 64 KiB per request, and 1024 output tokens per call. It charges a conservative upper bound before forwarding each call. The user and global daily accounting retain the reservation even when a run fails, so an upstream timeout cannot cause an unbilled retry loop. The operator should monitor actual Cloudflare usage as a second independent check.
+
+The container runs without general network access, host credentials, or writable host directories. Its working directory is a bounded in-memory filesystem; the host supplies only read-only initial code. It is non-root, read-only except for bounded temporary storage, and has CPU, memory, PID, and wall-time limits. A user's code can run terminal commands **inside that container**, so do not mount the Docker socket, server database, deployment files, SSH agent, or host home into it. OpenCode permissions are convenience controls inside the container and are not the isolation boundary.
+
+## Current limits
+
+The preview accepts at most 100 project files and 500 KiB of code, at most 12 KiB of shared conversation context, and a two-minute run. Package downloads and arbitrary web access are unavailable from the container. Commands using dependencies already present in the image or source workspace can run; a project that needs external packages must use a separately approved dependency strategy. New files that exceed the cloud code rules are not checkpointed. These limits keep the trial service within a bounded free allocation; they are not a claim that every project can build inside this runner.
+
+The operator must validate the container path on its deployment host before enabling the flag. Unit tests use a mocked Docker runner and model response; they do not prove that OpenCode can complete a real provider-backed project task. No billable provider request is made by the test suite.
+
+For provider alternatives and the exact operator handoff, see [model API options](HOSTED_AGENT_PROVIDERS.md).

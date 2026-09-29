@@ -148,6 +148,29 @@ test("Agent requests carry the selected model and reasoning profile on the produ
   }
 });
 
+test("cloud Agent uses a separate endpoint and sends code opt-in explicitly", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return Response.json({ data: { enabled: true } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    await api.getHostedAgentStatus();
+    await api.appendHostedAgentRequest("s/1", { content: "Implement a test",
+      includeCode: true, idempotencyKey: "hosted-request-0001", replyTo: "e1" });
+    assert.deepEqual(requests.map((request) => [request.url, request.options.method ?? "GET"]), [
+      ["https://gatherthread.example/v1/hosted-agent", "GET"],
+      ["https://gatherthread.example/v1/sessions/s%2F1/hosted-agent-requests", "POST"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[1].options.body), {
+      content: "Implement a test", include_code: true,
+      idempotency_key: "hosted-request-0001", reply_to_event_id: "e1",
+    });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
 test("DeepSeek Harness requests target one exact runtime without Codex fallback or credentials", async () => {
   const originalFetch = globalThis.fetch;
   let captured;

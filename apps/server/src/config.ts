@@ -1,6 +1,7 @@
 import { accessSync, constants, mkdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import type { HostedAgentOptions } from "./hosted-agent.js";
 
 const EnvironmentSchema = z.enum(["development", "test", "production"]);
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -31,6 +32,7 @@ export interface ServerConfig {
   maxUserSessions: number;
   maxProjectSessions: number;
   maxTotalSessions: number;
+  hostedAgent?: HostedAgentOptions;
 }
 
 function parsePort(name: string, raw: string | undefined, fallback: number): number {
@@ -149,6 +151,31 @@ export function loadServerConfig(
   const maxProjectSessions = parseCountLimit("GATHERTHREAD_MAX_PROJECT_SESSIONS", env.GATHERTHREAD_MAX_PROJECT_SESSIONS, 2_048);
   const maxTotalSessions = parseCountLimit("GATHERTHREAD_MAX_TOTAL_SESSIONS", env.GATHERTHREAD_MAX_TOTAL_SESSIONS, 8_192);
   const rawAuthTokenPepper = env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
+  const hostedEnabled = parseBoolean("GATHERTHREAD_HOSTED_AGENT_ENABLED", env.GATHERTHREAD_HOSTED_AGENT_ENABLED, false);
+  const hostedFreeConfirmed = parseBoolean("GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED",
+    env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED, false);
+  let hostedAgent: HostedAgentOptions | undefined;
+  if (hostedEnabled) {
+    const accountId = env.GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID?.trim() ?? "";
+    const apiToken = env.GATHERTHREAD_CLOUDFLARE_AI_TOKEN?.trim() ?? "";
+    const image = env.GATHERTHREAD_HOSTED_AGENT_IMAGE?.trim() ?? "";
+    if (!hostedFreeConfirmed || !/^[a-f0-9]{32}$/iu.test(accountId) || !apiToken || /[\r\n]/u.test(apiToken)
+      || !/^[-a-z0-9./_]+@sha256:[a-f0-9]{64}$/u.test(image)) {
+      throw new ConfigurationError("Cloud Agent requires confirmed Workers Free plan, credentials, and a digest-pinned runner image");
+    }
+    hostedAgent = { accountId, apiToken, image,
+      defaultUserDailyNeurons: parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS",
+        env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS, 2_000),
+      globalDailyNeurons: parseCountLimit("GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS",
+        env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS, 8_000),
+      maxConcurrent: parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT",
+        env.GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT, 2),
+    };
+    if (hostedAgent.globalDailyNeurons > 9_000 || hostedAgent.defaultUserDailyNeurons > 10_000
+      || hostedAgent.maxConcurrent > 8) {
+      throw new ConfigurationError("Cloud Agent limits exceed the guarded Free-plan ceiling");
+    }
+  }
   if (rawAuthTokenPepper !== undefined && rawAuthTokenPepper !== rawAuthTokenPepper.trim()) {
     throw new ConfigurationError("GATHERTHREAD_AUTH_TOKEN_PEPPER must not have leading or trailing whitespace");
   }
@@ -197,6 +224,7 @@ export function loadServerConfig(
     maxUserSessions,
     maxProjectSessions,
     maxTotalSessions,
+    ...(hostedAgent ? { hostedAgent } : {}),
   };
 }
 

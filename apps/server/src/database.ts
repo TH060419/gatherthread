@@ -8,6 +8,7 @@ import type {
   CommitLocalTurnInput,
   CommitLocalTurnResult,
   CreateHistorySummaryInput,
+  HostedAgentRequestInput,
   DeviceAuthorizationRecord,
   EventType,
   EventVisibility,
@@ -42,6 +43,7 @@ import {
   isHistorySummaryRequest, selectHistorySummarySources,
 } from "@gatherthread/protocol";
 import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
+import { HOSTED_AGENT_SCHEMA } from "./hosted-agent-schema.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
 
@@ -956,6 +958,7 @@ export class CollaborationDatabase {
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
     this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
+    this.sqlite.exec(HOSTED_AGENT_SCHEMA);
     this.migrateCodeRepositoryEnableColumn();
     this.migrateCodeRepositoryUsageColumns();
     this.migrateDeviceCredentialColumns();
@@ -3037,6 +3040,124 @@ export class CollaborationDatabase {
         }
       }
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
+    });
+  }
+
+  setHostedAgentUserLimit(userId: string, dailyNeurons: number): void {
+    if (!Number.isSafeInteger(dailyNeurons) || dailyNeurons < 0 || dailyNeurons > 10_000) {
+      throw new RangeError("dailyNeurons must be an integer from 0 to 10000");
+    }
+    this.sqlite.prepare(`INSERT INTO hosted_agent_limits(user_id,daily_neurons) VALUES(?,?)
+      ON CONFLICT(user_id) DO UPDATE SET daily_neurons=excluded.daily_neurons`).run(userId, dailyNeurons);
+  }
+
+  hostedAgentUsage(actor: Actor, defaultUserLimit: number, globalLimit: number) {
+    this.assertActiveDevice(actor);
+    const day = this.now().slice(0, 10);
+    const limit = this.sqlite.prepare("SELECT daily_neurons FROM hosted_agent_limits WHERE user_id=?")
+      .get(actor.user_id) as { daily_neurons: number } | undefined;
+    const user = this.sqlite.prepare(`SELECT COALESCE(SUM(COALESCE(metered_neurons,reserved_neurons)),0) AS neurons
+      FROM hosted_agent_jobs WHERE user_id=? AND utc_day=?`).get(actor.user_id, day) as { neurons: number };
+    const global = this.sqlite.prepare(`SELECT COALESCE(SUM(COALESCE(metered_neurons,reserved_neurons)),0) AS neurons
+      FROM hosted_agent_jobs WHERE utc_day=?`).get(day) as { neurons: number };
+    return { utc_day: day, user_limit_neurons: limit?.daily_neurons ?? defaultUserLimit,
+      user_used_neurons: user.neurons, global_limit_neurons: globalLimit, global_used_neurons: global.neurons };
+  }
+
+  reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
+    reservedNeurons: number, defaultUserLimit: number, globalLimit: number, maxConcurrent: number,
+  ): { event: CanonicalEvent; created: boolean } {
+    this.assertActiveDevice(actor);
+    return this.transaction(() => {
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (session.state !== "active") throw conflict("Archived sessions do not accept Agent requests");
+      const payload: JsonValue = redactJson({
+        content: input.content,
+        include_code: input.include_code,
+        execution_profile: { harness: "opencode", provider: "cloudflare-workers-ai",
+          model: "@cf/qwen/qwen3-30b-a3b-fp8" },
+      });
+      const replyId = input.reply_to_event_id ?? null;
+      if (replyId !== null) {
+        const target = this.getEvent(sessionId, replyId);
+        if (target.visibility !== "session") throw forbidden("Cloud Agent cannot quote private history");
+      }
+      const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
+      if (existing) {
+        const event = this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", payload, replyId, "session", null);
+        if (!this.sqlite.prepare("SELECT 1 FROM hosted_agent_jobs WHERE request_event_id=?").get(event.id)) {
+          throw idempotencyConflict("The key belongs to another Agent request");
+        }
+        return { event, created: false };
+      }
+      if (!Number.isSafeInteger(reservedNeurons) || reservedNeurons < 1 || reservedNeurons > 2_000) {
+        throw new ApiError(413, "hosted_request_too_large", "Cloud Agent request exceeds the per-run budget");
+      }
+      const active = this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_jobs WHERE status='running'")
+        .get() as { count: number };
+      if (active.count >= maxConcurrent) throw new ApiError(429, "hosted_agent_busy", "Cloud Agent is busy; try again later");
+      const day = this.now().slice(0, 10);
+      const usage = this.hostedAgentUsage(actor, defaultUserLimit, globalLimit);
+      if (usage.user_used_neurons + reservedNeurons > usage.user_limit_neurons) {
+        throw new ApiError(429, "hosted_user_quota", "Your Cloud Agent daily allowance is used up");
+      }
+      if (usage.global_used_neurons + reservedNeurons > globalLimit) {
+        throw new ApiError(503, "hosted_global_budget", "Cloud Agent daily capacity is used up");
+      }
+      const event = this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: input.idempotency_key, type: "agent_request", visibility: "session",
+        reply_to_event_id: replyId, payload,
+      }, null);
+      this.sqlite.prepare(`INSERT INTO hosted_agent_jobs(request_event_id,session_id,user_id,device_id,utc_day,
+        reserved_neurons,status,created_at) VALUES(?,?,?,?,?,?,'running',?)`)
+        .run(event.id, sessionId, actor.user_id, actor.device_id, day, reservedNeurons, this.now());
+      return { event, created: true };
+    });
+  }
+
+  finishHostedAgentRequest(requestId: string, outcome: { content?: string; inputTokens?: number; outputTokens?: number;
+    meteredNeurons?: number }): CanonicalEvent | undefined {
+    return this.transaction(() => {
+      const job = this.sqlite.prepare("SELECT * FROM hosted_agent_jobs WHERE request_event_id=?")
+        .get(requestId) as { request_event_id: string; session_id: string; user_id: string; device_id: string;
+          reserved_neurons: number; status: string } | undefined;
+      if (!job || job.status !== "running") return undefined;
+      const session = this.requireSession(job.session_id);
+      const device = this.sqlite.prepare(`SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > ?)`).get(job.device_id, job.user_id, this.now());
+      const writer = this.membershipRole(job.session_id, job.user_id);
+      const authorized = Boolean(device && writer && writer !== "viewer" && session.state === "active"
+        && (session.mode !== "solo" || session.owner_user_id === job.user_id));
+      const content = authorized ? outcome.content : undefined;
+      const success = typeof content === "string" && content.trim().length > 0;
+      const neurons = Number.isSafeInteger(outcome.meteredNeurons) && outcome.meteredNeurons! >= 0
+        ? outcome.meteredNeurons! : job.reserved_neurons;
+      const event = this.appendInsideTransaction(job.user_id, job.session_id, {
+        idempotency_key: `hosted-agent-result-${requestId}`,
+        type: "agent_response", visibility: "session", reply_to_event_id: requestId,
+        payload: success ? { content: redactJson(content!.slice(0, 16_000)), status: "completed" }
+          : { content: "Cloud Agent is unavailable. Please try a new request later.", status: "failed",
+            error: { code: authorized ? "model_unavailable" : "access_changed" } },
+      }, success ? {
+        user_id: job.user_id, device_id: job.device_id, harness: "opencode",
+        provider: "cloudflare-workers-ai", model: "@cf/qwen/qwen3-30b-a3b-fp8",
+        local_session_id: "server-contained", capture_fidelity: "canonical_history",
+      } : null);
+      this.sqlite.prepare(`UPDATE hosted_agent_jobs SET status=?,finished_at=?,metered_neurons=?,
+        input_tokens=?,output_tokens=? WHERE request_event_id=?`).run(
+        success ? "completed" : "failed", this.now(), neurons,
+        outcome.inputTokens ?? null, outcome.outputTokens ?? null, requestId,
+      );
+      return event;
+    });
+  }
+
+  failInterruptedHostedAgentJobs(): CanonicalEvent[] {
+    const rows = this.sqlite.prepare("SELECT request_event_id FROM hosted_agent_jobs WHERE status='running'")
+      .all() as Array<{ request_event_id: string }>;
+    return rows.flatMap((row) => {
+      const event = this.finishHostedAgentRequest(row.request_event_id, {});
+      return event ? [event] : [];
     });
   }
 

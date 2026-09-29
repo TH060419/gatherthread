@@ -12,6 +12,21 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  hosted-agent-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:ts
+      - run: docker build -f ops/hosted-agent/Dockerfile -t gt-hosted-smoke .
+      - run: node scripts/test-hosted-container.mjs
+        env:
+          GATHERTHREAD_TEST_HOSTED_IMAGE: gt-hosted-smoke
   verify:
     strategy:
       fail-fast: false

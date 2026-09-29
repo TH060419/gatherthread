@@ -193,6 +193,15 @@ export const AppendEventInputSchema = z.object({
 
 export type AppendEventInput = z.infer<typeof AppendEventInputSchema>;
 
+/** A separate, explicit action from both human chat and local Agent requests. */
+export const HostedAgentRequestInputSchema = z.object({
+  content: z.string().trim().min(1).max(6000),
+  include_code: z.boolean().default(false),
+  idempotency_key: IdempotencyKeySchema,
+  reply_to_event_id: IdSchema.nullable().optional(),
+}).strict();
+export type HostedAgentRequestInput = z.infer<typeof HostedAgentRequestInputSchema>;
+
 export const SingleLineTitleSchema = z.string()
   .regex(/^[^\u0000-\u001f\u007f-\u009f]*$/u, "Title must not contain control characters")
   .trim()

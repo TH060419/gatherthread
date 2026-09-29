@@ -147,6 +147,7 @@ let newDeviceAccessToken = "";
 let authenticationGeneration = 0;
 let workspaceLoadGeneration = 0;
 let pendingMessageSend = null;
+let hostedAgentStatus = { enabled: false };
 let selectionRetry = null;
 let memberRefreshTimer;
 let memberRefreshInFlight = false;
@@ -196,6 +197,7 @@ const timelineEmpty = element("timeline-empty");
 const messageInput = element("message-input");
 const sendChatButton = element("send-chat-button");
 const sendAgentButton = element("send-agent-button");
+const sendCloudAgentButton = element("send-cloud-agent-button");
 const sendError = element("send-error");
 const composer = element("composer");
 const composerLayoutResizer = element("composer-layout-resizer");
@@ -1200,6 +1202,7 @@ deleteCloudForm.addEventListener("submit", async (event) => {
 
 sendChatButton.addEventListener("click", () => sendMessage("human_chat"));
 sendAgentButton.addEventListener("click", () => sendMessage("agent_request"));
+sendCloudAgentButton.addEventListener("click", () => sendMessage("hosted_agent"));
 element("settings-button").addEventListener("click", openSettingsDialog);
 element("close-settings-button").addEventListener("click", cancelSettingsDialog);
 element("cancel-settings-button").addEventListener("click", cancelSettingsDialog);
@@ -1374,6 +1377,7 @@ function resetWorkspaceToAuth() {
   workspaceLoadGeneration += 1;
   pendingMessageSend?.restore?.();
   pendingMessageSend = null;
+  hostedAgentStatus = { enabled: false };
   selectionRetry = null;
   codeSyncUi.close();
   codeSyncUi.closeNotice();
@@ -1445,6 +1449,15 @@ async function enterWorkspace(preferredProjectId) {
   if (!state.currentUser) return;
   const isCurrent = () => authentication === authenticationGeneration
     && load === workspaceLoadGeneration && Boolean(state.currentUser);
+  void api.getHostedAgentStatus().then((status) => {
+    if (!isCurrent()) return;
+    hostedAgentStatus = status;
+    renderComposerPermissions();
+  }).catch(() => {
+    if (!isCurrent()) return;
+    hostedAgentStatus = { enabled: false };
+    renderComposerPermissions();
+  });
   authView.hidden = true;
   workspace.hidden = false;
   const noticeDeviceId = state.currentUser.device_id;
@@ -2824,6 +2837,17 @@ function renderComposerPermissions() {
   const sending = Boolean(pendingMessageSend?.());
   sendChatButton.disabled = sending || !chat.allowed;
   sendAgentButton.disabled = sending || !agentAllowed;
+  sendCloudAgentButton.disabled = sending || !chat.allowed || !hostedAgentStatus.enabled
+    || hostedAgentStatus.user_used_neurons + 2_000 > hostedAgentStatus.user_limit_neurons
+    || hostedAgentStatus.global_used_neurons + 2_000 > hostedAgentStatus.global_limit_neurons;
+  element("send-cloud-agent-help").hidden = !hostedAgentStatus.enabled;
+  if (hostedAgentStatus.enabled) {
+    const available = Math.min(hostedAgentStatus.user_limit_neurons - hostedAgentStatus.user_used_neurons,
+      hostedAgentStatus.global_limit_neurons - hostedAgentStatus.global_used_neurons);
+    element("cloud-agent-budget").textContent = localizer.t(available < 2_000
+      ? "Cloud Agent daily limit reached"
+      : "OpenCode · Cloudflare Workers AI · limited daily allowance");
+  }
   messageInput.disabled = !chat.allowed && !agentAllowed;
   element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
   const dshSelection = harness === DSH_HARNESS && resolution.runtime
@@ -2863,11 +2887,14 @@ async function sendMessage(kind) {
     messageInput.focus();
     return;
   }
-  const button = kind === "human_chat" ? sendChatButton : sendAgentButton;
+  const button = kind === "human_chat" ? sendChatButton
+    : kind === "hosted_agent" ? sendCloudAgentButton : sendAgentButton;
   if (button.disabled || pendingMessageSend?.()) return;
   sendError.textContent = "";
-  if (kind === "agent_request" && state.settings.composer.confirmAgentRequest
-    && !window.confirm("Start this Agent request with the selected harness and model?")) {
+  if ((kind === "agent_request" || kind === "hosted_agent") && state.settings.composer.confirmAgentRequest
+    && !window.confirm(kind === "hosted_agent"
+      ? localizer.t("Start OpenCode in the cloud? The request and selected GT Cloud code will be sent for model inference.")
+      : "Start this Agent request with the selected harness and model?")) {
     messageInput.focus();
     return;
   }
@@ -2886,6 +2913,13 @@ async function sendMessage(kind) {
     const input = { content, idempotencyKey: createIdempotencyKey(kind), replyTo: metadata.replyTo,
       mentions: metadata.mentions.map((mention) => ({ ...mention, start: mention.start - leading, end: mention.end - leading })) };
     if (kind === "human_chat") await api.appendHumanChat(sessionId, input);
+    else if (kind === "hosted_agent") {
+      await api.appendHostedAgentRequest(sessionId, { ...input,
+        includeCode: element("cloud-agent-include-code").checked });
+      void api.getHostedAgentStatus().then((status) => {
+        if (isCurrent()) { hostedAgentStatus = status; renderComposerPermissions(); }
+      }).catch(() => undefined);
+    }
     else {
       const harness = currentProjectHarness();
       const executionProfile = harness === DSH_HARNESS

@@ -42,6 +42,7 @@ function harness(names, overrides = {}) {
       projects: [], session: { id: "s1" }, settings: { composer: {} }, invitations: [], snapshotRequests: [] },
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
+    hostedAgentStatus: { enabled: false },
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },
     onboarding: { cancel: noop, offer: noop, refreshLanguage: noop },
     sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
@@ -81,7 +82,8 @@ test("a project list response after logout cannot reopen a workspace", async () 
   const pending = deferred();
   let selections = 0;
   const app = harness(["enterWorkspace"], {
-    api: { listProjects: () => pending.promise }, selectProject: () => { selections += 1; },
+    api: { listProjects: () => pending.promise, getHostedAgentStatus: async () => ({ enabled: false }) },
+    selectProject: () => { selections += 1; },
   });
   const work = app.enterWorkspace();
   app.authenticationGeneration += 1;
@@ -185,7 +187,8 @@ test("a background workspace reload cannot undo a newer project selection", asyn
   const pending = deferred();
   let selections = 0;
   const app = harness(["enterWorkspace"], {
-    api: { listProjects: () => pending.promise }, selectProject: () => { selections += 1; },
+    api: { listProjects: () => pending.promise, getHostedAgentStatus: async () => ({ enabled: false }) },
+    selectProject: () => { selections += 1; },
   });
   const work = app.enterWorkspace();
   app.selectedSessionGeneration += 1;

@@ -499,6 +499,13 @@
                   </button>
                   <span id="agent-target-label">No runtime available</span>
                 </div>
+                <div class="intent-help intent-agent" id="send-cloud-agent-help" hidden>
+                  <button id="send-cloud-agent-button" class="button button-secondary" type="button">
+                    <span aria-hidden="true">☁</span> Try cloud Agent
+                  </button>
+                  <label for="cloud-agent-include-code"><input id="cloud-agent-include-code" type="checkbox"> Use GT Cloud code and save changes to my GT Cloud branch</label>
+                  <span id="cloud-agent-budget">OpenCode · Cloudflare Workers AI · limited daily allowance</span>
+                </div>
               </div>
               <p id="send-error" class="form-error" role="alert"></p>
             </form>

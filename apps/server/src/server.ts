@@ -25,6 +25,7 @@ import {
   CreateInvitationInputSchema,
   CreateIdentityInputSchema,
   CreateHistorySummaryInputSchema,
+  HostedAgentRequestInputSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
   CODE_SYNC_MAX_BODY_BYTES,
@@ -62,6 +63,7 @@ import { DshDevicePairingBroker, dshPairingPollToken } from "./dsh-pairing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { CollaborationService } from "./service.js";
 import { CodeRepository } from "./code-repository.js";
+import { HostedAgent, type HostedAgentOptions } from "./hosted-agent.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const DEFAULT_REPLAY_LIMIT = 50;
@@ -145,6 +147,7 @@ export interface ServerOptions {
   maxUserSessions?: number;
   maxProjectSessions?: number;
   maxTotalSessions?: number;
+  hostedAgent?: HostedAgentOptions;
 }
 
 export interface RunningCollaborationServer {
@@ -441,6 +444,7 @@ export async function startCollaborationServer(
     maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
+  database.failInterruptedHostedAgentJobs();
   const publicAccountActor = (actor: Actor) => ({
     id: actor.user_id,
     username: actor.display_name,
@@ -450,6 +454,7 @@ export async function startCollaborationServer(
   const ephemeralCodeDirectory = options.databasePath === ":memory:" && !options.codeRepositoryDirectory
     ? mkdtempSync(join(tmpdir(), "gatherthread-code-")) : undefined;
   const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
+  const hostedAgent = options.hostedAgent ? new HostedAgent(service, codeRepository, options.hostedAgent) : undefined;
   const dshPairings = new DshDevicePairingBroker();
   const secureTransport = options.secureTransport ?? false;
   const browserCookieName = browserSessionCookieName(secureTransport);
@@ -751,6 +756,11 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/hosted-agent") {
+        sendJson(response, 200, { data: hostedAgent?.status(actor) ?? { enabled: false } });
+        return;
+      }
+
       if (url.pathname === "/v1/account/deletion-preview" && request.method === "GET") {
         if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Account deletion requires a browser session");
         sendJson(response, 200, { data: service.accountDeletionPreview(actor) });
@@ -1042,6 +1052,12 @@ export async function startCollaborationServer(
       }
 
       const sessionId = parts[0] === "v1" && parts[1] === "sessions" ? parts[2] : undefined;
+      if (sessionId && parts[3] === "hosted-agent-requests" && parts.length === 4 && request.method === "POST") {
+        if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
+        const input = HostedAgentRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: await hostedAgent.request(actor, sessionId, input) });
+        return;
+      }
       if (sessionId && request.method === "GET" && parts.length === 3) {
         sendJson(response, 200, { data: service.getSession(actor, sessionId) });
         return;

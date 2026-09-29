@@ -5,6 +5,7 @@ import type {
   CommitLocalTurnResult,
   CreateHistorySummaryInput,
   HistoryContext,
+  HostedAgentRequestInput,
   JsonValue,
   MembershipRole,
   ReplayResponse,
@@ -333,6 +334,21 @@ export class CollaborationService {
       payload: redactJson(input.payload),
     }, provenance);
     this.publish(event);
+    return event;
+  }
+
+  reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
+    reservedNeurons: number, defaultUserLimit: number, globalLimit: number, maxConcurrent: number) {
+    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input,
+      reservedNeurons, defaultUserLimit, globalLimit, maxConcurrent);
+    if (result.created) this.publish(result.event);
+    return result;
+  }
+
+  finishHostedAgentRequest(requestId: string, outcome: { content?: string; inputTokens?: number;
+    outputTokens?: number; meteredNeurons?: number }) {
+    const event = this.database.finishHostedAgentRequest(requestId, outcome);
+    if (event) this.publish(event);
     return event;
   }
 

@@ -8,6 +8,8 @@ The repository contains an executable single-process `0.1.0-alpha.8` source prev
 
 ## Assets and trust boundaries
 
+When the hosted trial Agent is enabled, project cloud code, the provider credential, the host Docker daemon, and the model proxy are additional protected assets. Each request runs in a fresh non-root container with no general network interface, read-only root, bounded temporary filesystems, dropped capabilities, CPU/memory/PID/time limits, and no host credential or Docker-socket mount. The host-side model proxy fixes the provider endpoint and model, bounds request size/calls/output and never discloses its token. User and global daily allowances are reserved transactionally before the Agent request is recorded. Operators must validate the image and isolation on the deployment host before enabling the feature. See [ADR-0036](adr/0036-isolated-hosted-trial-agent.md).
+
 Protected assets are canonical event content, membership and visibility state, bearer credentials, runtime registrations, snapshot jobs and result metadata, local transcript paths, connector cursors and outboxes, hook registry/spool content, attachments, model/provider metadata, retention settings, backups, and audit records.
 
 The main trust boundaries are:
