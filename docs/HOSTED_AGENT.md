@@ -6,6 +6,8 @@ This feature is off by default. It does not replace a member's selected local Co
 
 ## Operator setup
 
+Deploy this preview on a Linux host with Docker and Unix socket support. Windows hosts reject the enabled configuration; the container smoke test is exercised on Linux CI.
+
 1. Build `ops/hosted-agent/Dockerfile` in a reviewed build pipeline or on the deployment host with `docker build -f ops/hosted-agent/Dockerfile -t gt-hosted:reviewed .` and record its immutable local image ID with `docker image inspect --format '{{.Id}}' gt-hosted:reviewed`. Alternatively use a registry image reference pinned as `repository@sha256:<digest>`. The image pins OpenCode 1.18.32 and includes Node.js, Git, and socat. Run an isolated smoke test of `opencode run`, code editing, terminal commands, Unix-socket model access, and container cleanup before setting the feature flag.
 2. Use a Cloudflare Workers **Free** account and create a token limited to Workers AI inference for its account. Verify the current [Workers AI prices and free allocation](https://developers.cloudflare.com/workers-ai/platform/pricing/) and the [Qwen3 model](https://developers.cloudflare.com/workers-ai/models/qwen3-30b-a3b-fp8/) before enabling. The server requires an explicit confirmation flag because provider terms and quotas can change.
 3. Set `GATHERTHREAD_HOSTED_AGENT_ENABLED=true`, `GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED=true`, `GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID`, `GATHERTHREAD_CLOUDFLARE_AI_TOKEN`, and `GATHERTHREAD_HOSTED_AGENT_IMAGE=sha256:<local-image-id>` (or `repository@sha256:<registry-digest>`) in the private server environment. Never put the provider token in browser settings, project files, or the container.

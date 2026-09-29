@@ -10,6 +10,8 @@ import { ApiError } from "../src/errors.js";
 import { HostedAgent, HostedModelProxy, HOSTED_MODEL, type HostedAgentOptions } from "../src/hosted-agent.js";
 import { CollaborationService } from "../src/service.js";
 
+const unixSocketTest = process.platform === "win32" ? test.skip : test;
+
 const options: HostedAgentOptions = {
   accountId: "a".repeat(32), apiToken: "private-provider-token",
   image: `example/hosted@sha256:${"b".repeat(64)}`,
@@ -28,7 +30,7 @@ function unixPost(socketPath: string, path: string, body: unknown): Promise<numb
   });
 }
 
-test("hosted model proxy permits only the fixed model endpoint and enforces a hard call cap", async () => {
+unixSocketTest("hosted model proxy permits only the fixed model endpoint and enforces a hard call cap", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gt-model-proxy-"));
   const socket = join(directory, "model.sock");
   const forwarded: Array<{ url: string; authorization: string | undefined; body: Record<string, unknown> }> = [];
@@ -58,7 +60,7 @@ test("hosted model proxy permits only the fixed model endpoint and enforces a ha
   }
 });
 
-test("hosted run uses isolated Docker arguments, persists an event, and reserves daily quota once", async () => {
+unixSocketTest("hosted run uses isolated Docker arguments, persists an event, and reserves daily quota once", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gt-hosted-run-"));
   const database = new CollaborationDatabase(join(directory, "db.sqlite"), {
     authTokenPepper: "hosted-test-auth-token-pepper",
@@ -104,7 +106,7 @@ test("hosted run uses isolated Docker arguments, persists an event, and reserves
   }
 });
 
-test("hosted code changes checkpoint only to the requesting member's cloud branch", async () => {
+unixSocketTest("hosted code changes checkpoint only to the requesting member's cloud branch", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gt-hosted-code-"));
   const database = new CollaborationDatabase(join(directory, "db.sqlite"), {
     authTokenPepper: "hosted-test-auth-token-pepper",

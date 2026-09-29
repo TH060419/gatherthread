@@ -52,6 +52,12 @@ test("hosted Agent requires explicit Free-plan confirmation and immutable image"
     GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
     GATHERTHREAD_HOSTED_AGENT_IMAGE: "example/hosted:latest",
   }, "/srv/gatherthread"), ConfigurationError);
+  if (process.platform === "win32") {
+    assert.throws(() => loadServerConfig({ ...enabled,
+      GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+    }, "/srv/gatherthread"), /Linux Docker host/);
+    return;
+  }
   const config = loadServerConfig({ ...enabled,
     GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
   }, "/srv/gatherthread");

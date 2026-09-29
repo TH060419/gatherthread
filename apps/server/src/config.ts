@@ -156,6 +156,9 @@ export function loadServerConfig(
     env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED, false);
   let hostedAgent: HostedAgentOptions | undefined;
   if (hostedEnabled) {
+    if (process.platform === "win32") {
+      throw new ConfigurationError("Cloud Agent requires a Linux Docker host with Unix sockets");
+    }
     const accountId = env.GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID?.trim() ?? "";
     const apiToken = env.GATHERTHREAD_CLOUDFLARE_AI_TOKEN?.trim() ?? "";
     const image = env.GATHERTHREAD_HOSTED_AGENT_IMAGE?.trim() ?? "";
