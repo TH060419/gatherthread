@@ -33,6 +33,8 @@ export interface DshManagedConnector {
    * single-model binding: those keep their existing declaration unchanged.
    */
   updateExecutionProfiles?(profiles: readonly DshRuntimeExecutionProfile[]): Promise<void>;
+  /** Apply the latest authorized Session mode without replacing the connector. */
+  updateSessionSummary(session: SessionSummary): void;
   localSyncStatus?(): LocalConversationSyncStatus;
   setLocalAutoUpload?(enabled: boolean): Promise<LocalConversationSyncStatus>;
   uploadLocalTurns?(): Promise<LocalConversationUploadResult>;
@@ -322,6 +324,28 @@ export class DshProjectManager {
     this.#discoveryFailures = 0;
     for (const error of permissions.errors) this.#reportError(error);
     const eligibleSessions = [...permissions.eligibleSessions];
+    const sessionUpdateErrors: Error[] = [];
+    for (const session of eligibleSessions) {
+      const binding = this.#managed.get(session.id);
+      if (binding?.phase === "active" && !binding.connector.stopped) {
+        try {
+          binding.connector.updateSessionSummary(session);
+        } catch (error) {
+          // A connector that missed the new Solo/Multi permission or display
+          // state must not keep publishing with its previous Session summary.
+          this.#managed.delete(session.id);
+          try {
+            await binding.connector.stop();
+          } catch (stopError) {
+            this.#reportError(publicError(stopError, "DSH Session connector cleanup failed"));
+          }
+          if (!this.#stopped) this.#recordFailure(session.id);
+          const failure = publicError(error, `DSH Session ${session.id} mode refresh failed`);
+          sessionUpdateErrors.push(failure);
+          this.#reportError(failure);
+        }
+      }
+    }
     if (this.#discoverLocalSessions !== undefined) {
       try {
         const candidates = await this.#discoverLocalSessions();
@@ -367,7 +391,7 @@ export class DshProjectManager {
       status: "updated",
       eligibleSessionIds: [...eligibleIds].sort(),
       activeSessionIds: this.activeSessionIds(),
-      errors: [...permissions.errors, ...attachErrors],
+      errors: [...permissions.errors, ...sessionUpdateErrors, ...attachErrors],
     };
     this.#notifyStatus({
       state: "connected",

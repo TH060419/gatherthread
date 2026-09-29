@@ -139,7 +139,9 @@ class FakeManagedConnector implements DshManagedConnector {
   starts = 0;
   stops = 0;
   readonly profileUpdates: Array<ReadonlyArray<{ provider: string; model: string }>> = [];
+  readonly sessionUpdates: SessionSummary[] = [];
   failProfileUpdate = false;
+  failSessionUpdate = false;
 
   constructor(private readonly failStart = false) {}
 
@@ -158,7 +160,78 @@ class FakeManagedConnector implements DshManagedConnector {
     if (this.failProfileUpdate) throw new Error("simulated re-registration failure");
     this.profileUpdates.push(structuredClone(profiles));
   }
+
+  updateSessionSummary(session: SessionSummary): void {
+    if (this.failSessionUpdate) throw new Error("simulated Session mode refresh failure");
+    this.sessionUpdates.push(structuredClone(session));
+  }
 }
+
+test("project refresh updates a running connector through Solo to Multi and back", async () => {
+  const api = new DiscoveryApi();
+  api.sessions = [session("switching", { mode: "solo", ownerUserId: "actor-1" })];
+  const created: FakeManagedConnector[] = [];
+  const manager = new DshProjectManager({
+    config: projectConfig(),
+    api,
+    createConnector: () => {
+      const connector = new FakeManagedConnector();
+      created.push(connector);
+      return connector;
+    },
+  });
+
+  await manager.start();
+  assert.equal(created.length, 1);
+  api.sessions[0] = session("switching", { mode: "multi", ownerUserId: "actor-1" });
+  await manager.refreshOnce();
+  api.sessions[0] = session("switching", { mode: "solo", ownerUserId: "actor-1" });
+  await manager.refreshOnce();
+
+  assert.equal(created.length, 1, "mode changes must keep the same DSH connector");
+  assert.equal(created[0]?.starts, 1);
+  assert.deepEqual(created[0]?.sessionUpdates.map((summary) => summary.mode), ["multi", "solo"]);
+  await manager.stop();
+});
+
+test("one failed Session mode refresh cannot block peers or leave its stale connector active", async () => {
+  const api = new DiscoveryApi();
+  api.sessions = [session("broken"), session("healthy")];
+  const created = new Map<string, FakeManagedConnector>();
+  const reported: Error[] = [];
+  let now = 0;
+  const manager = new DshProjectManager({
+    config: projectConfig(),
+    api,
+    now: () => now,
+    onBackgroundError: (error) => reported.push(error),
+    createConnector: ({ config }) => {
+      const connector = new FakeManagedConnector();
+      created.set(config.sessionId, connector);
+      return connector;
+    },
+  });
+
+  await manager.start();
+  created.get("broken")!.failSessionUpdate = true;
+  api.sessions = [
+    session("broken", { mode: "solo", ownerUserId: "actor-1" }),
+    session("healthy", { mode: "solo", ownerUserId: "actor-1" }),
+    session("new"),
+  ];
+  const result = await manager.refreshOnce();
+  assert.equal(result.status, "updated");
+  assert.deepEqual(created.get("healthy")?.sessionUpdates.map(({ mode }) => mode), ["solo"]);
+  assert.equal(created.get("broken")?.stops, 1, "a stale mode must not keep publishing");
+  assert.deepEqual(manager.activeSessionIds(), ["healthy", "new"]);
+  assert.match(reported[0]?.message ?? "", /mode refresh failure/u);
+  const staleConnector = created.get("broken");
+  now = 100;
+  await manager.refreshOnce();
+  assert.notEqual(created.get("broken"), staleConnector, "the failed connector must be replaced");
+  assert.deepEqual(manager.activeSessionIds(), ["broken", "healthy", "new"]);
+  await manager.stop();
+});
 
 test("project discovery reuses authoritative Solo/Multi permissions and reconciles lifecycle", async () => {
   const api = new DiscoveryApi();
@@ -370,6 +443,7 @@ test("permission downgrade cancels a queued permit before claim while another Se
       return {
         get stopped() { return connector.stopped; },
         start: () => connector.start({ runImmediately: false, schedule: false }),
+        updateSessionSummary: (session) => connector.updateSessionSummary(session),
         stop: () => connector.stop(),
       };
     },

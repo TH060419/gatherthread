@@ -1010,7 +1010,11 @@ async function createProjectionMessage(
 }
 
 function formatProjectionText(projection: DshCanonicalProjection): string {
-  if (projection.role === "user") return projection.content;
+  if (projection.role === "user") {
+    const sender = projection.actorDisplayName?.replace(/[\p{Cc}\p{Cf}【】]+/gu, " ")
+      .replace(/\s+/gu, " ").trim();
+    return sender ? `【${sender} · GatherThread】\n${projection.content}` : projection.content;
+  }
   const route = [projection.provider, projection.model].filter(Boolean).join(" / ");
   const attribution = [projection.actorDisplayName, route].filter(Boolean).join(" · ");
   return `[GatherThread remote Agent reply${attribution ? ` · ${attribution}` : ""}]\n`
