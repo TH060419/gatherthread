@@ -87,6 +87,7 @@ test("hosted run uses isolated Docker arguments, persists an event, and reserves
     }
     assert.ok(args.some((argument) => argument.includes("dst=/input,readonly")));
     assert.equal(args.includes(options.apiToken), false);
+    assert.equal(args.some((argument) => argument.includes(input.content)), false);
     assert.equal((await agent.request(owner, session.id, input)).replayed, true);
     assert.equal(argsSeen.length, 1);
     assert.equal(agent.status(owner).user_used_neurons, 2_000);

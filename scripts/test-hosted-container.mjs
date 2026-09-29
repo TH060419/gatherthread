@@ -25,6 +25,8 @@ writeFileSync(join(control, "opencode.json"), JSON.stringify({
   permission: { read: "allow", edit: "allow", bash: "allow", task: "deny",
     external_directory: "deny", webfetch: "deny", websearch: "deny" },
 }), { mode: 0o644 });
+writeFileSync(join(control, "prompt.txt"),
+  "Use the terminal to create hello.txt containing READY. Then reply READY.", { mode: 0o644 });
 
 let calls = 0;
 let toolIssued = false;
@@ -34,6 +36,7 @@ const proxy = new HostedModelProxy({
   fetch: async (_url, init) => {
     calls += 1;
     const body = JSON.parse(String(init?.body));
+    assert.match(JSON.stringify(body.messages), /create hello\.txt containing READY/);
     const bash = Array.isArray(body.tools) && body.tools.some((tool) => tool?.function?.name === "bash");
     const useTool = bash && !toolIssued;
     if (useTool) toolIssued = true;
@@ -93,7 +96,6 @@ try {
     "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m", "--tmpfs", "/home/agent:rw,nosuid,size=64m",
     "-e", "HOME=/home/agent", "-e", "OPENCODE_CONFIG=/run/gatherthread/opencode.json",
     "-e", "NO_COLOR=1", "-e", "CI=1", image,
-    "Use the terminal to create hello.txt containing READY. Then reply READY.",
   ]);
   const result = JSON.parse(answer);
   assert.match(result.answer, /READY/);

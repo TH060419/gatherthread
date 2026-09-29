@@ -69,7 +69,8 @@ async function main() {
   try {
     await new Promise((resolve) => setTimeout(resolve, 100));
     const answer = await run("opencode", [
-      "run", "--model", "hosted/@cf/qwen/qwen3-30b-a3b-fp8", "--agent", "build", process.argv[2] ?? "",
+      "run", "--model", "hosted/@cf/qwen/qwen3-30b-a3b-fp8", "--agent", "build",
+      "--file", "/run/gatherthread/prompt.txt", "Complete the attached task in this workspace.",
     ], 64_000);
     let files = null;
     let save_error = null;

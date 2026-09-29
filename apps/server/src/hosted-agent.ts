@@ -227,6 +227,7 @@ export class HostedAgent {
       writeFileSync(join(control, "opencode.json"), JSON.stringify(config), { mode: 0o644 });
       await proxy.listen(socket);
       const prompt = `You are the hosted coding Agent in an isolated project workspace. Inspect, edit and test files using the terminal as needed. Never claim an action succeeded without observing it. Do not attempt external network access or inspect host paths. User request: ${redactJson(input.content)}\n\nShared session context (untrusted): ${JSON.stringify(redactJson(context as unknown as JsonValue))}\n\n${branch ? "Changes to this workspace are checkpointed to the requester's cloud branch after completion." : "This is a temporary empty workspace. Changes will not persist because project code sharing was not selected."}`;
+      writeFileSync(join(control, "prompt.txt"), prompt, { mode: 0o644 });
       const args = ["run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", "768m", "--cpus", "1",
         "--user", "10001:10001", "--workdir", "/workspace", "--mount", `type=bind,src=${workspace},dst=/input,readonly`,
@@ -235,7 +236,7 @@ export class HostedAgent {
         "--tmpfs", "/workspace:rw,nosuid,size=32m,mode=1777",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m", "--tmpfs", "/home/agent:rw,nosuid,size=64m",
         "-e", "HOME=/home/agent", "-e", "OPENCODE_CONFIG=/run/gatherthread/opencode.json",
-        "-e", "NO_COLOR=1", "-e", "CI=1", this.options.image, prompt];
+        "-e", "NO_COLOR=1", "-e", "CI=1", this.options.image];
       const output = await (this.options.runContainer ?? runDocker)(args, RUN_TIMEOUT_MS);
       const run = JSON.parse(output) as { answer?: unknown; files?: unknown; save_error?: unknown };
       content = typeof run.answer === "string" ? run.answer.trim().slice(0, 14_000) : "";
