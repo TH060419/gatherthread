@@ -4,7 +4,80 @@ Project code collaboration is included in the `0.1.0-alpha.8` Alpha. The invitat
 
 项目代码协作已纳入 `0.1.0-alpha.8` Alpha。邀请制服务器 `https://gatherthread.cn` 仅在项目与本地设备分别授权后使用该功能；公众注册和公开 Git 传输仍未开放。若匹配的 Codex 连接器与 DSH 插件包可用，可直接安装；否则从经过审核的源码构建。
 
-## What is synchronized
+## Choose source storage / 选择代码存储
+
+The GitHub integration described below is an **unreleased source preview**, not a claim about the hosted service or published packages. Use a reviewed source checkout containing the matching server, Web client, connector and DSH plugin. The existing GatherThread cloud checkpoint option remains available with its existing limits; nothing migrates or uploads automatically when you choose GitHub.
+
+下述 GitHub 接入是**尚未发布的源码预览**，不代表线上服务或已发布安装包已经支持。测试时需使用同一份经过审核的源码构建服务端、网页、连接器和 DSH 插件。原有 GatherThread 云端检查点保留；选择 GitHub 不会自动迁移或上传已有代码。
+
+| Option / 方式 | Suitable use / 适用场景 | Source destination / 代码去向 | Local snapshot handling / 本地快照处理 |
+|---|---|---|---|
+| GatherThread cloud / 共序云端 | Small projects and first trials / 小项目与初次体验 | GatherThread server / 共序服务器 | 1,000 files; 2 MiB/file; 8 MiB/tree |
+| GitHub | Recommended for longer-term collaboration and larger source trees / 推荐用于长期协作和较大源码项目 | Local computer directly to GitHub / 本机直接传到 GitHub | No GT storage quota; preview handles 10,000 files, 20 MiB/file, 128 MiB/tree |
+| Native Git / 原生 Git | Trees outside these preview limits, LFS or submodules / 超出预览限制、使用 LFS 或子模块 | Your selected Git remote / 自行选择的远端 | Governed by your tools and hosting provider / 由工具和托管服务决定 |
+
+GitHub uploads do not count against GatherThread storage quotas. The preview numbers are local memory and file-handling safeguards, not a GitHub storage allowance; repositories beyond them can still use native Git with the same GitHub repository. The first fetch also caches the selected branches' Git history locally and can require more disk space and time than a single source snapshot. GitHub repository visibility and collaborator permissions are independent of GatherThread project membership. A private GatherThread project does not make a public GitHub repository private, and a GatherThread invitation does not grant GitHub access.
+
+GitHub 上传不计入共序的存储额度。表中数字是本地预览同步器的内存与文件处理保护，并非 GitHub 存储额度；超出范围的仓库仍可使用原生 Git 操作同一仓库。首次获取还会在本机缓存所选分支的 Git 历史，占用空间和耗时可能大于单次源码快照。GitHub 仓库的可见性和协作者权限独立管理：共序中的私有项目不会把公开 GitHub 仓库变成私有仓库，共序邀请也不会自动授予 GitHub 权限。
+
+## GitHub source preview / GitHub 源码预览
+
+### Configure and authorize / 配置与授权
+
+1. Prepare the intended GitHub repository and grant each collaborator the required GitHub access. Review its visibility, branch rules and Actions workflows. The integration never creates a repository, invites GitHub members, grants privileges or opens/merges a pull request for you.
+2. As the GatherThread project owner, open **Project code → GitHub**, save `OWNER/REPO` and the shared base branch, then enable the connection. Enter only the repository slug, without a URL or `.git` suffix. Use a base such as `main`, outside the reserved `gatherthread/` namespace. Saving this metadata uploads no source and grants no local file access.
+3. On each local device, install Git 2.38+ and GitHub CLI. Select that device in the Web code panel and click **Connect GitHub on this device** for a Codex runtime, or click **连接 GitHub · 打开浏览器** in DSH settings. The local GitHub CLI opens browser sign-in when needed; complete authorization in that browser. GitHub CLI normally uses the local credential store, but [may fall back to a plain-text file when no credential store is available](https://cli.github.com/manual/gh_auth_login); inspect `gh auth status` on your device if this matters to you. If browser launching is unavailable, use the local CLI fallback:
+
+   ```sh
+   gh auth login --hostname github.com --git-protocol https --web
+   gh auth status --hostname github.com
+   ```
+
+4. Review eligible source files and separately authorize that exact repository/base configuration in Codex or DSH. A new local GitHub binding automatically uploads settled changes while the Agent is idle; the device switch can turn this off at any time. Existing explicit off choices survive reconnects. Repository/base changes and configuration revisions require renewed local authorization; an owner cannot silently redirect an already-authorized device to another repository.
+
+先在 GitHub 准备仓库，并独立授予协作者权限。项目创建者在共序“项目代码 → GitHub”填写 `OWNER/REPO` 和主分支；每位成员在自己的设备上安装 Git 与 GitHub CLI。Codex 可在网页选择自己的在线设备并点击“在此设备连接 GitHub”，DSH 可在插件设置点击“连接 GitHub · 打开浏览器”。本地 CLI 会在需要登录时打开浏览器，用户在 GitHub 完成确认；也可使用上方终端命令。检查上传范围并在 Codex 或 DSH 单独授权后，新设备默认会在 Agent 空闲时自动上传稳定的文件改动，可随时关闭，关闭状态在重连后保留。仓库、主分支或配置版本变化后需重新确认本地授权，包括暂停后重新开启；网页保存配置不能替代设备授权。
+
+### Codex source commands / Codex 源码命令
+
+In the source preview, add explicit GitHub authorization to the existing connection command. This is separate from cloud `--code-sync` and requires reviewed Hooks for normal connected operation:
+
+```sh
+npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --workspace '/absolute/path/to/project' --plugin-hooks --github-code-sync OWNER/REPO --github-base-branch main
+```
+
+Use your actual server and project. The GatherThread device token stays in its hidden prompt; do not put GitHub credentials in that prompt, a GatherThread form or a command URL. The local transport uses HTTPS Git with the local `gh` credential helper. It does not use your workspace's Git remotes or change its branch/index.
+
+For explicit one-shot recovery with no Agent startup, the source CLI adds `--recover-github-code`; this recovery path does not require Hooks:
+
+```sh
+npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --workspace '/absolute/path/to/previous/project' --github-code-sync OWNER/REPO --github-base-branch main --recover-github-code
+```
+
+Recovery creates a new directory for uploaded eligible files. It does not restore excluded secrets/dependencies, unuploaded changes or native conversation state. Inspect the returned path and recovered files before opening or running them. These flags belong to the unreleased source integration; do not assume an older npm package accepts them.
+
+这些参数仅适用于未发布源码中的新连接器。正常连接需审阅并信任 Hooks；一次性恢复不启动 Agent，也不需要 Hooks。GitHub 凭据由本机 `gh` 管理，不能粘贴到共序设备 token 提示或网页中。恢复会创建新目录，不会改绑旧会话，也无法恢复未上传修改、被排除的文件或原生对话。
+
+### DSH and daily use / DSH 与日常使用
+
+The matching native plugin adds **Settings → GatherThread / 共序 → 项目代码 · GitHub（推荐）**. Check the displayed repository/base branch and authorize that project locally. Its GitHub controls provide status, upload, download, recovery, update from the shared base and a separate idle automatic-upload switch. The Web page can request those operations only through the exact selected same-user Codex/DSH execution runtime; it cannot grant DSH consent.
+
+Each GatherThread user has a stable branch `gatherthread/<project hash>/<user hash>`, shared across their devices. Upload pushes only that personal branch with ordinary fast-forward checks. It never force-pushes, writes the shared base/default branch, or changes the original workspace Git branch/index. Review and merge the personal branch through your normal GitHub pull-request process. **Update from base** merges the configured shared base into your personal branch, then **Download** applies the result only when local files match the acknowledged baseline. Conflicts or stale heads stop for manual resolution. Use **Recover** for a separate comparison copy when both sides changed.
+
+DSH 原生设置中新增独立的 GitHub 区域。核对仓库和主分支后逐项目授权，再选择状态、上传、下载、恢复、从主分支更新或空闲自动上传。每位用户跨设备共用稳定的个人分支；上传只推进本人分支，不强推、不直接改共享主分支。审核合并使用 GitHub 常规 PR 流程。共享主分支有更新时先更新个人分支，再下载；本地有未上传修改或发生冲突时会停止，需自行处理。
+
+### Privacy, pause and limits / 隐私、暂停与限制
+
+GitHub source bytes and GitHub credentials travel directly between the local computer and GitHub. GatherThread stores repository/base/enablement/revision metadata and bounded private job/status metadata, not the GitHub source or credential. Existing GatherThread cloud code uploads remain a separate destination and still store source on that server when explicitly used. Conversation sharing also remains a separate feature.
+
+Turning off GitHub synchronization, removing a GatherThread member or deleting the GatherThread project does not revoke that person's GitHub permissions or delete any GitHub branch, repository, clone or backup. Manage those in GitHub separately. Stop active transfers before changing configuration; a push already sent cannot be recalled by pausing GatherThread. GitHub pushes may trigger [repository Actions workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push), including from automatic uploads. Review workflow triggers and secrets before enabling automation.
+
+The preview refuses symlinks, submodules, Git LFS pointers, non-portable/private paths and tracked generated/dependency trees instead of silently dropping them from a remote snapshot. Secret checks cover recognizable patterns, not all possible sensitive content. Review files before sharing, and use native Git for unsupported repositories. Synchronization operations share a local workspace lock, but this does not lock native Agent tools or editors: use separate working copies for simultaneous writers.
+
+GitHub 源码和 GitHub 凭据由本机直接传给 GitHub，共序只保存连接与任务状态元数据。若另外使用共序云端代码上传，代码仍会按该功能存储在共序服务器。暂停、移除共序成员或删除共序项目，不会撤销 GitHub 权限，也不会删除 GitHub 分支、仓库、克隆或备份；需在 GitHub 单独处理。已发出的推送不能由暂停操作撤回。自动上传同样可能触发仓库 Actions，请先检查触发规则与机密使用范围。
+
+本预览拒绝符号链接、子模块、LFS 指针、不安全路径和远端已跟踪的生成产物或依赖树；超限或不支持的仓库请使用原生 Git。已知密钥扫描不能证明文件完全不含敏感内容。不同 Agent 同时写入时仍需使用独立工作目录。实现与验证边界见 [ADR-0035](adr/0035-direct-local-github-code-synchronization.md)。
+
+## GatherThread cloud: what is synchronized
 
 Each project can have one server-managed Git repository. Each member uploads to their own branch, independent of their selected Agent or device. The project owner reviews changes and merges them into shared `main`. Project viewers can inspect code but cannot upload or merge. All project readers can read every code branch: a personal branch is not private, and code visibility is **not** narrowed by a Solo conversation.
 
@@ -90,7 +163,7 @@ npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --wor
 
 It prints the new local recovery directory and exits without starting an Agent. This recovers the latest uploaded eligible source files, not edits that never reached the server, excluded files, dependencies or credentials. Check the recovered code before running install/build commands; collaborators' source is untrusted until reviewed.
 
-## Limits and operational requirements
+## GatherThread cloud limits and operational requirements
 
 - A checkpoint: at most 1,000 regular files, 2 MiB per file and 8 MiB total decoded content. No submodules, symlinks or arbitrary local paths from Web commands.
 - Common generated/dependency directories, `.git`, private GatherThread/Codex/DSH state, `.env` secrets and credential-file patterns are excluded or refused. `.env.example` may be shared if it contains only placeholders. Recognizable secret scanning is a safety net, not proof that a file contains no secrets.
@@ -103,7 +176,17 @@ It prints the new local recovery directory and exits without starting an Agent. 
 - Cloud project deletion revokes API access and removes code metadata; retained Git objects remain in operator-controlled storage pending explicit retention/backup cleanup. No cloud deletion deletes a member's local files.
 - No external Git hosting credentials, Git smart HTTP, task-specific worktrees, historical-version picker, LFS or automatic conflict resolution in this version. Main and member history remain ordinary Git commits in server storage.
 
-## Manual acceptance checklist
+## GitHub preview manual acceptance checklist
+
+These are required manual checks, not a statement that live GitHub or supported desktop platforms have already passed.
+
+1. In a disposable GitHub repository, verify separate owner configuration, local account login and local consent. Change repository/base or pause/resume; confirm renewed consent is required and chat remains usable.
+2. Upload from two users and inspect the exact personal refs on GitHub. Confirm the shared base/default branch and each original workspace's index/branch are unchanged. Run two devices of one user from the same baseline and confirm the stale upload refuses.
+3. Review/merge using GitHub, update the personal branch from base and download only onto a clean acknowledged tree. Verify conflicting/dirty trees stop. Recover separately and compare file bytes without deleting the original workspace.
+4. Confirm that a newly authorized GitHub binding defaults to auto-upload on, waits for idle/stable files and stops after disabling; reconnect and verify the off preference remains off. Review any GitHub Actions run triggered by the disposable test push. Exercise native DSH and exact-runtime Web controls independently.
+5. Verify unsupported tracked trees and preview limits stop without dropping remote content. Remove GatherThread access and confirm its controls stop while GitHub permissions remain separately administered. Repeat relevant paths on each supported platform/browser before claiming compatibility.
+
+## GatherThread cloud manual acceptance checklist
 
 1. **Opt-in:** create a project and session; confirm code upload remains disabled until owner enablement and local authorization. Existing chat/Agent actions must still work without either.
 2. **First checkpoint:** create two harmless source files, upload once, refresh status and inspect changes. Repeat unchanged upload; no duplicate content commit should appear.

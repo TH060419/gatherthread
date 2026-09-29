@@ -39,24 +39,29 @@ export function isCodeSyncPathAllowed(path: string): boolean {
   });
 }
 
-export const CodeFileSchema = z.object({
+export interface CodeSyncLimits { maxFiles: number; maxFileBytes: number; maxSnapshotBytes: number; }
+export const CLOUD_CODE_SYNC_LIMITS: CodeSyncLimits = { maxFiles: CODE_SYNC_MAX_FILES, maxFileBytes: CODE_SYNC_MAX_FILE_BYTES, maxSnapshotBytes: CODE_SYNC_MAX_SNAPSHOT_BYTES };
+export const GITHUB_CODE_SYNC_LIMITS: CodeSyncLimits = { maxFiles: 10_000, maxFileBytes: 20 * 1024 * 1024, maxSnapshotBytes: 128 * 1024 * 1024 };
+
+function createCodeFileSchema(limits: CodeSyncLimits) { return z.object({
   path: z.string().refine(isCodeSyncPathAllowed, "Unsafe or private code path"),
-  content_base64: z.string().max(4 * Math.ceil(CODE_SYNC_MAX_FILE_BYTES / 3)).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
+  content_base64: z.string().max(4 * Math.ceil(limits.maxFileBytes / 3)).regex(/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/),
   executable: z.boolean(),
-}).strict();
+}).strict(); }
+export const CodeFileSchema = createCodeFileSchema(CLOUD_CODE_SYNC_LIMITS);
 export type CodeFile = z.infer<typeof CodeFileSchema>;
 
-export const CodeFilesSchema = z.array(CodeFileSchema).max(CODE_SYNC_MAX_FILES).superRefine((files, context) => {
+export function createCodeFilesSchema(limits: CodeSyncLimits) { return z.array(createCodeFileSchema(limits)).max(limits.maxFiles).superRefine((files, context) => {
   let size = 0;
   const names = new Set<string>();
   for (const [index, file] of files.entries()) {
     const bytes = file.content_base64.length * 3 / 4 - (file.content_base64.endsWith("==") ? 2 : file.content_base64.endsWith("=") ? 1 : 0);
     size += bytes;
     const normalized = portablePathKey(file.path);
-    if (bytes > CODE_SYNC_MAX_FILE_BYTES || names.has(normalized)) context.addIssue({ code: "custom", path: [index], message: "File limit or duplicate portable path" });
+    if (bytes > limits.maxFileBytes || names.has(normalized)) context.addIssue({ code: "custom", path: [index], message: "File limit or duplicate portable path" });
     names.add(normalized);
   }
-  if (size > CODE_SYNC_MAX_SNAPSHOT_BYTES) context.addIssue({ code: "custom", message: "Code snapshot exceeds 8 MiB" });
+  if (size > limits.maxSnapshotBytes) context.addIssue({ code: "custom", message: "Code snapshot exceeds provider limit" });
   for (const name of names) {
     const parts = name.split("/");
     parts.pop();
@@ -65,7 +70,8 @@ export const CodeFilesSchema = z.array(CodeFileSchema).max(CODE_SYNC_MAX_FILES).
       parts.pop();
     }
   }
-});
+}); }
+export const CodeFilesSchema = createCodeFilesSchema(CLOUD_CODE_SYNC_LIMITS);
 export const CodeEnableInputSchema = z.object({ idempotency_key: Key }).strict();
 export const CodeDisableInputSchema = z.object({ idempotency_key: Key }).strict();
 export const CodeCheckpointInputSchema = z.object({

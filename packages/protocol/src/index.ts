@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { codeSyncRequestKinds } from "./code-sync.js";
+import { githubCodeSyncRequestKinds } from "./github-sync.js";
 export * from "./code-sync.js";
+export * from "./github-sync.js";
 export * from "./history-summary.js";
 
 export const sessionModes = ["solo", "multi"] as const;
@@ -567,6 +569,7 @@ export type SnapshotRequestStatus = z.infer<typeof SnapshotRequestStatusSchema>;
 
 export const snapshotRequestKinds = [
   ...codeSyncRequestKinds,
+  ...githubCodeSyncRequestKinds,
   "immutable",
   "visible_history_replace",
   "local_sync_status",

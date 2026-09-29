@@ -255,6 +255,14 @@ export class HttpCollaborationApi {
     return this.request(`/v1/projects/${encodeURIComponent(projectId)}/code`);
   }
 
+  async getProjectGithub(projectId) {
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/github`);
+  }
+
+  async putProjectGithub(projectId, input) {
+    return this.request(`/v1/projects/${encodeURIComponent(projectId)}/github`, { method: "PUT", body: JSON.stringify(input) });
+  }
+
   listProjectMentions(projectId, beforeId) {
     const query = beforeId ? `?before_event_id=${encodeURIComponent(beforeId)}` : "";
     return this.request(`/v1/projects/${encodeURIComponent(projectId)}/mentions${query}`);
@@ -723,6 +731,8 @@ export class MockCollaborationApi {
     this.localAutomaticUpload = new Map();
     this.codeRepositories = new Map();
     this.codeAutomaticUpload = new Map();
+    this.githubConnections = new Map();
+    this.githubAutomaticUpload = new Map();
     this.credential = "";
     this.deviceName = "Safari · macOS";
     this.dshDeviceName = "DeepSeek Harness · macOS";
@@ -978,6 +988,24 @@ export class MockCollaborationApi {
     return structuredClone(this.codeRepositories.get(projectId) ?? {
       repository: { enabled: false, main_commit: null }, branches: [], own_branch_id: null,
     });
+  }
+
+  async getProjectGithub(projectId) {
+    const project = await this.getProject(projectId);
+    return { connection: structuredClone(this.githubConnections.get(projectId) ?? null),
+      branch: `gatherthread/demo-project/demo-user`, can_configure: project.role === "owner",
+      can_write: ["owner", "participant"].includes(project.role) };
+  }
+
+  async putProjectGithub(projectId, input) {
+    const status = await this.getProjectGithub(projectId);
+    if (!status.can_configure) throw new ApiError("Only the owner can configure GitHub.", { status: 403, code: "forbidden" });
+    if (input.expected_revision !== (status.connection?.revision ?? null)) throw new ApiError("GitHub configuration changed.", { status: 409, code: "github_revision_conflict" });
+    if (!/^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9_.-]{1,100}$/u.test(input.repository)
+      || !input.base_branch || input.base_branch.startsWith("gatherthread/") || typeof input.enabled !== "boolean") throw new ApiError("Invalid GitHub configuration.", { status: 400, code: "invalid_request" });
+    this.githubConnections.set(projectId, { repository: input.repository, base_branch: input.base_branch,
+      enabled: input.enabled, revision: createIdempotencyKey("github") });
+    return this.getProjectGithub(projectId);
   }
 
   async getCodeStorage() {
@@ -1270,6 +1298,29 @@ export class MockCollaborationApi {
     const request = this.snapshotRequests.get(requestId);
     if (!request) throw new ApiError("Snapshot request not found.", { status: 404, code: "not_found" });
     request.pollCount += 1;
+    if (request.kind.startsWith("github_code_") || request.kind === "github_auth_connect") {
+      request.status = request.pollCount === 1 ? "claimed" : "completed";
+      if (request.status === "completed" && !request.result) {
+        const projectId = this.#findSession(request.sessionId).projectId;
+        const status = await this.getProjectGithub(projectId);
+        const connection = status.connection;
+        if (!status.can_write || !connection || (!connection.enabled && !["github_auth_connect", "github_code_sync_status", "github_code_auto_upload_disable"].includes(request.kind))) {
+          request.status = "failed"; request.failureCode = "github_code_sync_disabled";
+          return structuredClone(request);
+        }
+        const key = `${projectId}:${request.targetRuntimeId}`;
+        if (request.kind === "github_code_auto_upload_enable") this.githubAutomaticUpload.set(key, true);
+        if (request.kind === "github_code_auto_upload_disable") this.githubAutomaticUpload.set(key, false);
+        request.result = request.kind === "github_auth_connect" ? { provider: "github", connected: true } : { kind: request.kind, provider: "github", repository: connection.repository,
+          branch: status.branch, base_branch: connection.base_branch, enabled: true,
+          automatic_upload: this.githubAutomaticUpload.get(key) ?? true,
+          local_changes: 0, file_count: 1, excluded_count: 0, base_commit: "1".repeat(40),
+          cloud_commit: "1".repeat(40), needs_download: false,
+          ...(request.kind === "github_code_recover" ? { recovery_directory: "gatherthread-github-recovery-demo" } : {}),
+        };
+      }
+      return structuredClone(request);
+    }
     if (request.kind.startsWith("code_")) {
       request.status = request.pollCount === 1 ? "claimed" : "completed";
       if (request.status === "completed" && !request.result) {

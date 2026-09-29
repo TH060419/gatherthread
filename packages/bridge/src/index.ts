@@ -13,3 +13,5 @@ export * from "./project-workspace.js";
 export * from "./daemon.js";
 export * from "./local-api-relay.js";
 export * from "./code-sync.js";
+export * from "./github-code-sync.js";
+export * from "./github-auth.js";
