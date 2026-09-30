@@ -166,7 +166,7 @@ test("product home distinguishes local Agents from the pending cloud trial", asy
   assert.match(html, /当前 Alpha 在 gatherthread\.cn 邀请制测试/u);
   assert.match(html, /本地 Codex 与 DeepSeek Harness 的模型、凭据和工作目录仍由你管理/u);
   assert.match(html, /id="cloud-agent"/u);
-  assert.match(html, /目前仍待模型 API 接入与部署验证/u);
+  assert.match(html, /目前仍待模型 API、GitHub App 接入与部署验证/u);
   assert.match(html, /data-i18n="connect\.c3\.h3">连接本地 Agent/u);
   assert.doesNotMatch(html, /npm run connection:local/u);
 });

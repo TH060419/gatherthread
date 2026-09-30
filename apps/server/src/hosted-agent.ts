@@ -5,7 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Actor } from "./database.js";
-import { isCodeSyncPathAllowed, type CodeFile, type HostedAgentRequestInput, type JsonValue } from "@gatherthread/protocol";
+import { isCodeSyncPathAllowed, type CanonicalEvent, type CodeFile, type HostedAgentRequestInput, type JsonValue } from "@gatherthread/protocol";
 import { ApiError } from "./errors.js";
 import { redactJson } from "./redaction.js";
 import type { CollaborationService } from "./service.js";
@@ -49,7 +49,7 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Buffer
   return Buffer.concat(chunks);
 }
 
-function runDocker(args: string[], timeoutMs: number): Promise<string> {
+export function runDocker(args: string[], timeoutMs: number, outputLimit = 1_000_000, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"], env: {
       PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: process.env.HOME ?? "/",
@@ -58,16 +58,21 @@ function runDocker(args: string[], timeoutMs: number): Promise<string> {
     let size = 0;
     let settled = false;
     const fail = (error: Error) => { if (!settled) { settled = true; reject(error); } child.kill("SIGKILL"); };
+    const abort = () => fail(new Error("container_interrupted"));
+    signal?.addEventListener("abort", abort, { once: true });
+    if (signal?.aborted) abort();
     const timer = setTimeout(() => fail(new Error("container_timeout")), timeoutMs);
     child.stdout.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 1_000_000) fail(new Error("container_output_too_large"));
+      if (size > outputLimit) fail(new Error("container_output_too_large"));
       else output += chunk.toString("utf8");
     });
-    child.stderr.on("data", (chunk: Buffer) => { size += chunk.length; if (size > 64_000) fail(new Error("container_output_too_large")); });
+    let stderrSize = 0;
+    child.stderr.on("data", (chunk: Buffer) => { stderrSize += chunk.length; if (stderrSize > 64_000) fail(new Error("container_output_too_large")); });
     child.once("error", (error) => { clearTimeout(timer); fail(error); });
     child.once("close", (code) => {
       clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
       if (settled) return;
       settled = true;
       if (code === 0) resolve(output);
@@ -82,6 +87,8 @@ export class HostedModelProxy {
   private spent = 0;
   readonly server = createServer((request, response) => void this.forward(request, response));
   constructor(private readonly options: { endpoint: HostedEndpoint; fetch?: typeof globalThis.fetch;
+    repositoryRun?: boolean;
+    authorize?: () => void;
     onUnavailable?: (retryAfterMs: number) => void }) {}
 
   async listen(path: string): Promise<void> {
@@ -94,6 +101,7 @@ export class HostedModelProxy {
 
   close(): Promise<void> {
     if (!this.server.listening) return Promise.resolve();
+    this.server.closeAllConnections();
     return new Promise((resolve) => this.server.close(() => resolve()));
   }
 
@@ -101,19 +109,21 @@ export class HostedModelProxy {
     const fail = (code: number) => { if (!response.headersSent) response.writeHead(code).end(); else response.destroy(); };
     let upstreamAttempted = false;
     try {
+      this.options.authorize?.();
       if (request.method !== "POST" || request.url !== "/v1/chat/completions"
         || request.headers["content-type"]?.split(";")[0] !== "application/json") return fail(404);
-      const bytes = await readBody(request, MAX_MODEL_BODY_BYTES);
+      const outputLimit = this.options.repositoryRun ? 2048 : MAX_OUTPUT_TOKENS;
+      const bytes = await readBody(request, this.options.repositoryRun ? 128_000 : MAX_MODEL_BODY_BYTES);
       const body = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
       if (body.model !== this.options.endpoint.model || !Array.isArray(body.messages) || body.messages.length < 1
         || body.max_tokens !== undefined && (!Number.isSafeInteger(body.max_tokens)
-          || (body.max_tokens as number) < 1 || (body.max_tokens as number) > MAX_OUTPUT_TOKENS)) return fail(400);
+          || (body.max_tokens as number) < 1 || (body.max_tokens as number) > outputLimit)) return fail(400);
       const charge = costUpperBound(bytes.length);
-      if (this.calls >= MAX_MODEL_CALLS || this.options.endpoint.provider === "cloudflare-workers-ai" && this.spent + charge > RUN_NEURONS) return fail(429);
+      if (this.calls >= (this.options.repositoryRun ? 64 : MAX_MODEL_CALLS) || this.options.endpoint.provider === "cloudflare-workers-ai" && this.spent + charge > RUN_NEURONS) return fail(429);
       this.calls += 1;
       this.spent += charge;
       delete body.max_completion_tokens;
-      body.max_tokens = MAX_OUTPUT_TOKENS;
+      body.max_tokens = outputLimit;
       body.n = 1;
       if (this.options.endpoint.provider === "deepseek") body.thinking = { type: "disabled" };
       upstreamAttempted = true;
@@ -205,7 +215,29 @@ export class HostedAgent {
     if (ready.status !== 0 || image.status !== 0) throw new ApiError(503, "hosted_runner_unavailable", "Cloud Agent execution is unavailable");
   }
 
+  reserveRepository(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
+    onReserved: (event: CanonicalEvent) => void) {
+    this.assertDockerReady();
+    const context = this.service.readHistoryContext(actor, sessionId);
+    if (Buffer.byteLength(JSON.stringify(context)) > MAX_CONTEXT_BYTES) {
+      throw new ApiError(413, "hosted_context_too_large", "Cloud Agent needs a shorter conversation context");
+    }
+    const endpoints = this.options.endpoints.filter((e) => e.profileId === input.profile_id);
+    if (!endpoints.length || endpoints[0]!.provider === "cloudflare-workers-ai") {
+      throw new ApiError(400, "github_model_unavailable", "Repository tasks require a DeepSeek or compatible API profile");
+    }
+    const result = this.service.reserveHostedAgentRequest(actor, sessionId, input,
+      endpoints.map((e) => ({ ...e, blocked: (this.cooldowns.get(e.quotaGroup) ?? 0) > Date.now() })),
+      this.options, onReserved);
+    return { ...result, endpoint: endpoints.find((e) => e.id === result.endpointId), context };
+  }
+
+  coolDown(quotaGroup: string, milliseconds: number) {
+    this.cooldowns.set(quotaGroup, Date.now() + milliseconds);
+  }
+
   async request(actor: Actor, sessionId: string, input: HostedAgentRequestInput) {
+    if (input.github_task_id) throw new ApiError(400, "github_task_route_required", "Use the cloud repository task endpoint");
     const endpoints = this.options.endpoints.filter((e) => e.profileId === input.profile_id);
     if (!endpoints.length) throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
     this.assertDockerReady();

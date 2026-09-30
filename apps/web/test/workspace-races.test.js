@@ -43,6 +43,7 @@ function harness(names, overrides = {}) {
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
     hostedAgentStatus: { enabled: false },
+    cloudGithubUi: { updateContext: noop, completeAuthorization: async () => {} },
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },
     onboarding: { cancel: noop, offer: noop, refreshLanguage: noop },
     sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
@@ -290,4 +291,16 @@ test("local conversation uploads keep an offline selected device and fail closed
   app.renderCodexLocalSyncControls();
   assert.equal(app.selectedCodexLocalRuntimeId, "");
   assert.equal(app.uploadLocalTurnsButton.disabled, true);
+});
+
+test("retrying a cloud GitHub request opens its saved task and cannot execute the trial or a local harness", async () => {
+  const opened = [], calls = [];
+  const app = harness(["retryAgentRequest"], {
+    retryingAgentRequestIds: new Set(), sendError: element(), captureWorkspaceScope: () => () => true,
+    cloudGithubUi: { openTask: async (id) => opened.push(id) },
+    api: { appendHostedAgentRequest: async () => calls.push("trial"), appendAgentRequest: async () => calls.push("local") },
+  });
+  app.state.sync = { events: [{ id: "request", type: "agent_request", payload: { github_task_id: "gh-task-fixture", execution_profile: { harness: "opencode" } } }] };
+  await app.retryAgentRequest("request", { disabled: false, isConnected: true });
+  assert.deepEqual(opened, ["gh-task-fixture"]); assert.deepEqual(calls, []);
 });

@@ -339,8 +339,8 @@ export class CollaborationService {
   }
 
   reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
-    endpoints: HostedAllocation[], limits: HostedRunLimits) {
-    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input, endpoints, limits);
+    endpoints: HostedAllocation[], limits: HostedRunLimits, onReserved?: (event: CanonicalEvent) => void) {
+    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input, endpoints, limits, onReserved);
     if (result.created) this.publish(result.event);
     return result;
   }

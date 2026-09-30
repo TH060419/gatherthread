@@ -1,19 +1,23 @@
 import { spawn } from "node:child_process";
-import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { publicAnswer } from "./public-answer.mjs";
+import { prepareNpm } from "./npm-setup.mjs";
 
 const INPUT = "/input";
 const WORKSPACE = "/workspace";
-const MAX_FILES = 100;
-const MAX_BYTES = 512_000;
+const repository = process.env.GT_HOSTED_REPOSITORY === "1";
+const MAX_FILES = repository ? 1000 : 100;
+const MAX_BYTES = repository ? 8 * 1024 * 1024 : 512_000;
+const excluded = new Set(["node_modules", ".git", "dist", "coverage", ".next", ".turbo", ".npmrc"]);
 
 function walk(root, prefix = "", budget = { entries: 0 }, depth = 0) {
   if (depth > 16) throw new Error("workspace_depth");
   const entries = [];
   for (const name of readdirSync(join(root, prefix))) {
+    if (repository && excluded.has(name)) continue;
     budget.entries += 1;
-    if (budget.entries > 500) throw new Error("workspace_entries");
+    if (budget.entries > (repository ? 5000 : 500)) throw new Error("workspace_entries");
     const relative = prefix ? `${prefix}/${name}` : name;
     const path = join(root, relative);
     const stat = lstatSync(path);
@@ -73,12 +77,24 @@ async function main() {
   const bridge = spawn("socat", [
     "TCP-LISTEN:8787,bind=127.0.0.1,fork,reuseaddr", "UNIX-CONNECT:/run/model.sock",
   ], { stdio: "ignore" });
+  const npmBridge = repository ? spawn("socat", [
+    "TCP-LISTEN:8788,bind=127.0.0.1,fork,reuseaddr", "UNIX-CONNECT:/run/npm.sock",
+  ], { stdio: "ignore" }) : null;
   try {
     await new Promise((resolve) => setTimeout(resolve, 100));
+    if (repository) {
+      await prepareNpm(WORKSPACE, run);
+      await run("git", ["init", "--quiet"], 64000);
+      mkdirSync(join(WORKSPACE, ".git", "info"), { recursive: true });
+      writeFileSync(join(WORKSPACE, ".git", "info", "exclude"), "node_modules/\ndist/\ncoverage/\n.next/\n.turbo/\n");
+      await run("git", ["add", "."], 64000);
+      await run("git", ["-c", "user.name=GatherThread", "-c", "user.email=cloud@localhost",
+        "commit", "--quiet", "-m", "Cloud task starting snapshot"], 64000);
+    }
     const output = await run("opencode", [
       "run", "--format", "json", "--agent", "build",
       "Complete the attached task in this workspace.", "--file", "/run/gatherthread/prompt.txt",
-    ], 64_000);
+    ], repository ? 1024 * 1024 : 64_000);
     const answer = publicAnswer(output);
     let files = null;
     let save_error = null;
@@ -86,6 +102,7 @@ async function main() {
     process.stdout.write(JSON.stringify({ answer, files, save_error }));
   } finally {
     bridge.kill("SIGTERM");
+    npmBridge?.kill("SIGTERM");
   }
 }
 

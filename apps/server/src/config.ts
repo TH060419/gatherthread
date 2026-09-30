@@ -2,6 +2,7 @@ import { accessSync, constants, mkdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
 import { parseHostedEndpoints, HOSTED_MODEL } from "./hosted-agent-pool.js";
+import type { HostedGithubOptions } from "./hosted-github.js";
 import type { HostedAgentOptions } from "./hosted-agent.js";
 
 const EnvironmentSchema = z.enum(["development", "test", "production"]);
@@ -34,6 +35,7 @@ export interface ServerConfig {
   maxProjectSessions: number;
   maxTotalSessions: number;
   hostedAgent?: HostedAgentOptions;
+  hostedGithub?: HostedGithubOptions;
 }
 
 function parsePort(name: string, raw: string | undefined, fallback: number): number {
@@ -184,6 +186,19 @@ export function loadServerConfig(
       throw new ConfigurationError("Invalid Cloud Agent endpoints, account quotas, or credential environment variables");
     }
   }
+  let hostedGithub: HostedGithubOptions | undefined;
+  if (parseBoolean("GATHERTHREAD_HOSTED_GITHUB_ENABLED", env.GATHERTHREAD_HOSTED_GITHUB_ENABLED, false)) {
+    if (!hostedAgent || process.platform === "win32") throw new ConfigurationError("Cloud GitHub requires the enabled Linux cloud runner");
+    const encryptionKey = env.GATHERTHREAD_HOSTED_GITHUB_ENCRYPTION_KEY ?? "";
+    const clientId = env.GATHERTHREAD_HOSTED_GITHUB_CLIENT_ID ?? "";
+    const clientSecret = env.GATHERTHREAD_HOSTED_GITHUB_CLIENT_SECRET ?? "";
+    const appSlug = env.GATHERTHREAD_HOSTED_GITHUB_APP_SLUG ?? "";
+    if (Buffer.from(encryptionKey, "base64").length !== 32 || Buffer.from(encryptionKey, "base64").toString("base64") !== encryptionKey
+      || !clientId || !clientSecret || !/^[A-Za-z0-9_.-]+$/u.test(appSlug) || !publicBaseUrl.startsWith("https://")) {
+      throw new ConfigurationError("Cloud GitHub needs App credentials, a 32-byte base64 encryption key and HTTPS");
+    }
+    hostedGithub = { encryptionKey, clientId, clientSecret, appSlug, callbackUrl: `${publicBaseUrl}/v1/hosted-github/callback` };
+  }
   if (rawAuthTokenPepper !== undefined && rawAuthTokenPepper !== rawAuthTokenPepper.trim()) {
     throw new ConfigurationError("GATHERTHREAD_AUTH_TOKEN_PEPPER must not have leading or trailing whitespace");
   }
@@ -233,6 +248,7 @@ export function loadServerConfig(
     maxProjectSessions,
     maxTotalSessions,
     ...(hostedAgent ? { hostedAgent } : {}),
+    ...(hostedGithub ? { hostedGithub } : {}),
   };
 }
 

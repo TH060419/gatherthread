@@ -1,3 +1,4 @@
+import { mountCloudGithub } from "./cloud-github-view.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
 import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
@@ -261,6 +262,9 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
+const cloudGithubUi = mountCloudGithub({ api: () => api, t: (value) => localizer.t(value),
+  context: () => ({ userId: state.currentUser?.id, projectId: state.project?.id, sessionId: state.session?.id }) });
+element("cloud-agent-source").addEventListener("change", renderComposerPermissions);
 const codeSyncUi = mountCodeSync({
   document, api, localizer, mockEnabled,
   getContext: () => ({
@@ -1417,6 +1421,7 @@ function resetWorkspaceToAuth() {
   state.devices = [];
   messageInput.value = "";
   codeSyncUi.updateContext();
+  cloudGithubUi.updateContext();
   selectedCodexLocalRuntimeId = "";
   localSyncStatusRequestsInFlight.clear();
   localSyncActionsInFlight.clear();
@@ -1455,6 +1460,7 @@ async function enterWorkspace(preferredProjectId) {
   if (!state.currentUser) return;
   const isCurrent = () => authentication === authenticationGeneration
     && load === workspaceLoadGeneration && Boolean(state.currentUser);
+  void cloudGithubUi.completeAuthorization();
   void api.getHostedAgentStatus().then((status) => {
     if (!isCurrent()) return;
     hostedAgentStatus = status;
@@ -1493,6 +1499,7 @@ async function enterWorkspace(preferredProjectId) {
     state.project = null;
     renderProjectSelect();
     codeSyncUi.updateContext();
+  cloudGithubUi.updateContext();
     renderSessionList();
     sessionView.hidden = true;
     emptyState.hidden = false;
@@ -1547,6 +1554,7 @@ async function selectProject(projectId) {
     if (!projectSelectionGuard.isCurrent(selection)) return;
     state.project = project;
     codeSyncUi.updateContext();
+  cloudGithubUi.updateContext();
     state.projects = state.projects.map((item) => item.id === project.id ? { ...item, ...project } : item);
     const [sessions, projectMembers] = await Promise.all([
       api.listProjectSessions(projectId),
@@ -1687,6 +1695,7 @@ function renderProjectAgentButtons(settings = state.settings) {
 
 function renderProjectPermissions() {
   codeSyncUi.updateContext();
+  cloudGithubUi.updateContext();
   const mayCreate = state.project?.role === "owner" || state.project?.role === "participant";
   element("new-session-button").hidden = !mayCreate;
   element("empty-create-button").hidden = !mayCreate;
@@ -2891,6 +2900,7 @@ function renderComposerPermissions() {
     pendingMessageSend = null;
   }
   codeSyncUi.updateContext();
+  cloudGithubUi.updateContext();
   const common = { session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase };
   const chat = canAppend({ ...common, kind: "human_chat" });
   const harness = currentProjectHarness();
@@ -2903,6 +2913,7 @@ function renderComposerPermissions() {
   sendChatButton.disabled = sending || !chat.allowed;
   sendAgentButton.disabled = sending || !agentAllowed;
   element("send-cloud-agent-help").hidden = !cloud;
+  element("cloud-agent-include-code").closest("label").hidden = element("cloud-agent-source").value === "github";
   messageInput.disabled = !chat.allowed && !agentAllowed;
   element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
   const dshSelection = harness === DSH_HARNESS && resolution.runtime
@@ -2972,8 +2983,11 @@ async function sendMessage(kind) {
     else if (kind === "hosted_agent") {
       const includeCode = element("cloud-agent-include-code").checked;
       element("cloud-agent-include-code").checked = false;
-      await api.appendHostedAgentRequest(sessionId, { ...input,
-        includeCode, profileId: cloudProfile?.id });
+      if (element("cloud-agent-source").value === "github") {
+        await cloudGithubUi.start(sessionId, { ...input, profileId: cloudProfile?.id });
+      } else {
+        await api.appendHostedAgentRequest(sessionId, { ...input, includeCode, profileId: cloudProfile?.id });
+      }
       void api.getHostedAgentStatus().then((status) => {
         if (isCurrent()) { hostedAgentStatus = status; renderComposerPermissions(); }
       }).catch(() => undefined);
@@ -3026,6 +3040,10 @@ async function retryAgentRequest(requestId, button) {
   button.disabled = true;
   sendError.textContent = "";
   try {
+    if (request.payload?.github_task_id) {
+      await cloudGithubUi.openTask(request.payload.github_task_id);
+      return;
+    }
     if (request.payload?.execution_profile?.harness === "opencode") {
       const profile = hostedAgentStatus.profiles?.find((p) => p.id === request.payload.profile_id);
       const previous = request.payload.execution_profile;

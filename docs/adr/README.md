@@ -40,3 +40,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0033](0033-isolated-onboarding-example.md) | Isolate onboarding in a disposable example project | proposed | 2026-09-28 |
 | [0035](0035-direct-local-github-code-synchronization.md) | Synchronize GitHub source directly from authorized local devices | proposed / unreleased source preview | 2026-09-30 |
 | [0036](0036-isolated-hosted-trial-agent.md) | Run the hosted trial Agent with OpenCode in an isolated container | proposed / source preview | 2026-09-30 |
+| [0037](0037-cloud-github-repository-tasks.md) | Private cloud GitHub tasks with explicit PR publication | proposed / source preview | 2026-09-30 |

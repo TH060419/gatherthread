@@ -492,6 +492,10 @@
                 </div>
               </fieldset>
               <div class="cloud-code-consent" id="send-cloud-agent-help" hidden>
+                <label for="cloud-agent-source">Cloud workspace</label>
+                <select id="cloud-agent-source"><option value="trial">GT Cloud trial</option><option value="github">GitHub repository</option></select>
+                <button id="cloud-github-open" type="button" class="text-button">Cloud GitHub project</button>
+                <input id="cloud-github-parent" type="hidden"><span id="cloud-github-selected" role="status"></span>
                 <label for="cloud-agent-include-code"><input id="cloud-agent-include-code" type="checkbox"><span>Use GT Cloud code and save changes to my GT Cloud branch</span></label>
               </div>
               <div class="composer-actions">
@@ -1207,6 +1211,7 @@ codex plugin add gatherthread@gatherthread</code>
               </div>
               <div id="settings-cloud-agent-fields" class="settings-agent-fields" hidden>
                 <label class="settings-row" for="settings-cloud-model"><span><strong>Cloud model</strong><small>Models are provided by this server. No local Agent connection is required.</small></span><select id="settings-cloud-model" name="cloud-model"></select></label>
+                <button id="settings-cloud-github-open" class="text-button" type="button">Cloud GitHub project</button>
                 <p id="settings-cloud-status" class="field-help" role="status"></p>
                 <p class="field-help">The selected provider receives your request and any GT Cloud code you choose to share. API credentials are managed by the server operator.</p>
               </div>
@@ -1275,6 +1280,35 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+    <dialog id="cloud-github-dialog" class="create-dialog project-code-dialog" aria-labelledby="cloud-github-title" aria-describedby="cloud-github-description">
+      <div class="dialog-heading"><h2 id="cloud-github-title">Cloud GitHub project</h2><button id="cloud-github-close" type="button" class="icon-button" aria-label="Close cloud GitHub project">×</button></div>
+      <p id="cloud-github-description">Connect your account, choose a repository, then select GitHub repository in the Cloud Agent composer. Your selected model receives project code. Tasks save private changes; the Agent answer is shared in this GT conversation. Creating a draft PR is a separate action.</p>
+      <p id="cloud-github-status" role="status" aria-live="polite"></p><p id="cloud-github-error" class="form-error" role="alert"></p>
+      <div id="cloud-github-controls" hidden>
+        <a id="cloud-github-install" target="_blank" rel="noopener noreferrer">Install GitHub App on selected repositories</a>
+        <button id="cloud-github-authorize" type="button" class="button button-secondary">Connect your GitHub account</button>
+        <button id="cloud-github-disconnect" type="button" class="text-button" hidden>Disconnect cloud GitHub</button>
+        <form id="cloud-github-repository-form" class="github-code-form" hidden>
+          <label for="cloud-github-repository">Existing GitHub repository</label><input id="cloud-github-repository" required maxlength="140" placeholder="OWNER/REPO" autocomplete="off" data-i18n-skip>
+          <label for="cloud-github-base">Base branch</label><input id="cloud-github-base" required maxlength="200" value="main" autocomplete="off" data-i18n-skip>
+          <button type="submit" class="button button-primary">Use this repository in cloud tasks</button>
+        </form>
+        <p>Requires an npm project with package.json and package-lock.json. Public npm dependencies are installed without lifecycle scripts. Each run allows up to 15 minutes; saved source expires after seven days.</p>
+        <button id="cloud-github-refresh" type="button" class="text-button">Refresh cloud tasks</button>
+        <button id="cloud-github-new" type="button" class="text-button">New repository task</button>
+        <nav id="cloud-github-task-list" aria-label="Your cloud tasks"></nav>
+        <p id="cloud-github-task-status" role="status"></p><pre id="cloud-github-answer"></pre>
+        <section id="cloud-github-changes" aria-label="Source changes"></section>
+        <button id="cloud-github-continue" type="button" class="text-button" disabled>Continue task</button>
+        <button id="cloud-github-delete" type="button" class="text-button" disabled>Delete saved cloud task</button>
+        <a id="cloud-github-pr-link" target="_blank" rel="noopener noreferrer" hidden>View pull request on GitHub</a>
+        <form id="cloud-github-pr-form" hidden>
+          <label for="cloud-github-pr-title">Pull request title</label><input id="cloud-github-pr-title" maxlength="200" required>
+          <label for="cloud-github-pr-body">Pull request description</label><textarea id="cloud-github-pr-body" maxlength="6000"></textarea>
+          <button type="submit" class="button button-primary">Create draft pull request</button>
+        </form>
+      </div>
+    </dialog>
     <script type="module" src="./src/main.js?v=20260927-4"></script>
   </body>
 </html>

@@ -200,6 +200,7 @@ export const HostedAgentRequestInputSchema = z.object({
   include_code: z.boolean().default(false),
   idempotency_key: IdempotencyKeySchema,
   reply_to_event_id: IdSchema.nullable().optional(),
+  github_task_id: z.string().regex(/^gh-task-[a-f0-9]{32}$/u).optional(),
 }).strict();
 export type HostedAgentRequestInput = z.infer<typeof HostedAgentRequestInputSchema>;
 
@@ -693,3 +694,5 @@ export interface ApiErrorBody {
     details?: JsonValue;
   };
 }
+
+export * from "./hosted-github.js";

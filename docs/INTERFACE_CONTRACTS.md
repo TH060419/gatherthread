@@ -230,3 +230,14 @@ The project lead must review the PR before a version containing the contract cha
 `POST /v1/sessions/:sessionId/hosted-agent-requests` uses strict `HostedAgentRequestInputSchema`: `profile_id` (legacy default `default`), `content`, `include_code`, `idempotency_key`, and optional `reply_to_event_id`. It enforces live project/session write permissions, reserves user/account/global run capacity atomically with the canonical request, and returns the request/optional response event plus `replayed`. A profile identifies one exact provider/model. Only account capacity within that profile is interchangeable. Empty/unknown profiles, quota exhaustion, busy capacity and unavailable providers fail explicitly. Accepted failures consume their reserved run; same-key retries never double-execute.
 
 Server/Web must upgrade together from the earlier single-provider preview. Persistence migration, old environment aliases and rollback limits are in [HOSTED_AGENT.md](HOSTED_AGENT.md). This surface remains disabled until provider and deployment validation; it does not advertise a currently running public service.
+
+## Cloud GitHub task preview
+
+Strict input schemas are owned by `packages/protocol/src/hosted-github.ts`; server routing is in `apps/server/src/server.ts` and private persistence in `hosted-github-schema.ts`. Additive routes are:
+
+- `POST /v1/hosted-github/authorize`, `GET /v1/hosted-github/callback`, `POST /v1/hosted-github/complete`, `DELETE /v1/hosted-github/account`.
+- `GET /v1/projects/:id/hosted-github`, `POST /v1/projects/:id/hosted-github/repository`, `GET /v1/projects/:id/hosted-github/tasks`.
+- `POST /v1/sessions/:id/hosted-github-tasks` returns 202 with a private task.
+- `GET|DELETE /v1/hosted-github/tasks/:id`, `POST /v1/hosted-github/tasks/:id/pull-request`.
+
+Tasks use the existing canonical Agent request/result plane with optional `github_task_id`; old trial requests remain unchanged and cannot impersonate a repository task via that field. Canonical events carry task identity and bounded public assistant text, not private source/tool logs. Task queries and PR publication are requester-private and enforce current write eligibility. Retry keys bind the exact request; PR writes require `expected_revision`. Disabled project status returns `{enabled:false}`. Existing local GitHub routes are preserved. Resource limits, migration, credential storage and failure/retry behavior are documented in [HOSTED_GITHUB.md](HOSTED_GITHUB.md).

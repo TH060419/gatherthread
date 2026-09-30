@@ -1,0 +1,193 @@
+/** Private cloud repository tasks. No provider or GitHub credentials enter this module. */
+export function mountCloudGithub({ api: getApi, context, t, document: doc = document }) {
+  const el = (id) => doc.getElementById(id);
+  const dialog = el("cloud-github-dialog");
+  let generation = 0, selected = null, taskRows = [], key = "", pending = false, bindingKey;
+  const message = (value) => { el("cloud-github-error").textContent = value; };
+  async function action(fn) {
+    if (pending) return;
+    pending = true; message("");
+    const gen = generation;
+    try { await fn(); } catch (error) { if (gen === generation) message(error.message); }
+    finally { pending = false; }
+  }
+  function clear() {
+    generation++; selected = null; taskRows = []; bindingKey = undefined;
+    el("cloud-github-parent").value = ""; el("cloud-github-selected").textContent = "";
+    el("cloud-github-changes").replaceChildren(); el("cloud-github-task-list").replaceChildren();
+    el("cloud-github-pr-form").hidden = true; el("cloud-github-delete").disabled = true;
+    el("cloud-github-continue").disabled = true;
+    for (const id of ["cloud-github-status", "cloud-github-error", "cloud-github-task-status", "cloud-github-answer"]) el(id).textContent = "";
+    el("cloud-github-repository").value = ""; el("cloud-github-base").value = "main";
+    el("cloud-github-pr-title").value = ""; el("cloud-github-pr-body").value = "";
+    el("cloud-github-pr-link").hidden = true; el("cloud-github-pr-link").removeAttribute("href");
+    el("cloud-github-controls").hidden = true;
+  }
+  function updateContext() {
+    const c = context(), next = `${c.userId ?? ""}:${c.projectId ?? ""}:${c.sessionId ?? ""}`;
+    if (next !== key) { key = next; clear(); if (dialog.open) dialog.close(); }
+    const available = Boolean(c.userId && c.projectId && c.sessionId);
+    el("cloud-github-open").disabled = !available;
+    el("settings-cloud-github-open").disabled = !available;
+  }
+  function text(base64) {
+    if (base64 === null) return t("File absent");
+    try {
+      const value = new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+      return value.length > 20000 ? `${value.slice(0, 20000)}\n${t("Preview truncated")}` : value;
+    } catch { return t("Binary file changed"); }
+  }
+  function renderTask(task) {
+    const sameRevision = selected?.id === task.id && selected?.revision === task.revision;
+    selected = task;
+    el("cloud-github-task-status").textContent = `${task.repository} · ${t(task.state)}${task.error_code ? ` · ${t("Review the project setup and reconnect GitHub if needed.")}` : ""}`;
+    el("cloud-github-answer").textContent = task.answer ?? "";
+    el("cloud-github-changes").replaceChildren();
+    for (const change of task.changes) {
+      const details = doc.createElement("details"), summary = doc.createElement("summary");
+      summary.textContent = `${change.path}${change.before_executable !== change.after_executable ? ` · ${t("File mode changed")}` : ""}`;
+      details.append(summary);
+      for (const [label, source] of [["Before", change.before_base64], ["After", change.after_base64]]) {
+        const heading = doc.createElement("h4"), pre = doc.createElement("pre");
+        heading.textContent = t(label); pre.textContent = text(source); details.append(heading, pre);
+      }
+      el("cloud-github-changes").append(details);
+    }
+    const link = el("cloud-github-pr-link");
+    link.hidden = !task.pull_request_url;
+    if (task.pull_request_url && /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+$/u.test(task.pull_request_url)) link.href = task.pull_request_url;
+    else link.removeAttribute("href");
+    el("cloud-github-pr-form").hidden = task.state !== "completed" || !task.changes.length || Boolean(task.pull_request_url);
+    if (!sameRevision) {
+      el("cloud-github-pr-title").value = "GatherThread: cloud coding changes";
+      el("cloud-github-pr-body").value = (task.answer ?? "").slice(0, 6000);
+    }
+    el("cloud-github-continue").disabled = !task.resumable;
+    el("cloud-github-delete").disabled = task.state === "running";
+  }
+  async function refresh() {
+    updateContext(); const c = context(), gen = generation;
+    if (!c.projectId) return;
+    const status = await getApi().getHostedGithubStatus(c.projectId);
+    if (gen !== generation) return;
+    el("cloud-github-status").textContent = !status.enabled ? t("Cloud GitHub is not enabled on this server.")
+      : status.connected ? `${status.login} · ${status.binding?.repository ?? t("Choose a repository")}` : t("Connect your GitHub account");
+    el("cloud-github-controls").hidden = !status.enabled;
+    if (!status.enabled) return;
+    const install = el("cloud-github-install");
+    if (/^https:\/\/github\.com\/apps\/[A-Za-z0-9_.-]+\/installations\/new$/u.test(status.installation_url)) install.href = status.installation_url;
+    el("cloud-github-repository-form").hidden = !status.connected;
+    el("cloud-github-disconnect").hidden = !status.connected;
+    const nextBinding = JSON.stringify(status.binding ?? null);
+    if (bindingKey !== nextBinding) {
+      bindingKey = nextBinding;
+      el("cloud-github-repository").value = status.binding?.repository ?? "";
+      el("cloud-github-base").value = status.binding?.base_branch ?? "main";
+    }
+    const { tasks } = await getApi().listHostedGithubTasks(c.projectId);
+    if (gen !== generation) return;
+    taskRows = tasks;
+    el("cloud-github-task-list").replaceChildren();
+    for (const task of tasks.filter((item) => item.session_id === undefined || item.session_id === c.sessionId)) {
+      const button = doc.createElement("button"); button.type = "button"; button.className = "text-button";
+      button.textContent = `${task.repository} · ${t(task.state)} · ${task.id.slice(-8)}`;
+      button.addEventListener("click", () => void action(async () => { const detail = await getApi().getHostedGithubTask(task.id); if (gen === generation) renderTask(detail); })); el("cloud-github-task-list").append(button);
+    }
+    if (selected) { const detail = await getApi().getHostedGithubTask(selected.id); if (gen === generation) renderTask(detail); }
+  }
+  const open = () => { updateContext(); if (!context().sessionId) return; dialog.showModal(); void action(refresh); };
+  el("cloud-github-open").addEventListener("click", open);
+  el("settings-cloud-github-open").addEventListener("click", open);
+  el("cloud-github-close").addEventListener("click", () => dialog.close());
+  el("cloud-github-refresh").addEventListener("click", () => void action(refresh));
+  el("cloud-github-authorize").addEventListener("click", () => void action(async () => {
+    const gen = generation;
+    const { authorization_url } = await getApi().authorizeHostedGithub();
+    if (gen !== generation) return;
+    const url = new URL(authorization_url);
+    if (url.origin !== "https://github.com" || url.pathname !== "/login/oauth/authorize") throw new Error(t("Invalid GitHub authorization URL"));
+    window.location.assign(url.href);
+  }));
+  el("cloud-github-repository-form").addEventListener("submit", (event) => {
+    event.preventDefault(); void action(async () => {
+      const gen = generation;
+      await getApi().bindHostedGithub(context().projectId, { repository: el("cloud-github-repository").value.trim(), base_branch: el("cloud-github-base").value.trim() });
+      if (gen !== generation) return;
+      clear(); await refresh();
+    });
+  });
+  el("cloud-github-disconnect").addEventListener("click", () => void action(async () => {
+    const gen = generation;
+    await getApi().disconnectHostedGithub(); if (gen !== generation) return;
+    clear(); await refresh();
+  }));
+  el("cloud-github-pr-form").addEventListener("submit", (event) => {
+    event.preventDefault(); const task = selected; if (!task) return;
+    void action(async () => {
+      const gen = generation;
+      const result = await getApi().publishHostedGithub(task.id, { title: el("cloud-github-pr-title").value,
+        body: el("cloud-github-pr-body").value, expected_revision: task.revision });
+      if (gen !== generation) return;
+      renderTask(result); await refresh();
+    });
+  });
+  function chooseRepository() {
+    el("agent-harness-select").value = "cloud";
+    el("agent-harness-select").dispatchEvent(new Event("change", { bubbles: true }));
+    el("cloud-agent-source").value = "github";
+    el("cloud-agent-source").dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  el("cloud-github-continue").addEventListener("click", () => {
+    if (!selected) return;
+    const models = el("agent-cloud-model-select");
+    if (![...models.options].some((option) => option.value === selected.profile_id)) {
+      message(t("The original cloud model is no longer available.")); return;
+    }
+    chooseRepository();
+    models.value = selected.profile_id;
+    models.dispatchEvent(new Event("change", { bubbles: true }));
+    el("cloud-github-parent").value = selected.id;
+    el("cloud-github-selected").textContent = `${t("Continue task")}: ${selected.id.slice(-8)}`;
+    dialog.close(); el("message-input").focus();
+  });
+  el("cloud-github-new").addEventListener("click", () => {
+    chooseRepository();
+    el("cloud-github-parent").value = ""; el("cloud-github-selected").textContent = t("New repository task");
+    dialog.close(); el("message-input").focus();
+  });
+  el("cloud-github-delete").addEventListener("click", () => void action(async () => {
+    if (!selected) return; const gen = generation;
+    await getApi().deleteHostedGithubTask(selected.id); if (gen !== generation) return;
+    clear(); await refresh();
+  }));
+  const poll = setInterval(() => { if (dialog.open && !doc.hidden && taskRows.some((task) => task.state === "running")) void action(refresh); }, 5000);
+  window.addEventListener("pagehide", () => clearInterval(poll), { once: true });
+  return {
+    updateContext,
+    async openTask(id) {
+      updateContext(); const gen = generation;
+      if (!context().sessionId) return;
+      if (!dialog.open) dialog.showModal();
+      await action(async () => { await refresh(); const task = await getApi().getHostedGithubTask(id);
+        if (gen === generation) renderTask(task); });
+    },
+    async start(sessionId, input) {
+      updateContext(); const gen = generation;
+      const task = await getApi().startHostedGithubTask(sessionId, { content: input.content, profile_id: input.profileId,
+        idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null,
+        ...(el("cloud-github-parent").value ? { continue_task_id: el("cloud-github-parent").value } : {}) });
+      if (gen === generation && context().sessionId === sessionId) {
+        el("cloud-github-parent").value = ""; el("cloud-github-selected").textContent = t("New repository task");
+        selected = task;
+      }
+      return task;
+    },
+    async completeAuthorization() {
+      const hash = new URLSearchParams(window.location.hash.slice(1));
+      if (!hash.has("github_code")) return;
+      const input = { code: hash.get("github_code"), state: hash.get("github_state") };
+      history.replaceState(null, "", window.location.pathname + window.location.search);
+      await action(async () => { await getApi().completeHostedGithub(input); });
+    },
+  };
+}

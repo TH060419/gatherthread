@@ -3081,6 +3081,7 @@ export class CollaborationDatabase {
 
   reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
     endpoints: HostedAllocation[], limits: HostedRunLimits,
+    onReserved?: (event: CanonicalEvent) => void,
   ): { event: CanonicalEvent; created: boolean; endpointId?: string } {
     this.assertActiveDevice(actor);
     if (!endpoints.length || endpoints.some((e) => e.profileId !== input.profile_id
@@ -3094,6 +3095,7 @@ export class CollaborationDatabase {
         content: input.content,
         include_code: input.include_code,
         profile_id: input.profile_id,
+        ...(input.github_task_id ? { github_task_id: input.github_task_id } : {}),
         execution_profile: { harness: "opencode", provider: endpoints[0]!.provider,
           model: endpoints[0]!.model },
       });
@@ -3134,6 +3136,7 @@ export class CollaborationDatabase {
         profile_id,endpoint_id,quota_group,provider,model,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'running',?)`)
         .run(event.id, sessionId, actor.user_id, actor.device_id, day, selected.profileId, selected.id,
           selected.quotaGroup, selected.provider, selected.model, this.now());
+      onReserved?.(event);
       return { event, created: true, endpointId: selected.id };
     });
   }

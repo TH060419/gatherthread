@@ -11,9 +11,11 @@ Checked against provider documentation on 2026-09-30. Prices, quotas, available 
 
 ## Operator handoff
 
+For GitHub + npm development, choose a compatible DeepSeek or HTTPS Chat Completions coding profile. Cloudflare's small trial allocation is not enabled for repository tasks. The operator must also register a GitHub App and complete the authorization/PR activation checks in [Cloud GitHub setup](HOSTED_GITHUB.md).
+
 1. The chosen provider, exact tool-calling model, account quota grouping, parallel/daily limits, and API credentials, delivered through the server's private secret channel. Do not place the token in Git, a project, an Issue, or a chat message.
 2. Confirmed account terms and spending limits. Cloudflare Free additionally requires the account ID and explicit Free-plan confirmation. See the multi-account JSON example in [the operator guide](HOSTED_AGENT.md).
 3. A reviewed Docker image digest from the container smoke job, plus a deployment-host smoke run. Then set the private variables in [HOSTED_AGENT.md](HOSTED_AGENT.md) and enable the flag.
 4. One explicitly authorized live test with a disposable project, verifying model tool calls, terminal/file operations, quota accounting, canonical reply, and GT Cloud branch checkpoint. The automated suite uses a fake model and cannot establish live provider behavior.
 
-The current runner has no general Internet access, so it can run only tools and dependencies already in the image or supplied source. Broader project build support needs a separately designed dependency supply path, not a model API change alone.
+The GT Cloud trial runner has no general Internet access and uses tools and dependencies already supplied. The separate GitHub preview prepares root npm projects through an allowlisted proxy for exact public lockfile tarballs. Private registries, other package managers and general network access still require a separate environment strategy; a model API change alone does not add those capabilities.

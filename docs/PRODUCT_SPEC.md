@@ -1,5 +1,7 @@
 # Product specification v0.1
 
+The disabled cloud GitHub preview lets a session writer authorize their own GitHub App account, select an npm repository, request a private asynchronous Cloud Agent task, inspect source changes and explicitly create a draft PR. Human chat, GT Cloud trial code, local GitHub sync and cloud GitHub execution remain separate choices. Supported scope and user steps are in [HOSTED_GITHUB.md](HOSTED_GITHUB.md).
+
 ## Goal
 
 Enable multiple people to collaborate on an agent-assisted project while each person keeps using their own local harness, model, credentials, filesystem, and context-management policy.

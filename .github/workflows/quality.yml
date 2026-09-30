@@ -27,6 +27,9 @@ jobs:
       - run: node scripts/test-hosted-container.mjs
         env:
           GATHERTHREAD_TEST_HOSTED_IMAGE: gt-hosted-smoke
+      - run: node scripts/test-hosted-repository-container.mjs
+        env:
+          GATHERTHREAD_TEST_HOSTED_IMAGE: gt-hosted-smoke
   verify:
     strategy:
       fail-fast: false

@@ -940,3 +940,20 @@ test("realtime ticket is carried by WebSocket subprotocol and never placed in th
     globalThis.WebSocket = OriginalWebSocket;
   }
 });
+
+test("cloud GitHub authorization and repository tasks use same-origin cookies and explicit PR review revision", async () => {
+  const originalFetch = globalThis.fetch, calls = [];
+  globalThis.fetch = async (url, options) => { calls.push({ url, options }); return Response.json({ data: {} }); };
+  try {
+    const api = new HttpCollaborationApi();
+    await api.authorizeHostedGithub();
+    await api.completeHostedGithub({ state: "one-time-state", code: "one-time-code" });
+    await api.bindHostedGithub("project", { repository: "owner/project", base_branch: "main" });
+    await api.startHostedGithubTask("session", { content: "Fix", profile_id: "coding", idempotency_key: "task-key" });
+    await api.publishHostedGithub("gh-task-123", { title: "Fix", body: "Reviewed", expected_revision: "a".repeat(64) });
+    assert.ok(calls.every(({ url, options }) => url.startsWith("/v1/") && options.credentials === "include" && !options.headers.Authorization));
+    assert.equal(calls.at(-1).url, "/v1/hosted-github/tasks/gh-task-123/pull-request");
+    assert.equal(JSON.parse(calls.at(-1).options.body).expected_revision, "a".repeat(64));
+    assert.ok(!JSON.stringify(calls).includes("access_token"));
+  } finally { globalThis.fetch = originalFetch; }
+});

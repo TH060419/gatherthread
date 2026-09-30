@@ -183,6 +183,7 @@ async function start(config: ServerConfig): Promise<void> {
     maxProjectSessions: config.maxProjectSessions,
     maxTotalSessions: config.maxTotalSessions,
     ...(config.hostedAgent ? { hostedAgent: config.hostedAgent } : {}),
+    ...(config.hostedGithub ? { hostedGithub: config.hostedGithub } : {}),
   }, config.port, config.host);
   process.stdout.write(`GatherThread owner host listening at ${running.origin}\n`);
 

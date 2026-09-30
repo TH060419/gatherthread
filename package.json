@@ -33,7 +33,7 @@
     "dsh:connect": "npm run build:ts && node packages/dsh-host/dist/src/connect-cli.js",
     "test": "npm run test:unit && npm run test:scripts && npm run test:web && npm run test:integration && npm run test:e2e",
     "test:unit": "npm run build:ts && node --test packages/protocol/dist/test/*.test.js packages/adapters/dist/test/*.test.js packages/bridge/dist/test/*.test.js packages/dsh-host/dist/test/*.test.js packages/mcp/dist/test/*.test.js apps/server/dist/test/*.test.js",
-    "test:scripts": "npm run build:connector && node --test scripts/test/*.test.mjs",
+    "test:scripts": "npm run build:ts && npm run build:connector && node --test scripts/test/*.test.mjs",
     "test:web": "npm --workspace apps/web run check",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:dsh-host:real": "npm run build:ts && node scripts/test-dsh-host-real.mjs",

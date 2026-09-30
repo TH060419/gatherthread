@@ -20,3 +20,9 @@ The cloud trial Agent is being prepared for preview. **Cloud Agent** appears alo
 - If the daily allowance is exhausted, try again the next day. If the runner is unavailable, contact the server operator rather than repeatedly submitting the task.
 
 For container build, quotas, and credentials, see the [operator guide](HOSTED_AGENT.md).
+
+## GitHub cloud projects / GitHub 云端项目
+
+For npm Node.js/TypeScript repositories, open **Cloud GitHub project** in the composer or Settings. Authorize your own GitHub account, choose a repository, then choose **GitHub repository** as the cloud workspace. Inspect saved task changes before explicitly creating a draft PR. This separately enabled source preview is documented in [Cloud GitHub workflow and setup](HOSTED_GITHUB.md).
+
+对于 npm Node.js/TypeScript 仓库，可在输入区或设置打开“云端 GitHub 项目”，授权自己的 GitHub 账号并选择仓库，再将云端工作区选为“GitHub 仓库”。查看保存的任务改动后，主动创建草稿 PR。该功能需要管理员单独启用；完整步骤与限制见上方指南。

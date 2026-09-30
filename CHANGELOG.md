@@ -4,6 +4,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Add a disabled cloud GitHub/npm development source preview: expiring App authorization with PKCE, private encrypted task source, bounded dependency preparation, asynchronous OpenCode runs, revision review and explicit draft PR publication. Real App/provider and new Linux container activation checks remain required.
 - Prepare an optional OpenCode cloud Agent with isolated terminal/file tools, explicit GT Cloud code consent, own-branch checkpoints, and the same workspace Agent selector and Settings entry as local harnesses. Add multiple provider/account pools, atomic daily and concurrency limits, pinned model routing, failure cooldowns, and assistant-text-only output. Add bilingual guides and operator/provider setup documentation. Disabled by default; live model integration and deployment validation remain pending.
 
 ## [0.1.0-alpha.8] - 2026-09-28

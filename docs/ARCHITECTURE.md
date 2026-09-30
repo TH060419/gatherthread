@@ -1,5 +1,9 @@
 # Architecture v0.1
 
+## Cloud GitHub task plane
+
+The disabled source preview in `apps/server/src/hosted-github.ts` provides requester-private GitHub App authorization, repository binding and asynchronous development tasks. `hosted-repository-runner.ts` uses the existing OpenCode image with a lockfile-restricted npm proxy; GitHub credentials never enter the container. Private encrypted source snapshots support explicit continuation, and a reviewed revision can create a draft PR via Git Data APIs. This is separate from direct local GitHub sync. See [ADR-0037](adr/0037-cloud-github-repository-tasks.md) and [operator/user guide](HOSTED_GITHUB.md).
+
 ## Code version plane
 
 The unreleased GitHub source preview adds a second storage adapter to `ProjectCodeSync`. `packages/bridge/src/github-code-sync.ts` owns an isolated local Git repository and direct HTTPS GitHub transport using the local `gh` credential helper. The server stores connection metadata in `project_github_connections`, plus bounded requester-private control jobs, and receives no GitHub source or credential. `packages/protocol/src/github-sync.ts` owns strict metadata and separate GitHub job kinds. Codex and native DSH bind local consent to the repository/base/configuration revision; a metadata edit cannot silently redirect an already-authorized device. Stable project/user branches and ordinary fast-forward pushes preserve the original workspace Git index/branch. GitHub access and remote retention remain independent from GatherThread membership and deletion. See [ADR-0035](adr/0035-direct-local-github-code-synchronization.md) and [CODE_SYNC.md](CODE_SYNC.md); this does not claim a released package or deployed feature.
