@@ -27,6 +27,7 @@ Commands:
   bootstrap   Create the first owner directly in SQLite and print its credential once
   init        Alias for bootstrap
   issue-test-access  Issue up to 50 single-use test qualifications locally (JSON by default)
+  registration pause|resume|status|cleanup  Local registration circuit breaker and retention
   revoke-test-access Revoke an unclaimed test qualification token locally
 
 Configuration is read from NODE_ENV and the GATHERTHREAD_* variables documented in .env.example.
@@ -167,6 +168,7 @@ async function start(config: ServerConfig): Promise<void> {
   prepareDatabaseDirectory(config);
   assertStaticDirectory(config);
   const running = await startCollaborationServer({
+    registration: config.registration,
     databasePath: config.databasePath,
     allowedOrigins: config.allowedOrigins,
     ...(config.authTokenPepper ? { authTokenPepper: config.authTokenPepper } : {}),
@@ -211,6 +213,16 @@ async function main(): Promise<void> {
   }
   if (command === "revoke-test-access") {
     revokeTestAccess(config, args);
+    return;
+  }
+  if (command === "registration") {
+    const action = args[0];
+    if (args.length !== 1 || !["pause", "resume", "status", "cleanup"].includes(action ?? "")) throw new ConfigurationError("Usage: registration pause|resume|status|cleanup");
+    withOperatorDatabase(config, (database) => {
+      if (action === "pause" || action === "resume") database.registration.pause(action === "pause");
+      if (action === "cleanup") database.registration.cleanup();
+      process.stdout.write(`${JSON.stringify({ enabled: database.registration.ready(config.registration), paused: database.registration.paused() })}\n`);
+    });
     return;
   }
   if (command !== "start" || args.length > 0) throw new ConfigurationError(`Unknown command: ${[command, ...args].join(" ")}`);

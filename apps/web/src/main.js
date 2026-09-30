@@ -1,3 +1,4 @@
+import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
 import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
@@ -181,6 +182,8 @@ const forgetRememberedAccountButton = element("forget-remembered-account");
 const authEntryChooser = element("auth-entry-chooser");
 const authIdentity = element("auth-identity");
 const authEntryChoices = [
+  { entry: "email-login", button: element("auth-select-email-login"), panel: element("auth-email-login-panel") },
+  { entry: "register", button: element("auth-select-register"), panel: element("auth-register-panel") },
   { entry: "login", button: element("auth-select-login"), panel: element("auth-login-panel") },
   { entry: "activate", button: element("auth-select-activate"), panel: element("auth-activate-panel") },
   { entry: "invitation", button: element("auth-select-invitation"), panel: element("auth-invitation-panel") },
@@ -257,6 +260,16 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
+const registrationUi = mountRegistration({ document, api, localizer,
+  identity: () => authenticationIdentity({ required: activeAuthEntry === "register" }),
+  busy: (value) => { authRequestInProgress = value; },
+  complete: async (result) => {
+    state.currentUser = result.actor;
+    element("claim-display-name").value = "";
+    setAutomaticClaimDeviceName({ force: true });
+    await enterWorkspace();
+  },
+});
 const codeSyncUi = mountCodeSync({
   document, api, localizer, mockEnabled,
   getContext: () => ({
@@ -531,6 +544,8 @@ forgetRememberedAccountButton.addEventListener("click", async () => {
 
 function setActiveAuthEntry(entry, { focus = false } = {}) {
   if (authRequestInProgress) return;
+  if (entry === "register") void registrationUi.enter();
+  else registrationUi.clear();
   activeAuthEntry = entry;
   authEntryChooser.hidden = entry !== "choose";
   authIdentity.hidden = entry === "choose";
@@ -544,7 +559,8 @@ function setActiveAuthEntry(entry, { focus = false } = {}) {
   if (focus) {
     const targetId = entry === "choose" ? "auth-select-login"
       : entry === "login" ? rememberedAccountSelect.value ? "remembered-account-select" : "token"
-        : entry === "activate" || entry === "invitation" ? "claim-display-name"
+        : entry === "email-login" ? "email-login-email"
+        : entry === "activate" || entry === "invitation" || entry === "register" ? "claim-display-name"
           : "claim-invite-secret";
     element(targetId).focus();
   }
@@ -568,6 +584,10 @@ for (const id of ["claim-display-name", "claim-device-name"]) {
     } else if (activeAuthEntry === "login") {
       if (rememberedAccountSelect.value || element("token").value.trim()) loginForm.requestSubmit();
       else element("token").focus();
+    } else if (activeAuthEntry === "register") {
+      element("registration-email").focus();
+    } else if (activeAuthEntry === "email-login") {
+      element("email-login-email").focus();
     } else element("auth-select-login").focus();
   });
 }

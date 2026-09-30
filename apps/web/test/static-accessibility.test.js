@@ -275,7 +275,7 @@ test("entry choices precede shared identity fields and separate access forms", a
   assert.match(markup, /id="auth-activate-panel"[^>]*hidden/u);
   assert.match(markup, /id="auth-invitation-panel"[^>]*hidden/u);
   assert.match(main, /authIdentity\.hidden = entry === "choose"/u);
-  assert.match(main, /entry === "activate" \|\| entry === "invitation" \? "claim-display-name"/u);
+  assert.match(main, /entry === "activate" \|\| entry === "invitation" \|\| entry === "register" \? "claim-display-name"/u);
   assert.match(main, /for \(const id of \["claim-display-name", "claim-device-name"\]\)/u);
   assert.match(main, /activeAuthEntry === "invitation"[\s\S]*?claimInvitationForm\.requestSubmit\(\)/u);
   assert.match(main, /activeAuthEntry === "activate"[\s\S]*?claimTestAccessForm\.requestSubmit\(\)/u);

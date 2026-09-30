@@ -124,7 +124,7 @@ MCP exposes collaboration capabilities but is not assumed to see a host's full c
 ## Security baseline
 
 - Private-by-default projects and revocable project invitations.
-- Local-only first-owner bootstrap; no public registration.
+- Local-only first-owner bootstrap; public email registration closed by default and optional only after operator preflight.
 - One-use project invitations with fixed 1h, 24h, or 7d expiry.
 - One-use ten-minute authorization for each additional device.
 - Server-derived actor identity; clients cannot forge usernames.
@@ -136,3 +136,7 @@ MCP exposes collaboration capabilities but is not assumed to see a host's full c
 - Project role enforcement on every session write and runtime registration.
 - Content-free invitation audit metadata plus canonical session event history.
 - Loopback-only application host behind an approved HTTPS edge; no direct application-port ingress and no anonymous registration.
+
+## Optional email identity enrollment
+
+`registration.ts` owns durable OTP/budget/circuit-breaker state on the identity SQLite connection; `registration-providers.ts` owns pluggable outbound mail and mandatory challenge verification. `password.ts` performs bounded asynchronous scrypt outside SQLite transactions. `public_registration_accounts` records a unique keyed mailbox digest and salted password hash; `email_login_devices` binds each password-authenticated browser to its own device. Enrollment and login reuse the existing browser-session/vault/device ACL surfaces. These routes return no device bearer. They do not change project roles, qualification quotas, native harness authorization or GitHub/cloud-code routing. New email accounts have the same can_create_projects capability as qualification accounts. Provider setup and default-closed rollout are in [OPERATIONS](OPERATIONS.md) and the proposed [ADR-0036](adr/0036-verified-email-registration-and-password-login.md).

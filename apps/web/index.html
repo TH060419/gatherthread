@@ -65,8 +65,14 @@
         <p class="muted">Your identity and permissions come from the server.</p>
         <nav id="auth-entry-chooser" class="auth-entry-chooser" aria-label="Choose how to enter">
           <p class="field-help">Choose one way to enter. You can come back and switch at any time.</p>
+          <button id="auth-select-email-login" class="auth-entry-choice" type="button" aria-controls="auth-email-login-panel">
+            <span><strong>Email account · sign in</strong><small>Use the email and password you set during registration.</small></span><span aria-hidden="true">→</span>
+          </button>
           <button id="auth-select-login" class="auth-entry-choice" type="button" aria-controls="auth-login-panel">
             <span><strong>Existing account · sign in</strong><small>Use a device access token or choose an account remembered by this browser.</small></span><span aria-hidden="true">→</span>
+          </button>
+          <button id="auth-select-register" class="auth-entry-choice" type="button" aria-controls="auth-register-panel">
+            <span><strong>New account · email registration</strong><small>Verify your email and choose a password. No access token to save.</small></span><span aria-hidden="true">→</span>
           </button>
           <button id="auth-select-activate" class="auth-entry-choice" type="button" aria-controls="auth-activate-panel">
             <span><strong>First-time use · activate access</strong><small>Enter a one-time test qualification code to receive your own device token.</small></span><span aria-hidden="true">→</span>
@@ -88,7 +94,7 @@
               <input id="claim-device-name" name="device-name" autocomplete="off" maxlength="120" value="This browser" aria-describedby="auth-identity-help" />
             </div>
           </div>
-          <p id="auth-identity-help" class="field-help">Set both names for first-time activation or a project invitation. Existing accounts can leave them unchanged.</p>
+          <p id="auth-identity-help" class="field-help">For new accounts, set a display name and a device name. Existing accounts can leave them unchanged.</p>
         </div>
         <section id="auth-login-panel" class="auth-entry-panel" aria-labelledby="auth-login-heading" hidden>
           <button class="text-button auth-entry-back" type="button">← Back</button>
@@ -147,6 +153,56 @@
           </form>
           <p class="auth-request-access">No code yet? The public request Issue accepts an optional reason, discovery source, and email. Include an email only if you are comfortable sharing it publicly for private code delivery.</p>
           <a class="auth-request-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access</a>
+        </section>
+        <section id="auth-email-login-panel" class="auth-entry-panel" aria-labelledby="auth-email-login-heading" hidden>
+          <button class="text-button auth-entry-back" type="button">← Back</button>
+          <h3 id="auth-email-login-heading">Sign in with email and password</h3>
+          <form id="email-login-form" novalidate>
+            <label for="email-login-email">Email address</label>
+            <input id="email-login-email" type="email" autocomplete="username" maxlength="254" required />
+            <label for="email-login-password">Password</label>
+            <input id="email-login-password" type="password" autocomplete="current-password" maxlength="128" required />
+            <label class="auth-remember" for="email-login-remember">
+              <input id="email-login-remember" type="checkbox" />
+              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+            </label>
+            <p class="field-help">Password recovery is not available yet. Previously activated accounts can still use their device token.</p>
+            <p id="email-login-error" class="form-error" role="alert"></p>
+            <button class="button button-primary button-wide" type="submit">Sign in</button>
+          </form>
+        </section>
+        <section id="auth-register-panel" class="auth-entry-panel" aria-labelledby="auth-register-heading" hidden>
+          <button class="text-button auth-entry-back" type="button">← Back</button>
+          <h3 id="auth-register-heading">Create an account with email</h3>
+          <form id="registration-form" novalidate>
+            <label for="registration-email">Email address</label>
+            <input id="registration-email" type="email" autocomplete="email" maxlength="254" required aria-describedby="registration-help registration-error" />
+            <p id="registration-help" class="field-help">Your email is your sign-in account. Set a password after email verification. Existing accounts stay separate. Password recovery is not available yet.</p>
+            <label class="auth-remember" for="registration-privacy">
+              <input id="registration-privacy" type="checkbox" required />
+              <span>I have read the privacy notice and agree to email delivery and the Cloudflare security check.</span>
+            </label>
+            <a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy notice</a>
+            <div id="registration-challenge"></div>
+            <button id="registration-challenge-retry" class="text-button" type="button">Retry security check</button>
+            <p id="registration-status" class="field-help" role="status" aria-live="polite"></p>
+            <button id="registration-send" class="button button-secondary button-wide" type="button" disabled>Send / resend email code</button>
+            <div id="registration-code-step" hidden>
+              <label for="registration-password">Choose a password</label>
+              <input id="registration-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="registration-password-help registration-error" />
+              <p id="registration-password-help" class="field-help">Use 12–128 characters. A long, unique password is best. Keep it in your password manager.</p>
+              <label for="registration-password-confirm">Confirm password</label>
+              <input id="registration-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" />
+              <label for="registration-code">Eight-digit email code</label>
+              <input id="registration-code" inputmode="numeric" type="password" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{8}" aria-describedby="registration-status registration-error" />
+              <label class="auth-remember" for="registration-remember">
+                <input id="registration-remember" type="checkbox" />
+                <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+              </label>
+              <button id="registration-verify" class="button button-primary button-wide" type="submit" disabled>Verify and create account</button>
+            </div>
+            <p id="registration-error" class="form-error" role="alert"></p>
+          </form>
         </section>
         <section id="auth-invitation-panel" class="auth-entry-panel" aria-labelledby="auth-invitation-heading" hidden>
           <button class="text-button auth-entry-back" type="button">← Back</button>

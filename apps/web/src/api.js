@@ -502,6 +502,27 @@ export class HttpCollaborationApi {
     return { actor, invitation: normalizeInvitation(result.invitation), accessToken: result.token };
   }
 
+  registrationStatus() { return this.request("/v1/registration"); }
+
+  sendRegistration(input) { return this.request("/v1/registration/send", { method: "POST", body: JSON.stringify(input) }); }
+
+  async verifyRegistration(input) {
+    const result = await this.request("/v1/registration/verify", { method: "POST", body: JSON.stringify(input) });
+    const actor = { id: result.actor.user_id, username: result.actor.display_name,
+      device_id: result.actor.device_id, can_create_projects: result.actor.can_create_projects === true };
+    this.actors.set(actor.id, actor.username);
+    return { actor };
+  }
+
+  prepareEmailLogin() { return this.request("/v1/email-login"); }
+
+  async loginWithEmail(input) {
+    const result = await this.request("/v1/email-login", { method: "POST", body: JSON.stringify(input) });
+    const actor = { id: result.actor.user_id, username: result.actor.display_name, device_id: result.actor.device_id, can_create_projects: result.actor.can_create_projects === true };
+    this.actors.set(actor.id, actor.username);
+    return { actor };
+  }
+
   async claimTestAccess({ accessToken, displayName, deviceName, rememberDevice = false }) {
     const result = await this.request("/v1/test-access/claim", {
       method: "POST",

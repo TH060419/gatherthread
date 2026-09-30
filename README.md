@@ -165,3 +165,7 @@ Every version update is reviewed through a pull request by the project lead / de
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Yuhan He and contributors.
+
+### Email registration source preview
+
+This branch adds optional verified-email accounts with password sign-in, closed by default. They have the same permissions and existing quotas as test-qualification accounts, and users do not need to save a device access token. The hosted Alpha has not enabled registration. Operator setup, free-provider limits, circuit breaker, retention and preflight are in [OPERATIONS](docs/OPERATIONS.md); the design is [ADR-0036](docs/adr/0036-verified-email-registration-and-password-login.md). No provider account, paid plan or production deployment is created by this source change.

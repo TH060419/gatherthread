@@ -1,6 +1,8 @@
 import { accessSync, constants, mkdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import { registrationFromEnvironment } from "./registration-providers.js";
+import type { RegistrationOptions } from "./registration.js";
 
 const EnvironmentSchema = z.enum(["development", "test", "production"]);
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -14,6 +16,7 @@ export class ConfigurationError extends Error {
 }
 
 export interface ServerConfig {
+  registration: RegistrationOptions;
   environment: z.infer<typeof EnvironmentSchema>;
   host: string;
   port: number;
@@ -180,6 +183,7 @@ export function loadServerConfig(
   }
 
   return {
+    registration: registrationFromEnvironment(env, publicBaseUrl),
     environment,
     host,
     port,

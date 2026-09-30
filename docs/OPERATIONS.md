@@ -99,3 +99,28 @@ Alert on repeated authentication failures, forbidden writes, claim-owner mismatc
 ## Incident checklist
 
 Contain the service, preserve restricted evidence, rotate affected device credentials and peppers, revoke invitations, identify impacted sessions and sequences, validate backup state, patch and test, then restore from known-good state if integrity is uncertain. Notify affected deployment owners with scope and remediation. Do not put sensitive evidence in public issues or routine logs.
+
+## Optional public registration preflight (unreleased)
+
+Keep GATHERTHREAD_PUBLIC_REGISTRATION=false until project-lead approval. This PR does not open the hosted Alpha or declare a Beta. Read [ADR-0036](adr/0036-verified-email-registration-and-password-login.md) for provider comparison and [SECURITY](SECURITY.md) for authoritative budgets and retention. No third-party account or DNS/mail/proxy change is authorized by preparing the feature.
+
+Before opening: confirm the access provider/authority accepts the proposed public service and filing details; review the privacy notice, Resend/Cloudflare terms and personal-data transfer; create/configure approved provider accounts manually; verify the sender/domain and SPF/DKIM/DMARC; confirm actual current Free quotas and disable overages/auto-upgrade; use a dedicated restricted mail API key; configure sender, Resend key, Turnstile site/secret and exact HTTPS origin via private environment. Never put those values in Git, process arguments, logs or support screenshots. Verify approved QQ/163/Outlook/SJTU test inboxes, spam/bounce/delay behavior, mainland desktop/mobile network access, native Safari and keyboard accessibility. Free plans do not guarantee inbox delivery or a paid SLA. If unavailable, keep registration closed; no console mail or public relay fallback exists.
+
+Default send limits are below the documented Resend 100/day and 3,000/month Free plan: 20 per UTC hour, 80 per UTC day and 2,000 per fixed 31-day block. Daily caps bound any calendar month to at most 2,480 emails. Failed and uncertain sends still count. Other workloads on the same provider account reduce available capacity; lower the application budget in reviewed source or reserve a dedicated account/key, and verify provider quota before enablement. No unlimited or automatically paid sending is permitted. Alert on generic delivery/challenge/rate-limit/capacity failure codes and aggregate usage, without email/OTP/password/provider payload labels. Persistent budgets survive deployment restarts and deliberate toggling; never erase them to work around limits.
+
+Without proxy configuration, all clients through one edge share the peer-IP budget. To use per-client budgets, separately review an edge configuration that removes any incoming X-GatherThread-Client-IP and sets exactly one address from the actual connection. Set GATHERTHREAD_REGISTRATION_TRUSTED_PROXY to that exact socket peer IP only. Do not use X-Forwarded-For or client-selected chains. The source change does not edit the edge. Verify spoof attempts fail, and assess shared NAT/IPv6 aggregation before choosing the policy.
+
+Local commands use the existing private environment/database path and persistent pepper:
+
+```sh
+node --env-file-if-exists=.env apps/server/dist/src/cli.js registration status
+node --env-file-if-exists=.env apps/server/dist/src/cli.js registration pause
+node --env-file-if-exists=.env apps/server/dist/src/cli.js registration resume
+node --env-file-if-exists=.env apps/server/dist/src/cli.js registration cleanup
+```
+
+Pause commits a durable breaker observed by the running host for new sends and account completion; an already issued outbound request may finish. Resume does not enable missing dependencies or erase budgets. Existing email/password and token/vault login keep working. The host runs registration cleanup every minute, including while closed; a shutdown host must run cleanup before restart or inspection. Expired records cannot authenticate even before physical cleanup. Backups retain credential hashes, pseudonymous budgets and deletion tombstones under the existing 14-day policy. Never restore a database with old signup budgets/deletions while accepting writes; reconcile those records first.
+
+Migration is additive CREATE TABLE IF NOT EXISTS, without rewriting existing identity, roles or sessions. Take the existing paired SQLite/cloud-Git backup before upgrade. First disable or pause signup before a rollback. Earlier server versions ignore the new tables and existing opaque sessions/devices remain valid, but email/password sign-in is unavailable on old binaries. Prefer forward repair or roll back only to a binary retaining email-login support once accounts have enrolled. Do not drop tables or restore a pre-enrollment snapshot to roll back presentation. No migration, backup, operator command or rollback is executed on production by this PR.
+
+Future hosted Agent services must enforce independent per-account plus deployment/provider spending budgets inside their own allocation transaction. Email verification and the current signup caps cannot prevent a person controlling many mailboxes from consuming many free allocations. Keep hosted entitlements disabled until that independent design, abuse monitoring and manual suspension are reviewed.

@@ -668,3 +668,5 @@ export interface ApiErrorBody {
     details?: JsonValue;
   };
 }
+
+export * from "./registration.js";
