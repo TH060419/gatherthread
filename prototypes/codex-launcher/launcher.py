@@ -12,7 +12,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 from urllib.parse import parse_qs, urlparse
 
 
@@ -81,10 +81,21 @@ def valid_history_sync(value: str) -> str:
     return value
 
 
+def selected_workspace(value: str) -> str | None:
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute() or not path.is_dir():
+        raise ValueError("工作目录必须是已存在的本地绝对路径目录")
+    return str(path.resolve())
+
+
 def connector_args(node: Path, connector: Path, origin: str, project: str,
-                   model: str, tokens: int, mode: str, codex: str) -> list[str]:
+                   model: str, tokens: int, mode: str, codex: str,
+                   workspace: str | None = None) -> list[str]:
     return [str(node), str(connector), "--url", origin, "--project", project,
-            "--create-workspace", "--plugin-hooks", "--visible-history-sync", mode,
+            *(["--workspace", workspace] if workspace else ["--create-workspace"]),
+            "--plugin-hooks", "--visible-history-sync", mode,
             "--model", model, "--context-window-tokens", str(tokens),
             "--codex-command", codex]
 
@@ -223,12 +234,13 @@ class Launcher(tk.Tk):
     def __init__(self, link: str | None):
         super().__init__()
         self.title("GatherThread · Connect Codex")
-        self.geometry("760x650")
-        self.minsize(680, 600)
+        self.geometry("760x700")
+        self.minsize(680, 640)
         self.events: queue.Queue[tuple[str, str]] = queue.Queue()
         self.connector: subprocess.Popen[str] | None = None
         self.busy = False
         self.project = tk.StringVar()
+        self.workspace = tk.StringVar()
         self.codex = tk.StringVar(value=find_codex())
         self.model = tk.StringVar(value="gpt-5.6-sol")
         self.context_tokens = tk.StringVar(value="128000")
@@ -254,9 +266,15 @@ class Launcher(tk.Tk):
         ttk.Label(root, text="连接本机 Codex", font=("Segoe UI", 18, "bold")).pack(anchor="w")
         ttk.Label(root, text="网页负责项目和会话；此窗口负责启动并保持本机连接器运行。", wraplength=690).pack(anchor="w", pady=(4, 14))
         ttk.Label(root, text=f"网页服务地址：{SERVER_ORIGIN}").pack(anchor="w", pady=(0, 9))
-        for label, var in (("项目 ID（格式：project-***）", self.project), ("Codex CLI 路径", self.codex)):
+        for label, var in (("项目 ID（网页打开时自动填入；格式：project-***）", self.project), ("Codex CLI 路径", self.codex)):
             ttk.Label(root, text=label).pack(anchor="w")
             ttk.Entry(root, textvariable=var).pack(fill="x", pady=(2, 9))
+        ttk.Label(root, text="本地工作目录（可选；留空使用默认项目目录）").pack(anchor="w")
+        workspace_row = ttk.Frame(root)
+        workspace_row.pack(fill="x", pady=(2, 9))
+        ttk.Entry(workspace_row, textvariable=self.workspace).pack(side="left", fill="x", expand=True)
+        ttk.Button(workspace_row, text="浏览…", command=self._choose_workspace).pack(side="left", padx=(8, 0))
+        ttk.Button(workspace_row, text="默认目录", command=lambda: self.workspace.set("")).pack(side="left", padx=(8, 0))
         settings = ttk.Frame(root)
         settings.pack(fill="x", pady=(2, 9))
         for label, var, width in (("模型", self.model, 24), ("上下文 Token 上限", self.context_tokens, 14)):
@@ -292,6 +310,11 @@ class Launcher(tk.Tk):
         if codex != self.codex.get().strip():
             self.codex.set(codex)
         return node, codex
+
+    def _choose_workspace(self) -> None:
+        directory = filedialog.askdirectory(parent=self, mustexist=True, title="选择 Codex 本地工作目录")
+        if directory:
+            self.workspace.set(directory)
 
     def _env(self, token: str = "") -> dict[str, str]:
         env = os.environ.copy()
@@ -360,10 +383,11 @@ class Launcher(tk.Tk):
             model = valid_model(self.model.get())
             tokens = valid_context_tokens(self.context_tokens.get())
             mode = valid_history_sync(self.history_sync.get())
+            workspace = selected_workspace(self.workspace.get())
         except ValueError as error:
             messagebox.showerror("连接信息有误", str(error))
             return
-        args = connector_args(node, connector, origin, project, model, tokens, mode, codex)
+        args = connector_args(node, connector, origin, project, model, tokens, mode, codex, workspace)
         try:
             self.connector = subprocess.Popen(args, env=self._env(token), stdin=subprocess.DEVNULL,
                                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
