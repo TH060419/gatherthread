@@ -165,7 +165,7 @@ test("cloud Agent uses a separate endpoint and sends code opt-in explicitly", as
       ["https://gatherthread.example/v1/sessions/s%2F1/hosted-agent-requests", "POST"],
     ]);
     assert.deepEqual(JSON.parse(requests[1].options.body), {
-      content: "Implement a test", include_code: true,
+      profile_id: "default", content: "Implement a test", include_code: true,
       idempotency_key: "hosted-request-0001", reply_to_event_id: "e1",
     });
   } finally { globalThis.fetch = originalFetch; }

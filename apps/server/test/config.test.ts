@@ -59,10 +59,11 @@ test("hosted Agent requires explicit Free-plan confirmation and immutable image"
     return;
   }
   const config = loadServerConfig({ ...enabled,
+    GATHERTHREAD_HOSTED_AGENT_ENDPOINTS: "",
     GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
   }, "/srv/gatherthread");
   assert.equal(config.hostedAgent?.image, enabled.GATHERTHREAD_HOSTED_AGENT_IMAGE);
-  assert.equal(config.hostedAgent?.defaultUserDailyNeurons, 2_000);
+  assert.equal(config.hostedAgent?.userDailyRuns, 1);
   const localImage = `sha256:${"c".repeat(64)}`;
   assert.equal(loadServerConfig({ ...enabled,
     GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",

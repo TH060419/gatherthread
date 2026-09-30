@@ -470,6 +470,7 @@
                 <select id="agent-harness-select" name="agent-harness">
                   <option value="codex">Codex</option>
                   <option value="deepseek-harness">DeepSeek Harness</option>
+                  <option value="cloud">Cloud Agent</option>
                 </select>
                 <div id="codex-agent-profile-fields" class="agent-profile-fields">
                   <label for="agent-model-select">Model</label>
@@ -485,7 +486,14 @@
                   <label id="agent-dsh-effort-label" for="agent-dsh-effort-select" hidden>Reasoning</label>
                   <select id="agent-dsh-effort-select" name="agent-dsh-effort" hidden></select>
                 </div>
+                <div id="cloud-agent-profile-fields" class="agent-profile-fields" hidden>
+                  <label for="agent-cloud-model-select">Cloud model</label>
+                  <select id="agent-cloud-model-select" name="agent-cloud-model"></select>
+                </div>
               </fieldset>
+              <div class="cloud-code-consent" id="send-cloud-agent-help" hidden>
+                <label for="cloud-agent-include-code"><input id="cloud-agent-include-code" type="checkbox"><span>Use GT Cloud code and save changes to my GT Cloud branch</span></label>
+              </div>
               <div class="composer-actions">
                 <div class="intent-help" id="send-chat-help">
                   <button id="send-chat-button" class="button button-secondary" type="button">
@@ -498,13 +506,6 @@
                     <span aria-hidden="true">✦</span> Request my agent
                   </button>
                   <span id="agent-target-label">No runtime available</span>
-                </div>
-                <div class="intent-help intent-agent" id="send-cloud-agent-help" hidden>
-                  <button id="send-cloud-agent-button" class="button button-secondary" type="button">
-                    <span aria-hidden="true">☁</span> Try cloud Agent
-                  </button>
-                  <label for="cloud-agent-include-code"><input id="cloud-agent-include-code" type="checkbox"> Use GT Cloud code and save changes to my GT Cloud branch</label>
-                  <span id="cloud-agent-budget">OpenCode · Cloudflare Workers AI · limited daily allowance</span>
                 </div>
               </div>
               <p id="send-error" class="form-error" role="alert"></p>
@@ -1180,18 +1181,19 @@ codex plugin add gatherthread@gatherthread</code>
 
             <section id="settings-agents" class="settings-section" aria-labelledby="settings-agents-title">
               <div class="settings-section-heading">
-                <div><p class="eyebrow">Agents</p><h3 id="settings-agents-title">Default local Agent</h3></div>
+                <div><p class="eyebrow">Agents</p><h3 id="settings-agents-title">Default Agent</h3></div>
                 <p id="settings-agent-summary">Codex supplies this project's connection command and handles new Agent requests by default.</p>
               </div>
               <fieldset class="settings-agent-picker">
-                <legend>Connection shortcuts</legend>
-                <p>Choose one or more Agent connection buttons to keep in the project sidebar.</p>
+                <legend>Available Agents</legend>
+                <p>Choose the Agents available in this project. Cloud Agent needs no local connection.</p>
                 <div class="settings-agent-options">
                   <label class="settings-agent-option" for="settings-enabled-codex"><input id="settings-enabled-codex" name="enabled-agent" type="checkbox" value="codex" /><span>Codex</span></label>
                   <label class="settings-agent-option" for="settings-enabled-dsh"><input id="settings-enabled-dsh" name="enabled-agent" type="checkbox" value="deepseek-harness" /><span>DeepSeek Harness</span></label>
+                  <label class="settings-agent-option" for="settings-enabled-cloud"><input id="settings-enabled-cloud" name="enabled-agent" type="checkbox" value="cloud" /><span>Cloud Agent</span></label>
                 </div>
               </fieldset>
-              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option disabled>Claude Code · coming later</option></select></label>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="cloud">Cloud Agent</option><option disabled>Claude Code · coming later</option></select></label>
               <div id="settings-codex-agent-fields" class="settings-agent-fields">
                 <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
                 <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
@@ -1203,12 +1205,17 @@ codex plugin add gatherthread@gatherthread</code>
                 <p class="field-help">Install and pair the plugin from “Connect DeepSeek Harness” if no runtime appears.</p>
                 <p id="settings-dsh-runtime-error" class="form-error" role="alert"></p>
               </div>
+              <div id="settings-cloud-agent-fields" class="settings-agent-fields" hidden>
+                <label class="settings-row" for="settings-cloud-model"><span><strong>Cloud model</strong><small>Models are provided by this server. No local Agent connection is required.</small></span><select id="settings-cloud-model" name="cloud-model"></select></label>
+                <p id="settings-cloud-status" class="field-help" role="status"></p>
+                <p class="field-help">The selected provider receives your request and any GT Cloud code you choose to share. API credentials are managed by the server operator.</p>
+              </div>
             </section>
 
             <section id="settings-composer" class="settings-section" aria-labelledby="settings-composer-title">
               <div class="settings-section-heading"><div><p class="eyebrow">Composer</p><h3 id="settings-composer-title">Message behavior</h3></div><p>Controls only this browser.</p></div>
               <label class="settings-row" for="settings-enter-behavior"><span><strong>Enter key</strong><small>New line is safest because chat and Agent request are distinct actions.</small></span><select id="settings-enter-behavior" name="enter-behavior"><option value="newline">Insert a new line</option><option value="send_chat">Send chat</option><option value="request_agent">Request Agent</option></select></label>
-              <label class="settings-row settings-toggle" for="settings-confirm-agent"><span><strong>Confirm Agent requests</strong><small>Ask before starting a local model run.</small></span><input id="settings-confirm-agent" name="confirm-agent" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+              <label class="settings-row settings-toggle" for="settings-confirm-agent"><span><strong>Confirm Agent requests</strong><small>Ask before starting an Agent run.</small></span><input id="settings-confirm-agent" name="confirm-agent" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
               <label class="settings-row settings-toggle" for="settings-auto-scroll"><span><strong>Follow new events</strong><small>Keep the timeline at the latest event when already near the bottom.</small></span><input id="settings-auto-scroll" name="auto-scroll" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
             </section>
 

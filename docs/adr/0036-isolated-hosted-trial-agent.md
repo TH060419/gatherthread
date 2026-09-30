@@ -26,10 +26,12 @@ Each request runs a digest-pinned image in a new non-root Docker container with
 no general network, dropped capabilities, a read-only root, bounded tmpfs
 workspace, CPU/memory/PID/time limits, and no host credentials. The only model
 connection is a short-lived Unix socket to a server-side proxy. That proxy
-accepts only the selected Cloudflare Workers AI model and puts conservative
+accepts only the selected provider endpoint and model and puts conservative
 per-call and per-run bounds on requests. The provider token never enters the
 container. Daily user and global allocations are reserved before the canonical
 request is appended; retry uses the same idempotency key and cannot double-run.
+
+Cloud Agent appears beside local harnesses in the shared Agent selector and settings. Operators configure one or more API endpoints, grouping the same provider/model under a public profile and same-account keys under a shared quota group. Transactional account and host capacity gates enable parallel runs. Exhaustion fails explicitly; no silent model switch or automatic replay occurs. Run reservations cover non-Cloudflare providers; provider-side spend caps are still required. The additive database migration and configuration contract are documented in [the operator guide](../HOSTED_AGENT.md).
 
 The user separately chooses whether the Agent receives cloud project code.
 When chosen, the runner receives the requester's current branch or shared main

@@ -585,7 +585,7 @@ export class HttpCollaborationApi {
   appendHostedAgentRequest(sessionId, input) {
     return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-agent-requests`, {
       method: "POST",
-      body: JSON.stringify({ content: input.content, include_code: input.includeCode === true,
+      body: JSON.stringify({ profile_id: input.profileId ?? "default", content: input.content, include_code: input.includeCode === true,
         idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null }),
     });
   }
@@ -731,6 +731,8 @@ const users = {
 };
 
 export class MockCollaborationApi {
+  async getHostedAgentStatus() { return { enabled: false }; }
+
   constructor({ latency = 90 } = {}) {
     this.latency = latency;
     this.currentUser = { ...users.avery, can_create_projects: true };

@@ -4,7 +4,7 @@
 
 Enable multiple people to collaborate on an agent-assisted project while each person keeps using their own local harness, model, credentials, filesystem, and context-management policy.
 
-An optional hosted trial Agent may be enabled by an operator for members who do not yet have a local harness. It is a separate, explicitly selected OpenCode run in a disposable container. Project cloud code is read only after the requester selects that option; eligible changes are checkpointed to that member's own branch. This source-preview feature is disabled until its model provider and container are configured and validated. See [the user guide](HOSTED_AGENT_GUIDE.md) and [ADR-0036](adr/0036-isolated-hosted-trial-agent.md).
+An optional hosted trial Agent may be enabled by an operator for members who do not yet have a local harness. It is explicitly selected beside Codex and DSH in the project Agent selector and Settings, with an operator-provided model profile. It runs OpenCode in a disposable container. Multiple accounts may provide capacity for the same exact provider/model; unavailable capacity never silently switches models. Project cloud code is read only after the requester selects that option; eligible changes are checkpointed to that member's own branch. This source-preview feature is disabled until its model provider and container are configured and validated. See [the user guide](HOSTED_AGENT_GUIDE.md) and [ADR-0036](adr/0036-isolated-hosted-trial-agent.md).
 
 ## Browser entry flow
 

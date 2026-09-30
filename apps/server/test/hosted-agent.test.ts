@@ -13,9 +13,11 @@ import { CollaborationService } from "../src/service.js";
 const unixSocketTest = process.platform === "win32" ? test.skip : test;
 
 const options: HostedAgentOptions = {
-  accountId: "a".repeat(32), apiToken: "private-provider-token",
+  endpoints: [{ id: "first", profileId: "default", label: "Qwen3", provider: "cloudflare-workers-ai",
+    model: HOSTED_MODEL, baseUrl: `https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/ai/v1`,
+    apiToken: "private-provider-token", quotaGroup: "cf-account", dailyRuns: 4, maxConcurrent: 1 }],
   image: `example/hosted@sha256:${"b".repeat(64)}`,
-  defaultUserDailyNeurons: 2_000, globalDailyNeurons: 8_000, maxConcurrent: 1,
+  userDailyRuns: 1, globalDailyRuns: 4, maxConcurrent: 1,
 };
 
 function unixPost(socketPath: string, path: string, body: unknown): Promise<number> {
@@ -34,7 +36,7 @@ unixSocketTest("hosted model proxy permits only the fixed model endpoint and enf
   const directory = mkdtempSync(join(tmpdir(), "gt-model-proxy-"));
   const socket = join(directory, "model.sock");
   const forwarded: Array<{ url: string; authorization: string | undefined; body: Record<string, unknown> }> = [];
-  const proxy = new HostedModelProxy({ ...options, fetch: async (url, init) => {
+  const proxy = new HostedModelProxy({ endpoint: options.endpoints[0]!, fetch: async (url, init) => {
     forwarded.push({ url: String(url), authorization: (init?.headers as Record<string, string>).Authorization,
       body: JSON.parse(String(init?.body)) as Record<string, unknown> });
     return new Response(JSON.stringify({ choices: [{ message: { content: "okay" } }] }), {
@@ -51,8 +53,8 @@ unixSocketTest("hosted model proxy permits only the fixed model endpoint and enf
     assert.equal(await unixPost(socket, "/v1/chat/completions", body), 429);
     assert.equal(forwarded.length, 8);
     assert.ok(forwarded.every((call) => call.url ===
-      `https://api.cloudflare.com/client/v4/accounts/${options.accountId}/ai/v1/chat/completions`));
-    assert.ok(forwarded.every((call) => call.authorization === `Bearer ${options.apiToken}`
+      `${options.endpoints[0]!.baseUrl}/chat/completions`));
+    assert.ok(forwarded.every((call) => call.authorization === `Bearer ${options.endpoints[0]!.apiToken}`
       && call.body.model === HOSTED_MODEL && call.body.max_tokens === 1024));
   } finally {
     await proxy.close();
@@ -75,7 +77,7 @@ unixSocketTest("hosted run uses isolated Docker arguments, persists an event, an
       ...options, runContainer: async (args) => { argsSeen.push(args);
         return JSON.stringify({ answer: "Created a starter file plan.", files: [], save_error: null }); },
     });
-    const input = { content: "Create a small project", include_code: false,
+    const input = { profile_id: "default", content: "Create a small project", include_code: false,
       idempotency_key: "hosted-first-request" };
     const result = await agent.request(owner, session.id, input);
     assert.equal(result.replayed, false);
@@ -88,11 +90,11 @@ unixSocketTest("hosted run uses isolated Docker arguments, persists an event, an
       assert.ok(args.includes(required), `missing ${required}`);
     }
     assert.ok(args.some((argument) => argument.includes("dst=/input,readonly")));
-    assert.equal(args.includes(options.apiToken), false);
+    assert.equal(args.includes(options.endpoints[0]!.apiToken), false);
     assert.equal(args.some((argument) => argument.includes(input.content)), false);
     assert.equal((await agent.request(owner, session.id, input)).replayed, true);
     assert.equal(argsSeen.length, 1);
-    assert.equal(agent.status(owner).user_used_neurons, 2_000);
+    assert.equal(agent.status(owner).user_used_runs, 1);
     const outsider = database.createIdentity({ display_name: "Outsider", device_name: "Laptop" }).actor;
     await assert.rejects(agent.request(outsider, session.id, { ...input, idempotency_key: "outsider-request" }),
       (error: unknown) => error instanceof ApiError && error.status === 404);
@@ -122,7 +124,7 @@ unixSocketTest("hosted code changes checkpoint only to the requesting member's c
     const agent = new HostedAgent(service, repository, {
       ...options, runContainer: async () => JSON.stringify({ answer: "Wrote hello.txt", files: [file], save_error: null }),
     });
-    const result = await agent.request(owner, session.id, { content: "Create hello.txt", include_code: true,
+    const result = await agent.request(owner, session.id, { profile_id: "default", content: "Create hello.txt", include_code: true,
       idempotency_key: "hosted-code-request" });
     assert.equal(result.response_event?.type, "agent_response");
     const status = repository.status(owner, session.project_id);
@@ -133,4 +135,29 @@ unixSocketTest("hosted code changes checkpoint only to the requesting member's c
     database.close();
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+unixSocketTest("DeepSeek proxy pins the chosen model and reports rate-limit cooldown without forwarding credentials to the container", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-deepseek-proxy-"));
+  const socket = join(directory, "model.sock");
+  let calls = 0;
+  const cooldowns: number[] = [];
+  const endpoint = { ...options.endpoints[0]!, provider: "deepseek" as const, model: "deepseek-chat", baseUrl: "https://api.deepseek.com/v1" };
+  const proxy = new HostedModelProxy({ endpoint, onUnavailable: (ms) => cooldowns.push(ms), fetch: async (url, init) => {
+    calls++;
+    assert.equal(String(url), "https://api.deepseek.com/v1/chat/completions");
+    const body = JSON.parse(String(init?.body));
+    assert.deepEqual(body.thinking, { type: "disabled" });
+    assert.equal(body.n, 1);
+    assert.equal(body.model, "deepseek-chat");
+    return new Response("private upstream detail", { status: 429, headers: { "retry-after": "120" } });
+  } });
+  try {
+    await proxy.listen(socket);
+    assert.equal(await unixPost(socket, "/v1/chat/completions", { model: "other", messages: [] }), 400);
+    assert.equal(calls, 0); assert.equal(cooldowns.length, 0);
+    assert.equal(await unixPost(socket, "/v1/chat/completions", { model: "deepseek-chat", messages: [{ role: "user", content: "test" }] }), 429);
+    assert.deepEqual(cooldowns, [120_000]);
+    assert.equal(calls, 1);
+  } finally { await proxy.close(); rmSync(directory, { recursive: true, force: true }); }
 });

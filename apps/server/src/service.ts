@@ -1,3 +1,4 @@
+import type { HostedAllocation, HostedRunLimits } from "./hosted-agent-pool.js";
 import type {
   AppendEventInput,
   CanonicalEvent,
@@ -338,15 +339,13 @@ export class CollaborationService {
   }
 
   reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
-    reservedNeurons: number, defaultUserLimit: number, globalLimit: number, maxConcurrent: number) {
-    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input,
-      reservedNeurons, defaultUserLimit, globalLimit, maxConcurrent);
+    endpoints: HostedAllocation[], limits: HostedRunLimits) {
+    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input, endpoints, limits);
     if (result.created) this.publish(result.event);
     return result;
   }
 
-  finishHostedAgentRequest(requestId: string, outcome: { content?: string; inputTokens?: number;
-    outputTokens?: number; meteredNeurons?: number }) {
+  finishHostedAgentRequest(requestId: string, outcome: { content?: string }) {
     const event = this.database.finishHostedAgentRequest(requestId, outcome);
     if (event) this.publish(event);
     return event;

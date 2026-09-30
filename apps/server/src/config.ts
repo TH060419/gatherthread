@@ -1,6 +1,7 @@
 import { accessSync, constants, mkdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import { parseHostedEndpoints, HOSTED_MODEL } from "./hosted-agent-pool.js";
 import type { HostedAgentOptions } from "./hosted-agent.js";
 
 const EnvironmentSchema = z.enum(["development", "test", "production"]);
@@ -152,31 +153,35 @@ export function loadServerConfig(
   const maxTotalSessions = parseCountLimit("GATHERTHREAD_MAX_TOTAL_SESSIONS", env.GATHERTHREAD_MAX_TOTAL_SESSIONS, 8_192);
   const rawAuthTokenPepper = env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
   const hostedEnabled = parseBoolean("GATHERTHREAD_HOSTED_AGENT_ENABLED", env.GATHERTHREAD_HOSTED_AGENT_ENABLED, false);
-  const hostedFreeConfirmed = parseBoolean("GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED",
-    env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED, false);
   let hostedAgent: HostedAgentOptions | undefined;
   if (hostedEnabled) {
-    if (process.platform === "win32") {
-      throw new ConfigurationError("Cloud Agent requires a Linux Docker host with Unix sockets");
-    }
-    const accountId = env.GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID?.trim() ?? "";
-    const apiToken = env.GATHERTHREAD_CLOUDFLARE_AI_TOKEN?.trim() ?? "";
+    if (process.platform === "win32") throw new ConfigurationError("Cloud Agent requires a Linux Docker host with Unix sockets");
     const image = env.GATHERTHREAD_HOSTED_AGENT_IMAGE?.trim() ?? "";
-    if (!hostedFreeConfirmed || !/^[a-f0-9]{32}$/iu.test(accountId) || !apiToken || /[\r\n]/u.test(apiToken)
-      || !/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(image)) {
-      throw new ConfigurationError("Cloud Agent requires confirmed Workers Free plan, credentials, and a digest-pinned runner image");
+    if (!/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(image)) {
+      throw new ConfigurationError("Cloud Agent requires a digest-pinned runner image");
     }
-    hostedAgent = { accountId, apiToken, image,
-      defaultUserDailyNeurons: parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS",
-        env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS, 2_000),
-      globalDailyNeurons: parseCountLimit("GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS",
-        env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS, 8_000),
-      maxConcurrent: parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT",
-        env.GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT, 2),
-    };
-    if (hostedAgent.globalDailyNeurons > 9_000 || hostedAgent.defaultUserDailyNeurons > 10_000
-      || hostedAgent.maxConcurrent > 8) {
-      throw new ConfigurationError("Cloud Agent limits exceed the guarded Free-plan ceiling");
+    const legacyRuns = (value: string | undefined, fallback: number) => value === undefined
+      ? fallback : Math.floor(parseCountLimit("legacy Neuron allowance", value, fallback * 2000) / 2000);
+    const userDailyRuns = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS",
+      env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS, legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS, 1));
+    const globalDailyRuns = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_RUNS",
+      env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_RUNS, legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS, 4));
+    const maxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT",
+      env.GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT, 2);
+    if (userDailyRuns < 1 || userDailyRuns > 10_000 || globalDailyRuns < 1 || globalDailyRuns > 100_000 || maxConcurrent > 8) {
+      throw new ConfigurationError("Cloud Agent limits exceed the supported capacity");
+    }
+    try {
+      const raw = env.GATHERTHREAD_HOSTED_AGENT_ENDPOINTS?.trim() || JSON.stringify([{
+        id: "default", profile_id: "default", label: "Qwen3 · Cloudflare", provider: "cloudflare-workers-ai",
+        model: HOSTED_MODEL, account_id: env.GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID?.trim(),
+        token_env: "GATHERTHREAD_CLOUDFLARE_AI_TOKEN", daily_runs: 4, max_concurrent: Math.min(2, maxConcurrent),
+        free_plan_confirmed: env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true",
+      }]);
+      hostedAgent = { image, endpoints: parseHostedEndpoints(raw, env), userDailyRuns, globalDailyRuns, maxConcurrent };
+    } catch {
+      // Validation errors can contain the private JSON input; never print them.
+      throw new ConfigurationError("Invalid Cloud Agent endpoints, account quotas, or credential environment variables");
     }
   }
   if (rawAuthTokenPepper !== undefined && rawAuthTokenPepper !== rawAuthTokenPepper.trim()) {

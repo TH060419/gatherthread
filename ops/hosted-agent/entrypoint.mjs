@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { publicAnswer } from "./public-answer.mjs";
 
 const INPUT = "/input";
 const WORKSPACE = "/workspace";
@@ -74,10 +75,11 @@ async function main() {
   ], { stdio: "ignore" });
   try {
     await new Promise((resolve) => setTimeout(resolve, 100));
-    const answer = await run("opencode", [
-      "run", "--model", "hosted/@cf/qwen/qwen3-30b-a3b-fp8", "--agent", "build",
+    const output = await run("opencode", [
+      "run", "--format", "json", "--agent", "build",
       "Complete the attached task in this workspace.", "--file", "/run/gatherthread/prompt.txt",
     ], 64_000);
+    const answer = publicAnswer(output);
     let files = null;
     let save_error = null;
     try { files = outputFiles(); } catch { save_error = "workspace_limit_or_unsafe_file"; }

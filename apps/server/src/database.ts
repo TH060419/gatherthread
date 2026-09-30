@@ -43,6 +43,7 @@ import {
   isHistorySummaryRequest, selectHistorySummarySources,
 } from "@gatherthread/protocol";
 import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
+import type { HostedAllocation, HostedRunLimits } from "./hosted-agent-pool.js";
 import { HOSTED_AGENT_SCHEMA } from "./hosted-agent-schema.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
@@ -3043,39 +3044,58 @@ export class CollaborationDatabase {
     });
   }
 
-  setHostedAgentUserLimit(userId: string, dailyNeurons: number): void {
-    if (!Number.isSafeInteger(dailyNeurons) || dailyNeurons < 0 || dailyNeurons > 10_000) {
-      throw new RangeError("dailyNeurons must be an integer from 0 to 10000");
+  setHostedAgentUserLimit(userId: string, dailyRuns: number): void {
+    if (!Number.isSafeInteger(dailyRuns) || dailyRuns < 0 || dailyRuns > 10_000) {
+      throw new RangeError("dailyRuns must be an integer from 0 to 10000");
     }
-    this.sqlite.prepare(`INSERT INTO hosted_agent_limits(user_id,daily_neurons) VALUES(?,?)
-      ON CONFLICT(user_id) DO UPDATE SET daily_neurons=excluded.daily_neurons`).run(userId, dailyNeurons);
+    this.sqlite.prepare(`INSERT INTO hosted_agent_run_limits(user_id,daily_runs) VALUES(?,?)
+      ON CONFLICT(user_id) DO UPDATE SET daily_runs=excluded.daily_runs`).run(userId, dailyRuns);
   }
 
   hostedAgentUsage(actor: Actor, defaultUserLimit: number, globalLimit: number) {
     this.assertActiveDevice(actor);
     const day = this.now().slice(0, 10);
-    const limit = this.sqlite.prepare("SELECT daily_neurons FROM hosted_agent_limits WHERE user_id=?")
-      .get(actor.user_id) as { daily_neurons: number } | undefined;
-    const user = this.sqlite.prepare(`SELECT COALESCE(SUM(COALESCE(metered_neurons,reserved_neurons)),0) AS neurons
-      FROM hosted_agent_jobs WHERE user_id=? AND utc_day=?`).get(actor.user_id, day) as { neurons: number };
-    const global = this.sqlite.prepare(`SELECT COALESCE(SUM(COALESCE(metered_neurons,reserved_neurons)),0) AS neurons
-      FROM hosted_agent_jobs WHERE utc_day=?`).get(day) as { neurons: number };
-    return { utc_day: day, user_limit_neurons: limit?.daily_neurons ?? defaultUserLimit,
-      user_used_neurons: user.neurons, global_limit_neurons: globalLimit, global_used_neurons: global.neurons };
+    const limit = this.sqlite.prepare("SELECT daily_runs FROM hosted_agent_run_limits WHERE user_id=?")
+      .get(actor.user_id) as { daily_runs: number } | undefined;
+    const user = this.sqlite.prepare(`SELECT COUNT(*) AS runs
+      FROM hosted_agent_runs WHERE user_id=? AND utc_day=?`).get(actor.user_id, day) as { runs: number };
+    const global = this.sqlite.prepare(`SELECT COUNT(*) AS runs
+      FROM hosted_agent_runs WHERE utc_day=?`).get(day) as { runs: number };
+    return { utc_day: day, user_limit_runs: limit?.daily_runs ?? defaultUserLimit,
+      user_used_runs: user.runs, global_limit_runs: globalLimit, global_used_runs: global.runs };
+  }
+
+  hostedActiveRuns(): number {
+    return (this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_runs WHERE status='running'")
+      .get() as { count: number }).count;
+  }
+
+  hostedEndpointUsage(endpoint: HostedAllocation) {
+    // Old preview reservations count against every account for that day because
+    // the earlier schema did not record which credential paid for them.
+    return this.sqlite.prepare(`SELECT COUNT(CASE WHEN utc_day=? THEN 1 END) AS daily,
+      COUNT(CASE WHEN status='running' THEN 1 END) AS active
+      FROM hosted_agent_runs WHERE quota_group IN (?, 'legacy')`)
+      .get(this.now().slice(0, 10), endpoint.quotaGroup) as { daily: number; active: number };
   }
 
   reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
-    reservedNeurons: number, defaultUserLimit: number, globalLimit: number, maxConcurrent: number,
-  ): { event: CanonicalEvent; created: boolean } {
+    endpoints: HostedAllocation[], limits: HostedRunLimits,
+  ): { event: CanonicalEvent; created: boolean; endpointId?: string } {
     this.assertActiveDevice(actor);
+    if (!endpoints.length || endpoints.some((e) => e.profileId !== input.profile_id
+      || e.provider !== endpoints[0]!.provider || e.model !== endpoints[0]!.model)) {
+      throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
+    }
     return this.transaction(() => {
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       if (session.state !== "active") throw conflict("Archived sessions do not accept Agent requests");
       const payload: JsonValue = redactJson({
         content: input.content,
         include_code: input.include_code,
-        execution_profile: { harness: "opencode", provider: "cloudflare-workers-ai",
-          model: "@cf/qwen/qwen3-30b-a3b-fp8" },
+        profile_id: input.profile_id,
+        execution_profile: { harness: "opencode", provider: endpoints[0]!.provider,
+          model: endpoints[0]!.model },
       });
       const replyId = input.reply_to_event_id ?? null;
       if (replyId !== null) {
@@ -3085,42 +3105,44 @@ export class CollaborationDatabase {
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
       if (existing) {
         const event = this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", payload, replyId, "session", null);
-        if (!this.sqlite.prepare("SELECT 1 FROM hosted_agent_jobs WHERE request_event_id=?").get(event.id)) {
+        if (!this.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=?").get(event.id)) {
           throw idempotencyConflict("The key belongs to another Agent request");
         }
         return { event, created: false };
       }
-      if (!Number.isSafeInteger(reservedNeurons) || reservedNeurons < 1 || reservedNeurons > 2_000) {
-        throw new ApiError(413, "hosted_request_too_large", "Cloud Agent request exceeds the per-run budget");
-      }
-      const active = this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_jobs WHERE status='running'")
+      const active = this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_runs WHERE status='running'")
         .get() as { count: number };
-      if (active.count >= maxConcurrent) throw new ApiError(429, "hosted_agent_busy", "Cloud Agent is busy; try again later");
+      if (active.count >= limits.maxConcurrent) throw new ApiError(429, "hosted_agent_busy", "Cloud Agent is busy; try again later");
       const day = this.now().slice(0, 10);
-      const usage = this.hostedAgentUsage(actor, defaultUserLimit, globalLimit);
-      if (usage.user_used_neurons + reservedNeurons > usage.user_limit_neurons) {
+      const usage = this.hostedAgentUsage(actor, limits.userDailyRuns, limits.globalDailyRuns);
+      if (usage.user_used_runs >= usage.user_limit_runs) {
         throw new ApiError(429, "hosted_user_quota", "Your Cloud Agent daily allowance is used up");
       }
-      if (usage.global_used_neurons + reservedNeurons > globalLimit) {
+      if (usage.global_used_runs >= limits.globalDailyRuns) {
         throw new ApiError(503, "hosted_global_budget", "Cloud Agent daily capacity is used up");
       }
+      const candidates = endpoints.map((endpoint) => ({ endpoint, usage: this.hostedEndpointUsage(endpoint) }));
+      const selected = candidates.filter(({ endpoint, usage }) => !endpoint.blocked && usage.daily < endpoint.dailyRuns
+        && usage.active < endpoint.maxConcurrent).sort((a, b) => a.usage.active - b.usage.active
+          || a.usage.daily - b.usage.daily)[0]?.endpoint;
+      if (!selected) throw new ApiError(429, "hosted_profile_busy", "The selected cloud model is at capacity; try again later");
       const event = this.appendInsideTransaction(actor.user_id, sessionId, {
         idempotency_key: input.idempotency_key, type: "agent_request", visibility: "session",
         reply_to_event_id: replyId, payload,
       }, null);
-      this.sqlite.prepare(`INSERT INTO hosted_agent_jobs(request_event_id,session_id,user_id,device_id,utc_day,
-        reserved_neurons,status,created_at) VALUES(?,?,?,?,?,?,'running',?)`)
-        .run(event.id, sessionId, actor.user_id, actor.device_id, day, reservedNeurons, this.now());
-      return { event, created: true };
+      this.sqlite.prepare(`INSERT INTO hosted_agent_runs(request_event_id,session_id,user_id,device_id,utc_day,
+        profile_id,endpoint_id,quota_group,provider,model,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'running',?)`)
+        .run(event.id, sessionId, actor.user_id, actor.device_id, day, selected.profileId, selected.id,
+          selected.quotaGroup, selected.provider, selected.model, this.now());
+      return { event, created: true, endpointId: selected.id };
     });
   }
 
-  finishHostedAgentRequest(requestId: string, outcome: { content?: string; inputTokens?: number; outputTokens?: number;
-    meteredNeurons?: number }): CanonicalEvent | undefined {
+  finishHostedAgentRequest(requestId: string, outcome: { content?: string }): CanonicalEvent | undefined {
     return this.transaction(() => {
-      const job = this.sqlite.prepare("SELECT * FROM hosted_agent_jobs WHERE request_event_id=?")
+      const job = this.sqlite.prepare("SELECT * FROM hosted_agent_runs WHERE request_event_id=?")
         .get(requestId) as { request_event_id: string; session_id: string; user_id: string; device_id: string;
-          reserved_neurons: number; status: string } | undefined;
+          provider: string; model: string; status: string } | undefined;
       if (!job || job.status !== "running") return undefined;
       const session = this.requireSession(job.session_id);
       const device = this.sqlite.prepare(`SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked_at IS NULL
@@ -3130,8 +3152,6 @@ export class CollaborationDatabase {
         && (session.mode !== "solo" || session.owner_user_id === job.user_id));
       const content = authorized ? outcome.content : undefined;
       const success = typeof content === "string" && content.trim().length > 0;
-      const neurons = Number.isSafeInteger(outcome.meteredNeurons) && outcome.meteredNeurons! >= 0
-        ? outcome.meteredNeurons! : job.reserved_neurons;
       const event = this.appendInsideTransaction(job.user_id, job.session_id, {
         idempotency_key: `hosted-agent-result-${requestId}`,
         type: "agent_response", visibility: "session", reply_to_event_id: requestId,
@@ -3140,20 +3160,18 @@ export class CollaborationDatabase {
             error: { code: authorized ? "model_unavailable" : "access_changed" } },
       }, success ? {
         user_id: job.user_id, device_id: job.device_id, harness: "opencode",
-        provider: "cloudflare-workers-ai", model: "@cf/qwen/qwen3-30b-a3b-fp8",
+        provider: job.provider, model: job.model,
         local_session_id: "server-contained", capture_fidelity: "canonical_history",
       } : null);
-      this.sqlite.prepare(`UPDATE hosted_agent_jobs SET status=?,finished_at=?,metered_neurons=?,
-        input_tokens=?,output_tokens=? WHERE request_event_id=?`).run(
-        success ? "completed" : "failed", this.now(), neurons,
-        outcome.inputTokens ?? null, outcome.outputTokens ?? null, requestId,
+      this.sqlite.prepare(`UPDATE hosted_agent_runs SET status=?,finished_at=? WHERE request_event_id=?`).run(
+        success ? "completed" : "failed", this.now(), requestId,
       );
       return event;
     });
   }
 
   failInterruptedHostedAgentJobs(): CanonicalEvent[] {
-    const rows = this.sqlite.prepare("SELECT request_event_id FROM hosted_agent_jobs WHERE status='running'")
+    const rows = this.sqlite.prepare("SELECT request_event_id FROM hosted_agent_runs WHERE status='running'")
       .all() as Array<{ request_event_id: string }>;
     return rows.flatMap((row) => {
       const event = this.finishHostedAgentRequest(row.request_event_id, {});

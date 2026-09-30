@@ -31,8 +31,9 @@ writeFileSync(join(control, "prompt.txt"),
 let calls = 0;
 let toolIssued = false;
 const proxy = new HostedModelProxy({
-  accountId: "a".repeat(32), apiToken: "test-only-provider-token", image,
-  defaultUserDailyNeurons: 2000, globalDailyNeurons: 8000, maxConcurrent: 1,
+  endpoint: { id: "smoke", profileId: "default", label: "Smoke model", provider: "cloudflare-workers-ai",
+    model: HOSTED_MODEL, baseUrl: `https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/ai/v1`,
+    apiToken: "test-only-provider-token", quotaGroup: "smoke", dailyRuns: 4, maxConcurrent: 1 },
   fetch: async (_url, init) => {
     calls += 1;
     const body = JSON.parse(String(init?.body));

@@ -4,7 +4,7 @@
 
 **Alpha 8** 新增中英文初次使用引导与隔离练习项目、消息引用和 @成员、会话阅读与定位优化、由本地 Agent 声明的模型选择、可选的 Windows/macOS Codex 启动器原型、批量测试资格码和账号自行注销。限制与验证要求见 [Alpha 8 说明](docs/releases/0.1.0-alpha.8.md)。
 
-**云端体验 Agent 源码预览：**正在准备一个可选的隔离 [OpenCode](https://github.com/anomalyco/opencode) 工作区，供初次使用者编辑代码和运行终端命令。读取项目云端代码及保存到个人分支均须主动选择。管理员接入模型 API 并验证容器前，该功能默认关闭；这不表示 gatherthread.cn 现已开放云端 Agent。见[用户指南](docs/HOSTED_AGENT_GUIDE.zh-CN.md)和[运维指南](docs/HOSTED_AGENT.md)。
+**云端体验 Agent 源码预览：**正在准备一个可选的隔离 [OpenCode](https://github.com/anomalyco/opencode) 工作区，供初次使用者编辑代码和运行终端命令。读取项目云端代码及保存到个人分支均须主动选择。启用后可在工作页及设置中选择与 Codex、DSH 并列的云端 Agent；管理员可配置多个 API 账号提供并行容量。管理员接入模型 API 并验证容器前，该功能默认关闭；这不表示 gatherthread.cn 现已开放云端 Agent。见[用户指南](docs/HOSTED_AGENT_GUIDE.zh-CN.md)和[运维指南](docs/HOSTED_AGENT.md)。
 
 > **Alpha 7：可选的项目代码协作。** 云端 Git 代码检查点支持每位成员独立分支、手动/空闲时自动上传、安全下载、恢复到新目录，以及创建者审核合并。Codex 需显式添加 `--code-sync` 授权，DSH 可在插件设置中逐项目授权并操作。聊天上传与实时上下文注入不受影响，原有本地 Git 分支和暂存区不被改动。所有项目成员均可读取代码分支，Solo 不提供代码隐私隔离。详见[使用流程、边界与测试清单](docs/CODE_SYNC.md)。
 

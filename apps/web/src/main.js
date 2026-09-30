@@ -94,10 +94,12 @@ import {
   projectAgentHarness,
   projectCodexProfile,
   projectDshProfile,
+  projectCloudProfile,
   projectEnabledHarnesses,
   withProjectAgentHarness,
   withProjectCodexProfile,
   withProjectDshProfile,
+  withProjectCloudProfile,
   withProjectEnabledHarnesses,
 } from "./settings.js?v=20260925-4";
 
@@ -197,7 +199,7 @@ const timelineEmpty = element("timeline-empty");
 const messageInput = element("message-input");
 const sendChatButton = element("send-chat-button");
 const sendAgentButton = element("send-agent-button");
-const sendCloudAgentButton = element("send-cloud-agent-button");
+const agentCloudModelSelect = element("agent-cloud-model-select");
 const sendError = element("send-error");
 const composer = element("composer");
 const composerLayoutResizer = element("composer-layout-resizer");
@@ -1202,7 +1204,11 @@ deleteCloudForm.addEventListener("submit", async (event) => {
 
 sendChatButton.addEventListener("click", () => sendMessage("human_chat"));
 sendAgentButton.addEventListener("click", () => sendMessage("agent_request"));
-sendCloudAgentButton.addEventListener("click", () => sendMessage("hosted_agent"));
+agentCloudModelSelect.addEventListener("change", () => {
+  if (!state.project) return;
+  state.settings = settingsStore.set(withProjectCloudProfile(state.settings, state.project.id, agentCloudModelSelect.value));
+  renderComposerPermissions();
+});
 element("settings-button").addEventListener("click", openSettingsDialog);
 element("close-settings-button").addEventListener("click", cancelSettingsDialog);
 element("cancel-settings-button").addEventListener("click", cancelSettingsDialog);
@@ -1706,7 +1712,7 @@ function startDshRuntimePolling() {
   const generation = dshRuntimePollGeneration;
   const poll = async () => {
     if (generation !== dshRuntimePollGeneration || !state.session) return;
-    await refreshDshRuntimes();
+    await Promise.allSettled([refreshDshRuntimes(), refreshHostedAgentStatus()]);
     if (generation !== dshRuntimePollGeneration || !state.session) return;
     dshRuntimePollTimer = setTimeout(poll, mockEnabled ? 350 : 5_000);
     dshRuntimePollTimer.unref?.();
@@ -2822,6 +2828,63 @@ async function pollSnapshotRequests(generation) {
   snapshotPollTimer.unref?.();
 }
 
+async function refreshHostedAgentStatus() {
+  const isCurrent = captureWorkspaceScope();
+  try {
+    const status = await api.getHostedAgentStatus();
+    if (!isCurrent()) return;
+    hostedAgentStatus = status;
+  } catch {
+    if (!isCurrent()) return;
+    hostedAgentStatus = { enabled: false };
+  }
+  renderComposerPermissions();
+  if (settingsDialog.open) {
+    renderCloudModelOptions(element("settings-cloud-model"), element("settings-cloud-model").value);
+    renderCloudStatus();
+  }
+}
+
+function currentCloudProfile(settings = state.settings) {
+  const stored = state.project ? projectCloudProfile(settings, state.project.id) : null;
+  const profiles = hostedAgentStatus.enabled ? hostedAgentStatus.profiles ?? [] : [];
+  return stored ? profiles.find((p) => p.id === stored) : profiles[0];
+}
+
+function cloudStatusText(profile = currentCloudProfile()) {
+  if (!hostedAgentStatus.enabled) return localizer.t("Cloud Agent is not enabled on this server.");
+  if (!profile) return localizer.t("Select an available cloud model.");
+  const reason = { available: "Ready", busy: "Cloud Agent is busy; try again later", cooldown: "Provider is temporarily unavailable", daily_limit: "Cloud Agent daily limit reached" }[profile.status];
+  const remaining = Math.max(0, hostedAgentStatus.user_limit_runs - hostedAgentStatus.user_used_runs);
+  return `${profile.provider} · ${profile.model} · ${localizer.t(reason ?? "Unavailable")} · ${remaining} ${localizer.t("runs left today")}`;
+}
+
+function renderCloudModelOptions(select, stored) {
+  const profiles = hostedAgentStatus.enabled ? hostedAgentStatus.profiles ?? [] : [];
+  const selected = stored || profiles[0]?.id || "";
+  select.replaceChildren();
+  if (!profiles.some((p) => p.id === selected)) {
+    const missing = document.createElement("option");
+    missing.value = selected;
+    missing.textContent = localizer.t("Select an available cloud model.");
+    missing.selected = true;
+    select.append(missing);
+  }
+  for (const profile of profiles) {
+    const option = document.createElement("option");
+    option.value = profile.id;
+    option.textContent = `${profile.label} · ${profile.model}`;
+    option.selected = profile.id === selected;
+    select.append(option);
+  }
+  select.disabled = !profiles.length || !state.project;
+}
+
+function renderCloudStatus() {
+  const profile = hostedAgentStatus.profiles?.find((p) => p.id === element("settings-cloud-model").value);
+  element("settings-cloud-status").textContent = cloudStatusText(profile);
+}
+
 function renderComposerPermissions() {
   if (pendingMessageSend && !pendingMessageSend()) {
     pendingMessageSend.restore();
@@ -2832,22 +2895,14 @@ function renderComposerPermissions() {
   const chat = canAppend({ ...common, kind: "human_chat" });
   const harness = currentProjectHarness();
   const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
-  const agentAllowed = chat.allowed && resolution.runtime !== null;
-  const agentReason = chat.allowed ? resolution.reason : chat.reason;
+  const cloud = harness === "cloud";
+  const cloudProfile = currentCloudProfile();
+  const agentAllowed = chat.allowed && (cloud ? cloudProfile?.available === true : resolution.runtime !== null);
+  const agentReason = chat.allowed ? (cloud ? cloudStatusText(cloudProfile) : resolution.reason) : chat.reason;
   const sending = Boolean(pendingMessageSend?.());
   sendChatButton.disabled = sending || !chat.allowed;
   sendAgentButton.disabled = sending || !agentAllowed;
-  sendCloudAgentButton.disabled = sending || !chat.allowed || !hostedAgentStatus.enabled
-    || hostedAgentStatus.user_used_neurons + 2_000 > hostedAgentStatus.user_limit_neurons
-    || hostedAgentStatus.global_used_neurons + 2_000 > hostedAgentStatus.global_limit_neurons;
-  element("send-cloud-agent-help").hidden = !hostedAgentStatus.enabled;
-  if (hostedAgentStatus.enabled) {
-    const available = Math.min(hostedAgentStatus.user_limit_neurons - hostedAgentStatus.user_used_neurons,
-      hostedAgentStatus.global_limit_neurons - hostedAgentStatus.global_used_neurons);
-    element("cloud-agent-budget").textContent = localizer.t(available < 2_000
-      ? "Cloud Agent daily limit reached"
-      : "OpenCode · Cloudflare Workers AI · limited daily allowance");
-  }
+  element("send-cloud-agent-help").hidden = !cloud;
   messageInput.disabled = !chat.allowed && !agentAllowed;
   element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
   const dshSelection = harness === DSH_HARNESS && resolution.runtime
@@ -2857,7 +2912,7 @@ function renderComposerPermissions() {
     )
     : null;
   element("agent-target-label").textContent = agentAllowed
-    ? harness === DSH_HARNESS
+    ? cloud ? cloudStatusText(cloudProfile) : harness === DSH_HARNESS
       ? `${resolution.runtime.deviceName} · ${dshSelection.provider} · ${dshSelection.model}${dshSelection.reasoningEffort ? ` · ${dshSelection.reasoningEffort}` : ""}`
       : `${resolution.runtime.harness} · ${resolution.runtime.provider} · ${agentModelSelect.value}`
     : agentReason;
@@ -2866,7 +2921,7 @@ function renderComposerPermissions() {
 }
 
 function historySummaryExecutionProfile() {
-  if (!state.session || !state.project) return null;
+  if (!state.session || !state.project || currentProjectHarness() === "cloud") return null;
   const harness = currentProjectHarness();
   const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
   const runtime = resolution.runtime;
@@ -2881,14 +2936,15 @@ function historySummaryExecutionProfile() {
 }
 
 async function sendMessage(kind) {
+  if (kind === "agent_request" && currentProjectHarness() === "cloud") kind = "hosted_agent";
+  const cloudProfile = kind === "hosted_agent" ? currentCloudProfile() : null;
   const content = messageInput.value.trim();
   if (!content || !state.session) {
     sendError.textContent = content ? "Choose a session first." : "Write a message first.";
     messageInput.focus();
     return;
   }
-  const button = kind === "human_chat" ? sendChatButton
-    : kind === "hosted_agent" ? sendCloudAgentButton : sendAgentButton;
+  const button = kind === "human_chat" ? sendChatButton : sendAgentButton;
   if (button.disabled || pendingMessageSend?.()) return;
   sendError.textContent = "";
   if ((kind === "agent_request" || kind === "hosted_agent") && state.settings.composer.confirmAgentRequest
@@ -2917,7 +2973,7 @@ async function sendMessage(kind) {
       const includeCode = element("cloud-agent-include-code").checked;
       element("cloud-agent-include-code").checked = false;
       await api.appendHostedAgentRequest(sessionId, { ...input,
-        includeCode });
+        includeCode, profileId: cloudProfile?.id });
       void api.getHostedAgentStatus().then((status) => {
         if (isCurrent()) { hostedAgentStatus = status; renderComposerPermissions(); }
       }).catch(() => undefined);
@@ -2970,10 +3026,20 @@ async function retryAgentRequest(requestId, button) {
   button.disabled = true;
   sendError.textContent = "";
   try {
-    await api.appendAgentRequest(
-      state.session.id,
-      retryAgentRequestInput(request, createIdempotencyKey("agent_request")),
-    );
+    if (request.payload?.execution_profile?.harness === "opencode") {
+      const profile = hostedAgentStatus.profiles?.find((p) => p.id === request.payload.profile_id);
+      const previous = request.payload.execution_profile;
+      if (!profile || profile.provider !== previous.provider || profile.model !== previous.model) {
+        throw new Error(localizer.t("The original cloud model is no longer available."));
+      }
+      if (request.payload.include_code && !window.confirm(localizer.t("Retry with current GT Cloud code and save changes to your branch?"))) return;
+      await api.appendHostedAgentRequest(state.session.id, { content: eventContent(request),
+        profileId: profile.id, includeCode: request.payload.include_code === true,
+        idempotencyKey: createIdempotencyKey("hosted_agent"), replyTo: request.replyTo });
+      void refreshHostedAgentStatus();
+    } else {
+      await api.appendAgentRequest(state.session.id, retryAgentRequestInput(request, createIdempotencyKey("agent_request")));
+    }
   } catch (error) {
     if (isCurrent()) sendError.textContent = error.message ?? "The event was not accepted.";
   } finally {
@@ -3445,7 +3511,8 @@ function currentProjectHarness(settings = state.settings) {
 }
 
 function currentProjectEnabledHarnesses(settings = state.settings) {
-  return state.project ? projectEnabledHarnesses(settings, state.project.id) : ["codex"];
+  const enabled = state.project ? projectEnabledHarnesses(settings, state.project.id) : ["codex"];
+  return enabled.filter((h) => h !== "cloud" || hostedAgentStatus.enabled || currentProjectHarness(settings) === "cloud");
 }
 
 function renderDshRuntimeOptions(select, settings = state.settings) {
@@ -3539,7 +3606,7 @@ function renderAgentProfileControls() {
   for (const enabledHarness of enabledHarnesses) {
     const option = document.createElement("option");
     option.value = enabledHarness;
-    option.textContent = enabledHarness === DSH_HARNESS ? "DeepSeek Harness" : "Codex";
+    option.textContent = enabledHarness === "cloud" ? localizer.t("Cloud Agent") : enabledHarness === DSH_HARNESS ? "DeepSeek Harness" : "Codex";
     option.selected = enabledHarness === harness;
     agentHarnessSelect.append(option);
   }
@@ -3562,6 +3629,8 @@ function renderAgentProfileControls() {
   agentEffortSelect.disabled = disabled || !hasEffortChoice;
   element("codex-agent-profile-fields").hidden = harness !== "codex";
   element("dsh-agent-profile-fields").hidden = harness !== DSH_HARNESS;
+  element("cloud-agent-profile-fields").hidden = harness !== "cloud";
+  renderCloudModelOptions(agentCloudModelSelect, state.project ? projectCloudProfile(state.settings, state.project.id) : null);
   if (harness !== DSH_HARNESS) element("agent-request-profile").dataset.layout = "codex";
 }
 
@@ -3644,31 +3713,35 @@ function settingsEnabledHarnesses() {
   return [
     ["settings-enabled-codex", "codex"],
     ["settings-enabled-dsh", DSH_HARNESS],
+    ["settings-enabled-cloud", "cloud"],
   ].filter(([id]) => element(id).checked).map(([, harness]) => harness);
 }
 
 function settingsAgentSummary(harness) {
+  if (harness === "cloud") return localizer.t("Cloud Agent runs on this server. Choose a model without connecting a local Agent.");
   return harness === DSH_HARNESS
     ? "DeepSeek Harness supplies this project's runtime and handles new Agent requests by default."
     : "Codex supplies this project's connection command and handles new Agent requests by default.";
 }
 
 function syncSettingsAgentControls({ changedCheckbox } = {}) {
-  const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh")];
+  const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh"), element("settings-enabled-cloud")];
   let enabled = settingsEnabledHarnesses();
   if (enabled.length === 0) {
-    changedCheckbox.checked = true;
+    (changedCheckbox ?? controls[0]).checked = true;
     enabled = settingsEnabledHarnesses();
   }
   for (const control of controls) control.disabled = control.checked && enabled.length === 1;
   const harnessSelect = element("settings-agent-harness");
   for (const option of harnessSelect.options) {
-    if (option.value === "codex" || option.value === DSH_HARNESS) option.disabled = !enabled.includes(option.value);
+    if (["codex", DSH_HARNESS, "cloud"].includes(option.value)) option.disabled = !enabled.includes(option.value);
   }
   if (!enabled.includes(harnessSelect.value)) harnessSelect.value = enabled[0];
   const dsh = harnessSelect.value === DSH_HARNESS;
-  element("settings-codex-agent-fields").hidden = dsh;
+  element("settings-codex-agent-fields").hidden = harnessSelect.value !== "codex";
   element("settings-dsh-agent-fields").hidden = !dsh;
+  element("settings-cloud-agent-fields").hidden = harnessSelect.value !== "cloud";
+  renderCloudStatus();
   element("settings-agent-summary").textContent = settingsAgentSummary(harnessSelect.value);
 }
 
@@ -3699,6 +3772,8 @@ function populateSettingsForm(settings) {
   const enabledHarnesses = new Set(currentProjectEnabledHarnesses(normalized));
   element("settings-enabled-codex").checked = enabledHarnesses.has("codex");
   element("settings-enabled-dsh").checked = enabledHarnesses.has(DSH_HARNESS);
+  element("settings-enabled-cloud").checked = enabledHarnesses.has("cloud");
+  renderCloudModelOptions(element("settings-cloud-model"), state.project ? projectCloudProfile(normalized, state.project.id) : null);
   element("settings-agent-harness").value = harness;
   const profile = currentProjectProfile(normalized);
   renderModelOptions(element("settings-default-model"), profile.model, normalized);
@@ -3748,6 +3823,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
       model: element("settings-default-model").value,
       effort: element("settings-default-effort").value,
     }, advertisedCodexModels());
+    next = withProjectCloudProfile(next, state.project.id, element("settings-cloud-model").value);
     next = withProjectEnabledHarnesses(next, state.project.id, settingsEnabledHarnesses());
     next = withProjectAgentHarness(next, state.project.id, element("settings-agent-harness").value);
     if (element("settings-agent-harness").value === DSH_HARNESS) {
@@ -3772,6 +3848,7 @@ function openSettingsDialog() {
   deviceInput.disabled = true;
   element("settings-device-status").textContent = localizer.t("Loading this device…");
   settingsDialog.showModal();
+  void refreshHostedAgentStatus();
   void codeStorageSettings.load();
   void loadCurrentDeviceSettings();
   void loadAccountDeletionPreview();
@@ -3997,7 +4074,7 @@ function handleNumericPresetSelection(target, { focusCustom = false } = {}) {
 }
 
 function handleSettingsControlInput(event) {
-  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-agent-harness"].includes(event.target.id)) return;
+  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud", "settings-agent-harness"].includes(event.target.id)) return;
   if (handleNumericPresetSelection(event.target)) return;
   if (event.target.classList?.contains("digits-only-input")) {
     const sanitized = digitsOnly(event.target.value);
@@ -4015,16 +4092,17 @@ function handleSettingsControlChange(event) {
   if (event.target.id === "settings-default-model") {
     updateEffortControl(event.target, element("settings-default-effort"), element("settings-default-effort").value, settingsPreview);
   }
-  if (event.target.id === "settings-enabled-codex" || event.target.id === "settings-enabled-dsh") {
+  if (["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud"].includes(event.target.id)) {
     syncSettingsAgentControls({ changedCheckbox: event.target });
   }
   if (event.target.id === "settings-agent-harness") {
-    const selectedCheckbox = event.target.value === DSH_HARNESS
+    const selectedCheckbox = event.target.value === "cloud" ? element("settings-enabled-cloud") : event.target.value === DSH_HARNESS
       ? element("settings-enabled-dsh")
       : element("settings-enabled-codex");
     selectedCheckbox.checked = true;
     syncSettingsAgentControls();
   }
+  if (event.target.id === "settings-cloud-model") renderCloudStatus();
   if (handleNumericPresetSelection(event.target, { focusCustom: true })) return;
   updateSettingsPreviewFromForm();
 }

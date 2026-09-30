@@ -26,6 +26,7 @@ import {
   CreateIdentityInputSchema,
   CreateHistorySummaryInputSchema,
   HostedAgentRequestInputSchema,
+  HostedAgentStatusSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
   CODE_SYNC_MAX_BODY_BYTES,
@@ -757,7 +758,7 @@ export async function startCollaborationServer(
       }
 
       if (request.method === "GET" && url.pathname === "/v1/hosted-agent") {
-        sendJson(response, 200, { data: hostedAgent?.status(actor) ?? { enabled: false } });
+        sendJson(response, 200, { data: HostedAgentStatusSchema.parse(hostedAgent?.status(actor) ?? { enabled: false }) });
         return;
       }
 

@@ -222,3 +222,11 @@ An interface-changing PR must answer:
 6. Which canonical docs, release notes, and ADRs must change?
 
 The project lead must review the PR before a version containing the contract change is merged, tagged, published, or deployed.
+
+## Hosted Agent source-preview contract
+
+`GET /v1/hosted-agent` is authenticated and returns `{ data: { enabled: false } }` when disabled. When enabled, `HostedAgentStatusSchema` defines the exact public profile IDs, labels, providers, models, availability/capacity, UTC-day run usage/limits, capabilities and privacy copy. It never returns endpoint IDs, account grouping, URLs or API credentials.
+
+`POST /v1/sessions/:sessionId/hosted-agent` uses strict `HostedAgentRequestInputSchema`: `profile_id` (legacy default `default`), `content`, `include_code`, `idempotency_key`, and optional `reply_to_event_id`. It enforces live project/session write permissions, reserves user/account/global run capacity atomically with the canonical request, and returns the request/optional response event plus `replayed`. A profile identifies one exact provider/model. Only account capacity within that profile is interchangeable. Empty/unknown profiles, quota exhaustion, busy capacity and unavailable providers fail explicitly. Accepted failures consume their reserved run; same-key retries never double-execute.
+
+Server/Web must upgrade together from the earlier single-provider preview. Persistence migration, old environment aliases and rollback limits are in [HOSTED_AGENT.md](HOSTED_AGENT.md). This surface remains disabled until provider and deployment validation; it does not advertise a currently running public service.

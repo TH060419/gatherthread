@@ -11,7 +11,8 @@ import { redactJson } from "./redaction.js";
 import type { CollaborationService } from "./service.js";
 import type { CodeRepository } from "./code-repository.js";
 
-export const HOSTED_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
+import { HOSTED_MODEL, validateHostedEndpoints, type HostedEndpoint } from "./hosted-agent-pool.js";
+export { HOSTED_MODEL } from "./hosted-agent-pool.js";
 export const HOSTED_HARNESS = "opencode";
 const RUN_NEURONS = 2_000;
 const MAX_MODEL_CALLS = 8;
@@ -23,11 +24,10 @@ const MAX_WORKSPACE_BYTES = 512_000;
 const RUN_TIMEOUT_MS = 120_000;
 
 export interface HostedAgentOptions {
-  accountId: string;
-  apiToken: string;
+  endpoints: HostedEndpoint[];
   image: string;
-  defaultUserDailyNeurons: number;
-  globalDailyNeurons: number;
+  userDailyRuns: number;
+  globalDailyRuns: number;
   maxConcurrent: number;
   fetch?: typeof globalThis.fetch;
   runContainer?: (args: string[], timeoutMs: number) => Promise<string>;
@@ -81,7 +81,8 @@ export class HostedModelProxy {
   private calls = 0;
   private spent = 0;
   readonly server = createServer((request, response) => void this.forward(request, response));
-  constructor(private readonly options: HostedAgentOptions) {}
+  constructor(private readonly options: { endpoint: HostedEndpoint; fetch?: typeof globalThis.fetch;
+    onUnavailable?: (retryAfterMs: number) => void }) {}
 
   async listen(path: string): Promise<void> {
     await new Promise<void>((resolve, reject) => {
@@ -98,27 +99,36 @@ export class HostedModelProxy {
 
   private async forward(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const fail = (code: number) => { if (!response.headersSent) response.writeHead(code).end(); else response.destroy(); };
+    let upstreamAttempted = false;
     try {
       if (request.method !== "POST" || request.url !== "/v1/chat/completions"
         || request.headers["content-type"]?.split(";")[0] !== "application/json") return fail(404);
       const bytes = await readBody(request, MAX_MODEL_BODY_BYTES);
       const body = JSON.parse(bytes.toString("utf8")) as Record<string, unknown>;
-      if (body.model !== HOSTED_MODEL || !Array.isArray(body.messages) || body.messages.length < 1
+      if (body.model !== this.options.endpoint.model || !Array.isArray(body.messages) || body.messages.length < 1
         || body.max_tokens !== undefined && (!Number.isSafeInteger(body.max_tokens)
           || (body.max_tokens as number) < 1 || (body.max_tokens as number) > MAX_OUTPUT_TOKENS)) return fail(400);
       const charge = costUpperBound(bytes.length);
-      if (this.calls >= MAX_MODEL_CALLS || this.spent + charge > RUN_NEURONS) return fail(429);
+      if (this.calls >= MAX_MODEL_CALLS || this.options.endpoint.provider === "cloudflare-workers-ai" && this.spent + charge > RUN_NEURONS) return fail(429);
       this.calls += 1;
       this.spent += charge;
       delete body.max_completion_tokens;
       body.max_tokens = MAX_OUTPUT_TOKENS;
       body.n = 1;
+      if (this.options.endpoint.provider === "deepseek") body.thinking = { type: "disabled" };
+      upstreamAttempted = true;
       const upstream = await (this.options.fetch ?? globalThis.fetch)(
-        `https://api.cloudflare.com/client/v4/accounts/${this.options.accountId}/ai/v1/chat/completions`, {
+        `${this.options.endpoint.baseUrl}/chat/completions`, {
           method: "POST", redirect: "error", signal: AbortSignal.timeout(30_000),
-          headers: { Authorization: `Bearer ${this.options.apiToken}`, "Content-Type": "application/json" },
+          headers: { Authorization: `Bearer ${this.options.endpoint.apiToken}`, "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+      if (upstream.status === 429 || upstream.status >= 500 || upstream.status === 401 || upstream.status === 403) {
+        const retry = upstream.headers.get("retry-after");
+        const seconds = retry && /^\d+$/u.test(retry) ? Number(retry) : 60;
+        this.options.onUnavailable?.(Math.max(30_000, Math.min(300_000, seconds * 1000)));
+      }
+      if (!upstream.ok) return fail(upstream.status);
       response.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/json" });
       if (!upstream.body) { response.end(); return; }
       let sent = 0;
@@ -128,7 +138,7 @@ export class HostedModelProxy {
         response.write(chunk);
       }
       response.end();
-    } catch { fail(502); }
+    } catch { if (upstreamAttempted) this.options.onUnavailable?.(30_000); fail(502); }
   }
 }
 
@@ -147,15 +157,16 @@ function writeSnapshot(root: string, files: CodeFile[]): void {
 }
 
 export class HostedAgent {
+  private readonly cooldowns = new Map<string, number>();
   constructor(private readonly service: CollaborationService, private readonly codeRepository: CodeRepository,
     private readonly options: HostedAgentOptions) {
-    if (!/^[a-f0-9]{32}$/iu.test(options.accountId) || !options.apiToken || /[\r\n]/u.test(options.apiToken)
-      || !/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(options.image)) {
-      throw new Error("Cloud Agent needs a Workers AI credential and digest-pinned container image");
+    validateHostedEndpoints(options.endpoints);
+    if (!/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(options.image)) {
+      throw new Error("Cloud Agent needs a digest-pinned container image");
     }
     for (const [name, value, maximum] of [
-      ["defaultUserDailyNeurons", options.defaultUserDailyNeurons, 10_000],
-      ["globalDailyNeurons", options.globalDailyNeurons, 9_000],
+      ["userDailyRuns", options.userDailyRuns, 10_000],
+      ["globalDailyRuns", options.globalDailyRuns, 100_000],
       ["maxConcurrent", options.maxConcurrent, 8],
     ] as const) {
       if (!Number.isSafeInteger(value) || value < 1 || value > maximum) throw new Error(`${name} is out of range`);
@@ -163,11 +174,28 @@ export class HostedAgent {
   }
 
   status(actor: Actor) {
-    return { enabled: true, harness: HOSTED_HARNESS, model: HOSTED_MODEL,
-      ...this.service.database.hostedAgentUsage(actor, this.options.defaultUserDailyNeurons,
-        this.options.globalDailyNeurons),
+    const usage = this.service.database.hostedAgentUsage(actor, this.options.userDailyRuns, this.options.globalDailyRuns);
+    const profiles = [...new Set(this.options.endpoints.map((e) => e.profileId))].map((id) => {
+      const endpoints = this.options.endpoints.filter((e) => e.profileId === id);
+      const first = endpoints[0]!;
+      const groups = [...new Map(endpoints.map((e) => [e.quotaGroup, e])).values()];
+      const capacities = groups.map((endpoint) => {
+        const used = this.service.database.hostedEndpointUsage(endpoint);
+        return { remaining: Math.max(0, endpoint.dailyRuns - used.daily),
+          slots: Math.max(0, endpoint.maxConcurrent - used.active),
+          cooling: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() };
+      });
+      const capacity = Math.min(Math.max(0, this.options.maxConcurrent - this.service.database.hostedActiveRuns()),
+        capacities.reduce((n, c) => n + (c.cooling ? 0 : Math.min(c.remaining, c.slots)), 0));
+      const dailyAvailable = usage.user_used_runs < usage.user_limit_runs && usage.global_used_runs < usage.global_limit_runs;
+      const status = !dailyAvailable || capacities.every((c) => !c.remaining) ? "daily_limit"
+        : capacity > 0 ? "available" : capacities.some((c) => c.cooling) ? "cooldown" : "busy";
+      return { id, label: first.label, provider: first.provider, model: first.model,
+        available: status === "available", capacity, status };
+    });
+    return { enabled: true, harness: HOSTED_HARNESS, ...usage, profiles,
       capabilities: ["read_code", "edit_code", "terminal", "run_tests"],
-      privacy: "Session text and opted-in cloud code are sent to Cloudflare Workers AI for inference. Code runs in a short-lived container without general network access." };
+      privacy: "Session text and opted-in GT Cloud code are sent to the selected model provider. Code runs in an isolated temporary container." };
   }
 
   private assertDockerReady(): void {
@@ -178,6 +206,8 @@ export class HostedAgent {
   }
 
   async request(actor: Actor, sessionId: string, input: HostedAgentRequestInput) {
+    const endpoints = this.options.endpoints.filter((e) => e.profileId === input.profile_id);
+    if (!endpoints.length) throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
     this.assertDockerReady();
     const session = this.service.database.requireSession(sessionId);
     const context = this.service.readHistoryContext(actor, sessionId);
@@ -194,9 +224,10 @@ export class HostedAgent {
         throw new ApiError(413, "hosted_code_too_large", "Cloud Agent accepts at most 100 files and 500 KiB of code");
       }
     }
-    const reserved = this.service.reserveHostedAgentRequest(actor, sessionId, input, RUN_NEURONS,
-      this.options.defaultUserDailyNeurons, this.options.globalDailyNeurons, this.options.maxConcurrent);
+    const reserved = this.service.reserveHostedAgentRequest(actor, sessionId, input,
+      endpoints.map((endpoint) => ({ ...endpoint, blocked: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() })), this.options);
     if (!reserved.created) return { request_event: reserved.event, replayed: true };
+    const endpoint = endpoints.find((e) => e.id === reserved.endpointId)!;
     let content = "";
     let root: string;
     try { root = mkdtempSync(join(tmpdir(), "gt-hosted-")); }
@@ -208,19 +239,20 @@ export class HostedAgent {
     const control = join(root, "control");
     const socket = join(root, "model.sock");
     const name = `gt-hosted-${randomBytes(8).toString("hex")}`;
-    const proxy = new HostedModelProxy(this.options);
+    const proxy = new HostedModelProxy({ endpoint, ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+      onUnavailable: (ms) => this.cooldowns.set(endpoint.quotaGroup, Date.now() + ms) });
     try {
       mkdirSync(workspace, { mode: 0o777 });
       mkdirSync(control, { mode: 0o755 });
       if (branch) writeSnapshot(workspace, branch.files);
       chmodSync(workspace, 0o777);
       const config = {
-        model: `hosted/${HOSTED_MODEL}`,
-        small_model: `hosted/${HOSTED_MODEL}`,
+        model: `hosted/${endpoint.model}`,
+        small_model: `hosted/${endpoint.model}`,
         share: "disabled",
         provider: { hosted: { npm: "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
           options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "local" },
-          models: { [HOSTED_MODEL]: { name: "Qwen3 30B", limit: { context: 32_000, output: MAX_OUTPUT_TOKENS } } } } },
+          models: { [endpoint.model]: { name: endpoint.label, limit: { context: 32_000, output: MAX_OUTPUT_TOKENS } } } } },
         permission: { read: "allow", edit: "allow", bash: "allow", task: "deny", external_directory: "allow",
           webfetch: "deny", websearch: "deny" },
       };

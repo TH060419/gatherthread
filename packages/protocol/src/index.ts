@@ -195,12 +195,28 @@ export type AppendEventInput = z.infer<typeof AppendEventInputSchema>;
 
 /** A separate, explicit action from both human chat and local Agent requests. */
 export const HostedAgentRequestInputSchema = z.object({
+  profile_id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/u).default("default"),
   content: z.string().trim().min(1).max(6000),
   include_code: z.boolean().default(false),
   idempotency_key: IdempotencyKeySchema,
   reply_to_event_id: IdSchema.nullable().optional(),
 }).strict();
 export type HostedAgentRequestInput = z.infer<typeof HostedAgentRequestInputSchema>;
+
+export const HostedAgentStatusSchema = z.discriminatedUnion("enabled", [
+  z.object({ enabled: z.literal(false) }).strict(),
+  z.object({
+    enabled: z.literal(true), harness: z.literal("opencode"),
+    utc_day: z.string(), user_limit_runs: z.number().int().nonnegative(),
+    user_used_runs: z.number().int().nonnegative(), global_limit_runs: z.number().int().nonnegative(),
+    global_used_runs: z.number().int().nonnegative(),
+    profiles: z.array(z.object({ id: z.string(), label: z.string(), provider: z.string(), model: z.string(),
+      available: z.boolean(), capacity: z.number().int().nonnegative(),
+      status: z.enum(["available", "busy", "daily_limit", "cooldown"]),
+    }).strict()),
+    capabilities: z.array(z.string()), privacy: z.string(),
+  }).strict(),
+]);
 
 export const SingleLineTitleSchema = z.string()
   .regex(/^[^\u0000-\u001f\u007f-\u009f]*$/u, "Title must not contain control characters")
