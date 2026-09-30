@@ -20,7 +20,9 @@ installed and signed in. The manual terminal connection remains supported.
    alter an existing plugin installation without this explicit action.
 3. On `https://gatherthread.cn`, choose the project's **Connect Codex** →
    **Open Launcher**. Safari or Chrome may ask whether to open the local app.
-   Confirm the project and settings, enter your existing device token in the
+   The current project ID and settings fill automatically. Optionally select
+   an existing local working directory; leave it blank to use the connector's
+   default per-project directory. Enter your existing device token in the
    local window, and start the connector. The token never enters the URL or
    command arguments. Keep the app running; its Dock icon restores the window
    after closing it. Use **Stop connection** before quitting.

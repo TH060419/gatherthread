@@ -200,6 +200,8 @@ The optional Windows and macOS Launchers use `gatherthread-connect://connect?v=1
 
 The URI carries no device token, browser cookie, or other credential. It opens a local form; the user enters the existing device token there. No cloud pairing or state migration occurs. Invalid links show a local error and do not start a connector. Manual commands remain available if the Launcher is absent or the link is refused. Changing this URI requires a new version and tests on both OS handlers; a v1 handler intentionally rejects a link without `v=1`. The optional installer/`.app` is not yet Developer ID signed and notarized for public distribution; see [ADR-0034](adr/0034-optional-local-codex-launchers.md).
 
+The `project` in a valid link fills the local Launcher form for the selected Web project; a Launcher opened directly still allows manual project entry. Workspace selection remains local and is never a URI parameter. With no local directory selected, the Launchers pass `--create-workspace` to reuse/create the connector's default per-project directory. Selecting an existing absolute directory passes `--workspace <path>` instead; invalid or missing directories are refused before launch, and the connector validates the directory again. The two workspace flags are mutually exclusive.
+
 Web HTML IDs, form names, accessible labels, dialog relationships, and the separate chat/Agent actions are integration points between static markup, JavaScript, tests, assistive technology, and browser automation.
 
 - `/` is the product home and `/app/` is the authenticated application. Root operational links containing `?api=...`, `?mock=1`, `#project`, `#session`, `#dsh-pair`, `#settings-*`, or `#main-content` must preserve their query and fragment when forwarded to `/app/`.

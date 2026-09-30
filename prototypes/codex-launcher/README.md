@@ -22,9 +22,12 @@ already be installed and signed in.
    available to Codex Desktop for its MCP and Hooks. If that is unavailable,
    the optional bundled plugin uses the Launcher's private Node executable;
    review its MCP and Hooks in Codex and restart Codex after installation.
-3. The Launcher always connects to `https://gatherthread.cn`. Enter the project
-   ID shown on the website (in the form `project-***`), current model/context
-   settings, and existing device token, then
+3. From the project's Web **Connect Codex** dialog, choose **Open Launcher**;
+   the current project ID and connection settings fill automatically. If you
+   open the Launcher directly, enter the Web project ID (`project-***`). The
+   Launcher always connects to `https://gatherthread.cn`. Optionally choose an
+   existing local working directory with **Browse**; leave it blank to use the
+   connector's default per-project directory. Enter the existing device token, then
    press **Start connection**. The token is passed only to the connector child
    process, not placed in a URL or log. Closing the window minimizes it to the
    taskbar while the connector runs; restore it to stop the connection.
@@ -45,9 +48,8 @@ gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=
 ```
 
 The URL Scheme carries no credential. The current server has no Codex browser
-pairing endpoint, so the GUI still requires the device token. The updated web
-source emits the deep link; the cloud page will continue to show only manual
-commands until that web change is deployed.
+pairing endpoint, so the GUI still requires the device token. The Web launcher
+action emits the selected project's deep link; manual commands remain available.
 
 ## Build and verification
 

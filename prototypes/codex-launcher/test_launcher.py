@@ -12,6 +12,24 @@ SPEC.loader.exec_module(launcher)
 
 
 class NativeCodexCommandTests(unittest.TestCase):
+    def test_workspace_selection_uses_existing_absolute_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertIsNone(launcher.selected_workspace(""))
+            self.assertEqual(launcher.selected_workspace(directory), str(Path(directory).resolve()))
+            for invalid in ("relative-directory", str(Path(directory) / "missing"), __file__):
+                with self.subTest(path=invalid), self.assertRaises(ValueError):
+                    launcher.selected_workspace(invalid)
+
+    def test_connector_args_select_exactly_one_workspace_mode(self):
+        inputs = (Path("node"), Path("connector"), launcher.SERVER_ORIGIN,
+                  "project-example", "gpt-5.6-sol", 65536, "first-connect", "codex")
+        default = launcher.connector_args(*inputs)
+        custom = launcher.connector_args(*inputs, workspace="C:\\Codex Projects\\Example")
+        self.assertIn("--create-workspace", default)
+        self.assertNotIn("--workspace", default)
+        self.assertNotIn("--create-workspace", custom)
+        self.assertEqual(custom[custom.index("--workspace") + 1], "C:\\Codex Projects\\Example")
+
     def test_hook_command_rejects_windows_shell_expansion_in_install_path(self):
         self.assertIn('"${PLUGIN_ROOT}/scripts/hook-forwarder.mjs"', launcher.hook_node_command(Path('C:/Users/Test/node.exe')))
         for path in ('C:/Users/%USERNAME%/node.exe', 'C:/Users/!NAME!/node.exe', 'C:/Users/$(whoami)/node.exe', 'C:/Users/Bad"Name/node.exe'):
