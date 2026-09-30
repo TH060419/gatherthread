@@ -3769,7 +3769,8 @@ function populateSettingsForm(settings) {
   element("settings-notify-agent").checked = normalized.notifications.agentCompleted;
   element("settings-notify-connection").checked = normalized.notifications.connectionLost;
   const harness = currentProjectHarness(normalized);
-  const enabledHarnesses = new Set(currentProjectEnabledHarnesses(normalized));
+  const enabledHarnesses = new Set(state.project
+    ? projectEnabledHarnesses(normalized, state.project.id) : normalized.agents.enabledHarnesses);
   element("settings-enabled-codex").checked = enabledHarnesses.has("codex");
   element("settings-enabled-dsh").checked = enabledHarnesses.has(DSH_HARNESS);
   element("settings-enabled-cloud").checked = enabledHarnesses.has("cloud");
