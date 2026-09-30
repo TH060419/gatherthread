@@ -1,7 +1,7 @@
 // Real Docker/OpenCode/npm/test/build execution. All GitHub/model/registry responses are local fixtures.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -12,6 +12,30 @@ const inspected = spawnSync('docker', ['image', 'inspect', '--format', '{{.Id}}'
 assert.equal(inspected.status, 0);
 const directory = mkdtempSync(join(tmpdir(), 'gt-repository-smoke-'));
 let calls = 0, tarballCalls = 0, issued = false, observedChecks = false;
+// This smoke uses only fixtures. Production keeps raw container output private.
+async function runFixtureDocker(args) {
+  const name = args[args.indexOf('--name') + 1];
+  let timer;
+  try {
+    return await new Promise((resolve, reject) => {
+      const child = spawn('docker', [...args.slice(0, -1), '-e', 'GT_HOSTED_SMOKE_DEBUG=1', args.at(-1)],
+        { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stdout = '', stderr = '', size = 0;
+      timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('repository smoke timeout')); }, 90_000);
+      child.stdout.on('data', (chunk) => {
+        size += chunk.length;
+        if (size > 12 * 1024 * 1024) child.kill('SIGKILL'); else stdout += chunk.toString();
+      });
+      child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-8000); });
+      child.once('error', reject);
+      child.once('close', (code) => code === 0 && size <= 12 * 1024 * 1024 ? resolve(stdout)
+        : reject(new Error(`repository container exited ${code}: ${stderr}`)));
+    });
+  } finally {
+    clearTimeout(timer);
+    spawnSync('docker', ['rm', '-f', name], { timeout: 5000, stdio: 'ignore' });
+  }
+}
 try {
   const packageDir = join(directory, 'package'); mkdirSync(packageDir);
   writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: 'gt-smoke-dependency', version: '1.0.0', main: 'index.js' }));
@@ -43,7 +67,7 @@ try {
     const chunk = (delta, finish_reason = null) => JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: endpoint.model, choices: [{ index: 0, delta, finish_reason }] });
     return new Response(`data: ${chunk(delta)}\n\ndata: ${chunk({}, useTool ? 'tool_calls' : 'stop')}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
   };
-  const runner = new HostedRepositoryRunner({ endpoints: [endpoint], image: inspected.stdout.trim(), userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, fetch: fetcher });
+  const runner = new HostedRepositoryRunner({ endpoints: [endpoint], image: inspected.stdout.trim(), userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, fetch: fetcher, runContainer: runFixtureDocker });
   const result = await runner.run(files, 'Update value.cjs to export two; run npm test and npm run build.', endpoint, () => {});
   assert.ok(issued && calls >= 2 && tarballCalls > 0 && observedChecks);
   assert.equal(Buffer.from(result.files.find((f) => f.path === 'value.cjs').content_base64, 'base64').toString(), 'module.exports = 2;\n');

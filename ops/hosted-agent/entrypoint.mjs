@@ -5,8 +5,9 @@ import { publicAnswer } from "./public-answer.mjs";
 import { prepareNpm } from "./npm-setup.mjs";
 
 const INPUT = "/input";
-const WORKSPACE = "/workspace";
 const repository = process.env.GT_HOSTED_REPOSITORY === "1";
+// The tmpfs root belongs to root; Git needs a project directory owned by the Agent.
+const WORKSPACE = repository ? "/workspace/project" : "/workspace";
 const MAX_FILES = repository ? 1000 : 100;
 const MAX_BYTES = repository ? 8 * 1024 * 1024 : 512_000;
 const excluded = new Set(["node_modules", ".git", "dist", "coverage", ".next", ".turbo", ".npmrc"]);
@@ -29,6 +30,7 @@ function walk(root, prefix = "", budget = { entries: 0 }, depth = 0) {
 }
 
 function initialFiles() {
+  mkdirSync(WORKSPACE, { recursive: true });
   for (const file of walk(INPUT)) {
     const destination = join(WORKSPACE, file.path);
     mkdirSync(dirname(destination), { recursive: true });
