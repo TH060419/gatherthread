@@ -1,4 +1,10 @@
 const ZH_CN = Object.freeze({
+  "Choose file storage": "选择文件存储方式",
+  "GitHub account and saved tasks": "GitHub 账号与已有任务",
+  "Use your own GitHub repository for files, branches and pull requests. These options are independent; connecting GitHub does not migrate or delete GT Cloud files.": "使用自己的 GitHub 仓库管理文件、分支和 PR。两种存储方式相互独立；连接 GitHub 不会迁移或删除 GT Cloud 文件。",
+  "Cloud Agent · coming later": "云端 Agent · 后续开放",
+  "Choose the Agents available in this project. Cloud Agent will open in a later release.": "选择本项目可用的 Agent。云端 Agent 将在后续版本开放。",
+  "Connect your GitHub account and choose a repository. Existing task changes and draft pull requests remain available. New cloud Agent tasks will open in a later release.": "连接你的 GitHub 账号并选择仓库。已有任务改动和草稿 PR 仍可查看和处理。新建云端 Agent 任务将在后续版本开放。",
   "Cloud workspace": "云端工作区",
   "GT Cloud trial": "GT Cloud 试用",
   "GitHub repository": "GitHub 仓库",

@@ -192,6 +192,8 @@ The published MCP surface is intentionally narrower than the internal collaborat
 
 ## Web presentation boundary
 
+The Cloud Git dialog keeps `project-code-button` and `project-code-dialog` as its single entry/container. `code-provider-gt-cloud` and `code-provider-github` select peer views with `aria-pressed` and `aria-controls`; switching views has no repository mutation. Existing `github-code-*` local controls are retained. Private `cloud-github-*` account/task controls are inline in the GitHub view; the preview's separate `cloud-github-dialog`, `cloud-github-open`, `settings-cloud-github-open` and close button are removed with their bindings. The public Cloud Agent entry is held independently of these GitHub controls, as specified in [Product specification](PRODUCT_SPEC.md).
+
 ### Windows/macOS Codex Launcher URI v1
 
 The optional Windows and macOS Launchers use `gatherthread-connect://connect?v=1&origin=...&project=...&model=...&context_window_tokens=...&visible_history_sync=...`. Web offers this action only when the browser reports Windows or macOS and `location.origin` is exactly `https://gatherthread.cn`. Other platforms and origins retain the manual terminal commands. The Windows handler is registered per user by the installer; macOS registers the `.app` through Launch Services when it is opened. The browser cannot assume either is installed.

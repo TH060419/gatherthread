@@ -1,8 +1,8 @@
 # 试用云端 Agent
 
-云端体验 Agent 仍在预览准备中。服务器管理员完成模型 API 接入、隔离容器测试并启用服务后，项目会话的 Agent 选择器才会出现与 Codex、DeepSeek Harness 并列的 **云端 Agent**。选项未出现时，当前服务器尚未开放这项功能；你仍可连接自己的本地 Codex 或 DeepSeek Harness。
+云端 Agent 将在后续版本开放。设置中的勾选项和 Agent 选择入口暂时不可用，即使服务器已经配置模型 API 也不会开放此入口。现在可继续连接自己的 Codex 或 DeepSeek Harness。GitHub 连接保留在 **云端 Git → GitHub** 中，与 **GT Cloud** 并列。
 
-## 第一次使用
+## 功能开放后的第一次使用
 
 1. 登录 GatherThread，进入一个允许你发言的项目会话。访者只能阅读，不能发起 Agent 请求。
 2. 在 Agent 选择器选择 **云端 Agent** 和云端模型，也可到 **设置 → 默认 Agent** 中选择。然后在消息框写下一个明确的小任务，例如“新建一个 `hello.txt` 文件，写入一行问候语，然后用终端确认文件内容”。

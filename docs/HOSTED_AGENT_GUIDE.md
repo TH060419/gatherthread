@@ -1,8 +1,8 @@
 # Try the cloud Agent
 
-The cloud trial Agent is being prepared for preview. **Cloud Agent** appears alongside Codex and DeepSeek Harness in the Agent selector only after an operator connects a model API, validates the isolated container, and enables the service. If the option is absent, this server has not enabled the feature; you can still connect a local Codex or DeepSeek Harness.
+Cloud Agent is reserved for a later release. Its Settings checkbox and Agent option are unavailable, including on a server with a configured provider. Use a local Codex or DeepSeek Harness for now. GitHub connections remain available under **Cloud Git → GitHub**, beside **GT Cloud**.
 
-## First run
+## First run after the feature opens
 
 1. Sign in and open a project session where you may write. Viewers cannot start Agent requests.
 2. Choose **Cloud Agent** and a cloud model in the Agent selector (also available in **Settings → Default Agent**). Enter a small, clear task, such as “Create `hello.txt` with one greeting and check its content in the terminal.”

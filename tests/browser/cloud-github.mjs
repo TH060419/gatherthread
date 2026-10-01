@@ -58,31 +58,66 @@ try {
     });
     await page.goto(`${origin}/app/`); await page.locator('#workspace').waitFor({ state: 'visible' });
     for (const dialog of await page.locator('dialog[open]').all()) { const button = dialog.locator('button').last(); await button.click(); }
-    await page.locator('#agent-harness-select').selectOption('cloud');
-    await page.locator('#cloud-github-open').click();
+    await page.locator('#project-code-button').click();
+    await page.locator('#code-enable-section').waitFor({ state: 'visible' });
+    const gtCloudStatus = await page.locator('#code-repository-status').textContent();
+    await page.locator('#code-provider-github').click();
+    assert.equal(await page.locator('#code-provider-github').getAttribute('aria-pressed'), 'true');
+    await page.locator('#github-code-repository').fill('owner/device-fixture');
+    await page.locator('#github-code-save').click();
+    await page.locator('#code-confirm-accept').click();
+    await page.locator('#github-code-files').waitFor({ state: 'visible' });
+    assert.equal(await page.locator('#github-code-files').getAttribute('href'), 'https://github.com/owner/device-fixture/tree/main');
+    await page.locator('#code-provider-gt-cloud').click();
+    assert.equal(await page.locator('#code-repository-status').textContent(), gtCloudStatus);
+    await page.locator('#code-provider-github').click();
     await page.locator('#cloud-github-authorize').click();
     await page.waitForURL(`${origin}/app/`);
     await page.locator('#workspace').waitFor({ state: 'visible' });
     for (const dialog of await page.locator('dialog[open]').all()) await dialog.locator('button').last().click();
-    await page.locator('#agent-harness-select').selectOption('cloud');
-    await page.locator('#cloud-github-open').click(); await page.locator('#cloud-github-repository-form').waitFor({ state: 'visible' });
+    await page.locator('#project-code-button').click();
+    await page.locator('#code-provider-github').click(); await page.locator('#cloud-github-repository-form').waitFor({ state: 'visible' });
     await page.locator('#cloud-github-repository').fill('owner/fixture');
     await page.locator('#cloud-github-repository-form button[type=submit]').click();
     await page.locator('#cloud-github-status').filter({ hasText: 'owner/fixture' }).waitFor();
-    await page.locator('#cloud-github-close').click();
-    await page.locator('#cloud-agent-source').selectOption('github');
-    assert.equal(await page.locator('#cloud-agent-include-code').isVisible(), false);
-    await page.locator('#message-input').fill('Change value to two and run the tests/build'); await page.locator('#send-agent-button').click();
+    assert.equal(await page.locator('#cloud-github-new').isDisabled(), true);
+    assert.equal(await page.locator('#cloud-github-continue').isDisabled(), true);
+    assert.equal(await page.locator('#cloud-github-dialog').count(), 0);
+    assert.equal(await page.locator('#cloud-github-open').count(), 0);
+    const beforeRuns = runs;
+    await page.locator('#close-project-code-button').click();
+    await page.locator('#settings-button').click();
+    assert.equal(await page.locator('#settings-enabled-cloud').isDisabled(), true);
+    assert.equal(await page.locator('#settings-agent-harness option[value=cloud]').evaluate((option) => option.disabled), true);
+    await page.locator('#cancel-settings-button').click();
+    // An earlier cloud selection is retained without a silent fallback or a model call.
+    await page.evaluate((locale) => {
+      localStorage.setItem('gatherthread.settings.v1', JSON.stringify({ version: 13,
+        general: { locale }, agents: { activeHarness: 'cloud', enabledHarnesses: ['codex', 'cloud'] } }));
+    }, locale);
+    await page.reload(); await page.locator('#workspace').waitFor({ state: 'visible' });
+    await page.waitForFunction(() => document.getElementById('agent-harness-select').value === 'cloud');
+    assert.equal(await page.locator('#agent-harness-select').inputValue(), 'cloud');
+    assert.equal(await page.locator('#agent-harness-select option[value=cloud]').evaluate((option) => option.disabled), true);
+    assert.equal(await page.locator('#send-agent-button').isDisabled(), true);
+    assert.equal(await page.locator('#send-cloud-agent-help').isVisible(), false);
+    assert.match(await page.locator('#agent-target-label').textContent(), locale === 'en' ? /coming later/ : /后续开放/);
+    await page.locator('#message-input').fill('Must not start a cloud run');
+    await page.locator('#send-agent-button').evaluate((button) => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+    assert.equal(runs, beforeRuns);
+    await page.locator('#agent-harness-select').selectOption('codex');
+    // Seed an existing completed task through the fixture API; the held UI cannot start it.
+    const seeded = await page.request.post(`${origin}/v1/sessions/browser-github-session/hosted-github-tasks`, {
+      headers: { origin }, data: { content: 'Fixture task to review', profile_id: 'coding', idempotency_key: `fixture-${engine}-${locale}` }
+    });
+    assert.equal(seeded.status(), 202);
+    await page.locator('#project-code-button').click();
+    await page.locator('#code-provider-github').click();
     await page.getByText('Fixture: source changed; test and build checked.', { exact: false }).last().waitFor();
-    await page.locator('#cloud-github-open').click();
     await page.locator('#cloud-github-task-list button').first().click();
     await page.locator('#cloud-github-changes summary').filter({ hasText: 'index.ts' }).waitFor();
     await page.locator('#cloud-github-changes summary').first().click();
-    await page.locator('#cloud-github-continue').click();
-    assert.equal(await page.locator('#agent-harness-select').inputValue(), 'cloud');
-    assert.equal(await page.locator('#agent-cloud-model-select').inputValue(), 'coding');
-    assert.equal(await page.locator('#cloud-agent-source').inputValue(), 'github');
-    await page.locator('#cloud-github-open').click();
+    assert.equal(await page.locator('#cloud-github-continue').isDisabled(), true);
     await page.locator('#cloud-github-pr-title').fill('Reviewed fixture changes');
     await page.locator('#cloud-github-pr-body').fill('Fixture review');
     const previousPrs = prCount;
@@ -90,12 +125,13 @@ try {
     assert.equal(prCount, previousPrs + 1);
     assert.equal(await page.locator('#cloud-github-pr-link').getAttribute('href'), 'https://github.com/owner/fixture/pull/1');
     await page.setViewportSize({ width: 390, height: 844 });
-    assert.ok(await page.locator('#cloud-github-close').isVisible());
+    assert.ok(await page.locator('#close-project-code-button').isVisible());
     await page.screenshot({ path: join(tmpdir(), `gt-cloud-github-${engine}-${locale}.png`) });
-    assert.ok(await page.locator('#cloud-github-dialog').evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth + 2));
-    await page.keyboard.press('Escape'); assert.equal(await page.locator('#cloud-github-dialog').isVisible(), false);
+    assert.ok(await page.locator('#project-code-dialog').evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth + 2));
+    await page.keyboard.press('Escape'); assert.equal(await page.locator('#project-code-dialog').isVisible(), false);
+    assert.equal(await page.locator('#project-code-button').evaluate((button) => document.activeElement === button), true);
     assert.deepEqual(errors, []); await page.close();
-    process.stdout.write(`PASS ${engine} ${locale}: OAuth callback, repository bind, composer task, diff and explicit draft PR; mobile and Escape.\n`);
+    process.stdout.write(`PASS ${engine} ${locale}: single Cloud Git panel, held Agent entry, OAuth callback, repository bind, saved diff and explicit draft PR; mobile and Escape.\n`);
    }
   } finally { await browser.close(); }
  }

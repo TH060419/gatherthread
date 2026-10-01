@@ -1,7 +1,7 @@
 /** Private cloud repository tasks. No provider or GitHub credentials enter this module. */
-export function mountCloudGithub({ api: getApi, context, t, document: doc = document }) {
+export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false, openSurface = () => {}, document: doc = document }) {
   const el = (id) => doc.getElementById(id);
-  const dialog = el("cloud-github-dialog");
+  const dialog = el("project-code-dialog");
   let generation = 0, selected = null, taskRows = [], key = "", pending = false, bindingKey;
   const message = (value) => { el("cloud-github-error").textContent = value; };
   async function action(fn) {
@@ -27,8 +27,7 @@ export function mountCloudGithub({ api: getApi, context, t, document: doc = docu
     const c = context(), next = `${c.userId ?? ""}:${c.projectId ?? ""}:${c.sessionId ?? ""}`;
     if (next !== key) { key = next; clear(); if (dialog.open) dialog.close(); }
     const available = Boolean(c.userId && c.projectId && c.sessionId);
-    el("cloud-github-open").disabled = !available;
-    el("settings-cloud-github-open").disabled = !available;
+    el("cloud-github-new").disabled = !agentEnabled || !available;
   }
   function text(base64) {
     if (base64 === null) return t("File absent");
@@ -62,7 +61,7 @@ export function mountCloudGithub({ api: getApi, context, t, document: doc = docu
       el("cloud-github-pr-title").value = "GatherThread: cloud coding changes";
       el("cloud-github-pr-body").value = (task.answer ?? "").slice(0, 6000);
     }
-    el("cloud-github-continue").disabled = !task.resumable;
+    el("cloud-github-continue").disabled = !agentEnabled || !task.resumable;
     el("cloud-github-delete").disabled = task.state === "running";
   }
   async function refresh() {
@@ -95,10 +94,6 @@ export function mountCloudGithub({ api: getApi, context, t, document: doc = docu
     }
     if (selected) { const detail = await getApi().getHostedGithubTask(selected.id); if (gen === generation) renderTask(detail); }
   }
-  const open = () => { updateContext(); if (!context().sessionId) return; dialog.showModal(); void action(refresh); };
-  el("cloud-github-open").addEventListener("click", open);
-  el("settings-cloud-github-open").addEventListener("click", open);
-  el("cloud-github-close").addEventListener("click", () => dialog.close());
   el("cloud-github-refresh").addEventListener("click", () => void action(refresh));
   el("cloud-github-authorize").addEventListener("click", () => void action(async () => {
     const gen = generation;
@@ -132,18 +127,21 @@ export function mountCloudGithub({ api: getApi, context, t, document: doc = docu
     });
   });
   function chooseRepository() {
+    if (!agentEnabled) { message(t("Cloud Agent · coming later")); return false; }
     el("agent-harness-select").value = "cloud";
     el("agent-harness-select").dispatchEvent(new Event("change", { bubbles: true }));
     el("cloud-agent-source").value = "github";
     el("cloud-agent-source").dispatchEvent(new Event("change", { bubbles: true }));
+    return true;
   }
   el("cloud-github-continue").addEventListener("click", () => {
+    if (!agentEnabled) { message(t("Cloud Agent · coming later")); return; }
     if (!selected) return;
     const models = el("agent-cloud-model-select");
     if (![...models.options].some((option) => option.value === selected.profile_id)) {
       message(t("The original cloud model is no longer available.")); return;
     }
-    chooseRepository();
+    if (!chooseRepository()) return;
     models.value = selected.profile_id;
     models.dispatchEvent(new Event("change", { bubbles: true }));
     el("cloud-github-parent").value = selected.id;
@@ -151,7 +149,7 @@ export function mountCloudGithub({ api: getApi, context, t, document: doc = docu
     dialog.close(); el("message-input").focus();
   });
   el("cloud-github-new").addEventListener("click", () => {
-    chooseRepository();
+    if (!chooseRepository()) return;
     el("cloud-github-parent").value = ""; el("cloud-github-selected").textContent = t("New repository task");
     dialog.close(); el("message-input").focus();
   });
@@ -160,18 +158,20 @@ export function mountCloudGithub({ api: getApi, context, t, document: doc = docu
     await getApi().deleteHostedGithubTask(selected.id); if (gen !== generation) return;
     clear(); await refresh();
   }));
-  const poll = setInterval(() => { if (dialog.open && !doc.hidden && taskRows.some((task) => task.state === "running")) void action(refresh); }, 5000);
+  const poll = setInterval(() => { if (dialog.open && !el("code-github-panel").hidden && !doc.hidden && taskRows.some((task) => task.state === "running")) void action(refresh); }, 5000);
   window.addEventListener("pagehide", () => clearInterval(poll), { once: true });
   return {
     updateContext,
+    refresh: () => action(refresh),
     async openTask(id) {
       updateContext(); const gen = generation;
       if (!context().sessionId) return;
-      if (!dialog.open) dialog.showModal();
+      openSurface();
       await action(async () => { await refresh(); const task = await getApi().getHostedGithubTask(id);
         if (gen === generation) renderTask(task); });
     },
     async start(sessionId, input) {
+      if (!agentEnabled) throw new Error(t("Cloud Agent · coming later"));
       updateContext(); const gen = generation;
       const task = await getApi().startHostedGithubTask(sessionId, { content: input.content, profile_id: input.profileId,
         idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null,

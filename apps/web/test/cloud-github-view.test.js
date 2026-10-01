@@ -26,7 +26,7 @@ function element() {
     showModal() { this.open = true; }, close() { this.open = false; }, focus() { this.focused = true; } };
 }
 
-function fixture(overrides = {}) {
+function fixture(overrides = {}, { agentEnabled = true } = {}) {
   const nodes = new Map();
   const el = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
   let context = { userId: "u1", projectId: "p1", sessionId: "s1" };
@@ -38,7 +38,8 @@ function fixture(overrides = {}) {
     document: { getElementById: el, createElement: element },
     window: { addEventListener() {} }, setInterval: () => 1, clearInterval() {} });
   vm.runInContext(source.replace("export function mountCloudGithub", "function mountCloudGithub"), sandbox);
-  const view = sandbox.mountCloudGithub({ api: () => api, context: () => context, t: (value) => value });
+  const view = sandbox.mountCloudGithub({ api: () => api, context: () => context, t: (value) => value,
+    agentEnabled, openSurface: () => el("project-code-dialog").showModal() });
   view.updateContext();
   return { view, el, setContext: (next) => { context = next; view.updateContext(); } };
 }
@@ -59,7 +60,7 @@ test("switching accounts clears private task previews and ignores an old PR resp
   assert.equal(ui.el("cloud-github-pr-link").hidden, true);
   assert.equal(ui.el("cloud-github-pr-body").value, "");
   assert.equal(ui.el("cloud-github-repository").value, "");
-  assert.equal(ui.el("cloud-github-dialog").open, false);
+  assert.equal(ui.el("project-code-dialog").open, false);
 });
 
 test("a request finishing in an old session cannot replace a newer continuation draft", async () => {
@@ -96,6 +97,29 @@ test("refresh preserves repository and PR edits; task buttons select the cloud r
   ui.el("cloud-github-new").dispatchEvent({ type: "click" });
   assert.equal(ui.el("cloud-github-parent").value, "");
   assert.equal(routeChanges, 2);
-  assert.equal(ui.el("cloud-github-dialog").open, false);
+  assert.equal(ui.el("project-code-dialog").open, false);
   assert.equal(ui.el("message-input").focused, true);
+});
+
+test("closed cloud Agent entry preserves GitHub binding and review but refuses new runs", async () => {
+  let bindings = 0, runs = 0;
+  const ui = fixture({ bindHostedGithub: async () => { bindings++; },
+    startHostedGithubTask: async () => { runs++; return task(); } }, { agentEnabled: false });
+  await ui.view.openTask("private-task");
+  assert.equal(ui.el("project-code-dialog").open, true);
+  assert.equal(ui.el("cloud-github-controls").hidden, false);
+  assert.equal(ui.el("cloud-github-repository-form").hidden, false);
+  assert.equal(ui.el("cloud-github-pr-form").hidden, false);
+  assert.equal(ui.el("cloud-github-new").disabled, true);
+  assert.equal(ui.el("cloud-github-continue").disabled, true);
+  ui.el("cloud-github-repository").value = "owner/another";
+  ui.el("cloud-github-base").value = "main";
+  ui.el("cloud-github-repository-form").dispatchEvent({ type: "submit", preventDefault() {} });
+  await settle();
+  assert.equal(bindings, 1);
+  for (const id of ["cloud-github-new", "cloud-github-continue"]) ui.el(id).dispatchEvent({ type: "click" });
+  assert.equal(ui.el("agent-harness-select").value, "");
+  assert.equal(ui.el("cloud-github-error").textContent, "Cloud Agent · coming later");
+  await assert.rejects(ui.view.start("s1", { content: "Edit", profileId: "coding", idempotencyKey: "request" }), /coming later/);
+  assert.equal(runs, 0);
 });

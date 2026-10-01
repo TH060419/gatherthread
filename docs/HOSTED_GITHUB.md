@@ -2,18 +2,22 @@
 
 This is an unreleased, disabled-by-default source preview. It extends Cloud Agent with a GitHub + npm Node.js/TypeScript workflow. It does not certify the public deployment or claim Codex-equivalent model quality.
 
-## User workflow / 使用流程
+Current Web entry: open **Cloud Git**, then choose **GitHub**, beside **GT Cloud**. Local device GitHub sync and GitHub App account authorization/repository binding remain available in this panel. Saved task review and explicit draft PR publication remain available. New/continued cloud Agent tasks are disabled for a later release. There is no separate Cloud GitHub dialog or connection button in the composer or Agent settings.
 
-1. Select **Cloud Agent** in the work page. Choose a DeepSeek or HTTPS Chat Completions-compatible coding profile supplied by the operator. The small Cloudflare trial profile does not support repository tasks.
-2. Open **Cloud GitHub project** in the composer or **Settings → Default Agent**. Install the operator's GitHub App on only the intended repositories, then **Connect your GitHub account**. Organization approval or an active SAML session may be required.
+中文：当前在“云端 Git”内选择与“GT Cloud”并列的“GitHub”。设备端同步、GitHub 账号授权、仓库绑定和已有任务查看保持可用；新建及继续云端 Agent 任务暂不开放。输入区和 Agent 设置不再另设 GitHub 连接入口。
+
+## User flow after Cloud Agent opens / 使用流程
+
+1. Open **Cloud Git → GitHub** to connect your repository. Once Cloud Agent opens, select **Cloud Agent** in the work page. Choose a DeepSeek or HTTPS Chat Completions-compatible coding profile supplied by the operator. The small Cloudflare trial profile does not support repository tasks.
+2. Use the existing **Cloud Git → GitHub** panel. Install the operator's GitHub App on only the intended repositories, then **Connect your GitHub account**. Organization approval or an active SAML session may be required.
 3. Enter an existing `OWNER/REPO` and base branch, then select **Use this repository in cloud tasks**. Each member authorizes their own account and chooses their own repository binding; GT membership does not grant GitHub permissions. Both the App and that GitHub user need access and write permission.
 4. In the composer, choose **Cloud workspace → GitHub repository**, describe a change, and select **Request my agent**. This explicitly sends eligible repository source and shared conversation context to the selected model. The Agent answer is published to this GT conversation, whose existing membership rules apply. Task source and detailed diffs remain private to the requester. Human chat does not start a task.
 5. The server reads a pinned base commit's source snapshot, installs exact locked public npm dependencies in the isolated container, and lets OpenCode inspect, edit, run commands and test. The browser receives a task ID immediately; closing the page does not stop the server task.
-6. Reopen **Cloud GitHub project**, refresh/select your task, and inspect the answer plus each file's before/after content and executable-mode changes. The preview truncates long displayed content. **Continue task** starts a new, separately charged run from saved source; **New repository task** reads the current base branch. Dependencies are installed again; shell processes, installed tools, OpenCode private state and dependency caches are not persisted across runs.
+6. Reopen **Cloud Git → GitHub**, refresh/select your task, and inspect the answer plus each file's before/after content and executable-mode changes. The preview truncates long displayed content. **Continue task** starts a new, separately charged run from saved source; **New repository task** reads the current base branch. Dependencies are installed again; shell processes, installed tools, OpenCode private state and dependency caches are not persisted across runs.
 7. After reviewing the exact revision, fill in the PR title/description and select **Create draft pull request**. The server creates a task-specific branch and draft PR. It does not merge or update the base branch. A changed base or task branch is refused; start a new task from the latest base. If a response is lost, retrying reconciles the existing branch/PR rather than force-pushing or making a duplicate.
 8. **Delete saved cloud task** removes that private GT task snapshot. It does not delete GitHub branches/PRs. **Disconnect cloud GitHub** removes GT's stored account credentials and bindings; revoke the App authorization in GitHub for GitHub-side revocation. Disconnecting GT aborts its active repository tasks; model/registry requests recheck access, and an authorization watcher stops tasks when their GT device or membership changes.
 
-中文：在工作页选择“云端 Agent”，选择管理员提供的 DeepSeek 或兼容编码模型。打开“云端 GitHub 项目”，为指定仓库安装 GitHub App 并授权自己的账号，填写仓库和基准分支。输入区选择“GitHub 仓库”后明确请求 Agent，代码与共享会话内容会发送给所选模型。可以关闭页面后回来查看任务、逐文件比较改动，或继续保存的源码。检查后点击“创建草稿 PR”，由 GitHub 正常审核流程决定是否合并。删除 GT 任务不会删除 GitHub 工作；断开 GT 连接后，也可在 GitHub 撤销 App 授权。
+中文：在工作页选择“云端 Agent”，选择管理员提供的 DeepSeek 或兼容编码模型。打开“云端 Git → GitHub”，为指定仓库安装 GitHub App 并授权自己的账号，填写仓库和基准分支。输入区选择“GitHub 仓库”后明确请求 Agent，代码与共享会话内容会发送给所选模型。可以关闭页面后回来查看任务、逐文件比较改动，或继续保存的源码。检查后点击“创建草稿 PR”，由 GitHub 正常审核流程决定是否合并。删除 GT 任务不会删除 GitHub 工作；断开 GT 连接后，也可在 GitHub 撤销 App 授权。
 
 ## Supported environment
 

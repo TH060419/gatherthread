@@ -3,6 +3,8 @@ import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.j
 export const SETTINGS_VERSION = 13;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 export const SHARED_LANGUAGE_STORAGE_KEY = "gt-lang";
+// Public cloud Agent entry is held for a later release, independently of GitHub connections.
+export const CLOUD_AGENT_ENTRY_ENABLED = false;
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 
