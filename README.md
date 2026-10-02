@@ -110,7 +110,7 @@ The Web dialog uses one short, three-step flow:
 
 One-time plugin install:
 
-If `codex --version` is unavailable or Terminal reports `codex: command not found`, first install or update the official Codex CLI with `npm install -g @openai/codex`. Reopen Terminal and confirm `codex plugin --help` works before continuing.
+If Terminal reports `command not found: codex`, a Mac with ChatGPT Desktop installed may already have the CLI but lack its directory in `PATH`. Check the bundled executable, add its directory to `PATH`, and only then save the change to `~/.zshrc`; see the [Codex connection guide](docs/CODEX_CONNECT.md#1-install-the-codex-plugin-once) for the exact commands. On other systems, follow the [official Codex CLI installation guide](https://learn.chatgpt.com/docs/codex/cli). Confirm `codex plugin --help` works before continuing.
 
 ```bash
 codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread

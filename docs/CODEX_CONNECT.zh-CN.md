@@ -14,13 +14,22 @@
 codex --version
 ```
 
-如果终端提示 `codex: command not found`，请先安装或更新官方 CLI，然后重新打开终端：
+如果 macOS 的 zsh 提示 `command not found: codex`，且 ChatGPT Desktop 安装在“应用程序”目录中，先检查桌面版自带的 CLI，并把它加入当前终端的 `PATH`：
 
 ```bash
-npm install -g @openai/codex
+codex_dir='/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS'
+if [ -x "$codex_dir/codex" ]; then export PATH="$codex_dir:$PATH"; codex --version; else echo 'Bundled Codex CLI not found'; fi
 ```
 
-运行 `codex plugin --help`，确认当前 Codex 版本支持插件后，再安装共序：
+**只有显示版本号后**，再把修改保存到以后的 zsh 终端，并检查插件支持情况：
+
+```bash
+echo 'export PATH="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+codex plugin --help
+```
+
+如果找不到该文件、ChatGPT Desktop 安装在其他位置，或你使用其他系统，请按照 [Codex CLI 官方安装指南](https://learn.chatgpt.com/docs/codex/cli)操作，不要把不存在的目录加入 `PATH`。运行 `codex plugin --help` 确认当前 Codex 版本支持插件后，再安装共序：
 
 ```bash
 codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
