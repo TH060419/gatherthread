@@ -145,12 +145,34 @@ test("HTTP gate protects account/restoration APIs; native credentials and WS kee
     const nativeTicket = await request("/v1/realtime-ticket", { session_id: session.session.id }, undefined, identity.token, null);
     assert.equal(nativeTicket.status, 201);
     assert.equal(await websocketStatus(server.origin, ((await nativeTicket.json()) as {data: {ticket: string}}).data.ticket, { host }), 101, "native device ticket works without browser admission");
+    const newNativeTicket = async () => {
+      const response = await request("/v1/realtime-ticket", { session_id: session.session.id }, undefined, identity.token, null);
+      assert.equal(response.status, 201);
+      return ((await response.json()) as { data: { ticket: string } }).data.ticket;
+    };
+    const revokedGrant = admin.issue(1, 1)[0]!;
+    const revokedToken = admin.exchange(revokedGrant.admission_code).token;
+    admin.revoke(revokedGrant.grant_id);
+    for (const invalidCookie of [undefined, `${TEST_GATE_COOKIE}=gteg_${randomBytes(32).toString("base64url")}`, `${TEST_GATE_COOKIE}=${revokedToken}`]) {
+      assert.equal(await websocketStatus(server.origin, await newNativeTicket(), { host, origin: publicOrigin, ...(invalidCookie ? { cookie: invalidCookie } : {}) }), 401,
+        "native ticket does not exempt a browser-Origin handshake from admission");
+    }
+    const nativeBrowserSocket = new WebSocket(server.origin.replace("http:", "ws:") + "/v1/ws", ["gatherthread-v1", `gatherthread-ticket.${await newNativeTicket()}`], { headers: { host, origin: publicOrigin, cookie } });
+    await once(nativeBrowserSocket, "open");
+    const realNativeSocket = new WebSocket(server.origin.replace("http:", "ws:") + "/v1/ws", ["gatherthread-v1", `gatherthread-ticket.${await newNativeTicket()}`], { headers: { host } });
+    await once(realNativeSocket, "open");
     const liveTicket = await request("/v1/realtime-ticket", { session_id: session.session.id }, `${cookie}; ${sessionCookie}`);
     const liveSocket = new WebSocket(server.origin.replace("http:", "ws:") + "/v1/ws", ["gatherthread-v1", `gatherthread-ticket.${((await liveTicket.json()) as {data: {ticket: string}}).data.ticket}`], { headers: { host, origin: publicOrigin, cookie } });
     await once(liveSocket, "open");
     const closed = once(liveSocket, "close");
+    const nativeBrowserClosed = once(nativeBrowserSocket, "close");
     admin.revoke(grant.grant_id);
     assert.equal((await closed)[0], 1008, "revocation closes an already connected browser socket");
+    assert.equal((await nativeBrowserClosed)[0], 1008, "native ticket with browser Origin retains browser admission checks after upgrade");
+    assert.equal(realNativeSocket.readyState, WebSocket.OPEN, "genuine native device remains independent of browser admission");
+    const nativeClosed = once(realNativeSocket, "close");
+    server.database.revokeDevice(identity.actor, server.database.authenticate(identity.token).device_id);
+    assert.equal((await nativeClosed)[0], 1008, "independent device revocation still closes the genuine native socket");
     assert.equal((await request("/v1/me", undefined, `${cookie}; ${sessionCookie}`)).status, 403);
     assert.equal((await request("/v1/test-gate", { admission_code: grant.admission_code })).status, 403);
     assert.equal((await fetch(production.origin + "/v1/me", { headers: { authorization: `Bearer ${other.token}` } })).status, 200);

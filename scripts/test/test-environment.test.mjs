@@ -5,6 +5,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { TestGateStore } from '../../apps/server/dist/src/test-gate.js';
 
 test('test admission CLI writes private individual distribution files, refuses replacement and lists no secrets', () => {
   const directory = realpathSync(mkdtempSync(join(tmpdir(), 'gt-admission-cli-')));
@@ -22,7 +23,25 @@ test('test admission CLI writes private individual distribution files, refuses r
     if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
     const before = JSON.parse(cli(['list'])); assert.equal(before.length, 2); assert.equal(JSON.stringify(before).includes('gte_'), false);
     assert.throws(() => cli(['issue', '--output', path])); assert.equal(JSON.parse(cli(['list'])).length, 2);
-    cli(['revoke', '--grant-id', before[0].grant_id]); assert.equal(JSON.parse(cli(['list']))[0].revoked, 1);
+    const store = new TestGateStore({ databasePath: env.GATHERTHREAD_TEST_GATE_DATABASE_PATH, pepper: env.GATHERTHREAD_TEST_GATE_PEPPER, origin: env.GATHERTHREAD_PUBLIC_BASE_URL });
+    try {
+      const codes = [...content.matchAll(/测试人员代码：(gte_[A-Za-z0-9_-]+)/g)].map(match => match[1]);
+      const sessions = codes.map(code => store.exchange(code));
+      assert.throws(() => cli(['revoke', '--grant-id', 'unknown-fixture-id']), error => {
+        assert.equal(error.status, 1);
+        assert.match(error.stderr, /撤销编号不存在/);
+        assert.equal(error.stdout, '');
+        assert.equal(error.stderr.includes('unknown-fixture-id'), false);
+        return true;
+      });
+      assert.equal(sessions.every(session => store.admitted(session.token)), true);
+      assert.match(cli(['revoke', '--grant-id', before[0].grant_id]), /已撤销/);
+      assert.equal(store.admitted(sessions[0].token), false);
+      assert.equal(store.admitted(sessions[1].token), true);
+      store.cleanup(); // Real revoked metadata survives cleanup until its expiry.
+      assert.match(cli(['revoke', '--grant-id', before[0].grant_id]), /已经撤销/);
+      assert.equal(JSON.parse(cli(['list']))[0].revoked, 1);
+    } finally { store.close(); }
     assert.throws(() => cli(['issue', '--count', '51', '--output', join(directory, 'bad.txt')]));
     assert.throws(() => execFileSync(process.execPath, ['apps/server/dist/src/test-gate-cli.js', 'list'], { env: { ...env, GATHERTHREAD_DEPLOYMENT_ENVIRONMENT: 'production', GATHERTHREAD_TEST_GATE_ENABLED: 'false' }, stdio: 'pipe' }));
   } finally { rmSync(directory, { recursive: true, force: true }); }

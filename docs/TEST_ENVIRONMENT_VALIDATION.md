@@ -1,6 +1,6 @@
 # 独立测试环境本地验收记录
 
-2026-10-03 完成本地验收，2026-10-04 经负责人授权提交独立 PR 审核，尚未上线。代码位于独立分支 `codex/test-environment`，基于 main `ca4860d4fb26375eff26191fc7993fba21af7b4e`，该 base 在提交前重新 fetch 核对。[PR62](https://github.com/TH060419/gatherthread/pull/62) 在本任务期间由其他会话以 `898d811d39ada2fefb302d079a5b0b9be6510f68` 合入；最终验收以已合入账号系统的 main 加本门禁改动为准。以下结果不能替代门禁最终合并头的 CI 与上线验收。
+2026-10-04 对 [Draft PR64](https://github.com/TH060419/gatherthread/pull/64) 的三项 P2 审核反馈完成修复和本地复验，尚未上线。代码位于独立分支 `codex/test-environment`，基于 main `ca4860d4fb26375eff26191fc7993fba21af7b4e`，修复后重新 fetch 确认 base 未变，包含已合入的 [PR62](https://github.com/TH060419/gatherthread/pull/62) 账号系统。以下结果不能替代新提交的远端 CI、最终固定头审核与上线验收。
 
 ## 实例与执行范围
 
@@ -14,17 +14,17 @@
 
 | 检查 | 最终结果 |
 |---|---|
-| 当前 main + 门禁的 `npm run release:verify` | 1,075 项：1,070 通过、5 跳过、0 失败、0 取消；退出码 0 |
+| 三项 P2 修复后的 `npm run release:verify` | 1,084 项：1,079 通过、5 跳过、0 失败、0 取消；退出码 0 |
 | 依赖漏洞审计 | 0 vulnerabilities |
 | Git-less Codex/DSH 产物验证 | 通过，无真实凭据的安装/接口预检 |
 | 新增邮箱/门禁/原生跨环境集成 | 运行通过，未跳过账号依赖 |
 | Chrome/WebKit 最终 UI | 8/8 场景通过，无未捕获页面错误 |
-| 隔离报告最终格式检查的专用 CLI/报告复测 | 2/2 通过，退出码 0 |
+| HTTP 在途/账号异步/WS/CLI/邮件/跨环境专项复测 | 17/17 通过，无跳过；退出码 0 |
 | `git diff --check`、秘密模式检查、两份 shell 语法 | 通过 |
 
-完整发布日志：`/private/tmp/gt-test-current-main-release.log`。浏览器日志：`/private/tmp/gt-test-browser-current.log`。提交或 main 变化后仍需重跑，不能将本地工作树结果称为远端 CI 通过。
+完整发布日志：`/private/tmp/pr64-repair-release.log`。专项日志：`/private/tmp/pr64-repair-focused.log`。浏览器日志：`/private/tmp/pr64-repair-browser.log`。提交或 main 变化后仍需重跑，不能将本地工作树结果称为远端 CI 通过。
 
-完整发布检查后，最后加强了隔离报告的类型/完整性拒绝检查；该运维脚本及其负向用例随后以 `node --test scripts/test/test-environment.test.mjs` 专门复测通过，记录在 `/private/tmp/gt-test-final-isolation.log`。服务端与浏览器实现没有再变更。
+先在旧实现上执行新增回归，九项在途/异步用例及原有 WS、CLI 测试共十一项失败，记录在 `/private/tmp/pr64-repair-red.log`。修复后上述专项全部通过；完整发布检查串行运行，保留原有测试超时参数。
 
 `release:verify` 包含 TypeScript、Web/connector/DSH 构建、单元/脚本/Web/集成/e2e、引用/许可/品牌/秘密/依赖漏洞审计、发布元数据，以及 Git-less Codex/DSH tarball 验证。最终只保留五项已有 DSH 外部 harness 可选检查；邮箱链路测试已随已合入账号接口运行，不把缺少依赖算作通过。
 
@@ -36,10 +36,10 @@
 |---|---|
 | 门禁存储 | 256 位随机代码/会话、摘要而无明文、批量生成、有效期、撤销、独立 namespace、持久化限速、容量限制与严格协议 |
 | 配置/生产默认 | 默认关闭；test/开关不一致拒绝；单一 HTTPS Origin、独立路径、非占位独立 pepper；测试/正式凭据互拒 |
-| HTTP | 未准入注册/登录/找回/账号恢复/项目 API 拒绝；编码路径仍受保护；准入不是账号登录；旧入口与编码后的旧入口退役 |
-| Cookie/WS | Host-only HttpOnly Secure Strict 响应；重复门禁 Cookie 拒绝；浏览器 WS 缺准入拒绝、有效准入通过、撤销已连接浏览器 socket；有效原生设备 ticket 独立通过 |
+| HTTP | 未准入账号/项目 API 与编码路径拒绝；慢请求体等待期间撤销、退出或过期后返回 403，项目表无写入；挑战等待后撤销不发送邮件或预留投递；投递完成后撤销清除验证码；注册/登录/重设密码运算期间撤销不修改账号、设备、登录会话或密码 |
+| Cookie/WS | Host-only HttpOnly Secure Strict 响应；重复门禁 Cookie 拒绝；原生 ticket 用于带 Origin 的握手时，缺/错/撤销 Cookie 拒绝；有效 Cookie 的浏览器与原生 ticket 浏览器连接均在准入撤销后关闭；真正无 Origin 原生连接继续工作，独立设备撤销后关闭 |
 | 两环境邮箱 | 同邮箱分别注册不同密码；跨密码、Cookie、Codex 一次性授权和 DSH 配对拒绝；测试改密撤销其设备/会话，正式不受影响；测试账号删除不删除正式账号 |
-| CLI/隔离报告 | 新建 0600 发放文件、批量说明、拒绝覆盖/链接、终端与列表不含代码、撤销；报告不含密钥，拒绝复用密钥/路径/备份/Origin/端口与不完整/格式错误的报告 |
+| CLI/隔离报告 | 新建 0600 发放文件、拒绝覆盖、终端与列表不含代码；未知撤销编号非零退出且不假报成功，有效会话不受影响；真实编号撤销关联会话而不影响其他编号，清理后重复撤销仍确认状态；隔离报告拒绝共享密钥/路径/备份/Origin/端口与不完整/格式错误的报告 |
 | 邮件显示 | 两种语言的注册、找回与密码通知均加测试标记和测试链接，保留收件人、provider receipt 与幂等参数 |
 | 浏览器 | 最终分支 8 个 Chromium/WebKit × 1440/390 × 中英文场景；深链接先门禁、错误提示与清空输入、实际语言切换、无横向溢出、键盘、标记留白、退出准入、凭据不在 Web Storage |
 
@@ -55,7 +55,7 @@ Chrome/WebKit 英文桌面场景额外完成模拟邮箱注册、文件协作确
 npm ci
 npm run release:verify
 npm run build
-node --test apps/server/dist/test/test-gate.test.js apps/server/dist/test/test-email-transport.test.js scripts/test/test-environment.test.mjs tests/integration/test-environment-email.test.mjs
+node --test apps/server/dist/test/test-gate-races.test.js apps/server/dist/test/test-gate.test.js apps/server/dist/test/test-email-transport.test.js scripts/test/test-environment.test.mjs tests/integration/test-environment-email.test.mjs
 PLAYWRIGHT_MODULE_PATH=/ABSOLUTE/playwright/index.mjs PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/ABSOLUTE/chrome BROWSER_OUTPUT_DIRECTORY=/ABSOLUTE/private-output node tests/browser/test-environment.mjs
 git diff --check
 bash -n scripts/test-environment/prepare-candidate.sh scripts/test-environment/backup-admission.sh

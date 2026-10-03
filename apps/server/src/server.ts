@@ -543,6 +543,8 @@ export async function startCollaborationServer(
         return;
       }
 
+      // Reuse this request-bound check after awaits and before protected mutations.
+      let assertAdmissionCurrent = (): void => {};
       // One boundary before all account routes, callbacks, session restoration and application APIs.
       if (testGate && !["/health/live", "/health", "/health/ready"].includes(url.pathname)) {
         if (request.headers.host !== new URL(options.testGate!.origin).host) throw new ApiError(403, "test_origin_required", "Open the configured test origin.");
@@ -567,12 +569,16 @@ export async function startCollaborationServer(
           }
           throw notFound("Admission route");
         }
-        if (admissionPath.startsWith("/v1/") && !admitted) {
-          let native = nativeAdmissionCapability(url.pathname, request.method ?? "GET", requestOrigin !== undefined);
-          if (!native && request.headers.authorization && nativeAdmissionDeviceRoute(url.pathname, requestOrigin !== undefined)) {
-            database.authenticate(bearerToken(request)); native = true;
-          }
-          if (!native) throw new ApiError(403, "test_admission_required", "Enter the test admission code first.");
+        if (admissionPath.startsWith("/v1/")) {
+          assertAdmissionCurrent = () => {
+            if (testGate.admitted(admission)) return;
+            if (nativeAdmissionCapability(url.pathname, request.method ?? "GET", requestOrigin !== undefined)) return;
+            if (request.headers.authorization && nativeAdmissionDeviceRoute(url.pathname, requestOrigin !== undefined)) {
+              database.authenticate(bearerToken(request)); return;
+            }
+            throw new ApiError(403, "test_admission_required", "Enter the test admission code first.");
+          };
+          assertAdmissionCurrent();
         }
         // Keep legacy identity routes retired even when their path is encoded.
         if (["/v1/bootstrap", "/v1/browser-sessions", "/v1/test-access/claim", "/v1/invitations/claim"].includes(admissionPath)
@@ -584,6 +590,12 @@ export async function startCollaborationServer(
             && sendStaticFile(request, response, options.staticDirectory, target, true)) return;
         }
       }
+
+      const readAdmittedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
+        const value = await readJson(request, maxBytes);
+        assertAdmissionCurrent();
+        return value;
+      };
 
       if (["/v1/bootstrap", "/v1/browser-sessions", "/v1/invitations/claim", "/v1/test-access/claim"].includes(url.pathname)
         || url.pathname === "/v1/remembered-accounts" || url.pathname.startsWith("/v1/remembered-accounts/")) {
@@ -605,9 +617,10 @@ export async function startCollaborationServer(
           if (!request.headers["content-type"]?.startsWith("application/json")) throw new ApiError(415, "invalid_content_type", "Email sign-in requires JSON");
           const browser = registrationBrowser(request);
           if (!browser) throw new ApiError(400, "registration_browser", "Open registration in this browser and try again.");
-          const input = EmailLoginInputSchema.parse(await readJson(request, 8192));
+          const input = EmailLoginInputSchema.parse(await readAdmittedJson(8192));
           const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration?.trustedProxy);
-          const result = await database.loginWithEmail(input, browser, ip);
+          const result = await database.loginWithEmail(input, browser, ip, assertAdmissionCurrent);
+          assertAdmissionCurrent();
           const browserSession = result.browser_session;
           appendSetCookie(response, serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined));
@@ -637,12 +650,14 @@ export async function startCollaborationServer(
           if (!browser) throw new ApiError(400, "registration_browser", "Open registration in this browser and try again.");
           const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration!.trustedProxy);
           if (url.pathname.endsWith("/send")) {
-            const input = SendRegistrationInputSchema.parse(await readJson(request, 8192));
-            const result = await database.registration.send(input, browser, ip, registration!);
+            const input = SendRegistrationInputSchema.parse(await readAdmittedJson(8192));
+            const result = await database.registration.send(input, browser, ip, registration!, "registration", assertAdmissionCurrent);
+            assertAdmissionCurrent();
             sendJson(response, 202, { data: RegistrationSentSchema.parse(result) });
           } else {
-            const input = VerifyRegistrationInputSchema.parse(await readJson(request, 8192));
-            const { browser_session: browserSession, ...result } = await database.verifyPublicRegistration(input, browser, ip, registration!);
+            const input = VerifyRegistrationInputSchema.parse(await readAdmittedJson(8192));
+            const { browser_session: browserSession, ...result } = await database.verifyPublicRegistration(input, browser, ip, registration!, assertAdmissionCurrent);
+            assertAdmissionCurrent();
             appendSetCookie(response, serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport,
               browserSession.remembered ? browserSession.expires_at : undefined));
             sendJson(response, 201, { data: EmailAccountSessionSchema.parse({ actor: { ...result.actor, can_create_projects: true }, expires_at: browserSession.expires_at }) });
@@ -670,17 +685,20 @@ export async function startCollaborationServer(
           if (!browser) throw new ApiError(400, "registration_browser", "Open password recovery in this browser and try again.");
           const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration!.trustedProxy);
           if (url.pathname.endsWith("/send")) {
-            const result = await database.registration.send(SendPasswordResetInputSchema.parse(await readJson(request, 8192)), browser, ip, registration!, "password-reset");
+            const result = await database.registration.send(SendPasswordResetInputSchema.parse(await readAdmittedJson(8192)), browser, ip, registration!, "password-reset", assertAdmissionCurrent);
+            assertAdmissionCurrent();
             sendJson(response, 202, { data: PasswordResetSentSchema.parse({ reset_id: result.registration_id, expires_in_seconds: result.expires_in_seconds, resend_after_seconds: result.resend_after_seconds }) });
           } else {
-            const input = VerifyPasswordResetInputSchema.parse(await readJson(request, 8192));
-            const userId = await database.resetPassword(input, browser, ip, registration!);
+            const input = VerifyPasswordResetInputSchema.parse(await readAdmittedJson(8192));
+            const userId = await database.resetPassword(input, browser, ip, registration!, assertAdmissionCurrent);
             dshPairings.revokeUser(userId);
             for (const [value, ticket] of realtimeTickets) if (ticket.actor.user_id === userId) realtimeTickets.delete(value);
             for (const [socket, state] of sockets) if (state.actor.user_id === userId) { socket.close(1008, "password_reset"); sockets.delete(socket); }
             // All database and in-memory authorization is revoked before any notification wait.
             // The notice budget was reserved during verification; attempt once, without retry or provider logging.
+            assertAdmissionCurrent();
             try { await registration!.mailer!.notifyPasswordChanged!({ email: input.email, locale: input.locale, deliveryId: input.reset_id }); } catch { /* reset remains committed */ }
+            assertAdmissionCurrent();
             sendJson(response, 200, { data: { reset: true } });
           }
           return;
@@ -714,7 +732,7 @@ export async function startCollaborationServer(
         if (requestOrigin !== undefined) {
           throw new ApiError(403, "pairing_host_only", "DSH pairing must start from the local Host plugin");
         }
-        const input = BeginDshPairingInputSchema.parse(await readJson(request));
+        const input = BeginDshPairingInputSchema.parse(await readAdmittedJson());
         sendJson(response, 201, { data: dshPairings.begin(input.device_name) });
         return;
       }
@@ -728,7 +746,7 @@ export async function startCollaborationServer(
         if (requestOrigin !== undefined) {
           throw new ApiError(403, "pairing_host_only", "DSH pairing must be polled by the local Host plugin");
         }
-        z.object({}).parse(await readJson(request));
+        z.object({}).parse(await readAdmittedJson());
         const result = dshPairings.poll(
           parts[2],
           dshPairingPollToken(request.headers.authorization),
@@ -742,7 +760,7 @@ export async function startCollaborationServer(
       }
 
       if (request.method === "POST" && url.pathname === "/v1/device-authorizations/claim") {
-        const input = ClaimDeviceAuthorizationInputSchema.parse(await readJson(request));
+        const input = ClaimDeviceAuthorizationInputSchema.parse(await readAdmittedJson());
         sendJson(response, 201, { data: service.claimDeviceAuthorization(input) });
         return;
       }
@@ -783,9 +801,11 @@ export async function startCollaborationServer(
         }
       }
       const readAuthenticatedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
-        const value = await readJson(request, maxBytes);
+        const value = await readAdmittedJson(maxBytes);
         if (authentication.kind === "browser_session" && authentication.browserSessionId) {
           database.assertActiveBrowserSession(authentication.browserSessionId, actor);
+        } else {
+          database.assertActiveDevice(actor);
         }
         return value;
       };
@@ -1301,8 +1321,9 @@ export async function startCollaborationServer(
       if (!ticket || ticket.expiresAt < Date.now()) throw unauthorized("Realtime ticket is invalid or expired");
       database.assertActiveDevice(ticket.actor);
       const admissionToken = testGateToken(request, secureTransport);
-      if (testGate && (request.headers.host !== new URL(options.testGate!.origin).host || (!ticket.nativeDevice && !testGate.admitted(admissionToken)))) throw unauthorized("Test admission required");
-      const auth: SocketAuth = { actor: ticket.actor, allowedSessionId: ticket.allowedSessionId, admissionToken, nativeDevice: ticket.nativeDevice ?? false };
+      const nativeDevice = ticket.nativeDevice === true && requestOrigin === undefined;
+      if (testGate && (request.headers.host !== new URL(options.testGate!.origin).host || (!nativeDevice && !testGate.admitted(admissionToken)))) throw unauthorized("Test admission required");
+      const auth: SocketAuth = { actor: ticket.actor, allowedSessionId: ticket.allowedSessionId, admissionToken, nativeDevice };
       wsServer.handleUpgrade(request, socket, head, (webSocket) => {
         wsServer.emit("connection", webSocket, request, auth);
       });

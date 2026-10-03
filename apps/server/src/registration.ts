@@ -117,7 +117,7 @@ export class RegistrationStore {
   private requestDigest(input: SendRegistrationInput, browser: string, purpose: string): string {
     return this.digest(`${purpose}-request:${browser}:${input.idempotency_key}`);
   }
-  async send(input: SendRegistrationInput, browser: string, ip: string, options: RegistrationOptions, purpose: "registration" | "password-reset" = "registration"): Promise<{ registration_id: string; expires_in_seconds: 600; resend_after_seconds: 60 }> {
+  async send(input: SendRegistrationInput, browser: string, ip: string, options: RegistrationOptions, purpose: "registration" | "password-reset" = "registration", assertRequestCurrent?: () => void): Promise<{ registration_id: string; expires_in_seconds: 600; resend_after_seconds: 60 }> {
     const table = purpose === "registration" ? "registration_pending" : "password_reset_pending";
     const ready = () => purpose === "registration" ? this.ready(options) : this.recoveryReady(options);
     if (!ready()) throw unavailable();
@@ -141,6 +141,7 @@ export class RegistrationStore {
     });
     let validChallenge = false;
     try { validChallenge = await options.challenge!.verify(input.challenge_token, this.binding(browser, purpose), purpose); } catch { /* fail closed */ }
+    assertRequestCurrent?.();
     if (!validChallenge) throw new ApiError(400, "registration_challenge", "Complete the security check and try again.");
     if (!ready()) throw unavailable();
     const id = randomUUID();
@@ -179,6 +180,14 @@ export class RegistrationStore {
       if (reserved.state === "ready") return reply(reserved.id);
       throw unavailable();
     }
+    const assertDeliveryCurrent = () => {
+      try { assertRequestCurrent?.(); }
+      catch (error) {
+        this.sqlite.prepare(`UPDATE ${table} SET state='failed',code_digest='' WHERE id=? AND state='sending'`).run(id);
+        throw error;
+      }
+    };
+    assertDeliveryCurrent();
     try {
       if (!ready()) throw unavailable();
       // Existing-email requests use identical mail and response paths, with no account disclosure.
@@ -187,6 +196,7 @@ export class RegistrationStore {
       this.sqlite.prepare(`UPDATE ${table} SET state='failed',code_digest='' WHERE id=? AND state='sending'`).run(id);
       throw new ApiError(503, "registration_delivery", "The email could not be sent. Wait a minute and try again.");
     }
+    assertDeliveryCurrent();
     const updated = this.sqlite.prepare(`UPDATE ${table} SET state='ready' WHERE id=? AND state='sending'`).run(id);
     if (!updated.changes || !ready()) throw unavailable();
     return reply(id);

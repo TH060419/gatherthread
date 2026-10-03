@@ -2,6 +2,8 @@ import { closeSync, fchmodSync, openSync, writeFileSync } from "node:fs";
 import { loadServerConfig } from "./config.js";
 import { TestGateStore } from "./test-gate.js";
 
+class AdmissionGrantNotFoundError extends Error {}
+
 /** Deliberately separate from retired account-qualification commands. */
 export function runTestGateCli(args: string[], env: NodeJS.ProcessEnv = process.env): void {
   const config = loadServerConfig(env);
@@ -21,7 +23,11 @@ export function runTestGateCli(args: string[], env: NodeJS.ProcessEnv = process.
   if (command === "issue" && (!Number.isInteger(count) || count < 1 || count > 50 || !Number.isInteger(hours) || hours < 1 || hours > 720)) throw new Error("Use count 1..50 and hours 1..720");
   const store = new TestGateStore(config.testGate);
   try {
-    if (command === "revoke") { store.revoke(values.get("--grant-id")!); process.stdout.write("测试人员代码已撤销，其门禁会话也失效。\n"); }
+    if (command === "revoke") {
+      const result = store.revoke(values.get("--grant-id")!);
+      if (result === "not_found") throw new AdmissionGrantNotFoundError();
+      process.stdout.write(result === "already_revoked" ? "该测试人员代码已经撤销，其门禁会话仍然失效。\n" : "测试人员代码已撤销，其门禁会话也失效。\n");
+    }
     if (command === "list") process.stdout.write(`${JSON.stringify(store.list(), null, 2)}\n`);
     if (command === "issue") {
       // O_EXCL refuses replacement, links, and accidentally reused distribution files.
@@ -45,4 +51,7 @@ export function runTestGateCli(args: string[], env: NodeJS.ProcessEnv = process.
 }
 
 try { runTestGateCli(process.argv.slice(2)); }
-catch { process.stderr.write("测试门禁命令失败。检查独立测试配置、命令参数、私密目录和新输出文件。\n"); process.exitCode = 1; }
+catch (error) {
+  process.stderr.write(error instanceof AdmissionGrantNotFoundError ? "撤销编号不存在，未撤销任何测试人员代码。请用 list 核对编号。\n" : "测试门禁命令失败。检查独立测试配置、命令参数、私密目录和新输出文件。\n");
+  process.exitCode = 1;
+}

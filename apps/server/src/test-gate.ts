@@ -56,11 +56,16 @@ export class TestGateStore {
       this.#db.exec("COMMIT"); return grants;
     } catch (error) { this.#db.exec("ROLLBACK"); throw error; }
   }
-  revoke(id: string): void { this.#db.prepare("UPDATE grants SET revoked=1 WHERE id=?").run(id); }
+  revoke(id: string): "revoked" | "already_revoked" | "not_found" {
+    const changed = this.#db.prepare("UPDATE grants SET revoked=1 WHERE id=? AND revoked=0").run(id);
+    if (changed.changes) return "revoked";
+    return this.#db.prepare("SELECT 1 FROM grants WHERE id=?").get(id) ? "already_revoked" : "not_found";
+  }
   list(): unknown[] { return this.#db.prepare("SELECT id AS grant_id, expires AS expires_at_ms, revoked FROM grants ORDER BY expires").all(); }
   cleanup(now = Date.now()): void {
-    this.#db.prepare("DELETE FROM sessions WHERE expires<=?").run(now);
-    this.#db.prepare("DELETE FROM grants WHERE expires<=? OR revoked=1").run(now);
+    this.#db.prepare("DELETE FROM sessions WHERE expires<=? OR grant_id IN (SELECT id FROM grants WHERE revoked=1)").run(now);
+    // Keep bounded revoked metadata until expiry so administrators can confirm retries.
+    this.#db.prepare("DELETE FROM grants WHERE expires<=?").run(now);
     this.#db.prepare("DELETE FROM attempts WHERE reset<=?").run(now);
   }
   /** Durable global + peer budgets; never trust browser-supplied forwarding headers. */
