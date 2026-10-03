@@ -6,7 +6,8 @@ export function messageText(event) {
 
 export function agentWorkStatus(events, runtimeId) {
   if (!runtimeId) return null;
-  const completed = new Set(events.filter((event) => event.type === "agent_response").map((event) => event.replyTo));
+  const completed = new Set(events.filter((event) => event.type === "agent_response"
+    || (event.type === "agent_progress" && event.payload?.status === "paused")).map((event) => event.replyTo));
   const work = events.filter((event) => event.type === "agent_progress" && !completed.has(event.replyTo)
     && event.provenance?.runtimeId === runtimeId).at(-1);
   return work ? work.payload?.status === "thinking" ? "Agent thinking" : "Agent busy" : null;

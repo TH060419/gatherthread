@@ -954,6 +954,12 @@ code {
   display: none;
 }
 
+.agent-settings-shortcut {
+  display: flex;
+  margin: 10px auto 4px;
+  color: var(--teal-dark);
+}
+
 .project-action-row {
   display: flex;
   flex-wrap: wrap;
@@ -1793,6 +1799,8 @@ code {
 .agent-retry-button {
   margin: 8px 0 0;
 }
+
+.agent-paused-notice { margin: 8px 18px; color: var(--ink-soft); font-size: 0.78rem; }
 
 .agent-pending-status {
   display: flex;

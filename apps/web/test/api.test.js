@@ -3,6 +3,51 @@ import assert from "node:assert/strict";
 
 import { ApiError, HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
 
+test("pause uses the existing cookie-authenticated author control route with empty strict JSON", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options) => { requests.push({ url, options }); return Response.json({ data: { status: "paused" } }); };
+  try {
+    assert.equal((await new HttpCollaborationApi().pauseAgentRequest("s / 1", "r / 1")).status, "paused");
+    assert.equal(requests[0].url, "/v1/sessions/s%20%2F%201/agent-requests/r%20%2F%201/pause");
+    assert.equal(requests[0].options.method, "POST"); assert.equal(requests[0].options.credentials, "include");
+    assert.deepEqual(JSON.parse(requests[0].options.body), {});
+    assert.equal(requests[0].options.headers.Authorization, undefined);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("mock pause fences delayed work, checks authorship/roles and stays idempotent", async () => {
+  const originalSetTimeout = globalThis.setTimeout;
+  const work = new Map();
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    if ([220, 430, 650].includes(delay)) { work.set(delay, callback); return 1; }
+    return originalSetTimeout(callback, delay, ...args);
+  };
+  try {
+    const api = new MockCollaborationApi({ latency: 0 });
+    const input = { content: "Long mock request", idempotencyKey: "mock-pause-turn" };
+    const own = await api.appendAgentRequest("session-orbit", input);
+    await assert.rejects(api.pauseAgentRequest("session-orbit", own.id), /not started/);
+    work.get(220)();
+    const owner = api.currentUser;
+    api.currentUser = { id: "other" };
+    await assert.rejects(api.pauseAgentRequest("session-orbit", own.id), /Only the author/);
+    api.currentUser = owner;
+    const member = api.sessions[0].members.find(item => item.userId === owner.id);
+    const role = member.role;
+    member.role = "viewer";
+    await assert.rejects(api.pauseAgentRequest("session-orbit", own.id), /Only the author/);
+    member.role = role;
+    await api.pauseAgentRequest("session-orbit", own.id);
+    await api.pauseAgentRequest("session-orbit", own.id);
+    await api.appendAgentRequest("session-orbit", input);
+    work.get(430)(); work.get(650)();
+    const linked = api.events.get("session-orbit").filter((event) => event.replyTo === own.id);
+    assert.equal(linked.filter((event) => event.payload.status === "paused").length, 1);
+    assert.equal(linked.some((event) => event.type === "agent_response"), false);
+  } finally { globalThis.setTimeout = originalSetTimeout; }
+});
+
 test("browser API overrides cannot send credentials to another origin", async () => {
   const originalFetch = globalThis.fetch;
   const originalLocation = globalThis.location;

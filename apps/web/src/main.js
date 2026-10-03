@@ -1,5 +1,6 @@
 import { mountCloudGithub } from "./cloud-github-view.js";
 import { mountDeviceAuthorization } from "./device-authorization.js";
+import { mountAgentRequestControl } from "./agent-request-control.js";
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
@@ -236,6 +237,18 @@ const createInvitationForm = element("create-invitation-form");
 const invitationList = element("invitation-list");
 const settingsDialog = element("settings-dialog");
 const settingsForm = element("settings-form");
+const agentRequestControl = mountAgentRequestControl({
+  button: sendAgentButton, targetLabel: element("agent-target-label"), errorNode: sendError, api,
+  getContext: () => ({
+    events: state.sync.events, userId: state.currentUser?.id, sessionId: state.session?.id,
+    scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.project?.id}:${state.session?.id}`,
+    writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+    sending: Boolean(pendingMessageSend?.()),
+  }),
+  confirmResume: () => !state.settings.composer.confirmAgentRequest
+    || window.confirm(localizer.t("Resume with the original Agent and latest history? This starts a new request and may consume model quota.")),
+  onChange: renderComposerPermissions, makeKey: createIdempotencyKey, t: (text) => localizer.t(text),
+});
 settingsDialog.querySelector(".settings-navigation").addEventListener("click", (event) => {
   const link = event.target.closest("a[href^='#']");
   if (!link) return;
@@ -985,13 +998,16 @@ deleteCloudForm.addEventListener("submit", async (event) => {
 });
 
 sendChatButton.addEventListener("click", () => sendMessage("human_chat"));
-sendAgentButton.addEventListener("click", () => sendMessage("agent_request"));
+sendAgentButton.addEventListener("click", () => {
+  if (!agentRequestControl.handleClick()) void sendMessage("agent_request");
+});
 agentCloudModelSelect.addEventListener("change", () => {
   if (!state.project) return;
   state.settings = settingsStore.set(withProjectCloudProfile(state.settings, state.project.id, agentCloudModelSelect.value));
   renderComposerPermissions();
 });
 element("settings-button").addEventListener("click", openSettingsDialog);
+element("add-agent-button").addEventListener("click", () => openSettingsDialog("settings-agents"));
 element("close-settings-button").addEventListener("click", cancelSettingsDialog);
 element("cancel-settings-button").addEventListener("click", cancelSettingsDialog);
 element("reset-settings-button").addEventListener("click", resetSettingsPreview);
@@ -2118,6 +2134,12 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     if (pendingRequestIds.has(event.id)) {
       item.append(renderAgentPendingStatus(event));
     }
+    if (event.type === "agent_request" && progressByRequest.get(event.id)?.some((progress) => progress.payload?.status === "paused")) {
+      const notice = document.createElement("p");
+      notice.className = "agent-paused-notice";
+      notice.textContent = localizer.t("Agent paused by its author.");
+      item.append(notice);
+    }
     timeline.append(item);
   }
 
@@ -2683,6 +2705,7 @@ function renderComposerPermissions() {
     : agentReason;
   renderAgentProfileControls();
   historySummaryUi.updateContext();
+  agentRequestControl.update();
 }
 
 function historySummaryExecutionProfile() {
@@ -2701,6 +2724,8 @@ function historySummaryExecutionProfile() {
 }
 
 async function sendMessage(kind) {
+  // Enter-to-request never turns into an implicit pause/resume operation.
+  if (kind === "agent_request" && agentRequestControl.action() !== "request") return;
   if (kind === "agent_request" && currentProjectHarness() === "cloud") kind = "hosted_agent";
   if (kind === "hosted_agent" && !CLOUD_AGENT_ENTRY_ENABLED) {
     sendError.textContent = localizer.t("Cloud Agent · coming later");
@@ -3623,7 +3648,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
   return next;
 }
 
-function openSettingsDialog() {
+function openSettingsDialog(sectionId) {
   settingsReturnFocus = document.activeElement;
   settingsPreview = normalizeSettings(state.settings);
   populateSettingsForm(settingsPreview);
@@ -3638,7 +3663,13 @@ function openSettingsDialog() {
   void loadCurrentDeviceSettings();
   void loadAccountDeletionPreview();
   void loadHistoryContextPolicy();
-  requestAnimationFrame(() => element("close-settings-button").focus());
+  requestAnimationFrame(() => {
+    const section = typeof sectionId === "string" ? settingsDialog.querySelector(`#${sectionId}`) : null;
+    if (!section) { element("close-settings-button").focus(); return; }
+    section.tabIndex = -1;
+    section.scrollIntoView({ block: "start", behavior: "instant" });
+    section.focus({ preventScroll: true });
+  });
 }
 
 let accountDeletionGeneration = 0;
