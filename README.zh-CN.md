@@ -4,6 +4,8 @@
 
 **Alpha 8** 新增中英文初次使用引导与隔离练习项目、消息引用和 @成员、会话阅读与定位优化、由本地 Agent 声明的模型选择、可选的 Windows/macOS Codex 启动器原型、批量测试资格码和账号自行注销。限制与验证要求见 [Alpha 8 说明](docs/releases/0.1.0-alpha.8.md)。
 
+**云端体验 Agent 源码预览：**正在准备一个可选的隔离 [OpenCode](https://github.com/anomalyco/opencode) 工作区，供初次使用者编辑代码和运行终端命令。读取项目云端代码及保存到个人分支均须主动选择。启用后可在工作页及设置中选择与 Codex、DSH 并列的云端 Agent；管理员可配置多个 API 账号提供并行容量。管理员接入模型 API 并验证容器前，该功能默认关闭；这不表示 gatherthread.cn 现已开放云端 Agent。见[用户指南](docs/HOSTED_AGENT_GUIDE.zh-CN.md)和[运维指南](docs/HOSTED_AGENT.md)。 另有[云端 GitHub 开发预览](docs/HOSTED_GITHUB.md)，支持账号授权、npm 依赖准备、私有源码保存、改动查看和主动创建草稿 PR，首期面向 Node.js/TypeScript 项目；真实 App、模型与 Linux 容器验证仍是启用前的必要步骤。
+
 > **Alpha 7：可选的项目代码协作。** 云端 Git 代码检查点支持每位成员独立分支、手动/空闲时自动上传、安全下载、恢复到新目录，以及创建者审核合并。Codex 需显式添加 `--code-sync` 授权，DSH 可在插件设置中逐项目授权并操作。聊天上传与实时上下文注入不受影响，原有本地 Git 分支和暂存区不被改动。所有项目成员均可读取代码分支，Solo 不提供代码隐私隔离。详见[使用流程、边界与测试清单](docs/CODE_SYNC.md)。
 
 > **Alpha 7：云端代码配额与清理。** 每用户有效云端代码快照限额为 128 MiB；成员可在设置中清理自己的云端分支，项目创建者还可选择清理整个项目的云端 Git。清理个人分支不会撤销已合入共享 `main` 的代码；任何云端清理都不会改动本地 Git 或 Agent 文件。它会撤销云端访问并释放逻辑配额，但物理 Git 对象和旧备份需另行按运维保留策略清理。详见[代码协作指南](docs/CODE_SYNC.md)。
@@ -31,7 +33,7 @@ Git 标签、npm 包和 GitHub Release 的对应信息见[发布记录索引](do
 使用疑问、缺陷和非敏感反馈，请[提交 GitHub Issue](https://github.com/TH060419/gatherthread/issues)；安全问题请私下联系 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，不要附上凭据或未脱敏的私人会话。
 
 - `solo`：由创建者发布完整的规范化会话事件流；项目内其他所有人只读，即使对方是项目创建者。
-- `multi`：多人共享一个有序的项目会话。普通聊天消息只进入共享会话，不会调用 Agent；Agent 请求只由发送者自己的本地 runtime 领取，回复会标注用户名、harness、provider、模型和上下文保真度，不会向其他成员暴露本地设备或原生会话标识。
+- `multi`：多人共享一个有序的项目会话。普通聊天消息只进入共享会话，不会调用 Agent；连接本地 Agent 后，请求只由发送者自己的本地 runtime 领取。服务器启用云端体验功能后，用户可另行发起在隔离容器中运行的云端请求。回复会标注用户名、harness、provider、模型和上下文保真度，不会向其他成员暴露本地设备或原生会话标识。
 
 服务器使用 SQLite WAL 持久化只追加的规范事件日志，为每个会话分配权威序号，执行基于角色的访问控制，并提供可持久重放的历史记录和 WebSocket 实时推送。Codex 与 DeepSeek Harness 分别维护同一份规范历史的原生投影，通过持久游标和 outbox 断线恢复；每个 Agent 请求只会路由到用户明确选择的 runtime。
 

@@ -1,6 +1,10 @@
 import { accessSync, constants, mkdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
+import { parseHostedEndpoints, HOSTED_MODEL, siliconFlowFreePreset,
+  HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./hosted-agent-pool.js";
+import type { HostedGithubOptions } from "./hosted-github.js";
+import type { HostedAgentOptions } from "./hosted-agent.js";
 
 const EnvironmentSchema = z.enum(["development", "test", "production"]);
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -31,6 +35,8 @@ export interface ServerConfig {
   maxUserSessions: number;
   maxProjectSessions: number;
   maxTotalSessions: number;
+  hostedAgent?: HostedAgentOptions;
+  hostedGithub?: HostedGithubOptions;
 }
 
 function parsePort(name: string, raw: string | undefined, fallback: number): number {
@@ -66,6 +72,11 @@ function parseCountLimit(name: string, raw: string | undefined, fallback: number
   const count = Number(value);
   if (!Number.isSafeInteger(count) || count < 1) throw new ConfigurationError(`${name} must be a positive safe integer`);
   return count;
+}
+
+function parseHostedDailyLimit(name: string, raw: string | undefined, fallback: number | null): number | null {
+  if (raw === "none" || (raw === undefined && fallback === null)) return null;
+  return parseCountLimit(name, raw, fallback ?? 1);
 }
 
 function parseLoopbackHost(raw: string | undefined): string {
@@ -149,6 +160,70 @@ export function loadServerConfig(
   const maxProjectSessions = parseCountLimit("GATHERTHREAD_MAX_PROJECT_SESSIONS", env.GATHERTHREAD_MAX_PROJECT_SESSIONS, 2_048);
   const maxTotalSessions = parseCountLimit("GATHERTHREAD_MAX_TOTAL_SESSIONS", env.GATHERTHREAD_MAX_TOTAL_SESSIONS, 8_192);
   const rawAuthTokenPepper = env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
+  const hostedEnabled = parseBoolean("GATHERTHREAD_HOSTED_AGENT_ENABLED", env.GATHERTHREAD_HOSTED_AGENT_ENABLED, false);
+  let hostedAgent: HostedAgentOptions | undefined;
+  if (hostedEnabled) {
+    if (process.platform === "win32") throw new ConfigurationError("Cloud Agent requires a Linux Docker host with Unix sockets");
+    const image = env.GATHERTHREAD_HOSTED_AGENT_IMAGE?.trim() ?? "";
+    if (!/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(image)) {
+      throw new ConfigurationError("Cloud Agent requires a digest-pinned runner image");
+    }
+    const legacyRuns = (value: string | undefined, fallback: number) => value === undefined
+      ? fallback : Math.floor(parseCountLimit("legacy Neuron allowance", value, fallback * 2000) / 2000);
+    const preset = env.GATHERTHREAD_HOSTED_AGENT_PRESET?.trim();
+    if (preset && preset !== "siliconflow-free") throw new ConfigurationError("Unknown Cloud Agent preset");
+    if (preset && env.GATHERTHREAD_HOSTED_AGENT_ENDPOINTS?.trim()) {
+      throw new ConfigurationError("Choose a Cloud Agent preset or explicit endpoints");
+    }
+    const freePreset = preset === "siliconflow-free";
+    const userDailyRuns = parseHostedDailyLimit("GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS",
+      env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS, freePreset && env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS === undefined
+        ? null : legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS, 1));
+    const globalDailyRuns = parseHostedDailyLimit("GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_RUNS",
+      env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_RUNS, freePreset && env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS === undefined
+        ? null : legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS, 4));
+    const maxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT",
+      env.GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT, 2);
+    const userMinIntervalSeconds = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS",
+      env.GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MIN_INTERVAL_SECONDS);
+    const userMaxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT",
+      env.GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT, HOSTED_USER_MAX_CONCURRENT);
+    if ((userDailyRuns !== null && (userDailyRuns < 1 || userDailyRuns > 10_000))
+      || (globalDailyRuns !== null && (globalDailyRuns < 1 || globalDailyRuns > 100_000))
+      || maxConcurrent > 8 || userMaxConcurrent > maxConcurrent || userMinIntervalSeconds > 3600) {
+      throw new ConfigurationError("Cloud Agent limits exceed the supported capacity");
+    }
+    try {
+      const raw = freePreset ? siliconFlowFreePreset(maxConcurrent, env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true")
+        : env.GATHERTHREAD_HOSTED_AGENT_ENDPOINTS?.trim() || JSON.stringify([{
+        id: "default", profile_id: "default", label: "Qwen3 · Cloudflare", provider: "cloudflare-workers-ai",
+        model: HOSTED_MODEL, account_id: env.GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID?.trim(),
+        token_env: "GATHERTHREAD_CLOUDFLARE_AI_TOKEN", daily_runs: 4, max_concurrent: Math.min(2, maxConcurrent),
+        free_plan_confirmed: env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true",
+      }]);
+      const endpoints = parseHostedEndpoints(raw, env);
+      if ((userDailyRuns === null || globalDailyRuns === null) && endpoints.some((endpoint) => endpoint.dailyRuns !== null)) {
+        throw new Error("unlimited user or global runs require only confirmed zero-price endpoints");
+      }
+      hostedAgent = { image, endpoints, userDailyRuns, globalDailyRuns, maxConcurrent, userMinIntervalSeconds, userMaxConcurrent };
+    } catch {
+      // Validation errors can contain the private JSON input; never print them.
+      throw new ConfigurationError("Invalid Cloud Agent endpoints, account quotas, or credential environment variables");
+    }
+  }
+  let hostedGithub: HostedGithubOptions | undefined;
+  if (parseBoolean("GATHERTHREAD_HOSTED_GITHUB_ENABLED", env.GATHERTHREAD_HOSTED_GITHUB_ENABLED, false)) {
+    if (!hostedAgent || process.platform === "win32") throw new ConfigurationError("Cloud GitHub requires the enabled Linux cloud runner");
+    const encryptionKey = env.GATHERTHREAD_HOSTED_GITHUB_ENCRYPTION_KEY ?? "";
+    const clientId = env.GATHERTHREAD_HOSTED_GITHUB_CLIENT_ID ?? "";
+    const clientSecret = env.GATHERTHREAD_HOSTED_GITHUB_CLIENT_SECRET ?? "";
+    const appSlug = env.GATHERTHREAD_HOSTED_GITHUB_APP_SLUG ?? "";
+    if (Buffer.from(encryptionKey, "base64").length !== 32 || Buffer.from(encryptionKey, "base64").toString("base64") !== encryptionKey
+      || !clientId || !clientSecret || !/^[A-Za-z0-9_.-]+$/u.test(appSlug) || !publicBaseUrl.startsWith("https://")) {
+      throw new ConfigurationError("Cloud GitHub needs App credentials, a 32-byte base64 encryption key and HTTPS");
+    }
+    hostedGithub = { encryptionKey, clientId, clientSecret, appSlug, callbackUrl: `${publicBaseUrl}/v1/hosted-github/callback` };
+  }
   if (rawAuthTokenPepper !== undefined && rawAuthTokenPepper !== rawAuthTokenPepper.trim()) {
     throw new ConfigurationError("GATHERTHREAD_AUTH_TOKEN_PEPPER must not have leading or trailing whitespace");
   }
@@ -197,6 +272,8 @@ export function loadServerConfig(
     maxUserSessions,
     maxProjectSessions,
     maxTotalSessions,
+    ...(hostedAgent ? { hostedAgent } : {}),
+    ...(hostedGithub ? { hostedGithub } : {}),
   };
 }
 

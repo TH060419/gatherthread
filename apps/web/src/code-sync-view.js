@@ -28,7 +28,7 @@ export function codeFilePreview(file) {
   return new TextDecoder().decode(Uint8Array.from(raw, (char) => char.charCodeAt(0))).slice(0, 12000);
 }
 
-export function mountCodeSync({ document: doc, api, localizer, getContext, mockEnabled = false, storage = codeNoticeStorage() }) {
+export function mountCodeSync({ document: doc, api, localizer, getContext, onGithubOpen = () => {}, mockEnabled = false, storage = codeNoticeStorage() }) {
   const el = (id) => doc.getElementById(id);
   const dialog = el("project-code-dialog");
   const noticeDialog = el("code-notice-dialog");
@@ -40,9 +40,20 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   let viewProjectId;
   let pendingConfirmation;
   let noticeDeviceId = null;
+  let provider = "gt-cloud";
   const controller = createCodeSyncController({ api, onChange: render, pollMs: mockEnabled ? 120 : 1800 });
   const github = mountGithubCodeSync({ document: doc, api, localizer, confirm, mockEnabled });
   const routeKey = (state) => JSON.stringify([state.context?.project?.id, state.context?.sessionId, state.context?.userId, state.runtimeId]);
+
+  function showProvider(next, { refreshCloud = true } = {}) {
+    finishConfirmation(false);
+    provider = next;
+    el("code-gt-cloud-panel").hidden = next !== "gt-cloud";
+    el("code-github-panel").hidden = next !== "github";
+    el("code-provider-gt-cloud").setAttribute("aria-pressed", String(next === "gt-cloud"));
+    el("code-provider-github").setAttribute("aria-pressed", String(next === "github"));
+    if (next === "github" && refreshCloud) onGithubOpen();
+  }
 
   function showCodeView(view, focusId) {
     el("code-enabled-home").hidden = view !== "overview";
@@ -77,6 +88,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
       finishConfirmation(false);
       viewProjectId = context?.project?.id;
       showCodeView("overview");
+      showProvider("gt-cloud");
       previewGeneration += 1;
       reviewed = null;
       el("code-review-preview").hidden = true;
@@ -239,6 +251,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   trigger.addEventListener("click", () => {
     updateContext();
     showCodeView("overview");
+    showProvider("gt-cloud");
     // Safari mouse clicks do not necessarily focus the button before opening.
     returnFocus = trigger;
     dialog.showModal();
@@ -256,6 +269,8 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
     doc.getElementById("new-project-button")?.click?.();
   });
   el("code-open-device-view").addEventListener("click", () => showCodeView("device", "code-local-title"));
+  el("code-provider-gt-cloud").addEventListener("click", () => showProvider("gt-cloud"));
+  el("code-provider-github").addEventListener("click", () => showProvider("github"));
   el("code-open-branches-view").addEventListener("click", () => showCodeView("branches", "code-team-title"));
   el("code-back-device-view").addEventListener("click", () => showCodeView("overview", "code-open-device-view"));
   el("code-back-branches-view").addEventListener("click", () => showCodeView("overview", "code-open-branches-view"));
@@ -306,6 +321,11 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, mockE
   });
   return {
     updateContext, refresh: () => Promise.all([controller.refresh(), github.refresh()]),
+    openGithub(options) {
+      if (!dialog.open) trigger.click();
+      showProvider("github", options);
+    },
+    isGithubOpen: () => dialog.open && provider === "github",
     showFirstLoginNotice(deviceId) {
       if (hasSeenCodeNotice(storage, deviceId) || noticeDialog.open) return;
       noticeDeviceId = deviceId;

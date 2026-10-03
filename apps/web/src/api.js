@@ -578,6 +578,29 @@ export class HttpCollaborationApi {
     return this.#append(sessionId, "agent_request", input);
   }
 
+  getHostedGithubStatus(projectId) { return this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github`); }
+  authorizeHostedGithub() { return this.request("/v1/hosted-github/authorize", { method: "POST", body: "{}" }); }
+  completeHostedGithub(input) { return this.request("/v1/hosted-github/complete", { method: "POST", body: JSON.stringify(input) }); }
+  disconnectHostedGithub() { return this.request("/v1/hosted-github/account", { method: "DELETE" }); }
+  bindHostedGithub(projectId, input) { return this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github/repository`, { method: "POST", body: JSON.stringify(input) }); }
+  listHostedGithubTasks(projectId) { return this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github/tasks`); }
+  startHostedGithubTask(sessionId, input) { return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-github-tasks`, { method: "POST", body: JSON.stringify(input) }); }
+  getHostedGithubTask(id) { return this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}`); }
+  publishHostedGithub(id, input) { return this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}/pull-request`, { method: "POST", body: JSON.stringify(input) }); }
+  deleteHostedGithubTask(id) { return this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+
+  getHostedAgentStatus() {
+    return this.request("/v1/hosted-agent");
+  }
+
+  appendHostedAgentRequest(sessionId, input) {
+    return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-agent-requests`, {
+      method: "POST",
+      body: JSON.stringify({ profile_id: input.profileId ?? "default", content: input.content, include_code: input.includeCode === true,
+        idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null }),
+    });
+  }
+
   async createHistorySummary(sessionId, input) {
     const { historySummaryExecutionWire } = await import("./history-summaries.js");
     const { event } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/history-summaries`, {
@@ -719,6 +742,9 @@ const users = {
 };
 
 export class MockCollaborationApi {
+  async getHostedAgentStatus() { return { enabled: false }; }
+  async getHostedGithubStatus() { return { enabled: false }; }
+
   constructor({ latency = 90 } = {}) {
     this.latency = latency;
     this.currentUser = { ...users.avery, can_create_projects: true };

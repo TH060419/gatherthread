@@ -1,3 +1,5 @@
+import { HostedGithub, type HostedGithubOptions } from "./hosted-github.js";
+import { HostedGithubRepositoryInputSchema, HostedGithubTaskInputSchema, HostedGithubPrInputSchema, HostedGithubCompleteInputSchema } from "@gatherthread/protocol";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { createReadStream, realpathSync, statSync, mkdtempSync, rmSync } from "node:fs";
@@ -25,6 +27,8 @@ import {
   CreateInvitationInputSchema,
   CreateIdentityInputSchema,
   CreateHistorySummaryInputSchema,
+  HostedAgentRequestInputSchema,
+  HostedAgentStatusSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
   CODE_SYNC_MAX_BODY_BYTES,
@@ -62,6 +66,7 @@ import { DshDevicePairingBroker, dshPairingPollToken } from "./dsh-pairing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { CollaborationService } from "./service.js";
 import { CodeRepository } from "./code-repository.js";
+import { HostedAgent, type HostedAgentOptions } from "./hosted-agent.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const DEFAULT_REPLAY_LIMIT = 50;
@@ -145,6 +150,8 @@ export interface ServerOptions {
   maxUserSessions?: number;
   maxProjectSessions?: number;
   maxTotalSessions?: number;
+  hostedAgent?: HostedAgentOptions;
+  hostedGithub?: HostedGithubOptions;
 }
 
 export interface RunningCollaborationServer {
@@ -441,6 +448,7 @@ export async function startCollaborationServer(
     maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
+  database.failInterruptedHostedAgentJobs();
   const publicAccountActor = (actor: Actor) => ({
     id: actor.user_id,
     username: actor.display_name,
@@ -450,6 +458,10 @@ export async function startCollaborationServer(
   const ephemeralCodeDirectory = options.databasePath === ":memory:" && !options.codeRepositoryDirectory
     ? mkdtempSync(join(tmpdir(), "gatherthread-code-")) : undefined;
   const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
+  const hostedAgent = options.hostedAgent ? new HostedAgent(service, codeRepository, options.hostedAgent) : undefined;
+  if (options.hostedGithub && !hostedAgent) throw new Error("Cloud GitHub requires Cloud Agent");
+  const hostedGithub = options.hostedGithub && options.hostedAgent && hostedAgent
+    ? new HostedGithub(service, hostedAgent, options.hostedAgent, options.hostedGithub) : undefined;
   const dshPairings = new DshDevicePairingBroker();
   const secureTransport = options.secureTransport ?? false;
   const browserCookieName = browserSessionCookieName(secureTransport);
@@ -706,6 +718,16 @@ export async function startCollaborationServer(
 
       if (options.staticDirectory && sendStaticFile(request, response, options.staticDirectory, url.pathname)) return;
 
+      if (request.method === "GET" && url.pathname === "/v1/hosted-github/callback") {
+        if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
+        const code = url.searchParams.get("code"), state = url.searchParams.get("state");
+        if (!code || !state || code.length > 500 || !/^[A-Za-z0-9_-]{43}$/u.test(state)) {
+          throw new ApiError(400, "github_state", "Restart GitHub authorization");
+        }
+        response.writeHead(303, { location: `/app/#${new URLSearchParams({ github_code: code, github_state: state })}`,
+          "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
+        return;
+      }
       const authorization = request.headers.authorization;
       const authentication: HttpAuthentication = authorization === undefined
         ? (() => {
@@ -751,6 +773,50 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/hosted-agent") {
+        sendJson(response, 200, { data: HostedAgentStatusSchema.parse(hostedAgent?.status(actor) ?? { enabled: false }) });
+        return;
+      }
+
+      if (url.pathname.startsWith("/v1/hosted-github/")) {
+        if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
+        if (url.pathname === "/v1/hosted-github/authorize" && request.method === "POST") {
+          z.object({}).strict().parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: hostedGithub.authorize(actor) }); return;
+        }
+        if (url.pathname === "/v1/hosted-github/complete" && request.method === "POST") {
+          const input = HostedGithubCompleteInputSchema.parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: await hostedGithub.complete(actor, input) }); return;
+        }
+        if (url.pathname === "/v1/hosted-github/account" && request.method === "DELETE") {
+          sendJson(response, 200, { data: hostedGithub.disconnect(actor) }); return;
+        }
+        const match = /^\/v1\/hosted-github\/tasks\/(gh-task-[a-f0-9]{32})(\/pull-request)?$/u.exec(url.pathname);
+        if (match) {
+          const id = match[1]!;
+          if (!match[2] && request.method === "GET") { sendJson(response, 200, { data: hostedGithub.view(actor, id) }); return; }
+          if (!match[2] && request.method === "DELETE") { hostedGithub.remove(actor, id); response.writeHead(204).end(); return; }
+          if (match[2] && request.method === "POST") {
+            const input = HostedGithubPrInputSchema.parse(await readAuthenticatedJson());
+            sendJson(response, 200, { data: await hostedGithub.publish(actor, id, input) }); return;
+          }
+        }
+      }
+      const githubProject = /^\/v1\/projects\/([^/]+)\/hosted-github(\/repository|\/tasks)?$/u.exec(url.pathname);
+      if (githubProject) {
+        const projectId = decodeURIComponent(githubProject[1]!);
+        if (!hostedGithub) {
+          service.requireProjectMembership(actor, projectId);
+          if (!githubProject[2] && request.method === "GET") { sendJson(response, 200, { data: { enabled: false } }); return; }
+          throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
+        }
+        if (!githubProject[2] && request.method === "GET") { sendJson(response, 200, { data: hostedGithub.status(actor, projectId) }); return; }
+        if (githubProject[2] === "/repository" && request.method === "POST") {
+          const input = HostedGithubRepositoryInputSchema.parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: await hostedGithub.bind(actor, projectId, input) }); return;
+        }
+        if (githubProject[2] === "/tasks" && request.method === "GET") { sendJson(response, 200, { data: { tasks: hostedGithub.list(actor, projectId) } }); return; }
+      }
       if (url.pathname === "/v1/account/deletion-preview" && request.method === "GET") {
         if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Account deletion requires a browser session");
         sendJson(response, 200, { data: service.accountDeletionPreview(actor) });
@@ -1042,6 +1108,17 @@ export async function startCollaborationServer(
       }
 
       const sessionId = parts[0] === "v1" && parts[1] === "sessions" ? parts[2] : undefined;
+      if (sessionId && parts[3] === "hosted-github-tasks" && parts.length === 4 && request.method === "POST") {
+        if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
+        const input = HostedGithubTaskInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 202, { data: hostedGithub.start(actor, sessionId, input) }); return;
+      }
+      if (sessionId && parts[3] === "hosted-agent-requests" && parts.length === 4 && request.method === "POST") {
+        if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
+        const input = HostedAgentRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 201, { data: await hostedAgent.request(actor, sessionId, input) });
+        return;
+      }
       if (sessionId && request.method === "GET" && parts.length === 3) {
         sendJson(response, 200, { data: service.getSession(actor, sessionId) });
         return;
@@ -1392,6 +1469,7 @@ export async function startCollaborationServer(
       for (const socket of sockets.keys()) socket.terminate();
       wsServer.close();
       await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
+      await hostedGithub?.close();
       database.close();
       if (ephemeralCodeDirectory) rmSync(ephemeralCodeDirectory, { recursive: true, force: true });
     },

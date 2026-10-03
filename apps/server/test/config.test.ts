@@ -36,7 +36,39 @@ test("development configuration uses a loopback-only, same-origin baseline", () 
   assert.equal(config.maxUserSessions, 512);
   assert.equal(config.maxProjectSessions, 2_048);
   assert.equal(config.maxTotalSessions, 8_192);
+  assert.equal(config.hostedAgent, undefined);
   assert.throws(() => assertPersistentCredentialPepper(config), /credentials remain valid/);
+});
+
+test("hosted Agent requires explicit Free-plan confirmation and immutable image", () => {
+  const enabled = {
+    GATHERTHREAD_HOSTED_AGENT_ENABLED: "true",
+    GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID: "a".repeat(32),
+    GATHERTHREAD_CLOUDFLARE_AI_TOKEN: "private-token",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: `example/hosted@sha256:${"b".repeat(64)}`,
+  };
+  assert.throws(() => loadServerConfig(enabled, "/srv/gatherthread"), ConfigurationError);
+  assert.throws(() => loadServerConfig({ ...enabled,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: "example/hosted:latest",
+  }, "/srv/gatherthread"), ConfigurationError);
+  if (process.platform === "win32") {
+    assert.throws(() => loadServerConfig({ ...enabled,
+      GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+    }, "/srv/gatherthread"), /Linux Docker host/);
+    return;
+  }
+  const config = loadServerConfig({ ...enabled,
+    GATHERTHREAD_HOSTED_AGENT_ENDPOINTS: "",
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+  }, "/srv/gatherthread");
+  assert.equal(config.hostedAgent?.image, enabled.GATHERTHREAD_HOSTED_AGENT_IMAGE);
+  assert.equal(config.hostedAgent?.userDailyRuns, 1);
+  const localImage = `sha256:${"c".repeat(64)}`;
+  assert.equal(loadServerConfig({ ...enabled,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: localImage,
+  }, "/srv/gatherthread").hostedAgent?.image, localImage);
 });
 
 test("owner-host credentials require a stable pepper even outside production", () => {
@@ -44,6 +76,36 @@ test("owner-host credentials require a stable pepper even outside production", (
     GATHERTHREAD_AUTH_TOKEN_PEPPER: "development-pepper-0123456789abc",
   }, "/srv/gatherthread");
   assert.doesNotThrow(() => assertPersistentCredentialPepper(config));
+});
+
+test("SiliconFlow free preset selects two exact models with user throttling and no daily allowance", { skip: process.platform === "win32" }, () => {
+  const enabled = {
+    GATHERTHREAD_HOSTED_AGENT_ENABLED: "true", GATHERTHREAD_HOSTED_AGENT_PRESET: "siliconflow-free",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: `sha256:${"b".repeat(64)}`,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true", GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-only-key",
+  };
+  const hosted = loadServerConfig(enabled, "/srv/gatherthread").hostedAgent!;
+  assert.deepEqual(hosted.endpoints.map((endpoint) => endpoint.model), ["Qwen/Qwen3.5-4B", "Qwen/Qwen3-8B"]);
+  assert.ok(hosted.endpoints.every((endpoint) => endpoint.dailyRuns === null
+    && endpoint.baseUrl === "https://api.siliconflow.cn/v1" && endpoint.quotaGroup === "siliconflow-primary"));
+  assert.equal(hosted.userDailyRuns, null); assert.equal(hosted.globalDailyRuns, null);
+  assert.equal(hosted.userMinIntervalSeconds, 30); assert.equal(hosted.userMaxConcurrent, 1);
+  assert.equal(hosted.maxConcurrent, 2);
+  assert.equal(loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS: "2000" },
+    "/srv/gatherthread").hostedAgent?.userDailyRuns, 1);
+  for (const overrides of [
+    { GATHERTHREAD_SILICONFLOW_API_KEY: "" }, { GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "false" },
+    { GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS: "0" }, { GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS: "3601" },
+    { GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT: "3" }, { GATHERTHREAD_HOSTED_AGENT_ENDPOINTS: "[]" },
+    { GATHERTHREAD_HOSTED_AGENT_PRESET: "unknown" },
+  ]) assert.throws(() => loadServerConfig({ ...enabled, ...overrides }, "/srv/gatherthread"), ConfigurationError);
+  assert.equal(loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_ENABLED: "false",
+    GATHERTHREAD_SILICONFLOW_API_KEY: "" }, "/srv/gatherthread").hostedAgent, undefined);
+  const paid = JSON.stringify([{ id: "paid", profile_id: "paid", label: "Paid", provider: "deepseek",
+    model: "deepseek-chat", token_env: "PAID_TOKEN", quota_group: "paid", daily_runs: 5, max_concurrent: 1 }]);
+  assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_PRESET: "",
+    GATHERTHREAD_HOSTED_AGENT_ENDPOINTS: paid, PAID_TOKEN: "fixture-paid-key", GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS: "none",
+  }, "/srv/gatherthread"), ConfigurationError);
 });
 
 test("canonical GatherThread variables are parsed without falling back to generic HOST or PORT", () => {

@@ -24,7 +24,7 @@ class Node {
   click() { return this.dispatch("click"); }
 }
 
-function setup({ seenNotice = true } = {}) {
+function setup({ seenNotice = true, onGithubOpen } = {}) {
   const nodes = new Map();
   const el = (id) => { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); };
   const doc = { getElementById: el, createElement: () => new Node(), activeElement: new Node() };
@@ -44,7 +44,7 @@ function setup({ seenNotice = true } = {}) {
   let context = { project: { id: "p1", name: "Project", role: "owner" }, userId: "u1", sessionId: "s1", runtimes: [] };
   const storageValues = new Map(seenNotice ? [["gatherthread.code-notice.v2:d1", "seen"]] : []);
   const storage = { getItem: (key) => storageValues.get(key) ?? null, setItem: (key, value) => storageValues.set(key, value) };
-  const ui = mountCodeSync({ document: doc, api, localizer: { t: (text) => text }, getContext: () => context, storage });
+  const ui = mountCodeSync({ document: doc, api, localizer: { t: (text) => text }, getContext: () => context, storage, onGithubOpen });
   return { el, ui, status, mutations,
     changeContext: (next) => { context = next; ui.updateContext(); },
     setSnapshotHead: (value) => { snapshotHead = value; },
@@ -169,5 +169,27 @@ test("viewers can inspect member changes without exposing merge authority", asyn
   assert.equal(app.el("code-merge-button").hidden, true);
   assert.equal(app.el("code-merge-button").disabled, true);
   assert.equal(app.el("code-upload-button").disabled, true);
+  app.ui.close();
+});
+
+test("GT Cloud and GitHub share one panel and switching providers does not mutate storage", async () => {
+  let githubOpens = 0;
+  const app = setup({ onGithubOpen: () => { githubOpens++; } });
+  app.status.repository.enabled = false;
+  app.el("project-code-button").click();
+  await tick();
+  assert.equal(app.el("code-gt-cloud-panel").hidden, false);
+  assert.equal(app.el("code-github-panel").hidden, true);
+  app.el("code-provider-github").click();
+  assert.equal(app.el("project-code-dialog").open, true);
+  assert.equal(app.el("code-github-panel").hidden, false);
+  assert.equal(app.el("code-gt-cloud-panel").hidden, true);
+  assert.equal(app.ui.isGithubOpen(), true);
+  assert.equal(githubOpens, 1);
+  app.el("code-provider-gt-cloud").click();
+  assert.equal(app.ui.isGithubOpen(), false);
+  assert.equal(app.el("code-gt-cloud-panel").hidden, false);
+  assert.deepEqual(app.mutations, []);
+  assert.equal(app.status.repository.enabled, false);
   app.ui.close();
 });

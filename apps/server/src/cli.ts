@@ -28,6 +28,7 @@ Commands:
   init        Alias for bootstrap
   issue-test-access  Issue up to 50 single-use test qualifications locally (JSON by default)
   revoke-test-access Revoke an unclaimed test qualification token locally
+  hosted-agent:set-user-limit  Set a user's Cloud Agent daily run allowance locally
 
 Configuration is read from NODE_ENV and the GATHERTHREAD_* variables documented in .env.example.
 `;
@@ -181,6 +182,8 @@ async function start(config: ServerConfig): Promise<void> {
     maxUserSessions: config.maxUserSessions,
     maxProjectSessions: config.maxProjectSessions,
     maxTotalSessions: config.maxTotalSessions,
+    ...(config.hostedAgent ? { hostedAgent: config.hostedAgent } : {}),
+    ...(config.hostedGithub ? { hostedGithub: config.hostedGithub } : {}),
   }, config.port, config.host);
   process.stdout.write(`GatherThread owner host listening at ${running.origin}\n`);
 
@@ -211,6 +214,15 @@ async function main(): Promise<void> {
   }
   if (command === "revoke-test-access") {
     revokeTestAccess(config, args);
+    return;
+  }
+  if (command === "hosted-agent:set-user-limit") {
+    if (args.length !== 4 || args[0] !== "--user-id" || !["--runs", "--neurons"].includes(args[2]!)
+      || !/^(0|[1-9][0-9]*)$/u.test(args[3] ?? "")) {
+      throw new ConfigurationError("Usage: hosted-agent:set-user-limit --user-id ID --runs 0..10000");
+    }
+    withOperatorDatabase(config, (database) => database.setHostedAgentUserLimit(args[1]!, args[2] === "--neurons" ? Math.floor(Number(args[3]) / 2000) : Number(args[3])));
+    process.stdout.write("Cloud Agent user limit updated.\n");
     return;
   }
   if (command !== "start" || args.length > 0) throw new ConfigurationError(`Unknown command: ${[command, ...args].join(" ")}`);

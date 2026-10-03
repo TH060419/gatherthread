@@ -158,7 +158,7 @@ body {
 html[data-theme="dark"] .lockup-for-light { display: none; }
 html[data-theme="light"] .lockup-for-dark { display: none; }
 
-.nav-links { display: flex; gap: 36px; justify-self: center; }
+.nav-links { display: flex; gap: clamp(12px, 1.8vw, 24px); justify-self: center; }
 .nav-links a {
   color: var(--text-2);
   text-decoration: none;

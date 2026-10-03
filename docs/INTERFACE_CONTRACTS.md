@@ -192,6 +192,8 @@ The published MCP surface is intentionally narrower than the internal collaborat
 
 ## Web presentation boundary
 
+The Cloud Git dialog keeps `project-code-button` and `project-code-dialog` as its single entry/container. `code-provider-gt-cloud` and `code-provider-github` select peer views with `aria-pressed` and `aria-controls`; switching views has no repository mutation. Existing `github-code-*` local controls are retained. Private `cloud-github-*` account/task controls are inline in the GitHub view; the preview's separate `cloud-github-dialog`, `cloud-github-open`, `settings-cloud-github-open` and close button are removed with their bindings. The public Cloud Agent entry is held independently of these GitHub controls, as specified in [Product specification](PRODUCT_SPEC.md).
+
 ### Windows/macOS Codex Launcher URI v1
 
 The optional Windows and macOS Launchers use `gatherthread-connect://connect?v=1&origin=...&project=...&model=...&context_window_tokens=...&visible_history_sync=...`. Web offers this action only when the browser reports Windows or macOS and `location.origin` is exactly `https://gatherthread.cn`. Other platforms and origins retain the manual terminal commands. The Windows handler is registered per user by the installer; macOS registers the `.app` through Launch Services when it is opened. The browser cannot assume either is installed.
@@ -224,3 +226,22 @@ An interface-changing PR must answer:
 6. Which canonical docs, release notes, and ADRs must change?
 
 The project lead must review the PR before a version containing the contract change is merged, tagged, published, or deployed.
+
+## Hosted Agent source-preview contract
+
+`GET /v1/hosted-agent` is authenticated and returns `{ data: { enabled: false } }` when disabled. When enabled, `HostedAgentStatusSchema` defines the exact public profile IDs, labels, providers, models, availability/capacity, UTC-day run usage/limits, capabilities and privacy copy. Daily limits may be `null` for the confirmed free-model setup. Optional `rate_limits` reports `user_min_interval_seconds`, `user_max_concurrent`, `user_active_runs` and `retry_after_seconds`; profile availability can be `user_busy` or `rate_limit`. It never returns endpoint IDs, account grouping, URLs or API credentials. Preview server and Web upgrades must be coordinated for these new status values.
+
+`POST /v1/sessions/:sessionId/hosted-agent-requests` uses strict `HostedAgentRequestInputSchema`: `profile_id` (legacy default `default`), `content`, `include_code`, `idempotency_key`, and optional `reply_to_event_id`. It enforces live project/session write permissions and reserves user cooldown, user/account/global concurrency and any daily allowance atomically with the canonical request. It returns the request/optional response event plus `replayed`. A profile identifies one exact provider/model. Only account capacity within that profile is interchangeable. Empty/unknown profiles, quota exhaustion, busy capacity and unavailable providers fail explicitly. New error codes `hosted_user_busy` and `hosted_user_rate_limit` return 429; the latter includes `error.details.retry_after_seconds`. Accepted failures consume their start interval and any daily allowance; rejected reservations roll back, and same-key retries never double-execute. User limits aggregate trial and repository tasks across models, projects, sessions and devices.
+
+Server/Web must upgrade together from the earlier single-provider preview. Persistence migration, old environment aliases and rollback limits are in [HOSTED_AGENT.md](HOSTED_AGENT.md). This surface remains disabled until provider and deployment validation; it does not advertise a currently running public service.
+
+## Cloud GitHub task preview
+
+Strict input schemas are owned by `packages/protocol/src/hosted-github.ts`; server routing is in `apps/server/src/server.ts` and private persistence in `hosted-github-schema.ts`. Additive routes are:
+
+- `POST /v1/hosted-github/authorize`, `GET /v1/hosted-github/callback`, `POST /v1/hosted-github/complete`, `DELETE /v1/hosted-github/account`.
+- `GET /v1/projects/:id/hosted-github`, `POST /v1/projects/:id/hosted-github/repository`, `GET /v1/projects/:id/hosted-github/tasks`.
+- `POST /v1/sessions/:id/hosted-github-tasks` returns 202 with a private task.
+- `GET|DELETE /v1/hosted-github/tasks/:id`, `POST /v1/hosted-github/tasks/:id/pull-request`.
+
+Tasks use the existing canonical Agent request/result plane with optional `github_task_id`; old trial requests remain unchanged and cannot impersonate a repository task via that field. Canonical events carry task identity and bounded public assistant text, not private source/tool logs. Task queries and PR publication are requester-private and enforce current write eligibility. Request content is redacted once at the task boundary for persistence and execution, with a final prompt redaction. A private keyed original-input receipt preserves exact retry conflict semantics even when two inputs redact identically; it is never returned by task/status APIs. PR writes require `expected_revision`. Disabled project status returns `{enabled:false}`. Existing local GitHub routes are preserved. Resource limits, atomic input migration, credential storage and failure/retry behavior are documented in [HOSTED_GITHUB.md](HOSTED_GITHUB.md); current-day consumption survives cloud deletion under [HOSTED_AGENT.md](HOSTED_AGENT.md#upgrade-compatibility).

@@ -15,6 +15,8 @@ import {
   normalizeSettings,
   projectAgentHarness,
   projectCodexProfile,
+  projectCloudProfile,
+  withProjectCloudProfile,
   projectDshProfile,
   projectEnabledHarnesses,
   SETTINGS_STORAGE_KEY,
@@ -35,7 +37,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 12);
+  assert.equal(normalized.version, 13);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -148,7 +150,7 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
     token: "must-not-survive",
   });
   assert.equal(projectAgentHarness(settings, "project-alpha"), "deepseek-harness");
-  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness"]);
+  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "cloud", "deepseek-harness"]);
   assert.equal(projectAgentHarness(settings, "project-beta"), "deepseek-harness");
   assert.deepEqual(projectDshProfile(settings, "project-alpha"), {
     deviceId: "dsh-device-1",
@@ -194,7 +196,7 @@ test("legacy DSH project profiles migrate without inventing runtime ids or reaso
 });
 
 test("project connection shortcuts are ordered, multi-select, and always keep one default Agent", () => {
-  assert.deepEqual(projectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha"), ["codex"]);
+  assert.deepEqual(projectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha"), ["codex", "cloud"]);
   let settings = withProjectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha", ["codex", "deepseek-harness", "codex"]);
   assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.deepEqual(
@@ -221,7 +223,7 @@ test("legacy flat Codex project profiles migrate without changing their model or
       },
     },
   });
-  assert.equal(migrated.version, 12);
+  assert.equal(migrated.version, 13);
   assert.equal(projectAgentHarness(migrated, "project-alpha"), "codex");
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex"]);
   assert.deepEqual(projectCodexProfile(migrated, "project-alpha"), { model: "Legacy/Model", effort: "high" });
@@ -247,9 +249,9 @@ test("version 6 connection shortcuts become the default for newly opened project
     setItem: () => {},
     removeItem: () => {},
   }).get();
-  assert.equal(migrated.version, 12);
-  assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness"]);
-  assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
+  assert.equal(migrated.version, 13);
+  assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness", "cloud"]);
+  assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness", "cloud"]);
 });
 
 test("context budget keeps a precise configured value while reporting connector limits", () => {
@@ -303,7 +305,7 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 12);
+  assert.equal(migrated.version, 13);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");
@@ -378,4 +380,17 @@ test("the effective motion preference resolves the system default against the op
   // rather than silently claiming motion is unwanted.
   assert.equal(effectiveMotion(undefined, true), "reduce");
   assert.equal(effectiveMotion(undefined, false), "full");
+});
+
+
+test("cloud profile is isolated, exact and excludes credentials", () => {
+  let settings = withProjectAgentHarness(DEFAULT_SETTINGS, "project-alpha", "cloud");
+  settings = withProjectCloudProfile(settings, "project-alpha", "deepseek-main");
+  assert.equal(projectAgentHarness(settings, "project-alpha"), "cloud");
+  assert.equal(projectCloudProfile(settings, "project-alpha"), "deepseek-main");
+  assert.equal(projectCloudProfile(settings, "project-beta"), null);
+  const copy = JSON.parse(JSON.stringify(settings));
+  copy.agents.projectProfiles["project-alpha"].cloud.apiKey = "fake-key";
+  assert.doesNotMatch(JSON.stringify(normalizeSettings(copy)), /fake-key|apiKey/);
+  assert.equal(projectCloudProfile(normalizeSettings(copy), "project-alpha"), "deepseek-main");
 });
