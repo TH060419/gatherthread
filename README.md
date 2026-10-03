@@ -16,9 +16,10 @@ Git tag, npm package, and GitHub Release details are recorded in the [release in
 
 ## Registration and sign-in
 
-User accounts register with a verified email address and a self-set password, then sign in with email and password. All new accounts can create projects under the current Alpha roles and resource rules. Registration is closed by default; existing email/password login remains available while signup is disabled or paused. Password recovery is not implemented. No user access token is displayed or saved.
+Register with a verified email address and choose a password, then sign in with email and password. Create projects or accept project invitations after signing in. Connect your Agents with independent device authorization. If you forget your password, request an email code on the sign-in page and choose a new password; this signs out every device and revokes Agent access while keeping your projects.
 
-This unreleased branch replaces user token login, test qualification activation and invitation-created guest accounts. Their HTTP endpoints return `410 account_flow_retired`; local bootstrap/qualification issuance commands and the public application template are removed. Historical database rows are retained without account inheritance, merging or password enrollment. Old user Cookies cannot authenticate the Web app; independently authorized native Agent/device credentials remain separate and revocable. This source change performs no production cleanup or deployment. See [OPERATIONS](docs/OPERATIONS.md) and [ADR-0036](docs/adr/0036-verified-email-registration-and-password-login.md).
+Registration and password recovery are closed by default until their [operator setup](docs/OPERATIONS.md) is complete. This source preview is not deployed to the official Alpha. See [ADR-0036](docs/adr/0036-verified-email-registration-and-password-login.md) for account and device behavior.
+
 ## Project and role model
 
 A project is the collaboration and invitation boundary. The project owner can rename the project, creates `multi` sessions, can switch their own sessions between `solo` and `multi`, and may change any other member between `participant` and `viewer` later. Owners and participants may each create personal `solo` sessions; only that Solo's creator may write or rename it, while every other project member reads it. A participant can also write and run their own agent in every `multi` session. A viewer is read-only across the entire project, and local tasks created by a viewer never create cloud sessions. A session creator or the project owner may permanently delete that session's cloud copy; only the project owner may delete the whole cloud project. Cloud deletion stops synchronization and removes shared server history, but never deletes local workspaces, files, Codex tasks, or Agent conversations.
@@ -70,7 +71,7 @@ npm run owner-host
 
 To customize ports or paths, copy `.env.example` before initialization. `owner-host:init` fills only a blank pepper and preserves every other setting. `owner-host` builds the current source automatically on every start.
 
-Open `http://127.0.0.1:18787`, then enter `/app/` to register with verified email and sign in with a self-set password. Signup stays closed until the [operator preflight](docs/OPERATIONS.md) is complete. Password recovery is unavailable. The browser holds only an HttpOnly session Cookie, for 24 hours by default or 30 days with Remember this device; logout revokes it. Agent devices exchange a separate authorization in their connector without reusing the password.
+Open `http://127.0.0.1:18787`, then enter `/app/` to register with verified email and sign in with a self-set password. Signup stays closed until the [operator preflight](docs/OPERATIONS.md) is complete. Password recovery requires its separate operator switch and configured mail/security providers. The browser holds only an HttpOnly session Cookie, for 24 hours by default or 30 days with Remember this device; logout revokes it. Agent devices exchange a separate authorization in their connector without reusing the password.
 
 For UI-only development, `npm --workspace apps/web run dev` starts the loopback preview and proxies the local API. The product home is at `http://127.0.0.1:4173/`; explicit workspace mock mode is available only at `http://127.0.0.1:4173/app/?mock=1` with email `demo@example.invalid` and password `isolated demo password`.
 
@@ -154,6 +155,4 @@ Every version update is reviewed through a pull request by the project lead / de
 
 Licensed under the [Apache License 2.0](LICENSE). Copyright 2026 Yuhan He and contributors.
 
-### Email registration source preview
-
-User accounts register with a verified email address and a self-set password, then sign in with email and password. All new accounts can create projects under the current Alpha roles and resource rules. Registration is closed by default; existing email/password login remains available while signup is disabled or paused. Password recovery is not implemented. No user access token is displayed or saved. Future free hosted model usage will have its own enforced quota. This unreleased branch replaces user token login, test qualification activation and invitation-created guest accounts. Their HTTP endpoints return `410 account_flow_retired`; local bootstrap/qualification issuance commands and the public application template are removed. Historical database rows are retained without account inheritance, merging or password enrollment. Old user Cookies cannot authenticate the Web app; independently authorized native Agent/device credentials remain separate and revocable. This source change performs no production cleanup or deployment.
+#

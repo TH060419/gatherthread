@@ -444,6 +444,9 @@ export class HttpCollaborationApi {
   }
 
   prepareEmailLogin() { return this.request("/v1/email-login"); }
+  passwordResetStatus() { return this.request("/v1/password-reset"); }
+  sendPasswordReset(input) { return this.request("/v1/password-reset/send", { method: "POST", body: JSON.stringify(input) }); }
+  verifyPasswordReset(input) { return this.request("/v1/password-reset/verify", { method: "POST", body: JSON.stringify(input) }); }
 
   async loginWithEmail(input) {
     const result = await this.request("/v1/email-login", { method: "POST", body: JSON.stringify(input) });

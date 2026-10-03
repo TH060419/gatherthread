@@ -82,7 +82,7 @@ test("English is the unchanged default and Simplified Chinese preserves product 
   assert.equal(translateUiText("Settings", "zh-CN"), "设置");
   assert.equal(translateUiText("Remove {name} from project", "zh-CN"), "将{name}从项目中移除");
   assert.equal(translateUiText("Access token", "zh-CN"), "访问 token");
-  assert.equal(translateUiText("Verify your email and choose a password. No access token to save.", "zh-CN"), "验证邮箱并设置密码，无需保存 access token。");
+  assert.equal(translateUiText("Verify your email and choose a password.", "zh-CN"), "验证邮箱并设置密码。");
   assert.equal(translateUiText("Remember this device", "zh-CN"), "记住此设备");
   assert.equal(translateUiText("Checking…", "zh-CN"), "正在验证…");
   assert.equal(translateUiText("Sign in with email and password", "zh-CN"), "使用邮箱和密码登录");
@@ -107,7 +107,7 @@ test("English is the unchanged default and Simplified Chinese preserves product 
   );
   assert.equal(translateUiText("Create one-time device authorization", "zh-CN"), "创建一次性设备授权");
   assert.equal(translateUiText("One-time device authorization", "zh-CN"), "一次性设备授权");
-  assert.equal(translateUiText("Password recovery is not available yet. Keep your password in a password manager.", "zh-CN"), "目前暂不支持找回密码。请将密码保存在密码管理器中。");
+  assert.equal(translateUiText("Use a long, unique password and keep it in your password manager.", "zh-CN"), "请设置长且独有的密码，并保存在密码管理器中。");
   assert.match(
     translateUiText("Your device token is requested by a hidden CLI prompt and is not included in any command. This page only copies commands and cannot launch local Codex. Keep the connector running for Web requests and plugin MCP tools. Direct Desktop turn sync additionally requires --plugin-hooks plus explicit review and trust of the plugin Hooks.", "zh-CN"),
     /Hooks（钩子）/,

@@ -176,6 +176,7 @@ const authIdentity = element("auth-identity");
 const authEntryChoices = [
   { entry: "email-login", button: element("auth-select-email-login"), panel: element("auth-email-login-panel") },
   { entry: "register", button: element("auth-select-register"), panel: element("auth-register-panel") },
+  { entry: "password-reset", button: element("auth-select-password-reset"), panel: element("auth-password-reset-panel") },
 ];
 const sessionList = element("session-list");
 const projectSelect = element("project-select");
@@ -256,6 +257,13 @@ const registrationUi = mountRegistration({ document, api, localizer,
   busy: (value) => { authRequestInProgress = value; },
   beginAuthentication: beginEmailAuthentication,
   complete: completeEmailAuthentication,
+});
+const passwordResetUi = mountRegistration({ document, api, localizer, passwordReset: true,
+  busy: (value) => { authRequestInProgress = value; }, beginAuthentication: beginEmailAuthentication,
+  onReset: () => {
+    setActiveAuthEntry("email-login", { focus: true });
+    localizer.setText(element("email-login-status"), "Password reset. Sign in with your new password. Authorize your Agents again after signing in.");
+  },
 });
 const codeSyncUi = mountCodeSync({
   document, api, localizer, mockEnabled,
@@ -457,13 +465,16 @@ function setActiveAuthEntry(entry, { focus = false } = {}) {
   if (authRequestInProgress) return;
   authenticationGeneration += 1;
   activeAuthEntry = entry;
+  element("email-login-status").textContent = "";
   if (entry === "register") void registrationUi.enter();
   else registrationUi.clear();
+  if (entry === "password-reset") void passwordResetUi.enter();
+  else passwordResetUi.clear();
   authEntryChooser.hidden = entry !== "choose";
-  authIdentity.hidden = entry === "choose";
+  authIdentity.hidden = entry === "choose" || entry === "password-reset";
   for (const choice of authEntryChoices) choice.panel.hidden = choice.entry !== entry;
   if (focus) element(entry === "choose" ? "auth-select-email-login"
-    : entry === "register" ? "claim-display-name" : "email-login-email").focus();
+    : entry === "register" ? "claim-display-name" : entry === "password-reset" ? "password-reset-email" : "email-login-email").focus();
 }
 
 for (const choice of authEntryChoices) choice.button.addEventListener("click", () => setActiveAuthEntry(choice.entry, { focus: true }));
@@ -1869,7 +1880,7 @@ function updateCreatedInvitationShareText(locale = state.settings.general.locale
 }
 
 function clearSensitiveInputs() {
-  for (const id of ["registration-email", "registration-code", "registration-password", "registration-password-confirm", "email-login-email", "email-login-password", "accept-invite-secret", "claim-display-name"]) {
+  for (const id of ["password-reset-email", "password-reset-code", "password-reset-password", "password-reset-password-confirm", "registration-email", "registration-code", "registration-password", "registration-password-confirm", "email-login-email", "email-login-password", "accept-invite-secret", "claim-display-name"]) {
     element(id).value = "";
   }
 }

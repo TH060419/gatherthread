@@ -1,4 +1,17 @@
 const ZH_CN = Object.freeze({
+  "Forgot password?": "忘记密码？",
+  "Reset your password": "重设密码",
+  "Reset password": "重设密码",
+  "Choose a new password": "设置新密码",
+  "Enter your account email and verify the code to choose a new password. This signs out every device and revokes Agent access. Your projects stay in your account.": "输入注册邮箱，验证邮件中的验证码后设置新密码。重设后所有设备会退出登录，Agent 授权也会撤销，项目仍保留在你的账号中。",
+  "Checking password recovery availability…": "正在检查找回密码是否可用…",
+  "Enter the email address you used to register.": "请输入注册时使用的邮箱。",
+  "Password recovery is temporarily unavailable.": "暂时无法找回密码，请稍后重试。",
+  "Too many recovery attempts. Please try later.": "找回密码请求过多，请稍后再试。",
+  "Open password recovery in this browser and try again.": "请在此浏览器重新打开找回密码页面后重试。",
+  "Password could not be reset. Please try again.": "未能重设密码，请稍后重试。",
+  "Password reset. Sign in with your new password. Authorize your Agents again after signing in.": "密码已重设，请使用新密码登录。登录后请重新授权自己的 Agent。",
+
   "Authorize a Codex device": "授权 Codex 设备",
   "This authorizes one new device to act under your account. Revoke it later in Settings. The authorization expires in 10 minutes.": "此操作允许一台新设备以你的账号执行操作，可稍后在设置中撤销。此授权 10 分钟后失效。",
   "Create one-time device authorization": "创建一次性设备授权",
@@ -10,12 +23,11 @@ const ZH_CN = Object.freeze({
   "Create an authorization below, then paste it into the hidden CLI prompt or Launcher.": "在下方创建授权，再粘贴到命令行隐藏输入框或启动器。",
   "After installing the local Launcher, open it for this project. Enter the one-time device authorization in its window.": "安装本地启动器后，为当前项目打开启动器，并在其窗口中输入一次性设备授权。",
 
-  "Verify your email, then choose a password. Sign in with email and password. Password recovery is not available yet.": "验证邮箱后自行设置密码，之后用邮箱和密码登录。目前暂不支持找回密码。",
-  "Password recovery is not available yet. Keep your password in a password manager.": "目前暂不支持找回密码。请将密码保存在密码管理器中。",
+  "Verify your email, then choose a password. Sign in with email and password.": "验证邮箱后自行设置密码，之后用邮箱和密码登录。",
+  "Use a long, unique password and keep it in your password manager.": "请设置长且独有的密码，并保存在密码管理器中。",
   "Isolated example: use demo@example.invalid and password isolated demo password.": "独立示例：邮箱为 demo@example.invalid，密码为 isolated demo password。",
 
-  "Verify your email and choose a password. No access token to save.": "验证邮箱并设置密码，无需保存 access token。",
-  "Your email is your sign-in account. Set a password after email verification. Existing accounts stay separate. Password recovery is not available yet.": "邮箱就是登录账号。验证邮箱后设置密码，已有账号保持独立。目前暂不支持找回密码。",
+  "Verify your email and choose a password.": "验证邮箱并设置密码。",
   "Email account · sign in": "邮箱账号 · 登录",
   "Use the email and password you set during registration.": "使用注册时填写的邮箱和密码。",
   "Sign in with email and password": "使用邮箱和密码登录",
@@ -406,11 +418,11 @@ const ZH_CN = Object.freeze({
   "Many minds.": "汇聚众智。",
   "People collaborate in one space, each with a local Agent, sharing context that stays ordered, attributable, and live.": "多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。",
   "Enter your workspace": "进入工作空间",
-  "Your identity and permissions come from the server.": "你的身份与权限由服务器提供。",
+  "Sign in or create an account to collaborate.": "登录或创建账号，开始与团队协作。",
   "Account access": "账号入口",
   "Existing account": "已有账号 · 登录",
   "Have a project invitation?": "只有项目邀请？",
-  "For new accounts, set a display name and a device name. Existing accounts can leave them unchanged.": "新账号请填写显示名称和设备名称；已有账号登录时可保持不变。",
+  "Display names appear to collaborators. The device name helps you recognize this browser.": "显示名称会呈现给协作者，设备名称方便你识别这个浏览器。",
   "Sign in": "登录工作空间",
   "Checking…": "正在验证…",
   "Joining…": "正在加入…",
@@ -586,7 +598,7 @@ const ZH_CN = Object.freeze({
   "Open Launcher": "打开启动器",
   "A local connector keeps this project connected to Codex Desktop. Follow the manual terminal steps, or use the optional Windows/macOS Launcher.": "本地连接器会持续连接当前项目与 Codex Desktop。可按终端步骤手动操作，也可选用 Windows/macOS 启动器。",
   "The manual terminal path requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.": "手动终端流程需要 Node 24+ 和已登录的 Codex Desktop，然后添加固定版本的共序插件。",
-  "On supported Windows and macOS, this page can open the installed Launcher. Manual commands remain available. No token is placed in a command, URL, or shared history.": "在受支持的 Windows 和 macOS 环境中，此页面可打开已安装的启动器。手动连接命令仍可使用。任何 token 都不会进入命令、URL 或共享历史。",
+  "On supported Windows and macOS, this page can open the installed Launcher. Manual commands remain available.": "在受支持的 Windows 和 macOS 环境中，此页面可打开已安装的启动器。也可以使用手动连接命令。",
   "Current server only": "仅连接当前服务器",
   "Install once": "仅需安装一次",
   "Requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.": "需要 Node 24+ 和已登录的 Codex Desktop；然后添加固定版本的共序插件。",
@@ -636,7 +648,7 @@ const ZH_CN = Object.freeze({
   "Done": "完成",
   "GatherThread preferences": "GatherThread 偏好设置",
   "Settings": "设置",
-  "Personalize this browser without storing credentials.": "个性化当前浏览器，不会存储凭据。",
+  "Personalize this browser.": "个性化当前浏览器。",
   "Close Settings": "关闭设置",
   "Settings sections": "设置分类",
   "General": "通用",
@@ -1053,6 +1065,10 @@ export function createLocalizer(documentObject = globalThis.document) {
     },
     t(source) {
       return translateUiText(source, locale);
+    },
+    setText(node, source) {
+      node.textContent = source;
+      translateSubtree(node);
     },
     dispose() {
       observer.disconnect();

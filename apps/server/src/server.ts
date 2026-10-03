@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 import { extname, resolve, sep, join } from "node:path";
 import {
   EmailLoginInputSchema, EmailAccountSessionSchema, RegistrationStatusSchema, RegistrationSentSchema, SendRegistrationInputSchema, VerifyRegistrationInputSchema,
+  SendPasswordResetInputSchema, VerifyPasswordResetInputSchema, PasswordResetSentSchema,
   AppendEventInputSchema,
   AgentProgressInputSchema,
   AcceptInvitationInputSchema,
@@ -593,8 +594,40 @@ export async function startCollaborationServer(
         }
         throw notFound("Registration route");
       }
+      if (url.pathname.startsWith("/v1/password-reset")) {
+        if (url.search) throw new ApiError(400, "registration_invalid", "Reset parameters belong in the request body.");
+        const enabled = database.registration.recoveryReady(registration);
+        if (request.headers["sec-fetch-site"] === "cross-site") throw new ApiError(403, "origin_forbidden", "The browser origin is not allowed");
+        if (request.method === "GET" && url.pathname === "/v1/password-reset") {
+          const browser = registrationBrowser(request) ?? `grc_${randomBytes(32).toString("base64url")}`;
+          if (enabled) appendSetCookie(response, `${registrationCookieName}=${browser}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000${secureTransport ? "; Secure" : ""}`);
+          sendJson(response, 200, { data: RegistrationStatusSchema.parse({ enabled, site_key: enabled ? registration!.siteKey : null,
+            challenge_binding: enabled ? database.registration.binding(browser, "password-reset") : null }) });
+          return;
+        }
+        if (request.method === "POST" && ["/v1/password-reset/send", "/v1/password-reset/verify"].includes(url.pathname)) {
+          if (!enabled) throw new ApiError(503, "password_reset_unavailable", "Password recovery is temporarily unavailable.");
+          if (!requestOrigin || requestOrigin !== registration!.origin || !options.allowedOrigins?.includes(requestOrigin)) throw new ApiError(403, "csrf_origin_required", "Password reset requires the configured browser origin");
+          if (!request.headers["content-type"]?.startsWith("application/json")) throw new ApiError(415, "invalid_content_type", "Password reset requires JSON");
+          const browser = registrationBrowser(request);
+          if (!browser) throw new ApiError(400, "registration_browser", "Open password recovery in this browser and try again.");
+          const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration!.trustedProxy);
+          if (url.pathname.endsWith("/send")) {
+            const result = await database.registration.send(SendPasswordResetInputSchema.parse(await readJson(request, 8192)), browser, ip, registration!, "password-reset");
+            sendJson(response, 202, { data: PasswordResetSentSchema.parse({ reset_id: result.registration_id, expires_in_seconds: result.expires_in_seconds, resend_after_seconds: result.resend_after_seconds }) });
+          } else {
+            const userId = await database.resetPassword(VerifyPasswordResetInputSchema.parse(await readJson(request, 8192)), browser, ip, registration!);
+            dshPairings.revokeUser(userId);
+            for (const [value, ticket] of realtimeTickets) if (ticket.actor.user_id === userId) realtimeTickets.delete(value);
+            for (const [socket, state] of sockets) if (state.actor.user_id === userId) { socket.close(1008, "password_reset"); sockets.delete(socket); }
+            sendJson(response, 200, { data: { reset: true } });
+          }
+          return;
+        }
+        throw notFound("Password reset route");
+      }
       // The external challenge is limited to the real login document and configured deployments.
-      if (["/app/", "/app/index.html"].includes(url.pathname) && database.registration.ready(registration)) {
+      if (["/app/", "/app/index.html"].includes(url.pathname) && (database.registration.ready(registration) || database.registration.recoveryReady(registration))) {
         const csp = String(response.getHeader("content-security-policy"));
         response.setHeader("content-security-policy", csp.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com")
           .replace("connect-src 'self'", "connect-src 'self' https://challenges.cloudflare.com") + "; frame-src 'self' https://challenges.cloudflare.com");

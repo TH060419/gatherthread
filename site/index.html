@@ -186,16 +186,16 @@
     <div class="wrap">
       <p class="mono label fx">[ CONNECTION ]</p>
       <h2 class="h2 fx" data-i18n="connect.h2">通过服务器，随时接入同一项目。</h2>
-      <p class="lead fx" data-i18n="connect.lead">当前 Alpha 尚未开放公众注册。邮箱账号功能经审核启用后，网页承载共享会话，Agent 与工作目录仍留在自己的设备上。</p>
+      <p class="lead fx" data-i18n="connect.lead">当前 Alpha 尚未开放公众注册。网页承载共享会话，Agent 与工作目录仍留在自己的设备上。</p>
       <div class="trio">
         <article class="col fx">
           <h3 data-i18n="connect.c1.h3">打开共序</h3>
-          <p data-i18n="connect.c1.p">使用邮箱和密码登录。首次使用请先验证邮箱，再自行设置密码；目前暂不支持找回密码。</p>
+          <p data-i18n="connect.c1.p">使用邮箱和密码登录。首次使用请先验证邮箱，再自行设置密码。忘记密码时，可在登录页通过邮箱验证码重设。</p>
           <a class="col-action" href="./app/" data-i18n="connect.c1.link">打开登录页 ↗</a>
         </article>
         <article class="col fx">
           <h3 data-i18n="connect.c2.h3">注册与项目权限</h3>
-          <p data-i18n="connect.c2.p">注册账号可按当前 Alpha 规则创建项目、参与协作。先注册或登录，再接受项目邀请。注册默认关闭，只有完成审核和邮件、安全验证配置后才会开放；云端体验模型如上线，将单独设置配额。</p>
+          <p data-i18n="connect.c2.p">注册后可以创建项目，或接受邀请加入他人的项目。请先注册或登录，再接受邀请。注册默认关闭，开放情况以登录页提示为准。</p>
           <a class="col-action" href="./app/" target="_blank" rel="noopener noreferrer" data-i18n="connect.c2.link">查看注册页面 ↗</a>
         </article>
         <article class="col fx">
@@ -261,7 +261,7 @@
       <p class="mono label fx">[ SECURITY ]</p>
       <h2 class="h2 fx" data-i18n="security.h2">安全机制与当前限制。</h2>
       <div class="sec-grid fx">
-        <div class="sec-item"><h3 data-i18n="security.1.h3">设备凭据</h3><p data-i18n="security.1.p">使用 pepper 保护的设备凭据，只完整展示一次。</p></div>
+        <div class="sec-item"><h3 data-i18n="security.1.h3">账号与设备授权</h3><p data-i18n="security.1.p">使用 pepper 保护的账号与设备授权，只完整展示一次。</p></div>
         <div class="sec-item"><h3 data-i18n="security.2.h3">可撤销会话</h3><p data-i18n="security.2.p">仅存 HMAC 摘要且可撤销的浏览器会话。</p></div>
         <div class="sec-item"><h3 data-i18n="security.3.h3">一次性授权</h3><p data-i18n="security.3.p">一次性邀请与设备授权，用完即废。</p></div>
         <div class="sec-item"><h3 data-i18n="security.4.h3">实时连接 ticket</h3><p data-i18n="security.4.p">30 秒有效、一次性、限定会话。</p></div>
@@ -290,7 +290,7 @@
   <section class="band final-cta page">
     <div class="wrap">
       <h2 class="h2 fx" data-i18n="final.h2">进入共序，开始协作。</h2>
-      <p class="lead fx" data-i18n="final.lead">使用邮箱和密码登录。注册是否开放以登录页面提示为准；目前暂不支持找回密码。</p>
+      <p class="lead fx" data-i18n="final.lead">使用邮箱和密码登录。注册和找回密码是否可用，以登录页面提示为准。</p>
       <div class="hero-ctas fx">
         <a class="btn-pill" href="./app/" data-i18n="final.cta1">打开登录页</a>
         <a class="btn-link" href="./app/" target="_blank" rel="noopener noreferrer"><span data-i18n="final.cta2">邮箱注册</span><span class="chev">›</span></a>
@@ -306,7 +306,7 @@
     <div class="footnotes">
       <p data-i18n="foot.1">¹ Alpha 预览版：当前线上尚未切换邮箱账号更新，也未开放公众注册或公共 Beta。</p>
       <p data-i18n="foot.2">² 服务器使用 node:sqlite，因此需要 Node.js 24 或更新版本。</p>
-      <p data-i18n="foot.3">³ 用户先注册或登录，再接受项目邀请；Agent 使用独立设备授权。不要公开密码、验证码或设备凭据。</p>
+      <p data-i18n="foot.3">³ 用户先注册或登录，再接受项目邀请；Agent 使用独立设备授权。不要公开密码、验证码或账号与设备授权。</p>
     </div>
     <div class="footer-bar">
       <img class="footer-lockup lockup-for-dark" src="assets/lockup-color-transparent-dark.svg" alt="GatherThread">

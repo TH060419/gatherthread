@@ -324,6 +324,7 @@ test("switching registration and login invalidates a former email completion", a
   const app = harness(["setActiveAuthEntry", "beginEmailAuthentication", "completeEmailAuthentication"], {
     authRequestInProgress: false, authEntryChooser: element(), authIdentity: element(), authEntryChoices: [],
     registrationUi: { enter: async () => {}, clear: () => { cleared += 1; } },
+    passwordResetUi: { enter() {}, clear() {} },
     setAutomaticClaimDeviceName: noop, enterWorkspace: async () => { entries += 1; },
   });
   app.state.currentUser = null;

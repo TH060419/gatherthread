@@ -139,7 +139,7 @@ test("product home explains email sign-in and default registration closure", asy
   const [html, app] = await Promise.all([readFile(new URL("index.html", productRoot), "utf8"), readFile(new URL("app.js", productRoot), "utf8")]);
   assert.match(html, /邮箱和密码登录/u); assert.match(html, /注册默认关闭/u);
   assert.doesNotMatch(html + app, /template=test-access|qualification code|申请测试资格/u);
-  assert.match(html, /目前暂不支持找回密码/u);
+  assert.match(html, /忘记密码/u);
 });
 
 test("product home leads with the hosted server while keeping local Agents local", async () => {

@@ -39,6 +39,17 @@ export const RegistrationSentSchema = z.object({
 export type SendRegistrationInput = z.infer<typeof SendRegistrationInputSchema>;
 export type VerifyRegistrationInput = z.infer<typeof VerifyRegistrationInputSchema>;
 
+export const SendPasswordResetInputSchema = SendRegistrationInputSchema;
+export const PasswordResetSentSchema = z.object({
+  reset_id: z.string().uuid(), expires_in_seconds: z.literal(600), resend_after_seconds: z.literal(60),
+}).strict();
+export const VerifyPasswordResetInputSchema = z.object({
+  reset_id: z.string().uuid(), email: RegistrationEmailSchema, code: z.string().regex(/^\d{8}$/),
+  password: AccountPasswordSchema, password_confirmation: AccountPasswordSchema,
+  locale: z.enum(["en", "zh-CN"]),
+}).strict().refine((value) => value.password === value.password_confirmation);
+export type VerifyPasswordResetInput = z.infer<typeof VerifyPasswordResetInputSchema>;
+
 export const EmailAccountSessionSchema = z.object({
   actor: z.object({ user_id: z.string(), display_name: z.string(), device_id: z.string(), can_create_projects: z.literal(true) }).strict(),
   expires_at: z.string().datetime(),

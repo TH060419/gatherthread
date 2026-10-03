@@ -330,3 +330,174 @@ test("retired user routes cannot issue accounts or Cookies; old Cookies cannot l
     assert.equal(server.database.sqlite.prepare("SELECT COUNT(*) n FROM public_registration_accounts").get()!.n, 0);
   } finally { await server.close(); }
 });
+
+function recoveryFixture() {
+  const f = fixture();
+  const notices: Array<{ email: string; deliveryId: string }> = [];
+  f.options.recoveryEnabled = true;
+  f.options.mailer!.notifyPasswordChanged = async (message) => { notices.push(message); };
+  const request = (email = "new@example.invalid") => ({ email, locale: "en" as const, challenge_token: randomUUID(), idempotency_key: randomUUID() });
+  const resetInput = (id: string, code = f.mails.at(-1)!.code, email = "new@example.invalid") => ({ reset_id: id, email, code,
+    password: "isolated replacement password 82", password_confirmation: "isolated replacement password 82", locale: "en" as const });
+  const enroll = async () => { const sent = await f.send(); return f.db.verifyPublicRegistration(f.input(sent.registration_id), "browser1", "ip1", f.options); };
+  const sendReset = (email = "new@example.invalid", browser = "recovery-browser") => f.db.registration.send(request(email), browser, "recovery-ip", f.options, "password-reset");
+  return { ...f, notices, request, resetInput, enroll, sendReset };
+}
+
+test("recovery preserves identity/projects and atomically revokes all browsers, Agents and pending authorizations without auto-login", async () => {
+  const f = recoveryFixture();
+  try {
+    const account = await f.enroll();
+    const second = await f.db.loginWithEmail({ email: "new@example.invalid", password, device_name: "Second", remember_device: true }, "second", "ip2");
+    const native = f.db.createDevice(account.actor.user_id, "Native Agent");
+    const pending = f.db.createDeviceAuthorization(account.actor);
+    const project = f.db.createProject(account.actor, { title: "Keep project", idempotency_key: "keep" });
+    const sent = await f.sendReset(); const input = f.resetInput(sent.registration_id);
+    assert.equal(await f.db.resetPassword(input, "recovery-browser", "recovery-ip", f.options), account.actor.user_id);
+    for (const session of [account.browser_session, second.browser_session]) assert.throws(() => f.db.authenticateBrowserSession(session.token));
+    assert.throws(() => f.db.authenticate(native.token));
+    assert.throws(() => f.db.claimDeviceAuthorization({ authorization_token: pending.authorization_token, device_name: "Late Agent" }));
+    assert.equal(f.db.sqlite.prepare("SELECT count(*) n FROM devices WHERE user_id=? AND revoked_at IS NULL").get(account.actor.user_id)!.n, 0);
+    assert.deepEqual(f.db.listProjects(account.actor.user_id).map((p) => p.id), [project.id]);
+    assert.equal(f.db.canCreateProjects(account.actor.user_id), true);
+    await assert.rejects(f.db.loginWithEmail({ email: input.email, password, device_name: "B", remember_device: false }, "recovery-browser", "ip"), rejectCode("email_login_invalid"));
+    const logged = await f.db.loginWithEmail({ email: input.email, password: input.password, device_name: "B", remember_device: false }, "recovery-browser", "ip");
+    assert.equal(logged.actor.user_id, account.actor.user_id); assert.notEqual(logged.actor.device_id, account.actor.device_id);
+    await assert.rejects(f.db.resetPassword(input, "recovery-browser", "recovery-ip", f.options), rejectCode("registration_invalid"));
+    assert.equal(f.notices.length, 1);
+    const persisted = JSON.stringify(f.db.sqlite.prepare("SELECT * FROM password_reset_pending").all());
+    assert.equal(persisted.includes(input.email), false); assert.equal(persisted.includes(input.password), false); assert.equal(persisted.includes(input.code), false);
+  } finally { f.close(); }
+});
+
+test("recovery send/response/mail path is uniform, idempotent, purpose-separated and works with signup closed", async () => {
+  const f = recoveryFixture();
+  try {
+    await f.enroll();
+    f.options.enabled = false;
+    assert.equal(f.db.registration.ready(f.options), false); assert.equal(f.db.registration.recoveryReady(f.options), true);
+    const request = f.request(); const sent = await f.db.registration.send(request, "recovery-browser", "ip", f.options, "password-reset");
+    assert.deepEqual(await f.db.registration.send(request, "recovery-browser", "ip", f.options, "password-reset"), sent);
+    const unknown = await f.sendReset("unknown@example.invalid");
+    assert.deepEqual(Object.keys(unknown), Object.keys(sent)); assert.equal(unknown.expires_in_seconds, sent.expires_in_seconds);
+    assert.equal(f.mails.length, 3); // Signup, known reset, unknown reset; duplicate did not send.
+    await assert.rejects(f.db.resetPassword(f.resetInput(unknown.registration_id, f.mails.at(-1)!.code, "unknown@example.invalid"), "recovery-browser", "ip", f.options), rejectCode("registration_invalid"));
+    f.options.enabled = true;
+    await assert.rejects(f.db.verifyPublicRegistration(f.input(sent.registration_id, f.mails[1]!.code), "recovery-browser", "ip", f.options), rejectCode("registration_invalid"));
+    assert.equal(f.db.sqlite.prepare("SELECT count(*) n FROM users").get()!.n, 1);
+    assert.notEqual(f.db.registration.binding("same"), f.db.registration.binding("same", "password-reset"));
+    f.db.registration.pause(true); assert.equal(f.db.registration.recoveryReady(f.options), false);
+    await assert.rejects(f.sendReset("blocked@example.invalid"), rejectCode("registration_unavailable"));
+  } finally { f.close(); }
+});
+
+test("recovery wrong-attempt cap survives restart; resend, expiry and browser/mailbox binding are enforced", async () => {
+  const f = recoveryFixture();
+  try {
+    await f.enroll(); const first = await f.sendReset(); const code = f.mails.at(-1)!.code;
+    const wrong = code === "00000000" ? "11111111" : "00000000";
+    await assert.rejects(f.db.resetPassword(f.resetInput(first.registration_id, code), "other-browser", "ip", f.options), rejectCode("registration_invalid"));
+    await assert.rejects(f.db.resetPassword(f.resetInput(first.registration_id, code, "other@example.invalid"), "recovery-browser", "ip", f.options), rejectCode("registration_invalid"));
+    for (let n = 0; n < 4; n++) await assert.rejects(f.db.resetPassword(f.resetInput(first.registration_id, wrong), "recovery-browser", "ip", f.options), rejectCode("registration_invalid"));
+    const second = f.open();
+    await assert.rejects(second.resetPassword(f.resetInput(first.registration_id, code), "recovery-browser", "ip", f.options), rejectCode("registration_invalid")); second.close();
+    f.advance(61_000); const fresh = await f.sendReset();
+    await assert.rejects(f.db.resetPassword(f.resetInput(first.registration_id, code), "recovery-browser", "ip", f.options), rejectCode("registration_invalid"));
+    f.advance(600_001);
+    await assert.rejects(f.db.resetPassword(f.resetInput(fresh.registration_id), "recovery-browser", "ip", f.options), rejectCode("registration_invalid"));
+    assert.equal(f.db.sqlite.prepare("SELECT count(*) n FROM password_reset_pending").get()!.n, 0);
+  } finally { f.close(); }
+});
+
+test("recovery fences account changes, concurrent use, deletion and pause/expiry during password work", async () => {
+  const f = recoveryFixture();
+  try {
+    const account = await f.enroll(); const sent = await f.sendReset(); const input = f.resetInput(sent.registration_id);
+    const first = f.db.resetPassword(input, "recovery-browser", "ip", f.options);
+    await assert.rejects(f.db.resetPassword(input, "recovery-browser", "ip", f.options), rejectCode("registration_invalid"));
+    f.db.registration.pause(true); await assert.rejects(first, rejectCode("registration_unavailable"));
+    assert.equal(f.db.authenticateBrowserSession(account.browser_session.token).actor.user_id, account.actor.user_id);
+    f.db.registration.pause(false); f.advance(61_000); const fresh = await f.sendReset();
+    const expiring = f.db.resetPassword(f.resetInput(fresh.registration_id), "recovery-browser", "ip", f.options);
+    f.advance(600_001); await assert.rejects(expiring, rejectCode("registration_invalid"));
+    f.advance(3_600_000); const deleted = await f.sendReset();
+    f.db.deleteAccount(account.actor);
+    await assert.rejects(f.db.resetPassword(f.resetInput(deleted.registration_id), "recovery-browser", "ip", f.options), rejectCode("registration_invalid"));
+    assert.equal(f.db.sqlite.prepare("SELECT count(*) n FROM password_reset_pending").get()!.n, 0);
+  } finally { f.close(); }
+});
+
+test("recovery proof cannot reset a changed password version and notification failure never undoes committed reset", async () => {
+  const f = recoveryFixture();
+  try {
+    const account = await f.enroll(); const sent = await f.sendReset(); const input = f.resetInput(sent.registration_id);
+    const proof = f.db.registration.preparePasswordReset(input, "recovery-browser", "ip", f.options);
+    const original = f.db.sqlite.prepare("SELECT password_hash FROM public_registration_accounts").get()!.password_hash as string;
+    f.db.sqlite.prepare("UPDATE public_registration_accounts SET password_hash=?").run("changed-password-version");
+    assert.throws(() => f.db.registration.completePasswordReset(input.reset_id, proof, "recovery-browser", "new", f.options, () => assert.fail("must not revoke")), rejectCode("registration_invalid"));
+    f.db.sqlite.prepare("UPDATE public_registration_accounts SET password_hash=?").run(original);
+    f.advance(61_000); const next = await f.sendReset();
+    f.options.mailer!.notifyPasswordChanged = async () => { throw new Error("private provider error"); };
+    assert.equal(await f.db.resetPassword(f.resetInput(next.registration_id), "recovery-browser", "ip", f.options), account.actor.user_id);
+    const row = f.db.sqlite.prepare("SELECT password_hash FROM public_registration_accounts").get()!;
+    assert.equal(await checkPassword(f.resetInput(next.registration_id).password, row.password_hash as string), true);
+    assert.throws(() => f.db.authenticateBrowserSession(account.browser_session.token));
+  } finally { f.close(); }
+});
+
+test("registration, recovery and reset notifications share durable hard provider caps", async () => {
+  const f = recoveryFixture();
+  try {
+    await f.enroll();
+    const sent = await f.sendReset(); const reset = f.resetInput(sent.registration_id);
+    for (let n = 0; n < 18; n++) await f.send(`cap-${n}@example.invalid`, `cap-b-${n}`, `cap-ip-${n}`);
+    const second = f.open();
+    await assert.rejects(second.resetPassword(reset, "recovery-browser", "ip", f.options), rejectCode("registration_limited"));
+    await assert.rejects(f.sendReset("over@example.invalid"), rejectCode("registration_limited"));
+    second.close(); assert.equal(f.mails.length, 20); assert.equal(f.notices.length, 0);
+  } finally { f.close(); }
+});
+
+test("recovery config and provider challenge bind their distinct purpose; notice emails contain no password/code", async () => {
+  const env = { GATHERTHREAD_PASSWORD_RECOVERY: "true", GATHERTHREAD_PUBLIC_REGISTRATION: "false", GATHERTHREAD_TURNSTILE_SITE_KEY: "test-site-key", GATHERTHREAD_TURNSTILE_SECRET: "secret-for-isolated-tests-only", GATHERTHREAD_REGISTRATION_RESEND_KEY: "key-for-isolated-tests-only", GATHERTHREAD_REGISTRATION_FROM: "sender@example.invalid" };
+  const options = registrationFromEnvironment(env, "https://test.invalid"); assert.equal(options.enabled, false); assert.equal(options.recoveryEnabled, true);
+  assert.equal(registrationFromEnvironment({ ...env, GATHERTHREAD_TURNSTILE_SECRET: "" }, "https://test.invalid").recoveryEnabled, false);
+  assert.throws(() => registrationFromEnvironment({ GATHERTHREAD_PASSWORD_RECOVERY: "yes" }, "https://test.invalid"));
+  const transport = (async () => new Response(JSON.stringify({ success: true, hostname: "test.invalid", action: "gt_register", cdata: "bound" }))) as typeof fetch;
+  assert.equal(await new TurnstileRegistrationChallenge("secret", "test.invalid", transport).verify("token", "bound", "password-reset"), false);
+  const good = (async () => new Response(JSON.stringify({ success: true, hostname: "test.invalid", action: "gt_password_reset", cdata: "bound" }))) as typeof fetch;
+  assert.equal(await new TurnstileRegistrationChallenge("secret", "test.invalid", good).verify("token", "bound", "password-reset"), true);
+  const bodies: Array<{ subject: string; text: string }> = [];
+  const mailer = new ResendRegistrationMailer("private-key", "sender@example.invalid", (async (_url, request) => { bodies.push(JSON.parse(String(request!.body))); return new Response(null, { status: 200 }); }) as typeof fetch);
+  await mailer.send({ email: "recipient@example.invalid", code: "12345678", purpose: "password-reset", locale: "en", deliveryId: randomUUID() });
+  await mailer.notifyPasswordChanged({ email: "recipient@example.invalid", locale: "zh-CN", deliveryId: randomUUID() });
+  assert.match(bodies[0]!.subject, /password reset/); assert.match(bodies[1]!.text, /授权已撤销/);
+  assert.doesNotMatch(bodies[1]!.text, /12345678|isolated replacement/);
+});
+
+test("HTTP recovery is origin/JSON/browser fenced and invalidates old cookies/native devices", async () => {
+  const mails: Array<{ code: string }> = [];
+  const registration: RegistrationOptions = { enabled: true, recoveryEnabled: true, siteKey: "isolated-site-key", origin: "https://test.invalid",
+    challenge: { async verify() { return true; } }, mailer: { async send(message) { mails.push(message); }, async notifyPasswordChanged() {} } };
+  const server = await startCollaborationServer({ databasePath: ":memory:", authTokenPepper: pepper, registration, allowedOrigins: [registration.origin!] });
+  try {
+    const sent = await server.database.registration.send({ email: "http@example.invalid", locale: "en", challenge_token: randomUUID(), idempotency_key: randomUUID() }, "enroll", "ip", registration);
+    const account = await server.database.verifyPublicRegistration({ registration_id: sent.registration_id, code: mails.at(-1)!.code, display_name: "HTTP", device_name: "B", remember_device: true, privacy_acknowledged: true, password }, "enroll", "ip", registration);
+    const native = server.database.createDevice(account.actor.user_id, "Native");
+    registration.enabled = false;
+    const status = await fetch(server.origin + "/v1/password-reset"); const cookie = status.headers.getSetCookie()[0]!.split(";", 1)[0]!;
+    assert.equal((await status.json() as { data: { enabled: boolean } }).data.enabled, true);
+    const sendInput = { email: "http@example.invalid", locale: "en", challenge_token: randomUUID(), idempotency_key: randomUUID() };
+    const post = (path: string, body: unknown, headers: Record<string, string> = {}) => fetch(server.origin + path, { method: "POST", headers: { origin: registration.origin!, "content-type": "application/json", cookie, ...headers }, body: JSON.stringify(body) });
+    assert.equal((await post("/v1/password-reset/send", sendInput, { origin: "" })).status, 403);
+    assert.equal((await post("/v1/password-reset/send", sendInput, { "content-type": "text/plain" })).status, 415);
+    assert.equal((await post("/v1/password-reset/send", sendInput, { cookie: "" })).status, 400);
+    const reset = await post("/v1/password-reset/send", sendInput); assert.equal(reset.status, 202);
+    const resetId = (await reset.json() as { data: { reset_id: string } }).data.reset_id;
+    const input = { reset_id: resetId, email: sendInput.email, code: mails.at(-1)!.code, password: "isolated HTTP replacement password", password_confirmation: "isolated HTTP replacement password", locale: "en" };
+    const done = await post("/v1/password-reset/verify", input); assert.equal(done.status, 200); assert.deepEqual(await done.json(), { data: { reset: true } }); assert.equal(done.headers.getSetCookie().length, 0);
+    assert.equal((await fetch(server.origin + "/v1/me", { headers: { cookie: `gatherthread_session=${account.browser_session.token}` } })).status, 401);
+    assert.equal((await fetch(server.origin + "/v1/me", { headers: { authorization: `Bearer ${native.token}` } })).status, 401);
+    assert.equal((await post("/v1/password-reset/verify", input)).status, 400);
+  } finally { await server.close(); }
+});

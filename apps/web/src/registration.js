@@ -2,6 +2,7 @@
 export function registrationError(error) {
   const messages = {
     registration_unavailable: "Email registration is temporarily unavailable.",
+    password_reset_unavailable: "Password recovery is temporarily unavailable.",
     registration_delivery: "The email could not be sent. Wait a minute and try again.",
     registration_invalid: "The code is incorrect or unavailable. Request a new code.",
     registration_limited: "Too many registration attempts. Please try later.",
@@ -14,8 +15,9 @@ export function registrationError(error) {
   return messages[error?.code] ?? "Registration could not be completed. Please try again.";
 }
 
-export function mountRegistration({ document, api, localizer, identity, beginAuthentication, complete, busy }) {
-  const get = (id) => document.getElementById(id);
+let scriptPromise;
+export function mountRegistration({ document, api, localizer, identity, beginAuthentication, complete, busy, passwordReset = false, onReset }) {
+  const get = (id) => document.getElementById(passwordReset ? id.replace(/^registration-/, "password-reset-") : id);
   const form = get("registration-form");
   const send = get("registration-send");
   const verify = get("registration-verify");
@@ -29,8 +31,11 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
   let working = false;
   let resendAt = 0;
   let retryKey = null;
-  let scriptPromise;
-  const tell = (node, text) => { node.textContent = localizer.t(text); };
+  const tell = (node, text) => {
+    const source = passwordReset ? text.replace("Email registration", "Password recovery").replace("Too many registration attempts", "Too many recovery attempts").replace("Registration could not be completed", "Password could not be reset").replace("Open registration", "Open password recovery") : text;
+    if (localizer.setText) localizer.setText(node, source);
+    else node.textContent = localizer.t(source);
+  };
   const update = () => {
     send.disabled = working || !config?.enabled || !challenge || !get("registration-privacy").checked || Date.now() < resendAt;
     verify.disabled = working || !registrationId || !get("registration-privacy").checked;
@@ -58,7 +63,7 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
       const turnstile = await loadScript();
       if (run !== generation || !get("registration-privacy").checked || widget !== null) return;
       widget = turnstile.render(get("registration-challenge"), {
-        sitekey: config.site_key, action: "gt_register", cData: config.challenge_binding,
+        sitekey: config.site_key, action: passwordReset ? "gt_password_reset" : "gt_register", cData: config.challenge_binding,
         size: "compact",
         language: document.documentElement.lang === "zh-CN" ? "zh-cn" : "en",
         "response-field": false,
@@ -85,12 +90,12 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
   const enter = async () => {
     clear();
     const run = generation;
-    tell(status, "Checking registration availability…");
+    tell(status, passwordReset ? "Checking password recovery availability…" : "Checking registration availability…");
     try {
-      const nextConfig = await api.registrationStatus();
+      const nextConfig = await (passwordReset ? api.passwordResetStatus() : api.registrationStatus());
       if (run !== generation) return;
       config = nextConfig;
-      tell(status, config.enabled ? "Enter your email to create a new account." : "Email registration is temporarily unavailable.");
+      tell(status, config.enabled ? (passwordReset ? "Enter the email address you used to register." : "Enter your email to create a new account.") : "Email registration is temporarily unavailable.");
       update();
     } catch { if (run === generation) tell(status, "Email registration is temporarily unavailable."); }
   };
@@ -112,10 +117,10 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
     working = true; busy(true); error.textContent = ""; update();
     retryKey ??= globalThis.crypto.randomUUID();
     try {
-      const result = await api.sendRegistration({ email: email.value, challenge_token: challenge,
+      const result = await (passwordReset ? api.sendPasswordReset.bind(api) : api.sendRegistration.bind(api))({ email: email.value, challenge_token: challenge,
         locale: document.documentElement.lang === "zh-CN" ? "zh-CN" : "en", idempotency_key: retryKey });
       if (run !== generation) return;
-      registrationId = result.registration_id;
+      registrationId = passwordReset ? result.reset_id : result.registration_id;
       get("registration-code-step").hidden = false;
       tell(status, "Check your inbox or spam folder. Use the latest code within 10 minutes. Resend after 60 seconds.");
       resendAt = Date.now() + result.resend_after_seconds * 1000;
@@ -151,16 +156,22 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
     const isCurrent = () => run === generation && currentAuthentication();
     working = true; busy(true); error.textContent = ""; update();
     try {
-      const profile = identity();
-      const result = await api.verifyRegistration({ registration_id: registrationId, code: code.value,
-        display_name: profile.displayName, device_name: profile.deviceName,
-        remember_device: get("registration-remember").checked, privacy_acknowledged: true, password: password.value });
+      const profile = passwordReset ? null : identity();
+      const result = await (passwordReset
+        ? api.verifyPasswordReset({ reset_id: registrationId, email: get("registration-email").value, code: code.value,
+          password: password.value, password_confirmation: get("registration-password-confirm").value,
+          locale: document.documentElement.lang === "zh-CN" ? "zh-CN" : "en" })
+        : api.verifyRegistration({ registration_id: registrationId, code: code.value,
+          display_name: profile.displayName, device_name: profile.deviceName,
+          remember_device: get("registration-remember").checked, privacy_acknowledged: true, password: password.value }));
       if (!isCurrent()) return;
       code.value = ""; password.value = ""; get("registration-password-confirm").value = ""; get("registration-email").value = ""; registrationId = null;
-      await complete(result, isCurrent);
+      if (passwordReset) { working = false; busy(false); onReset(); }
+      else await complete(result, isCurrent);
     } catch (reason) { if (isCurrent()) tell(error, registrationError(reason)); }
     finally { if (isCurrent()) { working = false; busy(false); code.value = ""; password.value = ""; get("registration-password-confirm").value = ""; update(); } }
   });
+  if (passwordReset) return { enter, clear };
   const loginForm = get("email-login-form");
   loginForm.addEventListener("submit", async (event) => {
     event.preventDefault();

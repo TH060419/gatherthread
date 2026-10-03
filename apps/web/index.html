@@ -62,14 +62,14 @@
           <button id="auth-language-button" class="auth-language-button" type="button" aria-label="Switch language / 切换语言" title="Switch language / 切换语言">中</button>
         </div>
         <h2 id="login-title">Enter your workspace</h2>
-        <p class="muted">Your identity and permissions come from the server.</p>
+        <p class="muted">Sign in or create an account to collaborate.</p>
         <nav id="auth-entry-chooser" class="auth-entry-chooser" aria-label="Choose how to enter">
           <p class="field-help">Choose one way to enter. You can come back and switch at any time.</p>
           <button id="auth-select-email-login" class="auth-entry-choice" type="button" aria-controls="auth-email-login-panel">
             <span><strong>Email account · sign in</strong><small>Use the email and password you set during registration.</small></span><span aria-hidden="true">→</span>
           </button>
           <button id="auth-select-register" class="auth-entry-choice" type="button" aria-controls="auth-register-panel">
-            <span><strong>New account · email registration</strong><small>Verify your email and choose a password. No access token to save.</small></span><span aria-hidden="true">→</span>
+            <span><strong>New account · email registration</strong><small>Verify your email and choose a password.</small></span><span aria-hidden="true">→</span>
           </button>
         </nav>
         <div id="auth-identity" class="auth-identity" hidden>
@@ -83,7 +83,7 @@
               <input id="claim-device-name" name="device-name" autocomplete="off" maxlength="120" value="This browser" aria-describedby="auth-identity-help" />
             </div>
           </div>
-          <p id="auth-identity-help" class="field-help">For new accounts, set a display name and a device name. Existing accounts can leave them unchanged.</p>
+          <p id="auth-identity-help" class="field-help">Display names appear to collaborators. The device name helps you recognize this browser.</p>
         </div>
         <section id="auth-email-login-panel" class="auth-entry-panel" aria-labelledby="auth-email-login-heading" hidden>
           <button class="text-button auth-entry-back" type="button">← Back</button>
@@ -97,7 +97,9 @@
               <input id="email-login-remember" type="checkbox" />
               <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
             </label>
-            <p id="email-login-help" class="field-help">Password recovery is not available yet. Keep your password in a password manager.</p>
+            <p id="email-login-help" class="field-help">Use a long, unique password and keep it in your password manager.</p>
+            <button id="auth-select-password-reset" class="text-button" type="button" aria-controls="auth-password-reset-panel">Forgot password?</button>
+            <p id="email-login-status" class="field-help" role="status" aria-live="polite"></p>
             <p id="email-login-error" class="form-error" role="alert"></p>
             <button class="button button-primary button-wide" type="submit">Sign in</button>
           </form>
@@ -108,7 +110,7 @@
           <form id="registration-form" novalidate>
             <label for="registration-email">Email address</label>
             <input id="registration-email" type="email" autocomplete="email" maxlength="254" required aria-describedby="registration-help registration-error" />
-            <p id="registration-help" class="field-help">Verify your email, then choose a password. Sign in with email and password. Password recovery is not available yet.</p>
+            <p id="registration-help" class="field-help">Verify your email, then choose a password. Sign in with email and password.</p>
             <label class="auth-remember" for="registration-privacy">
               <input id="registration-privacy" type="checkbox" required />
               <span>I have read the privacy notice and agree to email delivery and the Cloudflare security check.</span>
@@ -133,6 +135,35 @@
               <button id="registration-verify" class="button button-primary button-wide" type="submit" disabled>Verify and create account</button>
             </div>
             <p id="registration-error" class="form-error" role="alert"></p>
+          </form>
+        </section>
+        <section id="auth-password-reset-panel" class="auth-entry-panel" aria-labelledby="auth-password-reset-heading" hidden>
+          <button class="text-button auth-entry-back" type="button">← Back</button>
+          <h3 id="auth-password-reset-heading">Reset your password</h3>
+          <form id="password-reset-form" novalidate>
+            <label for="password-reset-email">Email address</label>
+            <input id="password-reset-email" type="email" autocomplete="email" maxlength="254" required aria-describedby="password-reset-help password-reset-error" />
+            <p id="password-reset-help" class="field-help">Enter your account email and verify the code to choose a new password. This signs out every device and revokes Agent access. Your projects stay in your account.</p>
+            <label class="auth-remember" for="password-reset-privacy">
+              <input id="password-reset-privacy" type="checkbox" required />
+              <span>I have read the privacy notice and agree to email delivery and the Cloudflare security check.</span>
+            </label>
+            <a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy notice</a>
+            <div id="password-reset-challenge"></div>
+            <button id="password-reset-challenge-retry" class="text-button" type="button">Retry security check</button>
+            <p id="password-reset-status" class="field-help" role="status" aria-live="polite"></p>
+            <button id="password-reset-send" class="button button-secondary button-wide" type="button" disabled>Send / resend email code</button>
+            <div id="password-reset-code-step" hidden>
+              <label for="password-reset-password">Choose a new password</label>
+              <input id="password-reset-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="password-reset-password-help password-reset-error" />
+              <p id="password-reset-password-help" class="field-help">Use 12–128 characters. A long, unique password is best. Keep it in your password manager.</p>
+              <label for="password-reset-password-confirm">Confirm password</label>
+              <input id="password-reset-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" />
+              <label for="password-reset-code">Eight-digit email code</label>
+              <input id="password-reset-code" inputmode="numeric" type="password" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{8}" aria-describedby="password-reset-status password-reset-error" />
+              <button id="password-reset-verify" class="button button-primary button-wide" type="submit" disabled>Reset password</button>
+            </div>
+            <p id="password-reset-error" class="form-error" role="alert"></p>
           </form>
         </section>
         <p class="auth-privacy-link"><a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy &amp; account deletion</a></p>
@@ -890,7 +921,7 @@ codex plugin add gatherthread@gatherthread</code>
           <p>Editable sessions appear as Codex tasks. Web requests run separately; approved Hooks return direct Desktop turns to the same shared history.</p>
           <p>A new local task creates a personal Solo only after its first completed turn. Viewer tasks stay local.</p>
         </details>
-        <p id="connect-codex-security" class="codex-connect-notice">On supported Windows and macOS, this page can open the installed Launcher. Manual commands remain available. No token is placed in a command, URL, or shared history.</p>
+        <p id="connect-codex-security" class="codex-connect-notice">On supported Windows and macOS, this page can open the installed Launcher. Manual commands remain available.</p>
 
         <section aria-labelledby="codex-authorization-heading">
           <h3 id="codex-authorization-heading">Authorize a Codex device</h3>
@@ -999,7 +1030,7 @@ codex plugin add gatherthread@gatherthread</code>
           <div>
             <p class="eyebrow">GatherThread preferences</p>
             <h2 id="settings-title">Settings</h2>
-            <p>Personalize this browser without storing credentials.</p>
+            <p>Personalize this browser.</p>
           </div>
           <button id="close-settings-button" class="icon-button" type="button" aria-label="Close Settings">×</button>
         </header>

@@ -258,7 +258,8 @@ test("email entry choices have accessible panels and clear transient inputs on B
   }
   assert.doesNotMatch(markup, /id="(?:auth-select-login|auth-select-activate|auth-select-invitation|token|test-access-token|claim-invitation-form|device-credential-dialog)"/u);
   assert.match(main, /registrationUi\.clear\(\)/u);
-  assert.match(markup, /Password recovery is not available yet/u);
+  assert.match(markup, /id="auth-select-password-reset"[^>]*aria-controls="auth-password-reset-panel"/u);
+  assert.match(markup, /id="password-reset-password"[^>]*autocomplete="new-password"/u);
 });
 
 test("new account copy describes email/password and no public code application", async () => {

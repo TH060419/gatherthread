@@ -43,7 +43,7 @@ import {
 } from "@gatherthread/protocol";
 import { RegistrationStore, REGISTRATION_SCHEMA, type RegistrationOptions } from "./registration.js";
 import { hashPassword, checkPassword, PasswordCapacityError } from "./password.js";
-import type { EmailLoginInput, VerifyRegistrationInput } from "@gatherthread/protocol";
+import type { EmailLoginInput, VerifyRegistrationInput, VerifyPasswordResetInput } from "@gatherthread/protocol";
 import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
@@ -1164,6 +1164,31 @@ export class CollaborationDatabase {
       if (error instanceof PasswordCapacityError) throw new ApiError(503, "password_busy", "Sign-in is busy. Please try again.");
       throw error;
     }
+  }
+
+  async resetPassword(input: VerifyPasswordResetInput, browser: string, ip: string, options: RegistrationOptions): Promise<string> {
+    const proof = this.registration.preparePasswordReset(input, browser, ip, options);
+    let userId: string;
+    try {
+      const passwordHash = await hashPassword(input.password);
+      userId = this.registration.completePasswordReset(input.reset_id, proof, browser, passwordHash, options, (id) => {
+        const timestamp = this.now();
+        this.sqlite.prepare("UPDATE devices SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").run(timestamp, id);
+        this.sqlite.prepare("UPDATE runtimes SET status='revoked' WHERE device_id IN (SELECT id FROM devices WHERE user_id=?)").run(id);
+        this.sqlite.prepare(`UPDATE device_authorizations SET revoked_at=? WHERE authorizer_device_id IN (SELECT id FROM devices WHERE user_id=?)
+          AND claimed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL`).run(timestamp, id);
+        this.sqlite.prepare("UPDATE browser_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").run(timestamp, id);
+        this.sqlite.prepare("DELETE FROM remembered_accounts WHERE user_id=?").run(id);
+        this.sqlite.prepare("DELETE FROM email_login_devices WHERE user_id=?").run(id);
+      });
+    } catch (error) {
+      this.registration.failPasswordReset(input.reset_id, proof);
+      if (error instanceof PasswordCapacityError) throw new ApiError(503, "password_busy", "Sign-in is busy. Please try again.");
+      throw error;
+    }
+    // Password changes are committed even when notification delivery is uncertain; never retry or log provider data.
+    try { await options.mailer!.notifyPasswordChanged!({ email: input.email, locale: input.locale, deliveryId: input.reset_id }); } catch { /* bounded best-effort notification */ }
+    return userId;
   }
 
   async loginWithEmail(input: EmailLoginInput, browser: string, ip: string): Promise<{ actor: Actor; browser_session: BrowserSessionIssue }> {
