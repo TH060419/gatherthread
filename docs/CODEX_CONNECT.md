@@ -6,7 +6,13 @@ For optional **project code** upload/download/recovery, use the `0.1.0-alpha.8` 
 
 > Unreleased account update: the host is `https://gatherthread.cn`. Sign in on the Web with email and password, then authorize the connector device separately. Use a fixed release command only after its Git ref and matching npm package are published.
 
-## Normal three-step setup
+## Launcher setup · official site, Windows/macOS
+
+Install the matching [Windows Launcher](../prototypes/codex-launcher/README.md) or [macOS Launcher](../prototypes/codex-launcher/macos/README.md) and open a signed-in Codex Desktop. In the official site's **Connect Codex** dialog, create a one-time device authorization and choose **Open Launcher**. Enter the authorization in the Launcher and start the connection. You can install its bundled plugin there; restart Codex and review/enable its Hooks before using local automatic upload. Keep the Launcher running. This path needs no terminal commands.
+
+The current Launcher is an unsigned test build, pins `https://gatherthread.cn`, and requires separate local installation; the browser cannot assume it is installed. Linux, other server origins and unavailable Launchers use the manual setup below. The workspace **＋** below the connection buttons opens **Settings → Agents** to choose which connections to show.
+
+## Manual three-step setup · fallback
 
 ### 1. Install the Codex plugin once
 

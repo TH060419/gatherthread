@@ -1,6 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+test("Agent connection shortcut and pause/resume guidance are bilingual", () => {
+  for (const [en, zh] of [["Choose Agent connections", "选择要连接的 Agent"], ["Pause Agent", "暂停 Agent"],
+    ["Resume Agent", "恢复 Agent"], ["Waiting for Agent…", "等待 Agent…"],
+    ["Starts a new request with latest history, using the original Agent and model.", "使用原 Agent 和模型新建请求，读取最新历史。"]]) {
+    assert.equal(translateUiText(en, "en"), en); assert.equal(translateUiText(en, "zh-CN"), zh);
+  }
+});
+
 import { memberRemovalAriaLabel, memberRoleAriaLabel, translateUiText } from "../src/i18n.js";
 
 test("Git back buttons translate their complete labels including the arrow", () => {

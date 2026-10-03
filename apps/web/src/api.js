@@ -510,6 +510,12 @@ export class HttpCollaborationApi {
     return this.#append(sessionId, "agent_request", input);
   }
 
+  pauseAgentRequest(sessionId, requestId) {
+    return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-requests/${encodeURIComponent(requestId)}/pause`, {
+      method: "POST", body: JSON.stringify({}),
+    });
+  }
+
   async createHistorySummary(sessionId, input) {
     const { historySummaryExecutionWire } = await import("./history-summaries.js");
     const { event } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/history-summaries`, {
@@ -746,6 +752,7 @@ export class MockCollaborationApi {
           this.#seedEvent(3, "agent_request", users.avery, "Review the current plan and identify the highest-risk integration assumption.", 29),
           {
             ...this.#seedEvent(4, "agent_response", users.avery, "The highest risk is replay continuity across a reconnect. Treat socket delivery as advisory and advance the cursor only through contiguous committed events.", 28),
+            replyTo: "evt-seed-3",
             provenance: {
               userId: users.avery.id,
               username: users.avery.username,
@@ -1437,20 +1444,27 @@ export class MockCollaborationApi {
   }
 
   async appendAgentRequest(sessionId, input) {
+    const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
     const request = await this.#append(sessionId, "agent_request", input);
+    if (existing) return request;
+    const actor = structuredClone(this.currentUser);
+    const settled = () => !this.sessions.some((session) => session.id === sessionId)
+      || (this.events.get(sessionId) ?? []).some((event) => event.replyTo === request.id
+        && (event.type === "agent_response" || event.payload?.status === "paused"));
     for (const [delay, content] of [
       [220, "Inspecting the shared context…"],
       [430, "Preparing a **Markdown** response."],
     ]) {
       setTimeout(() => {
+        if (settled()) return;
         const progress = this.#makeEvent(sessionId, "agent_progress", {
           content,
-          actor: this.currentUser,
+          actor,
           idempotencyKey: createIdempotencyKey("mock-progress"),
           replyTo: request.id,
           provenance: {
-            userId: this.currentUser.id,
-            username: this.currentUser.username,
+            userId: actor.id,
+            username: actor.username,
             deviceId: "device-demo",
             harness: input.executionProfile?.harness ?? "codex",
             provider: input.executionProfile?.harness === "deepseek-harness" ? "deepseek-official" : "OpenAI",
@@ -1463,14 +1477,15 @@ export class MockCollaborationApi {
       }, delay);
     }
     setTimeout(() => {
+      if (settled()) return;
       const response = this.#makeEvent(sessionId, "agent_response", {
         content: "## Done\n\nMock Agent acknowledged the request. Connect the server and local bridge for a real harness response.\n\n- Progress is folded above\n- Final output supports `Markdown`\n- Inline math: $E = mc^2$\n\n$$\\int_0^1 x^2\\,dx = \\frac{1}{3}$$",
-        actor: this.currentUser,
+        actor,
         idempotencyKey: createIdempotencyKey("mock-response"),
         replyTo: request.id,
         provenance: {
-          userId: this.currentUser.id,
-          username: this.currentUser.username,
+          userId: actor.id,
+          username: actor.username,
           deviceId: "device-demo",
           harness: input.executionProfile?.harness ?? "codex",
           provider: input.executionProfile?.harness === "deepseek-harness" ? "deepseek-official" : "OpenAI",
@@ -1483,6 +1498,29 @@ export class MockCollaborationApi {
       this.#publish(sessionId, response);
     }, 650);
     return request;
+  }
+
+  async pauseAgentRequest(sessionId, requestId) {
+    await this.#wait();
+    const session = this.#findSession(sessionId);
+    const member = session.members.find((item) => item.userId === this.currentUser.id);
+    const events = this.events.get(sessionId) ?? [];
+    const request = events.find((event) => event.id === requestId && event.type === "agent_request");
+    if (!member || member.role === "viewer" || request?.actor.id !== this.currentUser.id
+      || (session.mode === "solo" && session.ownerUserId !== this.currentUser.id)) {
+      throw new ApiError("Only the author may pause a writable Agent request.", { status: 403 });
+    }
+    const linked = events.filter((event) => event.replyTo === requestId);
+    if (linked.some((event) => event.type === "agent_response")) throw new ApiError("This Agent request already completed.", { status: 409 });
+    if (!linked.some((event) => event.type === "agent_progress")) throw new ApiError("The Agent has not started this request.", { status: 409 });
+    if (!linked.some((event) => event.payload?.status === "paused")) {
+      const marker = this.#makeEvent(sessionId, "agent_progress", { content: "The author paused this Agent request.",
+        actor: this.currentUser, replyTo: requestId, idempotencyKey: createIdempotencyKey("mock-pause") });
+      marker.payload.phase = "lifecycle";
+      marker.payload.status = "paused";
+      this.#publish(sessionId, marker);
+    }
+    return { request_event_id: requestId, status: "paused" };
   }
 
   async createHistorySummary(sessionId, input) {

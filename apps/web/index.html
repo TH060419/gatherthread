@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20260927-2" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261004-1" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -245,6 +245,7 @@
             <span>Connect DeepSeek Harness</span>
             <small id="connect-dsh-button-status">Not connected</small>
           </button>
+          <button id="add-agent-button" class="icon-button agent-settings-shortcut" type="button" aria-label="Choose Agent connections" title="Choose Agent connections" data-tooltip aria-haspopup="dialog" aria-controls="settings-dialog"><span aria-hidden="true">＋</span></button>
           <div class="project-action-row">
             <button id="rename-project-button" class="text-button project-rename-button" type="button" aria-haspopup="dialog" aria-controls="rename-project-dialog" hidden>
               Rename project
@@ -1260,6 +1261,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20260927-4"></script>
+    <script type="module" src="./src/main.js?v=20261004-1"></script>
   </body>
 </html>

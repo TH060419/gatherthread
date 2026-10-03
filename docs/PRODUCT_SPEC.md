@@ -51,6 +51,8 @@ The Web conversation timeline groups displayed messages by the reader's local ca
 
 `agent_progress` records a bounded execution lifecycle marker and any public harness commentary emitted during a claimed Web Agent request. It remains pending state rather than request completion. The Web client shows it live while work is active, then places all linked progress under a closed-by-default work log beside the final Markdown-rendered `agent_response`. GFM tables and bundled KaTeX inline/display formulas are supported. Hidden model reasoning and chain-of-thought are never canonical events.
 
+The workspace connection area includes an icon-only add button opening Settings → Agents. For the user's latest ordinary Agent request, the composer waits for its first work marker, then replaces Request my agent with Pause Agent; a paused request offers Resume Agent. This controls the original request regardless of changes to the model/Agent selectors and preserves any draft. Only a current session writer and the original requester can operate it. Resume appends a new request using the original exact execution profile, quote and mentions, so it can read newer shared history; it is not a lossless native-turn continuation. Completed requests restore the ordinary request button. Summary generation retains its separate source-selection workflow.
+
 Internal runtime provenance binds `user_id`, `device_id`, runtime identity, `harness`, `provider`, `model`, native-session identity, and capture fidelity. Shared attribution exposes the username, harness, provider, model, and fidelity while replacing local device, runtime, and native-session identifiers outside the owning user or authorized owner view.
 
 ## Context fidelity
