@@ -32,7 +32,7 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
   let resendAt = 0;
   let retryKey = null;
   const tell = (node, text) => {
-    const source = passwordReset ? text.replace("Email registration", "Password recovery").replace("Too many registration attempts", "Too many recovery attempts").replace("Registration could not be completed", "Password could not be reset").replace("Open registration", "Open password recovery") : text;
+    const source = passwordReset ? text.replace("Email registration", "Password recovery").replace("Too many registration attempts", "Too many recovery attempts").replace("Registration could not be completed", "Password could not be reset").replace("Open registration", "Open password recovery").replace("Check your email, names and eight-digit code.", "Check your email, password and eight-digit code.").replace("Sign-in is busy.", "Password service is busy.") : text;
     if (localizer.setText) localizer.setText(node, source);
     else node.textContent = localizer.t(source);
   };

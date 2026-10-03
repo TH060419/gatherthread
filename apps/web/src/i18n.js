@@ -1,5 +1,7 @@
 const ZH_CN = Object.freeze({
   "Forgot password?": "忘记密码？",
+  "Check your email, password and eight-digit code.": "请检查邮箱、密码和 8 位验证码。",
+  "Password service is busy. Please try again.": "密码服务繁忙，请稍后重试。",
   "Reset your password": "重设密码",
   "Reset password": "重设密码",
   "Choose a new password": "设置新密码",
