@@ -120,7 +120,7 @@ npm run owner-host
 
 插件只需安装一次：
 
-如果 `codex --version` 不可用或终端提示 `codex: command not found`，请先运行 `npm install -g @openai/codex` 安装或更新官方 Codex CLI。重新打开终端，确认 `codex plugin --help` 可用后再继续。
+如果终端提示 `command not found: codex`，Mac 上安装的 ChatGPT Desktop 可能已经带有 CLI，只是其目录尚未加入 `PATH`。先检查该文件并临时加入 `PATH`，确认可用后再保存到 `~/.zshrc`；具体命令见 [Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md#1-一次性安装-codex-插件)。其他系统请参阅 [Codex CLI 官方安装指南](https://learn.chatgpt.com/docs/codex/cli)。继续前请确认 `codex plugin --help` 可用。
 
 ```bash
 codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread

@@ -377,8 +377,11 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(html, /Manual commands remain available/i);
   assert.match(html, /id="codex-launcher-option"[^>]*hidden/);
   assert.match(main, /canOpenCodexLauncher/);
-  assert.match(html, /codex: command not found/);
-  assert.match(html, /npm install -g @openai\/codex/);
+  assert.match(html, /command not found: codex/);
+  assert.match(html, /if \[ -x "\$codex_dir\/codex" \]/);
+  assert.match(html, /source ~\/\.zshrc/);
+  assert.match(html, /official Codex CLI installation guide/);
+  assert.doesNotMatch(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);
   assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.8 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
   assert.match(domain, /--plugin-hooks/);
@@ -388,7 +391,8 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Alpha 预览版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);
-  assert.match(i18n, /如果终端提示.*codex: command not found.*npm install -g @openai\/codex.*codex plugin --help/);
+  assert.match(i18n, /如果终端提示.*command not found: codex/);
+  assert.match(i18n, /如果显示版本号，再将 PATH 修改保存/);
   assert.match(i18n, /"Connect this project": "连接当前项目"/);
   assert.match(i18n, /"Confirm in Codex": "在 Codex 中确认"/);
   assert.doesNotMatch(html, /Codex <code>\/hooks<\/code>/i);
