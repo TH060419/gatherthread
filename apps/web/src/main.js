@@ -239,6 +239,8 @@ const agentRequestControl = mountAgentRequestControl({
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
     sending: Boolean(pendingMessageSend?.()),
   }),
+  confirmResume: () => !state.settings.composer.confirmAgentRequest
+    || window.confirm(localizer.t("Resume with the original Agent and latest history? This starts a new request and may consume model quota.")),
   onChange: renderComposerPermissions, makeKey: createIdempotencyKey, t: (text) => localizer.t(text),
 });
 settingsDialog.querySelector(".settings-navigation").addEventListener("click", (event) => {

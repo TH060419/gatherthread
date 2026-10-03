@@ -99,9 +99,12 @@ async function runWork(page, delay) {
 
 async function exerciseControl(page, harness, locale, prefix) {
   await page.locator("#agent-harness-select").selectOption(harness);
+  await page.evaluate(() => { window.primaryAgentButton = document.querySelector("#send-agent-button"); });
   const draft = `UNSENT_${harness}`;
   await page.locator("#message-input").fill(`LOCAL_MOCK_${harness}`);
+  const confirmed = page.waitForEvent("dialog").then(dialog => dialog.accept());
   await page.locator("#send-agent-button").click();
+  await confirmed;
   await page.waitForFunction(() => document.querySelector("#send-agent-button").dataset.agentAction === "wait");
   assert.equal(await page.locator("#send-agent-button").isDisabled(), true, "unclaimed work cannot be paused");
   await page.locator("#message-input").fill(draft);
@@ -119,7 +122,18 @@ async function exerciseControl(page, harness, locale, prefix) {
   assert.equal(await page.locator("#send-agent-button").getAttribute("data-agent-action"), "resume", "paused work never produces a late mock reply");
   // Change the composer selection. Resume must still use the original target.
   await page.locator("#agent-harness-select").selectOption(harness === "codex" ? "deepseek-harness" : "codex");
+  const beforeResume = await page.evaluate(() => window.agentWrites.length);
+  const cancelled = page.waitForEvent("dialog").then(async dialog => {
+    assert.match(dialog.message(), locale === "zh-CN" ? /原 Agent.*新请求/ : /original Agent.*new request/);
+    await dialog.dismiss();
+  });
   await page.locator("#send-agent-button").click();
+  await cancelled;
+  assert.equal(await page.evaluate(() => window.agentWrites.length), beforeResume, "cancelled confirmation never writes");
+  assert.equal(await page.locator("#message-input").inputValue(), draft);
+  const resumedConfirmation = page.waitForEvent("dialog").then(dialog => dialog.accept());
+  await page.locator("#send-agent-button").click();
+  await resumedConfirmation;
   await page.waitForFunction(() => document.querySelector("#send-agent-button").dataset.agentAction === "wait");
   const resumed = await page.evaluate(() => window.agentWrites.filter(item => item.method === "appendAgentRequest").at(-1));
   assert.equal(resumed.args[0], first.args[0]);
@@ -129,6 +143,7 @@ async function exerciseControl(page, harness, locale, prefix) {
   assert.equal(await page.locator("#message-input").inputValue(), draft, "resume retains draft");
   await runWork(page, 220); await runWork(page, 430); await runWork(page, 650);
   await page.waitForFunction(() => document.querySelector("#send-agent-button").dataset.agentAction === "request");
+  assert.equal(await page.evaluate(() => window.primaryAgentButton === document.querySelector("#send-agent-button")), true, "all actions reuse the original element");
   assert.equal(await page.locator("#message-input").inputValue(), draft, "completion retains draft");
   await page.locator("#send-chat-button").click();
   await page.getByText(draft, { exact: true }).waitFor();
@@ -145,6 +160,9 @@ try {
       assert.equal(await github.getAttribute("href"), "https://github.com/TH060419/gatherthread");
       assert.match(await github.innerText(), locale === "zh-CN" ? /GitHub 项目/ : /GitHub repository/);
       assert.match(await github.getAttribute("rel"), /noopener/);
+      assert.equal(await github.evaluate(node => node.classList.contains("btn-pill")), true, "repository uses the existing product button style");
+      assert.equal(await github.evaluate(node => getComputedStyle(node).backgroundImage),
+        await page.locator('.hero-ctas [data-i18n="hero.cta1"]').evaluate(node => getComputedStyle(node).backgroundImage));
       assert.match(await page.locator('[data-i18n="setup.codex.2"]').innerText(), locale === "zh-CN" ? /打开启动器/ : /Open Launcher/);
       assert.equal(await page.locator('[data-i18n="setup.codex.link"]').getAttribute("href"), "https://github.com/TH060419/gatherthread/tree/main/prototypes/codex-launcher");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "home has no horizontal overflow");
@@ -156,6 +174,7 @@ try {
       await page.waitForFunction(() => document.activeElement?.id === "add-agent-button");
       await page.locator("#add-agent-button").click();
       await page.locator("#settings-enabled-dsh").check();
+      await page.locator("#settings-confirm-agent").check();
       await page.locator("#settings-form button[type=submit]").click();
       if (width < 760 && await page.locator("#toggle-session-rail-button").getAttribute("aria-expanded") === "true") {
         await page.locator("#toggle-session-rail-button").click();

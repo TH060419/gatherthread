@@ -42,10 +42,13 @@ test("resume retains Codex/DSH exact original routing, quote and mentions", () =
   const legacy = request(); delete legacy.payload.execution_profile;
   assert.equal(composerAgentAction([legacy, progress(legacy.id, "paused")], "me").action, "request");
   assert.throws(() => resumeAgentRequestInput(legacy, "no-fallback"), /Original Agent settings/);
+  const unbound = request(); delete unbound.payload.execution_profile.runtime_id;
+  assert.equal(composerAgentAction([unbound, progress(unbound.id, "paused")], "me").action, "request");
+  assert.throws(() => resumeAgentRequestInput(unbound, "no-device-fallback"), /Original Agent settings/);
 });
 
 const flush = () => new Promise((resolve) => setImmediate(resolve));
-function fixture(api = {}) {
+function fixture(api = {}, options = {}) {
   const own = request();
   let context = { scope: "scope1", userId: "me", sessionId: "s1", writable: true, sending: false, events: [own, progress(own.id)] };
   const button = { disabled: false, dataset: {}, attributes: {}, textContent: "",
@@ -55,7 +58,7 @@ function fixture(api = {}) {
   const targetLabel = {}, errorNode = {};
   let keys = 0, changes = 0;
   const control = mountAgentRequestControl({ button, targetLabel, errorNode, api, getContext: () => context,
-    makeKey: () => `key-${++keys}`, onChange: () => { changes++; control.update(); } });
+    makeKey: () => `key-${++keys}`, onChange: () => { changes++; control.update(); }, ...options });
   control.update();
   return { control, button, targetLabel, errorNode, setContext: (value) => { context = { ...context, ...value }; control.update(); },
     context: () => context, changes: () => changes };
@@ -72,6 +75,20 @@ test("control writes are single-flight; stale failures cannot overwrite another 
   reject(Error("old private failure")); await flush();
   assert.equal(f.errorNode.textContent, ""); assert.equal(f.changes(), changes);
   assert.match(f.button.textContent, /Request my agent/);
+});
+
+test("resume honors confirmation without adding a request, key or busy state when cancelled", async () => {
+  let confirmed = false, confirmations = 0, appends = 0;
+  const f = fixture({ appendAgentRequest: async () => { appends++; } }, {
+    confirmResume: () => { confirmations++; return confirmed; },
+  });
+  f.setContext({ events: [request(), progress("r1", "paused")] });
+  f.control.handleClick(); await flush();
+  assert.equal(confirmations, 1); assert.equal(appends, 0);
+  assert.equal(f.button.attributes["aria-busy"], "false");
+  assert.match(f.button.textContent, /Resume Agent/);
+  confirmed = true; f.control.handleClick(); await flush();
+  assert.equal(confirmations, 2); assert.equal(appends, 1);
 });
 
 test("resume retries reuse a key without changing the target or drafts; viewer/sync gates remain closed", async () => {

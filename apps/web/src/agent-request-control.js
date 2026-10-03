@@ -1,6 +1,10 @@
 import { retryAgentRequestInput } from "./domain.js";
 
 const targetId = (event) => event.replyTo ?? event.reply_to_event_id ?? event.payload?.reply_to_event_id;
+const hasRecordedTarget = (request) => {
+  const profile = request?.payload?.execution_profile;
+  return Boolean(profile?.harness && profile?.model && typeof profile.runtime_id === "string" && profile.runtime_id.length > 0);
+};
 
 // Only the latest ordinary request authored by this user controls the composer.
 // Summary regeneration uses its own source-selection/confirmation workflow.
@@ -19,10 +23,9 @@ export function composerAgentAction(events, userId) {
   const linked = history.filter((event) => targetId(event) === request.id);
   if (linked.some((event) => event.type === "agent_response")) return { action: "request" };
   if (linked.some((event) => event.type === "agent_progress" && event.payload?.status === "paused")) {
-    const profile = request.payload?.execution_profile;
     // Legacy requests without a recorded target can be asked anew, but cannot
     // honestly promise to resume the original Agent/model.
-    if (!profile?.harness || !profile?.model) return { action: "request" };
+    if (!hasRecordedTarget(request)) return { action: "request" };
     return { action: "resume", request };
   }
   // The server can pause a claimed request only. A queued/unclaimed request is
@@ -31,8 +34,7 @@ export function composerAgentAction(events, userId) {
 }
 
 export function resumeAgentRequestInput(request, idempotencyKey) {
-  const profile = request?.payload?.execution_profile;
-  if (!profile?.harness || !profile?.model) throw new Error("Original Agent settings are unavailable. Start a new request.");
+  if (!hasRecordedTarget(request)) throw new Error("Original Agent settings are unavailable. Start a new request.");
   return {
     ...retryAgentRequestInput(request, idempotencyKey),
     ...(request.replyTo ? { replyTo: request.replyTo } : {}),
@@ -40,7 +42,8 @@ export function resumeAgentRequestInput(request, idempotencyKey) {
   };
 }
 
-export function mountAgentRequestControl({ button, targetLabel, errorNode, api, getContext, onChange, makeKey, t = (text) => text }) {
+export function mountAgentRequestControl({ button, targetLabel, errorNode, api, getContext, onChange, makeKey,
+  confirmResume = () => true, t = (text) => text }) {
   let operation = null;
   let resumeIntent = null;
 
@@ -79,6 +82,7 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
     const current = view();
     if (current.action === "request") return false;
     if (button.disabled || operation?.scope === current.scope || !current.writable) return true;
+    if (current.action === "resume" && !confirmResume(current.request)) return true;
     const pending = { scope: current.scope, action: current.action };
     operation = pending;
     errorNode.textContent = "";

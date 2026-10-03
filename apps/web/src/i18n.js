@@ -10,6 +10,7 @@ const ZH_CN = Object.freeze({
   "Starts a new request with latest history, using the original Agent and model.": "使用原 Agent 和模型新建请求，读取最新历史。",
   "Unable to control this Agent request. Try again.": "无法操作此 Agent 请求，请重试。",
   "Original Agent settings are unavailable. Start a new request.": "原 Agent 设置不可用，请发起新请求。",
+  "Resume with the original Agent and latest history? This starts a new request and may consume model quota.": "使用原 Agent 和最新历史恢复？这会发起新请求，可能消耗模型额度。",
   "Agent paused by its author.": "发送者已暂停此 Agent 请求。",
   "Only the author may pause a writable Agent request.": "仅发送者可在有写入权限时暂停此 Agent 请求。",
   "This Agent request already completed.": "此 Agent 请求已经完成。",

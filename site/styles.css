@@ -313,16 +313,7 @@ html[data-theme="light"] .icon-moon { opacity: 0; transform: rotate(90deg) scale
   display: inline-flex;
   align-items: center;
   gap: 10px;
-  padding: 12px 24px;
-  border: 1px solid currentColor;
-  border-radius: 999px;
-  color: var(--text);
-  background: var(--bg-1);
-  font-size: 17px;
-  font-weight: 600;
-  text-decoration: none;
 }
-.btn-repository:hover { text-decoration: underline; }
 .setup-fallback { margin-top: 16px; color: var(--text-2); font-size: 14px; line-height: 1.6; }
 
 .btn-link {
