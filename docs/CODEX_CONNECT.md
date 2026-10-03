@@ -16,13 +16,22 @@ First confirm that the Codex CLI is available:
 codex --version
 ```
 
-If Terminal reports `codex: command not found`, install or update the official CLI, then reopen Terminal:
+If zsh reports `command not found: codex` on a Mac with ChatGPT Desktop installed in `/Applications`, first check the bundled CLI. Add it to the current terminal's `PATH`:
 
 ```bash
-npm install -g @openai/codex
+codex_dir='/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS'
+if [ -x "$codex_dir/codex" ]; then export PATH="$codex_dir:$PATH"; codex --version; else echo 'Bundled Codex CLI not found'; fi
 ```
 
-Run `codex plugin --help` to confirm that this Codex build supports plugins, then install GatherThread:
+Only if the version appears, save the change for future zsh terminals and check plugin support:
+
+```bash
+echo 'export PATH="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+codex plugin --help
+```
+
+If that file is missing, ChatGPT Desktop is installed elsewhere, or you use another system, follow the [official Codex CLI installation guide](https://learn.chatgpt.com/docs/codex/cli) instead. Do not add a nonexistent directory to `PATH`. Run `codex plugin --help` to confirm that the available Codex build supports plugins, then install GatherThread:
 
 ```bash
 codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread

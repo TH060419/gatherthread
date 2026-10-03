@@ -932,7 +932,17 @@
         <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
           <li>
             <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>The manual terminal path requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.</p></div></div>
-            <p class="field-help codex-cli-recovery-hint">If Terminal reports “codex: command not found”, first run npm install -g @openai/codex, reopen Terminal, and confirm codex plugin --help works.</p>
+            <details class="connection-alternative codex-cli-recovery-hint">
+              <summary>If Terminal says “command not found: codex”</summary>
+              <p>On macOS, if ChatGPT Desktop is installed in Applications, check its bundled Codex CLI and add it to this terminal's PATH:</p>
+              <code class="connector-command" tabindex="0" data-i18n-skip>codex_dir='/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS'
+if [ -x "$codex_dir/codex" ]; then export PATH="$codex_dir:$PATH"; codex --version; else echo 'Bundled Codex CLI not found'; fi</code>
+              <p>If the version appears, save the PATH change for future zsh terminals, then check plugin support:</p>
+              <code class="connector-command" tabindex="0" data-i18n-skip>echo 'export PATH="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+codex plugin --help</code>
+              <p>If that file is missing, or you use another system, follow the <a href="https://learn.chatgpt.com/docs/codex/cli" target="_blank" rel="noopener noreferrer">official Codex CLI installation guide</a>.</p>
+            </details>
             <div class="command-heading">
               <span id="connect-codex-marketplace-title" class="command-label">Codex plugin</span>
               <button class="button button-secondary" type="button" data-copy-command="marketplace" aria-describedby="copy-marketplace-command-status">Copy commands</button>

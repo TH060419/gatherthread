@@ -86,8 +86,13 @@ test("repo marketplace exposes the real plugin and all install surfaces pin one 
     assert.match(surface, new RegExp(installCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
   for (const guide of [html, english, chinese, rootEnglish, rootChinese]) {
-    assert.match(guide, /npm install -g @openai\/codex/);
+    assert.match(guide, /command not found: codex/);
     assert.match(guide, /codex plugin --help/);
+    assert.doesNotMatch(guide, /npm install -g @openai\/codex/);
+  }
+  for (const guide of [html, english, chinese]) {
+    assert.match(guide, /CodexCLI\.app\/Contents\/MacOS/);
+    assert.match(guide, /\[ -x "\$codex_dir\/codex" \]/);
   }
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Connect this project<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Confirm in Codex<\/h3>/);
   assert.match(translations, /"Install once": "仅需安装一次"/);
