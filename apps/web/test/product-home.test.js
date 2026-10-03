@@ -15,7 +15,7 @@ test("product home enters the same-origin app and preserves operational deep lin
 
   assert.match(html, /<script src="boot\.js"><\/script>/u);
   assert.doesNotMatch(html, /<script>(?:.|\n)*?<\/script>/u);
-  assert.equal((html.match(/href="\.\/app\/"/gu) ?? []).length, 4);
+  assert.equal((html.match(/href="\.\/app\/"/gu) ?? []).length, 7);
   assert.match(html, /data-i18n="nav\.app">进入共序/u);
   assert.match(html, /data-i18n="hero\.cta1">开始使用/u);
   assert.match(html, /data-i18n="final\.cta1">打开登录页/u);
@@ -135,36 +135,17 @@ test("product home exposes canonical and bilingual social discovery metadata", a
   assert.match(html, /name="twitter:card" content="summary"/u);
 });
 
-test("product home and access Issue clearly explain public optional email delivery", async () => {
-  const [html, app, issueTemplate] = await Promise.all([
-    readFile(new URL("index.html", productRoot), "utf8"),
-    readFile(new URL("app.js", productRoot), "utf8"),
-    readFile(new URL("../../../.github/ISSUE_TEMPLATE/test-access.yml", import.meta.url), "utf8"),
-  ]);
-  const issueLink = /https:\/\/github\.com\/TH060419\/gatherthread\/issues\/new\?template=test-access\.yml/gu;
-  assert.ok((html.match(issueLink) ?? []).length >= 2);
-  assert.match(html, /邮箱选填；若愿意公开，建议填写，方便获批后私下发送资格码/u);
-  assert.match(html, /申请理由、希望测试的内容和了解渠道也可填写/u);
-  assert.match(html, /若介意公开邮箱，可在获批后把 Issue 链接私信至 coolhezi@sjtu\.edu\.cn/u);
-  assert.match(html, /维护者会在 Issue 回复审核结果，但不会公开资格码/u);
-  assert.match(app, /Email is optional; if you're comfortable sharing it publicly, we recommend including it/u);
-  assert.match(app, /share why you're applying, what you'd like to test, and how you heard about GatherThread/u);
-  assert.match(app, /If you prefer not to publish your email, after approval privately email the Issue link to coolhezi@sjtu\.edu\.cn/u);
-  assert.match(app, /maintainer will post the review decision on the Issue, but never the qualification code/u);
-  assert.match(issueTemplate, /邮箱选填；若愿意公开，建议填写/u);
-  assert.match(issueTemplate, /维护者会在此 Issue 回复审核结果，但不会公开发布资格码/u);
-  assert.match(issueTemplate, /Email is optional; if you are comfortable sharing it publicly, we recommend including it/u);
-  assert.match(issueTemplate, /the review result, but codes are never published in Issues/u);
-  assert.doesNotMatch(html, /公开 Issue 中发送资格码、设备 Token 或个人信息/u);
-  assert.doesNotMatch(app, /personal information in a public Issue/u);
-  assert.match(app, /"connect\.c2\.link"/u);
-  assert.doesNotMatch(html, /<form[^>]*test-access/u);
+test("product home explains email sign-in and default registration closure", async () => {
+  const [html, app] = await Promise.all([readFile(new URL("index.html", productRoot), "utf8"), readFile(new URL("app.js", productRoot), "utf8")]);
+  assert.match(html, /邮箱和密码登录/u); assert.match(html, /注册默认关闭/u);
+  assert.doesNotMatch(html + app, /template=test-access|qualification code|申请测试资格/u);
+  assert.match(html, /忘记密码/u);
 });
 
 test("product home leads with the hosted server while keeping local Agents local", async () => {
   const html = await readFile(new URL("index.html", productRoot), "utf8");
-  assert.match(html, /当前 Alpha 在 gatherthread\.cn 邀请制测试/u);
-  assert.match(html, /你的 Agent 与工作目录仍留在自己的设备上/u);
+  assert.match(html, /当前 Alpha 尚未开放公众注册/u);
+  assert.match(html, /Agent 与工作目录仍留在自己的设备上/u);
   assert.match(html, /data-i18n="connect\.c3\.h3">连接本地 Agent/u);
   assert.doesNotMatch(html, /npm run connection:local/u);
 });
@@ -177,9 +158,9 @@ test("product home ends with public contact and the gatherthread.cn ICP record",
   ]);
   const footer = html.slice(html.indexOf('<footer class="footer">'));
 
-  assert.match(footer, /data-i18n="foot\.3">³ Alpha 测试资格通过公开 GitHub Issue 申请；邮箱选填，愿意公开时建议填写。请勿发布资格码、设备 Token、密码、密钥或私有代码。<\/p>/u);
+  assert.match(footer, /先注册或登录，再接受项目邀请/u);
   assert.doesNotMatch(footer, /公开 Issue 中发送资格码、设备 Token 或个人信息/u);
-  assert.match(app, /Email is optional and recommended if you are comfortable sharing it publicly/u);
+  assert.match(app, /Register or sign in before accepting project invitations/u);
   assert.doesNotMatch(app, /personal information in a public Issue/u);
   assert.match(footer, /data-i18n="foot\.contact">联系与反馈：/u);
   assert.match(footer, /href="https:\/\/github\.com\/TH060419\/gatherthread\/issues"[^>]*>GitHub Issues<\/a>/u);

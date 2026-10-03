@@ -41,6 +41,9 @@ import {
   buildHistorySummaryPrompt, historySummaryMarker, historySummarySourceJson, historySummaryText,
   isHistorySummaryRequest, selectHistorySummarySources,
 } from "@gatherthread/protocol";
+import { RegistrationStore, REGISTRATION_SCHEMA, type RegistrationOptions } from "./registration.js";
+import { hashPassword, checkPassword, PasswordCapacityError } from "./password.js";
+import type { EmailLoginInput, VerifyRegistrationInput, VerifyPasswordResetInput } from "@gatherthread/protocol";
 import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
@@ -877,6 +880,7 @@ function mapEvent(row: EventRow): CanonicalEvent {
 
 export class CollaborationDatabase {
   readonly sqlite: DatabaseSync;
+  readonly registration: RegistrationStore;
   private readonly authTokenPepper: string;
   private readonly clock: () => Date;
   private readonly maxUserEventBytes: number;
@@ -979,6 +983,8 @@ export class CollaborationDatabase {
     this.migrateAgentClaimLease();
     this.migrateAgentClaimPause();
     this.initializeEventStorageUsage();
+    this.sqlite.exec(REGISTRATION_SCHEMA);
+    this.registration = new RegistrationStore(this.sqlite, (value) => this.tokenDigest(value), this.clock);
   }
 
   close(): void {
@@ -1134,6 +1140,74 @@ export class CollaborationDatabase {
       return options.browserSession
         ? { ...result, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device === true) }
         : result;
+    });
+  }
+
+  async verifyPublicRegistration(input: VerifyRegistrationInput, browser: string, ip: string, options: RegistrationOptions): Promise<{ actor: Actor; browser_session: BrowserSessionIssue }> {
+    const proof = this.registration.prepareVerification(input, browser, ip, options);
+    try {
+      const passwordHash = await hashPassword(input.password);
+      return this.registration.completeVerification(input.registration_id, proof, browser, ip, passwordHash, options, () => {
+        const userId = randomUUID();
+        const deviceId = randomUUID();
+        const timestamp = this.now();
+        const token = issueDeviceToken();
+        this.sqlite.prepare("INSERT INTO users(id,display_name,created_at,can_create_projects) VALUES(?,?,?,1)")
+          .run(userId, input.display_name, timestamp);
+        this.sqlite.prepare("INSERT INTO devices(id,user_id,name,token_hash,created_at,token_created_at) VALUES(?,?,?,?,?,?)")
+          .run(deviceId, userId, input.device_name, this.tokenDigest(token), timestamp, timestamp);
+        const actor = { user_id: userId, device_id: deviceId, display_name: input.display_name };
+        return { actor, browser_session: this.insertBrowserSession(actor, new Date(timestamp), input.remember_device) };
+      });
+    } catch (error) {
+      this.registration.failVerification(input.registration_id, proof);
+      if (error instanceof PasswordCapacityError) throw new ApiError(503, "password_busy", "Sign-in is busy. Please try again.");
+      throw error;
+    }
+  }
+
+  async resetPassword(input: VerifyPasswordResetInput, browser: string, ip: string, options: RegistrationOptions): Promise<string> {
+    const proof = this.registration.preparePasswordReset(input, browser, ip, options);
+    let userId: string;
+    try {
+      const passwordHash = await hashPassword(input.password);
+      userId = this.registration.completePasswordReset(input.reset_id, proof, browser, passwordHash, options, (id) => {
+        const timestamp = this.now();
+        this.sqlite.prepare("UPDATE devices SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").run(timestamp, id);
+        this.sqlite.prepare("UPDATE runtimes SET status='revoked' WHERE device_id IN (SELECT id FROM devices WHERE user_id=?)").run(id);
+        this.sqlite.prepare(`UPDATE device_authorizations SET revoked_at=? WHERE authorizer_device_id IN (SELECT id FROM devices WHERE user_id=?)
+          AND claimed_at IS NULL AND expired_at IS NULL AND revoked_at IS NULL`).run(timestamp, id);
+        this.sqlite.prepare("UPDATE browser_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").run(timestamp, id);
+        this.sqlite.prepare("DELETE FROM remembered_accounts WHERE user_id=?").run(id);
+        this.sqlite.prepare("DELETE FROM email_login_devices WHERE user_id=?").run(id);
+      });
+    } catch (error) {
+      this.registration.failPasswordReset(input.reset_id, proof);
+      if (error instanceof PasswordCapacityError) throw new ApiError(503, "password_busy", "Sign-in is busy. Please try again.");
+      throw error;
+    }
+    // Return immediately after commit. The service must revoke in-memory grants before awaiting notification delivery.
+    return userId;
+  }
+
+  async loginWithEmail(input: EmailLoginInput, browser: string, ip: string): Promise<{ actor: Actor; browser_session: BrowserSessionIssue }> {
+    const account = this.registration.passwordLoginAttempt(input.email, browser, ip);
+    let valid = false;
+    try { valid = await checkPassword(input.password, account?.password_hash); }
+    catch (error) { if (error instanceof PasswordCapacityError) throw new ApiError(503, "password_busy", "Sign-in is busy. Please try again."); throw error; }
+    if (!valid || !account) throw new ApiError(401, "email_login_invalid", "Email or password is incorrect.");
+    return this.transaction(() => {
+      const current = this.sqlite.prepare("SELECT password_hash FROM public_registration_accounts WHERE user_id=?").get(account.user_id) as { password_hash: string } | undefined;
+      if (!current || current.password_hash !== account.password_hash) throw unauthorized("Email or password is incorrect.");
+      let deviceId = this.registration.browserDevice(account.user_id, browser);
+      if (!deviceId) {
+        deviceId = this.createDevice(account.user_id, input.device_name).device_id;
+        this.registration.bindBrowserDevice(account.user_id, browser, deviceId);
+      }
+      this.sqlite.prepare("UPDATE devices SET name=? WHERE id=?").run(input.device_name, deviceId);
+      const row = this.sqlite.prepare("SELECT display_name FROM users WHERE id=?").get(account.user_id) as { display_name: string };
+      const actor = { user_id: account.user_id, device_id: deviceId, display_name: row.display_name };
+      return { actor, browser_session: this.insertBrowserSession(actor, this.clock(), input.remember_device) };
     });
   }
 
@@ -1722,6 +1796,7 @@ export class CollaborationDatabase {
       const preview = this.accountDeletionPreview(actor);
       if (preview.owned_projects.length) throw conflict("Transfer or delete every owned project before deleting the account");
       if (preview.cloud_branches) throw conflict("Resolve every personal cloud code branch before deleting the account");
+      this.registration.beforeDelete(actor.user_id);
       const deletedUserId = "deleted-account";
       this.sqlite.prepare(`
         INSERT INTO users(id,display_name,created_at,can_create_projects)

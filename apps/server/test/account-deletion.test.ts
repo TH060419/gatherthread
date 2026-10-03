@@ -1,3 +1,4 @@
+import { browserSessionFixture } from "./auth-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -120,8 +121,7 @@ test("account deletion HTTP requires a browser session and allowed Origin, then 
     const project = service.createProject(identity.actor, { title: "HTTP transfer", idempotency_key: "http-transfer-project" });
     service.claimInvitationForActor(recipient,
       service.createProjectInvitation(identity.actor, project.id, { role: "participant" }).invite_token);
-    const opened = await request("/v1/browser-sessions", { method: "POST", token: identity.token,
-      origin: browserOrigin });
+    const opened = browserSessionFixture(running, { token: identity.token, origin: browserOrigin });
     assert.equal(opened.status, 201);
     const cookie = opened.headers.get("set-cookie")?.split(";", 1)[0] ?? "";
     const transferPath = `/v1/projects/${project.id}/transfer-ownership`;

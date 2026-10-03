@@ -4,7 +4,7 @@ GatherThread keeps one selected cloud project connected to Codex Desktop through
 
 For optional **project code** upload/download/recovery, use the `0.1.0-alpha.8` connector with the separate `--code-sync` opt-in; follow [Project code collaboration](CODE_SYNC.md). This is independent of conversation/history synchronization.
 
-> Invitation-only Alpha: the hosted server is at `https://gatherthread.cn`. Before using the fixed `v0.1.0-alpha.8` command, verify that both its Git ref and matching npm package are published; otherwise use the source-checkout path below. Test access is requested only through a [GitHub Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml); never post a token in an Issue.
+> Unreleased account update: the host is `https://gatherthread.cn`. Sign in on the Web with email and password, then authorize the connector device separately. Use a fixed release command only after its Git ref and matching npm package are published.
 
 ## Normal three-step setup
 
@@ -52,7 +52,7 @@ npx --yes @gatherthread/codex-connect@0.1.0-alpha.8 \
   --plugin-hooks
 ```
 
-The connector asks for your device token in a hidden terminal prompt. Keep the terminal open. Run one connector per GatherThread project you want online.
+In Connect Codex, create a ten-minute one-use device authorization. Paste it into the hidden connector prompt or Launcher; do not save or share it. The connector claims its own device credential. Keep the terminal open. Run one connector per GatherThread project you want online.
 
 ### 3. Confirm the connection
 

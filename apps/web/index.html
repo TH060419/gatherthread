@@ -62,20 +62,15 @@
           <button id="auth-language-button" class="auth-language-button" type="button" aria-label="Switch language / 切换语言" title="Switch language / 切换语言">中</button>
         </div>
         <h2 id="login-title">Enter your workspace</h2>
-        <p class="muted">Your identity and permissions come from the server.</p>
+        <p class="muted">Sign in or create an account to collaborate.</p>
         <nav id="auth-entry-chooser" class="auth-entry-chooser" aria-label="Choose how to enter">
           <p class="field-help">Choose one way to enter. You can come back and switch at any time.</p>
-          <button id="auth-select-login" class="auth-entry-choice" type="button" aria-controls="auth-login-panel">
-            <span><strong>Existing account · sign in</strong><small>Use a device access token or choose an account remembered by this browser.</small></span><span aria-hidden="true">→</span>
+          <button id="auth-select-email-login" class="auth-entry-choice" type="button" aria-controls="auth-email-login-panel">
+            <span><strong>Email account · sign in</strong><small>Use the email and password you set during registration.</small></span><span aria-hidden="true">→</span>
           </button>
-          <button id="auth-select-activate" class="auth-entry-choice" type="button" aria-controls="auth-activate-panel">
-            <span><strong>First-time use · activate access</strong><small>Enter a one-time test qualification code to receive your own device token.</small></span><span aria-hidden="true">→</span>
+          <button id="auth-select-register" class="auth-entry-choice" type="button" aria-controls="auth-register-panel">
+            <span><strong>New account · email registration</strong><small>Verify your email and choose a password.</small></span><span aria-hidden="true">→</span>
           </button>
-          <button id="auth-select-invitation" class="auth-entry-choice" type="button" aria-controls="auth-invitation-panel">
-            <span><strong>Only have a project invitation?</strong><small>Join the invited project. This does not grant permission to create projects.</small></span><span aria-hidden="true">→</span>
-          </button>
-          <p class="auth-request-access">No test code yet? Apply through a GitHub Issue. You may add a reason and how you heard about GatherThread; email is optional and recommended only if you are comfortable sharing it publicly for private code delivery. Issues are public. If you prefer not to publish your email, after approval send the Issue link privately to coolhezi@sjtu.edu.cn.</p>
-          <a class="auth-request-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access on GitHub</a>
         </nav>
         <div id="auth-identity" class="auth-identity" hidden>
           <div class="claim-identity-grid">
@@ -88,88 +83,87 @@
               <input id="claim-device-name" name="device-name" autocomplete="off" maxlength="120" value="This browser" aria-describedby="auth-identity-help" />
             </div>
           </div>
-          <p id="auth-identity-help" class="field-help">Set both names for first-time activation or a project invitation. Existing accounts can leave them unchanged.</p>
+          <p id="auth-identity-help" class="field-help">Display names appear to collaborators. The device name helps you recognize this browser.</p>
         </div>
-        <section id="auth-login-panel" class="auth-entry-panel" aria-labelledby="auth-login-heading" hidden>
+        <section id="auth-email-login-panel" class="auth-entry-panel" aria-labelledby="auth-email-login-heading" hidden>
           <button class="text-button auth-entry-back" type="button">← Back</button>
-          <h3 id="auth-login-heading">Existing account · sign in</h3>
-          <form id="login-form" novalidate>
-            <div id="remembered-account-control" class="remembered-account-control" hidden>
-              <label for="remembered-account-select">Remembered accounts on this browser</label>
-              <select id="remembered-account-select" aria-describedby="remembered-account-help login-error">
-                <option value="">Use a device access token</option>
-              </select>
-              <p id="remembered-account-help" class="field-help">Choose an account for quick sign-in. The names above can still be changed before signing in. Anyone using this browser profile can choose a remembered account.</p>
-              <button id="forget-remembered-account" class="text-button" type="button" hidden>Forget selected account</button>
-            </div>
-            <div id="token-entry">
-              <label for="token">Device access token</label>
-              <input
-                id="token"
-                name="token"
-                type="password"
-                autocomplete="current-password"
-                required
-                aria-describedby="token-help login-error"
-              />
-              <p id="token-help" class="field-help">Use the device token issued when you first activated your account.</p>
-            </div>
-            <label id="login-remember-control" class="auth-remember" for="login-remember-device">
-              <input id="login-remember-device" name="remember-device" type="checkbox" />
+          <h3 id="auth-email-login-heading">Sign in with email and password</h3>
+          <form id="email-login-form" novalidate>
+            <label for="email-login-email">Email address</label>
+            <input id="email-login-email" type="email" autocomplete="username" maxlength="254" required />
+            <label for="email-login-password">Password</label>
+            <input id="email-login-password" type="password" autocomplete="current-password" maxlength="128" required />
+            <label class="auth-remember" for="email-login-remember">
+              <input id="email-login-remember" type="checkbox" />
               <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
             </label>
-            <p id="login-error" class="form-error" role="alert"></p>
-            <button class="button button-primary button-wide" type="submit">Sign in <span aria-hidden="true">→</span></button>
+            <p id="email-login-help" class="field-help">Use a long, unique password and keep it in your password manager.</p>
+            <button id="auth-select-password-reset" class="text-button" type="button" aria-controls="auth-password-reset-panel">Forgot password?</button>
+            <p id="email-login-status" class="field-help" role="status" aria-live="polite"></p>
+            <p id="email-login-error" class="form-error" role="alert"></p>
+            <button class="button button-primary button-wide" type="submit">Sign in</button>
           </form>
         </section>
-        <section id="auth-activate-panel" class="auth-entry-panel" aria-labelledby="auth-activate-heading" hidden>
+        <section id="auth-register-panel" class="auth-entry-panel" aria-labelledby="auth-register-heading" hidden>
           <button class="text-button auth-entry-back" type="button">← Back</button>
-          <h3 id="auth-activate-heading">First-time use · activate access</h3>
-          <form id="claim-test-access-form" novalidate>
-            <label for="test-access-token">Test qualification code</label>
-            <input
-              id="test-access-token"
-              name="test-access-token"
-              type="password"
-              autocomplete="off"
-              autocapitalize="none"
-              spellcheck="false"
-              required
-              aria-describedby="test-access-help test-access-error"
-            />
-            <p id="test-access-help" class="field-help">Enter your one-time code to activate an account and receive your own device token.</p>
-            <label class="auth-remember" for="test-access-remember-device">
-              <input id="test-access-remember-device" name="remember-device" type="checkbox" />
-              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+          <h3 id="auth-register-heading">Create an account with email</h3>
+          <form id="registration-form" novalidate>
+            <label for="registration-email">Email address</label>
+            <input id="registration-email" type="email" autocomplete="email" maxlength="254" required aria-describedby="registration-help registration-error" />
+            <p id="registration-help" class="field-help">Verify your email, then choose a password. Sign in with email and password.</p>
+            <label class="auth-remember" for="registration-privacy">
+              <input id="registration-privacy" type="checkbox" required />
+              <span>I have read the privacy notice and agree to email delivery and the Cloudflare security check.</span>
             </label>
-            <p id="test-access-error" class="form-error" role="alert"></p>
-            <button class="button button-primary button-wide" type="submit">Activate account <span aria-hidden="true">→</span></button>
+            <a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy notice</a>
+            <div id="registration-challenge"></div>
+            <button id="registration-challenge-retry" class="text-button" type="button">Retry security check</button>
+            <p id="registration-status" class="field-help" role="status" aria-live="polite"></p>
+            <button id="registration-send" class="button button-secondary button-wide" type="button" disabled>Send / resend email code</button>
+            <div id="registration-code-step" hidden>
+              <label for="registration-password">Choose a password</label>
+              <input id="registration-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="registration-password-help registration-error" />
+              <p id="registration-password-help" class="field-help">Use 12–128 characters. A long, unique password is best. Keep it in your password manager.</p>
+              <label for="registration-password-confirm">Confirm password</label>
+              <input id="registration-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" />
+              <label for="registration-code">Eight-digit email code</label>
+              <input id="registration-code" inputmode="numeric" type="password" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{8}" aria-describedby="registration-status registration-error" />
+              <label class="auth-remember" for="registration-remember">
+                <input id="registration-remember" type="checkbox" />
+                <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+              </label>
+              <button id="registration-verify" class="button button-primary button-wide" type="submit" disabled>Verify and create account</button>
+            </div>
+            <p id="registration-error" class="form-error" role="alert"></p>
           </form>
-          <p class="auth-request-access">No code yet? The public request Issue accepts an optional reason, discovery source, and email. Include an email only if you are comfortable sharing it publicly for private code delivery.</p>
-          <a class="auth-request-link" href="https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml" target="_blank" rel="noopener noreferrer">Request Alpha access</a>
         </section>
-        <section id="auth-invitation-panel" class="auth-entry-panel" aria-labelledby="auth-invitation-heading" hidden>
+        <section id="auth-password-reset-panel" class="auth-entry-panel" aria-labelledby="auth-password-reset-heading" hidden>
           <button class="text-button auth-entry-back" type="button">← Back</button>
-          <h3 id="auth-invitation-heading">Join an invited project</h3>
-          <form id="claim-invitation-form" class="invitation-claim-form" autocomplete="off">
-            <label for="claim-invite-secret">Invitation secret</label>
-            <input
-              id="claim-invite-secret"
-              name="invite-secret"
-              type="password"
-              autocomplete="off"
-              autocapitalize="none"
-              spellcheck="false"
-              required
-              aria-describedby="claim-invite-help claim-invite-error"
-            />
-            <p id="claim-invite-help" class="field-help">A project invitation grants access only to invited projects, not the ability to create a project.</p>
-            <label class="auth-remember" for="claim-remember-device">
-              <input id="claim-remember-device" name="remember-device" type="checkbox" />
-              <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
+          <h3 id="auth-password-reset-heading">Reset your password</h3>
+          <form id="password-reset-form" novalidate>
+            <label for="password-reset-email">Email address</label>
+            <input id="password-reset-email" type="email" autocomplete="email" maxlength="254" required aria-describedby="password-reset-help password-reset-error" />
+            <p id="password-reset-help" class="field-help">Enter your account email and verify the code to choose a new password. This signs out every device and revokes Agent access. Your projects stay in your account.</p>
+            <label class="auth-remember" for="password-reset-privacy">
+              <input id="password-reset-privacy" type="checkbox" required />
+              <span>I have read the privacy notice and agree to email delivery and the Cloudflare security check.</span>
             </label>
-            <p id="claim-invite-error" class="form-error" role="alert"></p>
-            <button class="button button-secondary button-wide" type="submit">Join project</button>
+            <a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy notice</a>
+            <div id="password-reset-challenge"></div>
+            <button id="password-reset-challenge-retry" class="text-button" type="button">Retry security check</button>
+            <p id="password-reset-status" class="field-help" role="status" aria-live="polite"></p>
+            <button id="password-reset-send" class="button button-secondary button-wide" type="button" disabled>Send / resend email code</button>
+            <div id="password-reset-code-step" hidden>
+              <label for="password-reset-password">Choose a new password</label>
+              <input id="password-reset-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="password-reset-password-help password-reset-error" />
+              <p id="password-reset-password-help" class="field-help">Use 12–128 characters. A long, unique password is best. Keep it in your password manager.</p>
+              <label for="password-reset-password-confirm">Confirm password</label>
+              <input id="password-reset-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" />
+              <label for="password-reset-code">Eight-digit email code</label>
+              <input id="password-reset-code" inputmode="numeric" type="password" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{8}" aria-describedby="password-reset-status password-reset-error" />
+              <button id="password-reset-verify" class="button button-primary button-wide" type="submit" disabled>Reset password</button>
+            </div>
+            <p id="password-reset-error" class="form-error" role="alert"></p>
           </form>
         </section>
         <p class="auth-privacy-link"><a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy &amp; account deletion</a></p>
@@ -866,7 +860,7 @@
         <p id="connect-codex-summary" class="connection-lead">A local connector keeps this project connected to Codex Desktop. Follow the manual terminal steps, or use the optional Windows/macOS Launcher.</p>
         <div id="codex-launcher-option" class="connection-preview-banner" role="note" hidden>
           <span class="connection-preview-badge">Codex launcher</span>
-          <span>After installing the local Launcher, open it for this project. Enter the device token in its window.</span>
+          <span>After installing the local Launcher, open it for this project. Enter the one-time device authorization in its window.</span>
           <button id="open-codex-launcher-button" class="button button-secondary" type="button" disabled>Open Launcher</button>
         </div>
         <div class="connection-preview-banner" role="note">
@@ -896,7 +890,7 @@ codex plugin add gatherthread@gatherthread</code>
           <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
           </li>
           <li>
-            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Connect this project</h3><p>Choose your terminal. The device token is requested by a hidden CLI prompt.</p></div></div>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Connect this project</h3><p>Create an authorization below, then paste it into the hidden CLI prompt or Launcher.</p></div></div>
             <strong id="connect-codex-project-name" class="connection-project-name"></strong>
             <section class="command-card command-card-compact" aria-labelledby="connect-codex-posix-title">
               <div class="command-heading">
@@ -927,7 +921,19 @@ codex plugin add gatherthread@gatherthread</code>
           <p>Editable sessions appear as Codex tasks. Web requests run separately; approved Hooks return direct Desktop turns to the same shared history.</p>
           <p>A new local task creates a personal Solo only after its first completed turn. Viewer tasks stay local.</p>
         </details>
-        <p id="connect-codex-security" class="codex-connect-notice">On supported Windows and macOS, this page can open the installed Launcher. Manual commands remain available. No token is placed in a command, URL, or shared history.</p>
+        <p id="connect-codex-security" class="codex-connect-notice">On supported Windows and macOS, this page can open the installed Launcher. Manual commands remain available.</p>
+
+        <section aria-labelledby="codex-authorization-heading">
+          <h3 id="codex-authorization-heading">Authorize a Codex device</h3>
+          <p>This authorizes one new device to act under your account. Revoke it later in Settings. The authorization expires in 10 minutes.</p>
+          <button id="authorize-codex-device" class="button button-secondary" type="button">Create one-time device authorization</button>
+          <div id="codex-authorization-result" hidden>
+            <label for="codex-device-authorization">One-time device authorization</label>
+            <input id="codex-device-authorization" type="password" readonly autocomplete="off" />
+            <button id="copy-codex-authorization" class="button button-secondary" type="button" disabled>Copy authorization</button>
+          </div>
+          <p id="codex-authorization-status" class="field-help" role="status" aria-live="polite"></p>
+        </section>
 
         <p id="connect-codex-error" class="form-error" role="alert"></p>
         <div class="dialog-actions">
@@ -1024,7 +1030,7 @@ codex plugin add gatherthread@gatherthread</code>
           <div>
             <p class="eyebrow">GatherThread preferences</p>
             <h2 id="settings-title">Settings</h2>
-            <p>Personalize this browser without storing credentials.</p>
+            <p>Personalize this browser.</p>
           </div>
           <button id="close-settings-button" class="icon-button" type="button" aria-label="Close Settings">×</button>
         </header>
@@ -1247,23 +1253,6 @@ codex plugin add gatherthread@gatherthread</code>
       <ol id="history-summary-versions" class="history-summary-versions"></ol>
     </dialog>
 
-    <dialog id="device-credential-dialog" class="create-dialog device-credential-dialog" aria-labelledby="device-credential-title">
-      <div>
-        <p class="eyebrow">One-time credential</p>
-        <h2 id="device-credential-title">Save your access token</h2>
-        <p>
-          Your secure browser session is active. Save this device token in a password manager so you can sign in again after the browser session ends. It will not be shown again.
-        </p>
-        <div class="secret-copy-row">
-          <code id="new-device-access-token"></code>
-          <button id="copy-device-access-token-button" class="button button-secondary" type="button">Copy</button>
-        </div>
-        <p id="copy-device-access-token-status" class="field-help" role="status" aria-live="polite"></p>
-        <button id="acknowledge-device-access-token-button" class="button button-primary button-wide" type="button">
-          I saved it
-        </button>
-      </div>
-    </dialog>
 
     <div id="attention-notice" class="attention-notice" role="status" aria-live="assertive" aria-atomic="true" hidden>
       <span class="status-dot" aria-hidden="true"></span>

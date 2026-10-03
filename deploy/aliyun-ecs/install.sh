@@ -241,8 +241,8 @@ GatherThread $release_version is ready on loopback and Caddy is configured for h
 
 Next:
   1. In the Alibaba Cloud security group, allow TCP 80 and 443. Never open 18787.
-  2. Create the first owner:
-     sudo $repository_root/deploy/aliyun-ecs/create-owner.sh --display-name "Your name" --device-name "Server bootstrap"
+  2. Review docs/OPERATIONS.md, then configure approved email and challenge providers.
+     Registration stays closed until separately approved and enabled.
   3. Run:
      sudo $repository_root/deploy/aliyun-ecs/preflight.sh $domain
 

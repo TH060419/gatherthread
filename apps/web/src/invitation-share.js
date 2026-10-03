@@ -18,7 +18,7 @@ export function projectInvitationShareText(secret, invitation, locale = "zh-CN")
   if (locale === "en") {
     return [
       `Invitation secret: ${secret}`,
-      "Sign in to GatherThread, then enter this secret under “Join another project” in the right sidebar to join my project. First-time users can also choose “Join an invited project” on the sign-in page.",
+      "Sign in to GatherThread, then enter this secret under “Join another project” in the right sidebar to join my project. New users must register with verified email and sign in before accepting an invitation.",
       startsAt && expiresAt
         ? `Valid: ${startsAt} to ${expiresAt} (China Standard Time)`
         : "Valid: Please confirm with the inviter (the server did not provide the validity period).",
@@ -26,7 +26,7 @@ export function projectInvitationShareText(secret, invitation, locale = "zh-CN")
   }
   return [
     `邀请密钥：${secret}`,
-    "登录共序后，在工作页右侧栏的「加入其他项目」中输入上述密钥，即可加入我的项目。首次使用时，也可在登录页选择「加入受邀项目」。",
+    "登录共序后，在工作页右侧栏的「加入其他项目」中输入上述密钥，即可加入我的项目。首次使用请先验证邮箱、注册账号并登录，再接受项目邀请。",
     startsAt && expiresAt
       ? `有效期：${startsAt} 至 ${expiresAt}（北京时间）`
       : "有效期：请向邀请者确认（服务器未提供有效时间）。",

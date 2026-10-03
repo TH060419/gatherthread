@@ -162,7 +162,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         stack.addArrangedSubview(NSTextField(labelWithString: "首次历史导入"))
         history.addItems(withTitles: ["first-connect", "never"])
         stack.addArrangedSubview(history)
-        addField("设备 Token（仅传给本机连接器）", token, to: stack)
+        addField("一次性设备授权（仅传给本机连接器）", token, to: stack)
         let actions = NSStackView()
         actions.orientation = .horizontal
         actions.spacing = 10

@@ -10,7 +10,7 @@ Copy the fixed-version command from GatherThread Web. It contains the server ori
 npx --yes @gatherthread/codex-connect@0.1.0-alpha.8 --url https://gatherthread.example --project PROJECT_ID --create-workspace --plugin-hooks --visible-history-sync first-connect
 ```
 
-The connector requests the device access token with hidden terminal input. It supports Web **Request my agent**, canonical per-session projections, read-only snapshots, and a verified Desktop-visible history snapshot. `first-connect` imports once when each session is first established locally; `never` disables automatic import. Each manual import creates a new task and leaves the previous task for the user to archive. Realtime context injection stays active in both modes. Keep the process running.
+Create a one-time device authorization in the signed-in Connect Codex dialog, then paste it into the hidden terminal input within ten minutes. The connector claims its own device token, never your password. It supports Web **Request my agent**, canonical per-session projections, read-only snapshots, and a verified Desktop-visible history snapshot. `first-connect` imports once when each session is first established locally; `never` disables automatic import. Each manual import creates a new task and leaves the previous task for the user to archive. Realtime context injection stays active in both modes. Keep the process running.
 
 After the matching Git release ref exists, install the fixed plugin source and plugin explicitly:
 

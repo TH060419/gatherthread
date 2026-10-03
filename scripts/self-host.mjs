@@ -4,8 +4,8 @@ import { ensureLocalOwnerHostEnvironment } from "./local-env.mjs";
 
 const mode = process.argv[2] ?? "start";
 const forwardedArguments = process.argv.slice(3);
-if (!new Set(["start", "init", "bootstrap", "issue-test-access", "revoke-test-access"]).has(mode)) {
-  process.stderr.write("Usage: node scripts/self-host.mjs [start|init|bootstrap|issue-test-access|revoke-test-access] [CLI options]\n");
+if (!new Set(["start", "init", "registration"]).has(mode)) {
+  process.stderr.write("Usage: node scripts/self-host.mjs [start|init|registration] [CLI options]\n");
   process.exit(2);
 }
 
@@ -13,6 +13,11 @@ if (mode !== "start") {
   const localEnvironment = await ensureLocalOwnerHostEnvironment();
   if (localEnvironment.generated) {
     process.stdout.write("Created private .env with a generated GatherThread authentication pepper.\n");
+  }
+  if (mode === "init") {
+    if (forwardedArguments.length) throw new Error("init accepts no account arguments");
+    process.stdout.write("Private configuration ready. Configure email delivery and Turnstile before enabling registration; no account was created.\n");
+    process.exit(0);
   }
 }
 
@@ -36,7 +41,7 @@ if (built.signal) {
 } else if (built.code !== 0) {
   process.exitCode = built.code;
 } else {
-  const command = mode === "init" ? "bootstrap" : mode;
+  const command = mode;
   const result = await run(process.execPath, ["apps/server/dist/src/cli.js", command, ...forwardedArguments]);
   if (result.signal) process.kill(process.pid, result.signal);
   else process.exitCode = result.code;

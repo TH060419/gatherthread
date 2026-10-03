@@ -9,11 +9,11 @@ cd apps/web
 npm run dev
 ```
 
-Start the API with `GATHERTHREAD_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173` for the product home and choose **Get Started** to enter the application at `/app/`. Enter an access token from the owner host there. The development server proxies same-origin `/v1` and `/health` requests to `GATHERTHREAD_WEB_API_ORIGIN` (default `http://127.0.0.1:18787`).
+Start the API with `GATHERTHREAD_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then open `http://127.0.0.1:4173` for the product home and choose **Get Started** to enter the application at `/app/`. Sign in with your email and password, or register after the operator enables registration. Use **Forgot password?** to request a code when recovery is enabled. The development server proxies same-origin `/v1` and `/health` requests to `GATHERTHREAD_WEB_API_ORIGIN` (default `http://127.0.0.1:18787`).
 
 Browser API requests are restricted to the page's origin before any credential is sent. Legacy `?api=...` links are still forwarded to `/app/`, but an external or credential-bearing API URL is rejected. To use another deployment, open that deployment's own `/app/`; development continues to use the same-origin proxy above.
 
-For the isolated mock preview, explicitly open `http://127.0.0.1:4173/app/?mock=1` and sign in with `demo-token`. Legacy root `?mock=1`, project/session fragments, and DSH pairing fragments are forwarded to `/app/` with their query and fragment preserved.
+For the isolated mock preview, explicitly open `http://127.0.0.1:4173/app/?mock=1` and sign in with email `demo@example.invalid` and password `isolated demo password`. Legacy root `?mock=1`, project/session fragments, and DSH pairing fragments are forwarded to `/app/` with their query and fragment preserved.
 
 ```bash
 npm test
@@ -36,21 +36,21 @@ The script uses only `/app/?mock=1`, disposable browser profiles and mock API fi
 
 `src/api.js` defines the replaceable transport boundary. `MockCollaborationApi` and `HttpCollaborationApi` expose the same operations:
 
-- `authenticate(token)` -> server-derived current user
+- `prepareEmailLogin()`, `loginWithEmail(...)` -> server-derived current user; `passwordResetStatus()`, `sendPasswordReset(...)`, `verifyPasswordReset(...)` -> recovery without auto-login
 - `listProjects()`, `getProject(...)`, and `createProject(...)`
 - `listProjectSessions(...)`, `listProjectMembers(...)`, and `createSession(projectId, ...)`
 - `getSession(sessionId)`, permission-checked `renameSession(sessionId, ...)`, and `listMembers(sessionId)`
 - project-scoped `createInvitation(...)`, `listInvitations(...)`, `revokeInvitation(...)`, and `setProjectMemberRole(...)`
-- distinct `claimInvitation(...)` and `acceptInvitation(...)` methods for new and existing users
+- `acceptInvitation(...)` after account sign-in
 - `replayEvents(sessionId, { afterSequence, limit })`
 - distinct `appendHumanChat(...)` and `appendAgentRequest(...)` methods
 - `createHistorySummary(...)` for explicit, selected-history Agent requests, plus per-user/project `getProjectContextPolicy(...)` and `setProjectContextPolicy(...)`
 - `createSnapshotRequest(sessionId)` and `getSnapshotRequest(requestId)` for one-way Codex downloads
 - `openRealtime({ sessionId, afterSequence, onEvent, onState })`
 
-The project rail also exposes **Connect Codex**, which generates separate macOS/Linux and Windows PowerShell commands from the validated same-origin server URL and current project ID. These commands contain no credential; the CLI requests the device token through hidden terminal input, creates or reuses the same-name local workspace, opens that workspace in Codex Desktop, and materializes all writable sessions as named tasks. After a synchronized Agent turn creates renderable native content, the connector launches the exact registered task link. Current Desktop builds have been observed to associate it with the project for the verified workspace, but the launcher returns no project-assignment receipt. No fake Agent turn is created merely to display an empty session. Activation failure is fail-soft and retryable while synchronization remains active.
+The project rail also exposes **Connect Codex**, which generates separate macOS/Linux and Windows PowerShell commands from the validated same-origin server URL and current project ID. These commands contain no credential; the CLI exchanges a one-use browser-issued authorization through hidden terminal input, creates or reuses the same-name local workspace, opens that workspace in Codex Desktop, and materializes all writable sessions as named tasks. After a synchronized Agent turn creates renderable native content, the connector launches the exact registered task link. Current Desktop builds have been observed to associate it with the project for the verified workspace, but the launcher returns no project-assignment receipt. No fake Agent turn is created merely to display an empty session. Activation failure is fail-soft and retryable while synchronization remains active.
 
-The same dialog offers an optional Windows/macOS Launcher button on the official HTTPS origin. Its `gatherthread-connect:` URL contains the validated server URL, project ID, model, context-window limit, and history-import mode, but no credential. The Windows ZIP bundles Python and Node; the native macOS `.app` bundles Node. Both include the fixed connector and local plugin source and still ask for the existing device token in their own GUI because the server does not yet expose a Codex browser pairing grant. The manual terminal commands remain available for other platforms, self-hosting, and recovery. Launcher build and installation notes are in `prototypes/codex-launcher/README.md` and `prototypes/codex-launcher/macos/README.md`.
+The same dialog offers an optional Windows/macOS Launcher button on the official HTTPS origin. Its `gatherthread-connect:` URL contains the validated server URL, project ID, model, context-window limit, and history-import mode, but no credential. The Windows ZIP bundles Python and Node; the native macOS `.app` bundles Node. Both include the fixed connector and local plugin source and ask for the browser-issued one-use device authorization in their own GUI. The manual terminal commands remain available for other platforms, self-hosting, and recovery. Launcher build and installation notes are in `prototypes/codex-launcher/README.md` and `prototypes/codex-launcher/macos/README.md`.
 
 The production HTTP/WS endpoints are:
 
@@ -125,7 +125,7 @@ Settings expose summary instructions (browser preference, shared on generation; 
 
 ## First-release limits
 
-- The entered device bearer is used only to create a browser session and is then cleared from JavaScript. The default is a 24-hour server-side session held in a non-persistent `HttpOnly; SameSite=Strict; Path=/` Cookie. **Remember this device** uses a 30-day persistent Cookie instead. HTTPS adds `Secure` and `__Host-`. Reload restores the workspace; logout, device revocation, and token rotation revoke either session. Cookie-authenticated writes require an exact allowed Origin. Neither bearer nor browser token is placed in Web Storage or a URL.
+- Email/password login creates a browser session; transient passwords and OTPs are cleared from JavaScript. Recovery signs out every device and revokes Agent access without changing projects or roles. The default is a 24-hour server-side session held in a non-persistent `HttpOnly; SameSite=Strict; Path=/` Cookie. **Remember this device** uses a 30-day persistent Cookie instead. HTTPS adds `Secure` and `__Host-`. Reload restores the workspace; logout, device revocation, and token rotation revoke either session. Cookie-authenticated writes require an exact allowed Origin. Neither bearer nor browser token is placed in Web Storage or a URL.
 - Project owners can change participant/viewer roles. There is no member-removal UI, attachment upload, reply UI, offline outbox, search, or runtime selection yet.
 - The mock emits illustrative agent responses; real responses use the local bridge claim/complete workflow.
 - An unanswered `agent_request` shows an accessible pulsing response indicator while its local runtime is online. If the runtime disconnects, the indicator changes to a static queued state and disappears only when a canonical linked response arrives.

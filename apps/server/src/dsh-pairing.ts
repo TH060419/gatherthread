@@ -144,7 +144,7 @@ export class DshDevicePairingBroker {
     pairingId: string,
     pollToken: string,
     issueDevice: (
-      userId: string,
+      authorizer: Actor,
       deviceName: string,
       deviceId: string,
     ) => { device_id: string; token: string; device: DeviceRecord },
@@ -169,7 +169,7 @@ export class DshDevicePairingBroker {
     pairing.consuming = true;
     try {
       const issued = issueDevice(
-        pairing.approvedBy.user_id,
+        { ...pairing.approvedBy },
         pairing.deviceName,
         pairing.deviceId,
       );

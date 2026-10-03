@@ -376,15 +376,12 @@ async function main() {
       authTokenPepper: ownerPepper,
       allowHttpBootstrap: true,
     }, 0);
-    const owner = await requestData(collaboration.origin, "/v1/bootstrap", {
-      method: "POST",
-      body: {
+    const owner = collaboration.database.bootstrapIdentity({
         user_id: "dsh-connect-real-owner",
         display_name: "DSH Connect Owner",
         device_id: DEVICE_ID,
         device_name: "Ephemeral DSH connect device",
-      },
-    });
+      });
     await requestData(collaboration.origin, "/v1/projects", {
       method: "POST",
       token: owner.token,

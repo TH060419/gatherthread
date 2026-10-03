@@ -5,25 +5,22 @@ import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { extname, resolve, sep, join } from "node:path";
 import {
+  EmailLoginInputSchema, EmailAccountSessionSchema, RegistrationStatusSchema, RegistrationSentSchema, SendRegistrationInputSchema, VerifyRegistrationInputSchema,
+  SendPasswordResetInputSchema, VerifyPasswordResetInputSchema, PasswordResetSentSchema,
   AppendEventInputSchema,
   AgentProgressInputSchema,
   AcceptInvitationInputSchema,
-  ActivateRememberedAccountInputSchema,
   ApproveDshPairingInputSchema,
   BeginDshPairingInputSchema,
   ClaimAgentRequestInputSchema,
   PauseAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
-  ClaimInvitationInputSchema,
-  ClaimTestAccessInputSchema,
   ClaimSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
   CompleteSnapshotRequestInputSchema,
   CreateSnapshotRequestInputSchema,
-  CreateBrowserSessionInputSchema,
   CreateInvitationInputSchema,
-  CreateIdentityInputSchema,
   CreateHistorySummaryInputSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
@@ -61,6 +58,8 @@ import { ApiError, notFound, unauthorized } from "./errors.js";
 import { DshDevicePairingBroker, dshPairingPollToken } from "./dsh-pairing.js";
 import { FixedWindowRateLimiter } from "./rate-limit.js";
 import { CollaborationService } from "./service.js";
+import type { RegistrationOptions } from "./registration.js";
+import { registrationClientIp } from "./registration-providers.js";
 import { CodeRepository } from "./code-repository.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -116,6 +115,7 @@ interface HttpAuthentication {
 }
 
 export interface ServerOptions {
+  registration?: RegistrationOptions;
   databasePath: string;
   codeRepositoryDirectory?: string;
   heartbeatIntervalMs?: number;
@@ -451,7 +451,14 @@ export async function startCollaborationServer(
     ? mkdtempSync(join(tmpdir(), "gatherthread-code-")) : undefined;
   const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
   const dshPairings = new DshDevicePairingBroker();
+  const registration = options.authTokenPepper && Buffer.byteLength(options.authTokenPepper) >= 32 ? options.registration : undefined;
   const secureTransport = options.secureTransport ?? false;
+  const registrationCookieName = secureTransport ? "__Host-gatherthread_registration" : "gatherthread_registration";
+  const registrationBrowser = (request: IncomingMessage): string | null => {
+    const values = (request.headers.cookie ?? "").split(";").map((value) => value.trim())
+      .filter((value) => value.startsWith(`${registrationCookieName}=`)).map((value) => value.slice(registrationCookieName.length + 1));
+    return values.length === 1 && /^grc_[A-Za-z0-9_-]{43}$/.test(values[0] ?? "") ? values[0]! : null;
+  };
   const browserCookieName = browserSessionCookieName(secureTransport);
   const rememberedCookieName = rememberedBrowserCookieName(secureTransport);
   const sockets = new Map<WebSocket, SocketState>();
@@ -470,25 +477,6 @@ export async function startCollaborationServer(
   const actorWriteLimiter = new FixedWindowRateLimiter(options.actorWriteRateLimit ?? { windowMs: 60_000, limit: 120 });
   const maxConnections = options.maxConnections ?? 128;
 
-  const rememberAfterLogin = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
-    const remembered = database.rememberBrowser(
-      rememberedBrowserCookieValue(request, rememberedCookieName), actor,
-    );
-    appendSetCookie(response, serializeRememberedBrowserCookie(
-      rememberedCookieName, remembered.token, secureTransport, remembered.expires_at,
-    ));
-  };
-
-  const rememberAfterOneUseClaim = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
-    try {
-      rememberAfterLogin(request, response, actor);
-    } catch {
-      // The claim and its unique device credential have already committed. Optional
-      // quick-login storage must not hide that credential behind an HTTP 500.
-      console.warn("Optional remembered-account registration failed after a one-use claim");
-    }
-  };
-
   const closeRealtimeWithoutMembership = (): void => {
     for (const [socket, state] of sockets) {
       if (state.sessionId !== null && database.membershipRole(state.sessionId, state.actor.user_id) === null) {
@@ -506,7 +494,7 @@ export async function startCollaborationServer(
 
   const httpServer = createServer(async (request, response) => {
     try {
-      const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
+      const url = new URL(request.url ?? "/", options.publicBaseUrl ?? "http://localhost");
       const parts = pathParts(url);
       setSecurityHeaders(response, secureTransport);
       const remoteAddress = request.socket.remoteAddress ?? "unknown";
@@ -538,6 +526,115 @@ export async function startCollaborationServer(
       if (request.method === "OPTIONS") {
         response.writeHead(204).end();
         return;
+      }
+
+      if (["/v1/bootstrap", "/v1/browser-sessions", "/v1/invitations/claim", "/v1/test-access/claim"].includes(url.pathname)
+        || url.pathname === "/v1/remembered-accounts" || url.pathname.startsWith("/v1/remembered-accounts/")) {
+        throw new ApiError(410, "account_flow_retired", "Use email registration and password sign-in. Accept project invitations after signing in.");
+      }
+
+      if (url.pathname === "/v1/email-login") {
+        if (!options.authTokenPepper || Buffer.byteLength(options.authTokenPepper) < 32) throw new ApiError(503, "registration_unavailable", "Email sign-in is temporarily unavailable.");
+        if (url.search) throw new ApiError(400, "registration_invalid", "Credentials belong in the request body.");
+        if (request.headers["sec-fetch-site"] === "cross-site") throw new ApiError(403, "origin_forbidden", "The browser origin is not allowed");
+        if (request.method === "GET") {
+          const browser = registrationBrowser(request) ?? `grc_${randomBytes(32).toString("base64url")}`;
+          appendSetCookie(response, `${registrationCookieName}=${browser}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000${secureTransport ? "; Secure" : ""}`);
+          sendJson(response, 200, { data: { enabled: true } });
+          return;
+        }
+        if (request.method === "POST") {
+          if (!requestOrigin || !options.allowedOrigins?.includes(requestOrigin) || (options.publicBaseUrl && requestOrigin !== options.publicBaseUrl)) throw new ApiError(403, "csrf_origin_required", "Email sign-in requires the configured browser origin");
+          if (!request.headers["content-type"]?.startsWith("application/json")) throw new ApiError(415, "invalid_content_type", "Email sign-in requires JSON");
+          const browser = registrationBrowser(request);
+          if (!browser) throw new ApiError(400, "registration_browser", "Open registration in this browser and try again.");
+          const input = EmailLoginInputSchema.parse(await readJson(request, 8192));
+          const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration?.trustedProxy);
+          const result = await database.loginWithEmail(input, browser, ip);
+          const browserSession = result.browser_session;
+          appendSetCookie(response, serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport,
+            browserSession.remembered ? browserSession.expires_at : undefined));
+          sendJson(response, 201, { data: EmailAccountSessionSchema.parse({ actor: { ...result.actor, can_create_projects: true }, expires_at: browserSession.expires_at }) });
+          return;
+        }
+        throw notFound("Email sign-in route");
+      }
+      if (url.pathname.startsWith("/v1/registration")) {
+        if (url.search) throw new ApiError(400, "registration_invalid", "Registration parameters belong in the request body.");
+        const enabled = database.registration.ready(registration);
+        if (request.method === "GET" && url.pathname === "/v1/registration") {
+          if (request.headers["sec-fetch-site"] === "cross-site") throw new ApiError(403, "origin_forbidden", "The browser origin is not allowed");
+          const browser = registrationBrowser(request) ?? `grc_${randomBytes(32).toString("base64url")}`;
+          if (enabled) appendSetCookie(response, `${registrationCookieName}=${browser}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000${secureTransport ? "; Secure" : ""}`);
+          sendJson(response, 200, { data: RegistrationStatusSchema.parse({ enabled, site_key: enabled ? registration!.siteKey : null,
+            challenge_binding: enabled ? database.registration.binding(browser) : null }) });
+          return;
+        }
+        if (request.method === "POST" && ["/v1/registration/send", "/v1/registration/verify"].includes(url.pathname)) {
+          if (!enabled) throw new ApiError(503, "registration_unavailable", "Email registration is temporarily unavailable.");
+          if (!requestOrigin || requestOrigin !== registration!.origin || !options.allowedOrigins?.includes(requestOrigin)) {
+            throw new ApiError(403, "csrf_origin_required", "Registration requires the configured browser origin");
+          }
+          if (!request.headers["content-type"]?.startsWith("application/json")) throw new ApiError(415, "invalid_content_type", "Registration requires JSON");
+          const browser = registrationBrowser(request);
+          if (!browser) throw new ApiError(400, "registration_browser", "Open registration in this browser and try again.");
+          const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration!.trustedProxy);
+          if (url.pathname.endsWith("/send")) {
+            const input = SendRegistrationInputSchema.parse(await readJson(request, 8192));
+            const result = await database.registration.send(input, browser, ip, registration!);
+            sendJson(response, 202, { data: RegistrationSentSchema.parse(result) });
+          } else {
+            const input = VerifyRegistrationInputSchema.parse(await readJson(request, 8192));
+            const { browser_session: browserSession, ...result } = await database.verifyPublicRegistration(input, browser, ip, registration!);
+            appendSetCookie(response, serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport,
+              browserSession.remembered ? browserSession.expires_at : undefined));
+            sendJson(response, 201, { data: EmailAccountSessionSchema.parse({ actor: { ...result.actor, can_create_projects: true }, expires_at: browserSession.expires_at }) });
+          }
+          return;
+        }
+        throw notFound("Registration route");
+      }
+      if (url.pathname.startsWith("/v1/password-reset")) {
+        if (url.search) throw new ApiError(400, "registration_invalid", "Reset parameters belong in the request body.");
+        const enabled = database.registration.recoveryReady(registration);
+        if (request.headers["sec-fetch-site"] === "cross-site") throw new ApiError(403, "origin_forbidden", "The browser origin is not allowed");
+        if (request.method === "GET" && url.pathname === "/v1/password-reset") {
+          const browser = registrationBrowser(request) ?? `grc_${randomBytes(32).toString("base64url")}`;
+          if (enabled) appendSetCookie(response, `${registrationCookieName}=${browser}; Path=/; HttpOnly; SameSite=Strict; Max-Age=2592000${secureTransport ? "; Secure" : ""}`);
+          sendJson(response, 200, { data: RegistrationStatusSchema.parse({ enabled, site_key: enabled ? registration!.siteKey : null,
+            challenge_binding: enabled ? database.registration.binding(browser, "password-reset") : null }) });
+          return;
+        }
+        if (request.method === "POST" && ["/v1/password-reset/send", "/v1/password-reset/verify"].includes(url.pathname)) {
+          if (!enabled) throw new ApiError(503, "password_reset_unavailable", "Password recovery is temporarily unavailable.");
+          if (!requestOrigin || requestOrigin !== registration!.origin || !options.allowedOrigins?.includes(requestOrigin)) throw new ApiError(403, "csrf_origin_required", "Password reset requires the configured browser origin");
+          if (!request.headers["content-type"]?.startsWith("application/json")) throw new ApiError(415, "invalid_content_type", "Password reset requires JSON");
+          const browser = registrationBrowser(request);
+          if (!browser) throw new ApiError(400, "registration_browser", "Open password recovery in this browser and try again.");
+          const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration!.trustedProxy);
+          if (url.pathname.endsWith("/send")) {
+            const result = await database.registration.send(SendPasswordResetInputSchema.parse(await readJson(request, 8192)), browser, ip, registration!, "password-reset");
+            sendJson(response, 202, { data: PasswordResetSentSchema.parse({ reset_id: result.registration_id, expires_in_seconds: result.expires_in_seconds, resend_after_seconds: result.resend_after_seconds }) });
+          } else {
+            const input = VerifyPasswordResetInputSchema.parse(await readJson(request, 8192));
+            const userId = await database.resetPassword(input, browser, ip, registration!);
+            dshPairings.revokeUser(userId);
+            for (const [value, ticket] of realtimeTickets) if (ticket.actor.user_id === userId) realtimeTickets.delete(value);
+            for (const [socket, state] of sockets) if (state.actor.user_id === userId) { socket.close(1008, "password_reset"); sockets.delete(socket); }
+            // All database and in-memory authorization is revoked before any notification wait.
+            // The notice budget was reserved during verification; attempt once, without retry or provider logging.
+            try { await registration!.mailer!.notifyPasswordChanged!({ email: input.email, locale: input.locale, deliveryId: input.reset_id }); } catch { /* reset remains committed */ }
+            sendJson(response, 200, { data: { reset: true } });
+          }
+          return;
+        }
+        throw notFound("Password reset route");
+      }
+      // The external challenge is limited to the real login document and configured deployments.
+      if (["/app/", "/app/index.html"].includes(url.pathname) && (database.registration.ready(registration) || database.registration.recoveryReady(registration))) {
+        const csp = String(response.getHeader("content-security-policy"));
+        response.setHeader("content-security-policy", csp.replace("script-src 'self'", "script-src 'self' https://challenges.cloudflare.com")
+          .replace("connect-src 'self'", "connect-src 'self' https://challenges.cloudflare.com") + "; frame-src 'self' https://challenges.cloudflare.com");
       }
 
       if (request.method === "GET" && url.pathname === "/health/live") {
@@ -578,129 +675,18 @@ export async function startCollaborationServer(
         const result = dshPairings.poll(
           parts[2],
           dshPairingPollToken(request.headers.authorization),
-          (userId, deviceName, deviceId) => database.createDevice(userId, deviceName, deviceId),
+          (authorizer, deviceName, deviceId) => {
+            database.assertActiveDevice(authorizer);
+            return database.createDevice(authorizer.user_id, deviceName, deviceId);
+          },
         );
         sendJson(response, result.status === "pending" ? 202 : 201, { data: result });
-        return;
-      }
-
-      if (options.allowHttpBootstrap && request.method === "POST" && url.pathname === "/v1/bootstrap") {
-        const input = CreateIdentityInputSchema.parse(await readJson(request));
-        sendJson(response, 201, { data: database.bootstrapIdentity(input) });
-        return;
-      }
-
-      if (request.method === "POST" && url.pathname === "/v1/invitations/claim") {
-        const input = ClaimInvitationInputSchema.parse(await readJson(request));
-        if (request.headers["x-gatherthread-browser-session"] === "1") {
-          const { browser_session: browserSession, ...result } = service.claimInvitationWithBrowserSession(input);
-          response.setHeader("set-cookie", serializeBrowserSessionCookie(
-            browserCookieName,
-            browserSession.token,
-            secureTransport,
-            browserSession.remembered ? browserSession.expires_at : undefined,
-          ));
-          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
-          sendJson(response, 201, { data: { ...result, actor: {
-            ...result.actor,
-            can_create_projects: database.canCreateProjects(result.actor.user_id),
-          } } });
-          return;
-        }
-        const result = service.claimInvitation(input);
-        sendJson(response, 201, { data: { ...result, actor: {
-          ...result.actor,
-          can_create_projects: database.canCreateProjects(result.actor.user_id),
-        } } });
-        return;
-      }
-
-      if (request.method === "POST" && url.pathname === "/v1/test-access/claim") {
-        const input = ClaimTestAccessInputSchema.parse(await readJson(request));
-        if (request.headers["x-gatherthread-browser-session"] === "1") {
-          const { browser_session: browserSession, ...result } = service.claimTestAccessWithBrowserSession(input);
-          response.setHeader("set-cookie", serializeBrowserSessionCookie(
-            browserCookieName,
-            browserSession.token,
-            secureTransport,
-            browserSession.remembered ? browserSession.expires_at : undefined,
-          ));
-          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
-          sendJson(response, 201, { data: { ...result, actor: {
-            ...result.actor,
-            can_create_projects: true,
-          } } });
-          return;
-        }
-        const result = service.claimTestAccess(input);
-        sendJson(response, 201, { data: { ...result, actor: {
-          ...result.actor,
-          can_create_projects: true,
-        } } });
         return;
       }
 
       if (request.method === "POST" && url.pathname === "/v1/device-authorizations/claim") {
         const input = ClaimDeviceAuthorizationInputSchema.parse(await readJson(request));
         sendJson(response, 201, { data: service.claimDeviceAuthorization(input) });
-        return;
-      }
-
-      if (request.method === "POST" && url.pathname === "/v1/browser-sessions") {
-        const actor = database.authenticate(bearerToken(request));
-        const input = CreateBrowserSessionInputSchema.parse(await readJson(request));
-        const browserSession = database.createBrowserSession(actor, input.remember_device, input);
-        response.setHeader("set-cookie", serializeBrowserSessionCookie(
-          browserCookieName,
-          browserSession.token,
-          secureTransport,
-          browserSession.remembered ? browserSession.expires_at : undefined,
-        ));
-        if (input.remember_device) rememberAfterLogin(request, response, actor);
-        sendJson(response, 201, { data: {
-          actor: publicAccountActor({ ...actor, display_name: input.display_name ?? actor.display_name }),
-          expires_at: browserSession.expires_at,
-        } });
-        return;
-      }
-
-      if (request.method === "GET" && url.pathname === "/v1/remembered-accounts") {
-        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
-        if (!token) throw unauthorized("Remembered browser credential is required");
-        sendJson(response, 200, { data: { accounts: database.listRememberedAccounts(token) } });
-        return;
-      }
-
-      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "remembered-accounts"
-        && parts[2] && parts[3] === "activate" && parts.length === 4) {
-        if (!requestOrigin) throw new ApiError(403, "csrf_origin_required", "Remembered-account sign-in requires an allowed Origin");
-        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
-        if (!token) throw unauthorized("Remembered browser credential is required");
-        const input = ActivateRememberedAccountInputSchema.parse(await readJson(request));
-        const result = database.activateRememberedAccount(token, parts[2], input);
-        appendSetCookie(response, serializeBrowserSessionCookie(
-          browserCookieName, result.browser_session.token, secureTransport, result.browser_session.expires_at,
-        ));
-        appendSetCookie(response, serializeRememberedBrowserCookie(
-          rememberedCookieName, result.remembered_browser.token, secureTransport, result.remembered_browser.expires_at,
-        ));
-        sendJson(response, 201, { data: {
-          actor: publicAccountActor(result.actor),
-          expires_at: result.browser_session.expires_at,
-        } });
-        return;
-      }
-
-      if (request.method === "DELETE" && parts[0] === "v1" && parts[1] === "remembered-accounts"
-        && parts[2] && parts.length === 3) {
-        if (!requestOrigin) throw new ApiError(403, "csrf_origin_required", "Forgetting an account requires an allowed Origin");
-        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
-        if (!token) throw unauthorized("Remembered browser credential is required");
-        const next = database.forgetRememberedAccount(token, parts[2]);
-        appendSetCookie(response, next
-          ? serializeRememberedBrowserCookie(rememberedCookieName, next.token, secureTransport, next.expires_at)
-          : serializeClearedBrowserSessionCookie(rememberedCookieName, secureTransport));
-        response.writeHead(204).end();
         return;
       }
 
@@ -712,6 +698,7 @@ export async function startCollaborationServer(
           const cookieToken = browserSessionCookieValue(request, browserCookieName);
           if (!cookieToken) throw unauthorized();
           const authenticated = database.authenticateBrowserSession(cookieToken);
+          if (!database.registration.hasAccount(authenticated.actor.user_id)) throw unauthorized("Sign in with email and password");
           return {
             actor: authenticated.actor,
             kind: "browser_session",
@@ -773,17 +760,6 @@ export async function startCollaborationServer(
           serializeClearedBrowserSessionCookie(rememberedCookieName, secureTransport),
         ]);
         sendJson(response, 200, { data: result });
-        return;
-      }
-
-      if (request.method === "POST" && url.pathname === "/v1/remembered-accounts/adopt-current-session") {
-        z.object({}).strict().parse(await readAuthenticatedJson());
-        if (authentication.kind !== "browser_session" || !authentication.rememberedBrowserSession) {
-          throw new ApiError(403, "remembered_session_required", "Only a remembered browser session can be adopted");
-        }
-        const existing = rememberedBrowserCookieValue(request, rememberedCookieName) ?? "";
-        if (!database.rememberedBrowserHasAccount(existing, actor)) rememberAfterLogin(request, response, actor);
-        sendJson(response, 200, { data: { adopted: true } });
         return;
       }
 
@@ -1371,6 +1347,10 @@ export async function startCollaborationServer(
     }
   }, options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS);
   heartbeat.unref();
+  const registrationCleanup = setInterval(() => {
+    try { database.registration.cleanup(); } catch { console.warn("Registration retention cleanup failed"); }
+  }, 60_000);
+  registrationCleanup.unref();
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
@@ -1387,6 +1367,7 @@ export async function startCollaborationServer(
     origin: `http://${address.address.includes(":") ? `[${address.address}]` : address.address}:${address.port}`,
     async close() {
       clearInterval(heartbeat);
+      clearInterval(registrationCleanup);
       unsubscribe();
       dshPairings.clear();
       for (const socket of sockets.keys()) socket.terminate();

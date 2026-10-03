@@ -4,6 +4,8 @@
 **Status**: superseded by [ADR-0006](0006-project-first-collaboration-boundary.md)
 **Deciders**: Yuhan He
 
+> Account onboarding and connector input are superseded by unreleased [ADR-0036](0036-verified-email-registration-and-password-login.md). This record preserves the earlier decision.
+
 ## Context
 
 An inviter must be able to grant access to a session without creating credentials for another person or retaining the ability to impersonate them. Server identity, session membership, and device authorization have different lifecycles and must be independently attributable and revocable.

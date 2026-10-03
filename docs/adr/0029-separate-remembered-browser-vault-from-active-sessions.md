@@ -4,6 +4,8 @@
 **Status**: proposed; pending project-lead review
 **Deciders**: pending project-lead review
 
+> Account onboarding and connector input are superseded by unreleased [ADR-0036](0036-verified-email-registration-and-password-login.md). This record preserves the earlier decision.
+
 ## Context
 
 An Alpha tester may use more than one GatherThread account in one browser profile. Logging out must revoke the active session, while an explicit **Remember this device** choice should still offer a quick account selection later. Reusing the active session Cookie as the account list would couple logout to forgetting every choice and would make multi-account switching ambiguous. Persisting device access tokens in Web Storage would expose long-lived credentials to page JavaScript.

@@ -27,7 +27,7 @@ already be installed and signed in.
    open the Launcher directly, enter the Web project ID (`project-***`). The
    Launcher always connects to `https://gatherthread.cn`. Optionally choose an
    existing local working directory with **Browse**; leave it blank to use the
-   connector's default per-project directory. Enter the existing device token, then
+   connector's default per-project directory. Enter the one-time device authorization, then
    press **Start connection**. The token is passed only to the connector child
    process, not placed in a URL or log. Closing the window minimizes it to the
    taskbar while the connector runs; restore it to stop the connection.
@@ -47,8 +47,8 @@ installed Launcher with:
 gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=PROJECT_ID&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect
 ```
 
-The URL Scheme carries no credential. The current server has no Codex browser
-pairing endpoint, so the GUI still requires the device token. The Web launcher
+The URL Scheme carries no credential. Create a ten-minute one-use authorization in the signed-in Connect Codex dialog,
+then enter it in the GUI. Only the connector claims the device credential. The Web launcher
 action emits the selected project's deep link; manual commands remain available.
 
 ## Build and verification

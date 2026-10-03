@@ -13,7 +13,6 @@ test("Alibaba Cloud ECS deployment shell entrypoints parse as Bash", () => {
   for (const path of [
     "deploy/aliyun-ecs/install.sh",
     "deploy/aliyun-ecs/preflight.sh",
-    "deploy/aliyun-ecs/create-owner.sh",
   ]) {
     const result = spawnSync("bash", ["-n", path], { encoding: "utf8" });
     assert.equal(result.status, 0, `${path}: ${result.stderr}`);
