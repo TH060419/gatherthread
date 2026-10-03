@@ -72,6 +72,7 @@
     <p class="hero-copy" data-i18n="hero.copy">让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。</p>
     <div class="hero-ctas">
       <a class="btn-pill" href="./app/" data-i18n="hero.cta1">开始使用</a>
+      <a class="btn-pill btn-repository" href="https://github.com/TH060419/gatherthread" target="_blank" rel="noopener noreferrer"><span data-i18n="hero.github">GitHub 项目</span><span aria-hidden="true">↗</span></a>
       <a class="btn-link" href="./app/" target="_blank" rel="noopener noreferrer"><span data-i18n="hero.cta2">邮箱注册说明</span><span class="chev">›</span></a>
     </div>
 
@@ -216,10 +217,12 @@
         <article class="card fx">
           <p class="mono card-tag">[ CODEX ]</p>
           <ol class="steps">
-            <li data-i18n="setup.codex.1">一次性安装固定版本的「共序 / GatherThread」Codex 插件。</li>
-            <li data-i18n="setup.codex.2">复制连接命令；官方站点的 Windows / macOS 用户也可选用本地启动器。</li>
-            <li data-i18n="setup.codex.3">重启 Codex Desktop，审查并启用插件 Hooks，然后保持连接器终端运行。</li>
+            <li data-i18n="setup.codex.1">官网 Windows / macOS 用户：先安装共序启动器，打开已登录的 Codex Desktop。</li>
+            <li data-i18n="setup.codex.2">在项目中点「连接 Codex → 打开启动器」，将一次性设备授权填入启动器，再点「开始连接」。</li>
+            <li data-i18n="setup.codex.3">首次使用可在启动器安装配套插件；重启 Codex、检查并启用 Hooks。保持启动器运行，无需输入终端命令。</li>
           </ol>
+          <a class="col-action" href="https://github.com/TH060419/gatherthread/tree/main/prototypes/codex-launcher" target="_blank" rel="noopener noreferrer" data-i18n="setup.codex.link">启动器与安装说明 ↗</a>
+          <p class="setup-fallback" data-i18n="setup.codex.fallback">Linux、自托管或启动器不可用时，连接窗口仍提供终端备用方式。当前启动器为未签名测试版。</p>
         </article>
         <article class="card fx">
           <p class="mono card-tag">[ DEEPSEEK HARNESS ]</p>

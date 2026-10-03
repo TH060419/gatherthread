@@ -54,6 +54,10 @@ test("busy and thinking belong only to a started, unfinished exact runtime reque
   assert.equal(agentWorkStatus([request, { ...started, payload: { status: "thinking" } }], "native"), "Agent thinking");
   assert.equal(agentWorkStatus([request, started], "other"), null);
   assert.equal(agentWorkStatus([request, started, { type: "agent_response", replyTo: "r" }], "native"), null);
+  const paused = { type: "agent_progress", replyTo: "r", payload: { status: "paused" } };
+  assert.equal(agentWorkStatus([request, started, paused], "native"), null);
+  assert.equal(agentWorkStatus([request, { ...started, payload: { status: "thinking" } }, paused], "native"), null);
+  assert.equal(agentWorkStatus([request, started, paused, { ...started, replyTo: "resumed" }], "native"), "Agent busy");
 });
 
 test("mention picking supports names with spaces and preserves offsets through edits", () => {

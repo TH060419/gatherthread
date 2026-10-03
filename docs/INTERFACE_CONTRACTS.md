@@ -129,6 +129,8 @@ An `agent_request` names an exact harness/model profile and eligible runtime. Th
 - The fixed server pause marker remains quota-charged but can use a bounded 1 KiB control allowance per paused accepted request in each storage scope; ordinary writes cannot use it. DSH retains the owned native-turn fence across lost completion acknowledgement so automatic and manual local upload cannot republish a paused answer. See [ADR-0023](adr/0023-lease-and-bounded-redispatch-agent-claims.md).
 - A paused request is a record, not a queue entry. Continuing is a **new** `agent_request`, exactly as retrying a failed one is: the new request's position in the log is what lets the resumed run see anything said while it was stopped.
 
+The Web composer reuses `send-agent-button` for its author's latest ordinary request, with `data-agent-action=request|wait|pause|resume`, bilingual accessible names and `aria-busy` during control writes. `POST /v1/sessions/:id/agent-requests/:eventId/pause` retains its strict empty JSON body and existing author/write checks. Resume uses the existing event append route with the original execution profile and message references and one stable retry key; it does not reopen a claim or change native connector contracts. `add-agent-button` opens the existing Agents settings section without changing the project/session URL or granting permissions.
+
 ## Snapshot and visible-history boundary
 
 Snapshot requests are requester-private control-plane records with frozen `through_sequence` values and bounded result metadata.
