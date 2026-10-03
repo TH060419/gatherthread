@@ -38,9 +38,9 @@ sudo deploy/aliyun-ecs/install.sh \
 
 脚本会安装并校验 Node.js 24.16.0，安装 Caddy，创建无登录权限的 `gatherthread` 系统用户，以 `npm ci` 构建候选版本，生成只允许服务账户读取的环境文件，配置 systemd、Caddy 和每日 SQLite 在线备份，最后把 `/opt/gatherthread/current` 原子切换到该 release。已有 `/etc/gatherthread/gatherthread.env` 不会被覆盖；域名不一致时脚本会停止。
 
-## 4. 配置邮箱注册
+## 4. 配置邮箱注册与密码恢复
 
-此未发布分支使用邮箱验证注册和密码登录，不再签发首位用户 Token 或测试资格码。按照 [运维检查](OPERATIONS.md) 配置邮件与安全验证服务，通过审核后才可开放注册。注册默认关闭；暂停注册不影响已有邮箱账号的密码登录。用户注册后可以按 Alpha 规则创建项目，登录后接受项目邀请。Agent 通过独立设备授权连接。当前不支持找回密码，不进行旧账号继承或清理。
+此未发布分支使用邮箱验证注册和密码登录，不再签发首位用户 Token 或测试资格码。按照 [运维检查](OPERATIONS.md) 配置邮件与安全验证服务，通过审核后才可开放注册。注册默认关闭；暂停注册不影响已有邮箱账号的密码登录。邮箱验证码找回密码已实现，由独立的 `GATHERTHREAD_PASSWORD_RECOVERY` 开关控制，默认关闭；开放前需完成[密码恢复预检](OPERATIONS.md#password-recovery-preflight-unreleased)中的服务配置与上线验证，注册可继续保持关闭。重设密码后项目和角色保留，但所有已登录设备及 Agent 授权会撤销，用户需重新登录并授权自己的 Agent。用户注册后可以按 Alpha 规则创建项目，登录后接受项目邀请。Agent 通过独立设备授权连接。不进行旧账号继承或清理。
 
 ## 5. 完整预检
 
