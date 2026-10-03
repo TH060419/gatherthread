@@ -966,6 +966,22 @@ export class CollaborationDatabase {
     this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
     this.transaction(() => {
       this.sqlite.exec(HOSTED_AGENT_SCHEMA);
+      // Earlier previews cascaded executor slots on account deletion. Rebuild
+      // atomically, preserving reservations while dropping only the user link.
+      const activeUser = this.sqlite.prepare("PRAGMA foreign_key_list(hosted_agent_active_runs)")
+        .all().find((row) => row.from === "user_id");
+      if (activeUser?.on_delete !== "SET NULL") {
+        this.sqlite.exec(`CREATE TABLE hosted_agent_active_runs_migration (
+          request_event_id TEXT PRIMARY KEY,
+          user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          quota_group TEXT NOT NULL, created_at TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO hosted_agent_active_runs_migration SELECT * FROM hosted_agent_active_runs;
+        DROP TABLE hosted_agent_active_runs;
+        ALTER TABLE hosted_agent_active_runs_migration RENAME TO hosted_agent_active_runs;
+        CREATE INDEX hosted_agent_active_runs_user_idx ON hosted_agent_active_runs(user_id);
+        CREATE INDEX hosted_agent_active_runs_group_idx ON hosted_agent_active_runs(quota_group);`);
+      }
       this.sqlite.prepare("DELETE FROM hosted_agent_daily_usage WHERE utc_day < ?").run(this.now().slice(0, 10));
     });
     this.migrateCodeRepositoryEnableColumn();

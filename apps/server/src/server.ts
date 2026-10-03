@@ -1,4 +1,5 @@
 import { HostedGithub, type HostedGithubOptions } from "./hosted-github.js";
+import { stopInterruptedHostedContainers } from "./hosted-agent-recovery.js";
 import { HostedGithubRepositoryInputSchema, HostedGithubTaskInputSchema, HostedGithubPrInputSchema, HostedGithubCompleteInputSchema } from "@gatherthread/protocol";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
@@ -448,6 +449,10 @@ export async function startCollaborationServer(
     maxTotalSessions: options.maxTotalSessions,
   });
   const service = new CollaborationService(database);
+  if (database.hostedActiveRuns() && !options.hostedAgent?.runContainer) {
+    try { stopInterruptedHostedContainers(); }
+    catch (error) { database.close(); throw error; }
+  }
   database.failInterruptedHostedAgentJobs();
   const publicAccountActor = (actor: Actor) => ({
     id: actor.user_id,

@@ -1,5 +1,6 @@
 // Actual HTTP/UI integration with fake GitHub and container responses. No real account, model or PR.
 import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -7,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { startCollaborationServer } from '../../apps/server/dist/src/server.js';
 const { chromium, webkit } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright');
 const directory = mkdtempSync(join(tmpdir(), 'gt-github-browser-'));
+const mails = new Map();
 const file = (path, content) => ({ path, content_base64: Buffer.from(content).toString('base64'), executable: false });
 const files = [file('package.json', '{"name":"fixture","version":"1.0.0"}'), file('package-lock.json', '{"lockfileVersion":3,"packages":{"":{}}}'), file('index.ts', 'export const value = 1;\n')];
 let runs = 0, prCount = 0, remoteRef = '', pull = null;
@@ -36,30 +38,43 @@ async function waitForWorkspace(page, sessionId) {
    && document.getElementById('global-connection')?.dataset.state === 'live', sessionId);
 }
 const server = await startCollaborationServer({ databasePath: join(directory, 'db'), staticDirectory: resolve('apps/web/dist'), publicBaseUrl: origin,
- allowedOrigins: [origin], authTokenPepper: 'github-browser-private-test-pepper', hostedAgent: { endpoints: [endpoint], image: `sha256:${'a'.repeat(64)}`, userDailyRuns: 20, globalDailyRuns: 20, maxConcurrent: 2,
+ allowedOrigins: [origin], authTokenPepper: 'github-browser-private-test-pepper',
+ registration: { enabled: true, origin, siteKey: 'synthetic-browser',
+  mailer: { async send(mail) { mails.set(mail.email, mail.code); } }, challenge: { async verify() { return true; } } },
+ hostedAgent: { endpoints: [endpoint], image: `sha256:${'a'.repeat(64)}`, userDailyRuns: 20, globalDailyRuns: 20, maxConcurrent: 2,
  runContainer: async (args) => { runs++; const input = args.find((arg) => arg.endsWith('dst=/input,readonly')).split('src=')[1].split(',dst=')[0];
   const result = files.map((f) => file(f.path, readFileSync(join(input, f.path), 'utf8'))); result.find((f) => f.path === 'index.ts').content_base64 = Buffer.from('export const value = 2;\n').toString('base64');
   return JSON.stringify({ answer: 'Fixture: source changed; test and build checked.', files: result, save_error: null }); } },
  hostedGithub: { clientId: 'browser-fixture', clientSecret: 'test-app', encryptionKey: Buffer.alloc(32, 9).toString('base64'), callbackUrl: 'https://gt.example/v1/hosted-github/callback', appSlug: 'fixture', fetch: fixtureFetch } }, port);
 try {
- server.database.bootstrapIdentity({ display_name: 'Fixture operator', device_name: 'Browser' });
  for (const engine of ['chrome', 'webkit']) {
   const browser = await (engine === 'chrome' ? chromium.launch({ channel: 'chrome' }) : webkit.launch());
   try {
    for (const locale of ['en', 'zh-CN']) {
     // Each browser/language variant gets its own user; production cooldown remains enabled.
-    const identity = server.database.createIdentity({ display_name: `Cloud owner ${engine} ${locale}`, device_name: 'Browser', can_create_projects: true });
-    const sessionId = `browser-github-${engine}-${locale}`;
-    server.service.createSession(identity.actor, { session_id: sessionId, mode: 'solo', title: 'GitHub browser fixture', idempotency_key: sessionId });
     remoteRef = ''; pull = null;
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     page.setDefaultTimeout(15000); const errors = []; page.on('pageerror', (e) => errors.push(e.message)); page.on('dialog', (d) => d.accept());
+    // Use the current verified-email/password HTTP flow with synthetic providers.
+    const email = `${engine}-${locale.toLowerCase()}@example.invalid`, password = 'synthetic browser password 42';
+    assert.equal((await page.request.get(`${origin}/v1/registration`)).status(), 200);
+    const post = (path, data) => page.request.post(`${origin}${path}`, { headers: { origin }, data });
+    const sent = await post('/v1/registration/send', { email, locale, challenge_token: randomUUID(), idempotency_key: randomUUID() });
+    assert.equal(sent.status(), 202);
+    const pending = (await sent.json()).data;
+    const verified = await post('/v1/registration/verify', { registration_id: pending.registration_id, code: mails.get(email),
+     display_name: `Cloud owner ${engine} ${locale}`, device_name: 'Browser', password, privacy_acknowledged: true, remember_device: false });
+    assert.equal(verified.status(), 201);
+    const login = await post('/v1/email-login', { email, password, device_name: 'Browser', remember_device: false });
+    assert.equal(login.status(), 201);
+    const identity = (await login.json()).data;
+    assert.equal('token' in identity, false);
+    const sessionId = `browser-github-${engine}-${locale}`;
+    server.service.createSession(identity.actor, { session_id: sessionId, mode: 'solo', title: 'GitHub browser fixture', idempotency_key: sessionId });
     await page.addInitScript(({ locale, actor, origin }) => {
      localStorage.setItem('gt-lang', locale === 'en' ? 'en' : 'zh');
      localStorage.setItem(`gatherthread.onboarding.v1:${JSON.stringify([origin, actor.user_id, actor.device_id])}`, 'skipped');
     }, { locale, actor: identity.actor, origin });
-    const login = await page.request.post(`${origin}/v1/browser-sessions`, { headers: { authorization: `Bearer ${identity.token}` }, data: { remember_device: false } });
-    assert.equal(login.status(), 201);
     await page.route('https://github.com/login/oauth/authorize**', async (route) => {
       const state = new URL(route.request().url()).searchParams.get('state');
       await route.fulfill({ status: 200, contentType: 'text/html', body: `<script>location.replace(${JSON.stringify(`${origin}/v1/hosted-github/callback?code=browser-fixture&state=${state}`)})</script>` });

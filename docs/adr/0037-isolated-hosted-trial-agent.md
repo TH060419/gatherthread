@@ -37,8 +37,9 @@ operator preset selects exactly these two models, retains one shared account
 group and has no daily run-count allowance by default. It admits one task per
 user at a time with a 30-second minimum interval across models, projects and
 devices. Persistent bounded control records survive conversation deletion;
-single-process startup recovery releases interrupted slots while preserving
-the last accepted start. Other models keep their paid/free-tier daily ceilings.
+account deletion nulls only the active slot's user link. Single-process startup
+recovery confirms executor exit before releasing interrupted slots, while
+preserving the last accepted start. Other models keep their paid/free-tier daily ceilings.
 Pricing and provider eligibility must be reconfirmed before activation.
 
 Keep current-day consumption in a separate minimal ledger with no foreign key

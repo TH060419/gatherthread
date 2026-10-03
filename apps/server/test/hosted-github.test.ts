@@ -10,6 +10,7 @@ import { CodeRepository } from "../src/code-repository.js";
 import { HostedAgent, type HostedAgentOptions } from "../src/hosted-agent.js";
 import { HostedGithub } from "../src/hosted-github.js";
 import { ApiError } from "../src/errors.js";
+import { HostedExecutorCleanupError } from "../src/hosted-agent-recovery.js";
 import { HostedNpmProxy } from "../src/hosted-npm-proxy.js";
 import type { CodeFile } from "@gatherthread/protocol";
 import { request } from "node:http";
@@ -84,6 +85,116 @@ async function settled(f: ReturnType<typeof fixture>, id: string) {
  for (let n = 0; n < 100; n++) { const task = f.github.view(f.actor, id); if (task.state !== "running") return task; await setTimeout(5); }
  throw new Error("Cloud task did not settle");
 }
+
+function deferred() {
+ let resolve!: () => void;
+ const promise = new Promise<void>((done) => { resolve = done; });
+ return { promise, resolve };
+}
+
+const revocations = ["downgrade", "remove-member", "archive", "rebind", "disconnect", "delete-task",
+ "delete-session", "delete-project", "revoke-device", "delete-account"] as const;
+const publicationSteps = [
+ ["/git/blobs", "/branches/main", "GET"],
+ ["/git/trees", "/git/blobs", "POST"],
+ ["/git/commits", "/git/trees", "POST"],
+ ["/git/refs", "/git/matching-refs/", "GET"],
+ ["/pulls", "/pulls?", "GET"],
+] as const;
+for (const [step, previous, method] of publicationSteps) {
+ for (const revocation of (step === "/pulls" ? revocations : ["downgrade"] as const)) {
+  unixTest(`publication rechecks ${revocation} after token refresh before POST ${step}`, async () => {
+   const f = fixture(), refreshStarted = deferred(), refreshReply = deferred();
+   const owner = f.actor;
+   f.session = f.service.createSession(owner, { session_id: "shared-refresh", idempotency_key: "shared-refresh",
+     mode: "multi", title: "Shared" }).session;
+   f.actor = f.db.createIdentity({ display_name: "Member", device_name: "Browser", can_create_projects: true }).actor;
+   const invite = f.service.createProjectInvitation(owner, f.session.project_id, { role: "participant", ttl: "1h" });
+   f.service.claimInvitationForActor(f.actor, invite.invite_token);
+   const fetcher = f.githubOptions.fetch;
+   let armed = false;
+   f.githubOptions.fetch = async (url, init) => {
+    const path = new URL(String(url)).pathname + new URL(String(url)).search;
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    if (path === "/login/oauth/access_token" && body?.grant_type === "refresh_token") {
+     refreshStarted.resolve(); await refreshReply.promise;
+    }
+    const reply = await fetcher(url, init);
+    if (armed && path.includes(previous) && (init?.method ?? "GET") === method) {
+     armed = false;
+     const seal = (f.github as unknown as { seal: (value: unknown, owner: string) => string }).seal.bind(f.github);
+     f.db.sqlite.prepare("UPDATE hosted_github_accounts SET credentials=? WHERE user_id=?").run(seal({
+      access_token: "ghu_test", refresh_token: "ghr_test", expires_at: 0,
+      refresh_expires_at: Date.now() + 600_000,
+     }, f.actor.user_id), f.actor.user_id);
+    }
+    return reply;
+   };
+   let publication: Promise<unknown> | undefined;
+   try {
+    await connect(f);
+    const started = f.github.start(f.actor, f.session.id, { content: "Fixture change", profile_id: "coding", idempotency_key: "refresh-task" });
+    const task = await settled(f, started.id); assert.equal(task.state, "completed");
+    armed = true;
+    publication = f.github.publish(f.actor, task.id, { expected_revision: task.revision!, title: "Fixture PR", body: "" });
+    const outcome = publication.then(() => null, (error: unknown) => error);
+    await Promise.race([refreshStarted.promise, setTimeout(1500).then(() => { throw new Error("Fixture refresh did not start"); })]);
+    const writeCount = f.calls.filter((call) => call.method === "POST" && call.path.startsWith("/repos/")).length;
+    switch (revocation) {
+     case "downgrade": f.db.setProjectMembership(owner, f.session.project_id, f.actor.user_id, "viewer"); break;
+     case "remove-member": f.db.removeProjectMembership(owner, f.session.project_id, f.actor.user_id); break;
+     case "archive": f.db.sqlite.prepare("UPDATE sessions SET state='archived' WHERE id=?").run(f.session.id); break;
+     case "rebind": f.db.sqlite.prepare("UPDATE hosted_github_bindings SET revision='concurrent-binding' WHERE user_id=? AND project_id=?")
+       .run(f.actor.user_id, f.session.project_id); break;
+     case "disconnect": f.github.disconnect(f.actor); break;
+     case "delete-task": f.db.sqlite.prepare("DELETE FROM hosted_github_tasks WHERE id=?").run(task.id); break;
+     case "delete-session": f.db.deleteSession(owner, f.session.id); break;
+     case "delete-project": f.service.deleteProject(owner, f.session.project_id); break;
+     case "revoke-device": f.db.revokeDevice(f.actor, f.actor.device_id); break;
+     case "delete-account": f.db.deleteAccount(f.actor); break;
+    }
+    refreshReply.resolve();
+    assert.ok(await outcome instanceof ApiError);
+    assert.equal(f.calls.filter((call) => call.method === "POST" && call.path.startsWith("/repos/")).length, writeCount);
+    assert.ok(!f.calls.some((call) => call.method === "POST" && call.path.endsWith(step)));
+   } finally { refreshReply.resolve(); await publication?.catch(() => {}); await f.close(); }
+  });
+ }
+}
+
+unixTest("deleted GitHub account retains an anonymous executor slot until the held runner settles", async () => {
+ const f = fixture(), entered = deferred(), release = deferred();
+ const run = f.runOptions.runContainer!;
+ f.runOptions.runContainer = async (args, timeout) => { entered.resolve(); await release.promise; return run(args, timeout); };
+ try {
+  await connect(f);
+  f.github.start(f.actor, f.session.id, { content: "Held fixture", profile_id: "coding", idempotency_key: "held-deleted-account" });
+  await entered.promise;
+  f.service.deleteProject(f.actor, f.session.project_id); f.db.deleteAccount(f.actor);
+  assert.equal(f.db.hostedActiveRuns(), 1);
+  assert.equal(f.db.hostedEndpointUsage(f.runOptions.endpoints[0]!).active, 1);
+  const slot = f.db.sqlite.prepare("SELECT * FROM hosted_agent_active_runs").get()!;
+  assert.equal(slot.user_id, null); assert.equal(Object.keys(slot).length, 4);
+  release.resolve(); await f.github.close();
+  assert.equal(f.db.hostedActiveRuns(), 0);
+ } finally { release.resolve(); await f.close(); }
+});
+
+unixTest("repository cleanup failure retains capacity until confirmed startup recovery", async () => {
+ const f = fixture();
+ (f.github as unknown as { runner: { run: () => Promise<never> } }).runner.run = async () => {
+  throw new HostedExecutorCleanupError();
+ };
+ try {
+  await connect(f);
+  const task = f.github.start(f.actor, f.session.id, { content: "Cleanup fixture", profile_id: "coding", idempotency_key: "cleanup-held-slot" });
+  assert.equal((await settled(f, task.id)).state, "failed");
+  assert.equal(f.db.hostedActiveRuns(), 1);
+  assert.equal(f.db.hostedEndpointUsage(f.runOptions.endpoints[0]!).active, 1);
+  // The injected executor has no Docker resource; this models verified recovery.
+  f.db.failInterruptedHostedAgentJobs(); assert.equal(f.db.hostedActiveRuns(), 0);
+ } finally { await f.close(); }
+});
 unixTest("GitHub requests are redacted before private persistence, container input and model transport without weakening exact retries", async () => {
  const f = fixture();
  const prompts: string[] = [], modelBodies: string[] = [];

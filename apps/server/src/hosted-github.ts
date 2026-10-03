@@ -1,5 +1,4 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
 import { CodeFilesSchema, HostedGithubTaskInputSchema, containsCodeSyncSecret, isCodeSyncPathAllowed, type CodeFile,
   type HostedGithubTaskInput, type HostedGithubRepositoryInput, type HostedGithubPrInput } from "@gatherthread/protocol";
 import type { Actor } from "./database.js";
@@ -9,6 +8,7 @@ import { HostedRepositoryRunner } from "./hosted-repository-runner.js";
 import type { CollaborationService } from "./service.js";
 import { HOSTED_GITHUB_SCHEMA } from "./hosted-github-schema.js";
 import { redactJson } from "./redaction.js";
+import { HostedExecutorCleanupError, stopHostedContainer } from "./hosted-agent-recovery.js";
 
 export interface HostedGithubOptions {
  clientId: string; clientSecret: string; encryptionKey: string; callbackUrl: string; appSlug: string;
@@ -62,7 +62,7 @@ export class HostedGithub {
    if (!runnerOptions.runContainer) {
      for (const row of this.sqlite.prepare("SELECT id FROM hosted_github_tasks WHERE state='running'").all()) {
        const id = String(row.id);
-       if (/^gh-task-[a-f0-9]{32}$/u.test(id)) spawnSync("docker", ["rm", "-f", `gt-repository-${id.slice(8)}`], { timeout: 5000, stdio: "ignore" });
+       if (/^gh-task-[a-f0-9]{32}$/u.test(id)) stopHostedContainer(`gt-repository-${id.slice(8)}`);
      }
    }
    this.sqlite.prepare("UPDATE hosted_github_tasks SET state='interrupted',error_code='github_task_interrupted' WHERE state='running'").run();
@@ -157,8 +157,11 @@ export class HostedGithub {
        "X-GitHub-Api-Version": "2022-11-28", ...(body ? { "content-type": "application/json" } : {}) },
      ...(body ? { body: JSON.stringify(body) } : {}) });
  }
- private async api(actor: Actor, path: string, method = "GET", body?: unknown) {
-   return this.apiWithToken(await this.token(actor), path, method, body);
+ private async api(actor: Actor, path: string, method = "GET", body?: unknown, authorize?: () => void) {
+   const token = await this.token(actor);
+   this.service.database.assertActiveDevice(actor);
+   authorize?.();
+   return this.apiWithToken(token, path, method, body);
  }
  authorize(actor: Actor) {
    this.prune(); this.service.database.assertActiveDevice(actor);
@@ -356,8 +359,9 @@ export class HostedGithub {
      if (row) {
        const code = signal.aborted ? "github_task_interrupted" : error instanceof ApiError ? error.code : "github_task_failed";
        this.sqlite.prepare("UPDATE hosted_github_tasks SET state=?,error_code=? WHERE id=?").run(signal.aborted ? "interrupted" : "failed", code, id);
-       this.service.finishHostedAgentRequest(String(row.request_event_id), {});
      }
+     // The runner has settled even if deletion removed the task and job rows.
+     if (requestId && !(error instanceof HostedExecutorCleanupError)) this.service.finishHostedAgentRequest(requestId, {});
    }
  }
  remove(actor: Actor, id: string) {
@@ -377,8 +381,9 @@ export class HostedGithub {
      const paths = [...new Set([...before.keys(), ...after.keys()])].filter((p) => JSON.stringify(before.get(p)) !== JSON.stringify(after.get(p)));
      if (!paths.length) throw new ApiError(409, "github_no_changes", "This task has no source changes");
      const api = async (path: string, method = "GET", body?: unknown) => {
-       this.task(actor, id); this.assertBinding(actor, task);
-       return this.api(actor, `/repos/${task.repository}${path}`, method, body);
+       const authorize = () => { this.task(actor, id); this.assertBinding(actor, task); };
+       authorize();
+       return this.api(actor, `/repos/${task.repository}${path}`, method, body, authorize);
      };
      const repo = await api(""); if (repo.id !== task.repository_id || !repo.permissions?.push) throw safeError("github_access", 403);
      const base = await api(`/branches/${encodeURIComponent(task.base_branch)}`);

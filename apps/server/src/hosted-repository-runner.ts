@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { spawnSync } from "node:child_process";
+import { stopHostedContainer } from "./hosted-agent-recovery.js";
 import { CodeFilesSchema, containsCodeSyncSecret, type CodeFile } from "@gatherthread/protocol";
 import { HostedModelProxy, runDocker, type HostedAgentOptions } from "./hosted-agent.js";
 import { HostedNpmProxy } from "./hosted-npm-proxy.js";
@@ -62,9 +62,12 @@ export class HostedRepositoryRunner {
       }
       return { answer: String(redactJson(String(result.answer))).slice(0, 12000), files: changed };
     } finally {
-      if (!this.options.runContainer) spawnSync("docker", ["rm", "-f", name], { timeout: 5000, stdio: "ignore" });
+      let cleanupError: unknown;
+      try { if (!this.options.runContainer) stopHostedContainer(name); }
+      catch (error) { cleanupError = error; }
       await model.close().catch(() => undefined); await npm.close().catch(() => undefined);
       rmSync(root, { recursive: true, force: true });
+      if (cleanupError) throw cleanupError;
     }
   }
 }

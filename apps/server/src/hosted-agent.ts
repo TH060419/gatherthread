@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { stopHostedContainer } from "./hosted-agent-recovery.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -333,9 +334,12 @@ export class HostedAgent {
       }
     } catch { content = ""; }
     finally {
-      if (!this.options.runContainer) spawnSync("docker", ["rm", "-f", name], { timeout: 5_000, stdio: "ignore" });
+      let cleanupError: unknown;
+      try { if (!this.options.runContainer) stopHostedContainer(name); }
+      catch (error) { cleanupError = error; }
       await proxy.close().catch(() => undefined);
       rmSync(root, { recursive: true, force: true });
+      if (cleanupError) throw cleanupError;
     }
     const result = this.service.finishHostedAgentRequest(reserved.event.id, { content });
     return { request_event: reserved.event, response_event: result, replayed: false };

@@ -65,7 +65,8 @@ CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_user_day_idx ON hosted_agent
 CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_group_day_idx ON hosted_agent_daily_usage(quota_group,utc_day);
 INSERT OR IGNORE INTO hosted_agent_daily_usage SELECT request_event_id,user_id,utc_day,quota_group FROM hosted_agent_runs;
 
--- User cooldown and active slots survive deletion of a conversation/project.
+-- Cooldown survives conversation/project deletion. Executor slots also survive
+-- account deletion, with the deleted user's identity immediately removed.
 -- These bounded control records contain no source, prompt, token or provider key.
 CREATE TABLE IF NOT EXISTS hosted_agent_user_activity (
   user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
@@ -73,7 +74,7 @@ CREATE TABLE IF NOT EXISTS hosted_agent_user_activity (
 ) STRICT;
 CREATE TABLE IF NOT EXISTS hosted_agent_active_runs (
   request_event_id TEXT PRIMARY KEY,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   quota_group TEXT NOT NULL,
   created_at TEXT NOT NULL
 ) STRICT;

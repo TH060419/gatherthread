@@ -34,6 +34,60 @@ const input = (key: string, profile = endpoints[0]!.profileId) => ({ profile_id:
   content: "Inspect code and test", idempotency_key: key });
 const errorCode = (code: string) => (error: unknown) => error instanceof ApiError && error.code === code;
 
+const unixTest = process.platform === "win32" ? test.skip : test;
+unixTest("account deletion cannot admit a second executor before the first exits", async () => {
+ const f = fixture();
+ let entered!: () => void, release!: () => void;
+ const started = new Promise<void>((done) => { entered = done; });
+ const held = new Promise<void>((done) => { release = done; });
+ let active = 0, peak = 0;
+ const agent = new HostedAgent(new CollaborationService(f.db), new CodeRepository(f.db, join(f.directory, "held-code")), {
+  endpoints, ...limits, maxConcurrent: 1, image: `sha256:${"a".repeat(64)}`,
+  runContainer: async () => { active++; peak = Math.max(peak, active); entered();
+   try { await held; return JSON.stringify({ answer: "Fixture complete", files: [], save_error: null }); }
+   finally { active--; }
+  },
+ });
+ let pending: ReturnType<HostedAgent["request"]> | undefined;
+ try {
+  const first = f.create("held-account");
+  const other = f.db.createIdentity({ display_name: "Other", device_name: "Browser", can_create_projects: true }).actor;
+  const second = f.create("other-account", other);
+  pending = agent.request(f.actor, first.id, input("held-account-run")); await started;
+  f.db.deleteProject(f.actor, first.project_id); f.db.deleteAccount(f.actor);
+  assert.equal(active, 1); assert.equal(f.db.hostedActiveRuns(), 1);
+  assert.equal(f.db.hostedEndpointUsage(endpoints[0]!).active, 1);
+  assert.equal(f.db.sqlite.prepare("SELECT user_id FROM hosted_agent_active_runs").get()!.user_id, null);
+  await assert.rejects(agent.request(other, second.id, input("blocked-other-run")), errorCode("hosted_agent_busy"));
+  assert.equal(peak, 1);
+  release(); await pending; assert.equal(f.db.hostedActiveRuns(), 0);
+  await agent.request(other, second.id, input("accepted-other-run"));
+  assert.equal(peak, 1); assert.equal(f.db.hostedActiveRuns(), 0);
+ } finally { release(); await pending; f.db.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
+test("legacy active-slot migration preserves capacity, anonymizes deletion and is idempotent", () => {
+ const f = fixture(); let db = f.db;
+ try {
+  const session = f.create("legacy-active");
+  const request = db.reserveHostedAgentRequest(f.actor, session.id, input("legacy-active-run"), endpoints.slice(0, 1), limits);
+  db.sqlite.exec(`DROP TABLE hosted_agent_active_runs;
+   CREATE TABLE hosted_agent_active_runs (request_event_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, quota_group TEXT NOT NULL, created_at TEXT NOT NULL) STRICT;
+   INSERT INTO hosted_agent_active_runs SELECT request_event_id,user_id,quota_group,created_at FROM hosted_agent_runs;`);
+  db.close(); db = new CollaborationDatabase(f.path, f.options);
+  assert.equal(db.hostedActiveRuns(), 1);
+  assert.equal(db.sqlite.prepare("PRAGMA foreign_key_list(hosted_agent_active_runs)").get()!.on_delete, "SET NULL");
+  assert.equal(db.sqlite.prepare("PRAGMA index_list(hosted_agent_active_runs)").all().length, 3);
+  db.deleteProject(f.actor, session.project_id); db.deleteAccount(f.actor);
+  db.close(); db = new CollaborationDatabase(f.path, f.options);
+  assert.equal(db.hostedActiveRuns(), 1);
+  assert.equal(db.sqlite.prepare("SELECT user_id FROM hosted_agent_active_runs").get()!.user_id, null);
+  db.finishHostedAgentRequest(request.event.id, {}); db.finishHostedAgentRequest(request.event.id, {});
+  assert.equal(db.hostedActiveRuns(), 0);
+ } finally { db.close(); rmSync(f.directory, { recursive: true, force: true }); }
+});
+
 test("free tasks share one user slot across models, devices and projects; other users can run concurrently", () => {
   const f = fixture();
   try {
