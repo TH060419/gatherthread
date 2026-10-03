@@ -9,22 +9,17 @@ import {
   AppendEventInputSchema,
   AgentProgressInputSchema,
   AcceptInvitationInputSchema,
-  ActivateRememberedAccountInputSchema,
   ApproveDshPairingInputSchema,
   BeginDshPairingInputSchema,
   ClaimAgentRequestInputSchema,
   PauseAgentRequestInputSchema,
   ClaimDeviceAuthorizationInputSchema,
-  ClaimInvitationInputSchema,
-  ClaimTestAccessInputSchema,
   ClaimSnapshotRequestInputSchema,
   CommitLocalTurnInputSchema,
   CompleteAgentRequestInputSchema,
   CompleteSnapshotRequestInputSchema,
   CreateSnapshotRequestInputSchema,
-  CreateBrowserSessionInputSchema,
   CreateInvitationInputSchema,
-  CreateIdentityInputSchema,
   CreateHistorySummaryInputSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
@@ -481,25 +476,6 @@ export async function startCollaborationServer(
   const actorWriteLimiter = new FixedWindowRateLimiter(options.actorWriteRateLimit ?? { windowMs: 60_000, limit: 120 });
   const maxConnections = options.maxConnections ?? 128;
 
-  const rememberAfterLogin = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
-    const remembered = database.rememberBrowser(
-      rememberedBrowserCookieValue(request, rememberedCookieName), actor,
-    );
-    appendSetCookie(response, serializeRememberedBrowserCookie(
-      rememberedCookieName, remembered.token, secureTransport, remembered.expires_at,
-    ));
-  };
-
-  const rememberAfterOneUseClaim = (request: IncomingMessage, response: ServerResponse, actor: Actor): void => {
-    try {
-      rememberAfterLogin(request, response, actor);
-    } catch {
-      // The claim and its unique device credential have already committed. Optional
-      // quick-login storage must not hide that credential behind an HTTP 500.
-      console.warn("Optional remembered-account registration failed after a one-use claim");
-    }
-  };
-
   const closeRealtimeWithoutMembership = (): void => {
     for (const [socket, state] of sockets) {
       if (state.sessionId !== null && database.membershipRole(state.sessionId, state.actor.user_id) === null) {
@@ -551,6 +527,11 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (["/v1/bootstrap", "/v1/browser-sessions", "/v1/invitations/claim", "/v1/test-access/claim"].includes(url.pathname)
+        || url.pathname === "/v1/remembered-accounts" || url.pathname.startsWith("/v1/remembered-accounts/")) {
+        throw new ApiError(410, "account_flow_retired", "Use email registration and password sign-in. Accept project invitations after signing in.");
+      }
+
       if (url.pathname === "/v1/email-login") {
         if (!options.authTokenPepper || Buffer.byteLength(options.authTokenPepper) < 32) throw new ApiError(503, "registration_unavailable", "Email sign-in is temporarily unavailable.");
         if (url.search) throw new ApiError(400, "registration_invalid", "Credentials belong in the request body.");
@@ -572,7 +553,6 @@ export async function startCollaborationServer(
           const browserSession = result.browser_session;
           appendSetCookie(response, serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined));
-          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
           sendJson(response, 201, { data: EmailAccountSessionSchema.parse({ actor: { ...result.actor, can_create_projects: true }, expires_at: browserSession.expires_at }) });
           return;
         }
@@ -607,7 +587,6 @@ export async function startCollaborationServer(
             const { browser_session: browserSession, ...result } = await database.verifyPublicRegistration(input, browser, ip, registration!);
             appendSetCookie(response, serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport,
               browserSession.remembered ? browserSession.expires_at : undefined));
-            if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
             sendJson(response, 201, { data: EmailAccountSessionSchema.parse({ actor: { ...result.actor, can_create_projects: true }, expires_at: browserSession.expires_at }) });
           }
           return;
@@ -665,123 +644,9 @@ export async function startCollaborationServer(
         return;
       }
 
-      if (options.allowHttpBootstrap && request.method === "POST" && url.pathname === "/v1/bootstrap") {
-        const input = CreateIdentityInputSchema.parse(await readJson(request));
-        sendJson(response, 201, { data: database.bootstrapIdentity(input) });
-        return;
-      }
-
-      if (request.method === "POST" && url.pathname === "/v1/invitations/claim") {
-        const input = ClaimInvitationInputSchema.parse(await readJson(request));
-        if (request.headers["x-gatherthread-browser-session"] === "1") {
-          const { browser_session: browserSession, ...result } = service.claimInvitationWithBrowserSession(input);
-          response.setHeader("set-cookie", serializeBrowserSessionCookie(
-            browserCookieName,
-            browserSession.token,
-            secureTransport,
-            browserSession.remembered ? browserSession.expires_at : undefined,
-          ));
-          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
-          sendJson(response, 201, { data: { ...result, actor: {
-            ...result.actor,
-            can_create_projects: database.canCreateProjects(result.actor.user_id),
-          } } });
-          return;
-        }
-        const result = service.claimInvitation(input);
-        sendJson(response, 201, { data: { ...result, actor: {
-          ...result.actor,
-          can_create_projects: database.canCreateProjects(result.actor.user_id),
-        } } });
-        return;
-      }
-
-      if (request.method === "POST" && url.pathname === "/v1/test-access/claim") {
-        const input = ClaimTestAccessInputSchema.parse(await readJson(request));
-        if (request.headers["x-gatherthread-browser-session"] === "1") {
-          const { browser_session: browserSession, ...result } = service.claimTestAccessWithBrowserSession(input);
-          response.setHeader("set-cookie", serializeBrowserSessionCookie(
-            browserCookieName,
-            browserSession.token,
-            secureTransport,
-            browserSession.remembered ? browserSession.expires_at : undefined,
-          ));
-          if (input.remember_device) rememberAfterOneUseClaim(request, response, result.actor);
-          sendJson(response, 201, { data: { ...result, actor: {
-            ...result.actor,
-            can_create_projects: true,
-          } } });
-          return;
-        }
-        const result = service.claimTestAccess(input);
-        sendJson(response, 201, { data: { ...result, actor: {
-          ...result.actor,
-          can_create_projects: true,
-        } } });
-        return;
-      }
-
       if (request.method === "POST" && url.pathname === "/v1/device-authorizations/claim") {
         const input = ClaimDeviceAuthorizationInputSchema.parse(await readJson(request));
         sendJson(response, 201, { data: service.claimDeviceAuthorization(input) });
-        return;
-      }
-
-      if (request.method === "POST" && url.pathname === "/v1/browser-sessions") {
-        const actor = database.authenticate(bearerToken(request));
-        const input = CreateBrowserSessionInputSchema.parse(await readJson(request));
-        const browserSession = database.createBrowserSession(actor, input.remember_device, input);
-        response.setHeader("set-cookie", serializeBrowserSessionCookie(
-          browserCookieName,
-          browserSession.token,
-          secureTransport,
-          browserSession.remembered ? browserSession.expires_at : undefined,
-        ));
-        if (input.remember_device) rememberAfterLogin(request, response, actor);
-        sendJson(response, 201, { data: {
-          actor: publicAccountActor({ ...actor, display_name: input.display_name ?? actor.display_name }),
-          expires_at: browserSession.expires_at,
-        } });
-        return;
-      }
-
-      if (request.method === "GET" && url.pathname === "/v1/remembered-accounts") {
-        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
-        if (!token) throw unauthorized("Remembered browser credential is required");
-        sendJson(response, 200, { data: { accounts: database.listRememberedAccounts(token) } });
-        return;
-      }
-
-      if (request.method === "POST" && parts[0] === "v1" && parts[1] === "remembered-accounts"
-        && parts[2] && parts[3] === "activate" && parts.length === 4) {
-        if (!requestOrigin) throw new ApiError(403, "csrf_origin_required", "Remembered-account sign-in requires an allowed Origin");
-        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
-        if (!token) throw unauthorized("Remembered browser credential is required");
-        const input = ActivateRememberedAccountInputSchema.parse(await readJson(request));
-        const result = database.activateRememberedAccount(token, parts[2], input);
-        appendSetCookie(response, serializeBrowserSessionCookie(
-          browserCookieName, result.browser_session.token, secureTransport, result.browser_session.expires_at,
-        ));
-        appendSetCookie(response, serializeRememberedBrowserCookie(
-          rememberedCookieName, result.remembered_browser.token, secureTransport, result.remembered_browser.expires_at,
-        ));
-        sendJson(response, 201, { data: {
-          actor: publicAccountActor(result.actor),
-          expires_at: result.browser_session.expires_at,
-        } });
-        return;
-      }
-
-      if (request.method === "DELETE" && parts[0] === "v1" && parts[1] === "remembered-accounts"
-        && parts[2] && parts.length === 3) {
-        if (!requestOrigin) throw new ApiError(403, "csrf_origin_required", "Forgetting an account requires an allowed Origin");
-        const token = rememberedBrowserCookieValue(request, rememberedCookieName);
-        if (!token) throw unauthorized("Remembered browser credential is required");
-        const next = database.forgetRememberedAccount(token, parts[2]);
-        appendSetCookie(response, next
-          ? serializeRememberedBrowserCookie(rememberedCookieName, next.token, secureTransport, next.expires_at)
-          : serializeClearedBrowserSessionCookie(rememberedCookieName, secureTransport));
-        response.writeHead(204).end();
         return;
       }
 
@@ -793,6 +658,7 @@ export async function startCollaborationServer(
           const cookieToken = browserSessionCookieValue(request, browserCookieName);
           if (!cookieToken) throw unauthorized();
           const authenticated = database.authenticateBrowserSession(cookieToken);
+          if (!database.registration.hasAccount(authenticated.actor.user_id)) throw unauthorized("Sign in with email and password");
           return {
             actor: authenticated.actor,
             kind: "browser_session",
@@ -854,17 +720,6 @@ export async function startCollaborationServer(
           serializeClearedBrowserSessionCookie(rememberedCookieName, secureTransport),
         ]);
         sendJson(response, 200, { data: result });
-        return;
-      }
-
-      if (request.method === "POST" && url.pathname === "/v1/remembered-accounts/adopt-current-session") {
-        z.object({}).strict().parse(await readAuthenticatedJson());
-        if (authentication.kind !== "browser_session" || !authentication.rememberedBrowserSession) {
-          throw new ApiError(403, "remembered_session_required", "Only a remembered browser session can be adopted");
-        }
-        const existing = rememberedBrowserCookieValue(request, rememberedCookieName) ?? "";
-        if (!database.rememberedBrowserHasAccount(existing, actor)) rememberAfterLogin(request, response, actor);
-        sendJson(response, 200, { data: { adopted: true } });
         return;
       }
 

@@ -3,6 +3,8 @@
 - Status: proposed / source preview
 - Date: 2026-09-28
 
+> Account onboarding and connector input are superseded by unreleased [ADR-0036](0036-verified-email-registration-and-password-login.md). This record preserves the earlier decision.
+
 ## Context
 
 ADR-0018 chose copyable, credential-free terminal commands for the initial

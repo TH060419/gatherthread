@@ -172,7 +172,7 @@ export function loadServerConfig(
       throw new ConfigurationError("GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true is required in production");
     }
     if (allowHttpBootstrap) {
-      throw new ConfigurationError("GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP cannot be enabled in production; use the local bootstrap command");
+      throw new ConfigurationError("GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP cannot be enabled in production; user bootstrap is retired; use verified-email registration");
     }
     if (!authTokenPepper || Buffer.byteLength(authTokenPepper, "utf8") < 32 || PLACEHOLDER_SECRET.test(authTokenPepper)) {
       throw new ConfigurationError("GATHERTHREAD_AUTH_TOKEN_PEPPER must be a non-placeholder secret of at least 32 bytes in production");

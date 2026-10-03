@@ -585,15 +585,12 @@ async function main() {
       authTokenPepper: `test-pepper-${randomBytes(18).toString("base64url")}`,
       allowHttpBootstrap: true,
     }, 0);
-    const owner = await requestData(running.origin, "/v1/bootstrap", {
-      method: "POST",
-      body: {
+    const owner = running.database.bootstrapIdentity({
         user_id: "dsh-real-loader-owner",
         display_name: "DSH Owner",
         device_id: DEVICE_ID,
         device_name: "Ephemeral DSH device",
-      },
-    });
+      });
     await requestData(running.origin, "/v1/projects", {
       method: "POST",
       token: owner.token,

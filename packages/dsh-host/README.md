@@ -42,8 +42,8 @@ Inside DSH, choose the future GatherThread public service or enter one custom
 server origin. The same field covers an HTTPS LAN host, self-hosted deployment,
 or Tailscale address; plain HTTP is accepted only on loopback. The plugin opens
 an outbound HTTPS connection. A five-minute, single-use short code is confirmed
-through the existing GatherThread browser session or invitation identity.
-Public account registration is not assumed. The resulting long-lived device
+through a signed-in GatherThread email account. Project invitations grant
+membership only and cannot authorize pairing. Signup is closed by default. The resulting long-lived device
 grant is stored only by DSH's credential service and never appears in argv, a
 URL, browser storage, logs, status RPC, or shared history. Once paired, the
 plugin reconnects automatically whenever DSH starts.

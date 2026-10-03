@@ -40,9 +40,9 @@ test("member controls regain localized accessible names after an in-page languag
 test("staged sign-in and Cloud Git navigation are localized without the irrelevant notice sentence", () => {
   for (const [source, expected] of [
     ["Choose how to enter", "选择进入方式"],
-    ["Existing account · sign in", "已有账号 · 登录"],
-    ["First-time use · activate access", "首次使用 · 激活资格"],
-    ["Only have a project invitation?", "只有项目邀请？"],
+    ["Email account · sign in", "邮箱账号 · 登录"],
+    ["New account · email registration", "新用户 · 邮箱注册"],
+    ["Use the email and password you set during registration.", "使用注册时填写的邮箱和密码。"],
     ["← Back", "← 返回"],
     ["Cloud Git settings", "云端 Git 设置"],
     ["This device · sync & recovery", "本设备 · 同步与恢复"],
@@ -82,10 +82,10 @@ test("English is the unchanged default and Simplified Chinese preserves product 
   assert.equal(translateUiText("Settings", "zh-CN"), "设置");
   assert.equal(translateUiText("Remove {name} from project", "zh-CN"), "将{name}从项目中移除");
   assert.equal(translateUiText("Access token", "zh-CN"), "访问 token");
-  assert.equal(translateUiText("Choose either an access token or a project invitation before continuing.", "zh-CN"), "请只填写访问 token 或项目邀请密钥中的一种，再继续。");
+  assert.equal(translateUiText("Verify your email and choose a password. No access token to save.", "zh-CN"), "验证邮箱并设置密码，无需保存 access token。");
   assert.equal(translateUiText("Remember this device", "zh-CN"), "记住此设备");
   assert.equal(translateUiText("Checking…", "zh-CN"), "正在验证…");
-  assert.equal(translateUiText("Activating…", "zh-CN"), "正在激活…");
+  assert.equal(translateUiText("Sign in with email and password", "zh-CN"), "使用邮箱和密码登录");
   assert.equal(translateUiText("Joining…", "zh-CN"), "正在加入…");
   assert.equal(translateUiText("Create your first project.", "zh-CN"), "创建你的第一个项目。");
   assert.equal(translateUiText("Create a project to organize your sessions and invite collaborators.", "zh-CN"), "创建项目来组织会话并邀请协作者。");
@@ -105,31 +105,9 @@ test("English is the unchanged default and Simplified Chinese preserves product 
     translateUiText("People collaborate in one space, each with a local Agent, sharing context that stays ordered, attributable, and live.", "zh-CN"),
     "多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。",
   );
-  assert.equal(
-    translateUiText("Connects to this owner host. The token is exchanged for a secure browser session and is never stored by the page.", "zh-CN"),
-    "用于连接当前主机。token 会被交换为安全的浏览器会话，且不会被页面存储。",
-  );
-  assert.equal(
-    translateUiText("Connects to https://example.test. The token is exchanged for a secure browser session and is never stored by the page.", "zh-CN"),
-    "用于连接 https://example.test。token 会被交换为安全的浏览器会话，且不会被页面存储。",
-  );
-  assert.equal(
-    translateUiText("Use a device token to sign in, or a one-time test access token to create an account on https://example.test. The token is exchanged for a secure browser session and is never stored by the page.", "zh-CN"),
-    "使用设备 token 登录，或使用一次性测试资格 token 在 https://example.test 创建账号。token 会被交换为安全的浏览器会话，且不会被页面存储。",
-  );
-  for (const [source, expected] of [
-    [
-      "Use your device token to sign in on https://example.test. The token is exchanged for a secure browser session and is never stored by the page.",
-      "使用设备令牌登录 https://example.test。令牌会被交换为安全的浏览器会话，且不会被页面存储。",
-    ],
-    [
-      "Use a one-time test qualification code to activate an account on https://example.test and receive a device token.",
-      "使用一次性测试资格码在 https://example.test 激活账号，并获取设备令牌。",
-    ],
-  ]) {
-    assert.equal(translateUiText(source, "en"), source);
-    assert.equal(translateUiText(source, "zh-CN"), expected);
-  }
+  assert.equal(translateUiText("Create one-time device authorization", "zh-CN"), "创建一次性设备授权");
+  assert.equal(translateUiText("One-time device authorization", "zh-CN"), "一次性设备授权");
+  assert.equal(translateUiText("Password recovery is not available yet. Keep your password in a password manager.", "zh-CN"), "目前暂不支持找回密码。请将密码保存在密码管理器中。");
   assert.match(
     translateUiText("Your device token is requested by a hidden CLI prompt and is not included in any command. This page only copies commands and cannot launch local Codex. Keep the connector running for Web requests and plugin MCP tools. Direct Desktop turn sync additionally requires --plugin-hooks plus explicit review and trust of the plugin Hooks.", "zh-CN"),
     /Hooks（钩子）/,
@@ -141,8 +119,8 @@ test("English is the unchanged default and Simplified Chinese preserves product 
   assert.equal(translateUiText("Install the GatherThread plugin", "zh-CN"), "安装共序 GatherThread 插件");
   assert.equal(translateUiText("Connect inside DSH", "zh-CN"), "在 DSH 中连接共序");
   assert.match(
-    translateUiText("Current compatibility authorization uses your existing signed GatherThread browser session or invitation. Public account registration is not assumed.", "zh-CN"),
-    /不假设公共账户注册系统已经上线/,
+    translateUiText("Approve the single-use code in this browser. The saved device credential stays inside DSH.", "zh-CN"),
+    /在当前浏览器批准一次性短码/,
   );
   assert.match(
     translateUiText("The short code expires once and is bound to this server and DSH device. The long-lived device credential stays in DSH’s local credential store and never enters a URL, command, page storage, log, or shared history.", "zh-CN"),

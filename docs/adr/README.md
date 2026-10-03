@@ -31,12 +31,12 @@ Architecture Decision Records document significant technical choices, their rati
 | [0025](0025-opt-in-git-backed-code-checkpoints.md) | Separate Git-backed code checkpoints from conversation synchronization | proposed / source preview | 2026-09-22 |
 | [0026](0026-native-first-context-management.md) | Separate native context management from synchronization transport bounds | proposed / source preview | 2026-09-22 |
 | [0027](0027-shared-manual-history-summaries.md) | Add shared manual summaries and derived Agent context | proposed / source preview | 2026-09-23 |
-| [0028](0028-separate-test-qualification-from-project-invitations.md) | Separate test qualification from project invitations | proposed | 2026-09-23 |
-| [0029](0029-separate-remembered-browser-vault-from-active-sessions.md) | Separate remembered-browser choices from active sessions | proposed | 2026-09-24 |
+| [0028](0028-separate-test-qualification-from-project-invitations.md) | Separate test qualification from project invitations | superseded for user onboarding by proposed 0036 | 2026-09-23 |
+| [0029](0029-separate-remembered-browser-vault-from-active-sessions.md) | Separate remembered-browser choices from active sessions | superseded for user login by proposed 0036 | 2026-09-24 |
 | [0030](0030-resolve-cloud-branches-before-project-member-removal.md) | Resolve cloud branches before project-member removal | proposed | 2026-09-24 |
 | [0031](0031-in-session-quotes-and-member-mentions.md) | In-session quote references and member mentions | proposed | 2026-09-27 |
 | [0032](0032-harness-advertised-model-catalogs.md) | Discover offered models from each connected harness | proposed | 2026-09-27 |
 | [0034](0034-optional-local-codex-launchers.md) | Use optional local Codex Launchers on Windows and macOS | proposed / source preview | 2026-09-28 |
 | [0033](0033-isolated-onboarding-example.md) | Isolate onboarding in a disposable example project | proposed | 2026-09-28 |
 | [0035](0035-direct-local-github-code-synchronization.md) | Synchronize GitHub source directly from authorized local devices | proposed / unreleased source preview | 2026-09-30 |
-| [0036](0036-verified-email-registration-and-password-login.md) | Verify email for qualified accounts with password login | proposed / unreleased source preview | 2026-09-30 |
+| [0036](0036-verified-email-registration-and-password-login.md) | Verified-email-only user accounts and independent device authorization | proposed / unreleased source preview | 2026-09-30 |

@@ -1,6 +1,6 @@
 # Alibaba Cloud ECS deployment: 0.1.0-alpha.8 preview
 
-This profile describes the `0.1.0-alpha.8` invitation-only deployment profile for `https://gatherthread.cn`. The application always listens on `127.0.0.1:18787`; Caddy is the only public listener on ports 80/443 and manages HTTPS. Never open port 18787 in the Alibaba Cloud security group. Anonymous registration is not implemented: create the first owner on the host, issue full test qualification locally, and keep project invitations separate for project-scoped guests. These commands are for a new reviewed release/deployment, not instructions to reinstall an already running server.
+This unreleased source profile keeps the application on `127.0.0.1:18787` and Caddy on public 80/443. Never open 18787. User signup requires approved verified-email providers and remains closed by default. The live Alpha has not switched to this branch. These commands are for a reviewed future deployment, not a reinstall of the running host.
 
 ## 1. Prerequisites
 
@@ -38,27 +38,9 @@ sudo deploy/aliyun-ecs/install.sh \
 
 The installer downloads and checksum-verifies Node.js 24.16.0, installs Caddy, creates a non-login `gatherthread` user, builds with `npm ci`, writes a service-readable environment file, installs systemd/Caddy/daily SQLite-backup units, and atomically points `/opt/gatherthread/current` at this release. It never overwrites an existing `/etc/gatherthread/gatherthread.env`; a domain mismatch fails closed.
 
-## 4. Create the first owner
+## 4. Configure email registration
 
-Run once on the first deployment:
-
-```sh
-sudo deploy/aliyun-ecs/create-owner.sh \
-  --display-name "Your display name" \
-  --device-name "Server bootstrap"
-```
-
-The device token is shown once. Save it immediately in a password manager; never place it in chat, an issue, logs, or a URL. On first browser login, the owner may remember the device and later rename it in settings.
-
-For a deployment containing [ADR-0028](adr/0028-separate-test-qualification-from-project-invitations.md), issue a one-use test qualification directly on the ECS in your own private terminal, after reviewing a request made through the [GitHub Alpha access Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml). No server-side application form collects applicant details. Do not run the issuance command through an Agent terminal whose output might enter a transcript:
-
-```sh
-sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d
-# Issue five independent one-use codes, each with its own Chinese share text
-sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d --count 5
-```
-
-The script prints one Chinese ready-to-share block per `gtq_` code, including first-time activation instructions and a Beijing-time validity range. Blocks are separated by blank lines; send **one block privately to one tester**, never a whole batch or anything in the public Issue. Revocation IDs appear separately in terminal diagnostics and are not part of the share text. Batch size is limited to 1–50. Do not redirect output to a public file or run it in an Agent terminal that may retain the transcript. If a private channel is needed, an approved applicant may voluntarily email their Issue link to `coolhezi@sjtu.edu.cn`; email is not an alternative application channel. On the GatherThread login page, they set their display and device names above the forms, select **First-time activation** (中文：**首次使用 · 激活资格**), and enter the code once in **Test qualification code** (中文：**测试资格码**). They must not enter it in the existing-account device-token field. After activation, they retain the newly issued `gta_` device token and use **Existing account** to sign in later. To revoke an unclaimed code, use `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID`; this does not revoke a claimed user's device. A project owner instead uses the in-app project invitation when they want to add a guest to only that project; its copy button now includes a localized explanation and expiry range. Neither path opens public registration or grants ECS SSH access.
+User accounts register with a verified email address and a self-set password, then sign in with email and password. All new accounts can create projects under the current Alpha roles and resource rules. Registration is closed by default; existing email/password login remains available while signup is disabled or paused. Password recovery is not implemented. No user access token is displayed or saved. Follow [OPERATIONS](OPERATIONS.md) for provider setup and enablement gates. A project owner creates a single-use `gti_` invitation granting `participant` or `viewer` membership. Recipients register or sign in first, then accept it from the workspace. Acceptance does not create an account, issue a user credential or change project-creation capability. Owners choose one hour, 24 hours or seven days, with 24 hours as the default. Each additional Agent/device uses its own short-lived authorization or browser-approved DSH pairing; connector/device tokens, Cookie sessions and independent revocation remain supported. This unreleased branch replaces user token login, test qualification activation and invitation-created guest accounts. Their HTTP endpoints return `410 account_flow_retired`; local bootstrap/qualification issuance commands and the public application template are removed. Historical database rows are retained without account inheritance, merging or password enrollment. Old user Cookies cannot authenticate the Web app; independently authorized native Agent/device credentials remain separate and revocable. This source change performs no production cleanup or deployment.
 
 ## 5. Preflight and smoke test
 

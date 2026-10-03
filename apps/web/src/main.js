@@ -1,3 +1,4 @@
+import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
@@ -114,11 +115,7 @@ const projectSelectionGuard = createSelectionGuard();
 const settingsStore = createSettingsStore();
 
 if (mockEnabled) {
-  elementAfterReady("token-help", "Mock mode is enabled for this tab. Use demo-token.");
-  elementAfterReady("test-access-help", "Mock mode is enabled for this tab. Use demo-test-access to try first-time activation.");
-} else if (configuredApiUrl) {
-  elementAfterReady("token-help", `Use your device token to sign in on ${configuredApiUrl}. The token is exchanged for a secure browser session and is never stored by the page.`);
-  elementAfterReady("test-access-help", `Use a one-time test qualification code to activate an account on ${configuredApiUrl} and receive a device token.`);
+  elementAfterReady("email-login-help", "Isolated example: use demo@example.invalid and password isolated demo password.");
 }
 
 function elementAfterReady(id, text) {
@@ -144,8 +141,8 @@ const state = {
 let createdInvitationSecret = "";
 let createdInvitationShareText = "";
 let createdInvitationDetails = null;
-let newDeviceAccessToken = "";
 let authenticationGeneration = 0;
+let authRequestInProgress = false;
 let workspaceLoadGeneration = 0;
 let pendingMessageSend = null;
 let selectionRetry = null;
@@ -173,20 +170,12 @@ let selectedCodexLocalRuntimeId = "";
 const element = (id) => document.getElementById(id);
 const authView = element("auth-view");
 const workspace = element("workspace");
-const loginForm = element("login-form");
-const claimTestAccessForm = element("claim-test-access-form");
-const claimInvitationForm = element("claim-invitation-form");
-const loginError = element("login-error");
-const rememberedAccountSelect = element("remembered-account-select");
-const forgetRememberedAccountButton = element("forget-remembered-account");
+const loginError = element("email-login-error");
 const authEntryChooser = element("auth-entry-chooser");
 const authIdentity = element("auth-identity");
 const authEntryChoices = [
   { entry: "email-login", button: element("auth-select-email-login"), panel: element("auth-email-login-panel") },
   { entry: "register", button: element("auth-select-register"), panel: element("auth-register-panel") },
-  { entry: "login", button: element("auth-select-login"), panel: element("auth-login-panel") },
-  { entry: "activate", button: element("auth-select-activate"), panel: element("auth-activate-panel") },
-  { entry: "invitation", button: element("auth-select-invitation"), panel: element("auth-invitation-panel") },
 ];
 const sessionList = element("session-list");
 const projectSelect = element("project-select");
@@ -224,6 +213,7 @@ const deleteCloudForm = element("delete-cloud-form");
 const leaveProjectDialog = element("leave-project-dialog");
 const leaveProjectForm = element("leave-project-form");
 const connectCodexDialog = element("connect-codex-dialog");
+
 const connectCodexButton = element("connect-codex-button");
 const connectDshDialog = element("connect-dsh-dialog");
 const connectDshButton = element("connect-dsh-button");
@@ -237,7 +227,6 @@ const compactWorkspaceQuery = window.matchMedia("(max-width: 1160px)");
 const acceptInvitationForm = element("accept-invitation-form");
 const createInvitationForm = element("create-invitation-form");
 const invitationList = element("invitation-list");
-const deviceCredentialDialog = element("device-credential-dialog");
 const settingsDialog = element("settings-dialog");
 const settingsForm = element("settings-form");
 settingsDialog.querySelector(".settings-navigation").addEventListener("click", (event) => {
@@ -260,15 +249,13 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
+const codexDeviceAuthorization = mountDeviceAuthorization({ document, api, localizer,
+  scope: () => `${authenticationGeneration}:${state.currentUser?.id}:${state.project?.id}` });
 const registrationUi = mountRegistration({ document, api, localizer,
   identity: () => authenticationIdentity({ required: activeAuthEntry === "register" }),
   busy: (value) => { authRequestInProgress = value; },
-  complete: async (result) => {
-    state.currentUser = result.actor;
-    element("claim-display-name").value = "";
-    setAutomaticClaimDeviceName({ force: true });
-    await enterWorkspace();
-  },
+  beginAuthentication: beginEmailAuthentication,
+  complete: completeEmailAuthentication,
 });
 const codeSyncUi = mountCodeSync({
   document, api, localizer, mockEnabled,
@@ -401,7 +388,6 @@ window.addEventListener("pagehide", () => {
   stopDshRuntimePolling();
   api.clearCredential?.();
   clearCreatedInvitationSecret();
-  clearNewDeviceAccessToken();
   clearSensitiveInputs();
 });
 window.addEventListener("pageshow", (event) => {
@@ -454,116 +440,30 @@ function authenticationIdentity({ required = false } = {}) {
 }
 
 let activeAuthEntry = "choose";
-let authRequestInProgress = false;
-let rememberedAccounts = [];
-let rememberedAccountsGeneration = 0;
-let selectedRememberedAccountId = "";
-let tokenEntryIdentity = null;
-
-function selectRememberedAccount() {
-  const account = rememberedAccounts.find((entry) => entry.id === rememberedAccountSelect.value);
-  const nextId = account?.id ?? "";
-  if (nextId && !selectedRememberedAccountId) {
-    tokenEntryIdentity = {
-      displayName: element("claim-display-name").value,
-      deviceName: element("claim-device-name").value,
-      automatic: element("claim-device-name").dataset.automatic,
-    };
-  }
-  if (!nextId && selectedRememberedAccountId && tokenEntryIdentity) {
-    element("claim-display-name").value = tokenEntryIdentity.displayName;
-    element("claim-device-name").value = tokenEntryIdentity.deviceName;
-    if (tokenEntryIdentity.automatic === undefined) delete element("claim-device-name").dataset.automatic;
-    else element("claim-device-name").dataset.automatic = tokenEntryIdentity.automatic;
-    tokenEntryIdentity = null;
-  }
-  element("token-entry").hidden = Boolean(account);
-  element("token").disabled = Boolean(account);
-  element("login-remember-control").hidden = Boolean(account);
-  forgetRememberedAccountButton.hidden = !account;
-  loginError.textContent = "";
-  if (account && nextId !== selectedRememberedAccountId) {
-    element("token").value = "";
-    element("claim-display-name").value = account.display_name;
-    element("claim-device-name").value = account.device_name;
-    element("claim-device-name").dataset.automatic = "false";
-  }
-  selectedRememberedAccountId = nextId;
+function beginEmailAuthentication() {
+  const generation = ++authenticationGeneration;
+  return () => generation === authenticationGeneration;
 }
 
-function renderRememberedAccounts() {
-  const selected = rememberedAccountSelect.value;
-  const defaultOption = document.createElement("option");
-  defaultOption.value = "";
-  defaultOption.textContent = localizer.t("Use a device access token");
-  const options = rememberedAccounts.map((account) => {
-    const option = document.createElement("option");
-    option.value = account.id;
-    option.textContent = `${account.display_name} · ${account.device_name}`;
-    option.setAttribute("data-i18n-skip", "");
-    return option;
-  });
-  rememberedAccountSelect.replaceChildren(defaultOption, ...options);
-  rememberedAccountSelect.value = rememberedAccounts.some((account) => account.id === selected) ? selected : "";
-  element("remembered-account-control").hidden = rememberedAccounts.length === 0;
-  selectRememberedAccount();
+async function completeEmailAuthentication(result, isCurrent) {
+  if (!isCurrent()) return;
+  state.currentUser = result.actor;
+  element("claim-display-name").value = "";
+  setAutomaticClaimDeviceName({ force: true });
+  await enterWorkspace();
 }
-
-async function refreshRememberedAccounts() {
-  const generation = ++rememberedAccountsGeneration;
-  try {
-    const accounts = await api.listRememberedAccounts();
-    if (generation !== rememberedAccountsGeneration || authView.hidden) return;
-    rememberedAccounts = Array.isArray(accounts) ? accounts : [];
-    renderRememberedAccounts();
-  } catch {
-    if (generation !== rememberedAccountsGeneration) return;
-    rememberedAccounts = [];
-    renderRememberedAccounts();
-    loginError.textContent = localizer.t("Remembered accounts are temporarily unavailable. You can still use a device token.");
-  }
-}
-
-rememberedAccountSelect.addEventListener("change", selectRememberedAccount);
-forgetRememberedAccountButton.addEventListener("click", async () => {
-  const id = rememberedAccountSelect.value;
-  if (!id || authRequestInProgress) return;
-  forgetRememberedAccountButton.disabled = true;
-  try {
-    await api.forgetRememberedAccount(id);
-    rememberedAccountSelect.value = "";
-    await refreshRememberedAccounts();
-    setAutomaticClaimDeviceName({ force: true });
-    element("claim-display-name").value = "";
-  } catch (error) {
-    loginError.textContent = localizer.t(error.message ?? "Unable to forget this account.");
-  } finally {
-    forgetRememberedAccountButton.disabled = false;
-  }
-});
 
 function setActiveAuthEntry(entry, { focus = false } = {}) {
   if (authRequestInProgress) return;
+  authenticationGeneration += 1;
+  activeAuthEntry = entry;
   if (entry === "register") void registrationUi.enter();
   else registrationUi.clear();
-  activeAuthEntry = entry;
   authEntryChooser.hidden = entry !== "choose";
   authIdentity.hidden = entry === "choose";
   for (const choice of authEntryChoices) choice.panel.hidden = choice.entry !== entry;
-  element("token").value = "";
-  element("test-access-token").value = "";
-  element("claim-invite-secret").value = "";
-  loginError.textContent = "";
-  element("test-access-error").textContent = "";
-  element("claim-invite-error").textContent = "";
-  if (focus) {
-    const targetId = entry === "choose" ? "auth-select-login"
-      : entry === "login" ? rememberedAccountSelect.value ? "remembered-account-select" : "token"
-        : entry === "email-login" ? "email-login-email"
-        : entry === "activate" || entry === "invitation" || entry === "register" ? "claim-display-name"
-          : "claim-invite-secret";
-    element(targetId).focus();
-  }
+  if (focus) element(entry === "choose" ? "auth-select-email-login"
+    : entry === "register" ? "claim-display-name" : "email-login-email").focus();
 }
 
 for (const choice of authEntryChoices) choice.button.addEventListener("click", () => setActiveAuthEntry(choice.entry, { focus: true }));
@@ -575,149 +475,9 @@ for (const id of ["claim-display-name", "claim-device-name"]) {
   element(id).addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.isComposing) return;
     event.preventDefault();
-    if (activeAuthEntry === "invitation") {
-      if (element("claim-invite-secret").value.trim()) claimInvitationForm.requestSubmit();
-      else element("claim-invite-secret").focus();
-    } else if (activeAuthEntry === "activate") {
-      if (element("test-access-token").value.trim()) claimTestAccessForm.requestSubmit();
-      else element("test-access-token").focus();
-    } else if (activeAuthEntry === "login") {
-      if (rememberedAccountSelect.value || element("token").value.trim()) loginForm.requestSubmit();
-      else element("token").focus();
-    } else if (activeAuthEntry === "register") {
-      element("registration-email").focus();
-    } else if (activeAuthEntry === "email-login") {
-      element("email-login-email").focus();
-    } else element("auth-select-login").focus();
+    element(activeAuthEntry === "register" ? "registration-email" : "email-login-email").focus();
   });
 }
-
-loginForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (authRequestInProgress) return;
-  const generation = ++authenticationGeneration;
-  loginError.textContent = "";
-  const data = new FormData(loginForm);
-  const rememberedId = rememberedAccountSelect.value;
-  const token = data.get("token")?.toString().trim() ?? "";
-  if (!rememberedId && (!token || token.startsWith("gtq_"))) {
-    loginError.textContent = localizer.t(token.startsWith("gtq_")
-      ? "Use First-time activation for a test qualification code."
-      : "Enter your device access token.");
-    (rememberedAccountSelect.value ? rememberedAccountSelect : element("token")).focus();
-    return;
-  }
-  const submit = loginForm.querySelector("button[type='submit']");
-  authRequestInProgress = true;
-  submit.disabled = true;
-  submit.textContent = "Checking…";
-  try {
-    const rememberDevice = data.get("remember-device") === "on";
-    const identity = authenticationIdentity({ required: Boolean(rememberedId) });
-    const actor = rememberedId
-      ? await api.activateRememberedAccount(rememberedId, { displayName: identity.displayName, deviceName: identity.deviceName })
-      : await api.authenticate(token, {
-        rememberDevice,
-        ...(identity.displayName ? { displayName: identity.displayName } : {}),
-        ...(identity.deviceNameEdited && identity.deviceName ? { deviceName: identity.deviceName } : {}),
-      });
-    if (generation !== authenticationGeneration) return;
-    state.currentUser = actor;
-    loginForm.reset();
-    renderRememberedAccounts();
-    element("claim-display-name").value = "";
-    setAutomaticClaimDeviceName({ force: true });
-    await enterWorkspace();
-  } catch (error) {
-    if (generation !== authenticationGeneration) return;
-    loginError.textContent = localizer.t(error.message ?? "Unable to sign in.");
-    (rememberedId ? rememberedAccountSelect : element("token")).focus();
-  } finally {
-    authRequestInProgress = false;
-    submit.disabled = false;
-    submit.textContent = `${localizer.t("Sign in")} →`;
-  }
-});
-
-claimTestAccessForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (authRequestInProgress) return;
-  const generation = ++authenticationGeneration;
-  const data = new FormData(claimTestAccessForm);
-  const errorNode = element("test-access-error");
-  const accessToken = data.get("test-access-token")?.toString().trim() ?? "";
-  errorNode.textContent = "";
-  if (!accessToken) {
-    errorNode.textContent = localizer.t("Enter your test qualification code.");
-    element("test-access-token").focus();
-    return;
-  }
-  const submit = claimTestAccessForm.querySelector("button[type='submit']");
-  authRequestInProgress = true;
-  submit.disabled = true;
-  submit.textContent = "Activating…";
-  try {
-    const identity = authenticationIdentity({ required: true });
-    const result = await api.claimTestAccess({
-      accessToken,
-      displayName: identity.displayName,
-      deviceName: identity.deviceName,
-      rememberDevice: data.get("remember-device") === "on",
-    });
-    if (generation !== authenticationGeneration) return;
-    state.currentUser = result.actor;
-    showNewDeviceAccessToken(result.accessToken);
-    claimTestAccessForm.reset();
-    element("claim-display-name").value = "";
-    setAutomaticClaimDeviceName({ force: true });
-    await enterWorkspace();
-  } catch (error) {
-    if (generation !== authenticationGeneration) return;
-    errorNode.textContent = localizer.t(error.message ?? "Unable to activate this account.");
-    element("test-access-token").focus();
-  } finally {
-    authRequestInProgress = false;
-    submit.disabled = false;
-    submit.textContent = `${localizer.t("Activate account")} →`;
-  }
-});
-
-claimInvitationForm.addEventListener("submit", async (event) => {
-  event.preventDefault();
-  if (authRequestInProgress) return;
-  const generation = ++authenticationGeneration;
-  const data = new FormData(claimInvitationForm);
-  const errorNode = element("claim-invite-error");
-  const submit = claimInvitationForm.querySelector("button[type='submit']");
-  errorNode.textContent = "";
-  authRequestInProgress = true;
-  submit.disabled = true;
-  submit.textContent = "Joining…";
-  try {
-    const identity = authenticationIdentity({ required: true });
-    const result = await api.claimInvitation({
-      inviteToken: data.get("invite-secret")?.toString().trim() ?? "",
-      displayName: identity.displayName,
-      deviceName: identity.deviceName,
-      rememberDevice: data.get("remember-device") === "on",
-    });
-    if (generation !== authenticationGeneration) return;
-    state.currentUser = result.actor;
-    showNewDeviceAccessToken(result.accessToken);
-    claimInvitationForm.reset();
-    element("claim-display-name").value = "";
-    setAutomaticClaimDeviceName({ force: true });
-    await enterWorkspace(result.invitation.projectId);
-  } catch (error) {
-    if (generation !== authenticationGeneration) return;
-    errorNode.textContent = localizer.t(error.message ?? "Unable to claim this invitation.");
-    element("claim-invite-secret").focus();
-  } finally {
-    authRequestInProgress = false;
-    submit.disabled = false;
-    submit.textContent = localizer.t("Join project");
-  }
-});
 
 element("logout-button").addEventListener("click", async () => {
   authenticationGeneration += 1;
@@ -728,7 +488,6 @@ element("logout-button").addEventListener("click", async () => {
   stopSnapshotPolling();
   stopDshRuntimePolling();
   clearCreatedInvitationSecret();
-  clearNewDeviceAccessToken();
   const button = element("logout-button");
   button.disabled = true;
   try {
@@ -737,9 +496,8 @@ element("logout-button").addEventListener("click", async () => {
     loginError.textContent = "The server could not confirm logout. If it is offline, close this browser tab to end the local session.";
   } finally {
     resetWorkspaceToAuth();
-    void refreshRememberedAccounts();
     button.disabled = false;
-    (rememberedAccountSelect.value ? rememberedAccountSelect : element("token")).focus();
+    element("auth-select-email-login").focus();
   }
 });
 
@@ -827,22 +585,6 @@ element("copy-invite-secret-button").addEventListener("click", async () => {
     status.textContent = "Clipboard access is unavailable. Copy the selected invitation manually.";
   }
 });
-
-element("copy-device-access-token-button").addEventListener("click", async () => {
-  const status = element("copy-device-access-token-status");
-  if (!newDeviceAccessToken) return;
-  try {
-    if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
-    await navigator.clipboard.writeText(newDeviceAccessToken);
-    status.textContent = "Copied to clipboard.";
-  } catch {
-    status.textContent = "Clipboard access is unavailable. Select and copy the token manually.";
-  }
-});
-element("acknowledge-device-access-token-button").addEventListener("click", () => {
-  clearNewDeviceAccessToken();
-});
-deviceCredentialDialog.addEventListener("cancel", (event) => event.preventDefault());
 
 element("new-session-button").addEventListener("click", openCreateDialog);
 element("empty-create-button").addEventListener("click", () => {
@@ -1014,6 +756,7 @@ element("open-codex-launcher-button").addEventListener("click", () => {
 element("close-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 element("done-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 connectCodexDialog.addEventListener("close", () => {
+  codexDeviceAuthorization.clear();
   const returnFocus = connectCodexReturnFocus;
   connectCodexReturnFocus = null;
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
@@ -1244,13 +987,11 @@ element("settings-delete-account").addEventListener("click", async () => {
   try {
     await api.deleteAccount();
     resetWorkspaceToAuth();
-    void refreshRememberedAccounts();
     loginError.textContent = localizer.t("Your account was deleted. Shared Multi content remains without your account identity.");
   } catch (error) {
     if (error?.status === 401) {
       resetWorkspaceToAuth();
-      void refreshRememberedAccounts();
-      return;
+        return;
     }
     status.textContent = error.message ?? localizer.t("Could not confirm account deletion. Refresh or sign in again before retrying.");
     void loadAccountDeletionPreview();
@@ -1366,13 +1107,12 @@ window.addEventListener("resize", () => positionSessionContextPanel(document));
 document.addEventListener("scroll", () => { if (sessionContextDetails.open) positionSessionContextPanel(document); }, true);
 
 async function restoreBrowserSession() {
-  if (mockEnabled && !exampleMode) return;
+  if (authRequestInProgress || (mockEnabled && !exampleMode)) return;
   const generation = ++authenticationGeneration;
   try {
     const actor = await api.restoreSession();
     if (generation !== authenticationGeneration) return;
     if (!actor) {
-      await refreshRememberedAccounts();
       return;
     }
     state.currentUser = actor;
@@ -1380,12 +1120,12 @@ async function restoreBrowserSession() {
   } catch (error) {
     if (generation !== authenticationGeneration) return;
     resetWorkspaceToAuth();
-    void refreshRememberedAccounts();
     loginError.textContent = error.message ?? "Unable to restore this browser session.";
   }
 }
 
 function resetWorkspaceToAuth() {
+  codexDeviceAuthorization.clear();
   onboarding.cancel();
   sessionContextDetails.open = false;
   updateSessionContextDisclosure();
@@ -1434,14 +1174,10 @@ function resetWorkspaceToAuth() {
   settingsDeviceLoadGeneration += 1;
   expandedWorklogs.clear();
   clearCreatedInvitationSecret();
-  clearNewDeviceAccessToken();
   clearSensitiveInputs();
   renderWorkspaceContext();
   workspace.hidden = true;
   authView.hidden = false;
-  loginForm.reset();
-  claimTestAccessForm.reset();
-  claimInvitationForm.reset();
   authRequestInProgress = false;
   setActiveAuthEntry("choose");
   setAutomaticClaimDeviceName({ force: true });
@@ -1468,15 +1204,7 @@ async function enterWorkspace(preferredProjectId) {
   authView.hidden = true;
   workspace.hidden = false;
   const noticeDeviceId = state.currentUser.device_id;
-  if (exampleMode) { /* The isolated example has no real cloud upload notice. */ } else if (deviceCredentialDialog.open) {
-    deviceCredentialDialog.addEventListener("close", () => {
-      if (authentication === authenticationGeneration && state.currentUser?.device_id === noticeDeviceId && !workspace.hidden) {
-        codeSyncUi.showFirstLoginNotice(noticeDeviceId);
-      }
-    }, { once: true });
-  } else {
-    codeSyncUi.showFirstLoginNotice(noticeDeviceId);
-  }
+  if (!exampleMode) codeSyncUi.showFirstLoginNotice(noticeDeviceId);
   element("current-username").textContent = state.currentUser.username;
   element("current-user-avatar").textContent = initials(state.currentUser.username);
   const projects = await api.listProjects();
@@ -2140,22 +1868,8 @@ function updateCreatedInvitationShareText(locale = state.settings.general.locale
   element("created-invite-secret").textContent = createdInvitationShareText;
 }
 
-function showNewDeviceAccessToken(token) {
-  newDeviceAccessToken = token;
-  element("new-device-access-token").textContent = token;
-  element("copy-device-access-token-status").textContent = "";
-  if (!deviceCredentialDialog.open) deviceCredentialDialog.showModal();
-}
-
-function clearNewDeviceAccessToken() {
-  newDeviceAccessToken = "";
-  element("new-device-access-token").textContent = "";
-  element("copy-device-access-token-status").textContent = "";
-  if (deviceCredentialDialog.open) deviceCredentialDialog.close();
-}
-
 function clearSensitiveInputs() {
-  for (const id of ["token", "test-access-token", "claim-invite-secret", "accept-invite-secret", "claim-display-name"]) {
+  for (const id of ["registration-email", "registration-code", "registration-password", "registration-password-confirm", "email-login-email", "email-login-password", "accept-invite-secret", "claim-display-name"]) {
     element(id).value = "";
   }
 }
@@ -3038,6 +2752,7 @@ function openDeleteCloudDialog(type) {
 }
 
 function openConnectCodexDialog() {
+  codexDeviceAuthorization.clear();
   if (!state.project) return;
   const launcherAvailable = canOpenCodexLauncher({
     origin: location.origin,

@@ -2,7 +2,7 @@
 
 **GatherThread（共序）** 是面向多人联机协作、各自使用本地 AI 编程 Agent 的开源、可自托管工作区。Codex Desktop 与 DeepSeek Harness 可以接入同一项目的有序历史和共享上下文：会话按参与者标注、可重放并实时同步，Solo/Multi 模式有明确的角色权限。每位成员保留自己的本地 Agent 和凭据；Git 代码检查点需单独主动授权，不是默认上传。
 
-**Alpha 8** 新增中英文初次使用引导与隔离练习项目、消息引用和 @成员、会话阅读与定位优化、由本地 Agent 声明的模型选择、可选的 Windows/macOS Codex 启动器原型、批量测试资格码和账号自行注销。限制与验证要求见 [Alpha 8 说明](docs/releases/0.1.0-alpha.8.md)。
+**Alpha 8** 新增中英文初次使用引导与隔离练习项目、消息引用和 @成员、会话阅读与定位优化、由本地 Agent 声明的模型选择、可选的 Windows/macOS Codex 启动器原型、账号自行注销。限制与验证要求见 [Alpha 8 说明](docs/releases/0.1.0-alpha.8.md)。
 
 > **Alpha 7：可选的项目代码协作。** 云端 Git 代码检查点支持每位成员独立分支、手动/空闲时自动上传、安全下载、恢复到新目录，以及创建者审核合并。Codex 需显式添加 `--code-sync` 授权，DSH 可在插件设置中逐项目授权并操作。聊天上传与实时上下文注入不受影响，原有本地 Git 分支和暂存区不被改动。所有项目成员均可读取代码分支，Solo 不提供代码隐私隔离。详见[使用流程、边界与测试清单](docs/CODE_SYNC.md)。
 
@@ -18,27 +18,15 @@
 
 **GatherThread** 不绑定具体 Agent harness，每位协作者都可以保留自己熟悉的本地 Agent、模型选择和工作方式。
 
-> **邀请制 Alpha 测试。** [gatherthread.cn](https://gatherthread.cn/) 已进行小规模服务器测试，尚未开放公众注册或公共 Beta。每位测试者需要一次性测试资格码来激活账号；仅凭项目邀请，只能进入被邀请的项目。本机、局域网和 Tailscale 自托管方式仍可使用。
+> **账号更新尚未发布。** 当前线上 Alpha 尚未切换本分支，也未开放公众注册。开放前需完成审核与运维检查。
 
 Git 标签、npm 包和 GitHub Release 的对应信息见[发布记录索引](docs/releases/README.md)。
 
-## 申请 Alpha 测试资格
+## 注册与登录
 
-**[在 GitHub 发起 Alpha 测试申请 Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml)**。源码仓库现已公开，但服务器账号仍须经维护者审核并取得一次性测试资格码才能激活；申请仅通过 Issue 发起，不提供邮件表单，也不会在服务器建立申请人资料。模板可选填申请理由、希望测试的内容、了解 GatherThread 的渠道，以及用于私下接收资格码的邮箱。邮箱选填；若不介意在公开 Issue 中展示，建议填写，方便获批后通过邮件私下发送资格码。若不愿公开邮箱，可在获批后将 Issue 链接私信发送至 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，再通过邮件私下接收资格码。请勿发布资格码、设备 Token、密码、密钥或私有代码。
+未发布分支使用邮箱验证注册和自设密码登录，沿用当前 Alpha 的项目创建、角色与资源规则。无需记录用户 access token。新账号先注册并登录，再接受项目邀请；Agent 通过独立设备授权连接。尚不支持找回密码。
 
-维护者会在公开 Issue 中回复审核结果与后续步骤，但绝不公开发送资格码。拿到私下发送的资格码后，打开[服务器登录页](https://gatherthread.cn/app/)，先填写自己的用户名与设备名，再在“首次使用 · 激活资格”中输入资格码。请妥善保存随后另行签发的设备 Token，供以后登录使用。已有资格的用户也可以邀请访客加入某个项目，但项目邀请不会赋予访客创建新项目的资格。
-
-使用疑问、缺陷和非敏感反馈，请[提交 GitHub Issue](https://github.com/TH060419/gatherthread/issues)；安全问题请私下联系 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，不要附上凭据或未脱敏的私人会话。
-
-- `solo`：由创建者发布完整的规范化会话事件流；项目内其他所有人只读，即使对方是项目创建者。
-- `multi`：多人共享一个有序的项目会话。普通聊天消息只进入共享会话，不会调用 Agent；Agent 请求只由发送者自己的本地 runtime 领取，回复会标注用户名、harness、provider、模型和上下文保真度，不会向其他成员暴露本地设备或原生会话标识。
-
-服务器使用 SQLite WAL 持久化只追加的规范事件日志，为每个会话分配权威序号，执行基于角色的访问控制，并提供可持久重放的历史记录和 WebSocket 实时推送。Codex 与 DeepSeek Harness 分别维护同一份规范历史的原生投影，通过持久游标和 outbox 断线恢复；每个 Agent 请求只会路由到用户明确选择的 runtime。
-
-中英文网页工作区会响应窗口尺寸，并允许调整主要区域大小。项目级设置统一管理默认 Agent 模型、推理强度和 Codex 备用上下文预算；无障碍自定义控件、默认高对比度和适配日夜主题的环境柔光，让界面保持清晰，同时不干扰会话内容。
-
-网页 Agent 回合采用接近 Codex Desktop 的阅读层级：公开工作进展实时出现，最终答复到达后自动收进可展开的“工作过程”。最终答复与工作进展均使用安全的 GitHub 风格 Markdown 渲染，并通过本地打包的 KaTeX 显示行内与块级公式；隐藏推理不会上传或显示。
-
+注册默认关闭；完成审核及邮件、安全验证、部署前检查后才能开放。当前线上服务尚未切换。旧用户 Token 登录、测试资格码、邀请创建访客账号均退出新版本支持，不进行旧账号继承或合并。见 [运维流程](docs/OPERATIONS.md) 与 [ADR-0036](docs/adr/0036-verified-email-registration-and-password-login.md)。
 ## 项目与权限模型
 
 项目是协作、邀请和权限的边界。项目创建者（`owner`）可以重命名项目、创建 `multi` 会话、在 `solo` 与 `multi` 之间切换自己创建的会话，并可随时把其他成员调整为参与者（`participant`）或访者（`viewer`）。创建者与参与者都可以创建自己的个人 `solo`；只有该 Solo 的创建者可以写入或改名，项目内其他人全部只读。参与者还可以在所有 `multi` 会话中聊天并请求自己的本地 Agent。访者对整个项目只读，其本地新任务不会创建任何云端会话。会话创建者或项目创建者可永久删除该会话的云端副本，只有项目创建者可删除整个云端项目。云端删除会停止同步并清除服务器上的共享历史，但不会删除任何本地工作区、文件、Codex 任务或 Agent 对话。
@@ -82,23 +70,23 @@ npm run verify
 
 ## 本地端到端运行
 
-首次初始化会在缺少 `.env` 或 Pepper 留空时自动生成权限为 `0600` 的私有 `.env` 和稳定随机 Pepper。直接创建第一位所有者，然后启动同源的 Web/API/WebSocket 服务：
+首次初始化会在缺少 `.env` 或 Pepper 留空时自动生成权限为 `0600` 的私有 `.env` 和稳定随机 Pepper。仅准备私有配置，不创建账号；然后启动同源的 Web/API/WebSocket 服务：
 
 ```bash
 npm run connection:local
-npm run owner-host:init -- --display-name "Alice" --device-name "Alice laptop"
+npm run owner-host:init
 npm run owner-host
 ```
 
 如需自定义端口或路径，可以在初始化前手动复制 `.env.example`；`owner-host:init` 会只填充空的 Pepper，不会覆盖其他设置。`owner-host` 每次启动都会自动构建当前源码。
 
-打开 `http://127.0.0.1:18787` 进入产品首页，再选择“开始使用”进入同源的 `/app/` 登录页与工作区。在这里输入命令一次性显示的设备凭据；应用会用它换取一个不透明的 `HttpOnly; SameSite=Strict` 浏览器会话 Cookie，然后立即从 JavaScript 内存中清除设备凭据。刷新页面时可以自动恢复登录，设备 Token 不进入 `localStorage` 或 `sessionStorage`。默认会话在服务器端有 24 小时绝对有效期，Cookie 本身不持久；勾选“记住此设备”后，会建立 30 天持久会话和独立的 `HttpOnly` 已记住账号凭据。此账号会出现在同一浏览器资料的登录下拉列表中，带出上次使用的用户名和设备名，登录前仍可修改。主动退出会撤销当前会话，但仍可从下拉列表快捷登录；30 天到期、选择“忘记此账号”或撤销/轮换设备 Token 后，此快捷资格失效。共用浏览器资料时不要勾选“记住此设备”。HTTPS 部署会额外启用 `Secure` 和 `__Host-` Cookie 前缀。WebSocket 仍使用独立的 30 秒有效、一次性、限定会话的 ticket，任何凭据都不会写入 URL。较高的默认端口可以减少 Windows 上常见的低端口占用冲突。已经显式设置 `GATHERTHREAD_SERVER_PORT=8787` 的既有安装仍会继续使用该值；`18787` 只作为新的默认端口。
+打开 `http://127.0.0.1:18787`，进入 `/app/` 后用邮箱验证注册，再用自设密码登录。注册默认关闭，需按 [运维检查](docs/OPERATIONS.md) 配置邮件与安全验证服务后启用。目前暂不支持找回密码。浏览器仅持有 HttpOnly 会话 Cookie，默认 24 小时，勾选“记住此设备”为 30 天；退出即撤销当前会话。Agent 独立设备授权在连接器中兑换，不复用用户密码。
 
-如果只开发 UI，运行 `npm --workspace apps/web run dev` 即可启动仅绑定 loopback 的预览服务并代理本地 API。产品首页位于 `http://127.0.0.1:4173/`；工作区显式 mock 模式只在 `http://127.0.0.1:4173/app/?mock=1` 可用，演示凭据为 `demo-token`。
+如果只开发 UI，运行 `npm --workspace apps/web run dev` 即可启动仅绑定 loopback 的预览服务并代理本地 API。产品首页位于 `http://127.0.0.1:4173/`；工作区显式 mock 模式只在 `http://127.0.0.1:4173/app/?mock=1` 可用，演示凭据为 示例邮箱 `demo@example.invalid` 和示例密码 `isolated demo password`。
 
 ## 服务器 Alpha 与其他连接方式
 
-当前服务器 Alpha 入口为 [https://gatherthread.cn](https://gatherthread.cn/)，同源工作区位于 `/app/`。所有者管理的 ECS 服务由 Caddy 提供 HTTPS，应用本身只监听 loopback；不提供匿名注册或公开 Git 传输。加入项目后，再从自己的设备连接 Codex 或 DeepSeek Harness。普通产品测试不需要服务器 SSH 账号。
+当前服务器 Alpha 入口为 [https://gatherthread.cn](https://gatherthread.cn/)，同源工作区位于 `/app/`。所有者管理的 ECS 服务由 Caddy 提供 HTTPS，应用本身只监听 loopback；邮箱注册默认关闭，不提供公开 Git 传输。加入项目后，再从自己的设备连接 Codex 或 DeepSeek Harness。普通产品测试不需要服务器 SSH 账号。
 
 如需独立自托管，无需阿里云账号也可使用三种方式；它们保留该部署自己的私有 `.env`、数据库、凭据 Pepper、用户和历史：
 
@@ -127,7 +115,7 @@ codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref 
 codex plugin add gatherthread@gatherthread
 ```
 
-连接器会在终端隐藏提示中读取设备 token，创建或复用本地项目，打开 Codex Desktop，并自动发现后续会话。可编辑的 GatherThread 会话会成为 Codex 任务；网页 Agent 请求在隔离的后台投影中运行，经信任的 Hooks 则把 Desktop 直接回合写回同一份规范历史。工作页为当前对话提供“本地回合自动上传至云端”开关和“立即从本地上传至云端”保底操作，Codex 插件也提供相同控制；Hook 漏记或失效时可扫描并补传已完成回合，且不会擅自重新开启自动上传。默认在每个会话首次于本地建立时导入一次经过验证、可直接阅读的原生历史快照；设置中可以关闭这次初始导入。“导入 Codex 历史”每次都会创建一个经过验证的新本地任务，公开消息不再按备用预算直接裁剪；在独立快照资源限额内，长历史由 Codex 原生压缩，后续 Hook 和上下文投递会切换到新任务。GatherThread 不覆盖或归档旧任务，请用户检查后自行归档。无论是否启用初次导入或执行手动导入，实时上下文注入都继续独立运行。本地新任务只有在首个回合成功完成后才会创建个人 Solo，访者任务始终留在本地。
+连接器会在终端隐藏提示中读取一次性设备授权，创建或复用本地项目，打开 Codex Desktop，并自动发现后续会话。可编辑的 GatherThread 会话会成为 Codex 任务；网页 Agent 请求在隔离的后台投影中运行，经信任的 Hooks 则把 Desktop 直接回合写回同一份规范历史。工作页为当前对话提供“本地回合自动上传至云端”开关和“立即从本地上传至云端”保底操作，Codex 插件也提供相同控制；Hook 漏记或失效时可扫描并补传已完成回合，且不会擅自重新开启自动上传。默认在每个会话首次于本地建立时导入一次经过验证、可直接阅读的原生历史快照；设置中可以关闭这次初始导入。“导入 Codex 历史”每次都会创建一个经过验证的新本地任务，公开消息不再按备用预算直接裁剪；在独立快照资源限额内，长历史由 Codex 原生压缩，后续 Hook 和上下文投递会切换到新任务。GatherThread 不覆盖或归档旧任务，请用户检查后自行归档。无论是否启用初次导入或执行手动导入，实时上下文注入都继续独立运行。本地新任务只有在首个回合成功完成后才会创建个人 Solo，访者任务始终留在本地。
 
 固定 Alpha 命令见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。安装前请核对 `v0.1.0-alpha.8` Git 引用与同版 npm 包均已发布；同一指南也提供源码路径。
 
@@ -148,7 +136,7 @@ DeepSeek Harness 使用四步流程：
 
 **未发布源码预览：本机直连 GitHub 同步。** 长期协作和较大源码项目推荐选择 GitHub，原有共序云端检查点适合小项目和初次体验。成员在每台设备用自己的 GitHub CLI 登录并单独授权，上传只推进稳定的个人分支，GitHub 源码和凭据不经过共序服务器。GitHub 权限、Actions 与远端清理仍需独立管理。本说明不代表已发布安装包或线上服务已经支持；配置流程、预览限制和超限时使用原生 Git 的说明见[代码同步指南](docs/CODE_SYNC.md)与 [ADR-0035](docs/adr/0035-direct-local-github-code-synchronization.md)。
 
-首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、按用户/项目/部署限制会话数量、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。新邀请用户的设备 Token 只展示一次，必须在关闭提示前妥善保存。
+首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、按用户/项目/部署限制会话数量、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。用户通过邮箱和密码登录；Agent 的独立设备凭据保留在连接器中。
 
 [gatherthread.cn](https://gatherthread.cn/) 已向获批测试者开放邀请制 Alpha；公众注册和公共 Beta 仍未开放。本机、局域网 HTTPS 与私有 Tailscale Serve 也可使用。[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)说明当前服务器部署模式。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
 

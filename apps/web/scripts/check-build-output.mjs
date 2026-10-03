@@ -13,8 +13,8 @@ test("Web build publishes the product home above the existing application", asyn
 
   assert.match(home, /href="\.\/app\/"/u);
   assert.match(home, /<script src="boot\.js"><\/script>/u);
-  assert.doesNotMatch(home, /id="login-form"/u);
-  assert.match(application, /id="login-form"/u);
+  assert.doesNotMatch(home, /id="email-login-form"/u);
+  assert.match(application, /id="email-login-form"/u);
   assert.match(application, /id="workspace"/u);
 
   await Promise.all([

@@ -1,6 +1,6 @@
 # 阿里云 ECS 部署：0.1.0-alpha.8 预览版
 
-本方案说明 `https://gatherthread.cn` 的 `0.1.0-alpha.8` 邀请制部署方案。应用始终只监听 `127.0.0.1:18787`，Caddy 独占公网 80/443 并自动管理 HTTPS；阿里云安全组不得开放 18787。当前版本没有匿名注册：首位创建者在服务器本机创建，测试资格码由运维人员在服务器私有终端签发，项目邀请只让访客加入指定项目。以下命令供新版本经过审核后部署，不应在已运行服务器上重复安装。
+此未发布分支保留应用 `127.0.0.1:18787` 与 Caddy 公网 80/443 边界，不得开放 18787。用户采用邮箱验证注册和密码登录；注册默认关闭，当前线上尚未切换。以下命令供经审核的后续部署使用，不应重复安装运行中的服务器。
 
 ## 1. 上线前条件
 
@@ -38,29 +38,9 @@ sudo deploy/aliyun-ecs/install.sh \
 
 脚本会安装并校验 Node.js 24.16.0，安装 Caddy，创建无登录权限的 `gatherthread` 系统用户，以 `npm ci` 构建候选版本，生成只允许服务账户读取的环境文件，配置 systemd、Caddy 和每日 SQLite 在线备份，最后把 `/opt/gatherthread/current` 原子切换到该 release。已有 `/etc/gatherthread/gatherthread.env` 不会被覆盖；域名不一致时脚本会停止。
 
-## 4. 创建首位创建者
+## 4. 配置邮箱注册
 
-仅第一次部署执行：
-
-```sh
-sudo deploy/aliyun-ecs/create-owner.sh \
-  --display-name "你的显示名称" \
-  --device-name "服务器初始化"
-```
-
-命令只显示一次设备 Token。立即保存到密码管理器，不要粘贴到聊天、Issue、日志或 URL。浏览器首次登录后可以勾选“记住此设备”，也可以在设置中修改设备名称。
-
-部署包含 [ADR-0028](adr/0028-separate-test-qualification-from-project-invitations.md) 的版本后，先审核通过 [GitHub Alpha 测试申请 Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml)，再在自己的服务器私有终端签发一次性资格码。系统不提供收集申请者资料的服务器表单。不要通过可能记录输出的 Agent 终端运行签发命令：
-
-```sh
-sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d
-# 一次签发 5 个独立资格码（每个仍只能激活一个账号）
-sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh issue --ttl 7d --count 5
-```
-
-脚本为每个资格码输出独立的中文转发段落，包含激活方法及北京时间有效期；批量输出时用空行分隔，**每段只私下交给一位测试者**，不要整批转给同一个人，也绝不贴在公开 Issue 中。每个签发记录的撤销编号单独显示在终端诊断输出中，不属于转发文案。批量数量限 1 至 50；可先少量签发，未使用的资格码可用 `sudo /opt/gatherthread/current/deploy/aliyun-ecs/test-access.sh revoke --grant-id GRANT_ID` 撤销，不影响已激活账号的设备。不要重定向输出到公共文件或运行在可能保存终端记录的 Agent 会话中。
-
-如需私密投递，已获批申请者可以主动把 Issue 链接发至 `coolhezi@sjtu.edu.cn`；邮箱不替代 Issue 申请。测试者在登录页先填写自己的用户名和设备名，再在“首次使用 · 激活资格”中输入资格码。激活后另行获得只展示一次的 `gta_` 设备 Token，之后从“已有账号”登录。项目创建者若只想邀请访客加入一个项目，则使用产品内的项目邀请；点击复制会得到带有效期与加入方式、跟随当前界面语言的整段说明。项目邀请不会授予创建新项目的资格，也不会给访客 ECS SSH 权限。
+此未发布分支使用邮箱验证注册和密码登录，不再签发首位用户 Token 或测试资格码。按照 [运维检查](OPERATIONS.md) 配置邮件与安全验证服务，通过审核后才可开放注册。注册默认关闭；暂停注册不影响已有邮箱账号的密码登录。用户注册后可以按 Alpha 规则创建项目，登录后接受项目邀请。Agent 通过独立设备授权连接。当前不支持找回密码，不进行旧账号继承或清理。
 
 ## 5. 完整预检
 

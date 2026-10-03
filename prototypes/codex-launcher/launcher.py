@@ -286,7 +286,7 @@ class Launcher(tk.Tk):
         history.pack(side="left")
         ttk.Label(history, text="首次历史导入").pack(anchor="w")
         ttk.Combobox(history, textvariable=self.history_sync, values=("first-connect", "never"), state="readonly", width=16).pack(anchor="w")
-        ttk.Label(root, text="设备 Token（仅交给连接器进程，不写入链接或日志）").pack(anchor="w")
+        ttk.Label(root, text="一次性设备授权（仅交给连接器进程，不写入链接或日志）").pack(anchor="w")
         ttk.Entry(root, textvariable=self.token, show="•").pack(fill="x", pady=(2, 12))
         ttk.Label(root, text="已有 GatherThread 插件可跳过安装。只有需要包内 Node 运行 MCP 与 Hooks 时才安装随包插件，并在 Codex 中审查 Hooks。", wraplength=690).pack(anchor="w")
         buttons = ttk.Frame(root)
@@ -379,7 +379,7 @@ class Launcher(tk.Tk):
                 raise ValueError("项目 ID 格式不正确；请使用网页显示的项目 ID，格式如 project-***")
             token = self.token.get().strip()
             if not token or "\n" in token or "\r" in token:
-                raise ValueError("请输入有效的设备 Token")
+                raise ValueError("请输入有效的一次性设备授权")
             model = valid_model(self.model.get())
             tokens = valid_context_tokens(self.context_tokens.get())
             mode = valid_history_sync(self.history_sync.get())

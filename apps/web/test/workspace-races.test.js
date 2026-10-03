@@ -288,3 +288,54 @@ test("local conversation uploads keep an offline selected device and fail closed
   assert.equal(app.selectedCodexLocalRuntimeId, "");
   assert.equal(app.uploadLocalTurnsButton.disabled, true);
 });
+
+for (const outcome of ["success", "failure"]) {
+  test(`late browser restoration ${outcome} cannot replace an email-authenticated workspace`, async () => {
+    const pending = deferred(); let entries = 0, resets = 0;
+    const app = harness(["restoreBrowserSession", "beginEmailAuthentication", "completeEmailAuthentication"], {
+      mockEnabled: false, authRequestInProgress: false, loginError: element(),
+      api: { restoreSession: () => pending.promise }, setAutomaticClaimDeviceName: noop,
+      enterWorkspace: async () => { entries += 1; }, resetWorkspaceToAuth: () => { resets += 1; },
+    });
+    const restoring = app.restoreBrowserSession();
+    const current = app.beginEmailAuthentication();
+    await app.completeEmailAuthentication({ actor: { id: "email-user" } }, current);
+    if (outcome === "success") pending.resolve({ id: "old-user" }); else pending.reject(new Error("Old restoration failed"));
+    await restoring;
+    assert.equal(app.state.currentUser.id, "email-user");
+    assert.equal(entries, 1); assert.equal(resets, 0); assert.equal(app.loginError.textContent, "");
+  });
+}
+
+test("starting email authentication fences restoration before email completion", async () => {
+  const pending = deferred(); let entries = 0;
+  const app = harness(["restoreBrowserSession", "beginEmailAuthentication"], {
+    mockEnabled: false, authRequestInProgress: false, loginError: element(),
+    api: { restoreSession: () => pending.promise }, enterWorkspace: async () => { entries += 1; },
+  });
+  app.state.currentUser = null;
+  const restoring = app.restoreBrowserSession();
+  app.beginEmailAuthentication(); pending.resolve({ id: "old-user" }); await restoring;
+  assert.equal(app.state.currentUser, null); assert.equal(entries, 0);
+});
+
+test("switching registration and login invalidates a former email completion", async () => {
+  let entries = 0, cleared = 0;
+  const app = harness(["setActiveAuthEntry", "beginEmailAuthentication", "completeEmailAuthentication"], {
+    authRequestInProgress: false, authEntryChooser: element(), authIdentity: element(), authEntryChoices: [],
+    registrationUi: { enter: async () => {}, clear: () => { cleared += 1; } },
+    setAutomaticClaimDeviceName: noop, enterWorkspace: async () => { entries += 1; },
+  });
+  app.state.currentUser = null;
+  const former = app.beginEmailAuthentication();
+  app.setActiveAuthEntry("email-login");
+  await app.completeEmailAuthentication({ actor: { id: "old-registration" } }, former);
+  assert.equal(app.state.currentUser, null); assert.equal(entries, 0); assert.equal(cleared, 1);
+});
+
+
+test("authentication state is initialized before startup restoration can access it", () => {
+  const startup = source.indexOf("void restoreBrowserSession()");
+  assert.ok(source.indexOf("let authRequestInProgress = false") < startup);
+  assert.ok(source.indexOf("let authenticationGeneration = 0") < startup);
+});

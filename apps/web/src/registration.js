@@ -14,7 +14,7 @@ export function registrationError(error) {
   return messages[error?.code] ?? "Registration could not be completed. Please try again.";
 }
 
-export function mountRegistration({ document, api, localizer, identity, complete, busy }) {
+export function mountRegistration({ document, api, localizer, identity, beginAuthentication, complete, busy }) {
   const get = (id) => document.getElementById(id);
   const form = get("registration-form");
   const send = get("registration-send");
@@ -63,8 +63,8 @@ export function mountRegistration({ document, api, localizer, identity, complete
         language: document.documentElement.lang === "zh-CN" ? "zh-cn" : "en",
         "response-field": false,
         callback: (token) => { if (run !== generation) return; challenge = token; status.textContent = ""; update(); },
-        "expired-callback": () => { challenge = ""; update(); },
-        "error-callback": () => { challenge = ""; tell(error, "Security check unavailable. Retry or return to sign-in."); update(); },
+        "expired-callback": () => { if (run !== generation) return; challenge = ""; update(); },
+        "error-callback": () => { if (run !== generation) return; challenge = ""; tell(error, "Security check unavailable. Retry or return to sign-in."); update(); },
       });
     } catch { if (run === generation) tell(error, "Security check unavailable. Retry or return to sign-in."); }
   };
@@ -76,6 +76,8 @@ export function mountRegistration({ document, api, localizer, identity, complete
   const clear = () => {
     ++generation;
     if (widget !== null) globalThis.turnstile?.remove(widget);
+    working = false; busy(false);
+    get("email-login-form").querySelector("button[type=submit]").disabled = false;
     widget = null; challenge = ""; registrationId = null; retryKey = null; config = null; resendAt = 0;
     form.reset(); get("registration-code-step").hidden = true;
     error.textContent = ""; status.textContent = ""; update();
@@ -126,7 +128,7 @@ export function mountRegistration({ document, api, localizer, identity, complete
       // After a known HTTP failure use a new reservation only following server cooldown.
       if (reason?.status) retryKey = null;
     } finally {
-      working = false; busy(false); if (run === generation) resetChallenge();
+      if (run === generation) { working = false; busy(false); resetChallenge(); }
     }
   });
   get("registration-email").addEventListener("input", () => {
@@ -145,17 +147,19 @@ export function mountRegistration({ document, api, localizer, identity, complete
       tell(error, "Use 12–128 characters and make sure both passwords match."); password.focus(); return;
     }
     const run = generation;
+    const currentAuthentication = beginAuthentication();
+    const isCurrent = () => run === generation && currentAuthentication();
     working = true; busy(true); error.textContent = ""; update();
     try {
       const profile = identity();
       const result = await api.verifyRegistration({ registration_id: registrationId, code: code.value,
         display_name: profile.displayName, device_name: profile.deviceName,
         remember_device: get("registration-remember").checked, privacy_acknowledged: true, password: password.value });
-      if (run !== generation) return;
+      if (!isCurrent()) return;
       code.value = ""; password.value = ""; get("registration-password-confirm").value = ""; get("registration-email").value = ""; registrationId = null;
-      await complete(result);
-    } catch (reason) { if (run === generation) tell(error, registrationError(reason)); }
-    finally { working = false; busy(false); code.value = ""; password.value = ""; get("registration-password-confirm").value = ""; update(); }
+      await complete(result, isCurrent);
+    } catch (reason) { if (isCurrent()) tell(error, registrationError(reason)); }
+    finally { if (isCurrent()) { working = false; busy(false); code.value = ""; password.value = ""; get("registration-password-confirm").value = ""; update(); } }
   });
   const loginForm = get("email-login-form");
   loginForm.addEventListener("submit", async (event) => {
@@ -168,17 +172,20 @@ export function mountRegistration({ document, api, localizer, identity, complete
       tell(errorNode, "Check your email and password."); return;
     }
     const run = generation;
-    working = true; busy(true);
+    const currentAuthentication = beginAuthentication();
+    const isCurrent = () => run === generation && currentAuthentication();
+    working = true; busy(true); errorNode.textContent = "";
     const submit = loginForm.querySelector("button[type=submit]"); submit.disabled = true;
     try {
       await api.prepareEmailLogin();
+      if (!isCurrent()) return;
       const profile = identity();
       const result = await api.loginWithEmail({ email: email.value, password: password.value,
         device_name: profile.deviceName, remember_device: get("email-login-remember").checked });
-      if (run !== generation) return;
-      loginForm.reset(); await complete(result);
-    } catch (reason) { if (run === generation) tell(errorNode, registrationError(reason)); }
-    finally { password.value = ""; working = false; busy(false); submit.disabled = false; }
+      if (!isCurrent()) return;
+      loginForm.reset(); await complete(result, isCurrent);
+    } catch (reason) { if (isCurrent()) tell(errorNode, registrationError(reason)); }
+    finally { if (isCurrent()) { password.value = ""; working = false; busy(false); submit.disabled = false; } }
   });
   const clearAll = () => { clear(); loginForm.reset(); get("email-login-error").textContent = ""; };
   return { enter, clear: clearAll };

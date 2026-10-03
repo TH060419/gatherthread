@@ -480,15 +480,12 @@ async function main() {
       staticDirectory,
     }, collaborationPort);
     assert.equal(collaboration.origin, collaborationOrigin);
-    const owner = (await requestData(collaboration.origin, "/v1/bootstrap", {
-      method: "POST",
-      body: {
+    const owner = (collaboration.database.bootstrapIdentity({
         user_id: "dsh-npm-real-owner",
         display_name: "DSH npm real owner",
         device_id: "dsh-npm-real-browser",
         device_name: "Ephemeral browser",
-      },
-    })).data;
+      })).data;
     await requestData(collaboration.origin, "/v1/projects", {
       method: "POST",
       token: owner.token,

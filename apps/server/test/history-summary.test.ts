@@ -1,3 +1,4 @@
+import { browserSessionFixture } from "./auth-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -286,7 +287,7 @@ test("summary creation uses existing browser Origin checks and authenticated con
   const f = await fixture();
   try {
     const source = f.chat("Browser-selected source");
-    const login = await f.request("/v1/browser-sessions", { method: "POST", origin: "http://summary-browser.example", body: {} });
+    const login = browserSessionFixture(f, { token: f.owner.token });
     const cookie = login.headers.get("set-cookie")?.split(";", 1)[0];
     assert.ok(cookie);
     const body = { source_event_ids: [source.id], idempotency_key: "summary-cookie-operation", execution_profile: f.profile() };

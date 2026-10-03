@@ -247,6 +247,9 @@ export class RegistrationStore {
       ON CONFLICT(user_id,browser_digest) DO UPDATE SET device_id=excluded.device_id`)
       .run(userId, this.digest(`registration-browser:${browser}`), deviceId);
   }
+  hasAccount(userId: string): boolean {
+    return !!this.sqlite.prepare("SELECT 1 FROM public_registration_accounts WHERE user_id=?").get(userId);
+  }
   beforeDelete(userId: string): void {
     const row = this.sqlite.prepare("SELECT email_digest FROM public_registration_accounts WHERE user_id=?").get(userId) as { email_digest: string } | undefined;
     if (row) {

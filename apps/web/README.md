@@ -13,7 +13,7 @@ Start the API with `GATHERTHREAD_ALLOWED_ORIGINS=http://127.0.0.1:4173`, then op
 
 Browser API requests are restricted to the page's origin before any credential is sent. Legacy `?api=...` links are still forwarded to `/app/`, but an external or credential-bearing API URL is rejected. To use another deployment, open that deployment's own `/app/`; development continues to use the same-origin proxy above.
 
-For the isolated mock preview, explicitly open `http://127.0.0.1:4173/app/?mock=1` and sign in with `demo-token`. Legacy root `?mock=1`, project/session fragments, and DSH pairing fragments are forwarded to `/app/` with their query and fragment preserved.
+For the isolated mock preview, explicitly open `http://127.0.0.1:4173/app/?mock=1` and sign in with email `demo@example.invalid` and password `isolated demo password`. Legacy root `?mock=1`, project/session fragments, and DSH pairing fragments are forwarded to `/app/` with their query and fragment preserved.
 
 ```bash
 npm test

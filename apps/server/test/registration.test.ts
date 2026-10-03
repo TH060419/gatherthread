@@ -256,7 +256,7 @@ test("HTTP registration/login fail closed, enforce Origin/cookie, and never retu
     assert.match(app.headers.get("content-security-policy")!, /frame-src 'self' https:\/\/challenges.cloudflare.com/);
     assert.equal(status.headers.get("content-security-policy")!.includes("challenges.cloudflare.com"), false);
     const input = { email: "http@example.invalid", challenge_token: randomUUID(), idempotency_key: randomUUID(), locale: "en" };
-    const post = async (path: string, body: unknown, origin = registration.origin!) => fetch(`${server.origin}${path}`, { method: "POST", headers: { origin, cookie, "content-type": "application/json", "x-forwarded-for": "1.2.3.4" }, body: JSON.stringify(body) });
+    const post = async (path: string, body: unknown, origin = registration.origin!, credentials = cookie) => fetch(`${server.origin}${path}`, { method: "POST", headers: { origin, cookie: credentials, "content-type": "application/json", "x-forwarded-for": "1.2.3.4" }, body: JSON.stringify(body) });
     assert.equal((await post("/v1/registration/send", input, "")).status, 403);
     assert.equal((await post("/v1/registration/send", input, "https://evil.invalid")).status, 403);
     const sent = await post("/v1/registration/send", input); assert.equal(sent.status, 202);
@@ -270,5 +270,63 @@ test("HTTP registration/login fail closed, enforce Origin/cookie, and never retu
     const login = await post("/v1/email-login", { email: input.email, password, device_name: "Web", remember_device: false });
     assert.equal(login.status, 201); assert.equal((await login.text()).includes("token"), false);
     assert.equal(login.headers.getSetCookie()[0]!.includes("Max-Age"), false);
+    const sessionCookie = login.headers.getSetCookie()[0]!.split(";", 1)[0]!;
+    const browser = await fetch(`${server.origin}/v1/me`, { headers: { cookie: sessionCookie } });
+    const actor = (await browser.json() as { data: { id: string; device_id: string } }).data;
+    const project = await post("/v1/projects", { title: "Normal Alpha project", idempotency_key: randomUUID() }, registration.origin!, sessionCookie);
+    assert.equal(project.status, 201);
+    const projectId = (await project.json() as { data: { project: { id: string } } }).data.project.id;
+    const authorized = await post("/v1/device-authorizations", undefined, registration.origin!, sessionCookie);
+    assert.equal(authorized.status, 201);
+    const grant = (await authorized.json() as { data: { authorization_token: string } }).data;
+    const claim = () => fetch(`${server.origin}/v1/device-authorizations/claim`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ authorization_token: grant.authorization_token, device_name: "Native agent" }) });
+    const claimed = await claim(); assert.equal(claimed.status, 201);
+    const device = (await claimed.json() as { data: { token: string; actor: { user_id: string; device_id: string } } }).data;
+    assert.equal(device.actor.user_id, actor.id); assert.notEqual(device.actor.device_id, actor.device_id);
+    assert.equal((await claim()).status, 401);
+    assert.equal((await fetch(`${server.origin}/v1/projects/${projectId}`, { headers: { authorization: `Bearer ${device.token}` } })).status, 200);
+    server.database.revokeDevice(server.database.authenticateBrowserSession(sessionCookie.split("=", 2)[1]!).actor, device.actor.device_id);
+    assert.equal((await fetch(`${server.origin}/v1/me`, { headers: { authorization: `Bearer ${device.token}` } })).status, 401);
+    assert.equal((await fetch(`${server.origin}/v1/me`, { headers: { cookie: sessionCookie } })).status, 200);
+
+  } finally { await server.close(); }
+});
+
+test("send deduplicates for ten minutes, then same UUID starts a budgeted attempt with a fresh challenge", async () => {
+  const f = fixture();
+  try {
+    const request = { email: "expiry@example.invalid", locale: "en" as const,
+      challenge_token: randomUUID(), idempotency_key: randomUUID() };
+    const first = await f.db.registration.send(request, "browser1", "ip1", f.options);
+    f.advance(599_999);
+    assert.deepEqual(await f.db.registration.send(request, "browser1", "ip1", f.options), first);
+    assert.equal(f.mails.length, 1);
+    f.advance(2); f.db.registration.cleanup();
+    const second = await f.db.registration.send({ ...request, challenge_token: randomUUID() }, "browser1", "ip1", f.options);
+    assert.notEqual(second.registration_id, first.registration_id); assert.equal(f.mails.length, 2);
+    f.advance(600_001);
+    await f.db.registration.send({ ...request, challenge_token: randomUUID() }, "browser1", "ip1", f.options);
+    f.advance(600_001);
+    await assert.rejects(f.db.registration.send({ ...request, challenge_token: randomUUID() }, "browser1", "ip1", f.options), rejectCode("registration_limited"));
+    assert.equal(f.mails.length, 3);
+  } finally { f.close(); }
+});
+
+test("retired user routes cannot issue accounts or Cookies; old Cookies cannot log in while native devices remain valid", async () => {
+  const server = await startCollaborationServer({ databasePath: ":memory:", authTokenPepper: pepper, allowHttpBootstrap: true });
+  try {
+    const old = server.database.bootstrapIdentity({ display_name: "Historical", device_name: "Historical browser" });
+    const session = server.database.createBrowserSession(old.actor);
+    for (const path of ["/v1/bootstrap", "/v1/browser-sessions", "/v1/invitations/claim", "/v1/test-access/claim", "/v1/remembered-accounts", "/v1/remembered-accounts/fixture/activate", "/v1/remembered-accounts/adopt-current-session"]) {
+      for (const method of ["GET", "POST", "DELETE"]) {
+        const response = await fetch(server.origin + path, { method });
+        assert.equal(response.status, 410); assert.equal((await response.json() as { error: { code: string } }).error.code, "account_flow_retired");
+        assert.equal(response.headers.getSetCookie().length, 0);
+      }
+    }
+    assert.equal((await fetch(`${server.origin}/v1/me`, { headers: { cookie: `gatherthread_session=${session.token}` } })).status, 401);
+    assert.equal((await fetch(`${server.origin}/v1/me`, { headers: { authorization: `Bearer ${old.token}` } })).status, 200);
+    assert.equal(server.database.sqlite.prepare("SELECT COUNT(*) n FROM users").get()!.n, 1);
+    assert.equal(server.database.sqlite.prepare("SELECT COUNT(*) n FROM public_registration_accounts").get()!.n, 0);
   } finally { await server.close(); }
 });

@@ -2,6 +2,10 @@
 
 All notable changes to GatherThread are documented here. The project follows Semantic Versioning while pre-release APIs may still change.
 
+## Unreleased account flow
+
+- Replace user access-token login, test qualification activation and guest account creation with verified-email registration and password sign-in. No old-account inheritance or destructive cleanup. Keep Alpha project permissions, invitations after login, independent Agent/device authorization and revocation. Signup is closed by default; password recovery is not implemented. Future hosted-model usage will have a separate quota.
+
 ## [Unreleased]
 
 ## [0.1.0-alpha.8] - 2026-09-28

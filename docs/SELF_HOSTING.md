@@ -38,7 +38,6 @@ GATHERTHREAD_PUBLIC_BASE_URL=https://your-host.your-tailnet.ts.net
 GATHERTHREAD_ALLOWED_ORIGINS=
 GATHERTHREAD_AUTH_TOKEN_PEPPER=
 GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true
-GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP=false
 GATHERTHREAD_MAX_EVENT_BYTES=262144
 GATHERTHREAD_MAX_USER_EVENT_BYTES=268435456
 GATHERTHREAD_MAX_SESSION_EVENT_BYTES=536870912
@@ -52,37 +51,19 @@ If this is a new deployment, the Pepper may remain blank until `owner-host:init`
 
 Generate the pepper with a cryptographic password generator, store it in a password manager, and paste it into `.env`. Never commit it. Losing or changing the pepper invalidates every device credential, so back it up separately from the database.
 
-The application refuses production startup if the public origin is not HTTPS, the pepper is missing or looks like a placeholder, HTTP bootstrap is enabled, the bind address is not loopback, event/session limits are invalid, or the database directory grants group/other access. The shown storage limits allow 256 MiB of attributed events per user, 512 MiB per session, and 2 GiB for the deployment, plus 512/2,048/8,192 session rows per creator/project/deployment. Increase them only after checking disk capacity and backup time; they prevent new writes rather than deleting history.
+The application refuses production startup if the public origin is not HTTPS, the pepper is missing or looks like a placeholder, the bind address is not loopback, event/session limits are invalid, or the database directory grants group/other access. The shown storage limits allow 256 MiB of attributed events per user, 512 MiB per session, and 2 GiB for the deployment, plus 512/2,048/8,192 session rows per creator/project/deployment. Increase them only after checking disk capacity and backup time; they prevent new writes rather than deleting history.
 
-## Create the first owner
-
-Bootstrap operates directly on the local SQLite database. There is no production network bootstrap endpoint. The command creates or fills a private local `.env` only when the Pepper is absent; it never replaces a configured value.
+## Prepare configuration and register
 
 ```bash
-npm run owner-host:init -- \
-  --display-name "Owner name" \
-  --device-name "Owner Mac"
+npm run owner-host:init
 ```
 
-The command prints the first device credential once. Put it in a password manager. Do not paste it into chat, an invitation, a URL, a command-line argument, or a committed file.
+This prepares the private `.env` only when its pepper is absent, preserving existing settings. It creates no account and prints no login credential. Configure and test approved email/challenge providers using [OPERATIONS](OPERATIONS.md) before enabling signup. User accounts register with a verified email address and a self-set password, then sign in with email and password. All new accounts can create projects under the current Alpha roles and resource rules. Registration is closed by default; existing email/password login remains available while signup is disabled or paused. Password recovery is not implemented. No user access token is displayed or saved.
 
-## Issue private test qualification
+A project owner creates a single-use `gti_` invitation granting `participant` or `viewer` membership. Recipients register or sign in first, then accept it from the workspace. Acceptance does not create an account, issue a user credential or change project-creation capability. Owners choose one hour, 24 hours or seven days, with 24 hours as the default. Each additional Agent/device uses its own short-lived authorization or browser-approved DSH pairing; connector/device tokens, Cookie sessions and independent revocation remain supported.
 
-After bootstrapping the first owner, the host operator can issue one or up to 50 independent test qualifications from a private host terminal:
-
-```bash
-npm run owner-host:issue-test-access -- --ttl 7d
-# Optional: issue up to 50 codes with one Chinese share block per recipient
-npm run owner-host:issue-test-access -- --ttl 7d --count 5 --format share
-```
-
-The default CLI output remains JSON: one object for one code, an array for a batch, each containing `grant_id`, creation/expiry times and a one-use `gtq_` activation token. `--format share` prints one Chinese ready-to-send block per code, separated by blank lines; revocation IDs appear only in terminal diagnostics. Deliver each block privately to exactly one tester, not a whole batch; do not paste codes into any chat, URL, shell command argument, issue or repository, and do not run issuance in an Agent terminal that may retain the transcript. On the login page, the tester sets their display and device names above the forms, selects **First-time activation** (中文：**首次使用 · 激活资格**), and enters the code in **Test qualification code** (中文：**测试资格码**). It does not belong in the existing-account device-token field. They receive a distinct `gta_` device token once, use **Existing account** to sign in later, and can create their own projects. A leaked, unclaimed qualification can be revoked by metadata ID without reprinting the secret:
-
-```bash
-npm run owner-host:revoke-test-access -- --grant-id GRANT_ID
-```
-
-An already claimed qualification cannot be revoked as a code; revoke the resulting device credential through the authenticated device controls instead. The operator must run these commands against the same database and credential pepper as the active service. No remote administrator issuance endpoint exists.
+This unreleased branch replaces user token login, test qualification activation and invitation-created guest accounts. Their HTTP endpoints return `410 account_flow_retired`; local bootstrap/qualification issuance commands and the public application template are removed. Historical database rows are retained without account inheritance, merging or password enrollment. Old user Cookies cannot authenticate the Web app; independently authorized native Agent/device credentials remain separate and revocable. This source change performs no production cleanup or deployment.
 
 ## Start the private service
 
@@ -106,7 +87,7 @@ This helper runs `tailscale serve` in background mode and explicitly does not ru
 tailscale serve status
 ```
 
-Collaborators open the exact `GATHERTHREAD_PUBLIC_BASE_URL`. GatherThread still requires its own test qualification or project invitation for first access, a device credential, project role, and one-use WebSocket ticket; tailnet membership is only an additional network boundary.
+Collaborators open the exact `GATHERTHREAD_PUBLIC_BASE_URL`. GatherThread requires email/password authentication, explicit Agent/device authorization, a project role, and a one-use WebSocket ticket; tailnet membership is only an additional network boundary.
 
 ## Restrict tailnet access
 
@@ -119,8 +100,8 @@ GatherThread does not trust Tailscale identity headers as application identity. 
 - The project owner creates a one-use project invitation for `participant` or `viewer`.
 - Expiry choices are one hour, 24 hours, or seven days; the default is 24 hours.
 - A participant can edit `multi` sessions and reads `solo`; a viewer is read-only throughout the project. The owner can change another member's role later.
-- A new collaborator claiming only a project invitation receives a guest account and first device credential. The guest can use that invited project according to its assigned role but cannot create projects.
-- A tester claiming an operator-issued qualification gets a full account and may create projects, then invite guests or other qualified accounts into each project.
+- A new collaborator registers an email account before accepting a project invitation. The invitation grants only that project role and issues no account credential.
+- A verified-email account can create projects and invite other signed-in email accounts into each project.
 - An existing user authenticates before accepting an invitation and receives no new credential.
 - A new device uses a separate ten-minute, one-use device authorization token.
 - The inviter never receives the invitee's device credential.
@@ -151,7 +132,7 @@ Keep at least one encrypted backup outside the host's main disk and protect the 
 - GatherThread binds only to loopback; no public port or Funnel exists.
 - Tailscale grants permit only named collaborators to TCP 443.
 - `.env`, SQLite, pepper, and backups are readable only by the host account.
-- Public registration and network bootstrap remain disabled.
+- Registration remains closed by default; retired user bootstrap never issues credentials.
 - Invitations and unused device authorizations are revoked when no longer needed.
 - Lost devices are revoked immediately. Revocation terminates their realtime sockets, runtimes, and unused delegated device authorizations; each remaining device rotates only its own credential.
 - Event-storage quota alerts are investigated before raising limits, and free disk space remains above the database and WAL safety margin.

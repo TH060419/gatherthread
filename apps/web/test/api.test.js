@@ -12,13 +12,12 @@ test("browser API overrides cannot send credentials to another origin", async ()
   try {
     for (const baseUrl of ["https://external.invalid", "//external.invalid", "https://user:password@gatherthread.example", "http://gatherthread.example"]) {
       const api = new HttpCollaborationApi({ baseUrl });
-      await assert.rejects(api.authenticate("fixture-browser-secret"), (error) => error.code === "invalid_api_origin");
-      assert.equal(api.token, "");
+      await assert.rejects(api.loginWithEmail({ email: "fixture@example.invalid", password: "isolated demo password", device_name: "Browser" }), (error) => error.code === "invalid_api_origin");
+      assert.equal(api.token, undefined);
     }
     assert.equal(requests.length, 0);
     await new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" }).restoreSession();
-    assert.deepEqual(requests, ["https://gatherthread.example/v1/me",
-      "https://gatherthread.example/v1/remembered-accounts/adopt-current-session"]);
+    assert.deepEqual(requests, ["https://gatherthread.example/v1/me"]);
   } finally {
     globalThis.fetch = originalFetch;
     if (originalLocation === undefined) delete globalThis.location;
@@ -81,29 +80,16 @@ test("cloud Git quota and cleanup use cookie-authenticated endpoints with explic
   }
 });
 
-test("mock authentication derives the user from a token", async () => {
+test("mock authentication uses email and password", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
-  await assert.rejects(() => api.authenticate("wrong"), (error) => {
+  await assert.rejects(() => api.loginWithEmail({ email: "wrong@example.invalid", password: "isolated demo password" }), (error) => {
     assert.equal(error instanceof ApiError, true);
     assert.equal(error.status, 401);
     return true;
   });
-  assert.equal((await api.authenticate("demo-token")).username, "Avery Chen");
+  assert.equal((await api.loginWithEmail({ email: "demo@example.invalid", password: "isolated demo password" })).actor.username, "Avery Chen");
 });
 
-test("mock remembered account remains selectable after logout and can be forgotten", async () => {
-  const api = new MockCollaborationApi({ latency: 0 });
-  await api.authenticate("demo-token", { rememberDevice: true, displayName: "Avery", deviceName: "Safari" });
-  await api.logout();
-  assert.deepEqual(await api.listRememberedAccounts(), [{
-    id: "mock-remembered-account", display_name: "Avery", device_name: "Safari",
-  }]);
-  assert.equal((await api.activateRememberedAccount("mock-remembered-account", {
-    displayName: "Avery Chen", deviceName: "Mac",
-  })).username, "Avery Chen");
-  await api.forgetRememberedAccount("mock-remembered-account");
-  assert.deepEqual(await api.listRememberedAccounts(), []);
-});
 
 test("append is idempotent and chat never fabricates an agent response", async () => {
   const api = new MockCollaborationApi({ latency: 0 });
@@ -571,7 +557,7 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
   const originalFetch = globalThis.fetch;
   const requests = [];
   const responses = [
-    { data: { actor: { id: "u1", username: "Alice", device_id: "d1" }, expires_at: "2026-08-26T00:00:00.000Z" } },
+    { data: { actor: { user_id: "u1", display_name: "Alice", device_id: "d1" }, expires_at: "2026-08-26T00:00:00.000Z" } },
     { data: { sessions: [{ id: "s1", title: "Shared", mode: "multi", state: "active", role: "owner", current_sequence: 2, member_count: 1, updated_at: "2026-08-25T00:00:00.000Z" }] } },
     { data: { members: [{ user_id: "u1", display_name: "Alice", role: "owner", runtime: { id: "r1", status: "online", harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }] } },
     { data: { events: [{ id: "e2", session_id: "s1", sequence: 2, type: "agent_response", actor_user_id: "u1", actor_display_name: "Frozen Alice", created_at: "2026-08-25T00:00:01.000Z", reply_to_event_id: "e1", payload: { content: "done" }, runtime_provenance: { harness: "Codex", provider: "OpenAI", model: "gpt-5.6-sol", capture_fidelity: "harness_transcript" } }], cursor: 2, has_more: false } },
@@ -585,7 +571,7 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
   };
   try {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    assert.equal((await api.authenticate("secret-token")).username, "Alice");
+    assert.equal((await api.loginWithEmail({ email: "alice@example.invalid", password: "isolated demo password", device_name: "Browser", remember_device: false })).actor.username, "Alice");
     const sessions = await api.listSessions();
     assert.deepEqual({ name: sessions[0].name, memberCount: sessions[0].memberCount }, { name: "Shared", memberCount: 1 });
     assert.equal((await api.listMembers("s1"))[0].runtime.model, "gpt-5.6-sol");
@@ -595,11 +581,11 @@ test("HTTP client normalizes the production v1 envelope and canonical event shap
     assert.equal(replay.events[0].provenance.fidelity, "harness_transcript");
     assert.equal(replay.events[0].replyTo, "e1");
     assert.equal(replay.next_after_sequence, 2);
-    assert.equal(requests[0].url, "https://gatherthread.example/v1/browser-sessions");
+    assert.equal(requests[0].url, "https://gatherthread.example/v1/email-login");
     assert.equal(requests[0].options.method, "POST");
     assert.equal(requests[0].options.credentials, "include");
-    assert.equal(requests[0].options.headers.Authorization, "Bearer secret-token");
-    assert.equal(api.token, "");
+    assert.equal(requests[0].options.headers.Authorization, undefined);
+    assert.equal(api.token, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -686,89 +672,9 @@ test("HTTP invitation API uses exact routes, keeps secrets out of list records, 
   }
 });
 
-test("new-user invitation claim requests a browser session without retaining the returned device credential", async () => {
-  const originalFetch = globalThis.fetch;
-  let captured;
-  globalThis.fetch = async (url, options = {}) => {
-    captured = { url: String(url), options };
-    return new Response(JSON.stringify({ data: {
-      actor: { user_id: "new-user", display_name: "New User", device_id: "new-device" },
-      token: "new-device-token",
-      invitation: {
-        id: "i1",
-        project_id: "p1",
-        inviter_user_id: "owner",
-        role: "viewer",
-        created_at: "2026-08-25T00:00:00.000Z",
-        expires_at: "2026-08-26T00:00:00.000Z",
-        revoked_at: null,
-        expired_at: null,
-        claimed_at: "2026-08-25T01:00:00.000Z",
-        claimed_by_user_id: "new-user",
-        claimed_by_device_id: "new-device",
-      },
-    } }), { status: 201, headers: { "content-type": "application/json" } });
-  };
-  try {
-    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    const claimed = await api.claimInvitation({
-      inviteToken: "one-use-invitation-secret-that-is-long",
-      displayName: "New User",
-      deviceName: "Work laptop",
-    });
-    assert.equal(claimed.actor.username, "New User");
-    assert.equal(claimed.actor.can_create_projects, false);
-    assert.equal(claimed.invitation.status, "claimed");
-    assert.equal(claimed.accessToken, "new-device-token");
-    assert.equal(api.token, "");
-    assert.equal(captured.url, "https://gatherthread.example/v1/invitations/claim");
-    assert.equal(captured.options.headers.Authorization, undefined);
-    assert.equal(captured.options.headers["X-GatherThread-Browser-Session"], "1");
-    assert.equal(captured.options.credentials, "include");
-    assert.deepEqual(JSON.parse(captured.options.body), {
-      invite_token: "one-use-invitation-secret-that-is-long",
-      display_name: "New User",
-      device_name: "Work laptop",
-      remember_device: false,
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
 
-test("test access activation uses a separate route and returns only the new device credential once", async () => {
-  const originalFetch = globalThis.fetch;
-  const qualificationCode = ["fixture", "qualification", "code"].join("-");
-  let captured;
-  globalThis.fetch = async (url, options = {}) => {
-    captured = { url: String(url), options };
-    return new Response(JSON.stringify({ data: {
-      actor: { user_id: "qualified", display_name: "Qualified", device_id: "qualified-device", can_create_projects: true },
-      token: "new-qualified-device-token",
-    } }), { status: 201, headers: { "content-type": "application/json" } });
-  };
-  try {
-    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    const result = await api.claimTestAccess({
-      accessToken: qualificationCode,
-      displayName: "Qualified", deviceName: "Work laptop", rememberDevice: true,
-    });
-    assert.equal(result.actor.can_create_projects, true);
-    assert.equal(result.accessToken, "new-qualified-device-token");
-    assert.equal(api.token, "");
-    assert.equal(captured.url, "https://gatherthread.example/v1/test-access/claim");
-    assert.equal(captured.options.headers.Authorization, undefined);
-    assert.equal(captured.options.headers["X-GatherThread-Browser-Session"], "1");
-    assert.deepEqual(JSON.parse(captured.options.body), {
-      access_token: qualificationCode,
-      display_name: "Qualified", device_name: "Work laptop", remember_device: true,
-    });
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
 
-test("browser login sends the remember-device choice without retaining the bearer", async () => {
+test("email login sends the remember-device choice without a user bearer", async () => {
   const originalFetch = globalThis.fetch;
   let captured;
   globalThis.fetch = async (url, options = {}) => {
@@ -780,48 +686,19 @@ test("browser login sends the remember-device choice without retaining the beare
   };
   try {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    await api.authenticate("device-token", {
-      rememberDevice: true, displayName: "Alice renamed", deviceName: "Office Mac",
+    await api.loginWithEmail({ email: "alice@example.invalid", password: "isolated demo password",
+      remember_device: true, device_name: "Office Mac",
     });
     assert.deepEqual(JSON.parse(captured.options.body), {
-      remember_device: true, display_name: "Alice renamed", device_name: "Office Mac",
+      email: "alice@example.invalid", password: "isolated demo password", remember_device: true, device_name: "Office Mac",
     });
-    assert.equal(captured.options.headers.Authorization, "Bearer device-token");
-    assert.equal(api.token, "");
+    assert.equal(captured.options.headers.Authorization, undefined);
+    assert.equal(api.token, undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("remembered accounts are listed, selected and forgotten without exposing a device token to JavaScript", async () => {
-  const originalFetch = globalThis.fetch;
-  const requests = [];
-  const responses = [
-    new Response(JSON.stringify({ data: { accounts: [{ id: "saved-1", username: "Alice", device_name: "Mac", display_name: "Alice" }] } }), { status: 200 }),
-    new Response(JSON.stringify({ data: { actor: { id: "u1", username: "Alice B", device_id: "d1" } } }), { status: 200 }),
-    new Response(null, { status: 204 }),
-  ];
-  globalThis.fetch = async (url, options = {}) => {
-    requests.push({ url: String(url), options });
-    return responses.shift();
-  };
-  try {
-    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    assert.equal((await api.listRememberedAccounts())[0].device_name, "Mac");
-    assert.equal((await api.activateRememberedAccount("saved-1", { displayName: "Alice B", deviceName: "Laptop" })).username, "Alice B");
-    await api.forgetRememberedAccount("saved-1");
-    assert.deepEqual(requests.map(({ url, options }) => [options.method ?? "GET", url]), [
-      ["GET", "https://gatherthread.example/v1/remembered-accounts"],
-      ["POST", "https://gatherthread.example/v1/remembered-accounts/saved-1/activate"],
-      ["DELETE", "https://gatherthread.example/v1/remembered-accounts/saved-1"],
-    ]);
-    assert.deepEqual(JSON.parse(requests[1].options.body), { display_name: "Alice B", device_name: "Laptop" });
-    assert.ok(requests.every(({ options }) => options.credentials === "include" && options.headers.Authorization === undefined));
-    assert.equal(api.token, "");
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
 
 test("HTTP client restores and revokes an HttpOnly browser session without JavaScript token storage", async () => {
   const originalFetch = globalThis.fetch;
@@ -830,9 +707,6 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
     new Response(JSON.stringify({ data: { id: "u1", username: "Alice", device_id: "d1" } }), {
       status: 200,
       headers: { "content-type": "application/json" },
-    }),
-    new Response(JSON.stringify({ data: { adopted: true } }), {
-      status: 200, headers: { "content-type": "application/json" },
     }),
     new Response(null, { status: 204 }),
     new Response(JSON.stringify({ error: { code: "unauthorized", message: "Unauthorized" } }), {
@@ -851,7 +725,6 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
     assert.equal(await api.restoreSession(), null);
     assert.deepEqual(requests.map((request) => [request.options.method ?? "GET", request.url]), [
       ["GET", "https://gatherthread.example/v1/me"],
-      ["POST", "https://gatherthread.example/v1/remembered-accounts/adopt-current-session"],
       ["DELETE", "https://gatherthread.example/v1/browser-sessions/current"],
       ["GET", "https://gatherthread.example/v1/me"],
     ]);
@@ -862,21 +735,6 @@ test("HTTP client restores and revokes an HttpOnly browser session without JavaS
   }
 });
 
-test("optional remembered-session adoption failure does not log out a restored session", async () => {
-  const originalFetch = globalThis.fetch;
-  const paths = [];
-  globalThis.fetch = async (url) => {
-    paths.push(String(url));
-    return paths.length === 1
-      ? Response.json({ data: { id: "u1", username: "Alice", device_id: "d1" } })
-      : Response.json({ error: { code: "remembered_session_required", message: "Not remembered" } }, { status: 403 });
-  };
-  try {
-    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
-    assert.equal((await api.restoreSession()).username, "Alice");
-    assert.equal(paths.length, 2);
-  } finally { globalThis.fetch = originalFetch; }
-});
 
 test("realtime ticket is carried by WebSocket subprotocol and never placed in the URL", async () => {
   const originalFetch = globalThis.fetch;
