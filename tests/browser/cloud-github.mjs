@@ -30,6 +30,11 @@ const fixtureFetch = async (url, init) => {
 };
 const endpoint = { id: 'fixture', profileId: 'coding', label: 'Coding', provider: 'deepseek', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiToken: 'fake-browser-model', quotaGroup: 'fixture', dailyRuns: 20, maxConcurrent: 2 };
 const port = 4199, origin = `http://127.0.0.1:${port}`;
+async function waitForWorkspace(page, sessionId) {
+ await page.locator('#workspace').waitFor({ state: 'visible' });
+ await page.waitForFunction((id) => new URLSearchParams(location.hash.slice(1)).get('session') === id
+   && document.getElementById('global-connection')?.dataset.state === 'live', sessionId);
+}
 const server = await startCollaborationServer({ databasePath: join(directory, 'db'), staticDirectory: resolve('apps/web/dist'), publicBaseUrl: origin,
  allowedOrigins: [origin], authTokenPepper: 'github-browser-private-test-pepper', hostedAgent: { endpoints: [endpoint], image: `sha256:${'a'.repeat(64)}`, userDailyRuns: 20, globalDailyRuns: 20, maxConcurrent: 2,
  runContainer: async (args) => { runs++; const input = args.find((arg) => arg.endsWith('dst=/input,readonly')).split('src=')[1].split(',dst=')[0];
@@ -59,8 +64,11 @@ try {
       const state = new URL(route.request().url()).searchParams.get('state');
       await route.fulfill({ status: 200, contentType: 'text/html', body: `<script>location.replace(${JSON.stringify(`${origin}/v1/hosted-github/callback?code=browser-fixture&state=${state}`)})</script>` });
     });
-    await page.goto(`${origin}/app/`); await page.locator('#workspace').waitFor({ state: 'visible' });
-    for (const dialog of await page.locator('dialog[open]').all()) { const button = dialog.locator('button').last(); await button.click(); }
+    await page.goto(`${origin}/app/`); await waitForWorkspace(page, sessionId);
+    // Synchronize the initial notice explicitly instead of enumerating dialogs while startup is rendering.
+    await page.locator('#code-notice-continue').waitFor({ state: 'visible' });
+    await page.locator('#code-notice-continue').press('Enter');
+    await page.locator('#code-notice-dialog').waitFor({ state: 'hidden' });
     await page.locator('#project-code-button').click();
     await page.locator('#code-enable-section').waitFor({ state: 'visible' });
     const gtCloudStatus = await page.locator('#code-repository-status').textContent();
@@ -76,8 +84,8 @@ try {
     await page.locator('#code-provider-github').click();
     await page.locator('#cloud-github-authorize').click();
     await page.waitForURL(`${origin}/app/`);
-    await page.locator('#workspace').waitFor({ state: 'visible' });
-    for (const dialog of await page.locator('dialog[open]').all()) await dialog.locator('button').last().click();
+    await waitForWorkspace(page, sessionId);
+    await page.locator('#code-notice-dialog').waitFor({ state: 'hidden' });
     await page.locator('#project-code-button').click();
     await page.locator('#code-provider-github').click(); await page.locator('#cloud-github-repository-form').waitFor({ state: 'visible' });
     await page.locator('#cloud-github-repository').fill('owner/fixture');
@@ -98,13 +106,14 @@ try {
       localStorage.setItem('gatherthread.settings.v1', JSON.stringify({ version: 13,
         general: { locale }, agents: { activeHarness: 'cloud', enabledHarnesses: ['codex', 'cloud'] } }));
     }, locale);
-    await page.reload(); await page.locator('#workspace').waitFor({ state: 'visible' });
+    await page.reload(); await waitForWorkspace(page, sessionId);
     await page.waitForFunction(() => document.getElementById('agent-harness-select').value === 'cloud');
     assert.equal(await page.locator('#agent-harness-select').inputValue(), 'cloud');
     assert.equal(await page.locator('#agent-harness-select option[value=cloud]').evaluate((option) => option.disabled), true);
     assert.equal(await page.locator('#send-agent-button').isDisabled(), true);
     assert.equal(await page.locator('#send-cloud-agent-help').isVisible(), false);
-    assert.match(await page.locator('#agent-target-label').textContent(), locale === 'en' ? /coming later/ : /后续开放/);
+    // Reload exposes a temporary history-sync status before locale and final availability settle.
+    await page.locator('#agent-target-label').filter({ hasText: locale === 'en' ? /coming later/ : /后续开放/ }).waitFor({ state: 'visible' });
     await page.locator('#message-input').fill('Must not start a cloud run');
     await page.locator('#send-agent-button').evaluate((button) => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     assert.equal(runs, beforeRuns);
