@@ -59,6 +59,33 @@ function harness(names, overrides = {}) {
   return context;
 }
 
+test("closed Cloud Agent never counts as the last available Agent or becomes the Settings default", () => {
+ const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud",
+  "settings-agent-harness", "settings-codex-agent-fields", "settings-dsh-agent-fields", "settings-cloud-agent-fields",
+  "settings-agent-summary"].map((id) => [id, element()]));
+ for (const [id, value] of [["settings-enabled-codex", "codex"], ["settings-enabled-dsh", "deepseek-harness"], ["settings-enabled-cloud", "cloud"]]) nodes[id].value = value;
+ nodes["settings-enabled-codex"].checked = true; nodes["settings-enabled-cloud"].checked = true;
+ nodes["settings-agent-harness"].value = "codex";
+ nodes["settings-agent-harness"].options = ["codex", "deepseek-harness", "cloud"].map((value) => ({ value }));
+ const app = harness(["settingsEnabledHarnesses", "syncSettingsAgentControls"], { element: (id) => nodes[id],
+  CLOUD_AGENT_ENTRY_ENABLED: false, DSH_HARNESS: "deepseek-harness", renderCloudStatus: noop, settingsAgentSummary: (value) => value });
+ app.syncSettingsAgentControls(); assert.equal(nodes["settings-enabled-codex"].disabled, true);
+ nodes["settings-enabled-codex"].checked = false;
+ app.syncSettingsAgentControls({ changedCheckbox: nodes["settings-enabled-codex"] });
+ assert.equal(nodes["settings-agent-harness"].value, "codex");
+ assert.deepEqual([...app.settingsEnabledHarnesses()], ["codex"]);
+ assert.equal(nodes["settings-cloud-agent-fields"].hidden, true);
+ // A migrated cloud-only selection gets a usable local Settings default.
+ nodes["settings-enabled-codex"].checked = false; nodes["settings-agent-harness"].value = "cloud";
+ app.syncSettingsAgentControls({ changedCheckbox: nodes["settings-enabled-cloud"] });
+ assert.equal(nodes["settings-agent-harness"].value, "codex");
+ assert.equal(nodes["settings-agent-harness"].options.find((option) => option.value === "cloud").disabled, true);
+ nodes["settings-enabled-dsh"].checked = true; nodes["settings-enabled-codex"].checked = false;
+ nodes["settings-agent-harness"].value = "deepseek-harness"; app.syncSettingsAgentControls();
+ assert.equal(nodes["settings-enabled-dsh"].disabled, true);
+ assert.equal(nodes["settings-agent-harness"].value, "deepseek-harness");
+});
+
 test("the global badge reports live delivery regardless of viewer-to-participant transitions", () => {
   const nodes = new Map();
   const el = (id) => {

@@ -2,6 +2,8 @@
 
 Cloud Agent is reserved for a later release. Its Settings checkbox and Agent option are unavailable, including on a server with a configured provider. Use a local Codex or DeepSeek Harness for now. GitHub connections remain available under **Cloud Git → GitHub**, beside **GT Cloud**.
 
+Settings keeps at least one usable local Agent selected. The closed cloud option is not checked automatically and cannot be used to uncheck the last local Agent. Its child settings stay hidden while it is unavailable.
+
 ## First run after the feature opens
 
 1. Sign in and open a project session where you may write. Viewers cannot start Agent requests.

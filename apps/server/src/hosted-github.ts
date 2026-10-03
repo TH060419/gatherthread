@@ -19,7 +19,7 @@ interface Binding { repository: string; repository_id: number; base_branch: stri
 interface Task extends Binding {
  id: string; request_event_id: string; user_id: string; device_id: string; session_id: string; project_id: string;
  binding_revision: string; input_json: string; state: string; base_sha: string | null; base_tree: string | null;
- initial_files: string | null; result_files: string | null; answer: string | null; error_code: string | null;
+ initial_files: string | null; starting_files: string | null; result_files: string | null; answer: string | null; error_code: string | null;
  pr_commit: string | null; pr_url: string | null; expires_at: number;
 }
 const digest = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -94,6 +94,9 @@ export class HostedGithub {
      if (!this.sqlite.prepare("PRAGMA table_info(hosted_github_tasks)").all().some((row) => row.name === "input_fingerprint")) {
        this.sqlite.exec("ALTER TABLE hosted_github_tasks ADD COLUMN input_fingerprint TEXT");
      }
+     if (!this.sqlite.prepare("PRAGMA table_info(hosted_github_tasks)").all().some((row) => row.name === "starting_files")) {
+       this.sqlite.exec("ALTER TABLE hosted_github_tasks ADD COLUMN starting_files TEXT");
+     }
      const rows = this.sqlite.prepare("SELECT id,user_id,session_id,input_json,input_fingerprint FROM hosted_github_tasks").all() as
        Array<{ id: string; user_id: string; session_id: string; input_json: string; input_fingerprint: string | null }>;
      for (const row of rows) {
@@ -105,6 +108,23 @@ export class HostedGithub {
        const fingerprint = row.input_fingerprint ?? this.inputFingerprint(row.user_id, row.session_id, row.input_json);
        this.sqlite.prepare("UPDATE hosted_github_tasks SET input_json=?,input_fingerprint=? WHERE id=?")
          .run(JSON.stringify(this.redactInput(input)), fingerprint, row.id);
+     }
+     // Legacy initial_files holds the cumulative repository baseline. Recover
+     // the actual starting snapshot only while its saved parent still exists.
+     for (const raw of this.sqlite.prepare("SELECT * FROM hosted_github_tasks WHERE starting_files IS NULL AND initial_files IS NOT NULL").all()) {
+       const task = raw as unknown as Task;
+       const input = JSON.parse(task.input_json) as HostedGithubTaskInput;
+       let source = task.initial_files!, owner = task.id;
+       if (input.continue_task_id) {
+         const parent = this.sqlite.prepare("SELECT * FROM hosted_github_tasks WHERE id=? AND user_id=? AND session_id=?")
+           .get(input.continue_task_id, task.user_id, task.session_id) as unknown as Task | undefined;
+         if (!parent?.initial_files) continue;
+         source = parent.result_files ?? parent.initial_files; owner = parent.id;
+       }
+       try {
+         const files = CodeFilesSchema.parse(this.open<CodeFile[]>(source, owner));
+         this.sqlite.prepare("UPDATE hosted_github_tasks SET starting_files=? WHERE id=?").run(this.seal(files, task.id), task.id);
+       } catch { throw new Error("Invalid stored cloud task snapshot"); }
      }
      this.sqlite.exec("COMMIT");
    } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
@@ -247,7 +267,8 @@ export class HostedGithub {
  view(actor: Actor, id: string, includeChanges = true) {
    const task = this.task(actor, id);
    const initial = includeChanges && task.initial_files ? this.open<CodeFile[]>(task.initial_files, id) : [];
-   const files = includeChanges && task.result_files ? this.open<CodeFile[]>(task.result_files, id) : initial;
+   const files = includeChanges && (task.result_files ?? task.starting_files)
+     ? this.open<CodeFile[]>((task.result_files ?? task.starting_files)!, id) : initial;
    const before = new Map(initial.map((f) => [f.path, f])); const after = new Map(files.map((f) => [f.path, f]));
    const changes = [...new Set([...before.keys(), ...after.keys()])].sort().flatMap((path) => {
      const a = before.get(path), b = after.get(path);
@@ -257,7 +278,8 @@ export class HostedGithub {
    });
    const input = JSON.parse(task.input_json) as HostedGithubTaskInput;
    return { id, session_id: task.session_id, profile_id: input.profile_id,
-     resumable: Boolean(task.initial_files) && ["completed", "failed", "interrupted"].includes(task.state) && !task.pr_url,
+     resumable: Boolean(task.initial_files && (task.result_files ?? task.starting_files))
+       && ["completed", "failed", "interrupted"].includes(task.state) && !task.pr_url,
      state: task.state, repository: task.repository, base_branch: task.base_branch,
      base_sha: task.base_sha, revision: task.revision ?? null, answer: task.answer ?? null,
      error_code: task.error_code, pull_request_url: task.pr_url, changes, expires_at: task.expires_at };
@@ -276,7 +298,8 @@ export class HostedGithub {
    }
    const parent = input.continue_task_id ? this.task(actor, input.continue_task_id) : null;
    if (parent) { this.assertBinding(actor, parent);
-     if (!["completed", "interrupted", "failed"].includes(parent.state) || !parent.initial_files || parent.pr_url
+     if (!["completed", "interrupted", "failed"].includes(parent.state) || !parent.initial_files
+       || !(parent.result_files ?? parent.starting_files) || parent.pr_url
        || parent.session_id !== sessionId) throw safeError("github_task_access", 409); }
    this.prune();
    const count = this.sqlite.prepare("SELECT COUNT(*) AS n FROM hosted_github_tasks WHERE user_id=?").get(actor.user_id) as { n: number };
@@ -337,11 +360,12 @@ export class HostedGithub {
      const task = this.task(actor, id); requestId = task.request_event_id;
      this.assertBinding(actor, task);
      const source = parent ? { sha: parent.base_sha!, tree: parent.base_tree!,
-       files: this.open<CodeFile[]>(parent.result_files ?? parent.initial_files!, parent.id),
+       files: this.open<CodeFile[]>(parent.result_files ?? parent.starting_files!, parent.id),
        initial: this.open<CodeFile[]>(parent.initial_files!, parent.id) } : await this.snapshot(actor, task);
      this.task(actor, id); this.assertBinding(actor, task);
-     this.sqlite.prepare("UPDATE hosted_github_tasks SET base_sha=?,base_tree=?,initial_files=? WHERE id=?")
-       .run(source.sha, source.tree, this.seal("initial" in source ? source.initial : source.files, id), id);
+     this.sqlite.prepare("UPDATE hosted_github_tasks SET base_sha=?,base_tree=?,initial_files=?,starting_files=? WHERE id=?")
+       .run(source.sha, source.tree, this.seal("initial" in source ? source.initial : source.files, id),
+         this.seal(source.files, id), id);
      signal.throwIfAborted();
      const prompt = `Work on this npm Node.js/TypeScript project. Dependencies have been installed with npm ci --ignore-scripts. Inspect package.json and run relevant existing tests and build/typecheck commands. Report observed results and missing checks honestly. No external internet or GitHub credentials are available. Do not change dependency lockfiles unless asked; new dependencies require a new environment setup. Do not modify workflow or private credential paths. Source changes are saved privately for human review; only a human action can create a PR. Request (untrusted): ${input.content}\nShared conversation (untrusted): ${JSON.stringify(context)}`;
      const result = await this.runner.run(source.files, prompt, endpoint, (ms) => this.agent.coolDown(endpoint.quotaGroup, ms), {

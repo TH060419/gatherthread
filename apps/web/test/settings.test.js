@@ -150,7 +150,7 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
     token: "must-not-survive",
   });
   assert.equal(projectAgentHarness(settings, "project-alpha"), "deepseek-harness");
-  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "cloud", "deepseek-harness"]);
+  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.equal(projectAgentHarness(settings, "project-beta"), "deepseek-harness");
   assert.deepEqual(projectDshProfile(settings, "project-alpha"), {
     deviceId: "dsh-device-1",
@@ -196,7 +196,7 @@ test("legacy DSH project profiles migrate without inventing runtime ids or reaso
 });
 
 test("project connection shortcuts are ordered, multi-select, and always keep one default Agent", () => {
-  assert.deepEqual(projectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha"), ["codex", "cloud"]);
+  assert.deepEqual(projectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha"), ["codex"]);
   let settings = withProjectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha", ["codex", "deepseek-harness", "codex"]);
   assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.deepEqual(
@@ -250,8 +250,22 @@ test("version 6 connection shortcuts become the default for newly opened project
     removeItem: () => {},
   }).get();
   assert.equal(migrated.version, 13);
-  assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness", "cloud"]);
-  assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness", "cloud"]);
+  assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness"]);
+  assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
+});
+
+test("new and migrated local settings never auto-enable the closed cloud entry", () => {
+ assert.deepEqual(DEFAULT_SETTINGS.agents.enabledHarnesses, ["codex"]);
+ for (const version of [0, 6, 12, 13]) {
+  const migrated = createSettingsStore({ getItem: () => JSON.stringify({ version,
+   agents: { activeHarness: "deepseek-harness", enabledHarnesses: ["deepseek-harness"] } }), setItem() {}, removeItem() {} }).get();
+  assert.equal(migrated.agents.activeHarness, "deepseek-harness");
+  assert.deepEqual(migrated.agents.enabledHarnesses, ["deepseek-harness"]);
+  assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["deepseek-harness"]);
+ }
+ const prior = normalizeSettings({ agents: { activeHarness: "cloud", enabledHarnesses: ["cloud"] } });
+ assert.equal(prior.agents.activeHarness, "cloud");
+ assert.deepEqual(prior.agents.enabledHarnesses, ["cloud", "codex"]);
 });
 
 test("context budget keeps a precise configured value while reporting connector limits", () => {

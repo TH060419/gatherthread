@@ -47,6 +47,8 @@ to conversation or account records. Cloud deletion and interruption do not
 refund accepted reservations; no deleted prompt or source is retained. The
 idempotent backfill and UTC-day pruning contract is owned by the operator guide.
 
+Settle accepted hosted jobs atomically with their canonical terminal event. Generate the terminal idempotency key privately so ordinary participant events cannot occupy it in advance. A full timeline discards the model answer and retains one fixed, charged failure marker using the bounded server control allowance in [Security](../SECURITY.md#persistence-and-redaction-requirements); it does not keep a finished executor's capacity slot indefinitely. Unconfirmed executor exit still retains the slot.
+
 Cloud Agent appears beside local harnesses in the shared Agent selector and settings. Operators configure one or more API endpoints, grouping the same provider/model under a public profile and same-account keys under a shared quota group. Transactional account and host capacity gates enable parallel runs. Exhaustion fails explicitly; no silent model switch or automatic replay occurs. Run reservations cover non-Cloudflare providers; provider-side spend caps are still required. The additive database migration and configuration contract are documented in [the operator guide](../HOSTED_AGENT.md).
 
 The user separately chooses whether the Agent receives cloud project code.

@@ -101,7 +101,7 @@ export const DEFAULT_SETTINGS = deepFreeze({
   },
   agents: {
     activeHarness: "codex",
-    enabledHarnesses: ["codex", "cloud"],
+    enabledHarnesses: ["codex"],
     customCodexModels: [],
     projectProfiles: {},
   },
@@ -551,9 +551,9 @@ function migrateStoredSettings(input) {
     },
     agents: {
       ...agents,
-      enabledHarnesses: [...new Set([...(previousVersion < 7 ? inheritedEnabledHarnesses : uniqueStrings(agents.enabledHarnesses)), "cloud"])],
+      enabledHarnesses: previousVersion < 7 ? inheritedEnabledHarnesses : uniqueStrings(agents.enabledHarnesses),
       projectProfiles: Object.fromEntries(Object.entries(isObject(agents.projectProfiles) ? agents.projectProfiles : {}).map(([id, profile]) => [id,
-        isObject(profile) ? { ...profile, enabledHarnesses: [...new Set([...uniqueStrings(profile.enabledHarnesses), profile.harness ?? "codex", "cloud"])] } : profile])),
+        isObject(profile) ? { ...profile, enabledHarnesses: [...new Set([...uniqueStrings(profile.enabledHarnesses), profile.harness ?? "codex"])] } : profile])),
     },
   };
 }
@@ -594,8 +594,11 @@ function defaultProjectAgentProfile(settings) {
 
 function normalizeEnabledHarnesses(harnesses, fallbackHarness) {
   const selected = uniqueStrings(harnesses).filter((harness) => AGENT_HARNESSES.includes(harness));
-  if (selected.length === 0) return [fallbackHarness];
-  return selected.includes(fallbackHarness) ? selected : [...selected, fallbackHarness];
+  if (!selected.includes(fallbackHarness)) selected.push(fallbackHarness);
+  // Preserve a previous explicit cloud target as unavailable, while keeping a
+  // usable local connection that the user can select in the existing controls.
+  if (!CLOUD_AGENT_ENTRY_ENABLED && !selected.some((harness) => harness !== "cloud")) selected.push("codex");
+  return selected;
 }
 
 function oneOf(value, allowed, fallback) {

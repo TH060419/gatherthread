@@ -3522,7 +3522,7 @@ function settingsEnabledHarnesses() {
     ["settings-enabled-codex", "codex"],
     ["settings-enabled-dsh", DSH_HARNESS],
     ["settings-enabled-cloud", "cloud"],
-  ].filter(([id]) => element(id).checked).map(([, harness]) => harness);
+  ].filter(([id, harness]) => element(id).checked && (harness !== "cloud" || CLOUD_AGENT_ENTRY_ENABLED)).map(([, harness]) => harness);
 }
 
 function settingsAgentSummary(harness) {
@@ -3537,10 +3537,12 @@ function syncSettingsAgentControls({ changedCheckbox } = {}) {
   const controls = [element("settings-enabled-codex"), element("settings-enabled-dsh"), element("settings-enabled-cloud")];
   let enabled = settingsEnabledHarnesses();
   if (enabled.length === 0) {
-    (changedCheckbox ?? controls[0]).checked = true;
+    (changedCheckbox && (changedCheckbox.value !== "cloud" || CLOUD_AGENT_ENTRY_ENABLED)
+      ? changedCheckbox : controls[0]).checked = true;
     enabled = settingsEnabledHarnesses();
   }
-  for (const control of controls) control.disabled = (control.value === "cloud" && !CLOUD_AGENT_ENTRY_ENABLED) || (control.checked && enabled.length === 1);
+  for (const control of controls) control.disabled = (control.value === "cloud" && !CLOUD_AGENT_ENTRY_ENABLED)
+    || (control.checked && enabled.includes(control.value) && enabled.length === 1);
   const harnessSelect = element("settings-agent-harness");
   for (const option of harnessSelect.options) {
     if (["codex", DSH_HARNESS, "cloud"].includes(option.value)) option.disabled = !enabled.includes(option.value) || (option.value === "cloud" && !CLOUD_AGENT_ENTRY_ENABLED);

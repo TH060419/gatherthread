@@ -114,12 +114,18 @@ try {
     await page.locator('#close-project-code-button').click();
     await page.locator('#settings-button').click();
     assert.equal(await page.locator('#settings-enabled-cloud').isDisabled(), true);
+    assert.equal(await page.locator('#settings-enabled-cloud').isChecked(), false);
+    assert.equal(await page.locator('#settings-enabled-codex').isDisabled(), true);
+    await page.locator('#settings-enabled-codex').evaluate((control) => { control.checked = false; control.dispatchEvent(new Event('change', { bubbles: true })); });
+    assert.equal(await page.locator('#settings-enabled-codex').isChecked(), true);
+    assert.equal(await page.locator('#settings-agent-harness').inputValue(), 'codex');
+    assert.equal(await page.locator('#settings-cloud-agent-fields').isVisible(), false);
     assert.equal(await page.locator('#settings-agent-harness option[value=cloud]').evaluate((option) => option.disabled), true);
     await page.locator('#cancel-settings-button').click();
     // An earlier cloud selection is retained without a silent fallback or a model call.
     await page.evaluate((locale) => {
       localStorage.setItem('gatherthread.settings.v1', JSON.stringify({ version: 13,
-        general: { locale }, agents: { activeHarness: 'cloud', enabledHarnesses: ['codex', 'cloud'] } }));
+        general: { locale }, agents: { activeHarness: 'cloud', enabledHarnesses: ['cloud'] } }));
     }, locale);
     await page.reload(); await waitForWorkspace(page, sessionId);
     await page.waitForFunction(() => document.getElementById('agent-harness-select').value === 'cloud');
@@ -129,6 +135,12 @@ try {
     assert.equal(await page.locator('#send-cloud-agent-help').isVisible(), false);
     // Reload exposes a temporary history-sync status before locale and final availability settle.
     await page.locator('#agent-target-label').filter({ hasText: locale === 'en' ? /coming later/ : /后续开放/ }).waitFor({ state: 'visible' });
+    await page.locator('#settings-button').click();
+    assert.equal(await page.locator('#settings-agent-harness').inputValue(), 'codex');
+    assert.equal(await page.locator('#settings-enabled-codex').isDisabled(), true);
+    assert.equal(await page.locator('#settings-cloud-agent-fields').isVisible(), false);
+    await page.locator('#cancel-settings-button').click();
+    assert.equal(await page.locator('#agent-harness-select').inputValue(), 'cloud');
     await page.locator('#message-input').fill('Must not start a cloud run');
     await page.locator('#send-agent-button').evaluate((button) => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     assert.equal(runs, beforeRuns);

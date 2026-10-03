@@ -3277,18 +3277,36 @@ export class CollaborationDatabase {
       const authorized = Boolean(device && writer && writer !== "viewer" && session.state === "active"
         && (session.mode !== "solo" || session.owner_user_id === job.user_id));
       const content = authorized ? outcome.content : undefined;
-      const success = typeof content === "string" && content.trim().length > 0;
-      const event = this.appendInsideTransaction(job.user_id, job.session_id, {
-        idempotency_key: `hosted-agent-result-${requestId}`,
-        type: "agent_response", visibility: "session", reply_to_event_id: requestId,
-        payload: success ? { content: redactJson(content!.slice(0, 16_000)), status: "completed" }
-          : { content: "Cloud Agent is unavailable. Please try a new request later.", status: "failed",
-            error: { code: authorized ? "model_unavailable" : "access_changed" } },
-      }, success ? {
-        user_id: job.user_id, device_id: job.device_id, harness: "opencode",
-        provider: job.provider, model: job.model,
-        local_session_id: "server-contained", capture_fidelity: "canonical_history",
-      } : null);
+      let success = typeof content === "string" && content.trim().length > 0;
+      // Private transaction-local randomness cannot be preempted by a member
+      // choosing a public chat idempotency key. The job transition deduplicates.
+      const terminalKey = `hosted-terminal-${randomUUID()}`;
+      const failure = (code: string) => ({ content: "Cloud Agent is unavailable. Please try a new request later.",
+        status: "failed", error: { code } });
+      const append = (payload: JsonValue, provenance: RuntimeProvenance | null, marker = false) =>
+        this.appendInsideTransaction(job.user_id, job.session_id, {
+          idempotency_key: terminalKey, type: "agent_response", visibility: "session",
+          reply_to_event_id: requestId, payload,
+        }, provenance, marker ? "hosted-terminal" : undefined);
+      let event: CanonicalEvent;
+      if (success) {
+        this.sqlite.exec("SAVEPOINT hosted_terminal");
+        try {
+          event = append({ content: redactJson(content!.slice(0, 16_000)), status: "completed" }, {
+            user_id: job.user_id, device_id: job.device_id, harness: "opencode",
+            provider: job.provider, model: job.model,
+            local_session_id: "server-contained", capture_fidelity: "canonical_history",
+          });
+          this.sqlite.exec("RELEASE hosted_terminal");
+        } catch (error) {
+          this.sqlite.exec("ROLLBACK TO hosted_terminal; RELEASE hosted_terminal");
+          if (!(error instanceof ApiError) || error.code !== "storage_quota_exceeded") throw error;
+          success = false;
+          event = append(failure("storage_quota_exceeded"), null, true);
+        }
+      } else {
+        event = append(failure(authorized ? "model_unavailable" : "access_changed"), null, true);
+      }
       this.sqlite.prepare(`UPDATE hosted_agent_runs SET status=?,finished_at=? WHERE request_event_id=?`).run(
         success ? "completed" : "failed", this.now(), requestId,
       );
@@ -4851,7 +4869,7 @@ export class CollaborationDatabase {
     `);
   }
 
-  private enforceEventStorageQuota(sessionId: string, actorUserId: string, eventBytes: number, pauseMarker = false): void {
+  private enforceEventStorageQuota(sessionId: string, actorUserId: string, eventBytes: number, pauseMarker = false, hostedMarker = false): void {
     // One fixed server marker per paused, already-accepted request. Charge it
     // normally, but allow at most 1 KiB per such request beyond the ordinary
     // quota so a full timeline cannot prevent its author from fencing work.
@@ -4867,17 +4885,17 @@ export class CollaborationDatabase {
       : { session_bytes: 0, user_bytes: 0, total_bytes: 0 };
     const sessionUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage WHERE session_id = ?")
       .get(sessionId) as unknown as BytesRow;
-    if (sessionUsage.bytes + eventBytes > this.maxSessionEventBytes + allowance.session_bytes) {
+    if (sessionUsage.bytes + eventBytes > (hostedMarker ? Math.max(this.maxSessionEventBytes, sessionUsage.bytes) + 1024 : this.maxSessionEventBytes + allowance.session_bytes)) {
       throw storageQuotaExceeded("session", this.maxSessionEventBytes);
     }
     const userUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage WHERE actor_user_id = ?")
       .get(actorUserId) as unknown as BytesRow;
-    if (userUsage.bytes + eventBytes > this.maxUserEventBytes + allowance.user_bytes) {
+    if (userUsage.bytes + eventBytes > (hostedMarker ? Math.max(this.maxUserEventBytes, userUsage.bytes) + 1024 : this.maxUserEventBytes + allowance.user_bytes)) {
       throw storageQuotaExceeded("user", this.maxUserEventBytes);
     }
     const totalUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage")
       .get() as unknown as BytesRow;
-    if (totalUsage.bytes + eventBytes > this.maxTotalEventBytes + allowance.total_bytes) {
+    if (totalUsage.bytes + eventBytes > (hostedMarker ? Math.max(this.maxTotalEventBytes, totalUsage.bytes) + 1024 : this.maxTotalEventBytes + allowance.total_bytes)) {
       throw storageQuotaExceeded("deployment", this.maxTotalEventBytes);
     }
   }
@@ -4965,7 +4983,7 @@ export class CollaborationDatabase {
     sessionId: string,
     input: Omit<AppendEventInput, "visibility"> & { visibility?: EventVisibility },
     provenance: RuntimeProvenance | null,
-    lifecycleAllowance?: "pause",
+    lifecycleAllowance?: "pause" | "hosted-terminal",
   ): CanonicalEvent {
     const session = this.requireSession(sessionId);
     const sequence = session.next_sequence + 1;
@@ -4987,7 +5005,7 @@ export class CollaborationDatabase {
     const payloadJson = JSON.stringify(event.payload);
     const provenanceJson = event.runtime_provenance === null ? null : JSON.stringify(event.runtime_provenance);
     const eventBytes = Buffer.byteLength(payloadJson) + (provenanceJson === null ? 0 : Buffer.byteLength(provenanceJson)) + 512;
-    if (eventBytes > this.maxEventBytes) throw storageQuotaExceeded("event", this.maxEventBytes);
+    if (eventBytes > this.maxEventBytes && lifecycleAllowance !== "hosted-terminal") throw storageQuotaExceeded("event", this.maxEventBytes);
     if (lifecycleAllowance === "pause") {
       const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
       const claim = request === undefined ? undefined : this.requireClaimRow(request.id);
@@ -4998,7 +5016,23 @@ export class CollaborationDatabase {
           content: "The author paused this Agent request.", phase: "lifecycle", status: "paused",
         })) throw conflict("Invalid server pause marker");
     }
-    this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes, lifecycleAllowance === "pause");
+    if (lifecycleAllowance === "hosted-terminal") {
+      const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
+      const job = request ? this.sqlite.prepare("SELECT status FROM hosted_agent_runs WHERE request_event_id=? AND user_id=?")
+        .get(request.id, actorUserId) : undefined;
+      const payload = input.payload as { error?: { code?: string } };
+      const code = typeof payload?.error?.code === "string" ? payload.error.code : "";
+      if (eventBytes > 1024 || provenance !== null || request?.type !== "agent_request"
+        || request.actor_user_id !== actorUserId || job?.status !== "running"
+        || input.type !== "agent_response" || input.visibility !== "session"
+        || !["storage_quota_exceeded", "model_unavailable", "access_changed"].includes(code ?? "")
+        || stableJson(input.payload) !== stableJson({ content: "Cloud Agent is unavailable. Please try a new request later.",
+          status: "failed", error: { code } })) throw conflict("Invalid server hosted terminal marker");
+    }
+    // Exactly one fixed, <=1 KiB failed terminal per accepted job. It is charged
+    // normally; subsequent ordinary writes cannot use this control allowance.
+    this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes, lifecycleAllowance === "pause",
+      lifecycleAllowance === "hosted-terminal");
     this.sqlite.prepare(`
       INSERT INTO events(id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name, created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

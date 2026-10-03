@@ -195,6 +195,83 @@ unixTest("repository cleanup failure retains capacity until confirmed startup re
   f.db.failInterruptedHostedAgentJobs(); assert.equal(f.db.hostedActiveRuns(), 0);
  } finally { await f.close(); }
 });
+
+for (const state of ["failed", "interrupted"] as const) {
+ unixTest(`continuing a ${state} child retains its actual starting source and cumulative PR baseline`, async () => {
+  const f = fixture(), entered = deferred(), release = deferred();
+  const run = f.runOptions.runContainer!;
+  const inputs: string[] = [];
+  let closing: Promise<void> | undefined;
+  try {
+   await connect(f);
+   const a = f.github.start(f.actor, f.session.id, { content: "A changes value", profile_id: "coding", idempotency_key: "snapshot-task-a" });
+   assert.equal((await settled(f, a.id)).state, "completed"); f.advance();
+   f.runOptions.runContainer = async (args, timeout) => {
+    const mount = args.find((arg) => arg.endsWith("dst=/input,readonly"))!;
+    const root = mount.split("src=")[1]!.split(",dst=")[0]!;
+    inputs.push(readFileSync(join(root, "src/index.ts"), "utf8")); entered.resolve();
+    if (state === "interrupted") { await release.promise; return run(args, timeout); }
+    throw new Error("Synthetic continuation failure");
+   };
+   const b = f.github.start(f.actor, f.session.id, { content: "B continues A", profile_id: "coding", idempotency_key: "snapshot-task-b", continue_task_id: a.id });
+   await entered.promise;
+   if (state === "interrupted") { closing = f.github.close(); release.resolve(); await closing;
+    f.github = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions); }
+   const saved = await settled(f, b.id); assert.equal(saved.state, state); assert.equal(saved.resumable, true);
+   assert.equal(Buffer.from(saved.changes.find((change) => change.path === "src/index.ts")!.after_base64!, "base64").toString(), "export const value = 2;\n");
+   if (state === "failed") {
+    // Simulate an earlier preview with only cumulative baseline retained.
+    f.db.sqlite.prepare("UPDATE hosted_github_tasks SET starting_files=NULL WHERE id=?").run(b.id);
+    await f.github.close(); f.github = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+   } else {
+    // Newly saved starting files stay usable even after their parent is removed.
+    f.github.remove(f.actor, a.id);
+   }
+   f.advance();
+   f.runOptions.runContainer = async (args) => {
+    const mount = args.find((arg) => arg.endsWith("dst=/input,readonly"))!;
+    const root = mount.split("src=")[1]!.split(",dst=")[0]!;
+    const files = initial.map((item) => file(item.path, readFileSync(join(root, item.path), "utf8")));
+    inputs.push(readFileSync(join(root, "src/index.ts"), "utf8"));
+    return JSON.stringify({ answer: "Kept inherited change", files, save_error: null });
+   };
+   const c = f.github.start(f.actor, f.session.id, { content: "C continues B", profile_id: "coding", idempotency_key: "snapshot-task-c", continue_task_id: b.id });
+   const completed = await settled(f, c.id); assert.equal(completed.state, "completed");
+   assert.deepEqual(inputs, ["export const value = 2;\n", "export const value = 2;\n"]);
+   const change = completed.changes.find((item) => item.path === "src/index.ts")!;
+   assert.equal(Buffer.from(change.before_base64!, "base64").toString(), "export const value = 1;\n");
+   assert.equal(Buffer.from(change.after_base64!, "base64").toString(), "export const value = 2;\n");
+   const published = await f.github.publish(f.actor, c.id, { expected_revision: completed.revision!, title: "Inherited fixture", body: "" });
+   assert.equal(published.pull_request_url, "https://github.com/owner/project/pull/1");
+  } finally { release.resolve(); await closing; await f.close(); }
+ });
+}
+unixTest("legacy failed continuation with a missing parent refuses unknown source before reserving a run", async () => {
+ const f = fixture();
+ try {
+  await connect(f);
+  const a = f.github.start(f.actor, f.session.id, { content: "A changes value", profile_id: "coding", idempotency_key: "legacy-source-a" });
+  assert.equal((await settled(f, a.id)).state, "completed"); f.advance();
+  f.runOptions.runContainer = async () => { throw new Error("Synthetic child failure"); };
+  const b = f.github.start(f.actor, f.session.id, { content: "B continues A", profile_id: "coding", idempotency_key: "legacy-source-b", continue_task_id: a.id });
+  assert.equal((await settled(f, b.id)).state, "failed");
+  f.github.remove(f.actor, a.id); await f.github.close();
+  f.db.sqlite.exec("ALTER TABLE hosted_github_tasks DROP COLUMN starting_files");
+  f.advance();
+  const usage = f.db.hostedAgentUsage(f.actor, 20, 20).user_used_runs;
+  const events = f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events").get()!.n;
+  for (let restart = 0; restart < 2; restart++) {
+   f.github = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+   assert.equal(f.github.view(f.actor, b.id).resumable, false);
+   assert.equal(f.db.sqlite.prepare("SELECT starting_files FROM hosted_github_tasks WHERE id=?").get(b.id)!.starting_files, null);
+   assert.throws(() => f.github.start(f.actor, f.session.id, { content: "C refuses unknown input", profile_id: "coding",
+    idempotency_key: "legacy-source-c", continue_task_id: b.id }), (e: unknown) => e instanceof ApiError && e.code === "github_task_access");
+   assert.equal(f.db.hostedAgentUsage(f.actor, 20, 20).user_used_runs, usage);
+   assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events").get()!.n, events);
+   assert.equal(f.db.hostedActiveRuns(), 0); await f.github.close();
+  }
+ } finally { await f.close(); }
+});
 unixTest("GitHub requests are redacted before private persistence, container input and model transport without weakening exact retries", async () => {
  const f = fixture();
  const prompts: string[] = [], modelBodies: string[] = [];
@@ -257,10 +334,15 @@ unixTest("startup scrubs legacy raw task inputs atomically and preserves exact r
    await f.github.close();
    // Exact earlier table shape and an interrupted retained task containing synthetic raw input.
    f.db.sqlite.exec("ALTER TABLE hosted_github_tasks DROP COLUMN input_fingerprint");
+   f.db.sqlite.exec("ALTER TABLE hosted_github_tasks DROP COLUMN starting_files");
    f.db.sqlite.prepare("UPDATE hosted_github_tasks SET input_json=?,state='running' WHERE id=?").run(JSON.stringify(input), done.id);
+   let savedStart: unknown;
    for (let restart = 0; restart < 2; restart++) {
      restored = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
-     const row = f.db.sqlite.prepare("SELECT input_json,input_fingerprint FROM hosted_github_tasks WHERE id=?").get(done.id)!;
+     const row = f.db.sqlite.prepare("SELECT input_json,input_fingerprint,starting_files FROM hosted_github_tasks WHERE id=?").get(done.id)!;
+     assert.equal(typeof row.starting_files, "string");
+     if (restart === 0) savedStart = row.starting_files;
+     else assert.equal(row.starting_files, savedStart, "repeated migration preserves the sealed starting snapshot");
      assert.equal(JSON.parse(String(row.input_json)).content, redactJson(input.content));
      assert.ok(!JSON.stringify(row).includes(marker)); assert.match(String(row.input_fingerprint), /^[a-f0-9]{64}$/u);
      assert.equal(restored.view(f.actor, done.id).state, "interrupted");
@@ -303,6 +385,24 @@ unixTest("invalid legacy input rolls back all scrubbing and fails startup withou
    restored = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
    assert.ok(f.db.sqlite.prepare("SELECT input_json FROM hosted_github_tasks").all().every((r) => !String(r.input_json).includes(marker)));
  } finally { await restored?.close(); await f.close(); }
+});
+unixTest("invalid legacy starting snapshot rolls back schema and input migration without leaking stored content", async () => {
+ const f = fixture();
+ try {
+  await connect(f);
+  const input = { content: "Inspect source", profile_id: "coding", idempotency_key: "invalid-starting-snapshot" };
+  const done = await settled(f, f.github.start(f.actor, f.session.id, input).id);
+  await f.github.close();
+  f.db.sqlite.exec("ALTER TABLE hosted_github_tasks DROP COLUMN input_fingerprint; ALTER TABLE hosted_github_tasks DROP COLUMN starting_files");
+  f.db.sqlite.prepare("UPDATE hosted_github_tasks SET input_json=?,initial_files=? WHERE id=?")
+   .run(JSON.stringify(input), "invalid-encrypted-snapshot-fixture", done.id);
+  assert.throws(() => new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions),
+   (e: unknown) => e instanceof Error && e.message === "Invalid stored cloud task snapshot");
+  const columns = f.db.sqlite.prepare("PRAGMA table_info(hosted_github_tasks)").all();
+  assert.ok(!columns.some((r) => r.name === "starting_files" || r.name === "input_fingerprint"));
+  assert.equal(f.db.sqlite.prepare("SELECT input_json FROM hosted_github_tasks WHERE id=?").get(done.id)!.input_json, JSON.stringify(input));
+  assert.equal(f.runs(), 1); assert.equal(f.db.hostedActiveRuns(), 0);
+ } finally { await f.close(); }
 });
 unixTest("repository runner redacts a direct prompt before writing the container control file", async () => {
  const marker = "sk-" + "V".repeat(24);
