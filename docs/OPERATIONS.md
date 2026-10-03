@@ -4,6 +4,10 @@
 
 This guide covers the executable single-process `0.1.0-alpha.8` Alpha profile, including the invitation-only Alibaba Cloud ECS deployment serving `https://gatherthread.cn`. The canonical environment contract is `.env.example`; generic `HOST`, `PORT`, and `DATABASE_PATH` variables are intentionally ignored. Supported edges are local-only loopback, private LAN HTTPS, private Tailscale Serve, and the operator-managed ECS profile. The application remains on loopback in every mode. Public registration and public Beta are not open.
 
+## Independent test service
+
+The `test.gatherthread.cn` source preparation uses separate process/user, env, database, cloud Git, admission store, backups, secrets and bounded resources. See [TEST_ENVIRONMENT.md](TEST_ENVIRONMENT.md) for templates, administrator code issuance, provider checks and the fixed-commit same-artifact test-to-production procedure. Testing never promotes automatically; the server-management chat executes each authorized deployment. The email-account dependency must pass review before enabling test signup/recovery.
+
 ## Private-by-default startup
 
 The safe local baseline is one process bound to loopback with an on-disk SQLite database under a directory readable only by the service account. Projects are private, public discovery is disabled, payload logging is disabled, and transcript upload excludes raw thinking and private instructions.

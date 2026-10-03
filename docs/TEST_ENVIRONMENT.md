@@ -1,0 +1,92 @@
+# 独立测试环境准备与验收
+
+状态：源码准备，尚未上线。目标是 `https://test.gatherthread.cn`。本分支已更新至 main `ca4860d4fb26375eff26191fc7993fba21af7b4e`，其中 [PR62](https://github.com/TH060419/gatherthread/pull/62) 已由其他会话以 `898d811d39ada2fefb302d079a5b0b9be6510f68` 合入。本门禁改动仍独立审核，不代表服务器已发布新账号系统。部署由服务器管理会话执行，需负责人逐次授权。
+
+## 用户流程与依赖
+
+打开测试站 → 输入负责人私下发放的测试人员代码 → 邮箱验证注册或邮箱/密码登录 → 完整工作页 → 单独授权测试环境的 Codex/DSH。测试代码只控制环境准入，不创建账号、提升项目角色或替代密码。两环境的同一邮箱可分别注册并设置不同密码；不迁移、合并或继承旧账号。
+
+当前 main 已包含 PR62 的 `registration` 服务接口；通过门禁后复用其邮箱注册、找回、登录与独立设备授权。旧浏览器 token、资格码激活、记住账号菜单和邀请创建身份的路由保持退役。本分支没有重写账号实现。直接使用库接口但缺少账号配置时，仅显示“账号系统准备中”的安全拒绝页面；正常 CLI 总是加载已有账号配置。
+
+服务端门禁位于 Origin/OPTIONS 处理之后、**所有账号与回调路由之前**。保留已有账号配置、原验证器与 Turnstile CSP。后续改动不能把门禁块放回 DSH 路由旁边，因为邮箱 API 在它之前。
+
+邮件适配已接入现有 `apps/server/src/registration-providers.ts`：`ResendRegistrationMailer` 的第三参数在测试部署使用 `testEmailTransport(origin.origin)`，正式使用原 `fetch`。适配器给注册、找回和密码更改通知加 `[测试环境 / TEST]`，正文带测试站 `/app/` 链接；验证码、账号、预算与提供商逻辑仍由原账号系统管理。**经最终候选与真实提供商检查后，才开测试注册/找回邮件。**
+
+## 负责人生成、发放与撤销
+
+安装、构建和配置完成后，由负责人在测试服务的私密运维终端运行。环境文件必须是 `/etc/gatherthread-test/gatherthread.env`，不得读取或复制正式环境文件。下面的命令只创建测试门禁代码，和旧 `owner-host:issue-test-access` 无关。本文没有任何可发放代码。
+
+```sh
+cd /opt/gatherthread-test/current
+umask 077
+node --env-file=/etc/gatherthread-test/gatherthread.env apps/server/dist/src/test-gate-cli.js issue --hours 168 --count 1 --output /var/lib/gatherthread-test/distribution-NEW.txt
+# 批量：--count 10；输出路径每次必须新建，已有文件/符号链接会拒绝。
+node --env-file=/etc/gatherthread-test/gatherthread.env apps/server/dist/src/test-gate-cli.js list
+node --env-file=/etc/gatherthread-test/gatherthread.env apps/server/dist/src/test-gate-cli.js revoke --grant-id GRANT_ID
+```
+
+发放文件为 0600，包含逐人的中文说明、测试网址、代码、撤销编号和北京时间截止时间。终端不打印代码。请用私密通道逐人发放，不放进链接、群聊、工单、截图、PR 或源码；负责人发送后按自己的密钥交付流程移除私密发放文件。`list` 仅显示管理编号/有效期/撤销状态，不显示代码。
+
+每个代码 256 位随机，服务端仅保存以独立 pepper 和 Origin 域分隔的 HMAC-SHA256 摘要。有效期 1..720 小时，默认 168 小时，一批 1..50 个，最多 1,000 个未过期记录。代码允许本人再次进入或更换浏览器，每个代码同时最多 32 个门禁会话。门禁 Cookie 最长 24 小时且不超过代码截止时间；代码过期或撤销后所有关联门禁会话失效。撤销环境准入不会注销邮箱账号或自动撤销已经授权的原生设备；需要同时停用 Agent 时，在测试账号设备管理中撤销相应设备。
+
+浏览器通过 HTTPS POST 换取 Host-only `__Host-gatherthread_test_gate`，带 `HttpOnly; Secure; SameSite=Strict; Path=/`。不在 URL、Web Storage、日志或响应 JSON 中返回代码/Cookie。DELETE `/v1/test-gate` 退出准入，邮箱会话依然独立但不能绕过门禁。无/错/过期/撤销代码统一不可用提示；每真实 TCP 对端 20 次/分钟、全实例 300 次/分钟，计数持久化，不信任来访者伪造的转发头。Caddy 下对端是代理，这会保守地共享 20 次预算，适合小范围测试；若调整，需另审可信代理 IP 边界。
+
+HTTP 每次检查摘要与有效期。现有页面每 30 秒检查门禁状态；现有 WebSocket 在消息、广播和 heartbeat 检查，失效后关闭。无 Cookie 的健康检查只说明进程/存储状态。原生 DSH begin/poll 与 Codex 一次性授权 claim 可到达各自已有、限速的凭据校验器，不能直接创建账号或得到设备。已有**本测试实例**的有效设备 bearer 可以调用明确允许的项目/会话/runtime/snapshot/code/`me` API 和取得 realtime ticket；它不允许绕过注册、密码登录、找回或浏览器账号管理门禁。带浏览器 Origin 的 bearer 请求仍需准入 Cookie。MCP 没有新增公开服务器端口，用户插件走私密本地 relay，连接器持有测试设备凭据。浏览器 WS 要求准入 Cookie 和原有一次性 ticket；原生 WS 仅接受由无浏览器 Origin 的设备凭据取得的 ticket，随后仍检查设备/项目 ACL。设备撤销与账号密码重设由账号系统负责。
+
+## 独立配置与提供商
+
+| 项目 | 正式 | 测试 |
+|---|---|---|
+| Origin | `https://gatherthread.cn` | `https://test.gatherthread.cn` |
+| 进程/Unix 用户 | `gatherthread` | `gatherthread-test` |
+| loopback 端口 | 18787 | 28787 |
+| 配置 | `/etc/gatherthread/` | `/etc/gatherthread-test/` |
+| DB/云 Git | `/var/lib/gatherthread/` | `/var/lib/gatherthread-test/`，Git 为 DB 路径加 `.code` |
+| 门禁 DB | 无 | `/var/lib/gatherthread-test/admission.sqlite` |
+| 备份/恢复 | `/var/backups/gatherthread/` | `/var/backups/gatherthread-test/` |
+| 当前产物路径 | `/opt/gatherthread/current` | `/opt/gatherthread-test/current` |
+| 设备/账号/会话摘要 pepper | 正式独立 pepper | 新生成独立账号 pepper，门禁再用单独 pepper |
+| Origin/CORS/WS | 正式唯一 Origin | 测试唯一 Origin |
+
+模板位于 [deploy/test-environment](../deploy/test-environment/)。公开测试以 `NODE_ENV=production` 启用真实安全预检，同时 `GATHERTHREAD_DEPLOYMENT_ENVIRONMENT=test` 与门禁必须一致。生产默认 `production/false`；误开测试门禁或测试模式误关门禁会拒绝启动。测试服务用户不能读取正式配置、数据或备份，systemd 限制测试进程写入自己的数据目录，内存 512 MiB、CPU 50%。服务器管理者还必须给测试数据设置独立磁盘/文件系统配额并验证余量，否则事件逻辑配额无法约束全部 SQLite/WAL/Git/备份占用。共享 Caddy、CPU、磁盘或提供商账号仍有公共资源风险；余量不足时使用独立主机。
+
+部署前，服务器管理会话分别用各自进程的 env 生成私密的公共隔离报告：`node --env-file=OWN_ENV scripts/test-environment/isolation-report.mjs write NEW_REPORT`。再在测试 env 下运行 `compare PRODUCTION_REPORT`。报告只包含公开路径/Origin/端口与高熵密钥的指纹；比较器不加载正式 env，也不输出密钥。它拒绝数据/Git/备份路径重叠、symlink 和密钥/端口/Origin 复用。另验 Unix 权限与 Cookie；不能把配置报告当成上线证明。不得复制正式用户、聊天、代码或备份到测试站。
+
+所有浏览器 Cookie 都无 Domain 属性。上线前实际检查正式站 Set-Cookie，若存在历史 `Domain=.gatherthread.cn` Cookie，先由负责人清理/迁移并确认浏览器不再将它发送到测试站。默认代码符合 `__Host-` 规则，测试会话不被正式 pepper/数据库接受；不要为了“方便”设置父域 Cookie。配对回调、设备 state 与本地连接器工作区也必须选择测试 Origin，并使用新的私密连接器状态目录。
+
+Turnstile 建议新建测试 widget，只准许 `test.gatherthread.cn`，PR62 服务端继续核对 hostname、action、cData；正式 widget/API secret 不进入测试配置。[官方 hostname 配置](https://developers.cloudflare.com/turnstile/additional-configuration/hostname-management/)。
+
+Resend 建议独立测试发件子域和仅发送权限的域限定 API key；可在现有提供商账号内建隔离配置，但账号级配额仍共享，测试预算不能耗尽正式邮件额度。先确认现有套餐支持域数量，不自行升级或购买。[官方子域说明](https://resend.com/docs/dashboard/domains/introduction)、[API key 权限](https://resend.com/docs/dashboard/api-keys/introduction)。模板只留空值；模拟测试没有真实发信。
+
+当前 GitHub 代码连接由本地连接器授权/操作，测试门禁没有新增 OAuth 服务器路由。若服务器管理配置中另有 GitHub App 或 OAuth，在管理员后台核对真实回调，不推测其已配置；推荐独立测试 App 与测试仓库。[GitHub App 可配置多个 callback](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url)，仍须为测试明确选择 redirect_uri、独立 client secret 和环境绑定 state。测试不能接收正式 OAuth state 或使用正式 GitHub 仓库/用户代码。未知回调仍默认拒绝，不宽泛放行门禁。可选 Launcher v1 当前固定正式 Origin，测试先用手动终端命令；不要放宽已发布 v1 协议。PR62 的新 Launcher 需其独立审核与版本配套。
+
+## 先测试，再由人工推广
+
+1. PR62 已合入 main，门禁分支仍需独立审核。门禁合并后的最终 full SHA 是唯一候选来源。提交、推送、合并、发 tag/npm、DNS/TLS/服务器变更各按 [CONTRIBUTING](../CONTRIBUTING.md) 授权。当前任务仅准备代码/模板。
+2. 在目标兼容 Linux/架构/Node 24 环境，运行 `bash scripts/test-environment/prepare-candidate.sh FULL_SHA ABSOLUTE_NEW_DIR`。脚本从固定提交归档到新目录，`npm ci`、完整 `release:verify`、构建后生成带 commit/Node/平台信息的 tarball 和 SHA256。没有 env、Git 或真实数据；不切换任何服务。代码更新后用新 SHA 重建，不在服务器重编两份产物。
+3. 服务器管理会话验证 tarball 校验和，将**同一产物**解到测试的版本目录；env 与数据在产物外。创建 `gatherthread-test` 用户、0700 数据/备份目录、私密配置与独立随机密钥，检查报告、磁盘/内存余量与 backup/restore。只安装测试 units，追加独立 Caddy block，不能替换正式配置。28787/18787 都不开放公网；防火墙只让 Caddy 80/443 入站。
+4. 获 DNS/TLS 授权后添加 test 子域 A/AAAA、签发 TLS；Caddy validate 成功才由管理会话 reload。核对反向代理 Host、可信 client-IP 覆写与证书，测试 service ready 和页面标记。在邮件接入复测后，负责人只在测试 env 开注册/找回并用少量授权收件地址验证，无批量邮件或付费模型测试。
+5. 完成下表验收，记录 commit、产物 SHA、配置指纹、浏览器/OS 版本、模拟与真实检查范围；负责人审核后再给正式推广授权。测试通过**不自动**修改正式配置、公开注册或更新正式服务。
+6. 正式推广使用已验收的同一 tarball/SHA，保留正式 env、生产默认关闭门禁、现有独立 DB/密钥。在正式自己的 verified backup 后，按既有 [OPERATIONS](OPERATIONS.md) 升级与有限烟测。正式与测试日志、定时器、删除登记与回滚记录分别管理。
+
+## 备份与回滚
+
+测试 backup unit 对应用 SQLite+`.code` 复用现有在线备份/校验工具；门禁无应用 schema，使用独立 `backup-admission.sh`，存 `admission/` 子目录。两者都保持 13 天阈值并监控定时器，不能复制正式 backup。测试 cloud Git 清理与日志保留计时器需从正式模板按测试用户/目录独立实例化，不能运行正式 timers。
+
+每次测试升级前做各自 verified backup，验证 SQLite integrity/foreign keys、事件 replay 与代码 heads。门禁恢复校验 SHA256、`PRAGMA integrity_check` 和 namespace，恢复到**新的测试路径**，先删恢复副本的 `sessions`，重放恢复时间之后的代码撤销记录，再开放。账号恢复依 [OPERATIONS](OPERATIONS.md) 的独立删除/设备撤销登记，不复活已删除账号；检查测试 pepper 与 Origin 仍匹配。备份和密钥分别受限保存。
+
+代码回滚只能指向与当前 schema 兼容的旧产物；不兼容时停测试进程并恢复测试自己的完整应用+Git+门禁备份到新路径。PR62 之前的二进制会重新暴露旧账号路径，不得作为开放测试/正式账号的回滚服务；必要时保持外部流量关闭。正式回滚绝不能使用测试 DB、Cookie、Git 或密钥。不要覆盖失败现场。
+
+## 验收记录要求
+
+| 验收 | 本地自动化/模拟 | 服务器上线还需检查 |
+|---|---|---|
+| 无/错/过期/撤销代码、直接 API/编码路径/深链接 | store/HTTP/WS 负向测试 | 真实反向代理与过期/撤销现有页面 |
+| 代码→注册→验证码→密码登录→找回→记住设备 | 当前 main + 门禁，两环境邮件/挑战用 fixtures | 实际 Turnstile、两种语言真实邮件、Safari |
+| 同邮箱两环境、改密/注销/退出/设备撤销独立 | 两独立进程与随机 pepper/fixture 账号 | 两浏览器、同邮箱真实注册与独立密码 |
+| Cookie/device/配对/WS/MCP 跨环境拒绝 | HTTP/原生能力/WS tests + 原有协议回归 | TLS Host-only Cookie、匹配的 Codex/DSH 插件 |
+| 项目、会话、邀请、GT Cloud/GitHub、摘要兼容 | release:verify，无真实付费模型 | 测试仓库/工作区的少量双客户端烟测 |
+| 页面标记、键盘、手机、中英文 | Chromium/WebKit 本地浏览器检查 | 原生 Safari/Chrome/Edge 支持版本 |
+| 生产默认与隔离 | config 与独立实例负向测试 | Unix 权限/磁盘/secret 指纹/备份恢复验证 |
+
+最终测试证据见 [TEST_ENVIRONMENT_VALIDATION.md](TEST_ENVIRONMENT_VALIDATION.md)。源码模拟通过不代表 DNS、TLS、邮件、原生 Agent 或服务器已经验收。

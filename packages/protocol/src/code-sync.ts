@@ -17,7 +17,7 @@ function portablePathKey(path: string): string {
 
 /** Reject recognizable credentials without modifying the uploaded source bytes. */
 export function containsCodeSyncSecret(text: string): boolean {
-  return /-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----|\b(?:gh[pousr]|github_pat|glpat|sk|xox[baprs])[-_][A-Za-z0-9_-]{16,}|\b(?:gt[abidp]|acp(?:i|d)?)_[A-Za-z0-9_-]{20,}|\bAKIA[A-Z0-9]{16}\b/u.test(text);
+  return /-----BEGIN (?:RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----|\b(?:gh[pousr]|github_pat|glpat|sk|xox[baprs])[-_][A-Za-z0-9_-]{16,}|\b(?:(?:gt[abidp]|gteg?)|acp(?:i|d)?)_[A-Za-z0-9_-]{20,}|\bAKIA[A-Z0-9]{16}\b/u.test(text);
 }
 
 /** Portable paths only. Private connector/harness state is never code. */

@@ -8,6 +8,10 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+### Added
+
+- Prepare a separate, default-disabled test-environment admission gate, private operator code issuance/revocation, bilingual entry/banner, negative API/WebSocket isolation checks and independent deployment templates. The email/password account flow remains dependent on separately reviewed PR62; no test or production deployment is performed.
+
 ## [0.1.0-alpha.8] - 2026-09-28
 
 ### Added

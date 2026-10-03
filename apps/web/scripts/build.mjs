@@ -20,6 +20,7 @@ for (const required of ["boot.js", "app.js", "styles.css", "./app/"]) {
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(applicationDist, { recursive: true });
+await cp(resolve(root, "test-gate"), resolve(dist, "test-gate"), { recursive: true });
 await cp(resolve(productRoot, "index.html"), resolve(dist, "index.html"));
 await cp(resolve(productRoot, "boot.js"), resolve(dist, "boot.js"));
 await cp(resolve(productRoot, "app.js"), resolve(dist, "app.js"));

@@ -18,6 +18,10 @@ The canonical conversation remains append-only. A dedicated writer-authorized en
 
 Significant architectural choices and their rationale are recorded in the [ADR index](adr/README.md). The server trust boundary is defined by [ADR-0001](adr/0001-trusted-self-hosted-collaboration-server.md). Public and internal integration boundaries, canonical contract owners, and compatibility rules are mapped in [Interface contracts](INTERFACE_CONTRACTS.md).
 
+## Isolated test deployment
+
+An optional admission boundary in `apps/server/src/test-gate.ts` precedes every account/API route. Its separate SQLite store contains only environment admission grant/session digests, never user accounts. The same build serves each deployment with independent configuration and storage. PR62 email accounts remain a separate reviewed dependency; main without that interface serves a pending page after admission. See [ADR-0037](adr/0037-isolated-test-environment-admission.md) and [test operations](TEST_ENVIRONMENT.md).
+
 ## Components
 
 Browser onboarding reuses the application shell in a disposable iframe with `sandbox="allow-scripts"` and no same-origin capability. `example-entry.js` initializes memory-only storage and `ExampleCollaborationApi` before the shell starts. A restrictive CSP blocks backend connections and form submission; presentation-only messages select an authored tutorial or exit. The parent receives no mock project state, and only the public, self-contained example permits same-site framing; real application/API framing remains denied. See [ADR-0033](adr/0033-isolated-onboarding-example.md).

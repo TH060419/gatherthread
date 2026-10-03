@@ -4,6 +4,7 @@ import { githubCodeSyncRequestKinds } from "./github-sync.js";
 export * from "./code-sync.js";
 export * from "./github-sync.js";
 export * from "./history-summary.js";
+export * from "./test-gate.js";
 
 export const sessionModes = ["solo", "multi"] as const;
 export const membershipRoles = ["owner", "participant", "viewer"] as const;
