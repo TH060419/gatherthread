@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS hosted_github_tasks (
  device_id TEXT NOT NULL, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
  repository TEXT NOT NULL, repository_id INTEGER NOT NULL, base_branch TEXT NOT NULL, binding_revision TEXT NOT NULL,
- input_json TEXT NOT NULL, state TEXT NOT NULL, base_sha TEXT, base_tree TEXT,
+ input_json TEXT NOT NULL, input_fingerprint TEXT, state TEXT NOT NULL, base_sha TEXT, base_tree TEXT,
  initial_files TEXT, result_files TEXT, revision TEXT, answer TEXT, error_code TEXT,
  pr_commit TEXT, pr_url TEXT, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL
 ) STRICT;

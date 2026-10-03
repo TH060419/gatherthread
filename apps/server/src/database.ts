@@ -960,7 +960,10 @@ export class CollaborationDatabase {
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
     this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
-    this.sqlite.exec(HOSTED_AGENT_SCHEMA);
+    this.transaction(() => {
+      this.sqlite.exec(HOSTED_AGENT_SCHEMA);
+      this.sqlite.prepare("DELETE FROM hosted_agent_daily_usage WHERE utc_day < ?").run(this.now().slice(0, 10));
+    });
     this.migrateCodeRepositoryEnableColumn();
     this.migrateCodeRepositoryUsageColumns();
     this.migrateDeviceCredentialColumns();
@@ -3059,9 +3062,9 @@ export class CollaborationDatabase {
     const limit = this.sqlite.prepare("SELECT daily_runs FROM hosted_agent_run_limits WHERE user_id=?")
       .get(actor.user_id) as { daily_runs: number } | undefined;
     const user = this.sqlite.prepare(`SELECT COUNT(*) AS runs
-      FROM hosted_agent_runs WHERE user_id=? AND utc_day=?`).get(actor.user_id, day) as { runs: number };
+      FROM hosted_agent_daily_usage WHERE user_id=? AND utc_day=?`).get(actor.user_id, day) as { runs: number };
     const global = this.sqlite.prepare(`SELECT COUNT(*) AS runs
-      FROM hosted_agent_runs WHERE utc_day=?`).get(day) as { runs: number };
+      FROM hosted_agent_daily_usage WHERE utc_day=?`).get(day) as { runs: number };
     return { utc_day: day, user_limit_runs: limit?.daily_runs ?? defaultUserLimit,
       user_used_runs: user.runs, global_limit_runs: globalLimit, global_used_runs: global.runs };
   }
@@ -3087,7 +3090,7 @@ export class CollaborationDatabase {
     // Old preview reservations count against every account for that day because
     // the earlier schema did not record which credential paid for them.
     return this.sqlite.prepare(`SELECT
-      (SELECT COUNT(*) FROM hosted_agent_runs WHERE utc_day=? AND quota_group IN (?, 'legacy')) AS daily,
+      (SELECT COUNT(*) FROM hosted_agent_daily_usage WHERE utc_day=? AND quota_group IN (?, 'legacy')) AS daily,
       (SELECT COUNT(*) FROM hosted_agent_active_runs WHERE quota_group IN (?, 'legacy')) AS active`)
       .get(this.now().slice(0, 10), endpoint.quotaGroup, endpoint.quotaGroup) as { daily: number; active: number };
   }
@@ -3127,6 +3130,7 @@ export class CollaborationDatabase {
       }
       if (this.hostedActiveRuns() >= limits.maxConcurrent) throw new ApiError(429, "hosted_agent_busy", "Cloud Agent is busy; try again later");
       const day = this.now().slice(0, 10);
+      this.sqlite.prepare("DELETE FROM hosted_agent_daily_usage WHERE utc_day < ?").run(day);
       const usage = this.hostedAgentUsage(actor, limits.userDailyRuns, limits.globalDailyRuns);
       if (usage.user_limit_runs !== null && usage.user_used_runs >= usage.user_limit_runs) {
         throw new ApiError(429, "hosted_user_quota", "Your Cloud Agent daily allowance is used up");
@@ -3157,6 +3161,8 @@ export class CollaborationDatabase {
         profile_id,endpoint_id,quota_group,provider,model,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'running',?)`)
         .run(event.id, sessionId, actor.user_id, actor.device_id, day, selected.profileId, selected.id,
           selected.quotaGroup, selected.provider, selected.model, this.now());
+      this.sqlite.prepare("INSERT INTO hosted_agent_daily_usage(request_event_id,user_id,utc_day,quota_group) VALUES(?,?,?,?)")
+        .run(event.id, actor.user_id, day, selected.quotaGroup);
       this.sqlite.prepare(`INSERT INTO hosted_agent_user_activity(user_id,last_started_at) VALUES(?,?)
         ON CONFLICT(user_id) DO UPDATE SET last_started_at=excluded.last_started_at`).run(actor.user_id, this.now());
       this.sqlite.prepare("INSERT INTO hosted_agent_active_runs(request_event_id,user_id,quota_group,created_at) VALUES(?,?,?,?)")

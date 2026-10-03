@@ -15,6 +15,8 @@ Keep GitHub transport outside the untrusted execution container. Acquire eligibl
 
 Atomically reserve existing account/host quotas, append the canonical request and create the private task. The HTTP response is asynchronous. Save eligible result source for seven days; continuing reconstructs a fresh container from saved source and prepares dependencies again. Restart requires explicit retry and never replays a paid task automatically. This single-process design has bounded capacity, no waiting queue and no persisted shell/VM state.
 
+Redact request content at the task boundary before canonical/private persistence and execution. Preserve exact original-input retries using a private identity-bound HMAC receipt, including conflicts between inputs whose redacted text is identical. Startup atomically scrubs retained earlier inputs before task access; the migration contract belongs to the operator guide. Current-day consumption follows the independent ledger in ADR-0036.
+
 A human reviews before/after files and executable modes. PR publication requires the exact saved revision, current membership/device authorization, unchanged repository consent and base commit. Use a unique task branch, never force-push, and reconcile remote branch/PR state after uncertain responses. Do not update shared main, merge, run workflow edits or attach credentials to canonical history.
 
 ## Consequences

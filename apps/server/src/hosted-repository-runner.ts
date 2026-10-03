@@ -33,7 +33,7 @@ export class HostedRepositoryRunner {
         writeFileSync(path, Buffer.from(file.content_base64, "base64"), { flag: "wx", mode: file.executable ? 0o755 : 0o644 });
         chmodSync(path, file.executable ? 0o755 : 0o644);
       }
-      writeFileSync(join(control, "prompt.txt"), prompt, { mode: 0o644 });
+      writeFileSync(join(control, "prompt.txt"), String(redactJson(prompt)), { mode: 0o644 });
       writeFileSync(join(control, "opencode.json"), JSON.stringify({
         model: `hosted/${endpoint.model}`, small_model: `hosted/${endpoint.model}`, share: "disabled",
         provider: { hosted: { npm: "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",

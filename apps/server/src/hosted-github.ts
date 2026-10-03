@@ -1,6 +1,6 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { CodeFilesSchema, containsCodeSyncSecret, isCodeSyncPathAllowed, type CodeFile,
+import { CodeFilesSchema, HostedGithubTaskInputSchema, containsCodeSyncSecret, isCodeSyncPathAllowed, type CodeFile,
   type HostedGithubTaskInput, type HostedGithubRepositoryInput, type HostedGithubPrInput } from "@gatherthread/protocol";
 import type { Actor } from "./database.js";
 import { ApiError } from "./errors.js";
@@ -8,6 +8,7 @@ import { HostedAgent, type HostedAgentOptions } from "./hosted-agent.js";
 import { HostedRepositoryRunner } from "./hosted-repository-runner.js";
 import type { CollaborationService } from "./service.js";
 import { HOSTED_GITHUB_SCHEMA } from "./hosted-github-schema.js";
+import { redactJson } from "./redaction.js";
 
 export interface HostedGithubOptions {
  clientId: string; clientSecret: string; encryptionKey: string; callbackUrl: string; appSlug: string;
@@ -57,6 +58,7 @@ export class HostedGithub {
    }
    this.sqlite = service.database.sqlite;
    this.sqlite.exec(HOSTED_GITHUB_SCHEMA);
+   this.migrateTaskInputs();
    if (!runnerOptions.runContainer) {
      for (const row of this.sqlite.prepare("SELECT id FROM hosted_github_tasks WHERE state='running'").all()) {
        const id = String(row.id);
@@ -78,6 +80,34 @@ export class HostedGithub {
    const cipher = createDecipheriv("aes-256-gcm", this.key, data.subarray(0, 12));
    cipher.setAAD(Buffer.from(owner)); cipher.setAuthTag(data.subarray(-16));
    return JSON.parse(Buffer.concat([cipher.update(data.subarray(12, -16)), cipher.final()]).toString("utf8"));
+ }
+ private inputFingerprint(userId: string, sessionId: string, inputJson: string) {
+   // Keyed, identity-bound receipt preserves exact retry checks without storing the raw request.
+   return createHmac("sha256", this.key).update(JSON.stringify(["hosted-github-input-v1", userId, sessionId, inputJson])).digest("hex");
+ }
+ private redactInput(input: HostedGithubTaskInput): HostedGithubTaskInput {
+   return { ...input, content: String(redactJson(input.content)) };
+ }
+ private migrateTaskInputs() {
+   this.sqlite.exec("BEGIN IMMEDIATE");
+   try {
+     if (!this.sqlite.prepare("PRAGMA table_info(hosted_github_tasks)").all().some((row) => row.name === "input_fingerprint")) {
+       this.sqlite.exec("ALTER TABLE hosted_github_tasks ADD COLUMN input_fingerprint TEXT");
+     }
+     const rows = this.sqlite.prepare("SELECT id,user_id,session_id,input_json,input_fingerprint FROM hosted_github_tasks").all() as
+       Array<{ id: string; user_id: string; session_id: string; input_json: string; input_fingerprint: string | null }>;
+     for (const row of rows) {
+       let input: HostedGithubTaskInput;
+       try {
+         input = JSON.parse(row.input_json) as HostedGithubTaskInput;
+         HostedGithubTaskInputSchema.parse(input);
+       } catch { throw new Error("Invalid stored cloud task input"); }
+       const fingerprint = row.input_fingerprint ?? this.inputFingerprint(row.user_id, row.session_id, row.input_json);
+       this.sqlite.prepare("UPDATE hosted_github_tasks SET input_json=?,input_fingerprint=? WHERE id=?")
+         .run(JSON.stringify(this.redactInput(input)), fingerprint, row.id);
+     }
+     this.sqlite.exec("COMMIT");
+   } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
  }
  private prune() {
    this.sqlite.prepare("DELETE FROM hosted_github_oauth WHERE expires_at < ?").run(Date.now());
@@ -229,14 +259,16 @@ export class HostedGithub {
      base_sha: task.base_sha, revision: task.revision ?? null, answer: task.answer ?? null,
      error_code: task.error_code, pull_request_url: task.pr_url, changes, expires_at: task.expires_at };
  }
- start(actor: Actor, sessionId: string, input: HostedGithubTaskInput) {
+ start(actor: Actor, sessionId: string, rawInput: HostedGithubTaskInput) {
+   const fingerprint = this.inputFingerprint(actor.user_id, sessionId, JSON.stringify(rawInput));
+   const input = this.redactInput(rawInput);
    if (this.closing) throw safeError("github_task_access", 503);
    const session = this.service.database.requireSession(sessionId);
    const binding = this.binding(actor, session.project_id);
    const id = `gh-task-${digest(`${actor.user_id}:${sessionId}:${input.idempotency_key}`).slice(0, 32)}`;
-   const previous = this.sqlite.prepare("SELECT input_json FROM hosted_github_tasks WHERE id=? AND user_id=?").get(id, actor.user_id);
+   const previous = this.sqlite.prepare("SELECT input_json,input_fingerprint FROM hosted_github_tasks WHERE id=? AND user_id=?").get(id, actor.user_id);
    if (previous) {
-     if (previous.input_json !== JSON.stringify(input)) throw safeError("github_revision", 409);
+     if (previous.input_fingerprint !== fingerprint || previous.input_json !== JSON.stringify(input)) throw safeError("github_revision", 409);
      return this.view(actor, id);
    }
    const parent = input.continue_task_id ? this.task(actor, input.continue_task_id) : null;
@@ -251,10 +283,10 @@ export class HostedGithub {
      include_code: false, github_task_id: id, idempotency_key: input.idempotency_key,
      reply_to_event_id: input.reply_to_event_id ?? null }, (event) => {
        this.sqlite.prepare(`INSERT INTO hosted_github_tasks(id,request_event_id,user_id,device_id,session_id,project_id,
-         repository,repository_id,base_branch,binding_revision,input_json,state,created_at,expires_at)
-         VALUES(?,?,?,?,?,?,?,?,?,?,?,'running',?,?)`).run(id, event.id, actor.user_id, actor.device_id, sessionId,
+         repository,repository_id,base_branch,binding_revision,input_json,input_fingerprint,state,created_at,expires_at)
+         VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'running',?,?)`).run(id, event.id, actor.user_id, actor.device_id, sessionId,
            session.project_id, binding.repository, binding.repository_id, binding.base_branch, binding.revision,
-           JSON.stringify(input), Date.now(), Date.now() + 7 * 86400000);
+           JSON.stringify(input), fingerprint, Date.now(), Date.now() + 7 * 86400000);
      });
    if (!reserved.created || !reserved.endpoint) throw safeError("github_task_access", 409);
    const controller = new AbortController(); this.controllers.set(id, controller);

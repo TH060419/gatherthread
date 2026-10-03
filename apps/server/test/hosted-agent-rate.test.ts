@@ -106,6 +106,8 @@ test("deleting a conversation cannot release a running container slot or reset c
     const first = f.create("deleted"), second = f.create("surviving");
     const run = db.reserveHostedAgentRequest(f.actor, first.id, input("deleted-run"), endpoints.slice(0, 1), limits);
     db.deleteSession(f.actor, first.id); f.advance();
+    assert.equal(db.hostedAgentUsage(f.actor, 1, 1).user_used_runs, 1);
+    assert.equal(db.hostedEndpointUsage(endpoints[0]!).daily, 1);
     assert.equal(db.hostedActiveRuns(), 1);
     assert.equal(db.hostedEndpointUsage(endpoints[0]!).active, 1);
     assert.throws(() => db.reserveHostedAgentRequest(f.actor, second.id, input("still-busy"), endpoints.slice(0, 1), limits), errorCode("hosted_user_busy"));

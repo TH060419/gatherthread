@@ -41,6 +41,11 @@ single-process startup recovery releases interrupted slots while preserving
 the last accepted start. Other models keep their paid/free-tier daily ceilings.
 Pricing and provider eligibility must be reconfirmed before activation.
 
+Keep current-day consumption in a separate minimal ledger with no foreign key
+to conversation or account records. Cloud deletion and interruption do not
+refund accepted reservations; no deleted prompt or source is retained. The
+idempotent backfill and UTC-day pruning contract is owned by the operator guide.
+
 Cloud Agent appears beside local harnesses in the shared Agent selector and settings. Operators configure one or more API endpoints, grouping the same provider/model under a public profile and same-account keys under a shared quota group. Transactional account and host capacity gates enable parallel runs. Exhaustion fails explicitly; no silent model switch or automatic replay occurs. Run reservations cover non-Cloudflare providers; provider-side spend caps are still required. The additive database migration and configuration contract are documented in [the operator guide](../HOSTED_AGENT.md).
 
 The user separately chooses whether the Agent receives cloud project code.

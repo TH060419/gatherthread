@@ -37,12 +37,15 @@ const server = await startCollaborationServer({ databasePath: join(directory, 'd
   return JSON.stringify({ answer: 'Fixture: source changed; test and build checked.', files: result, save_error: null }); } },
  hostedGithub: { clientId: 'browser-fixture', clientSecret: 'test-app', encryptionKey: Buffer.alloc(32, 9).toString('base64'), callbackUrl: 'https://gt.example/v1/hosted-github/callback', appSlug: 'fixture', fetch: fixtureFetch } }, port);
 try {
- const identity = server.database.bootstrapIdentity({ display_name: 'Cloud owner', device_name: 'Browser' });
- server.service.createSession(identity.actor, { session_id: 'browser-github-session', mode: 'solo', title: 'GitHub browser fixture', idempotency_key: 'browser-github-session' });
+ server.database.bootstrapIdentity({ display_name: 'Fixture operator', device_name: 'Browser' });
  for (const engine of ['chrome', 'webkit']) {
   const browser = await (engine === 'chrome' ? chromium.launch({ channel: 'chrome' }) : webkit.launch());
   try {
    for (const locale of ['en', 'zh-CN']) {
+    // Each browser/language variant gets its own user; production cooldown remains enabled.
+    const identity = server.database.createIdentity({ display_name: `Cloud owner ${engine} ${locale}`, device_name: 'Browser', can_create_projects: true });
+    const sessionId = `browser-github-${engine}-${locale}`;
+    server.service.createSession(identity.actor, { session_id: sessionId, mode: 'solo', title: 'GitHub browser fixture', idempotency_key: sessionId });
     remoteRef = ''; pull = null;
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     page.setDefaultTimeout(15000); const errors = []; page.on('pageerror', (e) => errors.push(e.message)); page.on('dialog', (d) => d.accept());
@@ -107,13 +110,22 @@ try {
     assert.equal(runs, beforeRuns);
     await page.locator('#agent-harness-select').selectOption('codex');
     // Seed an existing completed task through the fixture API; the held UI cannot start it.
-    const seeded = await page.request.post(`${origin}/v1/sessions/browser-github-session/hosted-github-tasks`, {
+    const seeded = await page.request.post(`${origin}/v1/sessions/${sessionId}/hosted-github-tasks`, {
       headers: { origin }, data: { content: 'Fixture task to review', profile_id: 'coding', idempotency_key: `fixture-${engine}-${locale}` }
     });
     assert.equal(seeded.status(), 202);
     await page.locator('#project-code-button').click();
     await page.locator('#code-provider-github').click();
     await page.getByText('Fixture: source changed; test and build checked.', { exact: false }).last().waitFor();
+    const beforeLimited = runs;
+    const limited = await page.request.post(`${origin}/v1/sessions/${sessionId}/hosted-github-tasks`, {
+      headers: { origin }, data: { content: 'Must wait for cooldown', profile_id: 'coding', idempotency_key: `rate-${engine}-${locale}` }
+    });
+    assert.equal(limited.status(), 429);
+    const { error } = await limited.json();
+    assert.equal(error.code, 'hosted_user_rate_limit');
+    assert.ok(error.details.retry_after_seconds > 0 && error.details.retry_after_seconds <= 30);
+    assert.equal(runs, beforeLimited);
     await page.locator('#cloud-github-task-list button').first().click();
     await page.locator('#cloud-github-changes summary').filter({ hasText: 'index.ts' }).waitFor();
     await page.locator('#cloud-github-changes summary').first().click();
@@ -131,7 +143,7 @@ try {
     await page.keyboard.press('Escape'); assert.equal(await page.locator('#project-code-dialog').isVisible(), false);
     assert.equal(await page.locator('#project-code-button').evaluate((button) => document.activeElement === button), true);
     assert.deepEqual(errors, []); await page.close();
-    process.stdout.write(`PASS ${engine} ${locale}: single Cloud Git panel, held Agent entry, OAuth callback, repository bind, saved diff and explicit draft PR; mobile and Escape.\n`);
+    process.stdout.write(`PASS ${engine} ${locale}: single Cloud Git panel, held Agent entry, OAuth callback, repository bind, saved diff and explicit draft PR; user cooldown refusal, mobile and Escape.\n`);
    }
   } finally { await browser.close(); }
  }

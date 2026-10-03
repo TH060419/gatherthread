@@ -13,6 +13,8 @@ import { ApiError } from "../src/errors.js";
 import { HostedNpmProxy } from "../src/hosted-npm-proxy.js";
 import type { CodeFile } from "@gatherthread/protocol";
 import { request } from "node:http";
+import { redactJson } from "../src/redaction.js";
+import { HostedRepositoryRunner } from "../src/hosted-repository-runner.js";
 
 const unixTest = process.platform === "win32" ? test.skip : test;
 const file = (path: string, content: string): CodeFile => ({ path, content_base64: Buffer.from(content).toString("base64"), executable: false });
@@ -82,6 +84,127 @@ async function settled(f: ReturnType<typeof fixture>, id: string) {
  for (let n = 0; n < 100; n++) { const task = f.github.view(f.actor, id); if (task.state !== "running") return task; await setTimeout(5); }
  throw new Error("Cloud task did not settle");
 }
+unixTest("GitHub requests are redacted before private persistence, container input and model transport without weakening exact retries", async () => {
+ const f = fixture();
+ const prompts: string[] = [], modelBodies: string[] = [];
+ const run = f.runOptions.runContainer!;
+ f.runOptions.fetch = async (_url, init) => { modelBodies.push(String(init?.body)); return Response.json({ choices: [{ message: { role: "assistant", content: "Fixture answer" } }] }); };
+ f.runOptions.runContainer = async (args, timeout) => {
+   const mount = args.find((arg) => arg.endsWith("dst=/run/gatherthread,readonly"))!;
+   const prompt = readFileSync(join(mount.split("src=")[1]!.split(",dst=")[0]!, "prompt.txt"), "utf8");
+   prompts.push(prompt);
+   const socket = args.find((arg) => arg.endsWith("dst=/run/model.sock"))!.split("src=")[1]!.split(",dst=")[0]!;
+   await new Promise<void>((resolve, reject) => {
+     const req = request({ socketPath: socket, path: "/v1/chat/completions", method: "POST", headers: { "content-type": "application/json" } }, (res) => {
+       res.resume(); res.once("end", () => res.statusCode === 200 ? resolve() : reject(new Error("Fixture model transport failed")));
+     });
+     req.once("error", reject); req.end(JSON.stringify({ model: "coding", messages: [{ role: "user", content: prompt }] }));
+   });
+   return run(args, timeout);
+ };
+ try {
+   await connect(f);
+   const marker = "ghp_" + "Z".repeat(24), changedMarker = "ghp_" + "Y".repeat(24);
+   const quote = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session",
+     idempotency_key: "ordinary-quote", payload: { content: "Keep the existing npm tests and src/index.ts reference." } });
+   const content = `Inspect src/index.ts and test. Accidental credential ${marker}; API_KEY=fixtureSensitiveValue. Preserve ordinary text.`;
+   const input = { content, profile_id: "coding", reply_to_event_id: quote.id, idempotency_key: "redacted-task" };
+   const first = f.github.start(f.actor, f.session.id, input);
+   assert.equal(f.github.start(f.actor, f.session.id, input).id, first.id);
+   assert.throws(() => f.github.start(f.actor, f.session.id, { ...input, content: content.replace(marker, changedMarker) }),
+     (e: unknown) => e instanceof ApiError && e.code === "github_revision");
+   const done = await settled(f, first.id);
+   assert.equal(done.state, "completed");
+   const row = f.db.sqlite.prepare("SELECT request_event_id,input_json FROM hosted_github_tasks WHERE id=?").get(first.id)!;
+   const canonical = f.db.getEvent(f.session.id, String(row.request_event_id));
+   assert.equal(canonical.reply_to_event_id, quote.id);
+   assert.equal((canonical.payload as { content: string }).content, redactJson(content));
+   assert.equal(JSON.parse(String(row.input_json)).content, redactJson(content));
+   f.advance();
+   const continuation = { ...input, idempotency_key: "redacted-continue", continue_task_id: first.id };
+   const next = f.github.start(f.actor, f.session.id, continuation);
+   assert.equal((await settled(f, next.id)).state, "completed");
+   assert.equal(f.github.start(f.actor, f.session.id, continuation).id, next.id);
+   assert.throws(() => f.github.start(f.actor, f.session.id, { ...continuation, continue_task_id: next.id }), ApiError);
+   for (const text of [String(row.input_json), JSON.stringify(canonical), ...prompts, ...modelBodies]) {
+     assert.ok(!text.includes(marker) && !text.includes("fixtureSensitiveValue"));
+     assert.match(text, /Inspect src\/index.ts and test/);
+   }
+   assert.equal(prompts.length, 2); assert.equal(modelBodies.length, 2);
+   assert.ok(prompts.every((text) => text.includes("Keep the existing npm tests and src/index.ts reference.")));
+   assert.equal(f.db.hostedAgentUsage(f.actor, 20, 20).user_used_runs, 2);
+ } finally { await f.close(); }
+});
+unixTest("startup scrubs legacy raw task inputs atomically and preserves exact retries through repeated recovery", async () => {
+ const f = fixture();
+ let restored: HostedGithub | undefined;
+ try {
+   await connect(f);
+   const marker = "sk-" + "Q".repeat(24), changedMarker = "sk-" + "R".repeat(24);
+   const input = { content: `Inspect src/index.ts. Accidental ${marker}`, profile_id: "coding", idempotency_key: "legacy-input-migration" };
+   const done = await settled(f, f.github.start(f.actor, f.session.id, input).id);
+   await f.github.close();
+   // Exact earlier table shape and an interrupted retained task containing synthetic raw input.
+   f.db.sqlite.exec("ALTER TABLE hosted_github_tasks DROP COLUMN input_fingerprint");
+   f.db.sqlite.prepare("UPDATE hosted_github_tasks SET input_json=?,state='running' WHERE id=?").run(JSON.stringify(input), done.id);
+   for (let restart = 0; restart < 2; restart++) {
+     restored = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+     const row = f.db.sqlite.prepare("SELECT input_json,input_fingerprint FROM hosted_github_tasks WHERE id=?").get(done.id)!;
+     assert.equal(JSON.parse(String(row.input_json)).content, redactJson(input.content));
+     assert.ok(!JSON.stringify(row).includes(marker)); assert.match(String(row.input_fingerprint), /^[a-f0-9]{64}$/u);
+     assert.equal(restored.view(f.actor, done.id).state, "interrupted");
+     assert.equal(restored.start(f.actor, f.session.id, input).id, done.id);
+     for (const changed of [{ ...input, content: input.content.replace(marker, changedMarker) },
+       { ...input, content: String(redactJson(input.content)) }, { ...input, reply_to_event_id: "different-reference" }]) {
+       assert.throws(() => restored!.start(f.actor, f.session.id, changed), (e: unknown) => e instanceof ApiError && e.code === "github_revision");
+     }
+     assert.equal(f.runs(), 1); assert.equal(f.db.hostedAgentUsage(f.actor, 20, 20).user_used_runs, 1);
+     await restored.close();
+   }
+   f.advance();
+   restored = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+   const next = restored.start(f.actor, f.session.id, { ...input, idempotency_key: "migrated-continuation", continue_task_id: done.id });
+   assert.equal((await settled(f, next.id)).state, "completed");
+   assert.ok(!String(f.db.sqlite.prepare("SELECT input_json FROM hosted_github_tasks WHERE id=?").get(next.id)!.input_json).includes(marker));
+ } finally { await restored?.close(); await f.close(); }
+});
+unixTest("invalid legacy input rolls back all scrubbing and fails startup without leaking its text", async () => {
+ const f = fixture();
+ let restored: HostedGithub | undefined;
+ try {
+   await connect(f);
+   const marker = "ghp_" + "W".repeat(24);
+   const first = { content: `Inspect index.ts ${marker}`, profile_id: "coding", idempotency_key: "migration-atomic-first" };
+   const one = await settled(f, f.github.start(f.actor, f.session.id, first).id);
+   f.advance();
+   const second = { ...first, idempotency_key: "migration-atomic-second" };
+   const two = await settled(f, f.github.start(f.actor, f.session.id, second).id);
+   await f.github.close();
+   f.db.sqlite.exec("ALTER TABLE hosted_github_tasks DROP COLUMN input_fingerprint");
+   f.db.sqlite.prepare("UPDATE hosted_github_tasks SET input_json=? WHERE id=?").run(JSON.stringify(first), one.id);
+   f.db.sqlite.prepare("UPDATE hosted_github_tasks SET input_json=? WHERE id=?").run(`invalid JSON ${marker}`, two.id);
+   assert.throws(() => new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions),
+     (e: unknown) => e instanceof Error && e.message === "Invalid stored cloud task input" && !e.message.includes(marker));
+   assert.ok(!f.db.sqlite.prepare("PRAGMA table_info(hosted_github_tasks)").all().some((r) => r.name === "input_fingerprint"));
+   assert.equal(f.db.sqlite.prepare("SELECT input_json FROM hosted_github_tasks WHERE id=?").get(one.id)!.input_json, JSON.stringify(first));
+   assert.equal(f.runs(), 2);
+   f.db.sqlite.prepare("UPDATE hosted_github_tasks SET input_json=? WHERE id=?").run(JSON.stringify(second), two.id);
+   restored = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+   assert.ok(f.db.sqlite.prepare("SELECT input_json FROM hosted_github_tasks").all().every((r) => !String(r.input_json).includes(marker)));
+ } finally { await restored?.close(); await f.close(); }
+});
+unixTest("repository runner redacts a direct prompt before writing the container control file", async () => {
+ const marker = "sk-" + "V".repeat(24);
+ const prompt = `Inspect src/index.ts. Accidental ${marker}. Keep npm tests.`;
+ let observed = "";
+ const runner = new HostedRepositoryRunner({ ...options, runContainer: async (args) => {
+   const control = args.find((arg) => arg.endsWith("dst=/run/gatherthread,readonly"))!.split("src=")[1]!.split(",dst=")[0]!;
+   observed = readFileSync(join(control, "prompt.txt"), "utf8");
+   return JSON.stringify({ answer: "Fixture", files: initial, save_error: null });
+ } });
+ await runner.run(initial, prompt, options.endpoints[0]!, () => undefined);
+ assert.equal(observed, redactJson(prompt)); assert.ok(!observed.includes(marker));
+});
 unixTest("cloud GitHub task persists private encrypted files, reserves atomically, reviews and creates one draft PR", async () => {
  const f = fixture();
  try {

@@ -51,6 +51,20 @@ INSERT OR IGNORE INTO hosted_agent_runs
     'cloudflare-workers-ai','@cf/qwen/qwen3-30b-a3b-fp8',status,created_at,finished_at
   FROM hosted_agent_jobs;
 
+-- Daily consumption is independent of conversation, project and account deletion.
+-- The request ID deduplicates backfill; no prompt, session, device or source is retained.
+-- Database startup and accepted reservations prune days older than the current UTC day.
+CREATE TABLE IF NOT EXISTS hosted_agent_daily_usage (
+  request_event_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  utc_day TEXT NOT NULL,
+  quota_group TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_day_idx ON hosted_agent_daily_usage(utc_day);
+CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_user_day_idx ON hosted_agent_daily_usage(user_id,utc_day);
+CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_group_day_idx ON hosted_agent_daily_usage(quota_group,utc_day);
+INSERT OR IGNORE INTO hosted_agent_daily_usage SELECT request_event_id,user_id,utc_day,quota_group FROM hosted_agent_runs;
+
 -- User cooldown and active slots survive deletion of a conversation/project.
 -- These bounded control records contain no source, prompt, token or provider key.
 CREATE TABLE IF NOT EXISTS hosted_agent_user_activity (
