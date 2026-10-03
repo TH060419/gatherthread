@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "driver.js": "1.8.0",
-    "katex": "^0.16.47",
+    "katex": "^0.18.9",
     "micromark": "^4.0.2",
     "micromark-extension-gfm": "^3.0.0"
   },
