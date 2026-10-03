@@ -23,9 +23,9 @@ try {
     });
     await page.goto(`${origin}/app/?mock=1`);
     if (locale === 'zh-CN') await page.locator('#auth-language-button').click();
-    await page.locator('#auth-select-login').click();
-    await page.locator('#token').fill('demo-token');
-    await page.locator('#login-form button[type=submit]').click();
+    await page.locator('#auth-select-email-login').click();
+    await page.locator('#email-login-email').fill('demo@example.invalid'); await page.locator('#email-login-password').fill('isolated demo password');
+    await page.locator('#email-login-form button[type=submit]').click();
     await page.locator('#session-view:not([hidden])').waitFor();
     await page.locator('#project-code-button').click();
     await page.locator('#github-code-form:not([hidden])').waitFor();

@@ -5,6 +5,8 @@ import { parseHostedEndpoints, HOSTED_MODEL, siliconFlowFreePreset,
   HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./hosted-agent-pool.js";
 import type { HostedGithubOptions } from "./hosted-github.js";
 import type { HostedAgentOptions } from "./hosted-agent.js";
+import { registrationFromEnvironment } from "./registration-providers.js";
+import type { RegistrationOptions } from "./registration.js";
 
 const EnvironmentSchema = z.enum(["development", "test", "production"]);
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -18,6 +20,7 @@ export class ConfigurationError extends Error {
 }
 
 export interface ServerConfig {
+  registration: RegistrationOptions;
   environment: z.infer<typeof EnvironmentSchema>;
   host: string;
   port: number;
@@ -244,7 +247,7 @@ export function loadServerConfig(
       throw new ConfigurationError("GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true is required in production");
     }
     if (allowHttpBootstrap) {
-      throw new ConfigurationError("GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP cannot be enabled in production; use the local bootstrap command");
+      throw new ConfigurationError("GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP cannot be enabled in production; user bootstrap is retired; use verified-email registration");
     }
     if (!authTokenPepper || Buffer.byteLength(authTokenPepper, "utf8") < 32 || PLACEHOLDER_SECRET.test(authTokenPepper)) {
       throw new ConfigurationError("GATHERTHREAD_AUTH_TOKEN_PEPPER must be a non-placeholder secret of at least 32 bytes in production");
@@ -255,6 +258,7 @@ export function loadServerConfig(
   }
 
   return {
+    registration: registrationFromEnvironment(env, publicBaseUrl),
     environment,
     host,
     port,

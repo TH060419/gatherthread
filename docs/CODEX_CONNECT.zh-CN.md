@@ -2,7 +2,7 @@
 
 共序通过一个轻量本地连接器，把当前选中的云端项目连接到 Codex Desktop。网页不会直接启动 Codex，也不会把任何凭据写进复制的命令。
 
-> 邀请制 Alpha：服务器地址是 `https://gatherthread.cn`。使用固定 `v0.1.0-alpha.8` 命令前，请核对 Git 引用和同版 npm 包均已发布；否则使用下方源码路径。测试资格仅通过 [GitHub Issue](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml) 申请，切勿在 Issue 中发布 Token。
+> 账号更新尚未发布：服务器地址是 `https://gatherthread.cn`。使用固定 `v0.1.0-alpha.8` 命令前，请核对 Git 引用和同版 npm 包均已发布；否则使用下方源码路径。用户使用邮箱和密码登录，在“连接 Codex”中创建十分钟有效的一次性设备授权，输入连接器隐藏提示或启动器。固定版本命令仅在对应连接器版本发布后使用，未发布功能请使用源码路径。
 
 ## 正常连接只需三步
 
@@ -14,13 +14,22 @@
 codex --version
 ```
 
-如果终端提示 `codex: command not found`，请先安装或更新官方 CLI，然后重新打开终端：
+如果 macOS 的 zsh 提示 `command not found: codex`，且 ChatGPT Desktop 安装在“应用程序”目录中，先检查桌面版自带的 CLI，并把它加入当前终端的 `PATH`：
 
 ```bash
-npm install -g @openai/codex
+codex_dir='/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS'
+if [ -x "$codex_dir/codex" ]; then export PATH="$codex_dir:$PATH"; codex --version; else echo 'Bundled Codex CLI not found'; fi
 ```
 
-运行 `codex plugin --help`，确认当前 Codex 版本支持插件后，再安装共序：
+**只有显示版本号后**，再把修改保存到以后的 zsh 终端，并检查插件支持情况：
+
+```bash
+echo 'export PATH="/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+codex plugin --help
+```
+
+如果找不到该文件、ChatGPT Desktop 安装在其他位置，或你使用其他系统，请按照 [Codex CLI 官方安装指南](https://learn.chatgpt.com/docs/codex/cli)操作，不要把不存在的目录加入 `PATH`。运行 `codex plugin --help` 确认当前 Codex 版本支持插件后，再安装共序：
 
 ```bash
 codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
@@ -41,7 +50,7 @@ npx --yes @gatherthread/codex-connect@0.1.0-alpha.8 \
   --plugin-hooks
 ```
 
-连接器会在终端的隐藏输入中询问设备 Token。保持这个终端运行。每个需要在线的共序项目运行一个连接器即可。
+连接器会在终端的隐藏输入中询问一次性设备授权。保持这个终端运行。每个需要在线的共序项目运行一个连接器即可。
 
 ### 3. 确认连接成功
 
@@ -114,7 +123,7 @@ Codex 安装会发布自己提供的模型清单，网页里为本连接显示�
 
 ## 安全边界
 
-复制的命令只包含服务器地址、项目 ID、模型和非敏感参数。设备 Token 仅保留在连接器进程中，并会从 Codex 子进程环境移除。插件 MCP 通过私有本地端点和短期能力连接正在运行的连接器；重复或歧义路由会拒绝执行。
+复制的命令只包含服务器地址、项目 ID、模型和非敏感参数。一次性授权会在连接器中兑换为独立设备凭据，设备凭据仅保留在连接器进程中，并会从 Codex 子进程环境移除。插件 MCP 通过私有本地端点和短期能力连接正在运行的连接器；重复或歧义路由会拒绝执行。
 
 连接器不会自动开启不受限沙箱，不会静默修改全局 Codex 设置，也不会把本地服务暴露到网络。按 `Control-C` 即可停止。
 

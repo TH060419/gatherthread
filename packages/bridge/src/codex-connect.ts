@@ -1,3 +1,4 @@
+import { resolveDeviceCredential } from "./device-credential.js";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
@@ -141,8 +142,10 @@ Options:
   --recover-github-code    Recover GitHub files into a NEW sibling folder, then exit
   --help                   Show this help
 
-The device access token is read from GATHERTHREAD_TOKEN when set. Otherwise it
-is requested using a hidden terminal prompt. It is kept only in this process
+Sign in on the Web, choose Connect Codex, and create a one-time device
+authorization. Paste it into the hidden prompt or Launcher within ten minutes.
+Existing private connector credentials can still use GATHERTHREAD_TOKEN.
+The connector exchanges the grant for its own device credential, kept only in this process
 and is never passed to Codex, written to the session state, or printed. Each
 writable session uses a Desktop-owned task for trusted local hooks and a separate
 exec-source background projection for Web requests and canonical hydration.
@@ -157,7 +160,8 @@ export async function runCodexConnectCli(
     process.stdout.write(HELP);
     return;
   }
-  const token = env.GATHERTHREAD_TOKEN?.trim() || await readSecret("GatherThread device access token: ");
+  const authorization = env.GATHERTHREAD_TOKEN?.trim() || await readSecret("GatherThread one-time device authorization (from Connect Codex): ");
+  const token = await resolveDeviceCredential(authorization, parsed.apiUrl);
   if (!token || /[\r\n]/.test(token)) throw new Error("A valid GatherThread device access token is required");
 
   const api = new HttpCollaborationClient({

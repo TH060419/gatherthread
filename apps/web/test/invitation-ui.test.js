@@ -77,29 +77,16 @@ test("English interface copies English invitation guidance and Beijing validity"
   assert.match(projectInvitationShareText(secret, {}, "en"), /Valid: Please confirm with the inviter/u);
 });
 
-test("new and existing user forms route to project-level claim and accept methods", async () => {
+test("project joining accepts invitations only after account login", async () => {
   const main = await readFile(mainPath, "utf8");
-  assert.match(main, /claimInvitationForm\.addEventListener[\s\S]*?api\.claimInvitation/);
-  assert.match(main, /acceptInvitationForm\.addEventListener[\s\S]*?api\.acceptInvitation/);
-  assert.match(main, /await enterWorkspace\(result\.invitation\.projectId\)/);
-  assert.match(main, /await selectProject\(result\.invitation\.projectId\)/);
+  assert.doesNotMatch(main, /claimInvitationForm|api\.claimInvitation/u);
+  assert.match(main, /acceptInvitationForm\.addEventListener[\s\S]*?api\.acceptInvitation/u);
+  assert.match(main, /await selectProject\(result\.invitation\.projectId\)/u);
 });
 
-test("new users receive a one-time copyable device token without browser storage or URL exposure", async () => {
+test("user authentication never displays or stores a device token", async () => {
   const [html, main] = await Promise.all([readFile(htmlPath, "utf8"), readFile(mainPath, "utf8")]);
-  for (const id of [
-    "device-credential-dialog",
-    "new-device-access-token",
-    "copy-device-access-token-button",
-    "acknowledge-device-access-token-button",
-  ]) {
-    assert.match(html, new RegExp(`id="${id}"`));
-  }
-  assert.match(main, /showNewDeviceAccessToken\(result\.accessToken\)/);
-  assert.match(main, /element\("new-device-access-token"\)\.textContent = token/);
-  assert.match(main, /deviceCredentialDialog\.addEventListener\("cancel", \(event\) => event\.preventDefault\(\)\)/);
-  assert.match(main, /clearNewDeviceAccessToken\(\)/);
-  assert.doesNotMatch(`${html}\n${main}`, /(?:local|session)Storage/);
+  assert.doesNotMatch(html + main, /device-credential-dialog|new-device-access-token|showNewDeviceAccessToken/u);
   assert.doesNotMatch(main, /searchParams\.(?:set|append)\([^\n]*(?:access|token)/i);
 });
 
@@ -108,7 +95,7 @@ test("refresh restoration is generation-safe and pagehide never logs out the ser
   assert.match(main, /void restoreBrowserSession\(\)/);
   assert.match(main, /const actor = await api\.restoreSession\(\)/);
   assert.match(main, /generation !== authenticationGeneration/);
-  assert.match(main, /claimInvitationForm\.addEventListener[\s\S]*?const generation = \+\+authenticationGeneration/);
+  assert.match(main, /function beginEmailAuthentication\(\) \{[\s\S]*?\+\+authenticationGeneration/);
   const pagehide = main.match(/window\.addEventListener\("pagehide",[\s\S]*?\n\}\);/)?.[0] ?? "";
   assert.match(pagehide, /sync\.disconnect\(\)/);
   assert.doesNotMatch(pagehide, /api\.logout/);

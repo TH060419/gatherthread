@@ -68,6 +68,17 @@ private func validModel(_ value: String) -> Bool {
     !value.unicodeScalars.contains(where: { $0.value < 32 || $0.value == 127 })
 }
 
+private func workspaceArguments(_ path: String) throws -> [String] {
+    if path.isEmpty { return ["--create-workspace"] }
+    var isDirectory: ObjCBool = false
+    guard path.hasPrefix("/"),
+          FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+          isDirectory.boolValue else {
+        throw LinkError.invalid("工作目录必须是已存在的本地绝对路径目录")
+    }
+    return ["--workspace", URL(fileURLWithPath: path).standardizedFileURL.path]
+}
+
 private func shellQuote(_ value: String) -> String {
     "'" + value.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
 }
@@ -88,6 +99,7 @@ private func executableCodex() -> String {
 private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow!
     private let project = NSTextField()
+    private let workspace = NSTextField()
     private let codex = NSTextField()
     private let model = NSTextField()
     private let tokens = NSTextField()
@@ -108,11 +120,11 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         menu.addItem(appItem)
         NSApp.mainMenu = menu
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 610),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 670),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "GatherThread · Connect Codex"
-        window.minSize = NSSize(width: 600, height: 570)
+        window.minSize = NSSize(width: 600, height: 620)
         window.center()
         window.delegate = self
         let stack = NSStackView()
@@ -134,14 +146,23 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         codex.stringValue = executableCodex()
         model.stringValue = "gpt-5.6-sol"
         tokens.stringValue = "128000"
-        addField("项目 ID（project-***）", project, to: stack)
+        addField("项目 ID（网页打开时自动填入；project-***）", project, to: stack)
         addField("Codex CLI 完整路径", codex, to: stack)
+        stack.addArrangedSubview(NSTextField(labelWithString: "本地工作目录（可选；留空使用默认项目目录）"))
+        let workspaceRow = NSStackView()
+        workspaceRow.orientation = .horizontal
+        workspaceRow.spacing = 8
+        workspaceRow.addArrangedSubview(workspace)
+        workspaceRow.addArrangedSubview(NSButton(title: "浏览…", target: self, action: #selector(chooseWorkspace)))
+        workspaceRow.addArrangedSubview(NSButton(title: "默认目录", target: self, action: #selector(clearWorkspace)))
+        stack.addArrangedSubview(workspaceRow)
+        workspaceRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
         addField("模型", model, to: stack)
         addField("上下文 Token 上限", tokens, to: stack)
         stack.addArrangedSubview(NSTextField(labelWithString: "首次历史导入"))
         history.addItems(withTitles: ["first-connect", "never"])
         stack.addArrangedSubview(history)
-        addField("设备 Token（仅传给本机连接器）", token, to: stack)
+        addField("一次性设备授权（仅传给本机连接器）", token, to: stack)
         let actions = NSStackView()
         actions.orientation = .horizontal
         actions.spacing = 10
@@ -203,6 +224,18 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         alert.informativeText = value
         alert.runModal()
     }
+
+    @objc private func chooseWorkspace() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "选择目录"
+        if panel.runModal() == .OK, let url = panel.url { workspace.stringValue = url.path }
+    }
+
+    @objc private func clearWorkspace() { workspace.stringValue = "" }
 
     @objc private func installPlugin() {
         if connector?.isRunning == true { showError("请先停止连接，再安装插件。"); return }
@@ -346,10 +379,13 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
             showError("请检查包内 Node/连接器、Codex CLI 路径、项目 ID、Token 和连接设置。")
             return
         }
+        let workspaceArgs: [String]
+        do { workspaceArgs = try workspaceArguments(workspace.stringValue) }
+        catch { showError(error.localizedDescription); return }
         let process = Process()
         process.executableURL = node
-        process.arguments = [connectorFile.path, "--url", serverOrigin, "--project", projectId,
-                             "--create-workspace", "--plugin-hooks", "--visible-history-sync", mode,
+        process.arguments = [connectorFile.path, "--url", serverOrigin, "--project", projectId]
+            + workspaceArgs + ["--plugin-hooks", "--visible-history-sync", mode,
                              "--model", modelName, "--context-window-tokens", String(count),
                              "--codex-command", codexPath]
         var environment = ProcessInfo.processInfo.environment
@@ -434,6 +470,13 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
 }
 
 private func runContractTests(at path: String) throws {
+    let defaultWorkspaceArgs = try workspaceArguments("")
+    let selectedWorkspaceArgs = try workspaceArguments(FileManager.default.temporaryDirectory.path)
+    guard defaultWorkspaceArgs == ["--create-workspace"],
+          selectedWorkspaceArgs.first == "--workspace",
+          (try? workspaceArguments("relative-directory")) == nil else {
+        throw LinkError.invalid("本地工作目录参数验证失败")
+    }
     let hostilePath = "/tmp/app'$(printf UNSAFE)`printf UNSAFE`/node"
     let shell = Process()
     shell.executableURL = URL(fileURLWithPath: "/bin/sh")

@@ -1,4 +1,4 @@
-# ADR-0036: Run the hosted trial Agent with OpenCode in an isolated container
+# ADR-0037: Run the hosted trial Agent with OpenCode in an isolated container
 
 - Status: proposed / source preview
 - Date: 2026-09-30

@@ -1,3 +1,4 @@
+import { browserSessionFixture } from "./auth-fixtures.js";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -575,9 +576,7 @@ test("HTTP code cleanup requires cookie Origin, owner role, exact heads, and act
     const path = `/v1/projects/${project.id}/code`;
     const repo = new CodeRepository(running.database, `${join(directory, "server.sqlite")}.code`);
     const initial = repo.enable(identity.actor, project.id, { idempotency_key: "clear-http-enable" });
-    const opened = await fetch(`${running.origin}/v1/browser-sessions`, {
-      method: "POST", headers: { authorization: `Bearer ${identity.token}`, origin: browserOrigin, "content-type": "application/json" }, body: "{}",
-    });
+    const opened = browserSessionFixture(running, { token: identity.token });
     const cookie = opened.headers.get("set-cookie")!.split(";", 1)[0]!;
     const input = { expected_main_commit: initial.commit, expected_branches: [], idempotency_key: "clear-http-project" };
     const clear = async (headers: Record<string, string>) => {
@@ -603,9 +602,7 @@ test("HTTP code mutations retain cookie CSRF checks and revoked devices cannot r
     const identity = running.database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner" });
     const project = running.service.createProject(identity.actor, { title: "Code auth", idempotency_key: "project-http-auth" });
     const path = `/v1/projects/${project.id}/code`;
-    const opened = await fetch(`${running.origin}/v1/browser-sessions`, {
-      method: "POST", headers: { authorization: `Bearer ${identity.token}`, origin: browserOrigin, "content-type": "application/json" }, body: "{}",
-    });
+    const opened = browserSessionFixture(running, { token: identity.token });
     assert.equal(opened.status, 201);
     const cookie = opened.headers.get("set-cookie")!.split(";", 1)[0]!;
     const input = { idempotency_key: "cookie-code-enable" };

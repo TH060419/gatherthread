@@ -1,4 +1,4 @@
-# ADR-0037: Private cloud GitHub tasks with explicit pull-request publication
+# ADR-0038: Private cloud GitHub tasks with explicit pull-request publication
 
 - Status: proposed / source preview
 - Date: 2026-09-30

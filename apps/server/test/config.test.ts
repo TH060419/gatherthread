@@ -188,7 +188,7 @@ test("production fails closed unless HTTPS proxying and a strong pepper are conf
       ...productionEnvironment,
       GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP: "true",
     }, "/srv/gatherthread"),
-    /local bootstrap command/,
+    /user bootstrap is retired/,
   );
   assert.throws(
     () => loadServerConfig({ ...productionEnvironment, GATHERTHREAD_DATABASE_PATH: ":memory:" }, "/srv/gatherthread"),

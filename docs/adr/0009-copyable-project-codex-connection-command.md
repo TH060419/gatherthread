@@ -5,6 +5,8 @@
 **Deciders**: Yuhan He
 **Builds on**: [ADR-0006](0006-project-first-collaboration-boundary.md), [ADR-0007](0007-project-harness-adapter-and-codex-app-server.md), and [ADR-0008](0008-local-agent-conversations-as-rebuildable-projections.md)
 
+> Account onboarding and connector input are superseded by unreleased [ADR-0036](0036-verified-email-registration-and-password-login.md). This record preserves the earlier decision.
+
 ## Context
 
 GatherThread needs a project-level first connection instead of requiring users to understand per-session runtimes. A browser cannot safely start a local Codex process or choose a filesystem workspace, and a signed background Companion would add packaging, update, and operating-system trust work that is too large for the no-cost Alpha. Codex App Server also has no public `project/create` API; Codex Desktop groups tasks by their local working directory.

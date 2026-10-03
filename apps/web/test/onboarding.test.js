@@ -40,8 +40,6 @@ test("all account states get the complete isolated example guides", () => {
   assert.equal(guideSteps("basics")[0].target, "");
   assert.equal(guideSteps("history")[0].target, "");
   assert.deepEqual(Object.keys(GUIDE_LABELS), ["basics", "members", "history", "files", "summaries"]);
-  assert.ok(guideSteps("basics").find((item) => item.id === "project").note);
-  assert.ok(guideSteps("members").find((item) => item.id === "join").note);
   assert.equal(guideSteps("basics").find((item) => item.id === "create-conversation").target, "#new-session-button");
   assert.equal(guideSteps("members").find((item) => item.id === "invite").target, "#create-invitation-form button[type=submit]");
 });

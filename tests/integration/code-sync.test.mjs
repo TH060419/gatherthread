@@ -39,9 +39,8 @@ test("real HTTP Git checkpoints support two collaborators, cross-device conflict
     const invitation = await request(running.origin, `/v1/projects/${projectId}/invitations`, {
       method: "POST", token: owner.token, body: { role: "participant", ttl: "1h" },
     });
-    const participant = await request(running.origin, "/v1/invitations/claim", {
-      method: "POST", body: { invite_token: invitation.invite_token, user_id: "bob", display_name: "Bob", device_id: "bob-dsh", device_name: "DSH desktop" },
-    });
+    const participant = running.database.createIdentity({ user_id: "bob", display_name: "Bob", device_id: "bob-dsh", device_name: "DSH desktop", can_create_projects: true });
+    await request(running.origin, "/v1/invitations/accept", { method: "POST", token: participant.token, body: { invite_token: invitation.invite_token } });
     const secondDevice = running.database.createDevice("alice", "Second laptop", "alice-second");
     const managers = {};
     const workspaces = {};

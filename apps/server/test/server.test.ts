@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { WebSocket } from "ws";
 import { startCollaborationServer } from "../src/server.js";
+import { identityFixture, invitationFixture, browserSessionFixture } from "./auth-fixtures.js";
 import { CodeRepository } from "../src/code-repository.js";
 
 interface IdentityResponse {
@@ -115,7 +116,7 @@ test("project mention inbox authenticates, scopes membership and validates the p
   const running = await startCollaborationServer({ databasePath: join(directory, "server.sqlite"),
     authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST", body: { display_name: "Owner", device_name: "Browser" },
     });
     const actor = running.database.authenticate(owner.body.data.token);
@@ -138,108 +139,6 @@ test("project mention inbox authenticates, scopes membership and validates the p
   }
 });
 
-test("test access and project invitations create distinct account capabilities over HTTP", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "gatherthread-test-access-http-"));
-  const browserOrigin = "http://client.test";
-  const running = await startCollaborationServer({
-    databasePath: join(directory, "server.sqlite"),
-    authTokenPepper: TEST_PEPPER,
-    allowHttpBootstrap: true,
-    allowedOrigins: [browserOrigin],
-  }, 0);
-  try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
-      method: "POST", body: { display_name: "Owner", device_name: "Owner laptop" },
-    });
-    assert.equal(owner.status, 201);
-    const ownerActor = running.database.authenticate(owner.body.data.token);
-    const shared = running.service.createProject(ownerActor, {
-      title: "Shared", idempotency_key: "test-access-http-shared",
-    });
-    const testAccess = running.database.issueTestAccess("1h");
-    const qualified = await api<{ data: {
-      actor: { user_id: string; device_id: string; can_create_projects: boolean };
-      token: string;
-    } }>(running.origin, "/v1/test-access/claim", {
-      method: "POST", origin: browserOrigin,
-      headers: { "x-gatherthread-browser-session": "1" },
-      body: {
-        access_token: testAccess.access_token,
-        display_name: "Qualified",
-        device_name: "Qualified laptop",
-        remember_device: false,
-      },
-    });
-    assert.equal(qualified.status, 201);
-    assert.equal(qualified.body.data.actor.can_create_projects, true);
-    const qualifiedCookie = qualified.headers.get("set-cookie")?.split(";")[0];
-    assert.ok(qualifiedCookie);
-    const ownProject = await api<{ data: { project: { id: string; role: string } } }>(running.origin, "/v1/projects", {
-      method: "POST", cookie: qualifiedCookie, origin: browserOrigin,
-      body: { title: "Qualified project", idempotency_key: "qualified-http-project" },
-    });
-    assert.equal(ownProject.status, 201);
-    assert.equal(ownProject.body.data.project.role, "owner");
-
-    const guestInvite = running.service.createProjectInvitation(ownerActor, shared.id, { role: "participant", ttl: "1h" });
-    const guest = await api<{ data: {
-      actor: { user_id: string; can_create_projects: boolean };
-      token: string;
-    } }>(running.origin, "/v1/invitations/claim", {
-      method: "POST", origin: browserOrigin,
-      headers: { "x-gatherthread-browser-session": "1" },
-      body: {
-        invite_token: guestInvite.invite_token,
-        display_name: "Guest", device_name: "Guest laptop",
-      },
-    });
-    assert.equal(guest.status, 201);
-    assert.equal(guest.body.data.actor.can_create_projects, false);
-    const guestCookie = guest.headers.get("set-cookie")?.split(";")[0];
-    assert.ok(guestCookie);
-    const guestProjects = await api<{ data: { projects: Array<{ id: string }> } }>(running.origin, "/v1/projects", {
-      cookie: guestCookie,
-    });
-    assert.deepEqual(guestProjects.body.data.projects.map((project) => project.id), [shared.id]);
-    const forbiddenProject = await api<{ error: { code: string } }>(running.origin, "/v1/projects", {
-      method: "POST", cookie: guestCookie, origin: browserOrigin,
-      body: { title: "Denied", idempotency_key: "guest-http-project-denied" },
-    });
-    assert.equal(forbiddenProject.status, 403);
-    const forbiddenLegacySession = await api<{ error: { code: string } }>(running.origin, "/v1/sessions", {
-      method: "POST", cookie: guestCookie, origin: browserOrigin,
-      body: { title: "Denied legacy project", mode: "solo", idempotency_key: "guest-http-legacy-denied" },
-    });
-    assert.equal(forbiddenLegacySession.status, 403);
-
-    const existingLogin = await api<{ data: { actor: { username: string; can_create_projects: boolean } } }>(
-      running.origin, "/v1/browser-sessions", {
-        method: "POST", token: qualified.body.data.token, origin: browserOrigin,
-        body: { display_name: "Qualified renamed", device_name: "New device label", remember_device: false },
-      },
-    );
-    assert.equal(existingLogin.status, 201);
-    assert.equal(existingLogin.body.data.actor.username, "Qualified renamed");
-    assert.equal(existingLogin.body.data.actor.can_create_projects, true);
-    assert.equal(running.service.listDevices(running.database.authenticate(qualified.body.data.token))
-      .find((device) => device.id === qualified.body.data.actor.device_id)?.name, "New device label");
-
-    const fullInvite = running.service.createProjectInvitation(ownerActor, shared.id, { role: "viewer", ttl: "1h" });
-    const accepted = await api<unknown>(running.origin, "/v1/invitations/accept", {
-      method: "POST", token: qualified.body.data.token, origin: browserOrigin,
-      body: { invite_token: fullInvite.invite_token },
-    });
-    assert.equal(accepted.status, 200);
-    const qualifiedProjects = await api<{ data: { projects: Array<{ id: string; role: string }> } }>(
-      running.origin, "/v1/projects", { token: qualified.body.data.token },
-    );
-    assert.deepEqual(new Map(qualifiedProjects.body.data.projects.map((project) => [project.id, project.role])),
-      new Map([[shared.id, "viewer"], [ownProject.body.data.project.id, "owner"]]));
-  } finally {
-    await running.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
 
 test("DSH device pairing is Host-initiated, browser-approved, single-use, and CSRF protected", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-dsh-pairing-"));
@@ -251,12 +150,12 @@ test("DSH device pairing is Host-initiated, browser-approved, single-use, and CS
     allowedOrigins: [browserOrigin],
   }, 0);
   try {
-    const bootstrap = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const bootstrap = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "browser-device", device_name: "Browser" },
     });
     const ownerToken = bootstrap.body.data.token;
-    const browserSession = await api<{ data: { actor: { id: string } } }>(running.origin, "/v1/browser-sessions", {
+    const browserSession = browserSessionFixture(running, {
       method: "POST",
       token: ownerToken,
       origin: browserOrigin,
@@ -457,7 +356,7 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
   }, 0);
   let socket: WebSocket | undefined;
   try {
-    const bootstrap = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const bootstrap = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
@@ -474,7 +373,7 @@ test("HTTP replay and WebSocket reconnect provide ordered multi-client updates",
       token: ownerToken,
       body: { role: "participant", ttl: "1h" },
     });
-    const member = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+    const member = invitationFixture(running, {
       method: "POST",
       body: {
         invite_token: invitation.body.data.invite_token,
@@ -575,7 +474,7 @@ test("HTTP project participants create personal solos that remain read only to t
     allowHttpBootstrap: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
@@ -586,7 +485,7 @@ test("HTTP project participants create personal solos that remain read only to t
     const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/projects/personal-http/invitations", {
       method: "POST", token: owner.body.data.token, body: { role: "participant", ttl: "1h" },
     });
-    const participant = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+    const participant = invitationFixture(running, {
       method: "POST",
       body: {
         invite_token: invitation.body.data.invite_token,
@@ -645,7 +544,7 @@ test("owner project and session renames validate input while session metadata re
   }, 0);
   let socket: WebSocket | undefined;
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "rename-owner", display_name: "Owner", device_id: "rename-owner-device", device_name: "Laptop" },
     });
@@ -660,7 +559,7 @@ test("owner project and session renames validate input while session metadata re
     const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/projects/rename-project/invitations", {
       method: "POST", token: owner.body.data.token, body: { role: "participant", ttl: "1h" },
     });
-    const member = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+    const member = invitationFixture(running, {
       method: "POST",
       body: { invite_token: invitation.body.data.invite_token, user_id: "rename-member", display_name: "Member", device_id: "rename-member-device", device_name: "Phone" },
     });
@@ -743,7 +642,7 @@ test("cloud delete endpoints enforce creator authority and revoke deleted realti
   }, 0);
   let socket: WebSocket | undefined;
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "delete-owner", display_name: "Owner", device_id: "delete-owner-device", device_name: "Laptop" },
     });
@@ -758,7 +657,7 @@ test("cloud delete endpoints enforce creator authority and revoke deleted realti
     const invitation = await api<{ data: { invite_token: string } }>(running.origin, "/v1/projects/cloud-delete-project/invitations", {
       method: "POST", token: owner.body.data.token, body: { role: "participant", ttl: "1h" },
     });
-    const participant = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+    const participant = invitationFixture(running, {
       method: "POST",
       body: {
         invite_token: invitation.body.data.invite_token,
@@ -821,7 +720,7 @@ test("project invitations grant current and future sessions while viewer ACL sta
     allowHttpBootstrap: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
@@ -851,7 +750,7 @@ test("project invitations grant current and future sessions while viewer ACL sta
       token: owner.body.data.token,
       body: { role: "viewer", ttl: "24h" },
     });
-    const viewer = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+    const viewer = invitationFixture(running, {
       method: "POST",
       body: {
         invite_token: invitation.body.data.invite_token,
@@ -939,7 +838,7 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
   }, 0);
   let socket: WebSocket | undefined;
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
@@ -1039,14 +938,11 @@ test("browser sessions survive refresh, reject CSRF writes, and revoke on logout
     allowHttpBootstrap: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
-    const opened = await api<{ data: { actor: { id: string }; expires_at: string } }>(
-      running.origin,
-      "/v1/browser-sessions",
-      { method: "POST", token: owner.body.data.token, origin: browserOrigin },
+    const opened = browserSessionFixture(running, { method: "POST", token: owner.body.data.token, origin: browserOrigin },
     );
     assert.equal(opened.status, 201);
     assert.equal(opened.body.data.actor.id, "owner");
@@ -1100,7 +996,7 @@ test("browser sessions survive refresh, reject CSRF writes, and revoke on logout
       origin: browserOrigin,
       body: { role: "participant", ttl: "1h" },
     });
-    const claimed = await api<IdentityResponse>(running.origin, "/v1/invitations/claim", {
+    const claimed = invitationFixture(running, {
       method: "POST",
       origin: browserOrigin,
       headers: { "x-gatherthread-browser-session": "1" },
@@ -1128,7 +1024,7 @@ test("browser sessions survive refresh, reject CSRF writes, and revoke on logout
     assert.match(logout.headers.get("set-cookie") ?? "", /^gatherthread_session=;.*HttpOnly;.*SameSite=Strict;.*Max-Age=0;/);
     assert.equal((await api(running.origin, "/v1/me", { cookie })).status, 401);
 
-    const reopened = await api(running.origin, "/v1/browser-sessions", {
+    const reopened = browserSessionFixture(running, {
       method: "POST",
       token: owner.body.data.token,
       origin: browserOrigin,
@@ -1156,7 +1052,7 @@ test("blocked snapshot mutation revalidates browser session after logout before 
     allowHttpBootstrap: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
@@ -1165,7 +1061,7 @@ test("blocked snapshot mutation revalidates browser session after logout before 
       token: owner.body.data.token,
       body: { session_id: "race-room", idempotency_key: "race-room-create", mode: "multi", title: "Race" },
     });
-    const opened = await api(running.origin, "/v1/browser-sessions", {
+    const opened = browserSessionFixture(running, {
       method: "POST",
       token: owner.body.data.token,
       origin: browserOrigin,
@@ -1235,11 +1131,11 @@ test("remembered browser sessions persist for 30 days and the current device can
     allowHttpBootstrap: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Safari · macOS" },
     });
-    const opened = await api<{ data: { expires_at: string } }>(running.origin, "/v1/browser-sessions", {
+    const opened = browserSessionFixture(running, {
       method: "POST",
       token: owner.body.data.token,
       origin: browserOrigin,
@@ -1248,7 +1144,7 @@ test("remembered browser sessions persist for 30 days and the current device can
     assert.equal(opened.status, 201);
     const setCookie = opened.headers.getSetCookie().find((value) => value.startsWith("gatherthread_session=")) ?? "";
     assert.match(setCookie, /; Max-Age=2592000; Expires=[^;]+ GMT$/);
-    assert.ok(opened.headers.getSetCookie().some((value) => value.startsWith("gatherthread_remembered=gtr_")));
+    assert.equal(opened.headers.getSetCookie().length, 1);
     const remaining = Date.parse(opened.body.data.expires_at) - Date.now();
     assert.ok(remaining > 29 * 24 * 60 * 60 * 1_000);
     assert.ok(remaining <= 30 * 24 * 60 * 60 * 1_000);
@@ -1284,164 +1180,8 @@ test("remembered browser sessions persist for 30 days and the current device can
   }
 });
 
-test("legacy remembered sessions adopt only through an origin-checked explicit write", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "gatherthread-legacy-remembered-"));
-  const browserOrigin = "http://client.test";
-  const running = await startCollaborationServer({
-    databasePath: join(directory, "server.sqlite"), allowedOrigins: [browserOrigin],
-    authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true,
-  }, 0);
-  try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
-      method: "POST", body: { display_name: "Owner", device_name: "Laptop" },
-    });
-    const opened = await api(running.origin, "/v1/browser-sessions", {
-      method: "POST", token: owner.body.data.token, origin: browserOrigin,
-      body: { remember_device: true },
-    });
-    const sessionCookie = opened.headers.getSetCookie().find((value) => value.startsWith("gatherthread_session="))?.split(";", 1)[0];
-    assert.ok(sessionCookie);
-    running.database.sqlite.prepare("DELETE FROM remembered_browsers").run();
-    const vaultCount = () => (running.database.sqlite.prepare("SELECT COUNT(*) AS count FROM remembered_browsers")
-      .get() as { count: number }).count;
-    const anonymousGet = await api(running.origin, "/v1/me", { cookie: sessionCookie });
-    assert.equal(anonymousGet.status, 200);
-    assert.equal(anonymousGet.headers.getSetCookie().length, 0);
-    assert.equal(vaultCount(), 0);
-    const crossSiteGet = await api(running.origin, "/v1/me", { cookie: sessionCookie, origin: "http://attacker.test" });
-    assert.equal(crossSiteGet.status, 403);
-    assert.equal(vaultCount(), 0);
-    const denied = await api(running.origin, "/v1/remembered-accounts/adopt-current-session", {
-      method: "POST", cookie: sessionCookie, body: {},
-    });
-    assert.equal(denied.status, 403);
-    assert.equal(vaultCount(), 0);
-    const adopted = await api(running.origin, "/v1/remembered-accounts/adopt-current-session", {
-      method: "POST", cookie: sessionCookie, origin: browserOrigin, body: {},
-    });
-    assert.equal(adopted.status, 200);
-    assert.equal(vaultCount(), 1);
-    assert.ok(adopted.headers.getSetCookie().some((value) => value.startsWith("gatherthread_remembered=")));
-  } finally {
-    await running.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
 
-test("remembered account chooser survives logout, requires origin for activation, and supports explicit forget", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "gatherthread-remembered-accounts-http-"));
-  const browserOrigin = "http://client.test";
-  const running = await startCollaborationServer({
-    databasePath: join(directory, "server.sqlite"),
-    authTokenPepper: TEST_PEPPER,
-    allowHttpBootstrap: true,
-    allowedOrigins: [browserOrigin],
-  }, 0);
-  const cookies = (headers: Headers): string[] => headers.getSetCookie()
-    .map((value) => value.split(";", 1)[0])
-    .filter((value): value is string => Boolean(value));
-  const vault = (items: string[]) => items.find((value) => value.startsWith("gatherthread_remembered=")) ?? "";
-  try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
-      method: "POST", body: { display_name: "Owner", device_name: "Owner laptop" },
-    });
-    const member = running.database.createIdentity({ display_name: "Member", device_name: "Member laptop" });
-    const ownerLogin = await api(running.origin, "/v1/browser-sessions", {
-      method: "POST", token: owner.body.data.token, origin: browserOrigin,
-      body: { remember_device: true },
-    });
-    assert.equal(ownerLogin.status, 201);
-    const ownerCookies = cookies(ownerLogin.headers);
-    assert.equal(ownerCookies.length, 2);
-    const memberLogin = await api(running.origin, "/v1/browser-sessions", {
-      method: "POST", token: member.token, cookie: vault(ownerCookies), origin: browserOrigin,
-      body: { remember_device: true },
-    });
-    assert.equal(memberLogin.status, 201);
-    const memberCookies = cookies(memberLogin.headers);
-    const listed = await api<{ data: { accounts: Array<{ id: string; display_name: string; device_name: string }> } }>(
-      running.origin, "/v1/remembered-accounts", { cookie: vault(memberCookies) },
-    );
-    assert.equal(listed.status, 200);
-    assert.deepEqual(new Set(listed.body.data.accounts.map((account) => account.display_name)), new Set(["Owner", "Member"]));
 
-    const ownerChoice = listed.body.data.accounts.find((account) => account.display_name === "Owner");
-    assert.ok(ownerChoice);
-    const denied = await api(running.origin, `/v1/remembered-accounts/${ownerChoice.id}/activate`, {
-      method: "POST", cookie: vault(memberCookies),
-      body: { display_name: "Owner", device_name: "Owner laptop" },
-    });
-    assert.equal(denied.status, 403);
-    const logout = await api(running.origin, "/v1/browser-sessions/current", {
-      method: "DELETE", cookie: memberCookies.join("; "), origin: browserOrigin,
-    });
-    assert.equal(logout.status, 204);
-    assert.equal((await api(running.origin, "/v1/me", { cookie: memberCookies[0] ?? "" })).status, 401);
-    assert.equal((await api(running.origin, "/v1/remembered-accounts", { cookie: vault(memberCookies) })).status, 200);
-
-    const activated = await api<{ data: { actor: { username: string } } }>(
-      running.origin, `/v1/remembered-accounts/${ownerChoice.id}/activate`, {
-        method: "POST", cookie: vault(memberCookies), origin: browserOrigin,
-        body: { display_name: "Owner updated", device_name: "Mac updated" },
-      },
-    );
-    assert.equal(activated.status, 201);
-    assert.equal(activated.body.data.actor.username, "Owner updated");
-    const activatedCookies = cookies(activated.headers);
-    assert.equal(activatedCookies.length, 2);
-    assert.equal((await api(running.origin, "/v1/remembered-accounts", { cookie: vault(memberCookies) })).status, 401);
-    const updatedList = await api<typeof listed.body>(running.origin, "/v1/remembered-accounts", {
-      cookie: vault(activatedCookies),
-    });
-    assert.equal(updatedList.body.data.accounts.find((account) => account.id === ownerChoice.id)?.device_name, "Mac updated");
-
-    const forgot = await api(running.origin, `/v1/remembered-accounts/${ownerChoice.id}`, {
-      method: "DELETE", cookie: vault(activatedCookies), origin: browserOrigin,
-    });
-    assert.equal(forgot.status, 204);
-    const finalList = await api<typeof listed.body>(running.origin, "/v1/remembered-accounts", {
-      cookie: vault(cookies(forgot.headers)),
-    });
-    assert.deepEqual(finalList.body.data.accounts.map((account) => account.display_name), ["Member"]);
-  } finally {
-    await running.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("a failed optional remembered-account write does not consume a one-use claim without delivering its device token", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "gatherthread-claim-remember-failure-"));
-  const browserOrigin = "http://client.test";
-  const running = await startCollaborationServer({
-    databasePath: join(directory, "server.sqlite"), authTokenPepper: TEST_PEPPER,
-    allowHttpBootstrap: true, allowedOrigins: [browserOrigin],
-  }, 0);
-  try {
-    const owner = running.database.bootstrapIdentity({ display_name: "Owner", device_name: "Owner laptop" });
-    const project = running.service.createProject(owner.actor, { title: "Project", idempotency_key: "remember-failure-project" });
-    const invitation = running.service.createProjectInvitation(owner.actor, project.id, { role: "participant" });
-    const qualification = running.database.issueTestAccess("1h");
-    running.database.sqlite.exec(`CREATE TRIGGER fail_remembered_account_insert
-      BEFORE INSERT ON remembered_accounts BEGIN SELECT RAISE(FAIL, 'injected remembered-account failure'); END`);
-    for (const [path, credential] of [
-      ["/v1/test-access/claim", { access_token: qualification.access_token }],
-      ["/v1/invitations/claim", { invite_token: invitation.invite_token }],
-    ] as const) {
-      const claimed = await api<IdentityResponse>(running.origin, path, {
-        method: "POST", origin: browserOrigin, headers: { "x-gatherthread-browser-session": "1" },
-        body: { ...credential, display_name: "Claimant", device_name: "Claimant laptop", remember_device: true },
-      });
-      assert.equal(claimed.status, 201);
-      assert.ok(claimed.body.data.token);
-      assert.equal(running.database.authenticate(claimed.body.data.token).user_id, claimed.body.data.actor.user_id);
-      assert.ok(claimed.headers.getSetCookie().some((value) => value.startsWith("gatherthread_session=")));
-      assert.equal(claimed.headers.getSetCookie().some((value) => value.startsWith("gatherthread_remembered=")), false);
-    }
-  } finally {
-    await running.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
 
 test("secure owner hosts issue __Host- browser session cookies", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gatherthread-secure-cookie-"));
@@ -1454,11 +1194,11 @@ test("secure owner hosts issue __Host- browser session cookies", async () => {
     secureTransport: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
-    const opened = await api(running.origin, "/v1/browser-sessions", {
+    const opened = browserSessionFixture(running, {
       method: "POST",
       token: owner.body.data.token,
       origin: browserOrigin,
@@ -1489,12 +1229,9 @@ test("network bootstrap, URL credentials, direct bearer sockets, and unapproved 
       device_id: "owner-device",
       device_name: "Laptop",
     });
-    const bootstrap = await api<{ error: { code: string } }>(running.origin, "/v1/bootstrap", {
-      method: "POST",
-      body: { display_name: "Attacker", device_name: "Browser" },
-    });
-    assert.equal(bootstrap.status, 401);
-    assert.equal(bootstrap.body.error.code, "unauthorized");
+    const bootstrap = await api<{ error: { code: string } }>(running.origin, "/v1/bootstrap", { method: "POST", body: { display_name: "Attacker", device_name: "Browser" } });
+    assert.equal(bootstrap.status, 410);
+    assert.equal(bootstrap.body.error.code, "account_flow_retired");
 
     const queryCredential = await api<{ error: { code: string } }>(
       running.origin,
@@ -1661,7 +1398,7 @@ test("revoking a device closes its realtime socket and invalidates delegated aut
   }, 0);
   let socket: WebSocket | undefined;
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
@@ -1709,7 +1446,7 @@ test("project membership removal closes realtime immediately without leaking a c
   }, 0);
   let socket: WebSocket | undefined;
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST",
       body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
@@ -1767,7 +1504,7 @@ test("participants and viewers can leave an invited project but cannot remove ot
     databasePath: join(directory, "server.sqlite"), authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST", body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
     const project = await api<{ data: { project: { id: string } } }>(running.origin, "/v1/projects", {
@@ -1884,7 +1621,7 @@ test("HTTP exposes idempotent local turns and snapshot request control-plane", a
     databasePath: join(directory, "server.sqlite"), authTokenPepper: TEST_PEPPER, allowHttpBootstrap: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST", body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
     const token = owner.body.data.token;
@@ -2039,7 +1776,7 @@ test("only the author can pause their Agent request over HTTP", async () => {
     allowHttpBootstrap: true,
   }, 0);
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST", body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
     const ownerToken = owner.body.data.token;
@@ -2111,7 +1848,7 @@ test("a pause reaches every subscribed member without waiting for a replay", asy
   }, 0);
   let socket: WebSocket | undefined;
   try {
-    const owner = await api<IdentityResponse>(running.origin, "/v1/bootstrap", {
+    const owner = identityFixture(running, {
       method: "POST", body: { user_id: "owner", display_name: "Owner", device_id: "owner-device", device_name: "Laptop" },
     });
     const ownerToken = owner.body.data.token;

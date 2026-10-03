@@ -700,3 +700,4 @@ export interface ApiErrorBody {
 }
 
 export * from "./hosted-github.js";
+export * from "./registration.js";

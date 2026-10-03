@@ -4,6 +4,8 @@
 **Status**: proposed
 **Deciders**: pending project-lead review
 
+> User account onboarding and quick login are superseded in the unreleased [ADR-0036](0036-verified-email-registration-and-password-login.md). This record preserves the historical decision.
+
 ## Context
 
 The original private Alpha used a project invitation for both first account creation and access to that project. After claiming it, every authenticated account could create its own project. That conflated permission to participate in a specific collaboration with permission to create new hosted workspaces. A project owner should be able to invite a guest into one project without issuing general Alpha testing qualification.

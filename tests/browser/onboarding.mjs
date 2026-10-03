@@ -49,8 +49,8 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
       Storage.prototype.setItem = function (key, value) { if (key.startsWith('gatherthread.onboarding.')) throw Error('Denied'); return set.call(this, key, value); };
     }
   }, { locale, empty, viewer, deniedStorage });
-  await page.locator('#auth-select-login').click(); await page.locator('#token').fill('demo-token');
-  await page.locator('#login-form button[type=submit]').click();
+  await page.locator('#auth-select-email-login').click(); await page.locator('#email-login-email').fill('demo@example.invalid'); await page.locator('#email-login-password').fill('isolated demo password');
+  await page.locator('#email-login-form button[type=submit]').click();
   await page.locator('#code-notice-dialog[open]').waitFor();
   assert.equal(await page.locator('iframe').count(), 0, 'required notice precedes guide');
   await page.locator('#code-notice-continue').click();

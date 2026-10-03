@@ -3112,6 +3112,15 @@ time,
   line-height: 1.5;
 }
 
+.codex-cli-recovery-hint p {
+  margin: 8px 0 0;
+}
+
+.codex-cli-recovery-hint .connector-command {
+  margin-left: 0;
+  width: 100%;
+}
+
 .connection-preview-banner {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
