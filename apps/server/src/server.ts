@@ -616,10 +616,14 @@ export async function startCollaborationServer(
             const result = await database.registration.send(SendPasswordResetInputSchema.parse(await readJson(request, 8192)), browser, ip, registration!, "password-reset");
             sendJson(response, 202, { data: PasswordResetSentSchema.parse({ reset_id: result.registration_id, expires_in_seconds: result.expires_in_seconds, resend_after_seconds: result.resend_after_seconds }) });
           } else {
-            const userId = await database.resetPassword(VerifyPasswordResetInputSchema.parse(await readJson(request, 8192)), browser, ip, registration!);
+            const input = VerifyPasswordResetInputSchema.parse(await readJson(request, 8192));
+            const userId = await database.resetPassword(input, browser, ip, registration!);
             dshPairings.revokeUser(userId);
             for (const [value, ticket] of realtimeTickets) if (ticket.actor.user_id === userId) realtimeTickets.delete(value);
             for (const [socket, state] of sockets) if (state.actor.user_id === userId) { socket.close(1008, "password_reset"); sockets.delete(socket); }
+            // All database and in-memory authorization is revoked before any notification wait.
+            // The notice budget was reserved during verification; attempt once, without retry or provider logging.
+            try { await registration!.mailer!.notifyPasswordChanged!({ email: input.email, locale: input.locale, deliveryId: input.reset_id }); } catch { /* reset remains committed */ }
             sendJson(response, 200, { data: { reset: true } });
           }
           return;
@@ -671,7 +675,10 @@ export async function startCollaborationServer(
         const result = dshPairings.poll(
           parts[2],
           dshPairingPollToken(request.headers.authorization),
-          (userId, deviceName, deviceId) => database.createDevice(userId, deviceName, deviceId),
+          (authorizer, deviceName, deviceId) => {
+            database.assertActiveDevice(authorizer);
+            return database.createDevice(authorizer.user_id, deviceName, deviceId);
+          },
         );
         sendJson(response, result.status === "pending" ? 202 : 201, { data: result });
         return;

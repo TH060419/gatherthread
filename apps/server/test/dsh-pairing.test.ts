@@ -55,9 +55,10 @@ test("DSH pairing keeps the long-lived credential out of the browser approval", 
   assert.equal(JSON.stringify(approval).includes("gta_"), false);
 
   let issued = 0;
-  const paired = f.broker.poll(intent.pairing_id, intent.poll_token, (userId, deviceName, deviceId) => {
+  const paired = f.broker.poll(intent.pairing_id, intent.poll_token, (authorizer, deviceName, deviceId) => {
     issued += 1;
-    assert.equal(userId, "owner");
+    assert.equal(authorizer.user_id, "owner");
+    assert.equal(authorizer.device_id, "browser-device");
     assert.equal(deviceName, "DeepSeek Harness · macOS");
     assert.match(deviceId, /^dsh_/u);
     return {

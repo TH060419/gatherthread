@@ -1186,8 +1186,7 @@ export class CollaborationDatabase {
       if (error instanceof PasswordCapacityError) throw new ApiError(503, "password_busy", "Sign-in is busy. Please try again.");
       throw error;
     }
-    // Password changes are committed even when notification delivery is uncertain; never retry or log provider data.
-    try { await options.mailer!.notifyPasswordChanged!({ email: input.email, locale: input.locale, deliveryId: input.reset_id }); } catch { /* bounded best-effort notification */ }
+    // Return immediately after commit. The service must revoke in-memory grants before awaiting notification delivery.
     return userId;
   }
 

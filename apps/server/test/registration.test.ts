@@ -333,15 +333,14 @@ test("retired user routes cannot issue accounts or Cookies; old Cookies cannot l
 
 function recoveryFixture() {
   const f = fixture();
-  const notices: Array<{ email: string; deliveryId: string }> = [];
   f.options.recoveryEnabled = true;
-  f.options.mailer!.notifyPasswordChanged = async (message) => { notices.push(message); };
+  f.options.mailer!.notifyPasswordChanged = async () => {};
   const request = (email = "new@example.invalid") => ({ email, locale: "en" as const, challenge_token: randomUUID(), idempotency_key: randomUUID() });
   const resetInput = (id: string, code = f.mails.at(-1)!.code, email = "new@example.invalid") => ({ reset_id: id, email, code,
     password: "isolated replacement password 82", password_confirmation: "isolated replacement password 82", locale: "en" as const });
   const enroll = async () => { const sent = await f.send(); return f.db.verifyPublicRegistration(f.input(sent.registration_id), "browser1", "ip1", f.options); };
   const sendReset = (email = "new@example.invalid", browser = "recovery-browser") => f.db.registration.send(request(email), browser, "recovery-ip", f.options, "password-reset");
-  return { ...f, notices, request, resetInput, enroll, sendReset };
+  return { ...f, request, resetInput, enroll, sendReset };
 }
 
 test("recovery preserves identity/projects and atomically revokes all browsers, Agents and pending authorizations without auto-login", async () => {
@@ -364,7 +363,6 @@ test("recovery preserves identity/projects and atomically revokes all browsers, 
     const logged = await f.db.loginWithEmail({ email: input.email, password: input.password, device_name: "B", remember_device: false }, "recovery-browser", "ip");
     assert.equal(logged.actor.user_id, account.actor.user_id); assert.notEqual(logged.actor.device_id, account.actor.device_id);
     await assert.rejects(f.db.resetPassword(input, "recovery-browser", "recovery-ip", f.options), rejectCode("registration_invalid"));
-    assert.equal(f.notices.length, 1);
     const persisted = JSON.stringify(f.db.sqlite.prepare("SELECT * FROM password_reset_pending").all());
     assert.equal(persisted.includes(input.email), false); assert.equal(persisted.includes(input.password), false); assert.equal(persisted.includes(input.code), false);
   } finally { f.close(); }
@@ -427,7 +425,7 @@ test("recovery fences account changes, concurrent use, deletion and pause/expiry
   } finally { f.close(); }
 });
 
-test("recovery proof cannot reset a changed password version and notification failure never undoes committed reset", async () => {
+test("recovery proof cannot reset a changed password version", async () => {
   const f = recoveryFixture();
   try {
     const account = await f.enroll(); const sent = await f.sendReset(); const input = f.resetInput(sent.registration_id);
@@ -437,7 +435,6 @@ test("recovery proof cannot reset a changed password version and notification fa
     assert.throws(() => f.db.registration.completePasswordReset(input.reset_id, proof, "recovery-browser", "new", f.options, () => assert.fail("must not revoke")), rejectCode("registration_invalid"));
     f.db.sqlite.prepare("UPDATE public_registration_accounts SET password_hash=?").run(original);
     f.advance(61_000); const next = await f.sendReset();
-    f.options.mailer!.notifyPasswordChanged = async () => { throw new Error("private provider error"); };
     assert.equal(await f.db.resetPassword(f.resetInput(next.registration_id), "recovery-browser", "ip", f.options), account.actor.user_id);
     const row = f.db.sqlite.prepare("SELECT password_hash FROM public_registration_accounts").get()!;
     assert.equal(await checkPassword(f.resetInput(next.registration_id).password, row.password_hash as string), true);
@@ -454,7 +451,7 @@ test("registration, recovery and reset notifications share durable hard provider
     const second = f.open();
     await assert.rejects(second.resetPassword(reset, "recovery-browser", "ip", f.options), rejectCode("registration_limited"));
     await assert.rejects(f.sendReset("over@example.invalid"), rejectCode("registration_limited"));
-    second.close(); assert.equal(f.mails.length, 20); assert.equal(f.notices.length, 0);
+    second.close(); assert.equal(f.mails.length, 20);
   } finally { f.close(); }
 });
 
