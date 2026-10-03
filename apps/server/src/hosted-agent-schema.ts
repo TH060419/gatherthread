@@ -50,4 +50,23 @@ INSERT OR IGNORE INTO hosted_agent_runs
   SELECT request_event_id,session_id,user_id,device_id,utc_day,'default','legacy','legacy',
     'cloudflare-workers-ai','@cf/qwen/qwen3-30b-a3b-fp8',status,created_at,finished_at
   FROM hosted_agent_jobs;
+
+-- User cooldown and active slots survive deletion of a conversation/project.
+-- These bounded control records contain no source, prompt, token or provider key.
+CREATE TABLE IF NOT EXISTS hosted_agent_user_activity (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  last_started_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS hosted_agent_active_runs (
+  request_event_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  quota_group TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS hosted_agent_active_runs_user_idx ON hosted_agent_active_runs(user_id);
+CREATE INDEX IF NOT EXISTS hosted_agent_active_runs_group_idx ON hosted_agent_active_runs(quota_group);
+INSERT INTO hosted_agent_user_activity SELECT user_id, MAX(created_at) FROM hosted_agent_runs GROUP BY user_id
+  ON CONFLICT(user_id) DO UPDATE SET last_started_at=MAX(last_started_at,excluded.last_started_at);
+INSERT OR IGNORE INTO hosted_agent_active_runs SELECT request_event_id,user_id,quota_group,created_at
+  FROM hosted_agent_runs WHERE status='running';
 `;

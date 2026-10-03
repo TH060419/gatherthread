@@ -44,6 +44,7 @@ import {
 } from "@gatherthread/protocol";
 import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
 import type { HostedAllocation, HostedRunLimits } from "./hosted-agent-pool.js";
+import { HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./hosted-agent-pool.js";
 import { HOSTED_AGENT_SCHEMA } from "./hosted-agent-schema.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
@@ -3052,7 +3053,7 @@ export class CollaborationDatabase {
       ON CONFLICT(user_id) DO UPDATE SET daily_runs=excluded.daily_runs`).run(userId, dailyRuns);
   }
 
-  hostedAgentUsage(actor: Actor, defaultUserLimit: number, globalLimit: number) {
+  hostedAgentUsage(actor: Actor, defaultUserLimit: number | null, globalLimit: number | null) {
     this.assertActiveDevice(actor);
     const day = this.now().slice(0, 10);
     const limit = this.sqlite.prepare("SELECT daily_runs FROM hosted_agent_run_limits WHERE user_id=?")
@@ -3066,17 +3067,29 @@ export class CollaborationDatabase {
   }
 
   hostedActiveRuns(): number {
-    return (this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_runs WHERE status='running'")
+    return (this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_active_runs")
       .get() as { count: number }).count;
+  }
+
+  hostedAgentRateUsage(actor: Actor, interval = HOSTED_USER_MIN_INTERVAL_SECONDS, maxConcurrent = HOSTED_USER_MAX_CONCURRENT) {
+    this.assertActiveDevice(actor);
+    const activity = this.sqlite.prepare("SELECT last_started_at FROM hosted_agent_user_activity WHERE user_id=?")
+      .get(actor.user_id) as { last_started_at: string } | undefined;
+    const active = this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_active_runs WHERE user_id=?")
+      .get(actor.user_id) as { count: number };
+    const retryAfter = activity ? Math.max(0, Math.ceil((Date.parse(activity.last_started_at)
+      + interval * 1000 - this.clock().getTime()) / 1000)) : 0;
+    return { user_min_interval_seconds: interval, user_max_concurrent: maxConcurrent,
+      user_active_runs: active.count, retry_after_seconds: retryAfter };
   }
 
   hostedEndpointUsage(endpoint: HostedAllocation) {
     // Old preview reservations count against every account for that day because
     // the earlier schema did not record which credential paid for them.
-    return this.sqlite.prepare(`SELECT COUNT(CASE WHEN utc_day=? THEN 1 END) AS daily,
-      COUNT(CASE WHEN status='running' THEN 1 END) AS active
-      FROM hosted_agent_runs WHERE quota_group IN (?, 'legacy')`)
-      .get(this.now().slice(0, 10), endpoint.quotaGroup) as { daily: number; active: number };
+    return this.sqlite.prepare(`SELECT
+      (SELECT COUNT(*) FROM hosted_agent_runs WHERE utc_day=? AND quota_group IN (?, 'legacy')) AS daily,
+      (SELECT COUNT(*) FROM hosted_agent_active_runs WHERE quota_group IN (?, 'legacy')) AS active`)
+      .get(this.now().slice(0, 10), endpoint.quotaGroup, endpoint.quotaGroup) as { daily: number; active: number };
   }
 
   reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
@@ -3112,19 +3125,27 @@ export class CollaborationDatabase {
         }
         return { event, created: false };
       }
-      const active = this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_runs WHERE status='running'")
-        .get() as { count: number };
-      if (active.count >= limits.maxConcurrent) throw new ApiError(429, "hosted_agent_busy", "Cloud Agent is busy; try again later");
+      if (this.hostedActiveRuns() >= limits.maxConcurrent) throw new ApiError(429, "hosted_agent_busy", "Cloud Agent is busy; try again later");
       const day = this.now().slice(0, 10);
       const usage = this.hostedAgentUsage(actor, limits.userDailyRuns, limits.globalDailyRuns);
-      if (usage.user_used_runs >= usage.user_limit_runs) {
+      if (usage.user_limit_runs !== null && usage.user_used_runs >= usage.user_limit_runs) {
         throw new ApiError(429, "hosted_user_quota", "Your Cloud Agent daily allowance is used up");
       }
-      if (usage.global_used_runs >= limits.globalDailyRuns) {
+      if (limits.globalDailyRuns !== null && usage.global_used_runs >= limits.globalDailyRuns) {
         throw new ApiError(503, "hosted_global_budget", "Cloud Agent daily capacity is used up");
       }
+      const rate = this.hostedAgentRateUsage(actor, limits.userMinIntervalSeconds, limits.userMaxConcurrent);
+      if (rate.user_active_runs >= rate.user_max_concurrent) {
+        throw new ApiError(429, "hosted_user_busy", "Your Cloud Agent task is still running; wait for it to finish");
+      }
+      if (rate.retry_after_seconds > 0) {
+        throw new ApiError(429, "hosted_user_rate_limit", "Please wait before starting another Cloud Agent task", {
+          retry_after_seconds: rate.retry_after_seconds,
+        });
+      }
       const candidates = endpoints.map((endpoint) => ({ endpoint, usage: this.hostedEndpointUsage(endpoint) }));
-      const selected = candidates.filter(({ endpoint, usage }) => !endpoint.blocked && usage.daily < endpoint.dailyRuns
+      const selected = candidates.filter(({ endpoint, usage }) => !endpoint.blocked
+        && (endpoint.dailyRuns === null || usage.daily < endpoint.dailyRuns)
         && usage.active < endpoint.maxConcurrent).sort((a, b) => a.usage.active - b.usage.active
           || a.usage.daily - b.usage.daily)[0]?.endpoint;
       if (!selected) throw new ApiError(429, "hosted_profile_busy", "The selected cloud model is at capacity; try again later");
@@ -3136,6 +3157,10 @@ export class CollaborationDatabase {
         profile_id,endpoint_id,quota_group,provider,model,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'running',?)`)
         .run(event.id, sessionId, actor.user_id, actor.device_id, day, selected.profileId, selected.id,
           selected.quotaGroup, selected.provider, selected.model, this.now());
+      this.sqlite.prepare(`INSERT INTO hosted_agent_user_activity(user_id,last_started_at) VALUES(?,?)
+        ON CONFLICT(user_id) DO UPDATE SET last_started_at=excluded.last_started_at`).run(actor.user_id, this.now());
+      this.sqlite.prepare("INSERT INTO hosted_agent_active_runs(request_event_id,user_id,quota_group,created_at) VALUES(?,?,?,?)")
+        .run(event.id, actor.user_id, selected.quotaGroup, this.now());
       onReserved?.(event);
       return { event, created: true, endpointId: selected.id };
     });
@@ -3143,6 +3168,7 @@ export class CollaborationDatabase {
 
   finishHostedAgentRequest(requestId: string, outcome: { content?: string }): CanonicalEvent | undefined {
     return this.transaction(() => {
+      this.sqlite.prepare("DELETE FROM hosted_agent_active_runs WHERE request_event_id=?").run(requestId);
       const job = this.sqlite.prepare("SELECT * FROM hosted_agent_runs WHERE request_event_id=?")
         .get(requestId) as { request_event_id: string; session_id: string; user_id: string; device_id: string;
           provider: string; model: string; status: string } | undefined;
@@ -3176,10 +3202,14 @@ export class CollaborationDatabase {
   failInterruptedHostedAgentJobs(): CanonicalEvent[] {
     const rows = this.sqlite.prepare("SELECT request_event_id FROM hosted_agent_runs WHERE status='running'")
       .all() as Array<{ request_event_id: string }>;
-    return rows.flatMap((row) => {
+    const events = rows.flatMap((row) => {
       const event = this.finishHostedAgentRequest(row.request_event_id, {});
       return event ? [event] : [];
     });
+    // Startup recovery also releases interrupted reservations whose original
+    // conversations were deleted while their containers ran.
+    this.sqlite.prepare("DELETE FROM hosted_agent_active_runs").run();
+    return events;
   }
 
   listProjectMentions(actor: Actor, projectId: string, beforeId?: string) {

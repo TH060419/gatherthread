@@ -50,6 +50,8 @@ const ZH_CN = Object.freeze({
   "Cloud Agent is not enabled on this server.": "此服务器尚未启用云端 Agent。",
   "Select an available cloud model.": "请选择可用的云端模型。",
   "Cloud Agent is busy; try again later": "云端 Agent 正忙，请稍后重试",
+  "Your Cloud Agent task is still running; wait for it to finish": "你的云端 Agent 任务仍在运行，请等待完成",
+  "Please wait before starting another Cloud Agent task": "请稍后再启动新的云端 Agent 任务",
   "Provider is temporarily unavailable": "模型服务商暂时不可用",
   "runs left today": "次今日可用",
   "Cloud Agent runs on this server. Choose a model without connecting a local Agent.": "云端 Agent 在服务器上运行，选择模型即可使用，无需连接本地 Agent。",

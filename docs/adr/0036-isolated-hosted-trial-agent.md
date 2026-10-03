@@ -28,8 +28,18 @@ workspace, CPU/memory/PID/time limits, and no host credentials. The only model
 connection is a short-lived Unix socket to a server-side proxy. That proxy
 accepts only the selected provider endpoint and model and puts conservative
 per-call and per-run bounds on requests. The provider token never enters the
-container. Daily user and global allocations are reserved before the canonical
-request is appended; retry uses the same idempotency key and cannot double-run.
+container. User start intervals, user/account/host slots and any configured daily
+allocations are reserved before the canonical request is appended; retry uses
+the same idempotency key and cannot double-run.
+
+The initial free candidates are SiliconFlow Qwen3.5-4B and Qwen3-8B. A reviewed
+operator preset selects exactly these two models, retains one shared account
+group and has no daily run-count allowance by default. It admits one task per
+user at a time with a 30-second minimum interval across models, projects and
+devices. Persistent bounded control records survive conversation deletion;
+single-process startup recovery releases interrupted slots while preserving
+the last accepted start. Other models keep their paid/free-tier daily ceilings.
+Pricing and provider eligibility must be reconfirmed before activation.
 
 Cloud Agent appears beside local harnesses in the shared Agent selector and settings. Operators configure one or more API endpoints, grouping the same provider/model under a public profile and same-account keys under a shared quota group. Transactional account and host capacity gates enable parallel runs. Exhaustion fails explicitly; no silent model switch or automatic replay occurs. Run reservations cover non-Cloudflare providers; provider-side spend caps are still required. The additive database migration and configuration contract are documented in [the operator guide](../HOSTED_AGENT.md).
 

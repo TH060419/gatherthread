@@ -1,7 +1,8 @@
 import { accessSync, constants, mkdirSync, statSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 import { z } from "zod";
-import { parseHostedEndpoints, HOSTED_MODEL } from "./hosted-agent-pool.js";
+import { parseHostedEndpoints, HOSTED_MODEL, siliconFlowFreePreset,
+  HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./hosted-agent-pool.js";
 import type { HostedGithubOptions } from "./hosted-github.js";
 import type { HostedAgentOptions } from "./hosted-agent.js";
 
@@ -71,6 +72,11 @@ function parseCountLimit(name: string, raw: string | undefined, fallback: number
   const count = Number(value);
   if (!Number.isSafeInteger(count) || count < 1) throw new ConfigurationError(`${name} must be a positive safe integer`);
   return count;
+}
+
+function parseHostedDailyLimit(name: string, raw: string | undefined, fallback: number | null): number | null {
+  if (raw === "none" || (raw === undefined && fallback === null)) return null;
+  return parseCountLimit(name, raw, fallback ?? 1);
 }
 
 function parseLoopbackHost(raw: string | undefined): string {
@@ -164,23 +170,42 @@ export function loadServerConfig(
     }
     const legacyRuns = (value: string | undefined, fallback: number) => value === undefined
       ? fallback : Math.floor(parseCountLimit("legacy Neuron allowance", value, fallback * 2000) / 2000);
-    const userDailyRuns = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS",
-      env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS, legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS, 1));
-    const globalDailyRuns = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_RUNS",
-      env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_RUNS, legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS, 4));
+    const preset = env.GATHERTHREAD_HOSTED_AGENT_PRESET?.trim();
+    if (preset && preset !== "siliconflow-free") throw new ConfigurationError("Unknown Cloud Agent preset");
+    if (preset && env.GATHERTHREAD_HOSTED_AGENT_ENDPOINTS?.trim()) {
+      throw new ConfigurationError("Choose a Cloud Agent preset or explicit endpoints");
+    }
+    const freePreset = preset === "siliconflow-free";
+    const userDailyRuns = parseHostedDailyLimit("GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS",
+      env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS, freePreset && env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS === undefined
+        ? null : legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_USER_DAILY_NEURONS, 1));
+    const globalDailyRuns = parseHostedDailyLimit("GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_RUNS",
+      env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_RUNS, freePreset && env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS === undefined
+        ? null : legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS, 4));
     const maxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT",
       env.GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT, 2);
-    if (userDailyRuns < 1 || userDailyRuns > 10_000 || globalDailyRuns < 1 || globalDailyRuns > 100_000 || maxConcurrent > 8) {
+    const userMinIntervalSeconds = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS",
+      env.GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MIN_INTERVAL_SECONDS);
+    const userMaxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT",
+      env.GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT, HOSTED_USER_MAX_CONCURRENT);
+    if ((userDailyRuns !== null && (userDailyRuns < 1 || userDailyRuns > 10_000))
+      || (globalDailyRuns !== null && (globalDailyRuns < 1 || globalDailyRuns > 100_000))
+      || maxConcurrent > 8 || userMaxConcurrent > maxConcurrent || userMinIntervalSeconds > 3600) {
       throw new ConfigurationError("Cloud Agent limits exceed the supported capacity");
     }
     try {
-      const raw = env.GATHERTHREAD_HOSTED_AGENT_ENDPOINTS?.trim() || JSON.stringify([{
+      const raw = freePreset ? siliconFlowFreePreset(maxConcurrent, env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true")
+        : env.GATHERTHREAD_HOSTED_AGENT_ENDPOINTS?.trim() || JSON.stringify([{
         id: "default", profile_id: "default", label: "Qwen3 · Cloudflare", provider: "cloudflare-workers-ai",
         model: HOSTED_MODEL, account_id: env.GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID?.trim(),
         token_env: "GATHERTHREAD_CLOUDFLARE_AI_TOKEN", daily_runs: 4, max_concurrent: Math.min(2, maxConcurrent),
         free_plan_confirmed: env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true",
       }]);
-      hostedAgent = { image, endpoints: parseHostedEndpoints(raw, env), userDailyRuns, globalDailyRuns, maxConcurrent };
+      const endpoints = parseHostedEndpoints(raw, env);
+      if ((userDailyRuns === null || globalDailyRuns === null) && endpoints.some((endpoint) => endpoint.dailyRuns !== null)) {
+        throw new Error("unlimited user or global runs require only confirmed zero-price endpoints");
+      }
+      hostedAgent = { image, endpoints, userDailyRuns, globalDailyRuns, maxConcurrent, userMinIntervalSeconds, userMaxConcurrent };
     } catch {
       // Validation errors can contain the private JSON input; never print them.
       throw new ConfigurationError("Invalid Cloud Agent endpoints, account quotas, or credential environment variables");

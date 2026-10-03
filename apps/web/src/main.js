@@ -2868,9 +2868,12 @@ function cloudStatusText(profile = currentCloudProfile()) {
   if (!CLOUD_AGENT_ENTRY_ENABLED) return localizer.t("Cloud Agent · coming later");
   if (!hostedAgentStatus.enabled) return localizer.t("Cloud Agent is not enabled on this server.");
   if (!profile) return localizer.t("Select an available cloud model.");
-  const reason = { available: "Ready", busy: "Cloud Agent is busy; try again later", cooldown: "Provider is temporarily unavailable", daily_limit: "Cloud Agent daily limit reached" }[profile.status];
-  const remaining = Math.max(0, hostedAgentStatus.user_limit_runs - hostedAgentStatus.user_used_runs);
-  return `${profile.provider} · ${profile.model} · ${localizer.t(reason ?? "Unavailable")} · ${remaining} ${localizer.t("runs left today")}`;
+  const reason = { available: "Ready", busy: "Cloud Agent is busy; try again later", cooldown: "Provider is temporarily unavailable",
+    daily_limit: "Cloud Agent daily limit reached", user_busy: "Your Cloud Agent task is still running; wait for it to finish",
+    rate_limit: "Please wait before starting another Cloud Agent task" }[profile.status];
+  const remaining = hostedAgentStatus.user_limit_runs === null ? ""
+    : ` · ${Math.max(0, hostedAgentStatus.user_limit_runs - hostedAgentStatus.user_used_runs)} ${localizer.t("runs left today")}`;
+  return `${profile.provider} · ${profile.model} · ${localizer.t(reason ?? "Unavailable")}${remaining}`;
 }
 
 function renderCloudModelOptions(select, stored) {
@@ -3775,7 +3778,7 @@ function syncSettingsAgentControls({ changedCheckbox } = {}) {
   const dsh = harnessSelect.value === DSH_HARNESS;
   element("settings-codex-agent-fields").hidden = harnessSelect.value !== "codex";
   element("settings-dsh-agent-fields").hidden = !dsh;
-  element("settings-cloud-agent-fields").hidden = harnessSelect.value !== "cloud" || !CLOUD_AGENT_ENTRY_ENABLED;
+  element("settings-cloud-agent-fields").hidden = !enabled.includes("cloud") || !CLOUD_AGENT_ENTRY_ENABLED;
   renderCloudStatus();
   element("settings-agent-summary").textContent = settingsAgentSummary(harnessSelect.value);
 }

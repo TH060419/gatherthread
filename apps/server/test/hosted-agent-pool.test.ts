@@ -38,7 +38,8 @@ test("operator pool validates exact model profiles, credentials, shared account 
 
 test("parallel reservations allocate separate accounts; replay and failures never multiply budget", () => {
   const directory = mkdtempSync(join(tmpdir(), "gt-pool-"));
-  const db = new CollaborationDatabase(join(directory, "db.sqlite"), { authTokenPepper: "pool-test-auth-token-pepper" });
+  let now = Date.parse("2026-10-03T00:00:00Z");
+  const db = new CollaborationDatabase(join(directory, "db.sqlite"), { authTokenPepper: "pool-test-auth-token-pepper", clock: () => new Date(now) });
   try {
     const owner = db.bootstrapIdentity({ display_name: "Owner", device_name: "Laptop" }).actor;
     const second = db.createIdentity({ display_name: "Second", device_name: "Laptop", can_create_projects: true }).actor;
@@ -64,6 +65,7 @@ test("parallel reservations allocate separate accounts; replay and failures neve
     assert.equal(db.hostedEndpointUsage(endpoints[0]!).active, 0);
     assert.equal(db.hostedEndpointUsage(endpoints[0]!).daily, 1);
     assert.equal(db.hostedAgentUsage(owner, 5, 8).user_used_runs, 1);
+    now += 30_000;
     assert.equal(db.reserveHostedAgentRequest(owner, one.id, { ...input, idempotency_key: "request-three" }, endpoints, limits).endpointId, "a");
     assert.throws(() => db.reserveHostedAgentRequest(owner, one.id, { ...input, profile_id: "other" }, endpoints, limits), /available/);
   } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
@@ -71,7 +73,8 @@ test("parallel reservations allocate separate accounts; replay and failures neve
 
 test("keys of one account share limits and never borrow another model's account", () => {
   const directory = mkdtempSync(join(tmpdir(), "gt-pool-shared-"));
-  const db = new CollaborationDatabase(join(directory, "db.sqlite"), { authTokenPepper: "pool-test-auth-token-pepper" });
+  let now = Date.parse("2026-10-03T00:00:00Z");
+  const db = new CollaborationDatabase(join(directory, "db.sqlite"), { authTokenPepper: "pool-test-auth-token-pepper", clock: () => new Date(now) });
   try {
     const owner = db.bootstrapIdentity({ display_name: "Owner", device_name: "Laptop" }).actor;
     const service = new CollaborationService(db);
@@ -80,8 +83,9 @@ test("keys of one account share limits and never borrow another model's account"
     const limits = { userDailyRuns: 5, globalDailyRuns: 8, maxConcurrent: 8 };
     const input = { profile_id: "coding", include_code: false, content: "test", idempotency_key: "shared-one" };
     const first = db.reserveHostedAgentRequest(owner, session.id, input, endpoints, limits);
-    assert.throws(() => db.reserveHostedAgentRequest(owner, session.id, { ...input, idempotency_key: "shared-two" }, endpoints, limits), /capacity/);
+    assert.throws(() => db.reserveHostedAgentRequest(owner, session.id, { ...input, idempotency_key: "shared-two" }, endpoints, limits), /still running/);
     db.finishHostedAgentRequest(first.event.id, { content: "done" });
+    now += 30_000;
     assert.throws(() => db.reserveHostedAgentRequest(owner, session.id, { ...input, idempotency_key: "shared-two" }, endpoints, limits), /capacity/);
     assert.equal(db.hostedAgentUsage(owner, 5, 8).user_used_runs, 1);
     db.setHostedAgentUserLimit(owner.user_id, 0);

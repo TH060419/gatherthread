@@ -11,7 +11,8 @@ import { redactJson } from "./redaction.js";
 import type { CollaborationService } from "./service.js";
 import type { CodeRepository } from "./code-repository.js";
 
-import { HOSTED_MODEL, validateHostedEndpoints, type HostedEndpoint } from "./hosted-agent-pool.js";
+import { HOSTED_MODEL, validateHostedEndpoints, HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT,
+  type HostedEndpoint, type HostedRunLimits } from "./hosted-agent-pool.js";
 export { HOSTED_MODEL } from "./hosted-agent-pool.js";
 export const HOSTED_HARNESS = "opencode";
 const RUN_NEURONS = 2_000;
@@ -23,12 +24,9 @@ const MAX_WORKSPACE_FILES = 100;
 const MAX_WORKSPACE_BYTES = 512_000;
 const RUN_TIMEOUT_MS = 120_000;
 
-export interface HostedAgentOptions {
+export interface HostedAgentOptions extends HostedRunLimits {
   endpoints: HostedEndpoint[];
   image: string;
-  userDailyRuns: number;
-  globalDailyRuns: number;
-  maxConcurrent: number;
   fetch?: typeof globalThis.fetch;
   runContainer?: (args: string[], timeoutMs: number) => Promise<string>;
 }
@@ -179,31 +177,43 @@ export class HostedAgent {
       ["globalDailyRuns", options.globalDailyRuns, 100_000],
       ["maxConcurrent", options.maxConcurrent, 8],
     ] as const) {
-      if (!Number.isSafeInteger(value) || value < 1 || value > maximum) throw new Error(`${name} is out of range`);
+      if (value === null && name !== "maxConcurrent" && options.endpoints.every((e) => e.dailyRuns === null)) continue;
+      if (value === null || !Number.isSafeInteger(value) || value < 1 || value > maximum) throw new Error(`${name} is out of range`);
+    }
+    const interval = options.userMinIntervalSeconds ?? HOSTED_USER_MIN_INTERVAL_SECONDS;
+    const userConcurrency = options.userMaxConcurrent ?? HOSTED_USER_MAX_CONCURRENT;
+    if (!Number.isSafeInteger(interval) || interval < 1 || interval > 3600
+      || !Number.isSafeInteger(userConcurrency) || userConcurrency < 1 || userConcurrency > options.maxConcurrent) {
+      throw new Error("Cloud Agent user rate limits are out of range");
     }
   }
 
   status(actor: Actor) {
     const usage = this.service.database.hostedAgentUsage(actor, this.options.userDailyRuns, this.options.globalDailyRuns);
+    const rateLimits = this.service.database.hostedAgentRateUsage(actor,
+      this.options.userMinIntervalSeconds, this.options.userMaxConcurrent);
     const profiles = [...new Set(this.options.endpoints.map((e) => e.profileId))].map((id) => {
       const endpoints = this.options.endpoints.filter((e) => e.profileId === id);
       const first = endpoints[0]!;
       const groups = [...new Map(endpoints.map((e) => [e.quotaGroup, e])).values()];
       const capacities = groups.map((endpoint) => {
         const used = this.service.database.hostedEndpointUsage(endpoint);
-        return { remaining: Math.max(0, endpoint.dailyRuns - used.daily),
+        return { remaining: endpoint.dailyRuns === null ? endpoint.maxConcurrent : Math.max(0, endpoint.dailyRuns - used.daily),
           slots: Math.max(0, endpoint.maxConcurrent - used.active),
           cooling: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() };
       });
       const capacity = Math.min(Math.max(0, this.options.maxConcurrent - this.service.database.hostedActiveRuns()),
         capacities.reduce((n, c) => n + (c.cooling ? 0 : Math.min(c.remaining, c.slots)), 0));
-      const dailyAvailable = usage.user_used_runs < usage.user_limit_runs && usage.global_used_runs < usage.global_limit_runs;
+      const dailyAvailable = (usage.user_limit_runs === null || usage.user_used_runs < usage.user_limit_runs)
+        && (usage.global_limit_runs === null || usage.global_used_runs < usage.global_limit_runs);
       const status = !dailyAvailable || capacities.every((c) => !c.remaining) ? "daily_limit"
+        : rateLimits.user_active_runs >= rateLimits.user_max_concurrent ? "user_busy"
+        : rateLimits.retry_after_seconds > 0 ? "rate_limit"
         : capacity > 0 ? "available" : capacities.some((c) => c.cooling) ? "cooldown" : "busy";
       return { id, label: first.label, provider: first.provider, model: first.model,
         available: status === "available", capacity, status };
     });
-    return { enabled: true, harness: HOSTED_HARNESS, ...usage, profiles,
+    return { enabled: true, harness: HOSTED_HARNESS, ...usage, rate_limits: rateLimits, profiles,
       capabilities: ["read_code", "edit_code", "terminal", "run_tests"],
       privacy: "Session text and opted-in GT Cloud code are sent to the selected model provider. Code runs in an isolated temporary container." };
   }

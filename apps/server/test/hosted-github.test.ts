@@ -24,7 +24,8 @@ const options: HostedAgentOptions = { endpoints: [{ id: "one", profileId: "codin
 
 function fixture() {
  const directory = mkdtempSync(join(tmpdir(), "gt-github-test-"));
- const db = new CollaborationDatabase(join(directory, "db"), { authTokenPepper: "github-test-pepper-long" });
+ let now = Date.parse("2026-10-03T00:00:00Z");
+ const db = new CollaborationDatabase(join(directory, "db"), { authTokenPepper: "github-test-pepper-long", clock: () => new Date(now) });
  const service = new CollaborationService(db);
  const actor = db.bootstrapIdentity({ display_name: "Owner", device_name: "Laptop" }).actor;
  const session = service.createSession(actor, { session_id: "gh-session", idempotency_key: "gh-create-session", mode: "solo", title: "GitHub" }).session;
@@ -68,6 +69,7 @@ function fixture() {
    callbackUrl: "https://gt.example/v1/hosted-github/callback", appSlug: "gatherthread-fixture", fetch: fetcher };
  const github = new HostedGithub(service, agent, runOptions, githubOptions);
  return { directory, db, service, actor, session, github, agent, runOptions, githubOptions, calls, setBase: (sha: string) => { base = sha; }, runs: () => runs,
+   advance: () => { now += 30_000; },
    close: async () => { await github.close(); db.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
 async function connect(f: ReturnType<typeof fixture>) {
@@ -125,6 +127,7 @@ unixTest("cloud GitHub refuses stale base, changed binding and replayed OAuth; c
    await f.github.close();
    const restored = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
    assert.equal(restored.view(f.actor, done.id).changes.length, 1);
+   f.advance();
    const next = restored.start(f.actor, f.session.id, { ...input, idempotency_key: "github-continue-test", continue_task_id: done.id });
    await settled(f, next.id); await restored.close(); assert.equal(restored.view(f.actor, next.id).state, "completed");
    await restored.bind(f.actor, f.session.project_id, { repository: "owner/project", base_branch: "main" });
