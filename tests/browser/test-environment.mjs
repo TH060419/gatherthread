@@ -34,7 +34,10 @@ try {
         try { await page.locator('#test-environment-banner').waitFor({ state: "visible", timeout: 8000 }); } catch (error) { console.error(JSON.stringify({errors, scripts: await page.locator('script').evaluateAll(elements => elements.map(element => element.src))})); throw error; }
         assert.equal(await page.locator('#test-environment-banner').isVisible(), true);
         assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-        await page.locator('#language').click(); await page.locator('#language').click();
+        const selectedLocale = locale === 'en' ? 'zh-CN' : 'en';
+        await page.locator('#language').click();
+        await page.waitForFunction(selected => document.documentElement.lang === selected, selectedLocale);
+        assert.equal(await page.evaluate(() => localStorage.getItem('gt-lang')), selectedLocale === 'zh-CN' ? 'zh' : 'en');
         await page.screenshot({ path: join(output, `${name}-gate-${width}-${locale}.png`), fullPage: true });
         await page.locator('#admission-code').focus(); await page.keyboard.press(name === 'webkit' && process.platform === 'darwin' ? 'Alt+Tab' : 'Tab');
         assert.equal(await page.locator('#enter').evaluate(element => element === document.activeElement), true);
@@ -47,8 +50,17 @@ try {
         await page.waitForURL('**/app/#settings-account');
         if (emailAccounts) {
           await page.locator('#auth-select-register').waitFor();
-          if (locale === 'zh-CN') await page.locator('#auth-language-button').click();
+          // One gate switch must carry into sign-in without a compensating app switch.
+          await page.waitForFunction(selected => document.documentElement.lang === selected, selectedLocale);
+          const gateTab = await context.newPage(); gateTab.on('pageerror', error => errors.push(error.message));
+          await gateTab.goto(origin + '/test-gate/index.html');
+          await gateTab.waitForFunction(selected => document.documentElement.lang === selected, selectedLocale);
+          // Changing the shared preference in the app updates an already open gate tab.
+          await page.locator('#auth-language-button').click();
           await page.waitForFunction(locale => document.documentElement.lang === locale, locale);
+          await gateTab.waitForFunction(locale => document.documentElement.lang === locale, locale);
+          await gateTab.reload(); await gateTab.waitForFunction(locale => document.documentElement.lang === locale, locale);
+          await gateTab.close();
           assert.match(await page.locator('#test-environment-banner').textContent(), locale === 'zh-CN' ? /测试环境/ : /Test environment/);
           if (width === 1440 && locale === 'en') {
             await page.locator('#auth-select-register').click();
@@ -80,10 +92,38 @@ try {
         // Screenshots are taken only after inputs have been cleared and contain no credentials.
         await page.screenshot({ path: join(output, `${name}-${width}-${locale}.png`), fullPage: true });
         await page.locator('#test-environment-banner button').click(); await page.locator('#admission-code').waitFor();
+        await page.waitForFunction(locale => document.documentElement.lang === locale, locale);
+        await page.reload(); await page.locator('#admission-code').waitFor();
+        await page.waitForFunction(locale => document.documentElement.lang === locale, locale);
         const api = await context.request.get(origin + '/v1/me'); assert.equal(api.status(), 403);
         await context.close();
       }
+      for (const [locale, stored] of [['en', 'zh'], ['zh-CN', 'en']]) {
+        const context = await browser.newContext({ locale }), page = await context.newPage(), errors = [];
+        page.on('pageerror', error => errors.push(error.message));
+        await page.goto(origin + '/app/');
+        await page.evaluate(value => localStorage.setItem('gt-lang', value), stored);
+        await page.reload(); await page.locator('#admission-code').waitFor();
+        const expected = stored === 'zh' ? 'zh-CN' : 'en';
+        await page.waitForFunction(locale => document.documentElement.lang === locale, expected);
+        await page.locator('#admission-code').fill(grant.admission_code); await page.locator('#enter').click();
+        await page.locator('#auth-select-register').waitFor();
+        await page.waitForFunction(locale => document.documentElement.lang === locale, expected);
+        await page.locator('#test-environment-banner button').click(); await page.locator('#admission-code').waitFor();
+        await page.waitForFunction(locale => document.documentElement.lang === locale, expected);
+        assert.deepEqual(errors, []); await context.close();
+      }
+      const restricted = await browser.newContext({ locale: 'en' }), restrictedPage = await restricted.newPage(), errors = [];
+      restrictedPage.on('pageerror', error => errors.push(error.message));
+      await restrictedPage.addInitScript(() => Object.defineProperty(window, 'localStorage', { configurable: true,
+        get() { throw new DOMException('Fixture storage restriction', 'SecurityError'); } }));
+      await restrictedPage.goto(origin + '/app/'); await restrictedPage.locator('#admission-code').waitFor();
+      await restrictedPage.locator('#language').click();
+      await restrictedPage.waitForFunction(() => document.documentElement.lang === 'zh-CN');
+      await restrictedPage.locator('#admission-code').fill('unavailable-fixture'); await restrictedPage.locator('#enter').click();
+      await restrictedPage.waitForFunction(() => document.querySelector('#feedback').textContent.includes('代码不可用'));
+      assert.deepEqual(errors, []); await restricted.close();
     } finally { await browser.close(); }
   }
-  console.log(`Chromium/WebKit: 8 bilingual desktop/mobile admission, keyboard, storage, logout and ${emailAccounts ? 'mock email registration/session restoration' : 'dependency pending-page'} checks passed.`);
+  console.log(`Chromium/WebKit: 8 bilingual desktop/mobile admission and single-switch cross-entry/tab/refresh flows, 4 existing language preference flows and 2 restricted-storage flows passed; ${emailAccounts ? 'mock email registration/session restoration' : 'dependency pending-page'} checks passed.`);
 } finally { await server.close(); admin.close(); rmSync(directory, { recursive: true, force: true }); }

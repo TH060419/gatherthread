@@ -26,7 +26,7 @@ const STRING_PATTERNS: readonly [RegExp, string][] = [
   [/\b(?:(?:gt[abid]|gteg?)|acp(?:i|d)?)_[A-Za-z0-9_-]{20,}\b/gi, "[REDACTED]"],
   [/\b(?:sk|key)-[A-Za-z0-9_-]{12,}\b/g, "[REDACTED]"],
   [/(\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd|private[_-]?key|refresh[_-]?token|secret|token)\s*[=:]\s*)[^\s,;]+/gi, "$1[REDACTED]"],
-  [/(\b[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|AUTH_TOKEN_PEPPER)\s*[=:]\s*)[^\s,;]+/g, "$1[REDACTED]"],
+  [/(\b[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_KEY|AUTH_TOKEN_PEPPER|TEST_GATE_PEPPER)\s*[=:]\s*)[^\s,;]+/g, "$1[REDACTED]"],
 ];
 
 function isPrivateKey(key: string): boolean {
@@ -39,6 +39,7 @@ function isPrivateKey(key: string): boolean {
     || normalized.endsWith("apikey")
     || normalized.endsWith("privatekey")
     || normalized.endsWith("tokenpepper")
+    || normalized.endsWith("testgatepepper")
     || normalized.endsWith("systemprompt")
     || normalized.endsWith("developerprompt")
     || normalized.endsWith("rawthinking");

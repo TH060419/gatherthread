@@ -1,10 +1,10 @@
 # 独立测试环境本地验收记录
 
-2026-10-04 对 [Draft PR64](https://github.com/TH060419/gatherthread/pull/64) 的三项 P2 审核反馈完成修复和本地复验，尚未上线。代码位于独立分支 `codex/test-environment`，基于 main `ca4860d4fb26375eff26191fc7993fba21af7b4e`，修复后重新 fetch 确认 base 未变，包含已合入的 [PR62](https://github.com/TH060419/gatherthread/pull/62) 账号系统。以下结果不能替代新提交的远端 CI、最终固定头审核与上线验收。
+2026-10-04 对 [Draft PR64](https://github.com/TH060419/gatherthread/pull/64) 的三项 P2 修复及追加两项 P2（门禁 pepper 脱敏、跨入口语言同步）完成本地复验，尚未上线。源码仍位于独立分支 `codex/test-environment`，源于 main `ca4860d4fb26375eff26191fc7993fba21af7b4e`；另外对当前 main `4aa5a1b3ac06d6e0ff7d0613f062f201177a27b3`（含 PR65）生成临时合并候选并完整验收，没有合并 PR 或改动 main。以下结果不能替代新提交的远端 CI、最终固定头审核与上线验收。
 
 ## 实例与执行范围
 
-最终工作树为 `/private/tmp/gatherthread-test-environment`。早期另在一次性副本 `/private/tmp/gatherthread-test-pr62-check` 验证旧 PR62 固定头 `fdeb234768e8341edeb4e40f51b84c23aaee8962` 的兼容性；它不是交付来源。PR62 合入后，本分支以新的 main 为基础，保留全部已审账号实现，门禁仍位于其前方；邮件标记已在现有 provider 的第三 transport 参数接入。
+源码工作树为 `/private/tmp/gatherthread-test-environment`。本轮从固定头 `344e9f618c1f3f8bf74da49732cf41134151c095` 及其与当前 main 的 merge-tree `500aeae6e38b87d6d8acd22bc840747a7f84bf50` 各导出 Git-less 源码，再应用本轮修复，生成 `/private/tmp/pr64-second-head-clean.63TiDF` 与 `/private/tmp/pr64-second-main-clean.j6PsyA`。两目录起始均无 node_modules 或 dist，经独立 `npm ci` 后串行执行完整 gate，保留原超时。编译出的 server 测试文件与 17 个源码测试文件逐一对应，没有旧 ignored dist 测试。代码字节已与交付源码核对；日志中的测试总数差异来自当前 main 的 PR65 用例。
 
 环境为 macOS 26.3.1 arm64、Node 24.16.0。浏览器使用实际 Chrome 154.0.8037.93 的 headless Chromium 和 Playwright WebKit 26.5。WebKit 的结果不等同于原生 Safari、真实 iPhone 或 Windows 浏览器验收。
 
@@ -14,17 +14,20 @@
 
 | 检查 | 最终结果 |
 |---|---|
-| 三项 P2 修复后的 `npm run release:verify` | 1,084 项：1,079 通过、5 跳过、0 失败、0 取消；退出码 0 |
+| PR64 本轮修复的干净源码 `npm run release:verify` | 1,086 项：1,081 通过、5 跳过、0 失败、0 取消；退出码 0 |
+| 修复与当前 main 的干净候选 `npm run release:verify` | 1,096 项：1,091 通过、5 跳过、0 失败、0 取消；退出码 0 |
 | 依赖漏洞审计 | 0 vulnerabilities |
 | Git-less Codex/DSH 产物验证 | 通过，无真实凭据的安装/接口预检 |
 | 新增邮箱/门禁/原生跨环境集成 | 运行通过，未跳过账号依赖 |
-| Chrome/WebKit 最终 UI | 8/8 场景通过，无未捕获页面错误 |
-| HTTP 在途/账号异步/WS/CLI/邮件/跨环境专项复测 | 17/17 通过，无跳过；退出码 0 |
+| Chrome/WebKit 原分支及当前 main 候选 UI | 每份 14/14 场景通过，无未捕获页面错误 |
+| 新脱敏专项 | 3/3 通过：原有规则、递归键/环境文本、真实服务写入和 replay；退出码 0 |
 | `git diff --check`、秘密模式检查、两份 shell 语法 | 通过 |
 
-完整发布日志：`/private/tmp/pr64-repair-release.log`。专项日志：`/private/tmp/pr64-repair-focused.log`。浏览器日志：`/private/tmp/pr64-repair-browser.log`。提交或 main 变化后仍需重跑，不能将本地工作树结果称为远端 CI 通过。
+本轮完整发布日志：`/private/tmp/pr64-second-head-release.log`、`/private/tmp/pr64-second-main-release.log`。脱敏专项日志：`/private/tmp/pr64-second-redaction-green.log`。浏览器日志：`/private/tmp/pr64-second-browser-green.log`、`/private/tmp/pr64-second-main-browser.log`。提交或 main 变化后仍需按变更范围重跑，不能将本地结果称为远端 CI 通过。
 
 先在旧实现上执行新增回归，九项在途/异步用例及原有 WS、CLI 测试共十一项失败，记录在 `/private/tmp/pr64-repair-red.log`。修复后上述专项全部通过；完整发布检查串行运行，保留原有测试超时参数。
+
+本轮新增两个脱敏测试在旧实现上失败，单次语言切换的浏览器测试也在旧门禁未保存 `gt-lang` 时失败；记录在 `/private/tmp/pr64-second-redaction-red.log`、`/private/tmp/pr64-second-browser-red.log`。修复后检查共享事件返回值、直接存储的 JSON、getEvent 和 replay 都不含明确标注为非秘密的 fixture pepper，普通 tokenCount 和轮换日期保留。未读取真实配置或密钥。
 
 `release:verify` 包含 TypeScript、Web/connector/DSH 构建、单元/脚本/Web/集成/e2e、引用/许可/品牌/秘密/依赖漏洞审计、发布元数据，以及 Git-less Codex/DSH tarball 验证。最终只保留五项已有 DSH 外部 harness 可选检查；邮箱链路测试已随已合入账号接口运行，不把缺少依赖算作通过。
 
@@ -41,7 +44,8 @@
 | 两环境邮箱 | 同邮箱分别注册不同密码；跨密码、Cookie、Codex 一次性授权和 DSH 配对拒绝；测试改密撤销其设备/会话，正式不受影响；测试账号删除不删除正式账号 |
 | CLI/隔离报告 | 新建 0600 发放文件、拒绝覆盖、终端与列表不含代码；未知撤销编号非零退出且不假报成功，有效会话不受影响；真实编号撤销关联会话而不影响其他编号，清理后重复撤销仍确认状态；隔离报告拒绝共享密钥/路径/备份/Origin/端口与不完整/格式错误的报告 |
 | 邮件显示 | 两种语言的注册、找回与密码通知均加测试标记和测试链接，保留收件人、provider receipt 与幂等参数 |
-| 浏览器 | 最终分支 8 个 Chromium/WebKit × 1440/390 × 中英文场景；深链接先门禁、错误提示与清空输入、实际语言切换、无横向溢出、键盘、标记留白、退出准入、凭据不在 Web Storage |
+| 共享内容脱敏 | 嵌套对象/数组中的门禁 pepper 命名形式、环境赋值文本；human_chat/tool_call/tool_result 经真实服务持久化再 replay 不保留 fixture 值，普通统计字段不被屏蔽 |
+| 浏览器 | 8 个 Chromium/WebKit × 1440/390 × 中英文场景包含单次门禁切换直接进入账号页、账号切换同步另一门禁标签、返回和刷新；另外 4 个已有 gt-lang 与浏览器 locale 相反的场景及 2 个 localStorage getter 抛 SecurityError 的安全退化场景；保留键盘、无溢出、凭据不在 Web Storage 和模拟注册/恢复检查 |
 
 Chrome/WebKit 英文桌面场景额外完成模拟邮箱注册、文件协作确认、独立示例退出，以及 reload 后账号会话恢复。中文与手机场景验证正常账号入口和环境标记；没有宣称每个视口都完成真实注册/找回。Safari/WebKit 在 macOS 使用系统全控件导航 `Option-Tab`；Chrome 使用 `Tab`。
 
@@ -55,7 +59,7 @@ Chrome/WebKit 英文桌面场景额外完成模拟邮箱注册、文件协作确
 npm ci
 npm run release:verify
 npm run build
-node --test apps/server/dist/test/test-gate-races.test.js apps/server/dist/test/test-gate.test.js apps/server/dist/test/test-email-transport.test.js scripts/test/test-environment.test.mjs tests/integration/test-environment-email.test.mjs
+node --test apps/server/dist/test/redaction.test.js apps/server/dist/test/test-gate-races.test.js apps/server/dist/test/test-gate.test.js apps/server/dist/test/test-email-transport.test.js scripts/test/test-environment.test.mjs tests/integration/test-environment-email.test.mjs
 PLAYWRIGHT_MODULE_PATH=/ABSOLUTE/playwright/index.mjs PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/ABSOLUTE/chrome BROWSER_OUTPUT_DIRECTORY=/ABSOLUTE/private-output node tests/browser/test-environment.mjs
 git diff --check
 bash -n scripts/test-environment/prepare-candidate.sh scripts/test-environment/backup-admission.sh

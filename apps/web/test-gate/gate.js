@@ -1,4 +1,21 @@
-let language = navigator.language.startsWith("zh") ? "zh-CN" : "en";
+// Same preference contract as the home page and account/workspace settings.
+const languageStorageKey = "gt-lang";
+function preferredLanguage() {
+  try {
+    const saved = localStorage.getItem(languageStorageKey);
+    if (saved === "zh") return "zh-CN";
+    if (saved === "en") return "en";
+    const settings = JSON.parse(localStorage.getItem("gatherthread.settings.v1") || "null");
+    if (settings?.general?.locale === "zh-CN" || settings?.general?.locale === "en") return settings.general.locale;
+  } catch { /* Restricted storage keeps the gate usable with the browser language. */ }
+  return navigator.language.startsWith("zh") ? "zh-CN" : "en";
+}
+function persistLanguage() {
+  try { localStorage.setItem(languageStorageKey, language === "zh-CN" ? "zh" : "en"); }
+  catch { /* The current page still switches language when persistence is unavailable. */ }
+}
+let language = preferredLanguage();
+persistLanguage();
 const form = document.querySelector("#gate-form"), input = document.querySelector("#admission-code"), enter = document.querySelector("#enter"), feedback = document.querySelector("#feedback");
 function render() {
   document.documentElement.lang = language;
@@ -6,7 +23,11 @@ function render() {
   document.querySelector("#language").textContent = language === "zh-CN" ? "English" : "中文";
   document.title = language === "zh-CN" ? "测试环境 · GatherThread" : "Test environment · GatherThread";
 }
-document.querySelector("#language").addEventListener("click", () => { language = language === "zh-CN" ? "en" : "zh-CN"; render(); });
+document.querySelector("#language").addEventListener("click", () => { language = language === "zh-CN" ? "en" : "zh-CN"; persistLanguage(); render(); });
+window.addEventListener("storage", event => {
+  if (event.key !== languageStorageKey && event.key !== null) return;
+  language = preferredLanguage(); render();
+});
 form.addEventListener("submit", async event => {
   event.preventDefault(); enter.disabled = true; feedback.textContent = "";
   const code = input.value.trim(); input.value = "";
