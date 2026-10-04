@@ -13,6 +13,8 @@ import type { HostedGithubTask } from "@gatherthread/protocol";
 
 const origin = "https://test.gatherthread.cn";
 const unixTest = process.platform === "win32" ? test.skip : test;
+// SQLite setup/teardown in parallel Windows CI can exceed the default case budget.
+const fixtureTimeout = process.platform === "win32" ? 60_000 : 10_000;
 const file = (path: string, content: string) => ({ path, content_base64: Buffer.from(content).toString("base64"), executable: false });
 const files = [file("package.json", '{"name":"fixture"}'), file("package-lock.json", '{"lockfileVersion":3,"packages":{"":{}}}'), file("index.js", "export const value = 1;\n")];
 async function fixture(t: TestContext) {
@@ -152,7 +154,7 @@ for (const action of ["authorize", "complete", "bind", "repository", "trial", "p
 }
 
 for (const stage of ["/login/oauth/access_token", "/user"]) {
- test(`OAuth ${stage} reply after admission revocation cannot store credentials`, { timeout: 10_000 }, async t => {
+ test(`OAuth ${stage} reply after admission revocation cannot store credentials`, { timeout: fixtureTimeout }, async t => {
   const f = await fixture(t), state = await f.authorize(), entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   f.hold(async path => { if (path === stage) { entered.resolve(); await release.promise; } });
   const response = f.call("/v1/hosted-github/complete", "POST", { state, code: "fixture" });
@@ -162,7 +164,7 @@ for (const stage of ["/login/oauth/access_token", "/user"]) {
  });
 }
 for (const stage of ["/repos/owner/project", "/repos/owner/project/branches/main"]) {
- test(`binding ${stage} reply after admission revocation cannot persist consent`, { timeout: 10_000 }, async t => {
+ test(`binding ${stage} reply after admission revocation cannot persist consent`, { timeout: fixtureTimeout }, async t => {
   const f = await fixture(t); await f.connect();
   const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
   f.hold(async path => { if (path === stage) { entered.resolve(); await release.promise; } });

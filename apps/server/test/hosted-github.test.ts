@@ -18,6 +18,8 @@ import { redactJson } from "../src/redaction.js";
 import { HostedRepositoryRunner } from "../src/hosted-repository-runner.js";
 
 const unixTest = process.platform === "win32" ? test.skip : test;
+// SQLite setup/teardown in parallel Windows CI can exceed the default case budget.
+const fixtureTimeout = process.platform === "win32" ? 60_000 : 10_000;
 const file = (path: string, content: string): CodeFile => ({ path, content_base64: Buffer.from(content).toString("base64"), executable: false });
 const initial = [file("package.json", '{"name":"fixture","version":"1.0.0","scripts":{"test":"node --test"}}'),
   file("package-lock.json", '{"name":"fixture","lockfileVersion":3,"packages":{"":{"name":"fixture","version":"1.0.0"}}}'), file("src/index.ts", "export const value = 1;\n")];
@@ -166,7 +168,7 @@ test("legacy OAuth states are invalidated atomically while current credentials s
 
 for (const stage of ["repository", "branch"] as const) {
  for (const action of ["disconnect-first", "disconnect-last", "reconnect-first", "reconnect-last", "choice-first", "choice-last", "another-instance"] as const) {
-  test(`binding ${stage} lookup respects newer ${action} across devices`, { timeout: 10_000 }, async () => {
+  test(`binding ${stage} lookup respects newer ${action} across devices`, { timeout: fixtureTimeout }, async () => {
    const f = fixture(), entered = deferred(), release = deferred(), nextEntered = deferred(), nextRelease = deferred();
    const peer = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Second browser").device_id };
    const fetcher = f.githubOptions.fetch;
@@ -333,7 +335,7 @@ for (const [index, step] of snapshotSteps.entries()) {
   const actions = index === 4 && boundary === "refresh" ? [...revocations, "shutdown" as const]
     : ["downgrade", "rebind", "shutdown"] as const;
   for (const action of actions) {
-   test(`snapshot ${step || "repository"} ${boundary} fences ${action} before further source acquisition`, { timeout: 10_000 }, async () => {
+   test(`snapshot ${step || "repository"} ${boundary} fences ${action} before further source acquisition`, { timeout: fixtureTimeout }, async () => {
     const f = fixture(), entered = deferred(), release = deferred();
     const owner = f.actor;
     f.session = f.service.createSession(owner, { session_id: "shared-source", idempotency_key: "shared-source",
@@ -407,7 +409,7 @@ for (const [index, step] of snapshotSteps.entries()) {
  }
 }
 for (const phase of ["headers", "body"] as const) {
- test(`snapshot shutdown aborts the actual pending ${phase} download without saving source`, { timeout: 10_000 }, async () => {
+ test(`snapshot shutdown aborts the actual pending ${phase} download without saving source`, { timeout: fixtureTimeout }, async () => {
   const f = fixture(), entered = deferred(), aborted = deferred();
   const server = createServer((_request, response) => {
    response.on("close", aborted.resolve);

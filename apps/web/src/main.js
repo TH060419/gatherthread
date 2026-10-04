@@ -1,5 +1,6 @@
 import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-3";
 import { mountDeviceAuthorization } from "./device-authorization.js";
+import { mountAccountDevices } from "./account-devices.js";
 import { mountAgentRequestControl } from "./agent-request-control.js";
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261004-3";
@@ -269,6 +270,14 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
+const accountDevices = mountAccountDevices({ document, api, localizer,
+  getContext: () => settingsDialog.open && state.currentUser ? {
+    scope: `${authenticationGeneration}:${state.currentUser.id}:${state.currentUser.device_id}`,
+    userId: state.currentUser.id, deviceId: state.currentUser.device_id,
+  } : null,
+  confirm: message => window.confirm(message),
+  onRevoked: () => void refreshDshRuntimes(),
+});
 const cloudGithubUi = mountCloudGithub({ api: () => api, t: (value) => localizer.t(value),
   setText: (node, source) => localizer.setText(node, source),
   agentEnabled: CLOUD_AGENT_ENTRY_ENABLED,
@@ -1043,6 +1052,7 @@ element("settings-delete-account").addEventListener("click", async () => {
   }
 });
 settingsDialog.addEventListener("close", () => {
+  accountDevices.clear();
   const returnFocus = settingsReturnFocus;
   settingsReturnFocus = null;
   returnFocus?.focus?.();
@@ -1218,6 +1228,7 @@ function resetWorkspaceToAuth() {
   localSyncStatusRequestsInFlight.clear();
   localSyncActionsInFlight.clear();
   currentDeviceName = "";
+  accountDevices.clear();
   settingsDeviceLoadGeneration += 1;
   expandedWorklogs.clear();
   clearCreatedInvitationSecret();
@@ -3209,6 +3220,7 @@ function applyVisualSettings(settings) {
   }
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  if (localeChanged) accountDevices.refreshLanguage();
   onboarding.refreshLanguage();
   if (localeChanged) updateCreatedInvitationShareText(normalized.general.locale);
   element("auth-language-button").textContent = normalized.general.locale === "zh-CN" ? "EN" : "中";
@@ -3664,6 +3676,7 @@ function openSettingsDialog(sectionId) {
   void refreshHostedAgentStatus();
   void codeStorageSettings.load();
   void loadCurrentDeviceSettings();
+  void accountDevices.load();
   void loadAccountDeletionPreview();
   void loadHistoryContextPolicy();
   requestAnimationFrame(() => {

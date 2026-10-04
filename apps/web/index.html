@@ -98,6 +98,7 @@
               <span><strong>Remember this device</strong><small>Keep this browser signed in for 30 days. Leave off on a shared device.</small></span>
             </label>
             <p id="email-login-help" class="field-help">Use a long, unique password and keep it in your password manager.</p>
+            <p class="field-help">Sign in with the same account on your computer, phone or tablet. Devices can stay signed in together.</p>
             <button id="auth-select-password-reset" class="text-button" type="button" aria-controls="auth-password-reset-panel">Forgot password?</button>
             <p id="email-login-status" class="field-help" role="status" aria-live="polite"></p>
             <p id="email-login-error" class="form-error" role="alert"></p>
@@ -1134,6 +1135,14 @@ codex plugin add gatherthread@gatherthread</code>
                 <input id="settings-device-name" name="device-name" type="text" autocomplete="off" maxlength="120" required />
               </label>
               <p id="settings-device-status" class="field-help" role="status" aria-live="polite"></p>
+              <div class="settings-section-heading account-devices-heading">
+                <div><h4 id="settings-devices-title">Your account devices</h4></div>
+                <button id="settings-devices-refresh" class="text-button" type="button">Refresh devices</button>
+              </div>
+              <p class="field-help">Sign in on another device with the same email and password. Signing out here does not sign out your other devices. Revoke a device below if you no longer trust it.</p>
+              <p class="field-help">To use your computer's Agent from your phone, keep its connector running and choose that Agent device. Authorize each new Agent separately.</p>
+              <ul id="settings-devices-list" class="account-device-list" aria-labelledby="settings-devices-title"></ul>
+              <p id="settings-devices-status" class="field-help" role="status" aria-live="polite"></p>
             </section>
 
             <section id="settings-account" class="settings-section" aria-labelledby="settings-account-title">

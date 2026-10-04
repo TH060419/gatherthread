@@ -2265,6 +2265,34 @@ time,
   line-height: 1.55;
 }
 
+.account-devices-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.account-devices-heading h4 { margin: 0; }
+.account-device-list {
+  padding: 0;
+  list-style: none;
+}
+.account-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.account-device-details {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-device-row button { flex-shrink: 0; }
+.account-device-details small { color: var(--ink-soft); }
+
 .account-projects {
   display: grid;
   gap: 10px;

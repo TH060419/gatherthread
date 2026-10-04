@@ -20,6 +20,8 @@ Git tag, npm package, and GitHub Release details are recorded in the [release in
 
 Register with a verified email address and choose a password, then sign in with email and password. Create projects or accept project invitations after signing in. Connect your Agents with independent device authorization. If you forget your password, request an email code on the sign-in page and choose a new password; this signs out every device and revokes Agent access while keeping your projects.
 
+The same account can stay signed in on a computer, phone and tablet together. Each browser has its own session; signing out affects only that browser. Settings → This device → Your account devices lets you inspect and revoke individual devices. To request an already-connected computer Agent from your phone, keep its connector running and select that Agent device; authorizing a new Agent remains a separate action.
+
 Registration and password recovery are closed by default until their [operator setup](docs/OPERATIONS.md) is complete. This source preview is not deployed to the official Alpha. See [ADR-0036](docs/adr/0036-verified-email-registration-and-password-login.md) for account and device behavior.
 
 For questions, bug reports, and non-sensitive feedback, [open a GitHub Issue](https://github.com/TH060419/gatherthread/issues). Send security reports privately to [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn), without including credentials or raw private transcripts.

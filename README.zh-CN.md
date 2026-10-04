@@ -28,6 +28,8 @@ Git 标签、npm 包和 GitHub Release 的对应信息见[发布记录索引](do
 
 验证邮箱并设置密码后，即可用邮箱和密码登录，创建项目或接受项目邀请。Agent 通过独立设备授权连接。忘记密码时，在登录页请求邮箱验证码并设置新密码；重设后所有设备退出登录、Agent 授权撤销，项目保留。
 
+同一账号可在电脑、手机和平板同时登录，每个浏览器拥有独立会话，退出当前浏览器不会影响其他端。在“设置 → 当前设备 → 账号下的设备”可查看并单独撤销设备。手机调用已连接的电脑 Agent 时，请保持电脑连接器运行并选择该 Agent 设备；新增 Agent 仍需单独授权。
+
 注册和找回密码默认关闭，完成[运维配置](docs/OPERATIONS.md)后分别启用。当前线上 Alpha 尚未部署此源码预览。账号及设备设计见 [ADR-0036](docs/adr/0036-verified-email-registration-and-password-login.md)。
 
 使用疑问、缺陷和非敏感反馈，请[提交 GitHub Issue](https://github.com/TH060419/gatherthread/issues)；安全问题请私下联系 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，不要附上凭据或未脱敏的私人会话。
