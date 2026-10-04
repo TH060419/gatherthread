@@ -24,6 +24,11 @@ export function mountAccountDevices({ document, api, localizer, getContext, conf
   };
   const buttons = [];
   const setBusy = value => { busy = value; refresh.disabled = value; for (const button of buttons) button.disabled = value; };
+  const restoreFocus = (button, wasFocused) => {
+    if (wasFocused && (document.activeElement === document.body || document.activeElement === button)) {
+      button.focus({ preventScroll: true });
+    }
+  };
   const clear = () => {
     generation++;
     list.replaceChildren(); buttons.length = 0; translations.length = 0; setStatus(""); setBusy(false);
@@ -33,6 +38,7 @@ export function mountAccountDevices({ document, api, localizer, getContext, conf
     const context = getContext();
     if (!context) return;
     const run = ++generation;
+    const wasFocused = document.activeElement === refresh;
     list.replaceChildren(); buttons.length = 0; translations.length = 0;
     setStatus("Loading account devices…");
     setBusy(true);
@@ -63,6 +69,7 @@ export function mountAccountDevices({ document, api, localizer, getContext, conf
           translations.push(updateAria); updateAria();
           button.addEventListener("click", async () => {
             if (busy || !current(run, context)) return;
+            const wasFocused = document.activeElement === button;
             const warning = localizer.t("Revoke access for {device}? This signs out that browser and stops any Agent authorized on that device. Your other devices stay connected.").replace("{device}", () => device.name);
             if (!confirm(warning) || !current(run, context)) return;
             setBusy(true); setStatus("");
@@ -76,7 +83,7 @@ export function mountAccountDevices({ document, api, localizer, getContext, conf
             } catch {
               if (current(run, context)) setStatus("Could not revoke device access. Refresh and try again.");
             } finally {
-              if (current(run, context)) setBusy(false);
+              if (current(run, context)) { setBusy(false); restoreFocus(button, wasFocused); }
             }
           });
           buttons.push(button); row.append(button);
@@ -87,7 +94,7 @@ export function mountAccountDevices({ document, api, localizer, getContext, conf
     } catch {
       if (current(run, context)) setStatus("Unable to load account devices. Refresh and try again.");
     } finally {
-      if (current(run, context)) setBusy(false);
+      if (current(run, context)) { setBusy(false); restoreFocus(refresh, wasFocused); }
     }
   };
   refresh.addEventListener("click", () => void load());

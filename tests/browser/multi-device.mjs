@@ -69,9 +69,11 @@ try {
           await pages[0].locator('#settings-button').click();
           await pages[0].locator('.settings-navigation a[href="#settings-device"]').click();
           await pages[0].locator('#settings-devices-list strong').getByText(longName, { exact: true }).waitFor();
-          await pages[0].locator('#settings-devices-refresh').click();
+          await pages[0].locator('#settings-devices-refresh').focus();
+          await pages[0].locator('#settings-devices-refresh').press('Enter');
           await pages[0].locator('#settings-devices-refresh').waitFor({ state: 'visible' });
           await pages[0].waitForFunction(() => !document.querySelector('#settings-devices-refresh').disabled);
+          assert.equal(await pages[0].locator('#settings-devices-refresh').evaluate(element => element === document.activeElement), true);
           assert.equal(await pages[0].locator(`#settings-devices-list button[data-device-id="${actors[0].device_id}"]`).count(), 0);
           assert.ok(await pages[0].evaluate(() => document.documentElement.scrollWidth <= innerWidth));
           assert.ok(await pages[0].locator('#settings-devices-list').evaluate(element => element.scrollWidth <= element.clientWidth));
@@ -84,8 +86,35 @@ try {
           await pages[0].waitForFunction(expected => document.querySelector('#settings-devices-title').textContent === expected,
             nextLocale === 'zh-CN' ? '账号下的设备' : 'Your account devices');
           assert.match(await pages[0].locator('#settings-devices-list').textContent(), nextLocale === 'zh-CN' ? /此浏览器/ : /This browser/);
+          // Failed HTTP actions must keep an enabled keyboard retry target.
+          const refresh = pages[0].locator('#settings-devices-refresh');
+          const fail = route => route.fulfill({ status: 503, contentType: 'application/json',
+            body: JSON.stringify({ error: { code: 'fixture_failure', message: 'Isolated fixture failure' } }) });
+          await pages[0].route(`${origin}/v1/devices`, fail);
+          const failedRefresh = pages[0].waitForResponse(response => response.url() === `${origin}/v1/devices` && response.status() === 503);
+          await refresh.focus(); await refresh.press('Enter'); await failedRefresh;
+          await pages[0].waitForFunction(() => !document.querySelector('#settings-devices-refresh').disabled);
+          assert.equal(await refresh.evaluate(element => element === document.activeElement), true);
+          assert.equal(await pages[0].locator('#settings-devices-status').textContent(), nextLocale === 'zh-CN'
+            ? '无法加载账号设备，请刷新后重试。' : 'Unable to load account devices. Refresh and try again.');
+          await pages[0].unroute(`${origin}/v1/devices`, fail);
+          const reloaded = pages[0].waitForResponse(response => response.url() === `${origin}/v1/devices` && response.status() === 200);
+          await refresh.press('Enter'); await reloaded;
+          await pages[0].waitForFunction(() => !document.querySelector('#settings-devices-refresh').disabled);
+          const revoke = pages[0].locator(`#settings-devices-list button[data-device-id="${actors[1].device_id}"]`);
+          const revokeUrl = `${origin}/v1/devices/${actors[1].device_id}`;
+          await pages[0].route(revokeUrl, fail);
+          const failedRevoke = pages[0].waitForResponse(response => response.url() === revokeUrl && response.status() === 503);
           pages[0].once('dialog', dialog => dialog.accept());
-          await pages[0].locator(`#settings-devices-list button[data-device-id="${actors[1].device_id}"]`).click();
+          await revoke.focus(); await revoke.press('Enter'); await failedRevoke;
+          await pages[0].waitForFunction(() => !document.querySelector('#settings-devices-refresh').disabled);
+          assert.equal(await revoke.evaluate(element => element === document.activeElement), true);
+          assert.equal(await pages[0].locator('#settings-devices-status').textContent(), nextLocale === 'zh-CN'
+            ? '未能撤销设备访问权限，请刷新后重试。' : 'Could not revoke device access. Refresh and try again.');
+          assert.equal((await contexts[1].request.get(origin + '/v1/me')).status(), 200);
+          await pages[0].unroute(revokeUrl, fail);
+          pages[0].once('dialog', dialog => dialog.accept());
+          await revoke.press('Enter');
           await pages[0].waitForFunction(() => !document.querySelector('#settings-devices-refresh').disabled);
           assert.equal((await contexts[1].request.get(origin + '/v1/me')).status(), 401);
           assert.equal((await contexts[0].request.get(origin + '/v1/me')).status(), 200);
@@ -97,5 +126,5 @@ try {
       }
     } finally { await browser.close(); }
   }
-  console.log(`Chromium/WebKit: ${scenarios} bilingual desktop/mobile concurrent-login, realtime chat, device-revocation and live-language scenarios passed.`);
+  console.log(`Chromium/WebKit: ${scenarios} bilingual desktop/mobile concurrent-login, realtime chat, device-revocation, keyboard retry and live-language scenarios passed.`);
 } finally { await server.close(); }
