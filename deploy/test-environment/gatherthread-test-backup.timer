@@ -1,0 +1,8 @@
+[Unit]
+Description=Hourly GatherThread test backup
+[Timer]
+OnCalendar=hourly
+RandomizedDelaySec=5m
+Persistent=true
+[Install]
+WantedBy=timers.target

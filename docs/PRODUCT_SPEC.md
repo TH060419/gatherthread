@@ -4,6 +4,10 @@
 
 Enable multiple people to collaborate on an agent-assisted project while each person keeps using their own local harness, model, credentials, filesystem, and context-management policy.
 
+## Test environment entry
+
+At `test.gatherthread.cn`, invited testers first enter a coordinator-issued admission code, then use the reviewed email/password account flow. Admission grants environment access only; account, password, device and project permissions remain independent. Test accounts/data are separate from production, including the same email address. Every real page visibly labels the test environment in both languages. Without the email-account dependency, admission leads to a pending page. Operational behavior and limits are in [TEST_ENVIRONMENT.md](TEST_ENVIRONMENT.md).
+
 ## Browser entry flow
 
 The entry UI offers email/password sign-in and email registration. The selected path shows its fields; Back clears transient inputs and returns to the choices.

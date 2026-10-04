@@ -40,3 +40,4 @@ Architecture Decision Records document significant technical choices, their rati
 | [0033](0033-isolated-onboarding-example.md) | Isolate onboarding in a disposable example project | proposed | 2026-09-28 |
 | [0035](0035-direct-local-github-code-synchronization.md) | Synchronize GitHub source directly from authorized local devices | proposed / unreleased source preview | 2026-09-30 |
 | [0036](0036-verified-email-registration-and-password-login.md) | Verified-email-only user accounts and independent device authorization | proposed / unreleased source preview | 2026-09-30 |
+| [0037](0037-isolated-test-environment-admission.md) | Separate test admission from accounts and native authorization | proposed | 2026-10-03 |

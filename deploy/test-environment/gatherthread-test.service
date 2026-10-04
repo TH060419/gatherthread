@@ -1,0 +1,38 @@
+[Unit]
+Description=GatherThread isolated test environment
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gatherthread-test
+Group=gatherthread-test
+WorkingDirectory=/opt/gatherthread-test/current
+EnvironmentFile=/etc/gatherthread-test/gatherthread.env
+ExecStart=/usr/local/bin/node /opt/gatherthread-test/current/apps/server/dist/src/cli.js start
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=30s
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ReadWritePaths=/var/lib/gatherthread-test
+InaccessiblePaths=-/etc/gatherthread -/var/lib/gatherthread -/var/backups/gatherthread -/opt/gatherthread
+MemoryMax=512M
+MemorySwapMax=0
+CPUQuota=50%
+TasksMax=64
+LimitNOFILE=512
+RestrictSUIDSGID=true
+RestrictRealtime=true
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -18,6 +18,7 @@
     "build:connector": "npm --workspace @gatherthread/codex-connect run build",
     "build:web": "npm --workspace apps/web run build",
     "clean": "tsc -b --clean",
+    "test-gate": "node --env-file-if-exists=.env apps/server/dist/src/test-gate-cli.js",
     "start": "node apps/server/dist/src/cli.js start",
     "owner-host": "node --env-file-if-exists=.env scripts/self-host.mjs start",
     "owner-host:init": "node --env-file-if-exists=.env scripts/self-host.mjs init",

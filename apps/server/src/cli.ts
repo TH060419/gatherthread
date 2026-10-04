@@ -45,6 +45,7 @@ async function start(config: ServerConfig): Promise<void> {
   const running = await startCollaborationServer({
     registration: config.registration,
     databasePath: config.databasePath,
+    ...(config.testGate ? { testGate: config.testGate } : {}),
     allowedOrigins: config.allowedOrigins,
     ...(config.authTokenPepper ? { authTokenPepper: config.authTokenPepper } : {}),
     staticDirectory: config.staticDirectory,

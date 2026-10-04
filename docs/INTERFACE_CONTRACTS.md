@@ -89,6 +89,10 @@ DSH also retains its independent ten-second heartbeat. A transient heartbeat fai
 
 The exact request and response schemas are in `packages/protocol/src/index.ts`; route tests in `apps/server/test/server.test.ts` are the executable compatibility suite.
 
+## Test admission contract
+
+Optional `GET /v1/test-gate` returns `{data:{enabled,admitted,environment}}`; POST accepts only `{admission_code}` under `TestGateExchangeInputSchema` and returns the same public status while setting a separate HttpOnly Cookie. DELETE revokes admission and expires that Cookie. State changes require the exact test Origin; query credentials are rejected. Missing admission returns `403 test_admission_required`; invalid/expired/revoked codes share `403 test_admission_invalid`; durable admission attempt limits return `429 rate_limited`. Production does not add this route. Existing account/native protocols remain owned by their modules. Native exemptions and PR62 integration placement are specified in [TEST_ENVIRONMENT.md](TEST_ENVIRONMENT.md).
+
 ## Realtime boundary
 
 1. An authenticated client requests a short-lived, one-use ticket from `POST /v1/realtime-ticket` for one session.

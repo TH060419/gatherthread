@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import { z } from "zod";
 import { RegistrationEmailSchema } from "@gatherthread/protocol";
 import type { RegistrationChallenge, RegistrationMailer, RegistrationOptions } from "./registration.js";
+import { testEmailTransport } from "./test-email-transport.js";
 
 const ChallengeResult = z.object({ success: z.boolean(), hostname: z.string().optional(), action: z.string().optional(), cdata: z.string().optional() });
 /** Provider responses/errors never enter logs or API replies. No redirect or unbounded retry. */
@@ -68,7 +69,7 @@ export function registrationFromEnvironment(env: NodeJS.ProcessEnv, publicOrigin
   if (origin.protocol !== "https:" || !siteKey || !secret || !key || !from.success) return closed();
   if (!/^[A-Za-z0-9_-]{10,100}$/.test(siteKey) || secret.length < 20 || key.length < 20) return closed();
   return { enabled: raw === "true", recoveryEnabled: recovery === "true", origin: origin.origin, siteKey,
-    mailer: new ResendRegistrationMailer(key, from.data),
+    mailer: new ResendRegistrationMailer(key, from.data, env.GATHERTHREAD_DEPLOYMENT_ENVIRONMENT === "test" ? testEmailTransport(origin.origin) : fetch),
     challenge: new TurnstileRegistrationChallenge(secret, origin.hostname),
     ...(proxy ? { trustedProxy: proxy } : {}),
   };
