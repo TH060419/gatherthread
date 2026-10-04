@@ -1,4 +1,4 @@
-import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-2";
+import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-3";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountAgentRequestControl } from "./agent-request-control.js";
 import { mountRegistration } from "./registration.js";

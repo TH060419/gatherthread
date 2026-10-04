@@ -4,6 +4,12 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
   const dialog = el("project-code-dialog");
   let generation = 0, selected = null, taskRows = [], key = "", pending = false, bindingKey;
   const message = (value) => setText(el("cloud-github-error"), value);
+  function appendLabel(parent, source, raw = false) {
+    const span = doc.createElement("span");
+    if (raw) { span.setAttribute("data-i18n-skip", ""); span.textContent = source; }
+    else setText(span, source);
+    parent.append(span);
+  }
   async function action(fn) {
     if (pending) return;
     pending = true; message("");
@@ -44,7 +50,13 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
   function renderTask(task) {
     const sameRevision = selected?.id === task.id && selected?.revision === task.revision;
     selected = task;
-    el("cloud-github-task-status").textContent = `${task.repository} · ${t(task.state)}${task.error_code ? ` · ${t("Review the project setup and reconnect GitHub if needed.")}` : ""}`;
+    const status = el("cloud-github-task-status"); status.replaceChildren();
+    appendLabel(status, task.repository, true); status.append(doc.createTextNode(" · "));
+    appendLabel(status, task.state);
+    if (task.error_code) {
+      status.append(doc.createTextNode(" · "));
+      appendLabel(status, "Review the project setup and reconnect GitHub if needed.");
+    }
     el("cloud-github-answer").setAttribute("data-i18n-skip", "");
     el("cloud-github-answer").textContent = task.answer ?? "";
     el("cloud-github-changes").replaceChildren();
@@ -81,8 +93,13 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     if (!c.projectId) return;
     const status = await getApi().getHostedGithubStatus(c.projectId);
     if (gen !== generation) return;
-    el("cloud-github-status").textContent = !status.enabled ? t("Cloud GitHub is not enabled on this server.")
-      : status.connected ? `${status.login} · ${status.binding?.repository ?? t("Choose a repository")}` : t("Connect your GitHub account");
+    const statusNode = el("cloud-github-status"); statusNode.replaceChildren();
+    if (!status.enabled) setText(statusNode, "Cloud GitHub is not enabled on this server.");
+    else if (!status.connected) setText(statusNode, "Connect your GitHub account");
+    else {
+      appendLabel(statusNode, status.login, true); statusNode.append(doc.createTextNode(" · "));
+      appendLabel(statusNode, status.binding?.repository ?? "Choose a repository", Boolean(status.binding));
+    }
     el("cloud-github-controls").hidden = !status.enabled;
     if (!status.enabled) return;
     const install = el("cloud-github-install");
@@ -101,7 +118,9 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     el("cloud-github-task-list").replaceChildren();
     for (const task of tasks.filter((item) => item.session_id === undefined || item.session_id === c.sessionId)) {
       const button = doc.createElement("button"); button.type = "button"; button.className = "text-button";
-      button.textContent = `${task.repository} · ${t(task.state)} · ${task.id.slice(-8)}`;
+      appendLabel(button, task.repository, true); button.append(doc.createTextNode(" · "));
+      appendLabel(button, task.state); button.append(doc.createTextNode(" · "));
+      appendLabel(button, task.id.slice(-8), true);
       button.addEventListener("click", () => void action(async () => { const detail = await getApi().getHostedGithubTask(task.id); if (gen === generation) renderTask(detail); })); el("cloud-github-task-list").append(button);
     }
     if (selected) { const detail = await getApi().getHostedGithubTask(selected.id); if (gen === generation) renderTask(detail); }
@@ -157,12 +176,14 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     models.value = selected.profile_id;
     models.dispatchEvent(new Event("change", { bubbles: true }));
     el("cloud-github-parent").value = selected.id;
-    el("cloud-github-selected").textContent = `${t("Continue task")}: ${selected.id.slice(-8)}`;
+    const selectedLabel = el("cloud-github-selected"); selectedLabel.replaceChildren();
+    appendLabel(selectedLabel, "Continue task"); selectedLabel.append(doc.createTextNode(": "));
+    appendLabel(selectedLabel, selected.id.slice(-8), true);
     dialog.close(); el("message-input").focus();
   });
   el("cloud-github-new").addEventListener("click", () => {
     if (!chooseRepository()) return;
-    el("cloud-github-parent").value = ""; el("cloud-github-selected").textContent = t("New repository task");
+    el("cloud-github-parent").value = ""; setText(el("cloud-github-selected"), "New repository task");
     dialog.close(); el("message-input").focus();
   });
   el("cloud-github-delete").addEventListener("click", () => void action(async () => {
@@ -183,13 +204,13 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
         if (gen === generation) renderTask(task); });
     },
     async start(sessionId, input) {
-      if (!agentEnabled) throw new Error(t("Cloud Agent · coming later"));
+      if (!agentEnabled) throw new Error("Cloud Agent · coming later");
       updateContext(); const gen = generation;
       const task = await getApi().startHostedGithubTask(sessionId, { content: input.content, profile_id: input.profileId,
         idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null,
         ...(el("cloud-github-parent").value ? { continue_task_id: el("cloud-github-parent").value } : {}) });
       if (gen === generation && context().sessionId === sessionId) {
-        el("cloud-github-parent").value = ""; el("cloud-github-selected").textContent = t("New repository task");
+        el("cloud-github-parent").value = ""; setText(el("cloud-github-selected"), "New repository task");
         selected = task;
       }
       return task;

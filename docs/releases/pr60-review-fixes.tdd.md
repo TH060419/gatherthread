@@ -12,6 +12,8 @@ At `fa6698b` (production code still at `14ced9f`):
 
 The follow-up RED checkpoint `6210ab6` adds in-page language switches. The actual first failure was the missing-file placeholder staying English after switching to Chinese, not the access error described in that commit message. Independent localizer reproduction also showed an already-Chinese error staying Chinese after switching to English. Source previews now separate translatable missing/binary/truncation notices from raw text; the view retains canonical English UI sources through `localizer.setText`.
 
+The final RED checkpoint `b3ab5ae` reproduces retained Chinese task status after switching to English. Connection status, task-list states and continuation labels now also retain canonical UI sources, separated from skipped raw repository/login/task-ID text. Browser roundtrips cover both task/list states and the disabled connection notice without requiring a refresh.
+
 ## GREEN focused checks
 
 - `npm run build:ts` and `node --experimental-test-coverage --test apps/server/dist/test/hosted-github.test.js`: 98 passed, zero failed/skipped. Includes all 38 boundary cases, two real loopback fetch cancellations during pending headers/body, and the existing OAuth generation, binding, publication, continuation, proxy, deletion and quota tests.
