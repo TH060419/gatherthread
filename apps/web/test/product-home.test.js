@@ -6,6 +6,18 @@ import { runInNewContext } from "node:vm";
 
 const productRoot = new URL("../../../site/", import.meta.url);
 
+test("home prominently links the repository and leads Codex setup with the Launcher", async () => {
+  const html = await readFile(new URL("index.html", productRoot), "utf8");
+  const app = await readFile(new URL("app.js", productRoot), "utf8");
+  const hero = html.slice(html.indexOf('class="hero-ctas"'), html.indexOf('class="hero-mark"'));
+  assert.match(hero, /class="btn-pill btn-repository" href="https:\/\/github.com\/TH060419\/gatherthread" target="_blank" rel="noopener noreferrer"/);
+  assert.match(app, /"hero.github":\s*\{ zh: "GitHub 项目", en: "GitHub repository" \}/);
+  assert.match(html, /data-i18n="setup.codex.2">.*连接 Codex → 打开启动器/);
+  assert.match(app, /Keep the Launcher running; no terminal commands are needed/);
+  assert.match(app, /For Linux, self-hosting or an unavailable Launcher/);
+  assert.match(html, /href="https:\/\/github.com\/TH060419\/gatherthread\/tree\/main\/prototypes\/codex-launcher"/);
+});
+
 test("product home enters the same-origin app and preserves operational deep links", async () => {
   const [html, boot, app] = await Promise.all([
     readFile(new URL("index.html", productRoot), "utf8"),

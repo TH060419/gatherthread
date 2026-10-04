@@ -22,6 +22,7 @@
     "hero.copy":      { zh: "让多人在同一空间协作，各自使用本地 Agent，共享有序、可追溯、实时同步的上下文。",
                         en: "Where people collaborate in one shared workspace, each with their own local Agent, while context stays ordered, attributable, and live." },
     "hero.cta1":      { zh: "开始使用", en: "Get Started" },
+    "hero.github":    { zh: "GitHub 项目", en: "GitHub repository" },
     "hero.cta2":      { zh: "邮箱注册说明", en: "Email registration" },
 
     "statement.h2":   { zh: "不绑定具体 Agent harness。",
@@ -66,9 +67,11 @@
     "connect.c3.link": { zh: "查看连接指南 ↗", en: "Read the connection guide ↗" },
 
     "setup.h2":      { zh: "连接你熟悉的 Agent。", en: "Connect the Agent you already use." },
-    "setup.codex.1": { zh: "一次性安装固定版本的「共序 / GatherThread」Codex 插件。", en: "Install the fixed 共序 / GatherThread Codex plugin once." },
-    "setup.codex.2": { zh: "复制连接命令；官方站点的 Windows / macOS 用户也可选用本地启动器。", en: "Copy the connector command; Windows and macOS users on the official site can optionally use a local Launcher." },
-    "setup.codex.3": { zh: "重启 Codex Desktop，审查并启用插件 Hooks，然后保持连接器终端运行。", en: "Restart Codex Desktop, review and enable the plugin Hooks, then keep the connector terminal open." },
+    "setup.codex.1": { zh: "官网 Windows / macOS 用户：先安装共序启动器，打开已登录的 Codex Desktop。", en: "On the official site with Windows or macOS, install the GatherThread Launcher and open a signed-in Codex Desktop." },
+    "setup.codex.2": { zh: "在项目中点「连接 Codex → 打开启动器」，将一次性设备授权填入启动器，再点「开始连接」。", en: "In your project, choose Connect Codex → Open Launcher. Enter the one-time device authorization in the Launcher, then start the connection." },
+    "setup.codex.3": { zh: "首次使用可在启动器安装配套插件；重启 Codex、检查并启用 Hooks。保持启动器运行，无需输入终端命令。", en: "On first use, install the bundled plugin from the Launcher, restart Codex, and review and enable its Hooks. Keep the Launcher running; no terminal commands are needed." },
+    "setup.codex.link": { zh: "启动器与安装说明 ↗", en: "Launcher & installation guide ↗" },
+    "setup.codex.fallback": { zh: "Linux、自托管或启动器不可用时，连接窗口仍提供终端备用方式。当前启动器为未签名测试版。", en: "For Linux, self-hosting or an unavailable Launcher, the connection dialog retains terminal setup. The Launcher is currently an unsigned test build." },
     "setup.dsh.1":   { zh: "把 @gatherthread/dsh-host 安装到已验证的 DSH Web profile。", en: "Install @gatherthread/dsh-host into the verified DSH Web profile." },
     "setup.dsh.2":   { zh: "启动 dsh web 并保持运行。", en: "Start dsh web and keep it running." },
     "setup.dsh.3":   { zh: "打开 Settings → GatherThread / 共序，输入当前服务器地址，并批准一次性配对码。", en: "Open Settings → GatherThread / 共序, enter the current server, and approve the one-use pairing code." },
