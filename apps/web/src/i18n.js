@@ -13,6 +13,7 @@ const ZH_CN = Object.freeze({
   "Review the project setup and reconnect GitHub if needed.": "请检查项目配置，必要时重新连接 GitHub。",
   "Connect your account, choose a repository, then select GitHub repository in the Cloud Agent composer. Your selected model receives project code. Tasks save private changes; the Agent answer is shared in this GT conversation. Creating a draft PR is a separate action.": "连接你的账号并选择仓库，然后在云端 Agent 输入区选择 GitHub 仓库。所选模型会收到项目代码。任务改动私下保存，Agent 回复会分享到此 GT 会话。创建草稿 PR 需要单独操作。",
   "Cloud GitHub is not enabled on this server.": "此服务器尚未启用云端 GitHub。",
+  "Cloud GitHub response is invalid. Refresh and try again.": "云端 GitHub 响应无效，请刷新后重试。",
   "Choose a repository": "请选择仓库",
   "Connect your GitHub account": "连接你的 GitHub 账号",
   "Install GitHub App on selected repositories": "为选定仓库安装 GitHub App",

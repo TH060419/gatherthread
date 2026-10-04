@@ -96,6 +96,10 @@ export class HostedGithub {
        this.sqlite.exec("ALTER TABLE hosted_github_oauth ADD COLUMN generation INTEGER NOT NULL DEFAULT 0; DELETE FROM hosted_github_oauth");
      }
      this.sqlite.prepare("INSERT OR IGNORE INTO hosted_github_authorizations(user_id,generation) SELECT user_id,0 FROM hosted_github_accounts").run();
+     // Earlier unfenced binds could leave consent behind after disconnect.
+     for (const table of ["hosted_github_bindings", "hosted_github_binding_attempts"]) {
+       this.sqlite.prepare(`DELETE FROM ${table} WHERE user_id NOT IN (SELECT user_id FROM hosted_github_accounts)`).run();
+     }
      if (!this.sqlite.prepare("PRAGMA table_info(hosted_github_tasks)").all().some((row) => row.name === "input_fingerprint")) {
        this.sqlite.exec("ALTER TABLE hosted_github_tasks ADD COLUMN input_fingerprint TEXT");
      }
@@ -229,10 +233,13 @@ export class HostedGithub {
    this.sqlite.exec("BEGIN IMMEDIATE");
    try {
      assertCurrent();
+     // A bind started while this exchange was pending must not reuse its account.
+     this.nextAuthorizationGeneration(actor.user_id);
      this.sqlite.prepare("INSERT INTO hosted_github_accounts VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET login=excluded.login,credentials=excluded.credentials")
        .run(actor.user_id, account.login, this.seal(credentials, actor.user_id));
      // Commit credentials and invalidated repository consent under the same fence.
      this.sqlite.prepare("DELETE FROM hosted_github_bindings WHERE user_id=?").run(actor.user_id);
+     this.sqlite.prepare("DELETE FROM hosted_github_binding_attempts WHERE user_id=?").run(actor.user_id);
      this.sqlite.exec("COMMIT");
    } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
    return { connected: true, login: account.login };
@@ -245,19 +252,49 @@ export class HostedGithub {
      installation_url: `https://github.com/apps/${this.options.appSlug}/installations/new` };
  }
  async bind(actor: Actor, projectId: string, input: HostedGithubRepositoryInput, authorize: () => void = () => {}) {
-   authorize();
-   const role = this.service.requireProjectMembership(actor, projectId);
-   if (role === "viewer") throw safeError("github_task_access", 403);
-   const repository = await this.api(actor, `/repos/${input.repository}`, "GET", undefined, authorize);
-   authorize();
+   const assertAccess = () => {
+     authorize(); this.service.database.assertActiveDevice(actor);
+     if (this.service.requireProjectMembership(actor, projectId) === "viewer") throw safeError("github_task_access", 403);
+   };
+   assertAccess();
+   const attempt = randomBytes(16).toString("hex");
+   let generation: number, revision: string | null;
+   this.sqlite.exec("BEGIN IMMEDIATE");
+   try {
+     assertAccess();
+     const account = this.sqlite.prepare(`SELECT generation FROM hosted_github_accounts
+       JOIN hosted_github_authorizations USING(user_id) WHERE user_id=?`).get(actor.user_id);
+     if (!account) throw safeError("github_access", 403);
+     generation = Number(account.generation);
+     revision = (this.sqlite.prepare("SELECT revision FROM hosted_github_bindings WHERE user_id=? AND project_id=?")
+       .get(actor.user_id, projectId)?.revision as string | undefined) ?? null;
+     // Reserve the latest explicit choice without replacing the last good consent.
+     this.sqlite.prepare(`INSERT INTO hosted_github_binding_attempts VALUES(?,?,?) ON CONFLICT(user_id,project_id)
+       DO UPDATE SET revision=excluded.revision`).run(actor.user_id, projectId, attempt);
+     this.sqlite.exec("COMMIT");
+   } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
+   const assertCurrent = () => {
+     assertAccess();
+     if (!this.sqlite.prepare(`SELECT 1 FROM hosted_github_accounts JOIN hosted_github_authorizations USING(user_id)
+       WHERE user_id=? AND generation=?`).get(actor.user_id, generation)) throw safeError("github_access", 403);
+     const current = this.sqlite.prepare("SELECT revision FROM hosted_github_bindings WHERE user_id=? AND project_id=?")
+       .get(actor.user_id, projectId)?.revision ?? null;
+     if (current !== revision || !this.sqlite.prepare("SELECT 1 FROM hosted_github_binding_attempts WHERE user_id=? AND project_id=? AND revision=?")
+       .get(actor.user_id, projectId, attempt)) throw safeError("github_binding_changed", 409);
+   };
+   const repository = await this.api(actor, `/repos/${input.repository}`, "GET", undefined, assertCurrent);
+   assertCurrent();
    if (repository.full_name?.toLowerCase() !== input.repository.toLowerCase() || !Number.isSafeInteger(repository.id)
      || !repository.permissions?.push || repository.archived) throw safeError("github_access", 403);
-   await this.api(actor, `/repos/${input.repository}/branches/${encodeURIComponent(input.base_branch)}`, "GET", undefined, authorize);
-   authorize();
-   if (this.service.requireProjectMembership(actor, projectId) === "viewer") throw safeError("github_task_access", 403);
-   this.sqlite.prepare(`INSERT INTO hosted_github_bindings VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,project_id)
-     DO UPDATE SET repository=excluded.repository,repository_id=excluded.repository_id,base_branch=excluded.base_branch,revision=excluded.revision`)
-     .run(actor.user_id, projectId, repository.full_name, repository.id, input.base_branch, randomBytes(16).toString("hex"));
+   await this.api(actor, `/repos/${input.repository}/branches/${encodeURIComponent(input.base_branch)}`, "GET", undefined, assertCurrent);
+   this.sqlite.exec("BEGIN IMMEDIATE");
+   try {
+     assertCurrent();
+     this.sqlite.prepare(`INSERT INTO hosted_github_bindings VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,project_id)
+       DO UPDATE SET repository=excluded.repository,repository_id=excluded.repository_id,base_branch=excluded.base_branch,revision=excluded.revision`)
+       .run(actor.user_id, projectId, repository.full_name, repository.id, input.base_branch, randomBytes(16).toString("hex"));
+     this.sqlite.exec("COMMIT");
+   } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
    return this.status(actor, projectId);
  }
  disconnect(actor: Actor) {
@@ -267,6 +304,7 @@ export class HostedGithub {
      this.nextAuthorizationGeneration(actor.user_id);
      this.sqlite.prepare("DELETE FROM hosted_github_accounts WHERE user_id=?").run(actor.user_id);
      this.sqlite.prepare("DELETE FROM hosted_github_bindings WHERE user_id=?").run(actor.user_id);
+     this.sqlite.prepare("DELETE FROM hosted_github_binding_attempts WHERE user_id=?").run(actor.user_id);
      this.sqlite.prepare("DELETE FROM hosted_github_oauth WHERE user_id=?").run(actor.user_id);
      this.sqlite.exec("COMMIT");
    } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }

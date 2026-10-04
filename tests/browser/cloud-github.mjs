@@ -116,6 +116,17 @@ try {
     await page.locator('#cloud-github-repository').fill('owner/fixture');
     await page.locator('#cloud-github-repository-form button[type=submit]').click();
     await page.locator('#cloud-github-status').filter({ hasText: 'owner/fixture' }).waitFor();
+    // Invalid/private payloads produce a localized safe error through the live localizer.
+    const statusRoute = `**/v1/projects/${server.database.requireSession(sessionId).project_id}/hosted-github`;
+    await page.route(statusRoute, route => route.fulfill({ status: 200, contentType: 'application/json',
+      body: JSON.stringify({ data: { enabled: false, credentials: 'private-invalid-response-fixture' } }) }));
+    await page.locator('#cloud-github-refresh').click();
+    await page.locator('#cloud-github-error').filter({ hasText: locale === 'en'
+      ? 'Cloud GitHub response is invalid. Refresh and try again.' : '云端 GitHub 响应无效，请刷新后重试。' }).waitFor();
+    assert.equal((await page.locator('#project-code-dialog').textContent()).includes('private-invalid-response-fixture'), false);
+    await page.unroute(statusRoute); await page.locator('#cloud-github-refresh').click();
+    await page.waitForFunction(() => document.getElementById('cloud-github-error').textContent === '');
+    await page.locator('#cloud-github-status').filter({ hasText: 'owner/fixture' }).waitFor();
     assert.equal(await page.locator('#cloud-github-new').isDisabled(), true);
     assert.equal(await page.locator('#cloud-github-continue').isDisabled(), true);
     assert.equal(await page.locator('#cloud-github-dialog').count(), 0);
@@ -204,7 +215,7 @@ try {
       assert.equal(server.database.sqlite.prepare('SELECT credentials FROM hosted_github_accounts WHERE user_id=?').get(identity.actor.user_id).credentials, credentials);
     }
     assert.deepEqual(errors, []); await page.close();
-    process.stdout.write(`PASS ${engine} ${locale}: single Cloud Git panel, held Agent entry, OAuth callback, repository bind, saved diff and explicit draft PR; user cooldown refusal, mobile and Escape.\n`);
+    process.stdout.write(`PASS ${engine} ${locale}: single Cloud Git panel, held Agent entry, OAuth callback, repository bind, localized invalid-response error, saved diff and explicit draft PR; user cooldown refusal, mobile and Escape.\n`);
    }
   } finally { await browser.close(); }
  }

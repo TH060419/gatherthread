@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { ApiError, HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
+import { translateUiText } from "../src/i18n.js";
 
 test("pause uses the existing cookie-authenticated author control route with empty strict JSON", async () => {
   const originalFetch = globalThis.fetch;
@@ -883,8 +884,11 @@ test("cloud GitHub rejects invalid or private response fields with a safe messag
     for (const data of [{ enabled: false, credentials: "private-fixture" }, { enabled: true },
       { enabled: false, generation: 1 }]) {
       globalThis.fetch = async () => Response.json({ data });
-      await assert.rejects(api.getHostedGithubStatus("project"), (error) =>
-        error.message === "Cloud GitHub response is invalid. Refresh and try again." && !error.message.includes("private-fixture"));
+      await assert.rejects(api.getHostedGithubStatus("project"), (error) => {
+        assert.equal(translateUiText(error.message, "en"), "Cloud GitHub response is invalid. Refresh and try again.");
+        assert.equal(translateUiText(error.message, "zh-CN"), "云端 GitHub 响应无效，请刷新后重试。");
+        return !error.message.includes("private-fixture");
+      });
     }
     globalThis.fetch = async () => Response.json({ data: { authorization_url: "https://attacker.invalid/login/oauth/authorize" } });
     await assert.rejects(api.authorizeHostedGithub(), /Cloud GitHub response is invalid/);

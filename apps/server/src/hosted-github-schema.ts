@@ -17,6 +17,12 @@ CREATE TABLE IF NOT EXISTS hosted_github_bindings (
  repository TEXT NOT NULL, repository_id INTEGER NOT NULL, base_branch TEXT NOT NULL, revision TEXT NOT NULL,
  PRIMARY KEY(user_id,project_id)
 ) STRICT;
+CREATE TABLE IF NOT EXISTS hosted_github_binding_attempts (
+ user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+ project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+ revision TEXT NOT NULL,
+ PRIMARY KEY(user_id,project_id)
+) STRICT;
 CREATE TABLE IF NOT EXISTS hosted_github_tasks (
  id TEXT PRIMARY KEY, request_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

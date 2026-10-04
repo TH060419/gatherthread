@@ -12,7 +12,7 @@ import { HostedGithub } from "../src/hosted-github.js";
 import { ApiError } from "../src/errors.js";
 import { HostedExecutorCleanupError } from "../src/hosted-agent-recovery.js";
 import { HostedNpmProxy } from "../src/hosted-npm-proxy.js";
-import type { CodeFile } from "@gatherthread/protocol";
+import { HostedGithubStatusSchema, type CodeFile } from "@gatherthread/protocol";
 import { request } from "node:http";
 import { redactJson } from "../src/redaction.js";
 import { HostedRepositoryRunner } from "../src/hosted-repository-runner.js";
@@ -161,6 +161,132 @@ test("legacy OAuth states are invalidated atomically while current credentials s
    await f.github.close();
   }
   await connect(f);
+ } finally { await f.close(); }
+});
+
+for (const stage of ["repository", "branch"] as const) {
+ for (const action of ["disconnect-first", "disconnect-last", "reconnect-first", "reconnect-last", "choice-first", "choice-last", "another-instance"] as const) {
+  test(`binding ${stage} lookup respects newer ${action} across devices`, { timeout: 10_000 }, async () => {
+   const f = fixture(), entered = deferred(), release = deferred(), nextEntered = deferred(), nextRelease = deferred();
+   const peer = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Second browser").device_id };
+   const fetcher = f.githubOptions.fetch;
+   let armed = false, login = "fixture-owner", old: Promise<unknown> | undefined, next: Promise<unknown> | undefined;
+   let other: HostedGithub | undefined, otherDb: CollaborationDatabase | undefined;
+   const pathAt = (repository: string) => `/repos/${repository}${stage === "branch" ? "/branches/main" : ""}`;
+   f.githubOptions.fetch = async (url, init) => {
+    const path = new URL(String(url)).pathname;
+    if (armed && path === pathAt("owner/project")) { armed = false; entered.resolve(); await release.promise; }
+    if (action === "choice-last" && path === pathAt("new-owner/new-project")) { nextEntered.resolve(); await nextRelease.promise; }
+    if (path === "/user") return Response.json({ login });
+    if (path === "/repos/new-owner/new-project") return Response.json({ id: 456, full_name: "new-owner/new-project", permissions: { push: true } });
+    if (path === "/repos/new-owner/new-project/branches/main") return Response.json({ commit: { sha: "c".repeat(40) } });
+    return fetcher(url, init);
+   };
+   try {
+    await connect(f); armed = true;
+    old = f.github.bind(f.actor, f.session.project_id, { repository: "owner/project", base_branch: "main" });
+    const outcome = old.then(() => null, (error: unknown) => error);
+    await entered.promise;
+    if (action === "disconnect-last") {
+     release.resolve(); assert.equal(await outcome, null); f.github.disconnect(peer);
+    } else if (action === "disconnect-first") {
+     f.github.disconnect(peer); release.resolve(); assert.ok(await outcome instanceof ApiError);
+    } else {
+     let current = f.github;
+     if (action === "another-instance") {
+      // Separate SQLite connection and service: no process-local cancellation lock.
+      otherDb = new CollaborationDatabase(join(f.directory, "db"), { authTokenPepper: "github-test-pepper-long" });
+      other = new HostedGithub(new CollaborationService(otherDb), f.agent, f.runOptions, f.githubOptions); current = other;
+     }
+     if (action.startsWith("reconnect")) {
+      const state = new URL(current.authorize(peer).authorization_url).searchParams.get("state")!;
+      if (action === "reconnect-last") { release.resolve(); assert.ok(await outcome instanceof ApiError); }
+      login = "new-account"; await current.complete(peer, { state, code: "new-fixture" });
+     }
+     next = current.bind(peer, f.session.project_id, { repository: "new-owner/new-project", base_branch: "main" });
+     const nextOutcome = next.then(() => null, (error: unknown) => error);
+     if (action === "choice-last") {
+      await nextEntered.promise; release.resolve(); assert.ok(await outcome instanceof ApiError);
+      assert.equal(current.status(peer, f.session.project_id).binding?.repository, "owner/project");
+      nextRelease.resolve();
+     }
+     assert.equal(await nextOutcome, null);
+     release.resolve(); assert.ok(await outcome instanceof ApiError);
+     const status = HostedGithubStatusSchema.parse(f.github.status(peer, f.session.project_id));
+     assert.ok(status.enabled);
+     assert.equal(status.connected, true); assert.equal(status.binding?.repository, "new-owner/new-project");
+     assert.equal(status.login, action.startsWith("reconnect") ? "new-account" : "fixture-owner");
+     return;
+    }
+    const status = HostedGithubStatusSchema.parse(f.github.status(peer, f.session.project_id));
+    assert.ok(status.enabled);
+    assert.equal(status.connected, false); assert.equal(status.binding, null);
+   } finally {
+    release.resolve(); nextRelease.resolve(); await old?.catch(() => {}); await next?.catch(() => {});
+    await other?.close(); otherDb?.close(); await f.close();
+   }
+  });
+ }
+}
+
+test("successful same-account OAuth completion cancels a bind started during the exchange", async () => {
+ const f = fixture(), entered = deferred(), release = deferred();
+ const fetcher = f.githubOptions.fetch;
+ let old: Promise<unknown> | undefined;
+ try {
+  await connect(f);
+  const state = new URL(f.github.authorize(f.actor).authorization_url).searchParams.get("state")!;
+  f.githubOptions.fetch = async (url, init) => {
+   if (new URL(String(url)).pathname === "/repos/owner/project/branches/main") { entered.resolve(); await release.promise; }
+   return fetcher(url, init);
+  };
+  old = f.github.bind(f.actor, f.session.project_id, { repository: "owner/project", base_branch: "main" });
+  const outcome = old.then(() => null, (error: unknown) => error);
+  await entered.promise; await f.github.complete(f.actor, { state, code: "same-account" });
+  release.resolve(); assert.ok(await outcome instanceof ApiError);
+  assert.equal(f.github.status(f.actor, f.session.project_id).binding, null);
+ } finally { release.resolve(); await old?.catch(() => {}); await f.close(); }
+});
+
+test("failed latest choice preserves committed consent and still cancels an older bind", async () => {
+ const f = fixture(), entered = deferred(), release = deferred();
+ const fetcher = f.githubOptions.fetch; let old: Promise<unknown> | undefined;
+ try {
+  await connect(f);
+  const revision = f.db.sqlite.prepare("SELECT revision FROM hosted_github_bindings").get()!.revision;
+  f.githubOptions.fetch = async (url, init) => {
+   const path = new URL(String(url)).pathname;
+   if (path === "/repos/owner/project/branches/main") { entered.resolve(); await release.promise; }
+   if (path === "/repos/denied/project") return Response.json({ id: 456, full_name: "denied/project", permissions: { push: false } });
+   return fetcher(url, init);
+  };
+  old = f.github.bind(f.actor, f.session.project_id, { repository: "owner/project", base_branch: "main" });
+  const outcome = old.then(() => null, (error: unknown) => error);
+  await entered.promise;
+  await assert.rejects(f.github.bind(f.actor, f.session.project_id, { repository: "denied/project", base_branch: "main" }), ApiError);
+  release.resolve(); assert.ok(await outcome instanceof ApiError);
+  assert.equal(f.db.sqlite.prepare("SELECT revision FROM hosted_github_bindings").get()!.revision, revision);
+  f.githubOptions.fetch = fetcher;
+  await f.github.bind(f.actor, f.session.project_id, { repository: "owner/project", base_branch: "main" });
+ } finally { release.resolve(); await old?.catch(() => {}); await f.close(); }
+});
+
+test("binding migration removes orphaned consent while preserving connected consent on repeated startup", async () => {
+ const f = fixture();
+ try {
+  await connect(f);
+  const connected = f.db.sqlite.prepare("SELECT * FROM hosted_github_bindings").get();
+  const orphan = f.db.createIdentity({ display_name: "Disconnected", device_name: "Other" }).actor;
+  f.db.sqlite.prepare("INSERT INTO hosted_github_bindings VALUES(?,?,?,?,?,?)")
+   .run(orphan.user_id, f.session.project_id, "owner/project", 123, "main", "orphan");
+  f.db.sqlite.prepare("INSERT INTO hosted_github_binding_attempts VALUES(?,?,?)").run(orphan.user_id, f.session.project_id, "orphan");
+  await f.github.close();
+  for (let n = 0; n < 2; n++) {
+   f.github = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+   assert.deepEqual(f.db.sqlite.prepare("SELECT * FROM hosted_github_bindings").get(), connected);
+   assert.equal(f.db.sqlite.prepare("SELECT 1 FROM hosted_github_binding_attempts WHERE user_id=?").get(orphan.user_id), undefined);
+   await f.github.close();
+  }
  } finally { await f.close(); }
 });
 
