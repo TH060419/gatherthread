@@ -79,7 +79,7 @@ export function mountAccountDevices({ document, api, localizer, getContext, conf
               onRevoked();
               setBusy(false);
               await load();
-              if (current(run + 1, context)) refresh.focus();
+              if (current(run + 1, context)) restoreFocus(refresh, wasFocused);
             } catch {
               if (current(run, context)) setStatus("Could not revoke device access. Refresh and try again.");
             } finally {

@@ -120,6 +120,23 @@ try {
           assert.equal((await contexts[0].request.get(origin + '/v1/me')).status(), 200);
           assert.equal(await pages[0].locator('#settings-devices-refresh').evaluate(element => element === document.activeElement), true);
           await pages[1].reload(); await pages[1].locator('#auth-view').waitFor({ state: 'visible' });
+          // A successful action must not steal focus moved during its request.
+          const initialRevokeUrl = `${origin}/v1/devices/${account.actor.device_id}`;
+          let releaseRevoke, enteredRevoke;
+          const revokeEntered = new Promise(resolve => { enteredRevoke = resolve; });
+          await pages[0].route(initialRevokeUrl, async route => {
+            await new Promise(resolve => { releaseRevoke = resolve; enteredRevoke(); });
+            await route.continue();
+          });
+          const revokedInitial = pages[0].waitForResponse(response => response.url() === initialRevokeUrl && response.status() === 200);
+          const initialRevoke = pages[0].locator(`#settings-devices-list button[data-device-id="${account.actor.device_id}"]`);
+          pages[0].once('dialog', dialog => dialog.accept());
+          await initialRevoke.focus(); await initialRevoke.press('Enter'); await revokeEntered;
+          const localeSelect = pages[0].locator('#settings-locale'); await localeSelect.focus();
+          releaseRevoke(); await revokedInitial;
+          await pages[0].waitForFunction(() => !document.querySelector('#settings-devices-refresh').disabled);
+          assert.equal(await localeSelect.evaluate(element => element === document.activeElement), true);
+          assert.equal((await contexts[0].request.get(origin + '/v1/me')).status(), 200);
           assert.deepEqual(errors, []);
           scenarios++;
         } finally { for (const context of contexts) await context.close(); }

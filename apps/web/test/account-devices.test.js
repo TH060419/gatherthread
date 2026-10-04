@@ -44,7 +44,7 @@ test("device controls are account-scoped, escape names and never revoke the curr
   assert.equal(f.rows().length, 3);
   assert.equal(f.rows()[1].children[0].children[0].textContent, "<Phone>");
   assert.deepEqual(f.buttons().map(button => button.dataset.deviceId), ["phone"]);
-  await f.buttons()[0].click();
+  f.buttons()[0].focus(); await f.buttons()[0].click();
   assert.deepEqual(calls, ["phone"]);
   assert.equal(f.nodes.get("settings-devices-refresh").focused, true, "focus returns only after the refreshed control is enabled");
 });
@@ -122,6 +122,33 @@ test("failed revocation does not steal a newer focus or restore it into a closed
     fail(Error("private response")); await pending;
     assert.equal(f.document.activeElement, change === "focus" ? other : f.document.body);
   }
+});
+
+for (const phase of ["revoke", "reload"]) test(`successful revocation preserves newer focus and lifecycle during ${phase}`, async () => {
+  for (const change of ["focus", "close", "account"]) {
+    let finish, entered, loaded = false;
+    const started = new Promise(resolve => { entered = resolve; });
+    const delay = () => new Promise(resolve => { finish = resolve; entered(); });
+    const f = fixture({
+      listDevices: async () => { if (loaded && phase === "reload") await delay(); return f.devices; },
+      revokeDevice: async () => { if (phase === "revoke") await delay(); }
+    });
+    await f.control.load(); loaded = true;
+    const button = f.buttons()[0]; button.focus(); const pending = button.click();
+    await started;
+    const other = f.document.createElement("input");
+    if (change === "focus") other.focus();
+    if (change === "close") f.close();
+    if (change === "account") f.setScope("account:2");
+    finish(); await pending;
+    assert.equal(f.document.activeElement, change === "focus" ? other : f.document.body);
+  }
+});
+
+test("successful revocation does not focus a control after an unfocused activation", async () => {
+  const f = fixture({ revokeDevice: async () => {} });
+  await f.control.load(); await f.buttons()[0].click();
+  assert.equal(f.document.activeElement, f.document.body);
 });
 
 test("loaded device labels switch languages both ways without refetching or translating names", async () => {
