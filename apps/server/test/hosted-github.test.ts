@@ -13,7 +13,7 @@ import { ApiError } from "../src/errors.js";
 import { HostedExecutorCleanupError } from "../src/hosted-agent-recovery.js";
 import { HostedNpmProxy } from "../src/hosted-npm-proxy.js";
 import { HostedGithubStatusSchema, type CodeFile } from "@gatherthread/protocol";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { redactJson } from "../src/redaction.js";
 import { HostedRepositoryRunner } from "../src/hosted-repository-runner.js";
 
@@ -405,6 +405,40 @@ for (const [index, step] of snapshotSteps.entries()) {
    });
   }
  }
+}
+for (const phase of ["headers", "body"] as const) {
+ test(`snapshot shutdown aborts the actual pending ${phase} download without saving source`, { timeout: 10_000 }, async () => {
+  const f = fixture(), entered = deferred(), aborted = deferred();
+  const server = createServer((_request, response) => {
+   response.on("close", aborted.resolve);
+   if (phase === "body") {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write('{"id":');
+   }
+   entered.resolve();
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert.ok(address && typeof address !== "string");
+  const fetcher = f.githubOptions.fetch;
+  let armed = false;
+  f.githubOptions.fetch = (url, init) => armed && new URL(String(url)).pathname === "/repos/owner/project"
+   ? globalThis.fetch(`http://127.0.0.1:${address.port}/`, init) : fetcher(url, init);
+  try {
+   await connect(f); armed = true;
+   const before = f.calls.length;
+   const task = f.github.start(f.actor, f.session.id, { content: "Download source", profile_id: "coding", idempotency_key: `abort-${phase}` });
+   await entered.promise; await f.github.close(); await aborted.promise;
+   assert.equal(f.calls.length, before, "no later metadata request may start");
+   assert.equal(f.runs(), 0); assert.equal(f.db.hostedActiveRuns(), 0);
+   const saved = f.db.sqlite.prepare("SELECT state,initial_files,starting_files,result_files FROM hosted_github_tasks WHERE id=?").get(task.id);
+   assert.equal(saved?.state, "interrupted");
+   assert.equal(saved?.initial_files, null); assert.equal(saved?.starting_files, null); assert.equal(saved?.result_files, null);
+  } finally {
+   server.closeAllConnections();
+   await new Promise<void>((resolve) => server.close(() => resolve()));
+   await f.close();
+  }
+ });
 }
 const publicationSteps = [
  ["/git/blobs", "/branches/main", "GET"],

@@ -185,7 +185,7 @@ try {
     assert.equal(seeded.status(), 202);
     await page.locator('#project-code-button').click();
     await page.locator('#code-provider-github').click();
-    await page.locator('#cloud-github-answer').filter({ hasText: 'failed' }).waitFor();
+    await page.locator('#event-timeline').getByText('failed', { exact: true }).last().waitFor();
     const beforeLimited = runs;
     const limited = await page.request.post(`${origin}/v1/sessions/${sessionId}/hosted-github-tasks`, {
       headers: { origin }, data: { content: 'Must wait for cooldown', profile_id: 'coding', idempotency_key: `rate-${engine}-${locale}` }

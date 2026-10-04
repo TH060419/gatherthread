@@ -1,4 +1,4 @@
-import { mountCloudGithub } from "./cloud-github-view.js";
+import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-1";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountAgentRequestControl } from "./agent-request-control.js";
 import { mountRegistration } from "./registration.js";
@@ -45,7 +45,7 @@ import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261004-1";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261005-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   CODEX_HARNESS,

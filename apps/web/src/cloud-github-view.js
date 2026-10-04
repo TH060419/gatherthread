@@ -8,7 +8,7 @@ export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false
     if (pending) return;
     pending = true; message("");
     const gen = generation;
-    try { await fn(); } catch (error) { if (gen === generation) message(error.message); }
+    try { await fn(); } catch (error) { if (gen === generation) message(t(error.message)); }
     finally { pending = false; }
   }
   function clear() {
@@ -40,15 +40,20 @@ export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false
     const sameRevision = selected?.id === task.id && selected?.revision === task.revision;
     selected = task;
     el("cloud-github-task-status").textContent = `${task.repository} · ${t(task.state)}${task.error_code ? ` · ${t("Review the project setup and reconnect GitHub if needed.")}` : ""}`;
+    el("cloud-github-answer").setAttribute("data-i18n-skip", "");
     el("cloud-github-answer").textContent = task.answer ?? "";
     el("cloud-github-changes").replaceChildren();
     for (const change of task.changes) {
       const details = doc.createElement("details"), summary = doc.createElement("summary");
-      summary.textContent = `${change.path}${change.before_executable !== change.after_executable ? ` · ${t("File mode changed")}` : ""}`;
+      const path = doc.createElement("span");
+      path.setAttribute("data-i18n-skip", ""); path.textContent = change.path;
+      summary.append(path);
+      if (change.before_executable !== change.after_executable) summary.append(doc.createTextNode(` · ${t("File mode changed")}`));
       details.append(summary);
       for (const [label, source] of [["Before", change.before_base64], ["After", change.after_base64]]) {
         const heading = doc.createElement("h4"), pre = doc.createElement("pre");
-        heading.textContent = t(label); pre.textContent = text(source); details.append(heading, pre);
+        heading.textContent = t(label); pre.setAttribute("data-i18n-skip", "");
+        pre.textContent = text(source); details.append(heading, pre);
       }
       el("cloud-github-changes").append(details);
     }

@@ -143,8 +143,9 @@ export class HostedGithub {
    this.sqlite.prepare("DELETE FROM hosted_github_tasks WHERE expires_at < ? AND state != 'running'").run(Date.now());
  }
  private async json(url: string, init: RequestInit, limit = 16 * 1024 * 1024): Promise<any> {
+   const timeout = AbortSignal.timeout(30_000);
    const response = await (this.options.fetch ?? globalThis.fetch)(url,
-     { ...init, redirect: "error", signal: AbortSignal.timeout(30_000) });
+     { ...init, redirect: "error", signal: init.signal ? AbortSignal.any([init.signal, timeout]) : timeout });
    if (!response.ok || !response.body) throw safeError("github_access", 502);
    let size = 0; const chunks: Uint8Array[] = [];
    for await (const chunk of response.body) { size += chunk.length; if (size > limit) throw safeError("github_source_limit", 413); chunks.push(chunk); }
@@ -182,18 +183,18 @@ export class HostedGithub {
    this.refreshing.set(actor.user_id, promise);
    try { return await promise; } finally { this.refreshing.delete(actor.user_id); }
  }
- private apiWithToken(token: string, path: string, method = "GET", body?: unknown) {
+ private apiWithToken(token: string, path: string, method = "GET", body?: unknown, signal?: AbortSignal) {
    return this.json(`https://api.github.com${path}`, { method,
      headers: { accept: "application/vnd.github+json", authorization: `Bearer ${token}`,
        "X-GitHub-Api-Version": "2022-11-28", ...(body ? { "content-type": "application/json" } : {}) },
-     ...(body ? { body: JSON.stringify(body) } : {}) });
+     ...(body ? { body: JSON.stringify(body) } : {}), ...(signal ? { signal } : {}) });
  }
- private async api(actor: Actor, path: string, method = "GET", body?: unknown, authorize?: () => void) {
+ private async api(actor: Actor, path: string, method = "GET", body?: unknown, authorize?: () => void, signal?: AbortSignal) {
    authorize?.();
    const token = await this.token(actor, authorize);
    this.service.database.assertActiveDevice(actor);
    authorize?.();
-   return this.apiWithToken(token, path, method, body);
+   return this.apiWithToken(token, path, method, body, signal);
  }
  authorize(actor: Actor) {
    this.prune(); this.service.database.assertActiveDevice(actor);
@@ -406,12 +407,22 @@ export class HostedGithub {
    this.inFlight.add(promise); void promise.then(settled, settled);
    return this.view(actor, id);
  }
- private async snapshot(actor: Actor, task: Task) {
-   const repo = await this.api(actor, `/repos/${task.repository}`);
+ private async snapshot(actor: Actor, task: Task, signal: AbortSignal) {
+   const authorize = () => {
+     signal.throwIfAborted();
+     if (this.task(actor, task.id).state !== "running") throw safeError("github_task_access", 409);
+     this.assertBinding(actor, task);
+   };
+   const api = async (path: string) => {
+     const result = await this.api(actor, `/repos/${task.repository}${path}`, "GET", undefined, authorize, signal);
+     authorize();
+     return result;
+   };
+   const repo = await api("");
    if (repo.id !== task.repository_id || !repo.permissions?.push || repo.archived) throw safeError("github_access", 403);
-   const branch = await this.api(actor, `/repos/${task.repository}/branches/${encodeURIComponent(task.base_branch)}`);
-   const commit = await this.api(actor, `/repos/${task.repository}/git/commits/${branch.commit.sha}`);
-   const tree = await this.api(actor, `/repos/${task.repository}/git/trees/${commit.tree.sha}?recursive=1`);
+   const branch = await api(`/branches/${encodeURIComponent(task.base_branch)}`);
+   const commit = await api(`/git/commits/${branch.commit.sha}`);
+   const tree = await api(`/git/trees/${commit.tree.sha}?recursive=1`);
    if (tree.truncated || !Array.isArray(tree.tree) || tree.tree.length > 5000) throw safeError("github_source_limit", 413);
    const entries = tree.tree.filter((e: any) => e.type !== "tree" && !excluded(e.path) && isCodeSyncPathAllowed(e.path));
    if (entries.length > 1000 || entries.some((e: any) => e.type !== "blob" || !["100644", "100755"].includes(e.mode)
@@ -421,9 +432,9 @@ export class HostedGithub {
    const deadline = Date.now() + 120000;
    for (let offset = 0; offset < entries.length; offset += 8) {
      const batch = await Promise.all(entries.slice(offset, offset + 8).map(async (entry: any) => {
-       this.task(actor, task.id); this.assertBinding(actor, task);
+       authorize();
        if (Date.now() > deadline) throw safeError("github_source_limit", 413);
-       const blob = await this.api(actor, `/repos/${task.repository}/git/blobs/${entry.sha}`);
+       const blob = await api(`/git/blobs/${entry.sha}`);
        if (blob.encoding !== "base64" || typeof blob.content !== "string") throw safeError("github_source_limit");
        const bytes = Buffer.from(blob.content.replace(/\s/gu, ""), "base64");
        if (bytes.length !== entry.size || containsCodeSyncSecret(bytes.toString("utf8"))) throw safeError("github_source_limit");
@@ -441,8 +452,9 @@ export class HostedGithub {
      this.assertBinding(actor, task);
      const source = parent ? { sha: parent.base_sha!, tree: parent.base_tree!,
        files: this.open<CodeFile[]>(parent.result_files ?? parent.starting_files!, parent.id),
-       initial: this.open<CodeFile[]>(parent.initial_files!, parent.id) } : await this.snapshot(actor, task);
+       initial: this.open<CodeFile[]>(parent.initial_files!, parent.id) } : await this.snapshot(actor, task, signal);
      this.task(actor, id); this.assertBinding(actor, task);
+     signal.throwIfAborted();
      this.sqlite.prepare("UPDATE hosted_github_tasks SET base_sha=?,base_tree=?,initial_files=?,starting_files=? WHERE id=?")
        .run(source.sha, source.tree, this.seal("initial" in source ? source.initial : source.files, id),
          this.seal(source.files, id), id);
