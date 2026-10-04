@@ -140,9 +140,9 @@ test("product home exposes canonical and bilingual social discovery metadata", a
   const html = await readFile(new URL("index.html", productRoot), "utf8");
   assert.match(html, /<link rel="canonical" href="https:\/\/gatherthread\.cn\/">/u);
   assert.match(html, /<title>GatherThread 共序 \| 本地 AI Agent 多人联机协作<\/title>/u);
-  assert.match(html, /name="description" content="GatherThread 共序是面向多人联机协作、各自使用本地 AI Agent 的开源工作区/u);
+  assert.match(html, /name="description" content="GatherThread 共序是开源、可自托管的多人 AI Agent 协作工作区/u);
   assert.match(html, /property="og:title" content="GatherThread 共序 \| Local AI Agent Collaboration"/u);
-  assert.match(html, /property="og:description" content="Self-hostable collaboration for teams using local AI coding agents/u);
+  assert.match(html, /property="og:description" content="Self-hostable AI Agent collaboration/u);
   assert.match(html, /property="og:url" content="https:\/\/gatherthread\.cn\/"/u);
   assert.match(html, /name="twitter:card" content="summary"/u);
 });
@@ -154,10 +154,12 @@ test("product home explains email sign-in and default registration closure", asy
   assert.match(html, /忘记密码/u);
 });
 
-test("product home leads with the hosted server while keeping local Agents local", async () => {
+test("product home distinguishes local Agents from the pending cloud trial", async () => {
   const html = await readFile(new URL("index.html", productRoot), "utf8");
   assert.match(html, /当前 Alpha 尚未开放公众注册/u);
   assert.match(html, /Agent 与工作目录仍留在自己的设备上/u);
+  assert.match(html, /id="cloud-agent"/u);
+  assert.match(html, /目前仍待模型 API、GitHub App 接入与部署验证/u);
   assert.match(html, /data-i18n="connect\.c3\.h3">连接本地 Agent/u);
   assert.doesNotMatch(html, /npm run connection:local/u);
 });

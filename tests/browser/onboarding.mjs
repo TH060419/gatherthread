@@ -28,7 +28,11 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   await page.evaluate(async ({ locale, empty, viewer, deniedStorage }) => {
     if (locale === 'zh-CN') document.querySelector('#auth-language-button').click();
     window.realWrites = [];
-    const { MockCollaborationApi } = await import('./src/api.js?v=20260927-1');
+    const mainUrl = document.querySelector('script[type="module"][src*="/main.js"]').src;
+    const source = await (await fetch(mainUrl)).text();
+    const specifier = source.match(/from\s+["'](\.\/api\.js(?:\?[^"']*)?)["']/)?.[1];
+    if (!specifier) throw new Error("Fixture could not resolve the application's API module");
+    const { MockCollaborationApi } = await import(new URL(specifier, mainUrl).href);
     const proto = MockCollaborationApi.prototype;
     for (const name of ['appendHumanChat', 'appendAgentRequest', 'createHistorySummary', 'createSnapshotRequest', 'createProject', 'createSession', 'mutateProjectCode', 'clearOwnCodeBranch', 'clearProjectCode', 'setProjectMemberRole', 'createInvitation', 'acceptInvitation', 'setProjectContextPolicy']) {
       const original = proto[name];

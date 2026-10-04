@@ -10,6 +10,8 @@
 
 **Alpha 8** adds a bilingual first-use guide and isolated practice project, quotes and member mentions, clearer conversation navigation, runtime-advertised model choices, optional Windows/macOS Codex Launcher prototypes, self-service account deletion. See the [Alpha 8 notes](docs/releases/0.1.0-alpha.8.md) for limits and verification gates.
 
+**Cloud trial Agent source preview:** an optional, isolated [OpenCode](https://github.com/anomalyco/opencode) runner is being prepared for first-time users. It can edit files and run terminal commands in a temporary container, with an explicit choice before reading project cloud code or saving changes to a member's branch. Once enabled, select Cloud Agent beside Codex and DSH in the workspace or Settings; operators can configure multiple API accounts for parallel capacity. It is disabled until an operator configures a model API and validates the container; it is not a claim that gatherthread.cn currently offers this feature. See the [user guide](docs/HOSTED_AGENT_GUIDE.md) and [operator guide](docs/HOSTED_AGENT.md). The separate [Cloud GitHub preview](docs/HOSTED_GITHUB.md) adds account authorization, npm dependency preparation, private saved source, change review and explicit draft PR creation for Node.js/TypeScript projects; its real App/provider and Linux container activation gates remain pending.
+
 > **Unreleased account update.** The hosted Alpha has not switched to this branch or opened public registration. The source flow below requires operator preflight before enablement.
 
 Git tag, npm package, and GitHub Release details are recorded in the [release index](docs/releases/README.md).
@@ -19,6 +21,17 @@ Git tag, npm package, and GitHub Release details are recorded in the [release in
 Register with a verified email address and choose a password, then sign in with email and password. Create projects or accept project invitations after signing in. Connect your Agents with independent device authorization. If you forget your password, request an email code on the sign-in page and choose a new password; this signs out every device and revokes Agent access while keeping your projects.
 
 Registration and password recovery are closed by default until their [operator setup](docs/OPERATIONS.md) is complete. This source preview is not deployed to the official Alpha. See [ADR-0036](docs/adr/0036-verified-email-registration-and-password-login.md) for account and device behavior.
+
+For questions, bug reports, and non-sensitive feedback, [open a GitHub Issue](https://github.com/TH060419/gatherthread/issues). Send security reports privately to [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn), without including credentials or raw private transcripts.
+
+- `solo`: its creator publishes a complete canonical session stream; every other project member, including the project owner when someone else created it, follows it read-only.
+- `multi`: people share one ordered project conversation. A human chat message is shared without invoking an agent. Requests to a connected local Agent are claimed only by the sender's local runtime. When enabled, a separate cloud trial request runs in an isolated server-side container. Responses are labelled with username, harness, provider, model, and capture fidelity; local device and native-session identifiers are not exposed to non-owner collaborators reading another user's activity.
+
+The server persists an append-only canonical event log in SQLite WAL, assigns authoritative per-session sequence numbers, enforces role-based access, and provides durable replay plus WebSocket live delivery. Codex and DeepSeek Harness keep separate native projections of that same history, recover from durable cursors and outboxes, and route each Agent request only to the runtime the user selected.
+
+The bilingual Web workspace is responsive and resizable. Project-scoped settings control the default Agent model, reasoning effort, and context-injection ceiling; accessible custom controls, default high contrast, and theme-aware ambient lighting keep the interface legible without competing with the conversation.
+
+Web Agent turns mirror Codex Desktop's reading hierarchy: public work updates arrive live, then collapse into an optional work log when the final response appears. Final responses and work updates render safe GitHub-flavored Markdown with bundled KaTeX for inline and display math, while hidden reasoning is never uploaded or displayed.
 
 ## Project and role model
 

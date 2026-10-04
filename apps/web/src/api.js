@@ -1,3 +1,5 @@
+import { HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
+  HostedGithubTaskSchema, HostedGithubTaskListSchema } from "@gatherthread/protocol";
 import {
   createIdempotencyKey,
   isExecutionRuntime,
@@ -6,6 +8,12 @@ import {
 } from "./domain.js";
 
 const TITLE_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
+
+async function hostedGithubResponse(schema, request) {
+  const parsed = schema.safeParse(await request);
+  if (!parsed.success) throw new Error("Cloud GitHub response is invalid. Refresh and try again.");
+  return parsed.data;
+}
 
 function normalizeMockTitle(value, label) {
   const title = typeof value === "string" ? value.trim() : "";
@@ -510,6 +518,29 @@ export class HttpCollaborationApi {
     return this.#append(sessionId, "agent_request", input);
   }
 
+  getHostedGithubStatus(projectId) { return hostedGithubResponse(HostedGithubStatusSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github`)); }
+  authorizeHostedGithub() { return hostedGithubResponse(HostedGithubAuthorizationSchema, this.request("/v1/hosted-github/authorize", { method: "POST", body: "{}" })); }
+  completeHostedGithub(input) { return hostedGithubResponse(HostedGithubConnectionSchema, this.request("/v1/hosted-github/complete", { method: "POST", body: JSON.stringify(input) })); }
+  disconnectHostedGithub() { return hostedGithubResponse(HostedGithubDisconnectionSchema, this.request("/v1/hosted-github/account", { method: "DELETE" })); }
+  bindHostedGithub(projectId, input) { return hostedGithubResponse(HostedGithubStatusSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github/repository`, { method: "POST", body: JSON.stringify(input) })); }
+  listHostedGithubTasks(projectId) { return hostedGithubResponse(HostedGithubTaskListSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github/tasks`)); }
+  startHostedGithubTask(sessionId, input) { return hostedGithubResponse(HostedGithubTaskSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-github-tasks`, { method: "POST", body: JSON.stringify(input) })); }
+  getHostedGithubTask(id) { return hostedGithubResponse(HostedGithubTaskSchema, this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}`)); }
+  publishHostedGithub(id, input) { return hostedGithubResponse(HostedGithubTaskSchema, this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}/pull-request`, { method: "POST", body: JSON.stringify(input) })); }
+  deleteHostedGithubTask(id) { return this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }); }
+
+  getHostedAgentStatus() {
+    return this.request("/v1/hosted-agent");
+  }
+
+  appendHostedAgentRequest(sessionId, input) {
+    return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-agent-requests`, {
+      method: "POST",
+      body: JSON.stringify({ profile_id: input.profileId ?? "default", content: input.content, include_code: input.includeCode === true,
+        idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null }),
+    });
+  }
+
   pauseAgentRequest(sessionId, requestId) {
     return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-requests/${encodeURIComponent(requestId)}/pause`, {
       method: "POST", body: JSON.stringify({}),
@@ -657,6 +688,9 @@ const users = {
 };
 
 export class MockCollaborationApi {
+  async getHostedAgentStatus() { return { enabled: false }; }
+  async getHostedGithubStatus() { return { enabled: false }; }
+
   constructor({ latency = 90 } = {}) {
     this.latency = latency;
     this.currentUser = { ...users.avery, can_create_projects: true };

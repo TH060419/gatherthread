@@ -1,8 +1,10 @@
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 
-export const SETTINGS_VERSION = 12;
+export const SETTINGS_VERSION = 13;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 export const SHARED_LANGUAGE_STORAGE_KEY = "gt-lang";
+// Public cloud Agent entry is held for a later release, independently of GitHub connections.
+export const CLOUD_AGENT_ENTRY_ENABLED = false;
 
 export const CODEX_REASONING_EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max", "ultra"]);
 
@@ -43,7 +45,7 @@ const PROJECT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const DEVICE_ID_PATTERN = PROJECT_ID_PATTERN;
 const DSH_PROVIDER_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,80}$/u;
 const DSH_MODEL_PATTERN = /^[^\u0000-\u001f\u007f-\u009f]{1,160}$/u;
-export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness"]);
+export const AGENT_HARNESSES = Object.freeze(["codex", "deepseek-harness", "cloud"]);
 
 export const MOTION_PREFERENCES = Object.freeze(["system", "reduce", "full"]);
 
@@ -122,7 +124,7 @@ export function normalizeSettings(input) {
     .filter((model) => MODEL_ID_PATTERN.test(model))
     .slice(0, 40);
   const activeHarness = oneOf(agents.activeHarness, AGENT_HARNESSES, DEFAULT_SETTINGS.agents.activeHarness);
-  const enabledHarnesses = normalizeEnabledHarnesses(agents.enabledHarnesses, activeHarness);
+  const enabledHarnesses = normalizeEnabledHarnesses(agents.enabledHarnesses ?? DEFAULT_SETTINGS.agents.enabledHarnesses, activeHarness);
   const projectProfiles = {};
   if (isObject(agents.projectProfiles)) {
     for (const [projectId, profile] of Object.entries(agents.projectProfiles)) {
@@ -135,6 +137,7 @@ export function normalizeSettings(input) {
         enabledHarnesses,
         codex: normalizeStoredCodexProfile(legacyCodex, customCodexModels),
         dsh: normalizeDshProfile(profile.dsh),
+        cloud: { profileId: typeof profile.cloud?.profileId === "string" && /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/u.test(profile.cloud.profileId) ? profile.cloud.profileId : null },
       };
     }
   }
@@ -398,6 +401,19 @@ export function withProjectDshProfile(settings, projectId, profile) {
   });
 }
 
+export function projectCloudProfile(settings, projectId) {
+  return normalizeSettings(settings).agents.projectProfiles[projectId]?.cloud?.profileId ?? null;
+}
+
+export function withProjectCloudProfile(settings, projectId, profileId) {
+  if (!PROJECT_ID_PATTERN.test(projectId)) throw new Error("A safe project ID is required for Agent settings.");
+  const normalized = normalizeSettings(settings);
+  const current = normalized.agents.projectProfiles[projectId] ?? defaultProjectAgentProfile(normalized);
+  return normalizeSettings({ ...normalized, agents: { ...normalized.agents,
+    projectProfiles: { ...normalized.agents.projectProfiles,
+      [projectId]: { ...current, cloud: { profileId } } } } });
+}
+
 export function addCustomCodexModel(settings, modelId) {
   const normalized = normalizeSettings(settings);
   const model = typeof modelId === "string" ? modelId.trim() : "";
@@ -535,7 +551,9 @@ function migrateStoredSettings(input) {
     },
     agents: {
       ...agents,
-      enabledHarnesses: previousVersion < 7 ? inheritedEnabledHarnesses : agents.enabledHarnesses,
+      enabledHarnesses: previousVersion < 7 ? inheritedEnabledHarnesses : uniqueStrings(agents.enabledHarnesses),
+      projectProfiles: Object.fromEntries(Object.entries(isObject(agents.projectProfiles) ? agents.projectProfiles : {}).map(([id, profile]) => [id,
+        isObject(profile) ? { ...profile, enabledHarnesses: [...new Set([...uniqueStrings(profile.enabledHarnesses), profile.harness ?? "codex"])] } : profile])),
     },
   };
 }
@@ -570,13 +588,17 @@ function defaultProjectAgentProfile(settings) {
     enabledHarnesses: [...settings.agents.enabledHarnesses],
     codex: normalizeCodexProfile(undefined, settings.agents.customCodexModels),
     dsh: null,
+    cloud: { profileId: null },
   };
 }
 
 function normalizeEnabledHarnesses(harnesses, fallbackHarness) {
   const selected = uniqueStrings(harnesses).filter((harness) => AGENT_HARNESSES.includes(harness));
-  if (selected.length === 0) return [fallbackHarness];
-  return selected.includes(fallbackHarness) ? selected : [...selected, fallbackHarness];
+  if (!selected.includes(fallbackHarness)) selected.push(fallbackHarness);
+  // Preserve a previous explicit cloud target as unavailable, while keeping a
+  // usable local connection that the user can select in the existing controls.
+  if (!CLOUD_AGENT_ENTRY_ENABLED && !selected.some((harness) => harness !== "cloud")) selected.push("codex");
+  return selected;
 }
 
 function oneOf(value, allowed, fallback) {
