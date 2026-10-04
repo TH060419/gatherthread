@@ -128,7 +128,8 @@ try {
             await new Promise(resolve => { releaseRevoke = resolve; enteredRevoke(); });
             await route.continue();
           });
-          const revokedInitial = pages[0].waitForResponse(response => response.url() === initialRevokeUrl && response.status() === 200);
+          const revokedInitial = pages[0].waitForResponse(response => response.url() === initialRevokeUrl
+            && response.request().method() === 'DELETE' && response.status() === 204);
           const initialRevoke = pages[0].locator(`#settings-devices-list button[data-device-id="${account.actor.device_id}"]`);
           pages[0].once('dialog', dialog => dialog.accept());
           await initialRevoke.focus(); await initialRevoke.press('Enter'); await revokeEntered;
