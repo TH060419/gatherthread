@@ -119,6 +119,9 @@ export class HostedModelProxy {
           || (body.max_tokens as number) < 1 || (body.max_tokens as number) > outputLimit)) return fail(400);
       const charge = costUpperBound(bytes.length);
       if (this.calls >= (this.options.repositoryRun ? 64 : MAX_MODEL_CALLS) || this.options.endpoint.provider === "cloudflare-workers-ai" && this.spent + charge > RUN_NEURONS) return fail(429);
+      // The untrusted body may arrive after access was revoked. Fence every
+      // outbound call before charging or treating an error as provider failure.
+      this.options.authorize?.();
       this.calls += 1;
       this.spent += charge;
       delete body.max_completion_tokens;
@@ -283,6 +286,16 @@ export class HostedAgent {
     const socket = join(root, "model.sock");
     const name = `gt-hosted-${randomBytes(8).toString("hex")}`;
     const proxy = new HostedModelProxy({ endpoint, ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+      authorize: () => {
+        this.service.database.assertActiveDevice(actor);
+        const session = this.service.database.requireSession(sessionId);
+        const role = this.service.requireMembership(actor, sessionId);
+        const job = this.service.database.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=? AND user_id=? AND device_id=? AND status='running'")
+          .get(reserved.event.id, actor.user_id, actor.device_id);
+        if (!job || role === "viewer" || session.state !== "active" || session.mode === "solo" && session.owner_user_id !== actor.user_id) {
+          throw new ApiError(403, "hosted_access_changed", "Cloud Agent access changed");
+        }
+      },
       onUnavailable: (ms) => this.cooldowns.set(endpoint.quotaGroup, Date.now() + ms) });
     try {
       mkdirSync(workspace, { mode: 0o777 });

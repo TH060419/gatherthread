@@ -92,6 +92,112 @@ function deferred() {
  return { promise, resolve };
 }
 
+for (const stage of ["/login/oauth/access_token", "/user"]) {
+ for (const action of ["disconnect", "reconnect-first", "reconnect-last", "second-instance"] as const) {
+  test(`OAuth ${stage} completion cannot resurrect or replace a newer ${action}`, async () => {
+   const f = fixture(), entered = deferred(), release = deferred();
+   const peer = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Second browser").device_id };
+   const fetcher = f.githubOptions.fetch;
+   let armed = true, old: Promise<unknown> | undefined, other: HostedGithub | undefined;
+   f.githubOptions.fetch = async (url, init) => {
+    if (armed && new URL(String(url)).pathname === stage) { armed = false; entered.resolve(); await release.promise; }
+    return fetcher(url, init);
+   };
+   try {
+    const state = new URL(f.github.authorize(f.actor).authorization_url).searchParams.get("state")!;
+    old = f.github.complete(f.actor, { state, code: "old-fixture" });
+    const outcome = old.then(() => null, (error: unknown) => error);
+    await entered.promise;
+    if (action === "second-instance") {
+     other = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+     other.disconnect(peer);
+    } else if (action === "disconnect") f.github.disconnect(peer);
+    else {
+     const freshState = new URL(f.github.authorize(peer).authorization_url).searchParams.get("state")!;
+     if (action === "reconnect-first") {
+      await f.github.complete(peer, { state: freshState, code: "new-fixture" });
+      await f.github.bind(peer, f.session.project_id, { repository: "owner/project", base_branch: "main" });
+     }
+     release.resolve(); assert.ok(await outcome instanceof ApiError);
+     if (action === "reconnect-last") {
+      assert.equal(f.github.status(peer, f.session.project_id).connected, false);
+      await f.github.complete(peer, { state: freshState, code: "new-fixture" });
+      await f.github.bind(peer, f.session.project_id, { repository: "owner/project", base_branch: "main" });
+     }
+     assert.ok(f.github.status(peer, f.session.project_id).binding);
+     return;
+    }
+    release.resolve(); assert.ok(await outcome instanceof ApiError);
+    assert.equal(f.github.status(peer, f.session.project_id).connected, false);
+    if (stage === "/login/oauth/access_token") assert.equal(f.calls.some((call) => call.path === "/user"), false);
+    // Disconnect remains effective after reopening the service, then a fresh flow works.
+    await other?.close(); other = undefined; await f.github.close();
+    f.github = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+    assert.equal(f.github.status(peer, f.session.project_id).connected, false);
+    const fresh = new URL(f.github.authorize(peer).authorization_url).searchParams.get("state")!;
+    await f.github.complete(peer, { state: fresh, code: "fresh-fixture" });
+    assert.equal(f.github.status(peer, f.session.project_id).connected, true);
+   } finally { release.resolve(); await old?.catch(() => {}); await other?.close(); await f.close(); }
+  });
+ }
+}
+
+test("legacy OAuth states are invalidated atomically while current credentials survive repeated startup", async () => {
+ const f = fixture();
+ try {
+  await connect(f);
+  const state = new URL(f.github.authorize(f.actor).authorization_url).searchParams.get("state")!;
+  const credentials = f.db.sqlite.prepare("SELECT credentials FROM hosted_github_accounts").get()!.credentials;
+  await f.github.close();
+  f.db.sqlite.exec(`ALTER TABLE hosted_github_oauth RENAME TO old_oauth;
+   CREATE TABLE hosted_github_oauth(state_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL,device_id TEXT NOT NULL,verifier TEXT NOT NULL,expires_at INTEGER NOT NULL) STRICT;
+   INSERT INTO hosted_github_oauth SELECT state_hash,user_id,device_id,verifier,expires_at FROM old_oauth;
+   DROP TABLE old_oauth; DROP TABLE hosted_github_authorizations;`);
+  for (let n = 0; n < 2; n++) {
+   f.github = new HostedGithub(f.service, f.agent, f.runOptions, f.githubOptions);
+   assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM hosted_github_oauth").get()!.n, 0);
+   assert.equal(f.db.sqlite.prepare("SELECT credentials FROM hosted_github_accounts").get()!.credentials, credentials);
+   await assert.rejects(f.github.complete(f.actor, { state, code: "legacy-fixture" }), (e: unknown) => e instanceof ApiError && e.code === "github_state");
+   await f.github.close();
+  }
+  await connect(f);
+ } finally { await f.close(); }
+});
+
+for (const revocation of ["disconnect", "delete-session", "revoke-device"] as const) {
+ unixTest(`repository model slow body rechecks ${revocation} before provider dispatch`, { timeout: 10_000 }, async () => {
+  const f = fixture(), entered = deferred(), release = deferred(), bodyStarted = deferred();
+  let calls = 0, armed = false, modelStatus = 0;
+  const active = f.db.assertActiveDevice.bind(f.db);
+  f.db.assertActiveDevice = (actor) => { active(actor); if (armed) bodyStarted.resolve(); };
+  f.runOptions.fetch = async () => { calls++; return Response.json({ choices: [] }); };
+  const run = f.runOptions.runContainer!;
+  f.runOptions.runContainer = async (args, timeout) => {
+   const socket = args.find((arg) => arg.endsWith("dst=/run/model.sock"))!.split("src=")[1]!.split(",dst=")[0]!;
+   const body = JSON.stringify({ model: "coding", messages: [{ role: "user", content: "Fixture" }] });
+   const result = Promise.withResolvers<number>();
+   const req = request({ socketPath: socket, method: "POST", path: "/v1/chat/completions", headers: {
+    "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) } }, (res) => {
+     res.resume(); res.on("end", () => result.resolve(res.statusCode!));
+   }); req.on("error", result.reject); armed = true; req.write(body.slice(0, 1));
+   await bodyStarted.promise; armed = false; entered.resolve(); await release.promise;
+   req.end(body.slice(1)); modelStatus = await result.promise;
+   return run(args, timeout);
+  };
+  try {
+   await connect(f);
+   const task = f.github.start(f.actor, f.session.id, { content: "Fixture", profile_id: "coding", idempotency_key: "slow-model-body" });
+   await entered.promise;
+   if (revocation === "disconnect") f.github.disconnect(f.actor);
+   if (revocation === "delete-session") f.db.deleteSession(f.actor, f.session.id);
+   if (revocation === "revoke-device") f.db.revokeDevice(f.actor, f.actor.device_id);
+   release.resolve(); await f.github.close();
+   assert.equal(modelStatus, 502); assert.equal(calls, 0);
+   assert.equal((f.agent as unknown as { cooldowns: Map<string, number> }).cooldowns.size, 0);
+  } finally { release.resolve(); await f.close(); }
+ });
+}
+
 const revocations = ["downgrade", "remove-member", "archive", "rebind", "disconnect", "delete-task",
  "delete-session", "delete-project", "revoke-device", "delete-account"] as const;
 const publicationSteps = [

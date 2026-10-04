@@ -3,9 +3,13 @@ CREATE TABLE IF NOT EXISTS hosted_github_accounts (
  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
  login TEXT NOT NULL, credentials TEXT NOT NULL
 ) STRICT;
+CREATE TABLE IF NOT EXISTS hosted_github_authorizations (
+ user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+ generation INTEGER NOT NULL
+) STRICT;
 CREATE TABLE IF NOT EXISTS hosted_github_oauth (
  state_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
- device_id TEXT NOT NULL, verifier TEXT NOT NULL, expires_at INTEGER NOT NULL
+ device_id TEXT NOT NULL, verifier TEXT NOT NULL, expires_at INTEGER NOT NULL, generation INTEGER NOT NULL
 ) STRICT;
 CREATE TABLE IF NOT EXISTS hosted_github_bindings (
  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

@@ -1167,10 +1167,11 @@ export class CollaborationDatabase {
     });
   }
 
-  async verifyPublicRegistration(input: VerifyRegistrationInput, browser: string, ip: string, options: RegistrationOptions): Promise<{ actor: Actor; browser_session: BrowserSessionIssue }> {
+  async verifyPublicRegistration(input: VerifyRegistrationInput, browser: string, ip: string, options: RegistrationOptions, assertRequestCurrent?: () => void): Promise<{ actor: Actor; browser_session: BrowserSessionIssue }> {
     const proof = this.registration.prepareVerification(input, browser, ip, options);
     try {
       const passwordHash = await hashPassword(input.password);
+      assertRequestCurrent?.();
       return this.registration.completeVerification(input.registration_id, proof, browser, ip, passwordHash, options, () => {
         const userId = randomUUID();
         const deviceId = randomUUID();
@@ -1190,11 +1191,12 @@ export class CollaborationDatabase {
     }
   }
 
-  async resetPassword(input: VerifyPasswordResetInput, browser: string, ip: string, options: RegistrationOptions): Promise<string> {
+  async resetPassword(input: VerifyPasswordResetInput, browser: string, ip: string, options: RegistrationOptions, assertRequestCurrent?: () => void): Promise<string> {
     const proof = this.registration.preparePasswordReset(input, browser, ip, options);
     let userId: string;
     try {
       const passwordHash = await hashPassword(input.password);
+      assertRequestCurrent?.();
       userId = this.registration.completePasswordReset(input.reset_id, proof, browser, passwordHash, options, (id) => {
         const timestamp = this.now();
         this.sqlite.prepare("UPDATE devices SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL").run(timestamp, id);
@@ -1214,11 +1216,12 @@ export class CollaborationDatabase {
     return userId;
   }
 
-  async loginWithEmail(input: EmailLoginInput, browser: string, ip: string): Promise<{ actor: Actor; browser_session: BrowserSessionIssue }> {
+  async loginWithEmail(input: EmailLoginInput, browser: string, ip: string, assertRequestCurrent?: () => void): Promise<{ actor: Actor; browser_session: BrowserSessionIssue }> {
     const account = this.registration.passwordLoginAttempt(input.email, browser, ip);
     let valid = false;
     try { valid = await checkPassword(input.password, account?.password_hash); }
     catch (error) { if (error instanceof PasswordCapacityError) throw new ApiError(503, "password_busy", "Sign-in is busy. Please try again."); throw error; }
+    assertRequestCurrent?.();
     if (!valid || !account) throw new ApiError(401, "email_login_invalid", "Email or password is incorrect.");
     return this.transaction(() => {
       const current = this.sqlite.prepare("SELECT password_hash FROM public_registration_accounts WHERE user_id=?").get(account.user_id) as { password_hash: string } | undefined;

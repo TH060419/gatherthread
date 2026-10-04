@@ -1,0 +1,15 @@
+# Append this reviewed block to the existing Caddy configuration. Do not replace it.
+test.gatherthread.cn {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:28787 {
+        header_up -X-GatherThread-Client-IP
+        header_up X-GatherThread-Client-IP {remote_host}
+        header_up -X-Forwarded-For
+        header_up Host test.gatherthread.cn
+        health_uri /health/ready
+        health_interval 30s
+        health_timeout 5s
+    }
+    header -Server
+    # Do not enable request/body/cookie logging. No admission code belongs in a URL.
+}

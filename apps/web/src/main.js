@@ -2,7 +2,7 @@ import { mountCloudGithub } from "./cloud-github-view.js";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountAgentRequestControl } from "./agent-request-control.js";
 import { mountRegistration } from "./registration.js";
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20260927-1";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261004-3";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
 import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
 import { ExampleCollaborationApi } from "./example-api.js";

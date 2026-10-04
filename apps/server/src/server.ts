@@ -1,15 +1,19 @@
 import { HostedGithub, type HostedGithubOptions } from "./hosted-github.js";
 import { stopInterruptedHostedContainers } from "./hosted-agent-recovery.js";
-import { HostedGithubRepositoryInputSchema, HostedGithubTaskInputSchema, HostedGithubPrInputSchema, HostedGithubCompleteInputSchema } from "@gatherthread/protocol";
+import { HostedGithubRepositoryInputSchema, HostedGithubTaskInputSchema, HostedGithubPrInputSchema, HostedGithubCompleteInputSchema,
+  HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
+  HostedGithubTaskSchema, HostedGithubTaskListSchema } from "@gatherthread/protocol";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
-import { createReadStream, realpathSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { createReadStream, readFileSync, realpathSync, statSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { extname, resolve, sep, join } from "node:path";
 import {
   EmailLoginInputSchema, EmailAccountSessionSchema, RegistrationStatusSchema, RegistrationSentSchema, SendRegistrationInputSchema, VerifyRegistrationInputSchema,
   SendPasswordResetInputSchema, VerifyPasswordResetInputSchema, PasswordResetSentSchema,
+  TestGateExchangeInputSchema,
+  TestGateStatusSchema,
   AppendEventInputSchema,
   AgentProgressInputSchema,
   AcceptInvitationInputSchema,
@@ -67,6 +71,7 @@ import type { RegistrationOptions } from "./registration.js";
 import { registrationClientIp } from "./registration-providers.js";
 import { CodeRepository } from "./code-repository.js";
 import { HostedAgent, type HostedAgentOptions } from "./hosted-agent.js";
+import { TestGateStore, testGateToken, testGateCookie, nativeAdmissionCapability, nativeAdmissionDeviceRoute, type TestGateOptions } from "./test-gate.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
 const DEFAULT_REPLAY_LIMIT = 50;
@@ -101,12 +106,16 @@ interface SocketState {
   alive: boolean;
   sessionId: string | null;
   cursor: number;
+  admissionToken: string | null;
+  nativeDevice: boolean;
   replaying: boolean;
 }
 
 interface SocketAuth {
   actor: Actor;
   allowedSessionId: string | null;
+  admissionToken?: string | null;
+  nativeDevice?: boolean;
 }
 
 interface RealtimeTicket extends SocketAuth {
@@ -123,6 +132,7 @@ interface HttpAuthentication {
 export interface ServerOptions {
   registration?: RegistrationOptions;
   databasePath: string;
+  testGate?: TestGateOptions;
   codeRepositoryDirectory?: string;
   heartbeatIntervalMs?: number;
   allowedOrigins?: string[];
@@ -195,7 +205,7 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".woff2": "font/woff2",
 };
 
-function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string): boolean {
+function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string, testEnvironment = false): boolean {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
   if (pathname.startsWith("/v1/") || pathname.startsWith("/health")) return false;
   if (pathname === "/app") {
@@ -224,6 +234,11 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   if (relative === "app/example.html") {
     response.removeHeader("x-frame-options");
     response.setHeader("content-security-policy", "default-src 'none'; script-src 'nonce-gatherthread-example-v1'; style-src 'unsafe-inline'; img-src data:; font-src data:; connect-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'self'; form-action 'none'; sandbox allow-scripts");
+  }
+  if (testEnvironment && relative.endsWith(".html") && relative !== "app/example.html") {
+    const html = readFileSync(resolved, "utf8").replace("</head>", '<link rel="stylesheet" href="/test-gate/environment.css"><script type="module" src="/test-gate/environment.js"></script></head>');
+    response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html), "cache-control": "no-store" });
+    response.end(request.method === "HEAD" ? undefined : html); return true;
   }
   response.writeHead(200, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
@@ -448,6 +463,7 @@ export async function startCollaborationServer(
     maxProjectSessions: options.maxProjectSessions,
     maxTotalSessions: options.maxTotalSessions,
   });
+  const testGate = options.testGate ? new TestGateStore(options.testGate) : undefined;
   const service = new CollaborationService(database);
   if (database.hostedActiveRuns() && !options.hostedAgent?.runContainer) {
     try { stopInterruptedHostedContainers(); }
@@ -496,6 +512,7 @@ export async function startCollaborationServer(
 
   const closeRealtimeWithoutMembership = (): void => {
     for (const [socket, state] of sockets) {
+      if (testGate && !state.nativeDevice && !testGate.admitted(state.admissionToken)) { socket.close(1008, "test_admission_required"); sockets.delete(socket); continue; }
       if (state.sessionId !== null && database.membershipRole(state.sessionId, state.actor.user_id) === null) {
         socket.close(1008, "membership_revoked");
         sockets.delete(socket);
@@ -545,6 +562,60 @@ export async function startCollaborationServer(
         return;
       }
 
+      // Reuse this request-bound check after awaits and before protected mutations.
+      let assertAdmissionCurrent = (): void => {};
+      // One boundary before all account routes, callbacks, session restoration and application APIs.
+      if (testGate && !["/health/live", "/health", "/health/ready"].includes(url.pathname)) {
+        if (request.headers.host !== new URL(options.testGate!.origin).host) throw new ApiError(403, "test_origin_required", "Open the configured test origin.");
+        const admission = testGateToken(request, secureTransport);
+        const admitted = testGate.admitted(admission);
+        const admissionPath = "/" + parts.join("/");
+        if (url.pathname === "/v1/test-gate") {
+          if (url.search) throw new ApiError(400, "test_admission_invalid", "Admission credentials belong in the request body.");
+          if (request.method === "GET") { sendJson(response, 200, { data: TestGateStatusSchema.parse({ enabled: true, admitted, environment: "test" }) }); return; }
+          if (requestOrigin !== options.testGate!.origin) throw new ApiError(403, "csrf_origin_required", "Admission requires the configured test origin.");
+          if (request.method === "POST") {
+            try { testGate.attempt(remoteAddress); } catch (error) { response.setHeader("retry-after", "60"); throw error; }
+            const input = TestGateExchangeInputSchema.safeParse(await readJson(request, 1024));
+            if (!input.success) throw new ApiError(403, "test_admission_invalid", "The test admission code is unavailable.");
+            const result = testGate.exchange(input.data.admission_code);
+            appendSetCookie(response, testGateCookie(result.token, result.expires, secureTransport));
+            sendJson(response, 200, { data: TestGateStatusSchema.parse({ enabled: true, admitted: true, environment: "test" }) }); return;
+          }
+          if (request.method === "DELETE") {
+            testGate.logout(admission); appendSetCookie(response, testGateCookie("", 0, secureTransport));
+            response.writeHead(204).end(); return;
+          }
+          throw notFound("Admission route");
+        }
+        if (admissionPath.startsWith("/v1/")) {
+          assertAdmissionCurrent = () => {
+            if (testGate.admitted(admission)) return;
+            if (nativeAdmissionCapability(url.pathname, request.method ?? "GET", requestOrigin !== undefined)) return;
+            if (request.headers.authorization && nativeAdmissionDeviceRoute(url.pathname, requestOrigin !== undefined)) {
+              database.authenticate(bearerToken(request)); return;
+            }
+            throw new ApiError(403, "test_admission_required", "Enter the test admission code first.");
+          };
+          assertAdmissionCurrent();
+        }
+        // Keep legacy identity routes retired even when their path is encoded.
+        if (["/v1/bootstrap", "/v1/browser-sessions", "/v1/test-access/claim", "/v1/invitations/claim"].includes(admissionPath)
+          || admissionPath.startsWith("/v1/remembered-accounts")) throw new ApiError(410, "account_flow_retired", "Use verified email registration and password sign-in.");
+        if (options.staticDirectory && !url.pathname.startsWith("/v1/") && !url.pathname.startsWith("/health")) {
+          const gateAsset = new Set(["/test-gate/index.html", "/test-gate/gate.js", "/test-gate/gate.css", "/test-gate/environment.js", "/test-gate/environment.css", "/test-gate/pending.html"]);
+          const target = gateAsset.has(url.pathname) ? url.pathname : !admitted ? "/test-gate/index.html" : !("registration" in options) ? "/test-gate/pending.html" : url.pathname;
+          if ((gateAsset.has(url.pathname) || !admitted || !("registration" in options))
+            && sendStaticFile(request, response, options.staticDirectory, target, true)) return;
+        }
+      }
+
+      const readAdmittedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
+        const value = await readJson(request, maxBytes);
+        assertAdmissionCurrent();
+        return value;
+      };
+
       if (["/v1/bootstrap", "/v1/browser-sessions", "/v1/invitations/claim", "/v1/test-access/claim"].includes(url.pathname)
         || url.pathname === "/v1/remembered-accounts" || url.pathname.startsWith("/v1/remembered-accounts/")) {
         throw new ApiError(410, "account_flow_retired", "Use email registration and password sign-in. Accept project invitations after signing in.");
@@ -565,9 +636,10 @@ export async function startCollaborationServer(
           if (!request.headers["content-type"]?.startsWith("application/json")) throw new ApiError(415, "invalid_content_type", "Email sign-in requires JSON");
           const browser = registrationBrowser(request);
           if (!browser) throw new ApiError(400, "registration_browser", "Open registration in this browser and try again.");
-          const input = EmailLoginInputSchema.parse(await readJson(request, 8192));
+          const input = EmailLoginInputSchema.parse(await readAdmittedJson(8192));
           const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration?.trustedProxy);
-          const result = await database.loginWithEmail(input, browser, ip);
+          const result = await database.loginWithEmail(input, browser, ip, assertAdmissionCurrent);
+          assertAdmissionCurrent();
           const browserSession = result.browser_session;
           appendSetCookie(response, serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport,
             browserSession.remembered ? browserSession.expires_at : undefined));
@@ -597,12 +669,14 @@ export async function startCollaborationServer(
           if (!browser) throw new ApiError(400, "registration_browser", "Open registration in this browser and try again.");
           const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration!.trustedProxy);
           if (url.pathname.endsWith("/send")) {
-            const input = SendRegistrationInputSchema.parse(await readJson(request, 8192));
-            const result = await database.registration.send(input, browser, ip, registration!);
+            const input = SendRegistrationInputSchema.parse(await readAdmittedJson(8192));
+            const result = await database.registration.send(input, browser, ip, registration!, "registration", assertAdmissionCurrent);
+            assertAdmissionCurrent();
             sendJson(response, 202, { data: RegistrationSentSchema.parse(result) });
           } else {
-            const input = VerifyRegistrationInputSchema.parse(await readJson(request, 8192));
-            const { browser_session: browserSession, ...result } = await database.verifyPublicRegistration(input, browser, ip, registration!);
+            const input = VerifyRegistrationInputSchema.parse(await readAdmittedJson(8192));
+            const { browser_session: browserSession, ...result } = await database.verifyPublicRegistration(input, browser, ip, registration!, assertAdmissionCurrent);
+            assertAdmissionCurrent();
             appendSetCookie(response, serializeBrowserSessionCookie(browserCookieName, browserSession.token, secureTransport,
               browserSession.remembered ? browserSession.expires_at : undefined));
             sendJson(response, 201, { data: EmailAccountSessionSchema.parse({ actor: { ...result.actor, can_create_projects: true }, expires_at: browserSession.expires_at }) });
@@ -630,17 +704,20 @@ export async function startCollaborationServer(
           if (!browser) throw new ApiError(400, "registration_browser", "Open password recovery in this browser and try again.");
           const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration!.trustedProxy);
           if (url.pathname.endsWith("/send")) {
-            const result = await database.registration.send(SendPasswordResetInputSchema.parse(await readJson(request, 8192)), browser, ip, registration!, "password-reset");
+            const result = await database.registration.send(SendPasswordResetInputSchema.parse(await readAdmittedJson(8192)), browser, ip, registration!, "password-reset", assertAdmissionCurrent);
+            assertAdmissionCurrent();
             sendJson(response, 202, { data: PasswordResetSentSchema.parse({ reset_id: result.registration_id, expires_in_seconds: result.expires_in_seconds, resend_after_seconds: result.resend_after_seconds }) });
           } else {
-            const input = VerifyPasswordResetInputSchema.parse(await readJson(request, 8192));
-            const userId = await database.resetPassword(input, browser, ip, registration!);
+            const input = VerifyPasswordResetInputSchema.parse(await readAdmittedJson(8192));
+            const userId = await database.resetPassword(input, browser, ip, registration!, assertAdmissionCurrent);
             dshPairings.revokeUser(userId);
             for (const [value, ticket] of realtimeTickets) if (ticket.actor.user_id === userId) realtimeTickets.delete(value);
             for (const [socket, state] of sockets) if (state.actor.user_id === userId) { socket.close(1008, "password_reset"); sockets.delete(socket); }
             // All database and in-memory authorization is revoked before any notification wait.
             // The notice budget was reserved during verification; attempt once, without retry or provider logging.
+            assertAdmissionCurrent();
             try { await registration!.mailer!.notifyPasswordChanged!({ email: input.email, locale: input.locale, deliveryId: input.reset_id }); } catch { /* reset remains committed */ }
+            assertAdmissionCurrent();
             sendJson(response, 200, { data: { reset: true } });
           }
           return;
@@ -674,7 +751,7 @@ export async function startCollaborationServer(
         if (requestOrigin !== undefined) {
           throw new ApiError(403, "pairing_host_only", "DSH pairing must start from the local Host plugin");
         }
-        const input = BeginDshPairingInputSchema.parse(await readJson(request));
+        const input = BeginDshPairingInputSchema.parse(await readAdmittedJson());
         sendJson(response, 201, { data: dshPairings.begin(input.device_name) });
         return;
       }
@@ -688,7 +765,7 @@ export async function startCollaborationServer(
         if (requestOrigin !== undefined) {
           throw new ApiError(403, "pairing_host_only", "DSH pairing must be polled by the local Host plugin");
         }
-        z.object({}).parse(await readJson(request));
+        z.object({}).parse(await readAdmittedJson());
         const result = dshPairings.poll(
           parts[2],
           dshPairingPollToken(request.headers.authorization),
@@ -702,12 +779,12 @@ export async function startCollaborationServer(
       }
 
       if (request.method === "POST" && url.pathname === "/v1/device-authorizations/claim") {
-        const input = ClaimDeviceAuthorizationInputSchema.parse(await readJson(request));
+        const input = ClaimDeviceAuthorizationInputSchema.parse(await readAdmittedJson());
         sendJson(response, 201, { data: service.claimDeviceAuthorization(input) });
         return;
       }
 
-      if (options.staticDirectory && sendStaticFile(request, response, options.staticDirectory, url.pathname)) return;
+      if (options.staticDirectory && sendStaticFile(request, response, options.staticDirectory, url.pathname, !!testGate)) return;
 
       if (request.method === "GET" && url.pathname === "/v1/hosted-github/callback") {
         if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
@@ -752,11 +829,17 @@ export async function startCollaborationServer(
           throw new ApiError(429, "rate_limited", "Too many writes for this device");
         }
       }
-      const readAuthenticatedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
-        const value = await readJson(request, maxBytes);
+      const assertRequestCurrent = (): void => {
+        assertAdmissionCurrent();
         if (authentication.kind === "browser_session" && authentication.browserSessionId) {
           database.assertActiveBrowserSession(authentication.browserSessionId, actor);
+        } else {
+          database.assertActiveDevice(actor);
         }
+      };
+      const readAuthenticatedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
+        const value = await readAdmittedJson(maxBytes);
+        assertRequestCurrent();
         return value;
       };
 
@@ -774,23 +857,23 @@ export async function startCollaborationServer(
         if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
         if (url.pathname === "/v1/hosted-github/authorize" && request.method === "POST") {
           z.object({}).strict().parse(await readAuthenticatedJson());
-          sendJson(response, 200, { data: hostedGithub.authorize(actor) }); return;
+          sendJson(response, 200, { data: HostedGithubAuthorizationSchema.parse(hostedGithub.authorize(actor)) }); return;
         }
         if (url.pathname === "/v1/hosted-github/complete" && request.method === "POST") {
           const input = HostedGithubCompleteInputSchema.parse(await readAuthenticatedJson());
-          sendJson(response, 200, { data: await hostedGithub.complete(actor, input) }); return;
+          sendJson(response, 200, { data: HostedGithubConnectionSchema.parse(await hostedGithub.complete(actor, input, assertRequestCurrent)) }); return;
         }
         if (url.pathname === "/v1/hosted-github/account" && request.method === "DELETE") {
-          sendJson(response, 200, { data: hostedGithub.disconnect(actor) }); return;
+          sendJson(response, 200, { data: HostedGithubDisconnectionSchema.parse(hostedGithub.disconnect(actor)) }); return;
         }
         const match = /^\/v1\/hosted-github\/tasks\/(gh-task-[a-f0-9]{32})(\/pull-request)?$/u.exec(url.pathname);
         if (match) {
           const id = match[1]!;
-          if (!match[2] && request.method === "GET") { sendJson(response, 200, { data: hostedGithub.view(actor, id) }); return; }
+          if (!match[2] && request.method === "GET") { sendJson(response, 200, { data: HostedGithubTaskSchema.parse(hostedGithub.view(actor, id)) }); return; }
           if (!match[2] && request.method === "DELETE") { hostedGithub.remove(actor, id); response.writeHead(204).end(); return; }
           if (match[2] && request.method === "POST") {
             const input = HostedGithubPrInputSchema.parse(await readAuthenticatedJson());
-            sendJson(response, 200, { data: await hostedGithub.publish(actor, id, input) }); return;
+            sendJson(response, 200, { data: HostedGithubTaskSchema.parse(await hostedGithub.publish(actor, id, input, assertRequestCurrent)) }); return;
           }
         }
       }
@@ -799,15 +882,15 @@ export async function startCollaborationServer(
         const projectId = decodeURIComponent(githubProject[1]!);
         if (!hostedGithub) {
           service.requireProjectMembership(actor, projectId);
-          if (!githubProject[2] && request.method === "GET") { sendJson(response, 200, { data: { enabled: false } }); return; }
+          if (!githubProject[2] && request.method === "GET") { sendJson(response, 200, { data: HostedGithubStatusSchema.parse({ enabled: false }) }); return; }
           throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
         }
-        if (!githubProject[2] && request.method === "GET") { sendJson(response, 200, { data: hostedGithub.status(actor, projectId) }); return; }
+        if (!githubProject[2] && request.method === "GET") { sendJson(response, 200, { data: HostedGithubStatusSchema.parse(hostedGithub.status(actor, projectId)) }); return; }
         if (githubProject[2] === "/repository" && request.method === "POST") {
           const input = HostedGithubRepositoryInputSchema.parse(await readAuthenticatedJson());
-          sendJson(response, 200, { data: await hostedGithub.bind(actor, projectId, input) }); return;
+          sendJson(response, 200, { data: HostedGithubStatusSchema.parse(await hostedGithub.bind(actor, projectId, input, assertRequestCurrent)) }); return;
         }
-        if (githubProject[2] === "/tasks" && request.method === "GET") { sendJson(response, 200, { data: { tasks: hostedGithub.list(actor, projectId) } }); return; }
+        if (githubProject[2] === "/tasks" && request.method === "GET") { sendJson(response, 200, { data: HostedGithubTaskListSchema.parse({ tasks: hostedGithub.list(actor, projectId) }) }); return; }
       }
       if (url.pathname === "/v1/account/deletion-preview" && request.method === "GET") {
         if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Account deletion requires a browser session");
@@ -1079,7 +1162,7 @@ export async function startCollaborationServer(
         service.requireMembership(actor, input.session_id);
         const ticket = randomBytes(32).toString("base64url");
         const expiresAt = Date.now() + 30_000;
-        realtimeTickets.set(ticket, { actor, allowedSessionId: input.session_id, expiresAt });
+        realtimeTickets.set(ticket, { actor, allowedSessionId: input.session_id, expiresAt, nativeDevice: authentication.kind === "bearer" && requestOrigin === undefined });
         sendJson(response, 201, { data: {
           ticket,
           websocket_url: "/v1/ws",
@@ -1092,12 +1175,14 @@ export async function startCollaborationServer(
       if (sessionId && parts[3] === "hosted-github-tasks" && parts.length === 4 && request.method === "POST") {
         if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
         const input = HostedGithubTaskInputSchema.parse(await readAuthenticatedJson());
-        sendJson(response, 202, { data: hostedGithub.start(actor, sessionId, input) }); return;
+        sendJson(response, 202, { data: HostedGithubTaskSchema.parse(hostedGithub.start(actor, sessionId, input)) }); return;
       }
       if (sessionId && parts[3] === "hosted-agent-requests" && parts.length === 4 && request.method === "POST") {
         if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
         const input = HostedAgentRequestInputSchema.parse(await readAuthenticatedJson());
-        sendJson(response, 201, { data: await hostedAgent.request(actor, sessionId, input) });
+        const result = await hostedAgent.request(actor, sessionId, input);
+        assertRequestCurrent();
+        sendJson(response, 201, { data: result });
         return;
       }
       if (sessionId && request.method === "GET" && parts.length === 3) {
@@ -1313,7 +1398,7 @@ export async function startCollaborationServer(
       const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "localhost"}`);
       if (url.pathname !== "/v1/ws") throw notFound("WebSocket route");
       const requestOrigin = request.headers.origin;
-      if (options.allowedOrigins?.length && (!requestOrigin || !options.allowedOrigins.includes(requestOrigin))) {
+      if (options.allowedOrigins?.length && ((!requestOrigin && !testGate) || (requestOrigin !== undefined && !options.allowedOrigins.includes(requestOrigin)))) {
         throw new ApiError(403, "origin_forbidden", "The WebSocket origin is not allowed");
       }
       if (sockets.size >= maxConnections) throw new ApiError(503, "connection_limit", "Realtime connection limit reached");
@@ -1325,7 +1410,10 @@ export async function startCollaborationServer(
       realtimeTickets.delete(ticketValue);
       if (!ticket || ticket.expiresAt < Date.now()) throw unauthorized("Realtime ticket is invalid or expired");
       database.assertActiveDevice(ticket.actor);
-      const auth: SocketAuth = { actor: ticket.actor, allowedSessionId: ticket.allowedSessionId };
+      const admissionToken = testGateToken(request, secureTransport);
+      const nativeDevice = ticket.nativeDevice === true && requestOrigin === undefined;
+      if (testGate && (request.headers.host !== new URL(options.testGate!.origin).host || (!nativeDevice && !testGate.admitted(admissionToken)))) throw unauthorized("Test admission required");
+      const auth: SocketAuth = { actor: ticket.actor, allowedSessionId: ticket.allowedSessionId, admissionToken, nativeDevice };
       wsServer.handleUpgrade(request, socket, head, (webSocket) => {
         wsServer.emit("connection", webSocket, request, auth);
       });
@@ -1337,7 +1425,7 @@ export async function startCollaborationServer(
 
   wsServer.on("connection", (socket: WebSocket, _request: IncomingMessage, auth: SocketAuth) => {
     const { actor } = auth;
-    const state: SocketState = { actor, alive: true, sessionId: null, cursor: 0, replaying: false };
+    const state: SocketState = { actor, alive: true, sessionId: null, cursor: 0, admissionToken: auth.admissionToken ?? null, nativeDevice: auth.nativeDevice ?? false, replaying: false };
     sockets.set(socket, state);
     socket.on("pong", () => { state.alive = true; });
     socket.on("close", () => sockets.delete(socket));
@@ -1346,6 +1434,7 @@ export async function startCollaborationServer(
       void (async () => {
         let ownsReplay = false;
         try {
+          if (testGate && !state.nativeDevice && !testGate.admitted(state.admissionToken)) throw unauthorized("Test admission required");
           database.assertActiveDevice(actor);
           const rateLimit = websocketLimiter.consume(`message:${actor.device_id}`);
           if (!rateLimit.allowed) throw new ApiError(429, "rate_limited", "Too many realtime messages");
@@ -1365,6 +1454,7 @@ export async function startCollaborationServer(
             service.requireMembership(actor, message.session_id);
             if (!await socketSend(socket, { type: "replay", events: page.events, cursor: page.cursor, has_more: page.has_more })) return;
             state.cursor = page.cursor;
+            if (testGate && !state.nativeDevice && !testGate.admitted(state.admissionToken)) throw unauthorized("Test admission required");
             database.assertActiveDevice(actor);
             const nextPage = service.replay(actor, message.session_id, state.cursor, DEFAULT_REPLAY_LIMIT, MAX_REPLAY_BYTES);
             if (!page.has_more && nextPage.events.length === 0 && nextPage.cursor === state.cursor) break;
@@ -1388,6 +1478,7 @@ export async function startCollaborationServer(
 
   const unsubscribe = service.onEvent((event: CanonicalEvent) => {
     for (const [socket, state] of sockets) {
+      if (testGate && !state.nativeDevice && !testGate.admitted(state.admissionToken)) { socket.close(1008, "test_admission_required"); sockets.delete(socket); continue; }
       if (state.replaying || state.sessionId !== event.session_id || event.sequence <= state.cursor) continue;
       try {
         database.assertActiveDevice(state.actor);
@@ -1411,6 +1502,7 @@ export async function startCollaborationServer(
       if (value.expiresAt < now) realtimeTickets.delete(ticket);
     }
     for (const [socket, state] of sockets) {
+      if (testGate && !state.nativeDevice && !testGate.admitted(state.admissionToken)) { socket.close(1008, "test_admission_required"); sockets.delete(socket); continue; }
       try {
         database.assertActiveDevice(state.actor);
         if (state.sessionId !== null) service.requireMembership(state.actor, state.sessionId);
@@ -1456,6 +1548,7 @@ export async function startCollaborationServer(
       wsServer.close();
       await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
       await hostedGithub?.close();
+      testGate?.close();
       database.close();
       if (ephemeralCodeDirectory) rmSync(ephemeralCodeDirectory, { recursive: true, force: true });
     },

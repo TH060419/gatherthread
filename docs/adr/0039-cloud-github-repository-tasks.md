@@ -1,4 +1,4 @@
-# ADR-0038: Private cloud GitHub tasks with explicit pull-request publication
+# ADR-0039: Private cloud GitHub tasks with explicit pull-request publication
 
 - Status: proposed / source preview
 - Date: 2026-09-30
@@ -11,13 +11,15 @@ The limited hosted trial reads GT Cloud snapshots. The local GitHub adapter uses
 
 Use expiring GitHub App user access tokens with PKCE and a single-use device-bound OAuth state. Server-side AES-256-GCM encrypts credentials and private source snapshots with distinct identity-bound associated data. Repository bindings and tasks belong to the authenticated user. An App's installation alone grants no GT participant access.
 
+Fence OAuth completions with a durable user-wide generation, advanced by disconnect or another authorization. Pending exchanges cannot resurrect disconnected credentials or replace newer consent across devices/restart. Public response schemas and request-bound admission checks follow [the interface contract](../INTERFACE_CONTRACTS.md#cloud-github-task-preview).
+
 Keep GitHub transport outside the untrusted execution container. Acquire eligible source at a fixed Git commit via GitHub Git Data APIs. Run the existing OpenCode harness in an isolated, larger Node.js 24 container. Install exact public npm dependencies through a second Unix socket that permits only validated lockfile tarballs; npm integrity checks and disabled installation lifecycle scripts bound that path. General egress and GitHub/provider credentials remain absent.
 
 Atomically reserve existing account/host quotas, append the canonical request and create the private task. The HTTP response is asynchronous. Save eligible result source for seven days; continuing reconstructs a fresh container from saved source and prepares dependencies again. Restart requires explicit retry and never replays a paid task automatically. This single-process design has bounded capacity, no waiting queue and no persisted shell/VM state.
 
 Save each run's actual starting source independently of its cumulative original repository baseline. A failed/interrupted continuation can inherit its starting source on the next explicit run; diff review and PR publication retain the original baseline. Legacy reconstruction and missing-source refusal are specified in [the migration guide](../HOSTED_GITHUB.md#task-input-and-source-migration).
 
-Redact request content at the task boundary before canonical/private persistence and execution. Preserve exact original-input retries using a private identity-bound HMAC receipt, including conflicts between inputs whose redacted text is identical. Startup atomically scrubs retained earlier inputs before task access; the migration contract belongs to the operator guide. Current-day consumption follows the independent ledger in ADR-0037.
+Redact request content at the task boundary before canonical/private persistence and execution. Preserve exact original-input retries using a private identity-bound HMAC receipt, including conflicts between inputs whose redacted text is identical. Startup atomically scrubs retained earlier inputs before task access; the migration contract belongs to the operator guide. Current-day consumption follows the independent ledger in ADR-0038.
 
 A human reviews before/after files and executable modes. PR publication requires the exact saved revision, current membership/device authorization, unchanged repository consent and base commit. Use a unique task branch, never force-push, and reconcile remote branch/PR state after uncertain responses. Do not update shared main, merge, run workflow edits or attach credentials to canonical history.
 

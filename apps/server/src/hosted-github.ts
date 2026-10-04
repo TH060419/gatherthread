@@ -1,5 +1,5 @@
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from "node:crypto";
-import { CodeFilesSchema, HostedGithubTaskInputSchema, containsCodeSyncSecret, isCodeSyncPathAllowed, type CodeFile,
+import { CodeFilesSchema, HostedGithubTaskInputSchema, HostedGithubTaskSchema, HostedGithubTaskListSchema, containsCodeSyncSecret, isCodeSyncPathAllowed, type CodeFile,
   type HostedGithubTaskInput, type HostedGithubRepositoryInput, type HostedGithubPrInput } from "@gatherthread/protocol";
 import type { Actor } from "./database.js";
 import { ApiError } from "./errors.js";
@@ -91,6 +91,11 @@ export class HostedGithub {
  private migrateTaskInputs() {
    this.sqlite.exec("BEGIN IMMEDIATE");
    try {
+     if (!this.sqlite.prepare("PRAGMA table_info(hosted_github_oauth)").all().some((row) => row.name === "generation")) {
+       // Earlier pending states have no cancellation fence and must be restarted.
+       this.sqlite.exec("ALTER TABLE hosted_github_oauth ADD COLUMN generation INTEGER NOT NULL DEFAULT 0; DELETE FROM hosted_github_oauth");
+     }
+     this.sqlite.prepare("INSERT OR IGNORE INTO hosted_github_authorizations(user_id,generation) SELECT user_id,0 FROM hosted_github_accounts").run();
      if (!this.sqlite.prepare("PRAGMA table_info(hosted_github_tasks)").all().some((row) => row.name === "input_fingerprint")) {
        this.sqlite.exec("ALTER TABLE hosted_github_tasks ADD COLUMN input_fingerprint TEXT");
      }
@@ -152,7 +157,8 @@ export class HostedGithub {
    return { access_token: data.access_token, refresh_token: data.refresh_token,
      expires_at: Date.now() + data.expires_in * 1000, refresh_expires_at: Date.now() + data.refresh_token_expires_in * 1000 };
  }
- private async token(actor: Actor) {
+ private async token(actor: Actor, authorize?: () => void) {
+   authorize?.();
    this.service.database.assertActiveDevice(actor);
    const account = this.sqlite.prepare("SELECT credentials FROM hosted_github_accounts WHERE user_id=?").get(actor.user_id) as { credentials: string } | undefined;
    if (!account) throw safeError("github_access", 403);
@@ -162,6 +168,7 @@ export class HostedGithub {
    const current = this.refreshing.get(actor.user_id); if (current) return current;
    const promise = (async () => {
      const next = await this.exchange({ grant_type: "refresh_token", refresh_token: credentials.refresh_token! });
+     authorize?.();
      this.service.database.assertActiveDevice(actor);
      const result = this.sqlite.prepare("UPDATE hosted_github_accounts SET credentials=? WHERE user_id=? AND credentials=?")
        .run(this.seal(next, actor.user_id), actor.user_id, account.credentials);
@@ -178,36 +185,56 @@ export class HostedGithub {
      ...(body ? { body: JSON.stringify(body) } : {}) });
  }
  private async api(actor: Actor, path: string, method = "GET", body?: unknown, authorize?: () => void) {
-   const token = await this.token(actor);
+   authorize?.();
+   const token = await this.token(actor, authorize);
    this.service.database.assertActiveDevice(actor);
    authorize?.();
    return this.apiWithToken(token, path, method, body);
  }
  authorize(actor: Actor) {
    this.prune(); this.service.database.assertActiveDevice(actor);
-   this.sqlite.prepare("DELETE FROM hosted_github_oauth WHERE user_id=? AND device_id=?").run(actor.user_id, actor.device_id);
    const state = randomBytes(32).toString("base64url"), verifier = randomBytes(32).toString("base64url");
-   this.sqlite.prepare("INSERT INTO hosted_github_oauth VALUES(?,?,?,?,?)")
-     .run(digest(state), actor.user_id, actor.device_id, this.seal(verifier, actor.user_id), Date.now() + 600000);
+   this.sqlite.exec("BEGIN IMMEDIATE");
+   try {
+     const generation = this.nextAuthorizationGeneration(actor.user_id);
+     this.sqlite.prepare("DELETE FROM hosted_github_oauth WHERE user_id=?").run(actor.user_id);
+     this.sqlite.prepare("INSERT INTO hosted_github_oauth(state_hash,user_id,device_id,verifier,expires_at,generation) VALUES(?,?,?,?,?,?)")
+       .run(digest(state), actor.user_id, actor.device_id, this.seal(verifier, actor.user_id), Date.now() + 600000, generation);
+     this.sqlite.exec("COMMIT");
+   } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
    const url = new URL("https://github.com/login/oauth/authorize");
    url.search = new URLSearchParams({ client_id: this.options.clientId, redirect_uri: this.options.callbackUrl,
      state, code_challenge: createHash("sha256").update(verifier).digest("base64url"), code_challenge_method: "S256", prompt: "select_account" }).toString();
    return { authorization_url: url.href };
  }
- async complete(actor: Actor, input: { state: string; code: string }) {
+ async complete(actor: Actor, input: { state: string; code: string }, authorize: () => void = () => {}) {
+   authorize();
    this.service.database.assertActiveDevice(actor);
-   const state = this.sqlite.prepare("DELETE FROM hosted_github_oauth WHERE state_hash=? AND user_id=? AND device_id=? AND expires_at>? RETURNING verifier")
-     .get(digest(input.state), actor.user_id, actor.device_id, Date.now()) as { verifier: string } | undefined;
+   const state = this.sqlite.prepare("DELETE FROM hosted_github_oauth WHERE state_hash=? AND user_id=? AND device_id=? AND expires_at>? RETURNING verifier,generation")
+     .get(digest(input.state), actor.user_id, actor.device_id, Date.now()) as { verifier: string; generation: number } | undefined;
    if (!state) throw safeError("github_state", 403);
+   const assertCurrent = () => {
+     authorize(); this.service.database.assertActiveDevice(actor);
+     if (!this.sqlite.prepare("SELECT 1 FROM hosted_github_authorizations WHERE user_id=? AND generation=?").get(actor.user_id, state.generation)) {
+       throw safeError("github_state", 403);
+     }
+   };
+   assertCurrent();
    const credentials = await this.exchange({ code: input.code, redirect_uri: this.options.callbackUrl,
      code_verifier: this.open<string>(state.verifier, actor.user_id) });
+   assertCurrent();
    const account = await this.apiWithToken(credentials.access_token, "/user");
+   assertCurrent();
    if (!/^[A-Za-z0-9-]{1,39}$/u.test(account.login)) throw safeError("github_access");
-   this.service.database.assertActiveDevice(actor);
-   this.sqlite.prepare("INSERT INTO hosted_github_accounts VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET login=excluded.login,credentials=excluded.credentials")
-     .run(actor.user_id, account.login, this.seal(credentials, actor.user_id));
-   // Reauthorization invalidates every earlier repository consent and task binding.
-   this.sqlite.prepare("DELETE FROM hosted_github_bindings WHERE user_id=?").run(actor.user_id);
+   this.sqlite.exec("BEGIN IMMEDIATE");
+   try {
+     assertCurrent();
+     this.sqlite.prepare("INSERT INTO hosted_github_accounts VALUES(?,?,?) ON CONFLICT(user_id) DO UPDATE SET login=excluded.login,credentials=excluded.credentials")
+       .run(actor.user_id, account.login, this.seal(credentials, actor.user_id));
+     // Commit credentials and invalidated repository consent under the same fence.
+     this.sqlite.prepare("DELETE FROM hosted_github_bindings WHERE user_id=?").run(actor.user_id);
+     this.sqlite.exec("COMMIT");
+   } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
    return { connected: true, login: account.login };
  }
  status(actor: Actor, projectId: string) {
@@ -217,13 +244,16 @@ export class HostedGithub {
    return { enabled: true, connected: Boolean(account), login: account?.login ?? null, binding: binding ?? null,
      installation_url: `https://github.com/apps/${this.options.appSlug}/installations/new` };
  }
- async bind(actor: Actor, projectId: string, input: HostedGithubRepositoryInput) {
+ async bind(actor: Actor, projectId: string, input: HostedGithubRepositoryInput, authorize: () => void = () => {}) {
+   authorize();
    const role = this.service.requireProjectMembership(actor, projectId);
    if (role === "viewer") throw safeError("github_task_access", 403);
-   const repository = await this.api(actor, `/repos/${input.repository}`);
+   const repository = await this.api(actor, `/repos/${input.repository}`, "GET", undefined, authorize);
+   authorize();
    if (repository.full_name?.toLowerCase() !== input.repository.toLowerCase() || !Number.isSafeInteger(repository.id)
      || !repository.permissions?.push || repository.archived) throw safeError("github_access", 403);
-   await this.api(actor, `/repos/${input.repository}/branches/${encodeURIComponent(input.base_branch)}`);
+   await this.api(actor, `/repos/${input.repository}/branches/${encodeURIComponent(input.base_branch)}`, "GET", undefined, authorize);
+   authorize();
    if (this.service.requireProjectMembership(actor, projectId) === "viewer") throw safeError("github_task_access", 403);
    this.sqlite.prepare(`INSERT INTO hosted_github_bindings VALUES(?,?,?,?,?,?) ON CONFLICT(user_id,project_id)
      DO UPDATE SET repository=excluded.repository,repository_id=excluded.repository_id,base_branch=excluded.base_branch,revision=excluded.revision`)
@@ -232,13 +262,22 @@ export class HostedGithub {
  }
  disconnect(actor: Actor) {
    this.service.database.assertActiveDevice(actor);
-   this.sqlite.prepare("DELETE FROM hosted_github_accounts WHERE user_id=?").run(actor.user_id);
-   this.sqlite.prepare("DELETE FROM hosted_github_bindings WHERE user_id=?").run(actor.user_id);
-   this.sqlite.prepare("DELETE FROM hosted_github_oauth WHERE user_id=?").run(actor.user_id);
+   this.sqlite.exec("BEGIN IMMEDIATE");
+   try {
+     this.nextAuthorizationGeneration(actor.user_id);
+     this.sqlite.prepare("DELETE FROM hosted_github_accounts WHERE user_id=?").run(actor.user_id);
+     this.sqlite.prepare("DELETE FROM hosted_github_bindings WHERE user_id=?").run(actor.user_id);
+     this.sqlite.prepare("DELETE FROM hosted_github_oauth WHERE user_id=?").run(actor.user_id);
+     this.sqlite.exec("COMMIT");
+   } catch (error) { this.sqlite.exec("ROLLBACK"); throw error; }
    for (const row of this.sqlite.prepare("SELECT id FROM hosted_github_tasks WHERE user_id=? AND state='running'").all(actor.user_id)) {
      this.controllers.get(String(row.id))?.abort();
    }
    return { connected: false };
+ }
+ private nextAuthorizationGeneration(userId: string): number {
+   return Number(this.sqlite.prepare(`INSERT INTO hosted_github_authorizations(user_id,generation) VALUES(?,1)
+     ON CONFLICT(user_id) DO UPDATE SET generation=generation+1 RETURNING generation`).get(userId)!.generation);
  }
  private binding(actor: Actor, projectId: string): Binding {
    if (this.service.requireProjectMembership(actor, projectId) === "viewer") throw safeError("github_task_access", 403);
@@ -261,8 +300,11 @@ export class HostedGithub {
  }
  list(actor: Actor, projectId: string) {
    this.service.requireProjectMembership(actor, projectId); this.prune();
-   return (this.sqlite.prepare("SELECT id FROM hosted_github_tasks WHERE user_id=? AND project_id=? ORDER BY created_at DESC LIMIT 10")
-     .all(actor.user_id, projectId) as { id: string }[]).flatMap(({ id }) => { try { return [this.view(actor, id, false)]; } catch { return []; } });
+   const tasks = (this.sqlite.prepare("SELECT id FROM hosted_github_tasks WHERE user_id=? AND project_id=? ORDER BY created_at DESC LIMIT 10")
+     .all(actor.user_id, projectId) as { id: string }[]).flatMap(({ id }) => { try {
+       const { answer: _answer, changes: _changes, ...summary } = this.view(actor, id, false); return [summary];
+     } catch { return []; } });
+   return HostedGithubTaskListSchema.parse({ tasks }).tasks;
  }
  view(actor: Actor, id: string, includeChanges = true) {
    const task = this.task(actor, id);
@@ -277,12 +319,12 @@ export class HostedGithub {
        before_executable: a?.executable ?? null, after_executable: b?.executable ?? null }];
    });
    const input = JSON.parse(task.input_json) as HostedGithubTaskInput;
-   return { id, session_id: task.session_id, profile_id: input.profile_id,
+   return HostedGithubTaskSchema.parse({ id, session_id: task.session_id, profile_id: input.profile_id,
      resumable: Boolean(task.initial_files && (task.result_files ?? task.starting_files))
        && ["completed", "failed", "interrupted"].includes(task.state) && !task.pr_url,
      state: task.state, repository: task.repository, base_branch: task.base_branch,
      base_sha: task.base_sha, revision: task.revision ?? null, answer: task.answer ?? null,
-     error_code: task.error_code, pull_request_url: task.pr_url, changes, expires_at: task.expires_at };
+     error_code: task.error_code, pull_request_url: task.pr_url, changes, expires_at: task.expires_at });
  }
  start(actor: Actor, sessionId: string, rawInput: HostedGithubTaskInput) {
    const fingerprint = this.inputFingerprint(actor.user_id, sessionId, JSON.stringify(rawInput));
@@ -393,7 +435,8 @@ export class HostedGithub {
    if (task.state === "running" || this.publishing.has(id)) throw safeError("github_pr_busy", 409);
    this.sqlite.prepare("DELETE FROM hosted_github_tasks WHERE id=? AND user_id=?").run(id, actor.user_id);
  }
- async publish(actor: Actor, id: string, input: HostedGithubPrInput) {
+ async publish(actor: Actor, id: string, input: HostedGithubPrInput, assertRequestCurrent: () => void = () => {}) {
+   assertRequestCurrent();
    const task = this.task(actor, id); this.assertBinding(actor, task);
    if (task.state !== "completed" || task.revision !== input.expected_revision) throw safeError("github_revision", 409);
    if (task.pr_url) return this.view(actor, id);
@@ -405,9 +448,11 @@ export class HostedGithub {
      const paths = [...new Set([...before.keys(), ...after.keys()])].filter((p) => JSON.stringify(before.get(p)) !== JSON.stringify(after.get(p)));
      if (!paths.length) throw new ApiError(409, "github_no_changes", "This task has no source changes");
      const api = async (path: string, method = "GET", body?: unknown) => {
-       const authorize = () => { this.task(actor, id); this.assertBinding(actor, task); };
+       const authorize = () => { assertRequestCurrent(); this.task(actor, id); this.assertBinding(actor, task); };
        authorize();
-       return this.api(actor, `/repos/${task.repository}${path}`, method, body, authorize);
+       const result = await this.api(actor, `/repos/${task.repository}${path}`, method, body, authorize);
+       authorize();
+       return result;
      };
      const repo = await api(""); if (repo.id !== task.repository_id || !repo.permissions?.push) throw safeError("github_access", 403);
      const base = await api(`/branches/${encodeURIComponent(task.base_branch)}`);

@@ -44,12 +44,15 @@ try {
   assert.equal(spawnSync('tar', ['-czf', tarPath, '-C', directory, 'package']).status, 0);
   const tarball = readFileSync(tarPath), integrity = `sha512-${createHash('sha512').update(tarball).digest('base64')}`;
   const file = (path, content) => ({ path, content_base64: Buffer.from(content).toString('base64'), executable: false });
-  const files = [file('package.json', JSON.stringify({ name: 'gt-cloud-smoke', version: '1.0.0', scripts: { test: 'node test.cjs', build: 'node build.cjs' }, dependencies: { 'gt-smoke-dependency': '1.0.0' } })),
+  const files = [file('package.json', JSON.stringify({ name: 'gt-cloud-smoke', version: '1.0.0', workspaces: ['packages/*'], scripts: { test: 'node test.cjs', build: 'node build.cjs' }, dependencies: { 'gt-smoke-dependency': '1.0.0' } })),
     file('package-lock.json', JSON.stringify({ name: 'gt-cloud-smoke', version: '1.0.0', lockfileVersion: 3, packages: {
-      '': { name: 'gt-cloud-smoke', version: '1.0.0', dependencies: { 'gt-smoke-dependency': '1.0.0' } },
+      '': { name: 'gt-cloud-smoke', version: '1.0.0', workspaces: ['packages/*'], dependencies: { 'gt-smoke-dependency': '1.0.0' } },
+      'packages/lib': { version: '1.0.0' },
+      'node_modules/gt-smoke-workspace': { resolved: 'packages/lib', link: true },
       'node_modules/gt-smoke-dependency': { version: '1.0.0', resolved: 'https://registry.npmjs.org/gt-smoke-dependency/-/gt-smoke-dependency-1.0.0.tgz', integrity },
-    } })), file('value.cjs', 'module.exports = 1;\n'),
-    file('test.cjs', "require('node:assert/strict').equal(require('./value.cjs'), 2); require('node:assert/strict').equal(require('gt-smoke-dependency'), 7); console.log('TEST_OK');\n"),
+    } })), file('packages/lib/package.json', JSON.stringify({ name: 'gt-smoke-workspace', version: '1.0.0', main: 'index.cjs' })),
+    file('packages/lib/index.cjs', 'module.exports = 9;\n'), file('value.cjs', 'module.exports = 1;\n'),
+    file('test.cjs', "require('node:assert/strict').equal(require('./value.cjs'), 2); require('node:assert/strict').equal(require('gt-smoke-dependency'), 7); require('node:assert/strict').equal(require('gt-smoke-workspace'), 9); console.log('TEST_OK');\n"),
     file('build.cjs', "require('node:fs').mkdirSync('dist', {recursive:true}); require('node:fs').writeFileSync('dist/result.txt', String(require('./value.cjs'))); console.log('BUILD_OK');\n")];
   const endpoint = { id: 'fixture', profileId: 'coding', label: 'Fixture', provider: 'openai-compatible', model: 'fixture-model', baseUrl: 'https://model.example/v1', apiToken: 'test-only-model-credential', quotaGroup: 'fixture', dailyRuns: 4, maxConcurrent: 1 };
   const fetcher = async (url, init) => {

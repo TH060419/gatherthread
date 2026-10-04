@@ -20,6 +20,7 @@ for (const required of ["boot.js", "app.js", "styles.css", "./app/"]) {
 
 await rm(dist, { recursive: true, force: true });
 await mkdir(applicationDist, { recursive: true });
+await cp(resolve(root, "test-gate"), resolve(dist, "test-gate"), { recursive: true });
 await cp(resolve(productRoot, "index.html"), resolve(dist, "index.html"));
 await cp(resolve(productRoot, "boot.js"), resolve(dist, "boot.js"));
 await cp(resolve(productRoot, "app.js"), resolve(dist, "app.js"));
@@ -31,6 +32,7 @@ await cp(resolve(root, "src"), resolve(applicationDist, "src"), { recursive: tru
 await cp(resolve(root, "brand"), resolve(applicationDist, "brand"), { recursive: true });
 await build({
   entryPoints: {
+    api: resolve(root, "src/api.js"),
     markdown: resolve(root, "src/markdown.js"),
     onboarding: resolve(root, "src/onboarding.js"),
     "history-summary-policy": resolve(root, "src/history-summary-policy.js"),
@@ -38,6 +40,7 @@ await build({
   },
   outdir: resolve(applicationDist, "src"),
   bundle: true,
+  alias: { "@gatherthread/protocol": resolve(repositoryRoot, "packages/protocol/src/index.ts") },
   format: "esm",
   platform: "browser",
   target: ["safari15", "chrome100", "firefox100"],
@@ -53,6 +56,7 @@ await build({
 // A self-contained classic bundle avoids WebKit's opaque-origin 'self' asset
 // restriction. The only script is authored build output; no backend is reachable.
 const exampleScript = await build({ entryPoints: [resolve(root, "src/example-entry.js")], outfile: "example.js", write: false,
+  alias: { "@gatherthread/protocol": resolve(repositoryRoot, "packages/protocol/src/index.ts") },
   bundle: true, format: "iife", platform: "browser", target: ["safari15", "chrome100", "firefox100"], minify: true });
 const exampleStyle = await build({ entryPoints: [resolve(root, "src/styles.css")], outfile: "example.css", write: false,
   bundle: true, minify: true, loader: { ".ttf": "dataurl", ".woff": "dataurl", ".woff2": "dataurl" } });

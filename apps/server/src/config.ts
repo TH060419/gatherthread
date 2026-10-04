@@ -7,6 +7,7 @@ import type { HostedGithubOptions } from "./hosted-github.js";
 import type { HostedAgentOptions } from "./hosted-agent.js";
 import { registrationFromEnvironment } from "./registration-providers.js";
 import type { RegistrationOptions } from "./registration.js";
+import type { TestGateOptions } from "./test-gate.js";
 
 const EnvironmentSchema = z.enum(["development", "test", "production"]);
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "localhost"]);
@@ -22,6 +23,7 @@ export class ConfigurationError extends Error {
 export interface ServerConfig {
   registration: RegistrationOptions;
   environment: z.infer<typeof EnvironmentSchema>;
+  testGate?: TestGateOptions;
   host: string;
   port: number;
   databasePath: string;
@@ -257,8 +259,24 @@ export function loadServerConfig(
     }
   }
 
+  const deployment = env.GATHERTHREAD_DEPLOYMENT_ENVIRONMENT ?? "production";
+  if (!["production", "test"].includes(deployment)) throw new ConfigurationError("GATHERTHREAD_DEPLOYMENT_ENVIRONMENT must be production or test");
+  const gateEnabled = parseBoolean("GATHERTHREAD_TEST_GATE_ENABLED", env.GATHERTHREAD_TEST_GATE_ENABLED, false);
+  if (gateEnabled !== (deployment === "test")) throw new ConfigurationError("Test deployment requires its gate; production must disable the test gate");
+  let testGate: TestGateOptions | undefined;
+  if (gateEnabled) {
+    const pepper = env.GATHERTHREAD_TEST_GATE_PEPPER ?? "";
+    const path = env.GATHERTHREAD_TEST_GATE_DATABASE_PATH;
+    if (!secureTransport || !publicBaseUrl.startsWith("https://") || allowedOrigins.length !== 1 || publicBaseUrl === "https://gatherthread.cn") throw new ConfigurationError("Test gate requires isolated HTTPS and one exact test origin");
+    if (!path || !isAbsolute(path) || path === ":memory:") throw new ConfigurationError("Test gate requires its own absolute durable database path");
+    const gatePath = resolve(path);
+    if (gatePath === databasePath || gatePath === staticDirectory || isWithin(staticDirectory, gatePath)) throw new ConfigurationError("Test gate database must be separate from application database and static assets");
+    if (pepper !== pepper.trim() || Buffer.byteLength(pepper) < 32 || PLACEHOLDER_SECRET.test(pepper) || pepper === authTokenPepper) throw new ConfigurationError("Test gate requires its own non-placeholder pepper of at least 32 bytes");
+    testGate = { databasePath: gatePath, pepper, origin: publicBaseUrl };
+  }
   return {
     registration: registrationFromEnvironment(env, publicBaseUrl),
+    ...(testGate ? { testGate } : {}),
     environment,
     host,
     port,

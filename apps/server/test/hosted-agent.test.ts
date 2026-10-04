@@ -32,6 +32,66 @@ function unixPost(socketPath: string, path: string, body: unknown): Promise<numb
   });
 }
 
+unixSocketTest("model proxy slow body cannot dispatch after revocation or charge provider cooldown", async () => {
+ const directory = mkdtempSync(join(tmpdir(), "gt-slow-model-")), entered = Promise.withResolvers<void>();
+ const socket = join(directory, "model.sock"); let authorized = true, calls = 0, cooldowns = 0;
+ const proxy = new HostedModelProxy({ endpoint: options.endpoints[0]!, authorize: () => {
+  if (!authorized) throw new ApiError(403, "fixture_revoked", "Revoked"); entered.resolve();
+ }, fetch: async () => { calls++; return Response.json({ choices: [] }); }, onUnavailable: () => { cooldowns++; } });
+ try {
+  await proxy.listen(socket);
+  const body = JSON.stringify({ model: HOSTED_MODEL, messages: [{ role: "user", content: "Fixture" }] });
+  const reply = Promise.withResolvers<number>();
+  const req = httpRequest({ socketPath: socket, method: "POST", path: "/v1/chat/completions", headers: {
+   "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) } }, (res) => { res.resume(); res.on("end", () => reply.resolve(res.statusCode!)); });
+  req.on("error", reply.reject); req.write(body.slice(0, 1)); await entered.promise;
+  authorized = false; req.end(body.slice(1));
+  assert.equal(await reply.promise, 502); assert.equal(calls, 0); assert.equal(cooldowns, 0);
+  authorized = true;
+  for (let n = 0; n < 8; n++) assert.equal(await unixPost(socket, "/v1/chat/completions", JSON.parse(body)), 200);
+  assert.equal(calls, 8); assert.equal(cooldowns, 0);
+ } finally { await proxy.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+for (const revocation of ["revoke-device", "viewer", "delete-session", "finish-job"] as const) {
+ unixSocketTest(`trial model slow body rechecks ${revocation} before dispatch`, { timeout: 10_000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-trial-body-"));
+  const db = new CollaborationDatabase(join(directory, "db"), { authTokenPepper: "trial-body-fixture-pepper" });
+  const service = new CollaborationService(db), owner = db.bootstrapIdentity({ display_name: "Owner", device_name: "Laptop" }).actor;
+  const session = service.createSession(owner, { session_id: "body-session", idempotency_key: "body-session", mode: "multi", title: "Fixture" }).session;
+  const actor = db.createIdentity({ display_name: "Participant", device_name: "Fixture", can_create_projects: true }).actor;
+  const invite = service.createProjectInvitation(owner, session.project_id, { role: "participant", ttl: "1h" });
+  service.claimInvitationForActor(actor, invite.invite_token);
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>(), bodyStarted = Promise.withResolvers<void>();
+  let armed = false, calls = 0, status = 0;
+  const active = db.assertActiveDevice.bind(db);
+  db.assertActiveDevice = (actor) => { active(actor); if (armed) bodyStarted.resolve(); };
+  const agent = new HostedAgent(service, new CodeRepository(db, join(directory, "code")), { ...options,
+   fetch: async () => { calls++; return Response.json({ choices: [] }); }, runContainer: async (args) => {
+    const socket = args.find((arg) => arg.endsWith("dst=/run/model.sock"))!.split("src=")[1]!.split(",dst=")[0]!;
+    const body = JSON.stringify({ model: HOSTED_MODEL, messages: [{ role: "user", content: "Fixture" }] });
+    const reply = Promise.withResolvers<number>();
+    const req = httpRequest({ socketPath: socket, method: "POST", path: "/v1/chat/completions", headers: {
+     "content-type": "application/json", "content-length": String(Buffer.byteLength(body)) } }, (res) => { res.resume(); res.on("end", () => reply.resolve(res.statusCode!)); });
+    req.on("error", reply.reject); armed = true; req.write(body.slice(0, 1)); await bodyStarted.promise;
+    armed = false; entered.resolve(); await release.promise; req.end(body.slice(1)); status = await reply.promise;
+    return JSON.stringify({ answer: "Fixture", files: [], save_error: null });
+   } });
+  let pending: Promise<unknown> | undefined;
+  try {
+   pending = agent.request(actor, session.id, { profile_id: "default", content: "Fixture", include_code: false, idempotency_key: "slow-trial-model" });
+   const outcome = pending.catch(() => {}); await entered.promise;
+   if (revocation === "revoke-device") db.revokeDevice(actor, actor.device_id);
+   if (revocation === "viewer") db.setProjectMembership(owner, session.project_id, actor.user_id, "viewer");
+   if (revocation === "delete-session") db.deleteSession(owner, session.id);
+   if (revocation === "finish-job") db.sqlite.prepare("UPDATE hosted_agent_runs SET status='failed' WHERE session_id=?").run(session.id);
+   release.resolve(); await outcome;
+   assert.equal(status, 502); assert.equal(calls, 0);
+   assert.equal((agent as unknown as { cooldowns: Map<string, number> }).cooldowns.size, 0);
+  } finally { release.resolve(); await pending?.catch(() => {}); db.close(); rmSync(directory, { recursive: true, force: true }); }
+ });
+}
+
 unixSocketTest("hosted model proxy permits only the fixed model endpoint and enforces a hard call cap", async () => {
   const directory = mkdtempSync(join(tmpdir(), "gt-model-proxy-"));
   const socket = join(directory, "model.sock");

@@ -1,7 +1,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { chmodSync } from "node:fs";
+import { matchesGlob } from "node:path";
 import { ApiError } from "./errors.js";
-import type { CodeFile } from "@gatherthread/protocol";
+import { isCodeSyncPathAllowed, type CodeFile } from "@gatherthread/protocol";
 
 /** Exact lockfile tarballs only. No arbitrary registry, metadata, redirects or credentials. */
 export class HostedNpmProxy {
@@ -23,10 +24,41 @@ export class HostedNpmProxy {
     }
     const packages = Object.entries(lock.packages);
     if (packages.length > 2000) throw new ApiError(413, "npm_dependency_limit", "Too many locked dependencies");
+    const invalidSource = () => new ApiError(400, "npm_dependency_source", "Unsupported dependency source");
+    const relativePath = (path: string) => !/[\\:\u0000-\u001f]/u.test(path)
+      && path.split("/").every((part) => part !== "" && part !== "." && part !== "..");
+    const patterns: unknown = Array.isArray(pkg.workspaces) ? pkg.workspaces : pkg.workspaces?.packages ?? [];
+    if (!Array.isArray(patterns) || patterns.some((p) => typeof p !== "string" || !p || p.length > 200
+      || p.startsWith("/") || p.startsWith("!") || /[\\:]/u.test(p) || p.split("/").includes(".."))) throw invalidSource();
+    const local = new Map<string, { name: string }>();
+    for (const [path, raw] of packages) {
+      if (!path || path.split("/").includes("node_modules")) continue;
+      const item = raw as { name?: string; version?: string; resolved?: string; link?: boolean; integrity?: string } | null;
+      const source = files.find((f) => f.path === `${path}/package.json`);
+      if (!source || !isCodeSyncPathAllowed(`${path}/package.json`) || !relativePath(path)
+        || !patterns.some((pattern) => matchesGlob(path, pattern)) || !item || typeof item !== "object" || Array.isArray(item)
+        || item.link || item.resolved || item.integrity) throw invalidSource();
+      let workspace: { name?: string; version?: string };
+      try { workspace = JSON.parse(Buffer.from(source.content_base64, "base64").toString("utf8")); } catch { throw invalidSource(); }
+      if (typeof workspace?.name !== "string" || !/^(?:@[a-z0-9_.-]+\/)?[a-z0-9_.-]+$/u.test(workspace.name)
+        || workspace.version !== undefined && (typeof workspace.version !== "string" || !workspace.version)
+        || item.name !== undefined && item.name !== workspace.name || item.version !== workspace.version) throw invalidSource();
+      if ([...local.values()].some((entry) => entry.name === workspace.name)) throw invalidSource();
+      local.set(path, { name: workspace.name });
+    }
+    const linked = new Set<string>();
     for (const [name, raw] of packages) {
       if (!name) continue;
+      if (local.has(name)) continue;
+      if (!relativePath(name)) throw invalidSource();
       const item = raw as { link?: boolean; resolved?: string; integrity?: string };
-      if (item.link) continue; // npm validates local workspace links during ci.
+      if (!item || typeof item !== "object" || Array.isArray(item)) throw invalidSource();
+      if (item.link) {
+        const workspace = typeof item.resolved === "string" ? local.get(item.resolved) : undefined;
+        const suffix = `node_modules/${workspace?.name}`;
+        if (!workspace || !(name === suffix || name.endsWith(`/${suffix}`)) || item.integrity) throw invalidSource();
+        linked.add(item.resolved!); continue;
+      }
       if (!item.resolved) throw new ApiError(400, "npm_dependency_source", "Every external dependency needs a registry tarball");
       let url: URL;
       try { url = new URL(item.resolved); } catch { throw new ApiError(400, "npm_dependency_source", "Unsupported dependency source"); }
@@ -37,6 +69,7 @@ export class HostedNpmProxy {
       }
       this.allowed.add(url.pathname);
     }
+    if ([...local.keys()].some((path) => !linked.has(path))) throw invalidSource();
   }
   async listen(path: string) {
     await new Promise<void>((resolve, reject) => { this.server.once("error", reject);
