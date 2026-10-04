@@ -220,6 +220,10 @@ try {
     assert.deepEqual(await rawChange.locator('pre').allTextContents(), ['Settings', 'Ready']);
     for (const next of [locale === 'en' ? 'zh-CN' : 'en', locale]) {
       await changeLocale(next);
+      await page.waitForFunction(next => document.getElementById('cloud-github-task-status').textContent ===
+        `owner/fixture · ${next === 'en' ? 'completed' : '已完成'}`, next);
+      assert.match(await page.locator('#cloud-github-task-list button').first().textContent(),
+        next === 'en' ? /owner\/fixture · completed ·/u : /owner\/fixture · 已完成 ·/u);
       const deletion = page.locator('#cloud-github-changes details').filter({ has: page.locator('summary', { hasText: 'deleted.txt' }) });
       const binary = page.locator('#cloud-github-changes details').filter({ has: page.locator('summary', { hasText: 'binary.bin' }) });
       await page.waitForFunction(next => [...document.querySelectorAll('#cloud-github-changes pre')]
@@ -240,6 +244,17 @@ try {
     await page.locator('#cloud-github-pr-form button[type=submit]').click(); await page.locator('#cloud-github-pr-link').waitFor({ state: 'visible' });
     assert.equal(prCount, previousPrs + 1);
     assert.equal(await page.locator('#cloud-github-pr-link').getAttribute('href'), 'https://github.com/owner/fixture/pull/1');
+    const disabledStatus = `**/v1/projects/${server.database.requireSession(sessionId).project_id}/hosted-github`;
+    await page.route(disabledStatus, route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ data: { enabled: false } }) }));
+    await page.locator('#cloud-github-refresh').click();
+    for (const next of [locale === 'en' ? 'zh-CN' : 'en', locale]) {
+      await changeLocale(next);
+      await page.locator('#cloud-github-status').filter({ hasText: next === 'en'
+        ? 'Cloud GitHub is not enabled on this server.' : '此服务器尚未启用云端 GitHub。' }).waitFor();
+    }
+    await page.unroute(disabledStatus);
+    await page.locator('#cloud-github-refresh').evaluate(button => button.click());
+    await page.locator('#cloud-github-status').filter({ hasText: 'owner/fixture' }).waitFor();
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.locator('#close-project-code-button').isVisible());
     await page.screenshot({ path: join(tmpdir(), `gt-cloud-github-${engine}-${locale}.png`) });
