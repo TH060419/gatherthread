@@ -42,6 +42,8 @@ function harness(names, overrides = {}) {
       projects: [], session: { id: "s1" }, settings: { composer: {} }, invitations: [], snapshotRequests: [] },
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
+    hostedAgentStatus: { enabled: false },
+    cloudGithubUi: { updateContext: noop, completeAuthorization: async () => {} },
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },
     onboarding: { cancel: noop, offer: noop, refreshLanguage: noop },
     sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
@@ -56,6 +58,33 @@ function harness(names, overrides = {}) {
   vm.runInContext(names.map(functionSource).join("\n"), context);
   return context;
 }
+
+test("closed Cloud Agent never counts as the last available Agent or becomes the Settings default", () => {
+ const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud",
+  "settings-agent-harness", "settings-codex-agent-fields", "settings-dsh-agent-fields", "settings-cloud-agent-fields",
+  "settings-agent-summary"].map((id) => [id, element()]));
+ for (const [id, value] of [["settings-enabled-codex", "codex"], ["settings-enabled-dsh", "deepseek-harness"], ["settings-enabled-cloud", "cloud"]]) nodes[id].value = value;
+ nodes["settings-enabled-codex"].checked = true; nodes["settings-enabled-cloud"].checked = true;
+ nodes["settings-agent-harness"].value = "codex";
+ nodes["settings-agent-harness"].options = ["codex", "deepseek-harness", "cloud"].map((value) => ({ value }));
+ const app = harness(["settingsEnabledHarnesses", "syncSettingsAgentControls"], { element: (id) => nodes[id],
+  CLOUD_AGENT_ENTRY_ENABLED: false, DSH_HARNESS: "deepseek-harness", renderCloudStatus: noop, settingsAgentSummary: (value) => value });
+ app.syncSettingsAgentControls(); assert.equal(nodes["settings-enabled-codex"].disabled, true);
+ nodes["settings-enabled-codex"].checked = false;
+ app.syncSettingsAgentControls({ changedCheckbox: nodes["settings-enabled-codex"] });
+ assert.equal(nodes["settings-agent-harness"].value, "codex");
+ assert.deepEqual([...app.settingsEnabledHarnesses()], ["codex"]);
+ assert.equal(nodes["settings-cloud-agent-fields"].hidden, true);
+ // A migrated cloud-only selection gets a usable local Settings default.
+ nodes["settings-enabled-codex"].checked = false; nodes["settings-agent-harness"].value = "cloud";
+ app.syncSettingsAgentControls({ changedCheckbox: nodes["settings-enabled-cloud"] });
+ assert.equal(nodes["settings-agent-harness"].value, "codex");
+ assert.equal(nodes["settings-agent-harness"].options.find((option) => option.value === "cloud").disabled, true);
+ nodes["settings-enabled-dsh"].checked = true; nodes["settings-enabled-codex"].checked = false;
+ nodes["settings-agent-harness"].value = "deepseek-harness"; app.syncSettingsAgentControls();
+ assert.equal(nodes["settings-enabled-dsh"].disabled, true);
+ assert.equal(nodes["settings-agent-harness"].value, "deepseek-harness");
+});
 
 test("the global badge reports live delivery regardless of viewer-to-participant transitions", () => {
   const nodes = new Map();
@@ -81,7 +110,8 @@ test("a project list response after logout cannot reopen a workspace", async () 
   const pending = deferred();
   let selections = 0;
   const app = harness(["enterWorkspace"], {
-    api: { listProjects: () => pending.promise }, selectProject: () => { selections += 1; },
+    api: { listProjects: () => pending.promise, getHostedAgentStatus: async () => ({ enabled: false }) },
+    selectProject: () => { selections += 1; },
   });
   const work = app.enterWorkspace();
   app.authenticationGeneration += 1;
@@ -185,7 +215,8 @@ test("a background workspace reload cannot undo a newer project selection", asyn
   const pending = deferred();
   let selections = 0;
   const app = harness(["enterWorkspace"], {
-    api: { listProjects: () => pending.promise }, selectProject: () => { selections += 1; },
+    api: { listProjects: () => pending.promise, getHostedAgentStatus: async () => ({ enabled: false }) },
+    selectProject: () => { selections += 1; },
   });
   const work = app.enterWorkspace();
   app.selectedSessionGeneration += 1;
@@ -287,6 +318,18 @@ test("local conversation uploads keep an offline selected device and fail closed
   app.renderCodexLocalSyncControls();
   assert.equal(app.selectedCodexLocalRuntimeId, "");
   assert.equal(app.uploadLocalTurnsButton.disabled, true);
+});
+
+test("retrying a cloud GitHub request opens its saved task and cannot execute the trial or a local harness", async () => {
+  const opened = [], calls = [];
+  const app = harness(["retryAgentRequest"], {
+    retryingAgentRequestIds: new Set(), sendError: element(), captureWorkspaceScope: () => () => true,
+    cloudGithubUi: { openTask: async (id) => opened.push(id) },
+    api: { appendHostedAgentRequest: async () => calls.push("trial"), appendAgentRequest: async () => calls.push("local") },
+  });
+  app.state.sync = { events: [{ id: "request", type: "agent_request", payload: { github_task_id: "gh-task-fixture", execution_profile: { harness: "opencode" } } }] };
+  await app.retryAgentRequest("request", { disabled: false, isConnected: true });
+  assert.deepEqual(opened, ["gh-task-fixture"]); assert.deepEqual(calls, []);
 });
 
 for (const outcome of ["success", "failure"]) {

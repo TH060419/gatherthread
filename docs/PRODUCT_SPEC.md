@@ -1,9 +1,14 @@
 # Product specification v0.1
 
+The disabled cloud GitHub preview lets a session writer authorize their own GitHub App account, select an npm repository, request a private asynchronous Cloud Agent task, inspect source changes and explicitly create a draft PR. Human chat, GT Cloud trial code, local GitHub sync and cloud GitHub execution remain separate choices. Supported scope and user steps are in [HOSTED_GITHUB.md](HOSTED_GITHUB.md).
+
 ## Goal
 
 Enable multiple people to collaborate on an agent-assisted project while each person keeps using their own local harness, model, credentials, filesystem, and context-management policy.
 
+An optional hosted trial Agent may be enabled by an operator for members who do not yet have a local harness. The public Cloud Agent entry is currently disabled and labelled “coming later” in Settings; even a configured server does not make it selectable in this Web release. An earlier saved Cloud selection is retained but cannot start or retry a run; users explicitly choose a local Agent. GitHub connections remain independent. When opened in a later release, it will be selected beside Codex and DSH with an operator-provided model profile. It runs OpenCode in a disposable container. Multiple accounts may provide capacity for the same exact provider/model; unavailable capacity never silently switches models. Project cloud code is read only after the requester selects that option; eligible changes are checkpointed to that member's own branch. This source-preview feature is disabled until its model provider and container are configured and validated. See [the user guide](HOSTED_AGENT_GUIDE.md) and [ADR-0038](adr/0038-isolated-hosted-trial-agent.md).
+
+The existing Cloud Git panel offers two peer categories, **GT Cloud** and **GitHub**. GitHub device sync, account authorization, repository binding and saved task review stay inside the GitHub category; there is no separate composer/settings connection button or cloud GitHub dialog. Switching categories changes only the displayed view and never enables, pauses or migrates either repository. New and continued cloud Agent tasks are unavailable while the Cloud Agent entry is held.
 ## Test environment entry
 
 At `test.gatherthread.cn`, invited testers first enter a coordinator-issued admission code, then use the reviewed email/password account flow. Admission grants environment access only; account, password, device and project permissions remain independent. Test accounts/data are separate from production, including the same email address. Every real page visibly labels the test environment in both languages. Without the email-account dependency, admission leads to a pending page. Operational behavior and limits are in [TEST_ENVIRONMENT.md](TEST_ENVIRONMENT.md).

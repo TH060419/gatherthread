@@ -12,6 +12,26 @@ test("Agent connection shortcut and pause/resume guidance are bilingual", () => 
 
 import { memberRemovalAriaLabel, memberRoleAriaLabel, translateUiText } from "../src/i18n.js";
 
+test("every public cloud GitHub failure has an English and Chinese explanation", () => {
+  for (const [en, zh] of [
+    ["GitHub access is unavailable. Reconnect and check repository permissions.", "GitHub 访问不可用，请重新连接并检查仓库权限。"],
+    ["GitHub authorization expired or belongs to another browser account. Start again.", "GitHub 授权已过期或属于其他浏览器账号，请重新开始授权。"],
+    ["Repository settings changed. Start a new cloud task.", "仓库设置已更改，请新建云端任务。"],
+    ["Cloud task is unavailable.", "云端任务不可用。"],
+    ["Cloud task failed. Check the npm lockfile, project size and model availability; start a new request to retry.", "云端任务失败，请检查 npm 锁文件、项目大小及模型可用性，再发起新请求重试。"],
+    ["Cloud task was interrupted. Saved files remain available for an explicit new run.", "云端任务已中断，保存的文件仍可用于手动发起新任务。"],
+    ["The reviewed files changed. Refresh the changes before creating a pull request.", "已审核的文件发生变化，请刷新改动后再创建 PR。"],
+    ["This repository exceeds the cloud source limits or contains unsupported files.", "仓库超过云端源码限制或包含不支持的文件。"],
+    ["The GitHub base branch changed. Start a new task from the latest branch.", "GitHub 基准分支已更改，请从最新分支新建任务。"],
+    ["Pull request creation is already in progress. Refresh this task shortly.", "正在创建 PR，请稍后刷新此任务。"],
+    ["Cloud repository operation is unavailable.", "云端仓库操作不可用。"],
+    ["Cloud task storage is full; delete an old task first", "云端任务存储已满，请先删除旧任务。"],
+    ["This task has no source changes", "此任务没有源码改动。"],
+  ]) {
+    assert.equal(translateUiText(en, "en"), en); assert.equal(translateUiText(en, "zh-CN"), zh);
+  }
+});
+
 test("Git back buttons translate their complete labels including the arrow", () => {
   assert.equal(translateUiText("← Back to code settings", "zh-CN"), "← 返回代码设置");
   assert.equal(translateUiText("Copy invitation", "zh-CN"), "复制邀请信息");

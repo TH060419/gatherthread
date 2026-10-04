@@ -4,10 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>GatherThread 共序 | 本地 AI Agent 多人联机协作</title>
-<meta name="description" content="GatherThread 共序是面向多人联机协作、各自使用本地 AI Agent 的开源工作区。连接 Codex Desktop 与 DeepSeek Harness，共享可追溯项目会话、实时上下文和可选 Git 代码检查点；支持自托管，官网为邀请制 Alpha。">
+<meta name="description" content="GatherThread 共序是开源、可自托管的多人 AI Agent 协作工作区。连接本地 Codex Desktop 或 DeepSeek Harness；另有待启用的云端体验 Agent，可在隔离环境中尝试代码编辑与终端命令。官网为邀请制 Alpha。">
 <link rel="canonical" href="https://gatherthread.cn/">
 <meta property="og:title" content="GatherThread 共序 | Local AI Agent Collaboration">
-<meta property="og:description" content="Self-hostable collaboration for teams using local AI coding agents. Shared project history, live context, role-based sessions, Codex and DeepSeek Harness, with opt-in Git code checkpoints.">
+<meta property="og:description" content="Self-hostable AI Agent collaboration with local Codex and DeepSeek Harness, shared project history, opt-in Git code checkpoints, and an upcoming isolated cloud trial Agent.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://gatherthread.cn/">
 <meta property="og:locale" content="zh_CN">
@@ -40,6 +40,7 @@
       <a href="#sessions" data-i18n="nav.sessions">会话</a>
       <a href="#context" data-i18n="nav.context">上下文</a>
       <a href="#connect" data-i18n="nav.connect">连接</a>
+      <a href="#cloud-agent" data-i18n="nav.cloud">云端体验</a>
       <a href="#code" data-i18n="nav.code">代码协作</a>
       <a href="#security" data-i18n="nav.security">安全</a>
       <a href="#specs" data-i18n="nav.specs">规格</a>
@@ -132,7 +133,7 @@
         <article class="card card-multi fx">
           <p class="mono card-tag">[ MULTI ]</p>
           <h3 data-i18n="sessions.multi.h3">Multi · 协作会话</h3>
-          <p data-i18n="sessions.multi.p">多人共享一个有序的项目会话。普通聊天不调用 Agent；也可引用消息、@成员，快速找到讨论。Agent 请求只由发送者自己的本地设备处理。</p>
+          <p data-i18n="sessions.multi.p">多人共享一个有序的项目会话。普通聊天不调用 Agent；可引用消息和 @成员。连接本地 Agent 后，请求由发送者的设备处理；云端体验 Agent 启用后需单独选择。</p>
         </article>
       </div>
     </div>
@@ -232,6 +233,30 @@
             <li data-i18n="setup.dsh.3">打开 Settings → GatherThread / 共序，输入当前服务器地址，并批准一次性配对码。</li>
             <li data-i18n="setup.dsh.4">选择 Provider 和 Model，确认连接后即可在项目中使用。</li>
           </ol>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ ISOLATED CLOUD TRIAL ============ -->
+  <section class="band page" id="cloud-agent">
+    <div class="wrap">
+      <p class="mono label fx">[ CLOUD AGENT · PLANNED PREVIEW ]</p>
+      <h2 class="h2 fx" data-i18n="cloud.h2">想先体验 Agent？试用隔离的云端工作区。</h2>
+      <p class="lead fx" data-i18n="cloud.lead">云端体验 Agent 使用开源 OpenCode harness，可在临时容器里读写代码、执行终端命令和运行已有依赖的测试。另有面向 Node.js/TypeScript 的云端 GitHub 开发预览，提供仓库授权、npm 依赖准备、任务源码保存、改动查看及主动创建草稿 PR。目前仍待模型 API、GitHub App 接入与部署验证；服务启用后，可在工作页与 Codex、DSH 并列的 Agent 选择器及设置中选用云端模型，无需连接本地 Agent。</p>
+      <div class="trio">
+        <article class="col fx">
+          <h3 data-i18n="cloud.c1.h3">无需安装本地 Agent</h3>
+          <p data-i18n="cloud.c1.p">在有写入权限的项目会话中直接发起一次云端请求。每日额度有限，运行结束后临时环境会清理。</p>
+        </article>
+        <article class="col fx">
+          <h3 data-i18n="cloud.c2.h3">代码由你选择</h3>
+          <p data-i18n="cloud.c2.p">默认在空工作区试用。只有主动勾选后，才会读取项目已共享的 GT Cloud 代码，并将合规改动保存到你的 GT Cloud 分支；本地文件不会因此上传。</p>
+        </article>
+        <article class="col fx">
+          <h3 data-i18n="cloud.c3.h3">清楚的运行边界</h3>
+          <p data-i18n="cloud.c3.p">云端容器没有通用外网访问，不能在线安装依赖；每次运行有时间、文件大小和模型用量限制。复杂项目仍适合连接自己的本地 Agent。</p>
+          <a class="col-action" href="https://github.com/TH060419/gatherthread/blob/main/docs/HOSTED_AGENT_GUIDE.zh-CN.md" target="_blank" rel="noopener noreferrer" data-i18n="cloud.c3.link">阅读使用指南 ↗</a>
         </article>
       </div>
     </div>

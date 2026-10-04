@@ -28,6 +28,11 @@ window.addEventListener("storage", event => {
   if (event.key !== languageStorageKey && event.key !== null) return;
   language = preferredLanguage(); render();
 });
+function returnToRequestedPage() {
+  if (location.pathname === "/v1/hosted-github/callback") location.replace(location.pathname + location.search);
+  else if (location.pathname === "/app/" && !location.search) location.reload();
+  else location.replace(`/app/${location.hash}`);
+}
 form.addEventListener("submit", async event => {
   event.preventDefault(); enter.disabled = true; feedback.textContent = "";
   const code = input.value.trim(); input.value = "";
@@ -39,9 +44,15 @@ form.addEventListener("submit", async event => {
         : (language === "zh-CN" ? "代码不可用，请向负责人确认。" : "Code unavailable. Check with your test coordinator.");
       input.focus(); return;
     }
-    if (location.pathname === "/app/" && !location.search) location.reload();
-    else location.replace(`/app/${location.hash}`);
+    returnToRequestedPage();
   } catch { feedback.textContent = language === "zh-CN" ? "连接失败，请重试。" : "Connection failed. Try again."; input.focus(); }
   finally { enter.disabled = false; }
 });
 render();
+// A denied cross-site OAuth navigation may still have a valid Strict Cookie.
+// No callback action happens until a fresh same-site admission check succeeds.
+if (location.pathname === "/v1/hosted-github/callback") {
+  void fetch("/v1/test-gate", { credentials: "same-origin" }).then(async response => {
+    if (response.ok && (await response.json()).data?.admitted === true) returnToRequestedPage();
+  }).catch(() => { /* Keep the ordinary admission form available. */ });
+}

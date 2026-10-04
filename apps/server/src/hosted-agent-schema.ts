@@ -1,0 +1,87 @@
+/** The reservation and the canonical request are committed in one SQLite write. */
+export const HOSTED_AGENT_SCHEMA = `
+CREATE TABLE IF NOT EXISTS hosted_agent_limits (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  daily_neurons INTEGER NOT NULL CHECK(daily_neurons >= 0)
+) STRICT;
+CREATE TABLE IF NOT EXISTS hosted_agent_jobs (
+  request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  utc_day TEXT NOT NULL,
+  reserved_neurons INTEGER NOT NULL CHECK(reserved_neurons > 0),
+  metered_neurons INTEGER CHECK(metered_neurons >= 0),
+  input_tokens INTEGER CHECK(input_tokens >= 0),
+  output_tokens INTEGER CHECK(output_tokens >= 0),
+  status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS hosted_agent_jobs_day_idx ON hosted_agent_jobs(utc_day,status);
+CREATE INDEX IF NOT EXISTS hosted_agent_jobs_user_day_idx ON hosted_agent_jobs(user_id,utc_day);
+
+-- Version 2 counts bounded runs across providers. Preserve the earlier preview's
+-- tables and canonical IDs; copying is idempotent and never resets daily usage.
+CREATE TABLE IF NOT EXISTS hosted_agent_run_limits (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  daily_runs INTEGER NOT NULL CHECK(daily_runs >= 0)
+) STRICT;
+CREATE TABLE IF NOT EXISTS hosted_agent_runs (
+  request_event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+  session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id TEXT NOT NULL,
+  utc_day TEXT NOT NULL,
+  profile_id TEXT NOT NULL,
+  endpoint_id TEXT NOT NULL,
+  quota_group TEXT NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
+  created_at TEXT NOT NULL,
+  finished_at TEXT
+) STRICT;
+CREATE INDEX IF NOT EXISTS hosted_agent_runs_day_idx ON hosted_agent_runs(utc_day,status);
+CREATE INDEX IF NOT EXISTS hosted_agent_runs_user_day_idx ON hosted_agent_runs(user_id,utc_day);
+CREATE INDEX IF NOT EXISTS hosted_agent_runs_group_day_idx ON hosted_agent_runs(quota_group,utc_day,status);
+INSERT OR IGNORE INTO hosted_agent_run_limits SELECT user_id, daily_neurons / 2000 FROM hosted_agent_limits;
+INSERT OR IGNORE INTO hosted_agent_runs
+  SELECT request_event_id,session_id,user_id,device_id,utc_day,'default','legacy','legacy',
+    'cloudflare-workers-ai','@cf/qwen/qwen3-30b-a3b-fp8',status,created_at,finished_at
+  FROM hosted_agent_jobs;
+
+-- Daily consumption is independent of conversation, project and account deletion.
+-- The request ID deduplicates backfill; no prompt, session, device or source is retained.
+-- Database startup and accepted reservations prune days older than the current UTC day.
+CREATE TABLE IF NOT EXISTS hosted_agent_daily_usage (
+  request_event_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  utc_day TEXT NOT NULL,
+  quota_group TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_day_idx ON hosted_agent_daily_usage(utc_day);
+CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_user_day_idx ON hosted_agent_daily_usage(user_id,utc_day);
+CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_group_day_idx ON hosted_agent_daily_usage(quota_group,utc_day);
+INSERT OR IGNORE INTO hosted_agent_daily_usage SELECT request_event_id,user_id,utc_day,quota_group FROM hosted_agent_runs;
+
+-- Cooldown survives conversation/project deletion. Executor slots also survive
+-- account deletion, with the deleted user's identity immediately removed.
+-- These bounded control records contain no source, prompt, token or provider key.
+CREATE TABLE IF NOT EXISTS hosted_agent_user_activity (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  last_started_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE IF NOT EXISTS hosted_agent_active_runs (
+  request_event_id TEXT PRIMARY KEY,
+  user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+  quota_group TEXT NOT NULL,
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX IF NOT EXISTS hosted_agent_active_runs_user_idx ON hosted_agent_active_runs(user_id);
+CREATE INDEX IF NOT EXISTS hosted_agent_active_runs_group_idx ON hosted_agent_active_runs(quota_group);
+INSERT INTO hosted_agent_user_activity SELECT user_id, MAX(created_at) FROM hosted_agent_runs GROUP BY user_id
+  ON CONFLICT(user_id) DO UPDATE SET last_started_at=MAX(last_started_at,excluded.last_started_at);
+INSERT OR IGNORE INTO hosted_agent_active_runs SELECT request_event_id,user_id,quota_group,created_at
+  FROM hosted_agent_runs WHERE status='running';
+`;

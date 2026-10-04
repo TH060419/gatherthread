@@ -41,3 +41,5 @@ Architecture Decision Records document significant technical choices, their rati
 | [0035](0035-direct-local-github-code-synchronization.md) | Synchronize GitHub source directly from authorized local devices | proposed / unreleased source preview | 2026-09-30 |
 | [0036](0036-verified-email-registration-and-password-login.md) | Verified-email-only user accounts and independent device authorization | proposed / unreleased source preview | 2026-09-30 |
 | [0037](0037-isolated-test-environment-admission.md) | Separate test admission from accounts and native authorization | proposed | 2026-10-03 |
+| [0038](0038-isolated-hosted-trial-agent.md) | Run the hosted trial Agent with OpenCode in an isolated container | proposed / source preview | 2026-09-30 |
+| [0039](0039-cloud-github-repository-tasks.md) | Private cloud GitHub tasks with explicit PR publication | proposed / source preview | 2026-09-30 |

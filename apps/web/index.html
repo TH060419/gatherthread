@@ -466,6 +466,7 @@
                 <select id="agent-harness-select" name="agent-harness">
                   <option value="codex">Codex</option>
                   <option value="deepseek-harness">DeepSeek Harness</option>
+                  <option value="cloud" disabled>Cloud Agent · coming later</option>
                 </select>
                 <div id="codex-agent-profile-fields" class="agent-profile-fields">
                   <label for="agent-model-select">Model</label>
@@ -481,7 +482,17 @@
                   <label id="agent-dsh-effort-label" for="agent-dsh-effort-select" hidden>Reasoning</label>
                   <select id="agent-dsh-effort-select" name="agent-dsh-effort" hidden></select>
                 </div>
+                <div id="cloud-agent-profile-fields" class="agent-profile-fields" hidden>
+                  <label for="agent-cloud-model-select">Cloud model</label>
+                  <select id="agent-cloud-model-select" name="agent-cloud-model"></select>
+                </div>
               </fieldset>
+              <div class="cloud-code-consent" id="send-cloud-agent-help" hidden>
+                <label for="cloud-agent-source">Cloud workspace</label>
+                <select id="cloud-agent-source"><option value="trial">GT Cloud trial</option><option value="github">GitHub repository</option></select>
+                <input id="cloud-github-parent" type="hidden"><span id="cloud-github-selected" role="status"></span>
+                <label for="cloud-agent-include-code"><input id="cloud-agent-include-code" type="checkbox"><span>Use GT Cloud code and save changes to my GT Cloud branch</span></label>
+              </div>
               <div class="composer-actions">
                 <div class="intent-help" id="send-chat-help">
                   <button id="send-chat-button" class="button button-secondary" type="button">
@@ -601,9 +612,14 @@
           <p id="code-confirmation-message" role="status"></p>
           <div class="code-actions"><button id="code-confirm-accept" class="button button-primary compact-button" type="button">Continue</button><button id="code-confirm-cancel" class="button button-secondary compact-button" type="button">Cancel</button></div>
         </section>
+        <nav class="code-actions" aria-label="Choose file storage">
+          <button id="code-provider-gt-cloud" type="button" class="button button-secondary" aria-pressed="true" aria-controls="code-gt-cloud-panel">GT Cloud</button>
+          <button id="code-provider-github" type="button" class="button button-secondary" aria-pressed="false" aria-controls="code-github-panel">GitHub</button>
+        </nav>
+        <div id="code-github-panel" hidden>
         <section id="github-code-section" class="code-section" aria-labelledby="github-code-title" hidden>
           <h3 id="github-code-title">GitHub · larger or long-term projects</h3>
-          <p class="code-help">Use your own GitHub repository for files, branches and pull requests. GT Cloud below is convenient for small trials. These options are independent; connecting GitHub does not migrate or delete GT Cloud files.</p>
+          <p class="code-help">Use your own GitHub repository for files, branches and pull requests. These options are independent; connecting GitHub does not migrate or delete GT Cloud files.</p>
           <p id="github-code-status" role="status" aria-live="polite"></p>
           <p id="github-code-error" class="form-error" role="alert"></p>
           <form id="github-code-form" class="github-code-form">
@@ -650,6 +666,38 @@
             </div>
           </div>
         </section>
+        <section id="cloud-github-panel" class="code-section" aria-labelledby="cloud-github-title">
+          <h3 id="cloud-github-title">GitHub account and saved tasks</h3>
+          <p id="cloud-github-description">Connect your GitHub account and choose a repository. Existing task changes and draft pull requests remain available. New cloud Agent tasks will open in a later release.</p>
+          <p id="cloud-github-status" role="status" aria-live="polite"></p><p id="cloud-github-error" class="form-error" role="alert"></p>
+          <div id="cloud-github-controls" hidden>
+            <a id="cloud-github-install" target="_blank" rel="noopener noreferrer">Install GitHub App on selected repositories</a>
+            <button id="cloud-github-authorize" type="button" class="button button-secondary">Connect your GitHub account</button>
+            <button id="cloud-github-disconnect" type="button" class="text-button" hidden>Disconnect cloud GitHub</button>
+            <form id="cloud-github-repository-form" class="github-code-form" hidden>
+              <label for="cloud-github-repository">Existing GitHub repository</label><input id="cloud-github-repository" required maxlength="140" placeholder="OWNER/REPO" autocomplete="off" data-i18n-skip>
+              <label for="cloud-github-base">Base branch</label><input id="cloud-github-base" required maxlength="200" value="main" autocomplete="off" data-i18n-skip>
+              <button type="submit" class="button button-primary">Use this repository in cloud tasks</button>
+            </form>
+            <p>Requires an npm project with package.json and package-lock.json. Public npm dependencies are installed without lifecycle scripts. Each run allows up to 15 minutes; saved source expires after seven days.</p>
+            <button id="cloud-github-refresh" type="button" class="text-button">Refresh cloud tasks</button>
+            <button id="cloud-github-new" type="button" class="text-button" disabled aria-describedby="cloud-github-agent-availability">New repository task</button>
+            <p id="cloud-github-agent-availability" class="field-help">Cloud Agent · coming later</p>
+            <nav id="cloud-github-task-list" aria-label="Your cloud tasks"></nav>
+            <p id="cloud-github-task-status" role="status"></p><pre id="cloud-github-answer"></pre>
+            <section id="cloud-github-changes" aria-label="Source changes"></section>
+            <button id="cloud-github-continue" type="button" class="text-button" disabled aria-describedby="cloud-github-agent-availability">Continue task</button>
+            <button id="cloud-github-delete" type="button" class="text-button" disabled>Delete saved cloud task</button>
+            <a id="cloud-github-pr-link" target="_blank" rel="noopener noreferrer" hidden>View pull request on GitHub</a>
+            <form id="cloud-github-pr-form" hidden>
+              <label for="cloud-github-pr-title">Pull request title</label><input id="cloud-github-pr-title" maxlength="200" required>
+              <label for="cloud-github-pr-body">Pull request description</label><textarea id="cloud-github-pr-body" maxlength="6000"></textarea>
+              <button type="submit" class="button button-primary">Create draft pull request</button>
+            </form>
+          </div>
+        </section>
+        </div>
+        <div id="code-gt-cloud-panel">
         <h3 class="code-provider-heading">GT Cloud · small trials</h3>
         <div class="code-toolbar"><span id="code-repository-status" role="status"></span><button id="code-refresh-button" class="text-button" type="button">Refresh</button></div>
         <p id="code-error" class="form-error" role="alert"></p>
@@ -698,6 +746,7 @@
               <button id="code-merge-button" class="button button-primary compact-button" type="button" disabled>Approve and merge into main</button>
             </section>
           </section>
+        </div>
         </div>
       </div>
     </dialog>
@@ -1199,18 +1248,19 @@ codex plugin add gatherthread@gatherthread</code>
 
             <section id="settings-agents" class="settings-section" aria-labelledby="settings-agents-title">
               <div class="settings-section-heading">
-                <div><p class="eyebrow">Agents</p><h3 id="settings-agents-title">Default local Agent</h3></div>
+                <div><p class="eyebrow">Agents</p><h3 id="settings-agents-title">Default Agent</h3></div>
                 <p id="settings-agent-summary">Codex supplies this project's connection command and handles new Agent requests by default.</p>
               </div>
               <fieldset class="settings-agent-picker">
-                <legend>Connection shortcuts</legend>
-                <p>Choose one or more Agent connection buttons to keep in the project sidebar.</p>
+                <legend>Available Agents</legend>
+                <p>Choose the Agents available in this project. Cloud Agent will open in a later release.</p>
                 <div class="settings-agent-options">
                   <label class="settings-agent-option" for="settings-enabled-codex"><input id="settings-enabled-codex" name="enabled-agent" type="checkbox" value="codex" /><span>Codex</span></label>
                   <label class="settings-agent-option" for="settings-enabled-dsh"><input id="settings-enabled-dsh" name="enabled-agent" type="checkbox" value="deepseek-harness" /><span>DeepSeek Harness</span></label>
+                  <label class="settings-agent-option" for="settings-enabled-cloud"><input id="settings-enabled-cloud" name="enabled-agent" type="checkbox" value="cloud" disabled /><span>Cloud Agent · coming later</span></label>
                 </div>
               </fieldset>
-              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option disabled>Claude Code · coming later</option></select></label>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="cloud" disabled>Cloud Agent · coming later</option><option disabled>Claude Code · coming later</option></select></label>
               <div id="settings-codex-agent-fields" class="settings-agent-fields">
                 <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
                 <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>
@@ -1222,12 +1272,17 @@ codex plugin add gatherthread@gatherthread</code>
                 <p class="field-help">Install and pair the plugin from “Connect DeepSeek Harness” if no runtime appears.</p>
                 <p id="settings-dsh-runtime-error" class="form-error" role="alert"></p>
               </div>
+              <div id="settings-cloud-agent-fields" class="settings-agent-fields" hidden>
+                <label class="settings-row" for="settings-cloud-model"><span><strong>Cloud model</strong><small>Models are provided by this server. No local Agent connection is required.</small></span><select id="settings-cloud-model" name="cloud-model"></select></label>
+                <p id="settings-cloud-status" class="field-help" role="status"></p>
+                <p class="field-help">The selected provider receives your request and any GT Cloud code you choose to share. API credentials are managed by the server operator.</p>
+              </div>
             </section>
 
             <section id="settings-composer" class="settings-section" aria-labelledby="settings-composer-title">
               <div class="settings-section-heading"><div><p class="eyebrow">Composer</p><h3 id="settings-composer-title">Message behavior</h3></div><p>Controls only this browser.</p></div>
               <label class="settings-row" for="settings-enter-behavior"><span><strong>Enter key</strong><small>New line is safest because chat and Agent request are distinct actions.</small></span><select id="settings-enter-behavior" name="enter-behavior"><option value="newline">Insert a new line</option><option value="send_chat">Send chat</option><option value="request_agent">Request Agent</option></select></label>
-              <label class="settings-row settings-toggle" for="settings-confirm-agent"><span><strong>Confirm Agent requests</strong><small>Ask before starting a local model run.</small></span><input id="settings-confirm-agent" name="confirm-agent" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+              <label class="settings-row settings-toggle" for="settings-confirm-agent"><span><strong>Confirm Agent requests</strong><small>Ask before starting an Agent run.</small></span><input id="settings-confirm-agent" name="confirm-agent" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
               <label class="settings-row settings-toggle" for="settings-auto-scroll"><span><strong>Follow new events</strong><small>Keep the timeline at the latest event when already near the bottom.</small></span><input id="settings-auto-scroll" name="auto-scroll" type="checkbox" role="switch" /><span class="settings-switch-visual" aria-hidden="true"></span></label>
             </section>
 
@@ -1270,6 +1325,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20261004-1"></script>
+    <script type="module" src="./src/main.js?v=20261005-3"></script>
   </body>
 </html>
