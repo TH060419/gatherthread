@@ -1,22 +1,23 @@
 // Actual HTTP/UI integration with fake GitHub and container responses. No real account, model or PR.
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { mkdtempSync, realpathSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { startCollaborationServer } from '../../apps/server/dist/src/server.js';
+import { TestGateStore } from '../../apps/server/dist/src/test-gate.js';
 const { chromium, webkit } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright');
-const directory = mkdtempSync(join(tmpdir(), 'gt-github-browser-'));
+const directory = realpathSync(mkdtempSync(join(tmpdir(), 'gt-github-browser-')));
 const mails = new Map();
 const file = (path, content) => ({ path, content_base64: Buffer.from(content).toString('base64'), executable: false });
 const files = [file('package.json', '{"name":"fixture","version":"1.0.0"}'), file('package-lock.json', '{"lockfileVersion":3,"packages":{"":{}}}'), file('index.ts', 'export const value = 1;\n')];
-let runs = 0, prCount = 0, remoteRef = '', pull = null;
+let runs = 0, prCount = 0, oauthCompletions = 0, remoteRef = '', pull = null;
 const fixtureFetch = async (url, init) => {
  const path = new URL(String(url)).pathname + new URL(String(url)).search, method = init?.method ?? 'GET';
  const body = init?.body ? JSON.parse(init.body) : null;
  const json = (data) => Response.json(data);
- if (path === '/login/oauth/access_token') return json({ access_token: 'ghu_test', refresh_token: 'ghr_test', expires_in: 28800, refresh_token_expires_in: 15897600, scope: '' });
+ if (path === '/login/oauth/access_token') { oauthCompletions++; return json({ access_token: 'ghu_test', refresh_token: 'ghr_test', expires_in: 28800, refresh_token_expires_in: 15897600, scope: '' }); }
  if (path === '/user') return json({ login: 'browser-fixture' });
  if (path === '/repos/owner/fixture') return json({ id: 1, full_name: 'owner/fixture', permissions: { push: true } });
  if (path.includes('/branches/')) return json({ commit: { sha: 'b'.repeat(40) } });
@@ -32,12 +33,16 @@ const fixtureFetch = async (url, init) => {
 };
 const endpoint = { id: 'fixture', profileId: 'coding', label: 'Coding', provider: 'deepseek', model: 'deepseek-chat', baseUrl: 'https://api.deepseek.com/v1', apiToken: 'fake-browser-model', quotaGroup: 'fixture', dailyRuns: 20, maxConcurrent: 2 };
 const port = 4199, origin = `http://127.0.0.1:${port}`;
+const admissionEnabled = process.env.GATHERTHREAD_TEST_GITHUB_ADMISSION === '1';
+const gate = { databasePath: join(directory, 'admission.sqlite'), origin, pepper: randomBytes(32).toString('hex') };
+const gateAdmin = admissionEnabled ? new TestGateStore(gate) : null;
 async function waitForWorkspace(page, sessionId) {
  await page.locator('#workspace').waitFor({ state: 'visible' });
  await page.waitForFunction((id) => new URLSearchParams(location.hash.slice(1)).get('session') === id
    && document.getElementById('global-connection')?.dataset.state === 'live', sessionId);
 }
 const server = await startCollaborationServer({ databasePath: join(directory, 'db'), staticDirectory: resolve('apps/web/dist'), publicBaseUrl: origin,
+ ...(admissionEnabled ? { testGate: gate } : {}),
  allowedOrigins: [origin], authTokenPepper: 'github-browser-private-test-pepper',
  registration: { enabled: true, origin, siteKey: 'synthetic-browser',
   mailer: { async send(mail) { mails.set(mail.email, mail.code); } }, challenge: { async verify() { return true; } } },
@@ -57,8 +62,12 @@ try {
     page.setDefaultTimeout(15000); const errors = []; page.on('pageerror', (e) => errors.push(e.message)); page.on('dialog', (d) => d.accept());
     // Use the current verified-email/password HTTP flow with synthetic providers.
     const email = `${engine}-${locale.toLowerCase()}@example.invalid`, password = 'synthetic browser password 42';
-    assert.equal((await page.request.get(`${origin}/v1/registration`)).status(), 200);
     const post = (path, data) => page.request.post(`${origin}${path}`, { headers: { origin }, data });
+    const grant = gateAdmin?.issue(1, 1)[0];
+    if (admissionEnabled) assert.equal((await post('/v1/test-gate', { admission_code: grant.admission_code })).status(), 200);
+    assert.equal((await page.request.get(`${origin}/v1/registration`)).status(), 200);
+    const callbackStatuses = [];
+    page.on('response', response => { if (new URL(response.url()).pathname === '/v1/hosted-github/callback') callbackStatuses.push(response.status()); });
     const sent = await post('/v1/registration/send', { email, locale, challenge_token: randomUUID(), idempotency_key: randomUUID() });
     assert.equal(sent.status(), 202);
     const pending = (await sent.json()).data;
@@ -99,6 +108,7 @@ try {
     await page.locator('#code-provider-github').click();
     await page.locator('#cloud-github-authorize').click();
     await page.waitForURL(`${origin}/app/`);
+    if (admissionEnabled) assert.deepEqual(callbackStatuses, [403, 303], 'cross-site Strict-cookie callback is denied, then retried under live same-site admission');
     await waitForWorkspace(page, sessionId);
     await page.locator('#code-notice-dialog').waitFor({ state: 'hidden' });
     await page.locator('#project-code-button').click();
@@ -178,10 +188,25 @@ try {
     assert.ok(await page.locator('#project-code-dialog').evaluate((dialog) => dialog.scrollWidth <= dialog.clientWidth + 2));
     await page.keyboard.press('Escape'); assert.equal(await page.locator('#project-code-dialog').isVisible(), false);
     assert.equal(await page.locator('#project-code-button').evaluate((button) => document.activeElement === button), true);
+    if (admissionEnabled) {
+      const authorization = await post('/v1/hosted-github/authorize', {});
+      assert.equal(authorization.status(), 200);
+      const next = (await authorization.json()).data.authorization_url;
+      const previousCompletions = oauthCompletions;
+      const credentials = server.database.sqlite.prepare('SELECT credentials FROM hosted_github_accounts WHERE user_id=?').get(identity.actor.user_id).credentials;
+      gateAdmin.revoke(grant.grant_id); callbackStatuses.length = 0;
+      const admissionResponse = page.waitForResponse(response => new URL(response.url()).pathname === '/v1/test-gate');
+      await page.goto(next); await page.locator('#gate-form').waitFor({ state: 'visible' });
+      assert.equal((await (await admissionResponse).json()).data.admitted, false);
+      assert.deepEqual(callbackStatuses, [403]);
+      assert.equal(new URL(page.url()).pathname, '/v1/hosted-github/callback');
+      assert.equal(oauthCompletions, previousCompletions);
+      assert.equal(server.database.sqlite.prepare('SELECT credentials FROM hosted_github_accounts WHERE user_id=?').get(identity.actor.user_id).credentials, credentials);
+    }
     assert.deepEqual(errors, []); await page.close();
     process.stdout.write(`PASS ${engine} ${locale}: single Cloud Git panel, held Agent entry, OAuth callback, repository bind, saved diff and explicit draft PR; user cooldown refusal, mobile and Escape.\n`);
    }
   } finally { await browser.close(); }
  }
  assert.equal(runs, 4);
-} finally { await server.close(); rmSync(directory, { recursive: true, force: true }); }
+} finally { await server.close(); gateAdmin?.close(); rmSync(directory, { recursive: true, force: true }); }

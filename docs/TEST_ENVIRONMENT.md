@@ -62,7 +62,7 @@ Turnstile 建议新建测试 widget，只准许 `test.gatherthread.cn`，PR62 �
 
 Resend 建议独立测试发件子域和仅发送权限的域限定 API key；可在现有提供商账号内建隔离配置，但账号级配额仍共享，测试预算不能耗尽正式邮件额度。先确认现有套餐支持域数量，不自行升级或购买。[官方子域说明](https://resend.com/docs/dashboard/domains/introduction)、[API key 权限](https://resend.com/docs/dashboard/api-keys/introduction)。模板只留空值；模拟测试没有真实发信。
 
-当前 GitHub 代码连接由本地连接器授权/操作，测试门禁没有新增 OAuth 服务器路由。若服务器管理配置中另有 GitHub App 或 OAuth，在管理员后台核对真实回调，不推测其已配置；推荐独立测试 App 与测试仓库。[GitHub App 可配置多个 callback](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url)，仍须为测试明确选择 redirect_uri、独立 client secret 和环境绑定 state。测试不能接收正式 OAuth state 或使用正式 GitHub 仓库/用户代码。未知回调仍默认拒绝，不宽泛放行门禁。可选 Launcher v1 当前固定正式 Origin，测试先用手动终端命令；不要放宽已发布 v1 协议。PR62 的新 Launcher 需其独立审核与版本配套。
+设备端 GitHub 连接仍由本地连接器授权/操作。可选服务器端 GitHub 功能依 [HOSTED_GITHUB](HOSTED_GITHUB.md) 单独配置；门禁仍覆盖其授权、回调、绑定和 PR 发布。Strict Cookie 的跨站返回使用公共 403 门禁页进行同站复查，规则由 [Security](SECURITY.md#test-admission-boundary) 定义。管理员须核对真实回调，不推测其已配置；推荐独立测试 App 与测试仓库。[GitHub App 可配置多个 callback](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url)，仍须为测试明确选择 redirect_uri、独立 client secret 和环境绑定 state。测试不能接收正式 OAuth state 或使用正式 GitHub 仓库/用户代码。未知回调仍默认拒绝，不宽泛放行门禁。可选 Launcher v1 当前固定正式 Origin，测试先用手动终端命令；不要放宽已发布 v1 协议。PR62 的新 Launcher 需其独立审核与版本配套。
 
 ## 先测试，再由人工推广
 

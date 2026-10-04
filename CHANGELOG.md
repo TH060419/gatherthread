@@ -17,6 +17,7 @@ All notable changes to GatherThread are documented here. The project follows Sem
 ### Changed and fixed
 
 - Fence hosted OAuth, repository binding and PR publication with live test admission/browser authorization after asynchronous waits. Cancel older OAuth completions across devices with a durable authorization generation. Recheck model execution permissions after slow request bodies, validate declared npm workspace source/links, and share strict private GitHub response schemas between server and Web.
+- Preserve Strict admission Cookies on cross-site GitHub return using a public 403 gate document and a live same-site admission recheck before the protected callback retry.
 
 ## [0.1.0-alpha.8] - 2026-09-28
 

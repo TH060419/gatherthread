@@ -33,6 +33,8 @@ Current Web entry: open **Cloud Git**, then choose **GitHub**, beside **GT Cloud
 
 ## Operator setup
 
+In the isolated test deployment, use an independently configured test App/callback and test repositories under [TEST_ENVIRONMENT.md](TEST_ENVIRONMENT.md). The first cross-site return can show the public admission page while Strict Cookies become available to a same-site check; a live admission resumes the protected callback automatically. Revoked/expired admission requires the coordinator's entry code. This does not enable Cloud Agent or bypass account/state checks.
+
 Implementation checks passed locally: `release:verify`, an actual npm installation through the production dependency proxy, and Chrome/WebKit English/Chinese browser flows. GitHub, model and container results in the browser/server tests are fixtures. Account/session changes discard old private previews and late responses. The real Linux repository container smoke and real App/provider workflow below remain activation gates; passing local tests does not establish a live cloud service.
 
 1. Register a GitHub App in GitHub's developer settings. Enable expiring user access tokens. Set the user-authorization callback to `https://YOUR_GT_ORIGIN/v1/hosted-github/callback`. Request repository **Contents: read/write**, **Pull requests: read/write**, and the required metadata read permission. Do not grant workflow or administration permission. No GitHub App private key is used by this implementation: actions use the intersection of the App's permissions and the authorizing user's permissions through expiring user access tokens. Webhook delivery is not implemented; disable an unused webhook endpoint.

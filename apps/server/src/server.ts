@@ -205,7 +205,7 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".woff2": "font/woff2",
 };
 
-function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string, testEnvironment = false): boolean {
+function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string, testEnvironment = false, status = 200): boolean {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
   if (pathname.startsWith("/v1/") || pathname.startsWith("/health")) return false;
   if (pathname === "/app") {
@@ -237,10 +237,10 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   }
   if (testEnvironment && relative.endsWith(".html") && relative !== "app/example.html") {
     const html = readFileSync(resolved, "utf8").replace("</head>", '<link rel="stylesheet" href="/test-gate/environment.css"><script type="module" src="/test-gate/environment.js"></script></head>');
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html), "cache-control": "no-store" });
+    response.writeHead(status, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html), "cache-control": "no-store" });
     response.end(request.method === "HEAD" ? undefined : html); return true;
   }
-  response.writeHead(200, {
+  response.writeHead(status, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
     "content-length": stat.size,
     "cache-control": relative.endsWith("index.html") ? "no-store" : "no-cache",
@@ -597,7 +597,16 @@ export async function startCollaborationServer(
             }
             throw new ApiError(403, "test_admission_required", "Enter the test admission code first.");
           };
-          assertAdmissionCurrent();
+          try { assertAdmissionCurrent(); } catch (error) {
+            // Strict Cookies are absent on the first cross-site OAuth return.
+            // Deny the callback; the public gate document can recheck admission
+            // from this same site before retrying the protected route.
+            if (url.pathname === "/v1/hosted-github/callback" && request.method === "GET"
+              && request.headers["sec-fetch-mode"] === "navigate" && request.headers["sec-fetch-dest"] === "document"
+              && options.hostedGithub && options.staticDirectory
+              && sendStaticFile(request, response, options.staticDirectory, "/test-gate/index.html", true, 403)) return;
+            throw error;
+          }
         }
         // Keep legacy identity routes retired even when their path is encoded.
         if (["/v1/bootstrap", "/v1/browser-sessions", "/v1/test-access/claim", "/v1/invitations/claim"].includes(admissionPath)

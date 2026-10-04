@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createCipheriv, randomBytes, randomUUID } from "node:crypto";
-import { mkdtempSync, realpathSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, realpathSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,8 @@ async function fixture(t: TestContext) {
  const directory = realpathSync(mkdtempSync(join(tmpdir(), "gt-hosted-gate-")));
  const gate = { databasePath: join(directory, "gate.sqlite"), pepper: randomBytes(32).toString("hex"), origin };
  const admin = new TestGateStore(gate), grant = admin.issue(1, 1)[0]!, admission = admin.exchange(grant.admission_code);
+ const staticDirectory = join(directory, "public"); mkdirSync(join(staticDirectory, "test-gate"), { recursive: true });
+ writeFileSync(join(staticDirectory, "test-gate/index.html"), '<html><head></head><body><form id="gate-form">Public admission form</form></body></html>');
  const mails: { code: string }[] = [], calls: { path: string; method: string; transport: string }[] = [], controls: string[] = [];
  const registration = { enabled: true, origin, siteKey: "fixture", challenge: { async verify() { return true; } },
   mailer: { async send(mail: { code: string }) { mails.push(mail); } } };
@@ -62,7 +64,7 @@ async function fixture(t: TestContext) {
    return JSON.stringify({ answer: "Fixture answer", files: output, save_error: null });
   } };
  const server = await startCollaborationServer({ databasePath: join(directory, "db.sqlite"), authTokenPepper: randomBytes(32).toString("hex"),
-  publicBaseUrl: origin, secureTransport: true, allowedOrigins: [origin], testGate: gate, registration, hostedAgent,
+  publicBaseUrl: origin, secureTransport: true, allowedOrigins: [origin], staticDirectory, testGate: gate, registration, hostedAgent,
   hostedGithub: { clientId: "fixture", clientSecret: "fixture", encryptionKey: Buffer.alloc(32, 3).toString("base64"), callbackUrl: `${origin}/v1/hosted-github/callback`, appSlug: "fixture", fetch: fetcher } });
  t.after(async () => { await server.close(); admin.close(); rmSync(directory, { recursive: true, force: true }); });
  const registrationBrowser = `grc_${randomBytes(32).toString("base64url")}`;
@@ -71,11 +73,12 @@ async function fixture(t: TestContext) {
   display_name: "Fixture", device_name: "Browser", password: "synthetic fixture password", remember_device: false, privacy_acknowledged: true }, registrationBrowser, "fixture", registration);
  const session = server.service.createSession(identity.actor, { session_id: "gate-hosted-session", mode: "solo", title: "Fixture", idempotency_key: "gate-hosted-session" }).session;
  const cookie = `${TEST_GATE_COOKIE}=${admission.token}; __Host-gatherthread_session=${identity.browser_session.token}`;
- const call = (path: string, method = "GET", body?: unknown, overrideCookie = cookie) => new Promise<Response>((resolve, reject) => {
+ const call = (path: string, method = "GET", body?: unknown, overrideCookie = cookie, extraHeaders: Record<string, string> = {}) => new Promise<Response>((resolve, reject) => {
   const text = body === undefined ? undefined : JSON.stringify(body);
   const req = request(server.origin + path, { method, headers: { host: new URL(origin).host, origin, cookie: overrideCookie, "content-type": "application/json",
-   ...(text !== undefined ? { "content-length": String(Buffer.byteLength(text)) } : {}) } }, res => {
-   const chunks: Buffer[] = []; res.on("data", chunk => chunks.push(Buffer.from(chunk))); res.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode! })));
+   ...(text !== undefined ? { "content-length": String(Buffer.byteLength(text)) } : {}), ...extraHeaders } }, res => {
+   const headers = new Headers(); for (const [key, values] of Object.entries(res.headers)) for (const value of Array.isArray(values) ? values : values === undefined ? [] : [values]) headers.append(key, value);
+   const chunks: Buffer[] = []; res.on("data", chunk => chunks.push(Buffer.from(chunk))); res.on("end", () => resolve(new Response(Buffer.concat(chunks), { status: res.statusCode!, headers })));
   }); req.on("error", reject); req.end(text);
  });
  const data = async <T>(reply: Response, status = 200): Promise<T> => { assert.equal(reply.status, status, await reply.clone().text()); return (await reply.json() as { data: T }).data; };
@@ -107,6 +110,21 @@ test("all hosted and OAuth HTTP routes require live browser admission before pro
  f.revoke(); for (const [method, path] of routes) assert.equal((await f.call(path!, method!, {})).status, 403, path);
  assert.equal(f.calls.length, 0); assert.equal(f.modelCalls(), 0); assert.equal(f.runs(), 0);
  assert.equal(f.count("hosted_github_oauth"), 0); assert.equal(f.count("hosted_agent_runs"), 0);
+});
+
+test("unadmitted OAuth navigation gets only a public 403 gate document without processing the callback", async t => {
+ const f = await fixture(t), state = await f.authorize();
+ const path = `/v1/hosted-github/callback?state=${state}&code=fixture-private-code`;
+ for (const cookie of ["", `${TEST_GATE_COOKIE}=invalid`]) {
+  const response = await f.call(path, "GET", undefined, cookie, { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" });
+  assert.equal(response.status, 403); assert.match(response.headers.get("content-type")!, /text\/html/);
+  assert.equal(response.headers.get("location"), null); assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+  const html = await response.text(); assert.match(html, /Public admission form/);
+  assert.equal(html.includes(state), false); assert.equal(html.includes("fixture-private-code"), false);
+ }
+ assert.equal(f.count("hosted_github_oauth"), 1); assert.equal(f.count("hosted_github_accounts"), 0); assert.equal(f.calls.length, 0);
+ f.revoke(); assert.equal((await f.call(path, "GET", undefined, f.cookie, { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document" })).status, 403);
 });
 
 for (const action of ["authorize", "complete", "bind", "repository", "trial", "publish"] as const) {
