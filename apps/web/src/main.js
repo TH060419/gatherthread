@@ -1,4 +1,4 @@
-import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-1";
+import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-2";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountAgentRequestControl } from "./agent-request-control.js";
 import { mountRegistration } from "./registration.js";
@@ -270,6 +270,7 @@ const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
 const cloudGithubUi = mountCloudGithub({ api: () => api, t: (value) => localizer.t(value),
+  setText: (node, source) => localizer.setText(node, source),
   agentEnabled: CLOUD_AGENT_ENTRY_ENABLED,
   openSurface: () => codeSyncUi.openGithub({ refreshCloud: false }),
   context: () => ({ userId: state.currentUser?.id, projectId: state.project?.id, sessionId: state.session?.id }) });

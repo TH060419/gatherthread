@@ -1,14 +1,14 @@
 /** Private cloud repository tasks. No provider or GitHub credentials enter this module. */
-export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false, openSurface = () => {}, document: doc = document }) {
+export function mountCloudGithub({ api: getApi, context, t, setText = (node, source) => { node.textContent = t(source); }, agentEnabled = false, openSurface = () => {}, document: doc = document }) {
   const el = (id) => doc.getElementById(id);
   const dialog = el("project-code-dialog");
   let generation = 0, selected = null, taskRows = [], key = "", pending = false, bindingKey;
-  const message = (value) => { el("cloud-github-error").textContent = value; };
+  const message = (value) => setText(el("cloud-github-error"), value);
   async function action(fn) {
     if (pending) return;
     pending = true; message("");
     const gen = generation;
-    try { await fn(); } catch (error) { if (gen === generation) message(t(error.message)); }
+    try { await fn(); } catch (error) { if (gen === generation) message(error.message); }
     finally { pending = false; }
   }
   function clear() {
@@ -29,12 +29,17 @@ export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false
     const available = Boolean(c.userId && c.projectId && c.sessionId);
     el("cloud-github-new").disabled = !agentEnabled || !available;
   }
-  function text(base64) {
-    if (base64 === null) return t("File absent");
+  function appendSource(parent, base64) {
+    const pre = doc.createElement("pre");
+    parent.append(pre);
+    if (base64 === null) { setText(pre, "File absent"); return; }
     try {
       const value = new TextDecoder("utf-8", { fatal: true }).decode(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
-      return value.length > 20000 ? `${value.slice(0, 20000)}\n${t("Preview truncated")}` : value;
-    } catch { return t("Binary file changed"); }
+      pre.setAttribute("data-i18n-skip", ""); pre.textContent = value.slice(0, 20000);
+      if (value.length > 20000) {
+        const note = doc.createElement("p"); setText(note, "Preview truncated"); parent.append(note);
+      }
+    } catch { setText(pre, "Binary file changed"); }
   }
   function renderTask(task) {
     const sameRevision = selected?.id === task.id && selected?.revision === task.revision;
@@ -48,12 +53,14 @@ export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false
       const path = doc.createElement("span");
       path.setAttribute("data-i18n-skip", ""); path.textContent = change.path;
       summary.append(path);
-      if (change.before_executable !== change.after_executable) summary.append(doc.createTextNode(` · ${t("File mode changed")}`));
+      if (change.before_executable !== change.after_executable) {
+        const note = doc.createElement("span"); setText(note, "File mode changed");
+        summary.append(doc.createTextNode(" · "), note);
+      }
       details.append(summary);
       for (const [label, source] of [["Before", change.before_base64], ["After", change.after_base64]]) {
-        const heading = doc.createElement("h4"), pre = doc.createElement("pre");
-        heading.textContent = t(label); pre.setAttribute("data-i18n-skip", "");
-        pre.textContent = text(source); details.append(heading, pre);
+        const heading = doc.createElement("h4"); setText(heading, label); details.append(heading);
+        appendSource(details, source);
       }
       el("cloud-github-changes").append(details);
     }
@@ -105,7 +112,7 @@ export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false
     const { authorization_url } = await getApi().authorizeHostedGithub();
     if (gen !== generation) return;
     const url = new URL(authorization_url);
-    if (url.origin !== "https://github.com" || url.pathname !== "/login/oauth/authorize") throw new Error(t("Invalid GitHub authorization URL"));
+    if (url.origin !== "https://github.com" || url.pathname !== "/login/oauth/authorize") throw new Error("Invalid GitHub authorization URL");
     window.location.assign(url.href);
   }));
   el("cloud-github-repository-form").addEventListener("submit", (event) => {
@@ -132,7 +139,7 @@ export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false
     });
   });
   function chooseRepository() {
-    if (!agentEnabled) { message(t("Cloud Agent · coming later")); return false; }
+    if (!agentEnabled) { message("Cloud Agent · coming later"); return false; }
     el("agent-harness-select").value = "cloud";
     el("agent-harness-select").dispatchEvent(new Event("change", { bubbles: true }));
     el("cloud-agent-source").value = "github";
@@ -140,11 +147,11 @@ export function mountCloudGithub({ api: getApi, context, t, agentEnabled = false
     return true;
   }
   el("cloud-github-continue").addEventListener("click", () => {
-    if (!agentEnabled) { message(t("Cloud Agent · coming later")); return; }
+    if (!agentEnabled) { message("Cloud Agent · coming later"); return; }
     if (!selected) return;
     const models = el("agent-cloud-model-select");
     if (![...models.options].some((option) => option.value === selected.profile_id)) {
-      message(t("The original cloud model is no longer available.")); return;
+      message("The original cloud model is no longer available."); return;
     }
     if (!chooseRepository()) return;
     models.value = selected.profile_id;
