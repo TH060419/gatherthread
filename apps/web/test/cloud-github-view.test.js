@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { translateUiText } from "../src/i18n.js";
 
 const source = await readFile(new URL("../src/cloud-github-view.js", import.meta.url), "utf8");
 const deferred = () => {
@@ -17,16 +18,19 @@ const task = (id = "private-task") => ({ id, session_id: "s1", profile_id: "codi
 
 function element() {
   const listeners = new Map();
+  const attributes = new Map();
   return { value: "", textContent: "", hidden: false, disabled: false, open: false, children: [], options: [],
     addEventListener(type, callback) { listeners.set(type, callback); },
     dispatchEvent(event) { return listeners.get(event.type)?.(event); },
     append(...children) { this.children.push(...children); },
+    setAttribute(name, value) { attributes.set(name, value); },
+    getAttribute(name) { return attributes.get(name) ?? null; },
     replaceChildren(...children) { this.children = children; },
     removeAttribute(name) { delete this[name]; },
     showModal() { this.open = true; }, close() { this.open = false; }, focus() { this.focused = true; } };
 }
 
-function fixture(overrides = {}, { agentEnabled = true } = {}) {
+function fixture(overrides = {}, { agentEnabled = true, locale = "en" } = {}) {
   const nodes = new Map();
   const el = (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); };
   let context = { userId: "u1", projectId: "p1", sessionId: "s1" };
@@ -35,14 +39,37 @@ function fixture(overrides = {}, { agentEnabled = true } = {}) {
       binding: { repository: "owner/private", base_branch: "main" } }),
     listHostedGithubTasks: async () => ({ tasks: [task()] }), getHostedGithubTask: async () => task(), ...overrides };
   const sandbox = vm.createContext({ Event, URL, URLSearchParams, TextDecoder, Uint8Array, atob,
-    document: { getElementById: el, createElement: element },
+    document: { getElementById: el, createElement: element, createTextNode: (textContent) => ({ textContent }) },
     window: { addEventListener() {} }, setInterval: () => 1, clearInterval() {} });
   vm.runInContext(source.replace("export function mountCloudGithub", "function mountCloudGithub"), sandbox);
-  const view = sandbox.mountCloudGithub({ api: () => api, context: () => context, t: (value) => value,
+  const view = sandbox.mountCloudGithub({ api: () => api, context: () => context, t: (value) => translateUiText(value, locale),
     agentEnabled, openSurface: () => el("project-code-dialog").showModal() });
   view.updateContext();
   return { view, el, setContext: (next) => { context = next; view.updateContext(); } };
 }
+
+test("raw answers, source and paths are excluded from automatic UI translation", async () => {
+  const detail = { ...task(), answer: "failed", changes: [{ path: "Ready", before_base64: btoa("Settings"),
+    after_base64: btoa("Ready"), before_executable: false, after_executable: true }] };
+  const ui = fixture({ getHostedGithubTask: async () => detail }, { locale: "zh-CN" });
+  await ui.view.openTask(detail.id);
+  assert.equal(ui.el("cloud-github-answer").getAttribute("data-i18n-skip"), "");
+  assert.equal(ui.el("cloud-github-answer").textContent, "failed");
+  const [summary, beforeLabel, before, afterLabel, after] = ui.el("cloud-github-changes").children[0].children;
+  assert.equal(summary.children[0].getAttribute("data-i18n-skip"), "");
+  assert.equal(summary.children[0].textContent, "Ready");
+  assert.equal(before.getAttribute("data-i18n-skip"), ""); assert.equal(before.textContent, "Settings");
+  assert.equal(after.getAttribute("data-i18n-skip"), ""); assert.equal(after.textContent, "Ready");
+  assert.equal(beforeLabel.textContent, "更改前"); assert.equal(afterLabel.textContent, "更改后");
+});
+
+test("public GitHub failures are localized immediately without translating user content", async () => {
+  const message = "GitHub access is unavailable. Reconnect and check repository permissions.";
+  for (const [locale, expected] of [["en", message], ["zh-CN", "GitHub 访问不可用，请重新连接并检查仓库权限。"]]) {
+    const ui = fixture({ getHostedGithubStatus: async () => { throw new Error(message); } }, { locale });
+    await ui.view.refresh(); assert.equal(ui.el("cloud-github-error").textContent, expected);
+  }
+});
 
 test("switching accounts clears private task previews and ignores an old PR response", async () => {
   const response = deferred();

@@ -326,6 +326,86 @@ for (const revocation of ["disconnect", "delete-session", "revoke-device"] as co
 
 const revocations = ["downgrade", "remove-member", "archive", "rebind", "disconnect", "delete-task",
  "delete-session", "delete-project", "revoke-device", "delete-account"] as const;
+const snapshotSteps = ["", "/branches/main", `/git/commits/${"b".repeat(40)}`,
+ `/git/trees/${"c".repeat(40)}`, "/git/blobs/blob0"] as const;
+for (const [index, step] of snapshotSteps.entries()) {
+ for (const boundary of ["response", "refresh"] as const) {
+  const actions = index === 4 && boundary === "refresh" ? [...revocations, "shutdown" as const]
+    : ["downgrade", "rebind", "shutdown"] as const;
+  for (const action of actions) {
+   test(`snapshot ${step || "repository"} ${boundary} fences ${action} before further source acquisition`, { timeout: 10_000 }, async () => {
+    const f = fixture(), entered = deferred(), release = deferred();
+    const owner = f.actor;
+    f.session = f.service.createSession(owner, { session_id: "shared-source", idempotency_key: "shared-source",
+      mode: "multi", title: "Shared source" }).session;
+    f.actor = f.db.createIdentity({ display_name: "Member", device_name: "Browser", can_create_projects: true }).actor;
+    const invite = f.service.createProjectInvitation(owner, f.session.project_id, { role: "participant", ttl: "1h" });
+    f.service.claimInvitationForActor(f.actor, invite.invite_token);
+    const peer = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Second browser").device_id };
+    const expireToken = () => {
+     const seal = (f.github as unknown as { seal: (value: unknown, owner: string) => string }).seal.bind(f.github);
+     f.db.sqlite.prepare("UPDATE hosted_github_accounts SET credentials=? WHERE user_id=?").run(seal({
+      access_token: "ghu_test", refresh_token: "ghr_test", expires_at: 0,
+      refresh_expires_at: Date.now() + 600_000,
+     }, f.actor.user_id), f.actor.user_id);
+    };
+    const fetcher = f.githubOptions.fetch;
+    const afterRevocation: string[] = [];
+    let armed = false, revoked = false, closing: Promise<void> | undefined;
+    f.githubOptions.fetch = async (url, init) => {
+     const path = new URL(String(url)).pathname;
+     const body = init?.body ? JSON.parse(String(init.body)) : null;
+     if (revoked) afterRevocation.push(path);
+     if (armed && (boundary === "response" ? path === `/repos/owner/project${step}`
+       : path === "/login/oauth/access_token" && body?.grant_type === "refresh_token")) {
+      armed = false; entered.resolve(); await release.promise;
+     }
+     const response = await fetcher(url, init);
+     if (armed && boundary === "refresh" && index > 0 && path === `/repos/owner/project${snapshotSteps[index - 1]}`) expireToken();
+     return response;
+    };
+    try {
+     await connect(f); armed = true;
+     if (boundary === "refresh" && index === 0) expireToken();
+     const started = f.github.start(f.actor, f.session.id, { content: "Inspect source", profile_id: "coding", idempotency_key: "source-fence" });
+     await entered.promise;
+     switch (action) {
+      case "downgrade": f.db.setProjectMembership(owner, f.session.project_id, f.actor.user_id, "viewer"); break;
+      case "remove-member": f.db.removeProjectMembership(owner, f.session.project_id, f.actor.user_id); break;
+      case "archive": f.db.sqlite.prepare("UPDATE sessions SET state='archived' WHERE id=?").run(f.session.id); break;
+      case "rebind":
+       if (boundary === "response") await f.github.bind(peer, f.session.project_id, { repository: "owner/project", base_branch: "main" });
+       else f.db.sqlite.prepare("UPDATE hosted_github_bindings SET revision='concurrent-binding' WHERE user_id=? AND project_id=?")
+         .run(f.actor.user_id, f.session.project_id);
+       break;
+      case "disconnect": f.github.disconnect(peer); break;
+      case "delete-task": f.db.sqlite.prepare("DELETE FROM hosted_github_tasks WHERE id=?").run(started.id); break;
+      case "delete-session": f.db.deleteSession(owner, f.session.id); break;
+      case "delete-project": f.service.deleteProject(owner, f.session.project_id); break;
+      case "revoke-device": f.db.revokeDevice(f.actor, f.actor.device_id); break;
+      case "delete-account": f.db.deleteAccount(f.actor); break;
+      case "shutdown": closing = f.github.close(); break;
+     }
+     revoked = true; release.resolve();
+     for (let n = 0; n < 100; n++) {
+      const row = f.db.sqlite.prepare("SELECT state FROM hosted_github_tasks WHERE id=?").get(started.id);
+      if (!row || row.state !== "running") break;
+      await setTimeout(5);
+     }
+     await f.github.close();
+     assert.deepEqual(afterRevocation, [], "no GitHub metadata or blob request may be dispatched after revocation");
+     assert.equal(f.runs(), 0, "revoked source must never reach the executor/model");
+     const saved = f.db.sqlite.prepare("SELECT state,initial_files,starting_files,result_files FROM hosted_github_tasks WHERE id=?").get(started.id);
+     if (saved) {
+      assert.notEqual(saved.state, "running");
+      assert.equal(saved.initial_files, null); assert.equal(saved.starting_files, null); assert.equal(saved.result_files, null);
+     }
+     assert.equal(f.db.hostedActiveRuns(), 0);
+    } finally { release.resolve(); await closing; await f.close(); }
+   });
+  }
+ }
+}
 const publicationSteps = [
  ["/git/blobs", "/branches/main", "GET"],
  ["/git/trees", "/git/blobs", "POST"],

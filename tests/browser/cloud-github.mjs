@@ -11,7 +11,7 @@ const { chromium, webkit } = await import(process.env.PLAYWRIGHT_MODULE ? pathTo
 const directory = realpathSync(mkdtempSync(join(tmpdir(), 'gt-github-browser-')));
 const mails = new Map();
 const file = (path, content) => ({ path, content_base64: Buffer.from(content).toString('base64'), executable: false });
-const files = [file('package.json', '{"name":"fixture","version":"1.0.0"}'), file('package-lock.json', '{"lockfileVersion":3,"packages":{"":{}}}'), file('index.ts', 'export const value = 1;\n')];
+const files = [file('package.json', '{"name":"fixture","version":"1.0.0"}'), file('package-lock.json', '{"lockfileVersion":3,"packages":{"":{}}}'), file('index.ts', 'export const value = 1;\n'), file('Ready', 'Settings')];
 let runs = 0, prCount = 0, oauthCompletions = 0, remoteRef = '', pull = null;
 const fixtureFetch = async (url, init) => {
  const path = new URL(String(url)).pathname + new URL(String(url)).search, method = init?.method ?? 'GET';
@@ -49,7 +49,8 @@ const server = await startCollaborationServer({ databasePath: join(directory, 'd
  hostedAgent: { endpoints: [endpoint], image: `sha256:${'a'.repeat(64)}`, userDailyRuns: 20, globalDailyRuns: 20, maxConcurrent: 2,
  runContainer: async (args) => { runs++; const input = args.find((arg) => arg.endsWith('dst=/input,readonly')).split('src=')[1].split(',dst=')[0];
   const result = files.map((f) => file(f.path, readFileSync(join(input, f.path), 'utf8'))); result.find((f) => f.path === 'index.ts').content_base64 = Buffer.from('export const value = 2;\n').toString('base64');
-  return JSON.stringify({ answer: 'Fixture: source changed; test and build checked.', files: result, save_error: null }); } },
+  result.find((f) => f.path === 'Ready').content_base64 = Buffer.from('Ready').toString('base64');
+  return JSON.stringify({ answer: 'failed', files: result, save_error: null }); } },
  hostedGithub: { clientId: 'browser-fixture', clientSecret: 'test-app', encryptionKey: Buffer.alloc(32, 9).toString('base64'), callbackUrl: 'https://gt.example/v1/hosted-github/callback', appSlug: 'fixture', fetch: fixtureFetch } }, port);
 try {
  for (const engine of ['chrome', 'webkit']) {
@@ -116,6 +117,17 @@ try {
     await page.locator('#cloud-github-repository').fill('owner/fixture');
     await page.locator('#cloud-github-repository-form button[type=submit]').click();
     await page.locator('#cloud-github-status').filter({ hasText: 'owner/fixture' }).waitFor();
+    // Known public failure messages are localized, while the safe server envelope stays unchanged.
+    for (const [code, message, zh] of [
+      ['github_access', 'GitHub access is unavailable. Reconnect and check repository permissions.', 'GitHub 访问不可用，请重新连接并检查仓库权限。'],
+      ['github_binding_changed', 'Repository settings changed. Start a new cloud task.', '仓库设置已更改，请新建云端任务。']
+    ]) {
+      const errorRoute = `**/v1/projects/${server.database.requireSession(sessionId).project_id}/hosted-github`;
+      await page.route(errorRoute, route => route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ error: { code, message } }) }));
+      await page.locator('#cloud-github-refresh').click();
+      await page.locator('#cloud-github-error').filter({ hasText: locale === 'en' ? message : zh }).waitFor();
+      await page.unroute(errorRoute);
+    }
     // Invalid/private payloads produce a localized safe error through the live localizer.
     const statusRoute = `**/v1/projects/${server.database.requireSession(sessionId).project_id}/hosted-github`;
     await page.route(statusRoute, route => route.fulfill({ status: 200, contentType: 'application/json',
@@ -173,7 +185,7 @@ try {
     assert.equal(seeded.status(), 202);
     await page.locator('#project-code-button').click();
     await page.locator('#code-provider-github').click();
-    await page.getByText('Fixture: source changed; test and build checked.', { exact: false }).last().waitFor();
+    await page.locator('#cloud-github-answer').filter({ hasText: 'failed' }).waitFor();
     const beforeLimited = runs;
     const limited = await page.request.post(`${origin}/v1/sessions/${sessionId}/hosted-github-tasks`, {
       headers: { origin }, data: { content: 'Must wait for cooldown', profile_id: 'coding', idempotency_key: `rate-${engine}-${locale}` }
@@ -185,6 +197,13 @@ try {
     assert.equal(runs, beforeLimited);
     await page.locator('#cloud-github-task-list button').first().click();
     await page.locator('#cloud-github-changes summary').filter({ hasText: 'index.ts' }).waitFor();
+    await page.locator('#cloud-github-changes summary').filter({ hasText: 'Ready' }).waitFor();
+    // Let the actual MutationObserver translate new UI labels before checking byte-exact user content.
+    await page.waitForFunction((locale) => [...document.querySelectorAll('#cloud-github-changes h4')]
+      .some((node) => node.textContent === (locale === 'en' ? 'Before' : '更改前')), locale);
+    assert.equal(await page.locator('#cloud-github-answer').textContent(), 'failed');
+    const rawChange = page.locator('#cloud-github-changes details').filter({ has: page.locator('summary', { hasText: 'Ready' }) });
+    assert.deepEqual(await rawChange.locator('pre').allTextContents(), ['Settings', 'Ready']);
     await page.locator('#cloud-github-changes summary').first().click();
     assert.equal(await page.locator('#cloud-github-continue').isDisabled(), true);
     await page.locator('#cloud-github-pr-title').fill('Reviewed fixture changes');
