@@ -43,7 +43,11 @@ async function contextFor(locale, width) {
 async function login(page, empty = false) {
   await page.goto(`${origin}/app/?mock=1`);
   await page.evaluate(async empty => {
-    const { MockCollaborationApi } = await import("./src/api.js?v=20260927-1");
+    const mainUrl = document.querySelector('script[type="module"][src*="/main.js"]').src;
+    const source = await (await fetch(mainUrl)).text();
+    const specifier = source.match(/from\s+["'](\.\/api\.js(?:\?[^"']*)?)["']/)?.[1];
+    if (!specifier) throw new Error("Fixture could not resolve the application's API module");
+    const { MockCollaborationApi } = await import(new URL(specifier, mainUrl).href);
     const proto = MockCollaborationApi.prototype;
     window.agentWrites = [];
     for (const method of ["appendAgentRequest", "pauseAgentRequest"]) {

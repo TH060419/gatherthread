@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { ApiError, HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
+import { translateUiText } from "../src/i18n.js";
 
 test("pause uses the existing cookie-authenticated author control route with empty strict JSON", async () => {
   const originalFetch = globalThis.fetch;
@@ -177,6 +178,29 @@ test("Agent requests carry the selected model and reasoning profile on the produ
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test("cloud Agent uses a separate endpoint and sends code opt-in explicitly", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    return Response.json({ data: { enabled: true } });
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    await api.getHostedAgentStatus();
+    await api.appendHostedAgentRequest("s/1", { content: "Implement a test",
+      includeCode: true, idempotencyKey: "hosted-request-0001", replyTo: "e1" });
+    assert.deepEqual(requests.map((request) => [request.url, request.options.method ?? "GET"]), [
+      ["https://gatherthread.example/v1/hosted-agent", "GET"],
+      ["https://gatherthread.example/v1/sessions/s%2F1/hosted-agent-requests", "POST"],
+    ]);
+    assert.deepEqual(JSON.parse(requests[1].options.body), {
+      profile_id: "default", content: "Implement a test", include_code: true,
+      idempotency_key: "hosted-request-0001", reply_to_event_id: "e1",
+    });
+  } finally { globalThis.fetch = originalFetch; }
 });
 
 test("DeepSeek Harness requests target one exact runtime without Codex fallback or credentials", async () => {
@@ -819,4 +843,56 @@ test("realtime ticket is carried by WebSocket subprotocol and never placed in th
     globalThis.fetch = originalFetch;
     globalThis.WebSocket = OriginalWebSocket;
   }
+});
+
+test("cloud GitHub authorization and repository tasks use same-origin cookies and explicit PR review revision", async () => {
+  const originalFetch = globalThis.fetch, calls = [];
+  const task = { id: `gh-task-${"a".repeat(32)}`, session_id: "session", profile_id: "coding", resumable: false,
+    state: "running", repository: "owner/project", base_branch: "main", base_sha: null, revision: null,
+    error_code: null, pull_request_url: null, expires_at: Date.now() + 60000, answer: null, changes: [] };
+  const status = { enabled: true, connected: true, login: "fixture", binding: { repository: "owner/project", base_branch: "main" },
+    installation_url: "https://github.com/apps/fixture/installations/new" };
+  globalThis.fetch = async (url, options) => { calls.push({ url, options });
+    const data = url.endsWith("/authorize") ? { authorization_url: `https://github.com/login/oauth/authorize?state=${"a".repeat(43)}` }
+      : url.endsWith("/complete") ? { connected: true, login: "fixture" }
+      : url.endsWith("/account") ? { connected: false }
+      : url.endsWith("/repository") || url.endsWith("/hosted-github") ? status
+      : url.endsWith("/tasks") ? { tasks: [] } : task;
+    return Response.json({ data }); };
+  try {
+    const api = new HttpCollaborationApi();
+    await api.getHostedGithubStatus("project");
+    await api.listHostedGithubTasks("project");
+    await api.authorizeHostedGithub();
+    await api.completeHostedGithub({ state: "one-time-state", code: "one-time-code" });
+    await api.bindHostedGithub("project", { repository: "owner/project", base_branch: "main" });
+    await api.startHostedGithubTask("session", { content: "Fix", profile_id: "coding", idempotency_key: "task-key" });
+    await api.publishHostedGithub("gh-task-123", { title: "Fix", body: "Reviewed", expected_revision: "a".repeat(64) });
+    assert.ok(calls.every(({ url, options }) => url.startsWith("/v1/") && options.credentials === "include" && !options.headers.Authorization));
+    assert.equal(calls.at(-1).url, "/v1/hosted-github/tasks/gh-task-123/pull-request");
+    assert.equal(JSON.parse(calls.at(-1).options.body).expected_revision, "a".repeat(64));
+    assert.ok(!JSON.stringify(calls).includes("access_token"));
+    await api.getHostedGithubTask(task.id);
+    await api.disconnectHostedGithub();
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("cloud GitHub rejects invalid or private response fields with a safe message", async () => {
+  const originalFetch = globalThis.fetch;
+  try {
+    const api = new HttpCollaborationApi();
+    for (const data of [{ enabled: false, credentials: "private-fixture" }, { enabled: true },
+      { enabled: false, generation: 1 }]) {
+      globalThis.fetch = async () => Response.json({ data });
+      await assert.rejects(api.getHostedGithubStatus("project"), (error) => {
+        assert.equal(translateUiText(error.message, "en"), "Cloud GitHub response is invalid. Refresh and try again.");
+        assert.equal(translateUiText(error.message, "zh-CN"), "云端 GitHub 响应无效，请刷新后重试。");
+        return !error.message.includes("private-fixture");
+      });
+    }
+    globalThis.fetch = async () => Response.json({ data: { authorization_url: "https://attacker.invalid/login/oauth/authorize" } });
+    await assert.rejects(api.authorizeHostedGithub(), /Cloud GitHub response is invalid/);
+    globalThis.fetch = async () => Response.json({ data: { tasks: [{ answer: "private-source" }] } });
+    await assert.rejects(api.listHostedGithubTasks("project"), /Cloud GitHub response is invalid/);
+  } finally { globalThis.fetch = originalFetch; }
 });

@@ -10,6 +10,7 @@ import type {
   CommitLocalTurnInput,
   CommitLocalTurnResult,
   CreateHistorySummaryInput,
+  HostedAgentRequestInput,
   DeviceAuthorizationRecord,
   EventType,
   EventVisibility,
@@ -48,6 +49,9 @@ import { RegistrationStore, REGISTRATION_SCHEMA, type RegistrationOptions } from
 import { hashPassword, checkPassword, PasswordCapacityError } from "./password.js";
 import type { EmailLoginInput, VerifyRegistrationInput, VerifyPasswordResetInput } from "@gatherthread/protocol";
 import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
+import type { HostedAllocation, HostedRunLimits } from "./hosted-agent-pool.js";
+import { HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./hosted-agent-pool.js";
+import { HOSTED_AGENT_SCHEMA } from "./hosted-agent-schema.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
 
@@ -966,6 +970,26 @@ export class CollaborationDatabase {
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
     this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
+    this.transaction(() => {
+      this.sqlite.exec(HOSTED_AGENT_SCHEMA);
+      // Earlier previews cascaded executor slots on account deletion. Rebuild
+      // atomically, preserving reservations while dropping only the user link.
+      const activeUser = this.sqlite.prepare("PRAGMA foreign_key_list(hosted_agent_active_runs)")
+        .all().find((row) => row.from === "user_id");
+      if (activeUser?.on_delete !== "SET NULL") {
+        this.sqlite.exec(`CREATE TABLE hosted_agent_active_runs_migration (
+          request_event_id TEXT PRIMARY KEY,
+          user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+          quota_group TEXT NOT NULL, created_at TEXT NOT NULL
+        ) STRICT;
+        INSERT INTO hosted_agent_active_runs_migration SELECT * FROM hosted_agent_active_runs;
+        DROP TABLE hosted_agent_active_runs;
+        ALTER TABLE hosted_agent_active_runs_migration RENAME TO hosted_agent_active_runs;
+        CREATE INDEX hosted_agent_active_runs_user_idx ON hosted_agent_active_runs(user_id);
+        CREATE INDEX hosted_agent_active_runs_group_idx ON hosted_agent_active_runs(quota_group);`);
+      }
+      this.sqlite.prepare("DELETE FROM hosted_agent_daily_usage WHERE utc_day < ?").run(this.now().slice(0, 10));
+    });
     this.migrateCodeRepositoryEnableColumn();
     this.migrateCodeRepositoryUsageColumns();
     this.migrateDeviceCredentialColumns();
@@ -3156,6 +3180,194 @@ export class CollaborationDatabase {
     });
   }
 
+  setHostedAgentUserLimit(userId: string, dailyRuns: number): void {
+    if (!Number.isSafeInteger(dailyRuns) || dailyRuns < 0 || dailyRuns > 10_000) {
+      throw new RangeError("dailyRuns must be an integer from 0 to 10000");
+    }
+    this.sqlite.prepare(`INSERT INTO hosted_agent_run_limits(user_id,daily_runs) VALUES(?,?)
+      ON CONFLICT(user_id) DO UPDATE SET daily_runs=excluded.daily_runs`).run(userId, dailyRuns);
+  }
+
+  hostedAgentUsage(actor: Actor, defaultUserLimit: number | null, globalLimit: number | null) {
+    this.assertActiveDevice(actor);
+    const day = this.now().slice(0, 10);
+    const limit = this.sqlite.prepare("SELECT daily_runs FROM hosted_agent_run_limits WHERE user_id=?")
+      .get(actor.user_id) as { daily_runs: number } | undefined;
+    const user = this.sqlite.prepare(`SELECT COUNT(*) AS runs
+      FROM hosted_agent_daily_usage WHERE user_id=? AND utc_day=?`).get(actor.user_id, day) as { runs: number };
+    const global = this.sqlite.prepare(`SELECT COUNT(*) AS runs
+      FROM hosted_agent_daily_usage WHERE utc_day=?`).get(day) as { runs: number };
+    return { utc_day: day, user_limit_runs: limit?.daily_runs ?? defaultUserLimit,
+      user_used_runs: user.runs, global_limit_runs: globalLimit, global_used_runs: global.runs };
+  }
+
+  hostedActiveRuns(): number {
+    return (this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_active_runs")
+      .get() as { count: number }).count;
+  }
+
+  hostedAgentRateUsage(actor: Actor, interval = HOSTED_USER_MIN_INTERVAL_SECONDS, maxConcurrent = HOSTED_USER_MAX_CONCURRENT) {
+    this.assertActiveDevice(actor);
+    const activity = this.sqlite.prepare("SELECT last_started_at FROM hosted_agent_user_activity WHERE user_id=?")
+      .get(actor.user_id) as { last_started_at: string } | undefined;
+    const active = this.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_active_runs WHERE user_id=?")
+      .get(actor.user_id) as { count: number };
+    const retryAfter = activity ? Math.max(0, Math.ceil((Date.parse(activity.last_started_at)
+      + interval * 1000 - this.clock().getTime()) / 1000)) : 0;
+    return { user_min_interval_seconds: interval, user_max_concurrent: maxConcurrent,
+      user_active_runs: active.count, retry_after_seconds: retryAfter };
+  }
+
+  hostedEndpointUsage(endpoint: HostedAllocation) {
+    // Old preview reservations count against every account for that day because
+    // the earlier schema did not record which credential paid for them.
+    return this.sqlite.prepare(`SELECT
+      (SELECT COUNT(*) FROM hosted_agent_daily_usage WHERE utc_day=? AND quota_group IN (?, 'legacy')) AS daily,
+      (SELECT COUNT(*) FROM hosted_agent_active_runs WHERE quota_group IN (?, 'legacy')) AS active`)
+      .get(this.now().slice(0, 10), endpoint.quotaGroup, endpoint.quotaGroup) as { daily: number; active: number };
+  }
+
+  reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
+    endpoints: HostedAllocation[], limits: HostedRunLimits,
+    onReserved?: (event: CanonicalEvent) => void,
+  ): { event: CanonicalEvent; created: boolean; endpointId?: string } {
+    this.assertActiveDevice(actor);
+    if (!endpoints.length || endpoints.some((e) => e.profileId !== input.profile_id
+      || e.provider !== endpoints[0]!.provider || e.model !== endpoints[0]!.model)) {
+      throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
+    }
+    return this.transaction(() => {
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (session.state !== "active") throw conflict("Archived sessions do not accept Agent requests");
+      const payload: JsonValue = redactJson({
+        content: input.content,
+        include_code: input.include_code,
+        profile_id: input.profile_id,
+        ...(input.github_task_id ? { github_task_id: input.github_task_id } : {}),
+        execution_profile: { harness: "opencode", provider: endpoints[0]!.provider,
+          model: endpoints[0]!.model },
+      });
+      const replyId = input.reply_to_event_id ?? null;
+      if (replyId !== null) {
+        const target = this.getEvent(sessionId, replyId);
+        if (target.visibility !== "session") throw forbidden("Cloud Agent cannot quote private history");
+      }
+      const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
+      if (existing) {
+        const event = this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", payload, replyId, "session", null);
+        if (!this.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=?").get(event.id)) {
+          throw idempotencyConflict("The key belongs to another Agent request");
+        }
+        return { event, created: false };
+      }
+      if (this.hostedActiveRuns() >= limits.maxConcurrent) throw new ApiError(429, "hosted_agent_busy", "Cloud Agent is busy; try again later");
+      const day = this.now().slice(0, 10);
+      this.sqlite.prepare("DELETE FROM hosted_agent_daily_usage WHERE utc_day < ?").run(day);
+      const usage = this.hostedAgentUsage(actor, limits.userDailyRuns, limits.globalDailyRuns);
+      if (usage.user_limit_runs !== null && usage.user_used_runs >= usage.user_limit_runs) {
+        throw new ApiError(429, "hosted_user_quota", "Your Cloud Agent daily allowance is used up");
+      }
+      if (limits.globalDailyRuns !== null && usage.global_used_runs >= limits.globalDailyRuns) {
+        throw new ApiError(503, "hosted_global_budget", "Cloud Agent daily capacity is used up");
+      }
+      const rate = this.hostedAgentRateUsage(actor, limits.userMinIntervalSeconds, limits.userMaxConcurrent);
+      if (rate.user_active_runs >= rate.user_max_concurrent) {
+        throw new ApiError(429, "hosted_user_busy", "Your Cloud Agent task is still running; wait for it to finish");
+      }
+      if (rate.retry_after_seconds > 0) {
+        throw new ApiError(429, "hosted_user_rate_limit", "Please wait before starting another Cloud Agent task", {
+          retry_after_seconds: rate.retry_after_seconds,
+        });
+      }
+      const candidates = endpoints.map((endpoint) => ({ endpoint, usage: this.hostedEndpointUsage(endpoint) }));
+      const selected = candidates.filter(({ endpoint, usage }) => !endpoint.blocked
+        && (endpoint.dailyRuns === null || usage.daily < endpoint.dailyRuns)
+        && usage.active < endpoint.maxConcurrent).sort((a, b) => a.usage.active - b.usage.active
+          || a.usage.daily - b.usage.daily)[0]?.endpoint;
+      if (!selected) throw new ApiError(429, "hosted_profile_busy", "The selected cloud model is at capacity; try again later");
+      const event = this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: input.idempotency_key, type: "agent_request", visibility: "session",
+        reply_to_event_id: replyId, payload,
+      }, null);
+      this.sqlite.prepare(`INSERT INTO hosted_agent_runs(request_event_id,session_id,user_id,device_id,utc_day,
+        profile_id,endpoint_id,quota_group,provider,model,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'running',?)`)
+        .run(event.id, sessionId, actor.user_id, actor.device_id, day, selected.profileId, selected.id,
+          selected.quotaGroup, selected.provider, selected.model, this.now());
+      this.sqlite.prepare("INSERT INTO hosted_agent_daily_usage(request_event_id,user_id,utc_day,quota_group) VALUES(?,?,?,?)")
+        .run(event.id, actor.user_id, day, selected.quotaGroup);
+      this.sqlite.prepare(`INSERT INTO hosted_agent_user_activity(user_id,last_started_at) VALUES(?,?)
+        ON CONFLICT(user_id) DO UPDATE SET last_started_at=excluded.last_started_at`).run(actor.user_id, this.now());
+      this.sqlite.prepare("INSERT INTO hosted_agent_active_runs(request_event_id,user_id,quota_group,created_at) VALUES(?,?,?,?)")
+        .run(event.id, actor.user_id, selected.quotaGroup, this.now());
+      onReserved?.(event);
+      return { event, created: true, endpointId: selected.id };
+    });
+  }
+
+  finishHostedAgentRequest(requestId: string, outcome: { content?: string }): CanonicalEvent | undefined {
+    return this.transaction(() => {
+      this.sqlite.prepare("DELETE FROM hosted_agent_active_runs WHERE request_event_id=?").run(requestId);
+      const job = this.sqlite.prepare("SELECT * FROM hosted_agent_runs WHERE request_event_id=?")
+        .get(requestId) as { request_event_id: string; session_id: string; user_id: string; device_id: string;
+          provider: string; model: string; status: string } | undefined;
+      if (!job || job.status !== "running") return undefined;
+      const session = this.requireSession(job.session_id);
+      const device = this.sqlite.prepare(`SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked_at IS NULL
+        AND (expires_at IS NULL OR expires_at > ?)`).get(job.device_id, job.user_id, this.now());
+      const writer = this.membershipRole(job.session_id, job.user_id);
+      const authorized = Boolean(device && writer && writer !== "viewer" && session.state === "active"
+        && (session.mode !== "solo" || session.owner_user_id === job.user_id));
+      const content = authorized ? outcome.content : undefined;
+      let success = typeof content === "string" && content.trim().length > 0;
+      // Private transaction-local randomness cannot be preempted by a member
+      // choosing a public chat idempotency key. The job transition deduplicates.
+      const terminalKey = `hosted-terminal-${randomUUID()}`;
+      const failure = (code: string) => ({ content: "Cloud Agent is unavailable. Please try a new request later.",
+        status: "failed", error: { code } });
+      const append = (payload: JsonValue, provenance: RuntimeProvenance | null, marker = false) =>
+        this.appendInsideTransaction(job.user_id, job.session_id, {
+          idempotency_key: terminalKey, type: "agent_response", visibility: "session",
+          reply_to_event_id: requestId, payload,
+        }, provenance, marker ? "hosted-terminal" : undefined);
+      let event: CanonicalEvent;
+      if (success) {
+        this.sqlite.exec("SAVEPOINT hosted_terminal");
+        try {
+          event = append({ content: redactJson(content!.slice(0, 16_000)), status: "completed" }, {
+            user_id: job.user_id, device_id: job.device_id, harness: "opencode",
+            provider: job.provider, model: job.model,
+            local_session_id: "server-contained", capture_fidelity: "canonical_history",
+          });
+          this.sqlite.exec("RELEASE hosted_terminal");
+        } catch (error) {
+          this.sqlite.exec("ROLLBACK TO hosted_terminal; RELEASE hosted_terminal");
+          if (!(error instanceof ApiError) || error.code !== "storage_quota_exceeded") throw error;
+          success = false;
+          event = append(failure("storage_quota_exceeded"), null, true);
+        }
+      } else {
+        event = append(failure(authorized ? "model_unavailable" : "access_changed"), null, true);
+      }
+      this.sqlite.prepare(`UPDATE hosted_agent_runs SET status=?,finished_at=? WHERE request_event_id=?`).run(
+        success ? "completed" : "failed", this.now(), requestId,
+      );
+      return event;
+    });
+  }
+
+  failInterruptedHostedAgentJobs(): CanonicalEvent[] {
+    const rows = this.sqlite.prepare("SELECT request_event_id FROM hosted_agent_runs WHERE status='running'")
+      .all() as Array<{ request_event_id: string }>;
+    const events = rows.flatMap((row) => {
+      const event = this.finishHostedAgentRequest(row.request_event_id, {});
+      return event ? [event] : [];
+    });
+    // Startup recovery also releases interrupted reservations whose original
+    // conversations were deleted while their containers ran.
+    this.sqlite.prepare("DELETE FROM hosted_agent_active_runs").run();
+    return events;
+  }
+
   listProjectMentions(actor: Actor, projectId: string, beforeId?: string) {
     this.assertActiveDevice(actor);
     const role = this.projectMembershipRole(projectId, actor.user_id);
@@ -4703,7 +4915,7 @@ export class CollaborationDatabase {
     `);
   }
 
-  private enforceEventStorageQuota(sessionId: string, actorUserId: string, eventBytes: number, pauseMarker = false): void {
+  private enforceEventStorageQuota(sessionId: string, actorUserId: string, eventBytes: number, pauseMarker = false, hostedMarker = false): void {
     // One fixed server marker per paused, already-accepted request. Charge it
     // normally, but allow at most 1 KiB per such request beyond the ordinary
     // quota so a full timeline cannot prevent its author from fencing work.
@@ -4719,17 +4931,17 @@ export class CollaborationDatabase {
       : { session_bytes: 0, user_bytes: 0, total_bytes: 0 };
     const sessionUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage WHERE session_id = ?")
       .get(sessionId) as unknown as BytesRow;
-    if (sessionUsage.bytes + eventBytes > this.maxSessionEventBytes + allowance.session_bytes) {
+    if (sessionUsage.bytes + eventBytes > (hostedMarker ? Math.max(this.maxSessionEventBytes, sessionUsage.bytes) + 1024 : this.maxSessionEventBytes + allowance.session_bytes)) {
       throw storageQuotaExceeded("session", this.maxSessionEventBytes);
     }
     const userUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage WHERE actor_user_id = ?")
       .get(actorUserId) as unknown as BytesRow;
-    if (userUsage.bytes + eventBytes > this.maxUserEventBytes + allowance.user_bytes) {
+    if (userUsage.bytes + eventBytes > (hostedMarker ? Math.max(this.maxUserEventBytes, userUsage.bytes) + 1024 : this.maxUserEventBytes + allowance.user_bytes)) {
       throw storageQuotaExceeded("user", this.maxUserEventBytes);
     }
     const totalUsage = this.sqlite.prepare("SELECT COALESCE(SUM(bytes), 0) AS bytes FROM event_storage_usage")
       .get() as unknown as BytesRow;
-    if (totalUsage.bytes + eventBytes > this.maxTotalEventBytes + allowance.total_bytes) {
+    if (totalUsage.bytes + eventBytes > (hostedMarker ? Math.max(this.maxTotalEventBytes, totalUsage.bytes) + 1024 : this.maxTotalEventBytes + allowance.total_bytes)) {
       throw storageQuotaExceeded("deployment", this.maxTotalEventBytes);
     }
   }
@@ -4817,7 +5029,7 @@ export class CollaborationDatabase {
     sessionId: string,
     input: Omit<AppendEventInput, "visibility"> & { visibility?: EventVisibility },
     provenance: RuntimeProvenance | null,
-    lifecycleAllowance?: "pause",
+    lifecycleAllowance?: "pause" | "hosted-terminal",
   ): CanonicalEvent {
     const session = this.requireSession(sessionId);
     const sequence = session.next_sequence + 1;
@@ -4839,7 +5051,7 @@ export class CollaborationDatabase {
     const payloadJson = JSON.stringify(event.payload);
     const provenanceJson = event.runtime_provenance === null ? null : JSON.stringify(event.runtime_provenance);
     const eventBytes = Buffer.byteLength(payloadJson) + (provenanceJson === null ? 0 : Buffer.byteLength(provenanceJson)) + 512;
-    if (eventBytes > this.maxEventBytes) throw storageQuotaExceeded("event", this.maxEventBytes);
+    if (eventBytes > this.maxEventBytes && lifecycleAllowance !== "hosted-terminal") throw storageQuotaExceeded("event", this.maxEventBytes);
     if (lifecycleAllowance === "pause") {
       const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
       const claim = request === undefined ? undefined : this.requireClaimRow(request.id);
@@ -4850,7 +5062,23 @@ export class CollaborationDatabase {
           content: "The author paused this Agent request.", phase: "lifecycle", status: "paused",
         })) throw conflict("Invalid server pause marker");
     }
-    this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes, lifecycleAllowance === "pause");
+    if (lifecycleAllowance === "hosted-terminal") {
+      const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
+      const job = request ? this.sqlite.prepare("SELECT status FROM hosted_agent_runs WHERE request_event_id=? AND user_id=?")
+        .get(request.id, actorUserId) : undefined;
+      const payload = input.payload as { error?: { code?: string } };
+      const code = typeof payload?.error?.code === "string" ? payload.error.code : "";
+      if (eventBytes > 1024 || provenance !== null || request?.type !== "agent_request"
+        || request.actor_user_id !== actorUserId || job?.status !== "running"
+        || input.type !== "agent_response" || input.visibility !== "session"
+        || !["storage_quota_exceeded", "model_unavailable", "access_changed"].includes(code ?? "")
+        || stableJson(input.payload) !== stableJson({ content: "Cloud Agent is unavailable. Please try a new request later.",
+          status: "failed", error: { code } })) throw conflict("Invalid server hosted terminal marker");
+    }
+    // Exactly one fixed, <=1 KiB failed terminal per accepted job. It is charged
+    // normally; subsequent ordinary writes cannot use this control allowance.
+    this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes, lifecycleAllowance === "pause",
+      lifecycleAllowance === "hosted-terminal");
     this.sqlite.prepare(`
       INSERT INTO events(id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name, created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

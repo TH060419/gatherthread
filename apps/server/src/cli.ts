@@ -17,6 +17,7 @@ const HELP = `Usage:
 Commands:
   start       Start the loopback-only host (default)
   registration pause|resume|status|cleanup  Local registration circuit breaker and retention
+  hosted-agent:set-user-limit  Set a user's Cloud Agent daily run allowance locally
 
 User accounts register with verified email and sign in with their password.
 owner-host:init prepares private configuration only; it creates no account or login token.
@@ -58,6 +59,8 @@ async function start(config: ServerConfig): Promise<void> {
     maxUserSessions: config.maxUserSessions,
     maxProjectSessions: config.maxProjectSessions,
     maxTotalSessions: config.maxTotalSessions,
+    ...(config.hostedAgent ? { hostedAgent: config.hostedAgent } : {}),
+    ...(config.hostedGithub ? { hostedGithub: config.hostedGithub } : {}),
   }, config.port, config.host);
   process.stdout.write(`GatherThread owner host listening at ${running.origin}\n`);
 
@@ -86,6 +89,15 @@ async function main(): Promise<void> {
       if (action === "cleanup") database.registration.cleanup();
       process.stdout.write(`${JSON.stringify({ enabled: database.registration.ready(config.registration), paused: database.registration.paused() })}\n`);
     });
+    return;
+  }
+  if (command === "hosted-agent:set-user-limit") {
+    if (args.length !== 4 || args[0] !== "--user-id" || !["--runs", "--neurons"].includes(args[2]!)
+      || !/^(0|[1-9][0-9]*)$/u.test(args[3] ?? "")) {
+      throw new ConfigurationError("Usage: hosted-agent:set-user-limit --user-id ID --runs 0..10000");
+    }
+    withOperatorDatabase(config, (database) => database.setHostedAgentUserLimit(args[1]!, args[2] === "--neurons" ? Math.floor(Number(args[3]) / 2000) : Number(args[3])));
+    process.stdout.write("Cloud Agent user limit updated.\n");
     return;
   }
   if (command !== "start" || args.length > 0) throw new ConfigurationError(`Unknown command: ${[command, ...args].join(" ")}`);

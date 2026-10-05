@@ -1,3 +1,8 @@
+import { HostedGithub, type HostedGithubOptions } from "./hosted-github.js";
+import { stopInterruptedHostedContainers } from "./hosted-agent-recovery.js";
+import { HostedGithubRepositoryInputSchema, HostedGithubTaskInputSchema, HostedGithubPrInputSchema, HostedGithubCompleteInputSchema,
+  HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
+  HostedGithubTaskSchema, HostedGithubTaskListSchema } from "@gatherthread/protocol";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { randomBytes } from "node:crypto";
 import { createReadStream, readFileSync, realpathSync, statSync, mkdtempSync, rmSync } from "node:fs";
@@ -25,6 +30,8 @@ import {
   CreateSnapshotRequestInputSchema,
   CreateInvitationInputSchema,
   CreateHistorySummaryInputSchema,
+  HostedAgentRequestInputSchema,
+  HostedAgentStatusSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
   CODE_SYNC_MAX_BODY_BYTES,
@@ -64,6 +71,7 @@ import { CollaborationService } from "./service.js";
 import type { RegistrationOptions } from "./registration.js";
 import { registrationClientIp } from "./registration-providers.js";
 import { CodeRepository } from "./code-repository.js";
+import { HostedAgent, type HostedAgentOptions } from "./hosted-agent.js";
 import { TestGateStore, testGateToken, testGateCookie, nativeAdmissionCapability, nativeAdmissionDeviceRoute, type TestGateOptions } from "./test-gate.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -154,6 +162,8 @@ export interface ServerOptions {
   maxUserSessions?: number;
   maxProjectSessions?: number;
   maxTotalSessions?: number;
+  hostedAgent?: HostedAgentOptions;
+  hostedGithub?: HostedGithubOptions;
 }
 
 export interface RunningCollaborationServer {
@@ -196,7 +206,7 @@ const STATIC_CONTENT_TYPES: Readonly<Record<string, string>> = {
   ".woff2": "font/woff2",
 };
 
-function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string, testEnvironment = false): boolean {
+function sendStaticFile(request: IncomingMessage, response: ServerResponse, staticDirectory: string, pathname: string, testEnvironment = false, status = 200): boolean {
   if (request.method !== "GET" && request.method !== "HEAD") return false;
   if (pathname.startsWith("/v1/") || pathname.startsWith("/health")) return false;
   if (pathname === "/app") {
@@ -228,10 +238,10 @@ function sendStaticFile(request: IncomingMessage, response: ServerResponse, stat
   }
   if (testEnvironment && relative.endsWith(".html") && relative !== "app/example.html") {
     const html = readFileSync(resolved, "utf8").replace("</head>", '<link rel="stylesheet" href="/test-gate/environment.css"><script type="module" src="/test-gate/environment.js"></script></head>');
-    response.writeHead(200, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html), "cache-control": "no-store" });
+    response.writeHead(status, { "content-type": "text/html; charset=utf-8", "content-length": Buffer.byteLength(html), "cache-control": "no-store" });
     response.end(request.method === "HEAD" ? undefined : html); return true;
   }
-  response.writeHead(200, {
+  response.writeHead(status, {
     "content-type": STATIC_CONTENT_TYPES[extname(resolved).toLowerCase()] ?? "application/octet-stream",
     "content-length": stat.size,
     "cache-control": relative.endsWith("index.html") ? "no-store" : "no-cache",
@@ -456,6 +466,11 @@ export async function startCollaborationServer(
   });
   const testGate = options.testGate ? new TestGateStore(options.testGate) : undefined;
   const service = new CollaborationService(database);
+  if (database.hostedActiveRuns() && !options.hostedAgent?.runContainer) {
+    try { stopInterruptedHostedContainers(); }
+    catch (error) { database.close(); throw error; }
+  }
+  database.failInterruptedHostedAgentJobs();
   const publicAccountActor = (actor: Actor) => ({
     id: actor.user_id,
     username: actor.display_name,
@@ -466,6 +481,10 @@ export async function startCollaborationServer(
   const ephemeralCodeDirectory = options.databasePath === ":memory:" && !options.codeRepositoryDirectory
     ? mkdtempSync(join(tmpdir(), "gatherthread-code-")) : undefined;
   const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
+  const hostedAgent = options.hostedAgent ? new HostedAgent(service, codeRepository, options.hostedAgent) : undefined;
+  if (options.hostedGithub && !hostedAgent) throw new Error("Cloud GitHub requires Cloud Agent");
+  const hostedGithub = options.hostedGithub && options.hostedAgent && hostedAgent
+    ? new HostedGithub(service, hostedAgent, options.hostedAgent, options.hostedGithub) : undefined;
   const dshPairings = new DshDevicePairingBroker();
   const registration = options.authTokenPepper && Buffer.byteLength(options.authTokenPepper) >= 32 ? options.registration : undefined;
   const secureTransport = options.secureTransport ?? false;
@@ -580,7 +599,16 @@ export async function startCollaborationServer(
             }
             throw new ApiError(403, "test_admission_required", "Enter the test admission code first.");
           };
-          assertAdmissionCurrent();
+          try { assertAdmissionCurrent(); } catch (error) {
+            // Strict Cookies are absent on the first cross-site OAuth return.
+            // Deny the callback; the public gate document can recheck admission
+            // from this same site before retrying the protected route.
+            if (url.pathname === "/v1/hosted-github/callback" && request.method === "GET"
+              && request.headers["sec-fetch-mode"] === "navigate" && request.headers["sec-fetch-dest"] === "document"
+              && options.hostedGithub && options.staticDirectory
+              && sendStaticFile(request, response, options.staticDirectory, "/test-gate/index.html", true, 403)) return;
+            throw error;
+          }
         }
         // Keep legacy identity routes retired even when their path is encoded.
         if (["/v1/bootstrap", "/v1/browser-sessions", "/v1/test-access/claim", "/v1/invitations/claim"].includes(admissionPath)
@@ -769,6 +797,16 @@ export async function startCollaborationServer(
 
       if (options.staticDirectory && sendStaticFile(request, response, options.staticDirectory, url.pathname, !!testGate)) return;
 
+      if (request.method === "GET" && url.pathname === "/v1/hosted-github/callback") {
+        if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
+        const code = url.searchParams.get("code"), state = url.searchParams.get("state");
+        if (!code || !state || code.length > 500 || !/^[A-Za-z0-9_-]{43}$/u.test(state)) {
+          throw new ApiError(400, "github_state", "Restart GitHub authorization");
+        }
+        response.writeHead(303, { location: `/app/#${new URLSearchParams({ github_code: code, github_state: state })}`,
+          "cache-control": "no-store", "referrer-policy": "no-referrer" }).end();
+        return;
+      }
       const authorization = request.headers.authorization;
       const authentication: HttpAuthentication = authorization === undefined
         ? (() => {
@@ -802,13 +840,17 @@ export async function startCollaborationServer(
           throw new ApiError(429, "rate_limited", "Too many writes for this device");
         }
       }
-      const readAuthenticatedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
-        const value = await readAdmittedJson(maxBytes);
+      const assertRequestCurrent = (): void => {
+        assertAdmissionCurrent();
         if (authentication.kind === "browser_session" && authentication.browserSessionId) {
           database.assertActiveBrowserSession(authentication.browserSessionId, actor);
         } else {
           database.assertActiveDevice(actor);
         }
+      };
+      const readAuthenticatedJson = async (maxBytes = MAX_BODY_BYTES): Promise<unknown> => {
+        const value = await readAdmittedJson(maxBytes);
+        assertRequestCurrent();
         return value;
       };
 
@@ -824,6 +866,50 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "GET" && url.pathname === "/v1/hosted-agent") {
+        sendJson(response, 200, { data: HostedAgentStatusSchema.parse(hostedAgent?.status(actor) ?? { enabled: false }) });
+        return;
+      }
+
+      if (url.pathname.startsWith("/v1/hosted-github/")) {
+        if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
+        if (url.pathname === "/v1/hosted-github/authorize" && request.method === "POST") {
+          z.object({}).strict().parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: HostedGithubAuthorizationSchema.parse(hostedGithub.authorize(actor)) }); return;
+        }
+        if (url.pathname === "/v1/hosted-github/complete" && request.method === "POST") {
+          const input = HostedGithubCompleteInputSchema.parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: HostedGithubConnectionSchema.parse(await hostedGithub.complete(actor, input, assertRequestCurrent)) }); return;
+        }
+        if (url.pathname === "/v1/hosted-github/account" && request.method === "DELETE") {
+          sendJson(response, 200, { data: HostedGithubDisconnectionSchema.parse(hostedGithub.disconnect(actor)) }); return;
+        }
+        const match = /^\/v1\/hosted-github\/tasks\/(gh-task-[a-f0-9]{32})(\/pull-request)?$/u.exec(url.pathname);
+        if (match) {
+          const id = match[1]!;
+          if (!match[2] && request.method === "GET") { sendJson(response, 200, { data: HostedGithubTaskSchema.parse(hostedGithub.view(actor, id)) }); return; }
+          if (!match[2] && request.method === "DELETE") { hostedGithub.remove(actor, id); response.writeHead(204).end(); return; }
+          if (match[2] && request.method === "POST") {
+            const input = HostedGithubPrInputSchema.parse(await readAuthenticatedJson());
+            sendJson(response, 200, { data: HostedGithubTaskSchema.parse(await hostedGithub.publish(actor, id, input, assertRequestCurrent)) }); return;
+          }
+        }
+      }
+      const githubProject = /^\/v1\/projects\/([^/]+)\/hosted-github(\/repository|\/tasks)?$/u.exec(url.pathname);
+      if (githubProject) {
+        const projectId = decodeURIComponent(githubProject[1]!);
+        if (!hostedGithub) {
+          service.requireProjectMembership(actor, projectId);
+          if (!githubProject[2] && request.method === "GET") { sendJson(response, 200, { data: HostedGithubStatusSchema.parse({ enabled: false }) }); return; }
+          throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
+        }
+        if (!githubProject[2] && request.method === "GET") { sendJson(response, 200, { data: HostedGithubStatusSchema.parse(hostedGithub.status(actor, projectId)) }); return; }
+        if (githubProject[2] === "/repository" && request.method === "POST") {
+          const input = HostedGithubRepositoryInputSchema.parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: HostedGithubStatusSchema.parse(await hostedGithub.bind(actor, projectId, input, assertRequestCurrent)) }); return;
+        }
+        if (githubProject[2] === "/tasks" && request.method === "GET") { sendJson(response, 200, { data: HostedGithubTaskListSchema.parse({ tasks: hostedGithub.list(actor, projectId) }) }); return; }
+      }
       if (url.pathname === "/v1/account/deletion-preview" && request.method === "GET") {
         if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Account deletion requires a browser session");
         sendJson(response, 200, { data: service.accountDeletionPreview(actor) });
@@ -1104,6 +1190,19 @@ export async function startCollaborationServer(
       }
 
       const sessionId = parts[0] === "v1" && parts[1] === "sessions" ? parts[2] : undefined;
+      if (sessionId && parts[3] === "hosted-github-tasks" && parts.length === 4 && request.method === "POST") {
+        if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
+        const input = HostedGithubTaskInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 202, { data: HostedGithubTaskSchema.parse(hostedGithub.start(actor, sessionId, input)) }); return;
+      }
+      if (sessionId && parts[3] === "hosted-agent-requests" && parts.length === 4 && request.method === "POST") {
+        if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
+        const input = HostedAgentRequestInputSchema.parse(await readAuthenticatedJson());
+        const result = await hostedAgent.request(actor, sessionId, input);
+        assertRequestCurrent();
+        sendJson(response, 201, { data: result });
+        return;
+      }
       if (sessionId && request.method === "GET" && parts.length === 3) {
         sendJson(response, 200, { data: service.getSession(actor, sessionId) });
         return;
@@ -1472,6 +1571,7 @@ export async function startCollaborationServer(
       for (const socket of sockets.keys()) socket.terminate();
       wsServer.close();
       await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
+      await hostedGithub?.close();
       testGate?.close();
       database.close();
       if (ephemeralCodeDirectory) rmSync(ephemeralCodeDirectory, { recursive: true, force: true });

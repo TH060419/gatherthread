@@ -2265,6 +2265,34 @@ time,
   line-height: 1.55;
 }
 
+.account-devices-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.account-devices-heading h4 { margin: 0; }
+.account-device-list {
+  padding: 0;
+  list-style: none;
+}
+.account-device-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.account-device-details {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.account-device-row button { flex-shrink: 0; }
+.account-device-details small { color: var(--ink-soft); }
+
 .account-projects {
   display: grid;
   gap: 10px;
@@ -5948,3 +5976,15 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
 .avatar-choice:focus-within { outline: 2px solid var(--teal); outline-offset: 3px; }
 .avatar-choice input { width: 14px; height: 14px; margin: 0; accent-color: var(--teal); }
 .avatar-settings-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+/* Code transfer consent belongs to the whole cloud request, above send actions. */
+.composer .cloud-code-consent { width: 100%; min-width: 0; }
+.composer .cloud-code-consent[hidden] { display: none; }
+.composer .cloud-code-consent label { display: flex; align-items: flex-start; gap: 8px; font-size: 12px; line-height: 1.5; }
+.composer .cloud-code-consent input { flex: 0 0 auto; width: 16px; height: 16px; min-height: 0; padding: 0; margin: 2px 0 0; }
+.composer .cloud-code-consent span { min-width: 0; overflow-wrap: anywhere; }
+
+#cloud-github-panel { min-width: 0; overflow-wrap: anywhere; }
+#cloud-github-panel form { display: grid; gap: 0.6rem; margin-block: 1rem; padding: 0; }
+#cloud-github-panel pre { max-width: 100%; max-height: 24rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.8rem; }
+#cloud-github-task-list { display: grid; gap: 0.3rem; }
+#cloud-github-changes details { border-block-end: 1px solid var(--border-color, #8885); padding-block: 0.7rem; }

@@ -1,3 +1,4 @@
+import type { HostedAllocation, HostedRunLimits } from "./hosted-agent-pool.js";
 import type {
   AppendEventInput,
   CanonicalEvent,
@@ -5,6 +6,7 @@ import type {
   CommitLocalTurnResult,
   CreateHistorySummaryInput,
   HistoryContext,
+  HostedAgentRequestInput,
   JsonValue,
   MembershipRole,
   ReplayResponse,
@@ -333,6 +335,19 @@ export class CollaborationService {
       payload: redactJson(input.payload),
     }, provenance);
     this.publish(event);
+    return event;
+  }
+
+  reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
+    endpoints: HostedAllocation[], limits: HostedRunLimits, onReserved?: (event: CanonicalEvent) => void) {
+    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input, endpoints, limits, onReserved);
+    if (result.created) this.publish(result.event);
+    return result;
+  }
+
+  finishHostedAgentRequest(requestId: string, outcome: { content?: string }) {
+    const event = this.database.finishHostedAgentRequest(requestId, outcome);
+    if (event) this.publish(event);
     return event;
   }
 
