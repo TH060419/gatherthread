@@ -161,6 +161,10 @@ try {
           assert.equal(await page.locator(".session-header").isVisible(), false);
           await page.locator("#toggle-session-rail-button").click();
           await page.locator("#mobile-sessions-dialog[open]").waitFor();
+          const createProject = await page.locator("#new-project-button").boundingBox();
+          const projectSelect = await page.locator("#project-select").boundingBox();
+          assert.ok(createProject.y + createProject.height <= projectSelect.y || createProject.x >= projectSelect.x + projectSelect.width,
+            `create project does not overlap the project selector: ${JSON.stringify({ createProject, projectSelect })}`);
           assert.equal(await page.locator("#add-agent-button").isVisible(), false);
           assert.equal(await page.locator("#connect-dsh-button").isVisible(), false);
           assert.equal(await page.locator(".mobile-device-note").first().isVisible(), true);
@@ -190,6 +194,7 @@ try {
           await page.locator("#member-list").getByText("Teammate", { exact: true }).waitFor();
           await page.keyboard.press("Escape");
           await tools(page);
+          await page.screenshot({ path: join(output, `${name}-${locale}-tools.png`) });
           await page.locator("#session-context-details > summary").click();
           await page.keyboard.press("Tab");
           assert.equal(await page.locator("#session-context-panel").evaluate(node => node.closest("dialog")?.id), "mobile-tools-dialog");
@@ -244,8 +249,23 @@ try {
             } else {
               assert.equal(await page.locator("#agent-request-profile").evaluate(node => node.parentElement.id), "composer");
               assert.equal(await page.locator("#settings-button").evaluate(node => node.parentElement.className), "account-cluster");
+              assert.match(await page.locator("#send-agent-button").innerText(), locale === "en" ? /Request my agent/ : /请求我的 Agent/);
+              assert.equal(await page.locator("#toggle-session-rail-button").getAttribute("aria-expanded"), "true");
+              assert.match(await page.locator("#toggle-session-rail-button").getAttribute("aria-label"), locale === "en" ? /Collapse session sidebar/ : /收起会话侧栏/);
+              assert.match(await page.locator("#mobile-members-button").getAttribute("aria-label"), locale === "en" ? /Expand member sidebar|Collapse member sidebar/ : /展开成员侧栏|收起成员侧栏/);
             }
           }
+          // Closing a modal on resize must not overwrite the restored desktop disclosure state.
+          await page.locator("#toggle-session-rail-button").click();
+          await page.locator("#mobile-sessions-dialog[open]").waitFor();
+          await page.setViewportSize({ width: 844, height: 390 });
+          await page.waitForFunction(() => document.querySelector("#workspace").dataset.mobileUi === "false");
+          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          assert.equal(await page.locator("#mobile-sessions-dialog").evaluate(node => node.open), false);
+          assert.equal(await page.locator("#toggle-session-rail-button").getAttribute("aria-expanded"), "true");
+          assert.match(await page.locator("#toggle-session-rail-button").getAttribute("aria-label"), locale === "en" ? /Collapse session sidebar/ : /收起会话侧栏/);
+          await page.setViewportSize({ width: 390, height: 844 });
+          await page.waitForFunction(() => document.querySelector("#workspace").dataset.mobileUi === "true");
           await page.screenshot({ path: join(output, `${name}-${locale}-workspace.png`) });
           await page.evaluate(() => document.documentElement.dataset.theme = "dark");
           await page.screenshot({ path: join(output, `${name}-${locale}-dark.png`) });
@@ -271,6 +291,7 @@ try {
           scenarios++;
           console.log(`PASS ${name} ${locale}: mobile sheets, remote Codex/DSH, exact routing, pause/resume, draft, quote/@, empty project, resize, locale`);
         } catch (error) {
+          if (errors.length) console.error("Browser page errors:", errors);
           await page.screenshot({ path: join(output, `${name}-${locale}-failure.png`) }).catch(() => {});
           throw error;
         } finally { await context.close(); }

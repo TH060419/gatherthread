@@ -272,7 +272,9 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
-const mobileWorkspace = mountMobileWorkspace({ document, window, t: text => localizer.t(text), enabled: !exampleMode });
+const mobileWorkspace = mountMobileWorkspace({ document, window, t: text => localizer.t(text), enabled: !exampleMode,
+  // Mount can change layout before mobileWorkspace is assigned. Refresh after it returns.
+  onLayoutChange: () => queueMicrotask(() => handleWorkspaceBreakpointChange()) });
 const accountDevices = mountAccountDevices({ document, api, localizer,
   getContext: () => settingsDialog.open && state.currentUser ? {
     scope: `${authenticationGeneration}:${state.currentUser.id}:${state.currentUser.device_id}`,

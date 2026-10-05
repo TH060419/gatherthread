@@ -14,7 +14,7 @@ export function mobileControlLabel(text) {
     "Resume Agent": "Resume" })[text] ?? text;
 }
 
-export function mountMobileWorkspace({ document: doc, window: win, t, enabled = true }) {
+export function mountMobileWorkspace({ document: doc, window: win, t, enabled = true, onLayoutChange = () => {} }) {
   const el = id => doc.getElementById(id);
   const workspace = el("workspace");
   const query = win.matchMedia("(max-width: 760px)");
@@ -59,8 +59,11 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close(); });
     dialog.addEventListener("close", () => {
       if (index === 2) el("session-context-details").open = false;
-      triggers[index].setAttribute("aria-expanded", "false");
-      if (index === 2) el("mobile-compose-tools-button").setAttribute("aria-expanded", "false");
+      // A resize can restore desktop disclosure state before this async event fires.
+      if (active) {
+        triggers[index].setAttribute("aria-expanded", "false");
+        if (index === 2) el("mobile-compose-tools-button").setAttribute("aria-expanded", "false");
+      }
       // A newly opened settings/create dialog owns focus. Do not steal it.
       if (!workspace.hidden && !doc.querySelector("dialog[open]") && returnFocus.getClientRects().length) returnFocus.focus({ preventScroll: true });
     });
@@ -88,7 +91,8 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
 
   function update() {
     const next = enabled && query.matches;
-    if (next !== active) {
+    const changed = next !== active;
+    if (changed) {
       closeAll();
       active = next;
       for (const { node, marker, target } of placements) {
@@ -114,6 +118,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
       el("mobile-members-button").setAttribute("aria-label", t("Members"));
       el("mobile-members-button").title = t("Members");
       el("mobile-members-button").setAttribute("aria-controls", "mobile-members-dialog");
+      el("mobile-members-button").setAttribute("aria-expanded", String(dialogs[3].open));
       triggers[0].setAttribute("aria-controls", "mobile-sessions-dialog");
       triggers[0].setAttribute("aria-expanded", String(dialogs[0].open));
       triggers[0].setAttribute("aria-label", t("Projects and sessions"));
@@ -131,6 +136,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
       el("mobile-members-button").setAttribute("aria-controls", "member-panel");
       triggers[0].setAttribute("aria-controls", "session-rail");
     }
+    if (changed) onLayoutChange();
   }
   const schedule = () => {
     if (scheduled) return;

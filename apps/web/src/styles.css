@@ -5998,6 +5998,11 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
 #mobile-sessions-content .session-list { display: grid; gap: 8px; max-height: none; overflow: visible; padding: 0; }
 #mobile-sessions-content .session-button { min-width: 0; width: 100%; }
 #mobile-sessions-content .rail-heading .eyebrow { display: block; }
+#mobile-sessions-content .session-rail > .rail-heading:first-child { display: grid; grid-template-columns: minmax(0, 1fr) 44px; gap: 12px; align-items: center; }
+#mobile-sessions-content .session-rail > .rail-heading:first-child > div { display: contents; }
+#mobile-sessions-content .session-rail > .rail-heading:first-child .eyebrow { grid-column: 1; grid-row: 1; margin: 0; }
+#mobile-sessions-content .session-rail > .rail-heading:first-child #new-project-button { position: static; grid-column: 2; grid-row: 1; }
+#mobile-sessions-content .session-rail > .rail-heading:first-child .project-select { grid-column: 1 / -1; grid-row: 2; margin-top: 0; }
 #mobile-members-content .member-panel { position: static; display: block; width: 100%; max-width: none; height: auto; padding: 0; border: 0; transform: none; box-shadow: none; }
 #mobile-members-content #close-members-button { display: none; }
 .mobile-members-close { float: right; }
@@ -6029,8 +6034,8 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
   .workspace[data-mobile-ui="true"] .workspace-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   .workspace[data-mobile-ui="true"] .topbar { gap: 6px; padding-inline: 10px; }
   .workspace[data-mobile-ui="true"] .topbar-brand-cluster { gap: 6px; }
-  .workspace[data-mobile-ui="true"] .wordmark { width: 28px; height: 44px; overflow: hidden; display: flex; align-items: center; }
-  .workspace[data-mobile-ui="true"] .wordmark img { width: 142px; max-width: none; height: auto; }
+  .workspace[data-mobile-ui="true"] .wordmark { width: 44px; height: 44px; padding-inline: 8px; overflow: hidden; display: flex; align-items: center; }
+  .workspace[data-mobile-ui="true"] .wordmark img { flex: 0 0 auto; width: 142px; max-width: none; height: auto; clip-path: inset(0 114px 0 0); }
   .workspace[data-mobile-ui="true"] .topbar-session-context { max-width: 100%; display: grid; justify-items: center; gap: 1px; }
   .workspace[data-mobile-ui="true"] .topbar-session-context[hidden] { display: none; }
   .workspace[data-mobile-ui="true"] .topbar-session-context strong { font-size: .9rem; max-width: 100%; }
@@ -6061,7 +6066,7 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
   .workspace[data-mobile-ui="true"] .mobile-agent-button { isolation: isolate; }
   .workspace[data-mobile-ui="true"] .mobile-agent-button svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 1.5; }
   .workspace[data-mobile-ui="true"] #mobile-agent-label { overflow: hidden; text-overflow: ellipsis; }
-  .workspace[data-mobile-ui="true"] .message-action { min-width: 36px; width: 36px; min-height: 44px; height: 44px; }
+  .workspace[data-mobile-ui="true"] .message-action { min-width: 44px; width: 44px; min-height: 44px; height: 44px; }
   .workspace[data-mobile-ui="true"] .event-bubble { max-width: 100%; }
   .workspace[data-mobile-ui="true"] .event-card { padding-inline: 12px; }
 }
