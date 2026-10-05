@@ -868,7 +868,7 @@ test("browser integration exposes identity, members, CORS, and one-use scoped re
       "/v1/me",
       { token },
     );
-    assert.deepEqual(me.body.data, { id: "owner", username: "Owner", device_id: "owner-device", can_create_projects: true });
+    assert.deepEqual(me.body.data, { id: "owner", username: "Owner", avatar_id: null, device_id: "owner-device", can_create_projects: true });
 
     const members = await api<{ data: { members: Array<{ user_id: string; display_name: string; role: string; runtime: { model: string } | null }> } }>(
       running.origin,
@@ -958,7 +958,7 @@ test("browser sessions survive refresh, reject CSRF writes, and revoke on logout
       "/v1/me",
       { cookie },
     );
-    assert.deepEqual(restored.body.data, { id: "owner", username: "Owner", device_id: "owner-device", can_create_projects: true });
+    assert.deepEqual(restored.body.data, { id: "owner", username: "Owner", avatar_id: null, device_id: "owner-device", can_create_projects: true });
 
     const csrfDenied = await api<{ error: { code: string } }>(running.origin, "/v1/sessions", {
       method: "POST",

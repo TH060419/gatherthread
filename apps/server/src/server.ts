@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { extname, resolve, sep, join } from "node:path";
 import {
+  SetAccountAvatarInputSchema,
   EmailLoginInputSchema, EmailAccountSessionSchema, RegistrationStatusSchema, RegistrationSentSchema, SendRegistrationInputSchema, VerifyRegistrationInputSchema,
   SendPasswordResetInputSchema, VerifyPasswordResetInputSchema, PasswordResetSentSchema,
   TestGateExchangeInputSchema,
@@ -458,6 +459,7 @@ export async function startCollaborationServer(
   const publicAccountActor = (actor: Actor) => ({
     id: actor.user_id,
     username: actor.display_name,
+    avatar_id: database.accountAvatar(actor.user_id),
     device_id: actor.device_id,
     can_create_projects: database.canCreateProjects(actor.user_id),
   });
@@ -810,6 +812,13 @@ export async function startCollaborationServer(
         return value;
       };
 
+      if (request.method === "PUT" && url.pathname === "/v1/me/avatar") {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Manage your account avatar in the signed-in browser");
+        const input = SetAccountAvatarInputSchema.parse(await readAuthenticatedJson(1024));
+        sendJson(response, 200, { data: database.setAccountAvatar(actor, input.avatar_id) });
+        return;
+      }
+
       if (request.method === "GET" && url.pathname === "/v1/me") {
         sendJson(response, 200, { data: publicAccountActor(actor) });
         return;
@@ -1111,6 +1120,12 @@ export async function startCollaborationServer(
         service.deleteSession(actor, sessionId);
         closeRealtimeWithoutMembership();
         response.writeHead(204).end();
+        return;
+      }
+
+      if (sessionId && parts[3] === "avatar-profiles" && parts.length === 4 && request.method === "GET") {
+        service.requireMembership(actor, sessionId);
+        sendJson(response, 200, { data: { profiles: database.listSessionAvatarProfiles(actor, sessionId) } });
         return;
       }
 

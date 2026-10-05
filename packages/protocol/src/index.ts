@@ -263,7 +263,17 @@ export const ProjectListItemSchema = ProjectRecordSchema.omit({ owner_user_id: t
 
 export type ProjectListItem = z.infer<typeof ProjectListItemSchema>;
 
+// Stable official catalog IDs. Clients never submit image URLs or uploads.
+export const AvatarIdSchema = z.enum(["cat", "fox", "bear", "rabbit", "penguin", "owl"]);
+export type AvatarId = z.infer<typeof AvatarIdSchema>;
+export const SetAccountAvatarInputSchema = z.object({ avatar_id: AvatarIdSchema.nullable() }).strict();
+export const AccountAvatarProfileSchema = z.object({ user_id: IdSchema, avatar_id: AvatarIdSchema.nullable() });
+export type AccountAvatarProfile = z.infer<typeof AccountAvatarProfileSchema>;
+export const SessionAvatarProfilesSchema = z.object({ profiles: z.array(AccountAvatarProfileSchema) });
+
+
 export const ProjectMemberRecordSchema = z.object({
+  avatar_id: AvatarIdSchema.nullable().optional(),
   user_id: IdSchema,
   display_name: z.string().trim().min(1).max(120),
   role: MembershipRoleSchema,
@@ -306,6 +316,7 @@ export const ActorSchema = z.object({
 });
 
 export type ActorIdentity = z.infer<typeof ActorSchema>;
+
 
 export const AccountCapabilitiesSchema = z.object({
   can_create_projects: z.boolean(),

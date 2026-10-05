@@ -1,3 +1,4 @@
+import { avatarImage } from "./avatars.js";
 import {
   createIdempotencyKey,
   isExecutionRuntime,
@@ -85,6 +86,20 @@ export class HttpCollaborationApi {
     } finally {
       this.clearCredential();
     }
+  }
+
+  async getAccountAvatar() {
+    const actor = await this.request("/v1/me");
+    return { user_id: actor.id, avatar_id: actor.avatar_id ?? null };
+  }
+
+  async setAccountAvatar(avatarId) {
+    return this.request("/v1/me/avatar", { method: "PUT", body: JSON.stringify({ avatar_id: avatarId }) });
+  }
+
+  async listAvatarProfiles(sessionId) {
+    const { profiles } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/avatar-profiles`);
+    return profiles;
   }
 
   async accountDeletionPreview() {
@@ -279,6 +294,7 @@ export class HttpCollaborationApi {
       id: member.user_id,
       userId: member.user_id,
       username: member.display_name,
+      avatar_id: member.avatar_id ?? null,
       role: member.role,
       runtime: null,
     }));
@@ -330,6 +346,7 @@ export class HttpCollaborationApi {
         id: member.user_id,
         userId: member.user_id,
         username: member.display_name,
+        avatar_id: member.avatar_id ?? null,
         role: member.role,
         runtime: member.runtime ? {
           id: member.runtime.id,
@@ -659,7 +676,8 @@ const users = {
 export class MockCollaborationApi {
   constructor({ latency = 90 } = {}) {
     this.latency = latency;
-    this.currentUser = { ...users.avery, can_create_projects: true };
+    this.currentUser = { ...users.avery, avatar_id: "cat", can_create_projects: true };
+    this.avatarProfiles = new Map([[users.avery.id, "cat"], [users.maya.id, "fox"], [users.jon.id, "bear"]]);
     this.rememberedAccounts = [];
     this.listeners = new Map();
     this.idempotentEvents = new Map();
@@ -772,6 +790,28 @@ export class MockCollaborationApi {
         [this.#seedEvent(1, "context_snapshot", users.maya, "Shared summary approved through sequence 12.", 60, "session-notes")],
       ],
     ]);
+  }
+
+  async getAccountAvatar() {
+    await this.#wait();
+    return { user_id: this.currentUser.id, avatar_id: this.avatarProfiles.get(this.currentUser.id) ?? null };
+  }
+
+  async setAccountAvatar(avatarId) {
+    await this.#wait();
+    if (avatarId !== null && !avatarImage(avatarId)) throw new ApiError("Choose an official avatar", { status: 400 });
+    this.avatarProfiles.set(this.currentUser.id, avatarId);
+    this.currentUser.avatar_id = avatarId;
+    return { user_id: this.currentUser.id, avatar_id: avatarId };
+  }
+
+  async listAvatarProfiles(sessionId) {
+    await this.#wait();
+    const session = this.sessions.find((item) => item.id === sessionId);
+    if (!session) throw new ApiError("Session not found", { status: 404 });
+    const ids = new Set([...session.members.map((member) => member.userId),
+      ...(this.events.get(sessionId) ?? []).map((event) => event.actor.id)]);
+    return [...ids].map((userId) => ({ user_id: userId, avatar_id: this.avatarProfiles.get(userId) ?? null }));
   }
 
   async prepareEmailLogin() { return { enabled: true }; }

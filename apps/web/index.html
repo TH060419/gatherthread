@@ -1031,7 +1031,7 @@ codex plugin add gatherthread@gatherthread</code>
           <div>
             <p class="eyebrow">GatherThread preferences</p>
             <h2 id="settings-title">Settings</h2>
-            <p>Personalize this browser.</p>
+            <p>Personalize your account and this browser.</p>
           </div>
           <button id="close-settings-button" class="icon-button" type="button" aria-label="Close Settings">×</button>
         </header>
@@ -1039,6 +1039,7 @@ codex plugin add gatherthread@gatherthread</code>
         <div class="settings-layout">
           <nav class="settings-navigation" aria-label="Settings sections">
             <a href="#settings-general">General</a>
+            <a href="#settings-profile">Profile</a>
             <a href="#settings-device">This device</a>
             <a href="#settings-account">Account &amp; privacy</a>
             <a href="#settings-appearance">Appearance</a>
@@ -1073,6 +1074,20 @@ codex plugin add gatherthread@gatherthread</code>
                   <button class="button button-secondary" type="button" data-onboarding-topic="browse">Browse example project</button>
                 </div>
               </div>
+            </section>
+
+            <section id="settings-profile" class="settings-section" aria-labelledby="settings-profile-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">Profile</p><h3 id="settings-profile-title">Account avatar</h3></div>
+                <p>Your avatar appears in every project and conversation, including older messages.</p>
+              </div>
+              <div class="avatar-preview-row"><span id="settings-avatar-preview" class="avatar"></span><p>Your Agent replies show your avatar with an Agent badge.</p></div>
+              <fieldset class="avatar-picker"><legend>Choose an avatar</legend><div id="settings-avatar-grid" class="avatar-grid"></div></fieldset>
+              <div class="avatar-settings-actions">
+                <button id="settings-avatar-cancel" class="button button-secondary" type="button">Cancel avatar changes</button>
+                <button id="settings-avatar-save" class="button button-primary" type="button" disabled>Save avatar</button>
+              </div>
+              <p id="settings-avatar-status" class="field-help" role="status" aria-live="polite"></p>
             </section>
 
             <section id="settings-device" class="settings-section" aria-labelledby="settings-device-title">

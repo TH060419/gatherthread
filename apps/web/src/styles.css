@@ -5919,3 +5919,32 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
     color: CanvasText;
   }
 }
+
+/* Account avatars are presentation metadata, independent of event payloads. */
+.avatar { position: relative; isolation: isolate; }
+.event-identity .avatar, .avatar .avatar-agent-badge { display: grid; }
+.avatar-image, .avatar-fallback { grid-area: 1 / 1; }
+.avatar-image { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+.avatar-agent-badge {
+  position: absolute; right: -5px; bottom: -4px; width: 20px; height: 20px;
+  display: grid; place-items: center; border: 2px solid var(--paper-raised);
+  border-radius: 7px; background: var(--amber-wash); box-shadow: 0 1px 3px #0002;
+}
+.avatar-agent-badge img { width: 100%; height: 100%; border-radius: 4px; }
+.avatar-agent-badge[data-harness="codex"] { border-color: var(--teal-wash); }
+.avatar-agent-badge[data-harness="dsh"], .avatar-agent-badge[data-harness="deepseek-harness"] { border-color: #dce9f7; }
+.avatar-preview-row { display: flex; align-items: center; gap: 16px; margin: 18px 0; }
+.avatar-preview-row .avatar { width: 56px; height: 56px; font-size: 1rem; }
+.avatar-preview-row p { margin: 0; color: var(--ink-soft); }
+.avatar-picker { margin: 0; padding: 0; border: 0; min-width: 0; }
+.avatar-picker legend { margin-bottom: 12px; font-weight: 650; }
+.avatar-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(88px, 1fr)); gap: 10px; }
+.avatar-choice {
+  display: grid; place-items: center; gap: 7px; padding: 12px 6px; position: relative;
+  border: 1px solid var(--line); border-radius: 14px; cursor: pointer; font-size: .78rem;
+}
+.avatar-choice .avatar { width: 46px; height: 46px; }
+.avatar-choice.is-selected { background: var(--teal-wash); border-color: var(--teal); }
+.avatar-choice:focus-within { outline: 2px solid var(--teal); outline-offset: 3px; }
+.avatar-choice input { width: 14px; height: 14px; margin: 0; accent-color: var(--teal); }
+.avatar-settings-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 10px; margin-top: 18px; }

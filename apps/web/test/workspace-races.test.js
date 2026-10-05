@@ -47,11 +47,13 @@ function harness(names, overrides = {}) {
     sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
     location: { hash: "" }, URLSearchParams, initials: () => "U", localizer: { t: (value) => value },
     renderProjectSelect: noop, renderSessionList: noop, maybeOpenPendingDshPairing: noop,
+    renderCurrentAvatar: noop, applyAvatarProfiles: noop,
     renderMembers: noop, renderTimeline: noop, renderComposerPermissions: noop,
     renderSessionDeliveryControls: noop, announce: noop,
     memberRefreshInFlight: false, stopMemberRefresh: noop, stopSnapshotPolling: noop,
     sync: { disconnect: noop }, resetWorkspaceToAuth: noop,
     ...overrides,
+    api: { getAccountAvatar: async () => ({ user_id: "u1", avatar_id: null }), listAvatarProfiles: async () => [], ...overrides.api },
   });
   vm.runInContext(names.map(functionSource).join("\n"), context);
   return context;
@@ -138,6 +140,33 @@ function contextPolicySaveHarness(write) {
   app.element("settings-device-name").disabled = true;
   return { app, saved, event: { preventDefault: noop, submitter: element() } };
 }
+
+test("a profile poll started before a successful avatar save cannot restore the previous image", async () => {
+  const pending = deferred();
+  const applied = [];
+  const app = harness(["captureWorkspaceScope", "refreshMembers"], {
+    api: { listMembers: async () => [], listAvatarProfiles: () => pending.promise },
+    applyAvatarProfiles: profiles => applied.push(profiles), messageActions: { refresh: noop },
+  });
+  app.state.avatarProfileRevision = 0;
+  const work = app.refreshMembers("s1");
+  app.state.avatarProfileRevision += 1;
+  pending.resolve([{ user_id: "u1", avatar_id: "cat" }]);
+  await work;
+  assert.equal(applied.length, 0);
+  assert.equal(app.memberRefreshInFlight, false);
+});
+
+test("a transient avatar metadata failure does not block membership and permission refresh", async () => {
+  const app = harness(["captureWorkspaceScope", "refreshMembers"], {
+    api: { listMembers: async () => [{ userId: "u1", role: "viewer" }],
+      listAvatarProfiles: async () => { throw new Error("profile unavailable"); } },
+    messageActions: { refresh: noop },
+  });
+  await app.refreshMembers("s1");
+  assert.equal(app.state.session.members[0].role, "viewer");
+  assert.equal(app.memberRefreshInFlight, false);
+});
 
 test("context policy save failure stays in settings with a relevant bilingual error and no false local save", async () => {
   const { app, saved, event } = contextPolicySaveHarness(async () => { throw new Error("Fixture server internal"); });
