@@ -70,11 +70,15 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   return { page, context, frame };
 }
 async function start(page, topic) {
-  await page.locator('#settings-button').click(); await page.locator(`[data-onboarding-topic="${topic}"]`).click();
+  await openSettings(page); await page.locator(`[data-onboarding-topic="${topic}"]`).click();
   const frame = await example(page); if (topic !== 'browse') await frame.locator(popup).waitFor(); return frame;
 }
-async function checkSummarySettingsNavigation(page, locale) {
+async function openSettings(page) {
+  if (!await page.locator('#settings-button').isVisible()) await page.locator('#mobile-tools-button').click();
   await page.locator('#settings-button').click();
+}
+async function checkSummarySettingsNavigation(page, locale) {
+  await openSettings(page);
   await page.locator('#settings-dialog[open]').waitFor();
   const syncLink = page.locator('.settings-navigation a[href="#settings-sync"]');
   const link = page.locator('.settings-navigation a[href="#settings-summaries"]');

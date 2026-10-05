@@ -13,6 +13,14 @@ export function positionSessionContextPanel(doc) {
     panel.removeAttribute('style');
     return;
   }
+  // A modal sheet already provides unclipped scrolling and a focus boundary.
+  // Portalling to body would put its controls behind the modal/inert backdrop.
+  if (details.closest('dialog')) {
+    focusControllers.get(doc)?.setPortalled(false);
+    if (panel.parentElement !== details) details.append(panel);
+    panel.removeAttribute('style');
+    return;
+  }
   if (panel.parentElement !== doc.body) doc.body.append(panel);
   focusControllers.get(doc)?.setPortalled(true);
   const win = doc.defaultView;
@@ -60,6 +68,7 @@ export function bindSessionContextPanel(doc) {
       event.preventDefault(); details.open = false; positionSessionContextPanel(doc); summary.focus();
     }
     if (event.key !== 'Tab') return;
+    if (details.closest('dialog')) return; // Native modal focus traversal.
     const following = [...summary.closest('.session-header').querySelectorAll('button')]
       .find((node) => !details.contains(node) && usable(node) && Boolean(summary.compareDocumentPosition(node) & 4));
     let destination;

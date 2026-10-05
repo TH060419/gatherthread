@@ -34,6 +34,22 @@ The script uses only `/app/?mock=1`, disposable browser profiles and mock API fi
 
 ## Client contract
 
+### Mobile workspace
+
+At phone widths, projects/sessions, members and conversation tools open in modal sheets. The small Agent pill opens the **existing** Agent/model/reasoning controls; **Chat only** and **Ask AI** remain separate actions, and the same Ask button becomes Pause/Resume during a request. Quotes, mentions, summary generation/original-view switching, project files and Settings remain available. Resizing to desktop restores the original controls without changing drafts or runtime selection.
+
+On iPhone, iPad and Android, local connection/install shortcuts are hidden. Sign in with the same account as your computer to invoke its authorized online Codex/DSH runtime; keep that computer and connector online. A narrow desktop window still offers connection shortcuts. This is presentation, not authorization: the server keeps enforcing membership, session permissions, exact user-owned runtime/model routing and the existing Cloud Agent availability gate. The isolated beginner example retains its guided layout.
+
+After `npm run build`, run the local HTTP/WebSocket browser fixture (no live provider calls):
+
+```bash
+PLAYWRIGHT_MODULE_PATH=/absolute/path/to/playwright/index.mjs node tests/browser/mobile-workspace.mjs
+```
+
+It covers bilingual Chromium/WebKit phone layouts, same-account computer runtimes, Codex/DSH model/effort selection, pause/resume target and draft preservation, quote/@, summaries, modal keyboard/focus, empty projects and mobile/desktop resizing. Use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for an existing Chrome and `BROWSER_OUTPUT_DIRECTORY` for screenshots. WebKit emulation does not certify physical iOS keyboard or native Safari behavior.
+
+### Transport
+
 `src/api.js` defines the replaceable transport boundary. `MockCollaborationApi` and `HttpCollaborationApi` expose the same operations:
 
 - `prepareEmailLogin()`, `loginWithEmail(...)` -> server-derived current user; `passwordResetStatus()`, `sendPasswordReset(...)`, `verifyPasswordReset(...)` -> recovery without auto-login

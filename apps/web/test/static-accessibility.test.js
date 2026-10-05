@@ -709,8 +709,8 @@ test("project Agent shortcuts are selectable, contextual, and compact in the fix
   }
   assert.equal((html.match(/class="icon-button rail-create-button"/g) ?? []).length, 2);
   assert.match(main, /projectEnabledHarnesses/);
-  assert.match(main, /connectCodexButton\.hidden = !enabled\.has\("codex"\)/);
-  assert.match(main, /connectDshButton\.hidden = !enabled\.has\(DSH_HARNESS\)/);
+  assert.match(main, /connectCodexButton\.hidden = !mobileWorkspace\.canConnectLocally\(\) \|\| !enabled\.has\("codex"\)/);
+  assert.match(main, /connectDshButton\.hidden = !mobileWorkspace\.canConnectLocally\(\) \|\| !enabled\.has\(DSH_HARNESS\)/);
   assert.match(main, /const enabledHarnesses = currentProjectEnabledHarnesses\(\);[\s\S]*?agentHarnessSelect\.replaceChildren\(\);/);
   assert.match(main, /for \(const enabledHarness of enabledHarnesses\)[\s\S]*?agentHarnessSelect\.append\(option\);/);
   assert.match(main, /DeepSeek Harness supplies this project's runtime and handles new Agent requests by default\./);

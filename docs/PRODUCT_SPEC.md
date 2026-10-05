@@ -41,6 +41,10 @@ The Solo creator is the only member allowed to write or submit agent requests wh
 
 Project owners and participants can append human chat and agent requests. A human chat event is shared and included in future context hydration but does not trigger a local agent. An agent request is assigned to the initiating user's registered local runtime. The resulting response is appended to the same canonical history. Viewers remain read only.
 
+## Mobile workspace
+
+At phone widths, the workspace keeps the conversation and composer in view and folds projects/sessions, members and tools into icon-triggered modal sheets. A compact Agent pill opens Agent/model/reasoning choices, while Chat and Ask AI remain separate explicit actions. Pause/Resume reuses the Ask button and the original exact target. Resizing restores the same desktop controls; it does not create another request path. Mobile devices hide local installation/connection shortcuts but may invoke an authorized online computer runtime under the same account. This does not enable the held Cloud Agent entry or grant additional permissions. The disposable beginner example retains its guide-specific layout.
+
 ## Canonical event types
 
 - `human_chat`
