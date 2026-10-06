@@ -298,6 +298,25 @@ test("late account avatar reads cannot overwrite a save or a new authenticated a
   }
 });
 
+test("a late account avatar read cannot undo a newer session profile response", async () => {
+  const pending = deferred();
+  const images = [];
+  const app = harness(["refreshAccountAvatar", "refreshAvatarProfiles", "applyAvatarProfiles"], {
+    api: { getAccountAvatar: () => pending.promise,
+      listAvatarProfiles: async () => [{ user_id: "u1", avatar_id: "fox" }] },
+    renderCurrentAvatar: () => { images.push(app.state.currentUser.avatar_id); },
+  });
+  app.state.avatarProfileRevision = 0;
+  const stale = app.refreshAccountAvatar();
+  await app.refreshAvatarProfiles("s1");
+  assert.equal(app.state.currentUser.avatar_id, "fox");
+  pending.resolve({ user_id: "u1", avatar_id: "cat" });
+  await stale;
+  assert.equal(app.state.currentUser.avatar_id, "fox");
+  assert.equal(app.state.avatarProfiles.get("u1"), "fox");
+  assert.deepEqual(images, ["fox"]);
+});
+
 test("avatar refresh failures release their own slot and a successful retry updates presentation", async () => {
   let calls = 0;
   const applied = [];

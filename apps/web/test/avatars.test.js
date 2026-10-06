@@ -135,3 +135,21 @@ test("HTTP avatar reads have a finite default deadline without cancelling unrela
     ]);
   } finally { clearTimeout(keepAlive); globalThis.fetch = originalFetch; }
 });
+
+test("avatar reads work on supported browsers without AbortSignal.timeout", async () => {
+  const originalFetch = globalThis.fetch, originalTimeout = AbortSignal.timeout;
+  const calls = [];
+  AbortSignal.timeout = undefined;
+  globalThis.fetch = async (url, options) => {
+    calls.push(options.signal);
+    return Response.json({ data: url.endsWith("avatar-profiles")
+      ? { profiles: [] } : { id: "u1", avatar_id: "fox" } });
+  };
+  try {
+    const api = new HttpCollaborationApi();
+    assert.equal((await api.getAccountAvatar()).avatar_id, "fox");
+    assert.deepEqual(await api.listAvatarProfiles("s1"), []);
+    assert.equal(calls.length, 2);
+    assert.ok(calls.every(signal => signal instanceof AbortSignal));
+  } finally { globalThis.fetch = originalFetch; AbortSignal.timeout = originalTimeout; }
+});
