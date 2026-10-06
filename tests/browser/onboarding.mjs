@@ -136,7 +136,19 @@ async function assertStep(frame, item, size) {
   await frame.locator(popup).waitFor();
   await frame.waitForFunction(({ target }) => !target || document.querySelector('.driver-active-element:not(#driver-dummy-element)'), item);
   await frame.waitForFunction((stepId) => document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready') === stepId, item.id);
-  await frame.waitForTimeout(90);
+  // Focus readiness precedes the connector's next animation frame. Wait for
+  // actual geometry, not an arbitrary delay that varies with browser load.
+  await frame.waitForFunction(({ id, targeted }) => {
+    if (document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready') !== id) return false;
+    if (!targeted) return true;
+    const target = document.querySelector('.driver-active-element');
+    const ring = document.querySelector('.onboarding-ring');
+    if (!target || target.id === 'driver-dummy-element' || !ring) return false;
+    const box = target.getBoundingClientRect();
+    const layer = document.querySelector('.onboarding-connector')?.getBoundingClientRect();
+    const expected = [box.x - 7 - (layer?.x ?? 0), box.y - 7 - (layer?.y ?? 0), box.width + 14, box.height + 14];
+    return ['x', 'y', 'width', 'height'].every((name, index) => Math.abs(Number(ring.getAttribute(name)) - expected[index]) < 1);
+  }, { id: item.id, targeted: Boolean(item.target) }, { timeout: 5000 });
   const state = await frame.evaluate(() => {
     const card = document.querySelector('.onboarding-popover'), target = document.querySelector('.driver-active-element');
     const a = card.getBoundingClientRect(), b = target?.getBoundingClientRect();
@@ -179,7 +191,7 @@ async function assertStep(frame, item, size) {
     if (item.id === 'invite') assert.equal(state.inviteSubmit, true);
     assert.ok(state.overlap < 1, `${item.id} card covers control: ${JSON.stringify(state)}`);
     if (size.width >= 1440 && state.panelOverlap !== undefined) assert.ok(state.panelOverlap < 1, `${item.id} card covers disclosure`);
-    for (let index = 0; index < 4; index++) assert.ok(Math.abs(state.ring[index] - (state.targetBox[index] + (index < 2 ? -7 - state.layerOffset[index] : 14))) < 1, `${item.id} ring follows target`);
+    for (let index = 0; index < 4; index++) assert.ok(Math.abs(state.ring[index] - (state.targetBox[index] + (index < 2 ? -7 - state.layerOffset[index] : 14))) < 1, `${item.id} ring follows target: ${JSON.stringify(state)}`);
   } else assert.equal(state.target, 'driver-dummy-element', 'overview centered');
 }
 async function walk(page, frame, topic, prefix) {
