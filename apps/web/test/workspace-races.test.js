@@ -12,6 +12,7 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 const noop = () => {};
+const nextTurn = () => new Promise(resolve => setImmediate(resolve));
 
 // Execute the actual event handlers/functions without starting the app's polling
 // or accessing a real account. Dependencies below are bounded UI/API doubles.
@@ -196,6 +197,60 @@ test("a transient avatar metadata failure does not block membership and permissi
   await app.refreshMembers("s1");
   assert.equal(app.state.session.members[0].role, "viewer");
   assert.equal(app.memberRefreshInFlight, false);
+});
+
+test("pending avatar metadata cannot delay a role change or occupy member refresh", async () => {
+  const pending = deferred();
+  let permissions = 0;
+  const app = harness(["captureWorkspaceScope", "refreshMembers"], {
+    api: { listMembers: async () => [{ userId: "u1", role: "viewer" }], listAvatarProfiles: () => pending.promise },
+    renderComposerPermissions: () => { permissions += 1; }, messageActions: { refresh: noop },
+  });
+  const work = app.refreshMembers("s1");
+  try {
+    await nextTurn();
+    assert.equal(app.state.session.members?.[0]?.role, "viewer");
+    assert.equal(permissions, 1);
+    assert.equal(app.memberRefreshInFlight, false);
+  } finally { pending.resolve([]); await work; }
+});
+
+test("pending account avatar cannot delay loading projects", async () => {
+  const pending = deferred();
+  let selections = 0;
+  const app = harness(["enterWorkspace"], {
+    api: { listProjects: async () => [{ id: "p1" }], getAccountAvatar: () => pending.promise,
+      getHostedAgentStatus: async () => ({ enabled: false }) },
+    selectProject: async () => { selections += 1; },
+  });
+  const work = app.enterWorkspace();
+  try {
+    await nextTurn();
+    assert.equal(selections, 1);
+    assert.equal(app.state.projects.length, 1);
+  } finally { pending.resolve({ user_id: "u1", avatar_id: null }); await work; }
+});
+
+test("pending avatar metadata cannot delay opening a session or connecting realtime", async () => {
+  const pending = deferred();
+  let connections = 0;
+  const app = harness(["selectSession"], {
+    mobileWorkspace: { close: noop }, codeSyncUi: { close: noop }, historySummaryUi: { reset: noop },
+    messageActions: { reset: noop, refresh: noop }, expandedWorklogs: new Map(),
+    stopDshRuntimePolling: noop, renderProjectPermissions: noop, sendError: element(),
+    clearCreatedInvitationSecret: noop, closeMembersPanelWithoutFocus: noop, renderSnapshotRequests: noop,
+    downloadCodexButton: element(), importVisibleHistoryButton: element(), startMemberRefresh: noop,
+    renderSessionHeader: noop, refreshDshRuntimes: async () => {}, startDshRuntimePolling: noop,
+    restoreSnapshotRequests: noop, sync: { disconnect: noop, connect: async () => { connections += 1; } },
+    api: { getSession: async () => ({ id: "s2" }), listMembers: async () => [], listAvatarProfiles: () => pending.promise },
+  });
+  const work = app.selectSession("s2");
+  try {
+    await nextTurn();
+    assert.equal(app.state.session?.id, "s2");
+    assert.equal(connections, 1);
+    assert.equal(app.sessionView.hidden, false);
+  } finally { pending.resolve([]); await work; }
 });
 
 test("context policy save failure stays in settings with a relevant bilingual error and no false local save", async () => {
