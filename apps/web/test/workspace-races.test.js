@@ -317,6 +317,39 @@ test("a late account avatar read cannot undo a newer session profile response", 
   assert.deepEqual(images, ["fox"]);
 });
 
+test("a newer account read updates history avatars and fences an older profile read", async () => {
+  const pending = deferred();
+  const app = harness(["refreshAccountAvatar", "refreshAvatarProfiles", "applyAvatarProfiles"], {
+    api: { getAccountAvatar: async () => ({ user_id: "u1", avatar_id: "fox" }),
+      listAvatarProfiles: () => pending.promise },
+  });
+  app.state.avatarProfileRevision = 0;
+  app.state.currentUser.avatar_id = "cat";
+  app.state.avatarProfiles = new Map([["u1", "cat"]]);
+  const stale = app.refreshAvatarProfiles("s1");
+  try {
+    await app.refreshAccountAvatar();
+    assert.equal(app.state.currentUser.avatar_id, "fox");
+    assert.equal(app.state.avatarProfiles.get("u1"), "fox");
+  } finally { pending.resolve([{ user_id: "u1", avatar_id: "cat" }]); await stale; }
+  assert.equal(app.state.currentUser.avatar_id, "fox");
+});
+
+test("a confirmed unchanged profile still invalidates an older account response", async () => {
+  const pending = deferred();
+  const app = harness(["refreshAccountAvatar", "refreshAvatarProfiles", "applyAvatarProfiles"], {
+    api: { getAccountAvatar: () => pending.promise,
+      listAvatarProfiles: async () => [{ user_id: "u1", avatar_id: "cat" }] },
+  });
+  app.state.avatarProfileRevision = 0;
+  app.state.currentUser.avatar_id = "cat";
+  const stale = app.refreshAccountAvatar();
+  await app.refreshAvatarProfiles("s1");
+  pending.resolve({ user_id: "u1", avatar_id: "fox" });
+  await stale;
+  assert.equal(app.state.currentUser.avatar_id, "cat");
+});
+
 test("avatar refresh failures release their own slot and a successful retry updates presentation", async () => {
   let calls = 0;
   const applied = [];
