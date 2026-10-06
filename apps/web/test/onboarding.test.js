@@ -52,6 +52,9 @@ test("mobile guide uses visible drawer and Agent controls without mobile install
   assert.match(basics.find((item) => item.id === "connect").text[1], /电脑.*同一账号.*在线/u);
   assert.match(basics.find((item) => item.id === "connect").text[1], /公网访问.*其他网络/u);
   assert.equal(guideSteps("files", { layout: "mobile" }).find((item) => item.id === "files").target, "#mobile-tools-button");
+  const mention = guideSteps("members", { layout: "mobile" }).find((item) => item.id === "mention");
+  assert.equal(mention.view, "mobile-tools");
+  assert.match(mention.text[1], /会话工具.*输入框旁的 \+.*再点 @/u);
 });
 
 test("beginner copy explains shared history and summary limits without technical units", () => {

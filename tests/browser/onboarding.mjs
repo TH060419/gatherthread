@@ -190,8 +190,13 @@ async function walk(page, frame, topic, prefix) {
     try { await assertStep(frame, steps[index], size); }
     catch (error) { await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}-failure.png` }); error.message = `${prefix} ${topic}/${steps[index].id}: ${error.message}`; throw error; }
     if (['welcome', 'create-conversation', 'model', 'answer', 'upload', 'roles', 'invite', 'enable', 'original'].includes(steps[index].id)) await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}.png` });
+    if (layout === 'mobile' && index === 1) {
+      await frame.locator('.driver-popover-prev-btn').click();
+      await assertStep(frame, steps[0], size);
+      await frame.locator('.driver-popover-next-btn').click();
+      await assertStep(frame, steps[index], size);
+    }
     if (['create-conversation', 'invite'].includes(steps[index].id)) await page.keyboard.press('ArrowRight');
-    else if (await frame.locator('dialog[open]').count()) await frame.locator('.driver-popover-next-btn').press('Enter');
     else await frame.locator('.driver-popover-next-btn').click();
   }
   await page.locator('.onboarding-example-dialog').waitFor({ state: 'detached' });
@@ -231,7 +236,7 @@ try {
     const before = await page.evaluate(() => ({ hash: location.hash, title: document.querySelector('#session-title').textContent,
       timeline: document.querySelector('#event-timeline').innerHTML, draft: document.querySelector('#message-input').value }));
     const practice = await start(page, 'browse');
-    await practice.locator('#message-input').fill('Demo practice only'); await practice.locator('#send-chat-button').press('Enter');
+    await practice.locator('#message-input').fill('Demo practice only'); await practice.locator('#send-chat-button').click();
     await practice.getByText('Demo practice only', { exact: true }).waitFor();
     await practice.evaluate(() => localStorage.setItem('example-only-value', 'temporary'));
     assert.equal(await page.evaluate(() => localStorage.getItem('example-only-value')), null);
@@ -264,11 +269,11 @@ try {
   assert.equal(await fresh.locator('#current-username').innerText(), '陈晓');
   assert.match(await fresh.locator('#member-list').innerText(), /林悦/);
   assert.equal(await page.locator('html').getAttribute('lang'), 'en', 'sample language does not change real settings');
-  await fresh.locator('#cancel-settings-button').press('Enter');
+  await fresh.locator('#cancel-settings-button').click();
   assert.equal(await fresh.locator('#current-username').innerText(), 'Alex', 'cancel restores authored language');
   await fresh.locator('#settings-button').click();
   await fresh.locator('#settings-locale').selectOption('zh-CN');
-  await fresh.locator('#settings-form button[type=submit]').press('Enter');
+  await fresh.locator('#settings-form button[type=submit]').click();
   await fresh.locator('#settings-dialog[open]').waitFor({ state: 'hidden' });
   await fresh.locator('.example-toolbar select').selectOption('summaries');
   fresh = await example(page); await fresh.locator(popup).waitFor();

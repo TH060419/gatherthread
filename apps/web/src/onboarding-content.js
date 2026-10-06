@@ -82,7 +82,10 @@ const mobileBasics = {
   finish: { target: "#mobile-tools-button", view: "conversation", text: ["Open conversation tools from the top button or the + beside the composer. Settings, members, summaries and file sharing are there. The isolated example lets you explore without changing your projects.", "点顶部的会话工具按钮，或输入框旁的 +，可找到设置、成员、摘要和文件共享。独立示例可自由体验，不会改动自己的项目。"] },
 };
 const mobileMembers = {
-  mention: { target: "#mentions-button", view: "mobile-tools" },
+  mention: { target: "#mentions-button", view: "mobile-tools", text: [
+    "Type @ and choose a member to notify them. Open Conversation tools at the top or + beside the composer, then tap @ to see messages mentioning you. Unread marks reset on refresh.",
+    "输入 @ 并选成员可提醒对方。点顶部的会话工具或输入框旁的 +，再点 @ 查看提到你的消息。未读标记刷新后会重置。",
+  ] },
   roles: { target: "#member-list > li:first-child", view: "mobile-members" },
   invite: { target: "#create-invitation-form button[type=submit]", view: "mobile-members" },
   join: { target: "#accept-invite-secret", view: "mobile-members" },

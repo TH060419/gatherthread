@@ -85,17 +85,15 @@ html[data-example="true"] .workspace[data-onboarding-view="details"] .session-co
 html[data-example="true"] body.driver-active .settings-dialog { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--paper-raised); }
 .example-toolbar select { width: auto; max-width: 230px; }
 @media (max-width: 760px) { .example-toolbar { font-size: 11px; } .example-toolbar select { max-width: 125px; } }
-@media (max-width: 480px) {
-  html[data-example="true"] .mobile-workspace-dialog[open] .onboarding-popover.driver-popover {
-    display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto;
-    height: 200px; max-height: 200px; padding: 14px; overflow: hidden;
-  }
-  .mobile-workspace-dialog[open] .onboarding-popover .driver-popover-title { font-size: 15px; margin: 0 22px 8px 0; }
-  .mobile-workspace-dialog[open] .onboarding-popover .driver-popover-description { overflow: auto; min-height: 0; font-size: 12px; line-height: 1.55; }
-  .mobile-workspace-dialog[open] .onboarding-popover .driver-popover-footer { margin-top: 10px; }
-  .mobile-workspace-dialog[open] .onboarding-popover .driver-popover-footer button { padding: 6px 9px; min-height: 32px; }
-  .mobile-workspace-dialog[open] .onboarding-popover .onboarding-skip { padding: 6px 0 0; }
+html[data-example="true"] .mobile-workspace-dialog[open] .onboarding-popover.driver-popover {
+  display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto;
+  height: clamp(200px, 24dvh, 220px); max-height: 220px; padding: 14px; overflow: hidden;
 }
+.mobile-workspace-dialog[open] .onboarding-popover .driver-popover-title { font-size: 15px; margin: 0 22px 8px 0; }
+.mobile-workspace-dialog[open] .onboarding-popover .driver-popover-description { overflow: auto; min-height: 0; font-size: 12px; line-height: 1.55; }
+.mobile-workspace-dialog[open] .onboarding-popover .driver-popover-footer { margin-top: 10px; }
+.mobile-workspace-dialog[open] .onboarding-popover .driver-popover-footer button { padding: 6px 9px; min-height: 32px; }
+.mobile-workspace-dialog[open] .onboarding-popover .onboarding-skip { padding: 6px 0 0; }
 body.driver-active .example-toolbar, body.driver-active .example-toolbar * { pointer-events: auto; }
 html[data-example="true"] .member-panel { transition: none; }
 html[data-example="true"] .workspace[data-onboarding-step="answer"] .composer,
