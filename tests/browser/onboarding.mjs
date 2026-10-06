@@ -318,7 +318,19 @@ try {
   // The native toggle event portals the panel asynchronously. Wait before
   // focusing a child, otherwise moving that child can clear its focus.
   await page.waitForFunction(() => document.querySelector('.session-context-panel').parentElement === document.body);
-  await page.locator('#history-summary-select-button').evaluate((node) => { node.disabled = true; });
+  await page.evaluate(() => {
+    const button = document.querySelector('#history-summary-select-button');
+    const fixture = { button, disabled: button.disabled, restores: 0 };
+    button.disabled = true;
+    // Keep this deliberately disabled-control scenario stable while normal
+    // member/avatar polling recomputes summary availability in the background.
+    fixture.observer = new MutationObserver(() => {
+      if (!button.disabled) { fixture.restores += 1; button.disabled = true; }
+    });
+    fixture.observer.observe(button, { attributes: true, attributeFilter: ['disabled'] });
+    window.__disabledSummaryFixture = fixture;
+  });
+  await page.waitForFunction(() => window.__disabledSummaryFixture.restores > 0);
   await disclosure.focus();
   const visitedPanelControls = new Set();
   let reachedLastPanelControl = false;
@@ -339,6 +351,7 @@ try {
     JSON.stringify(await page.evaluate(() => ({ active: document.activeElement?.id, driverActive: document.body.classList.contains('driver-active'), open: document.querySelector('#session-context-details').open,
       controls: [...document.querySelector('.session-context-panel').querySelectorAll('button, input, select, a[href]')].map(node => ({ id: node.id, disabled: node.disabled, hidden: Boolean(node.closest('[hidden]')), rects: node.getClientRects().length })) }))));
   await page.locator('#upload-local-turns-button').press('Tab');
+  assert.equal(await page.locator('#history-summary-select-button').isDisabled(), true, 'disabled-control fixture survives polling');
   assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true);
   let reachedDocumentEnd = false;
   for (let i = 0; i < 200; i++) {
@@ -356,6 +369,12 @@ try {
     await page.keyboard.press('Tab');
   }
   assert.equal(reachedDocumentEnd, true, 'Tab must reach the end of the document');
+  await page.evaluate(() => {
+    const fixture = window.__disabledSummaryFixture;
+    fixture.observer.disconnect();
+    fixture.button.disabled = fixture.disabled;
+    delete window.__disabledSummaryFixture;
+  });
   await page.keyboard.press('Escape');
   await disclosure.click(); await page.locator('#logout-button').click();
   await page.locator('#auth-view:not([hidden])').waitFor();
