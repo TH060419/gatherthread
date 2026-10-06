@@ -136,7 +136,19 @@ async function assertStep(frame, item, size) {
   await frame.locator(popup).waitFor();
   await frame.waitForFunction(({ target }) => !target || document.querySelector('.driver-active-element:not(#driver-dummy-element)'), item);
   await frame.waitForFunction((stepId) => document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready') === stepId, item.id);
-  await frame.waitForTimeout(90);
+  // Focus readiness precedes the connector's next animation frame. Wait for
+  // actual geometry, not an arbitrary delay that varies with browser load.
+  await frame.waitForFunction(({ id, targeted }) => {
+    if (document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready') !== id) return false;
+    if (!targeted) return true;
+    const target = document.querySelector('.driver-active-element');
+    const ring = document.querySelector('.onboarding-ring');
+    if (!target || target.id === 'driver-dummy-element' || !ring) return false;
+    const box = target.getBoundingClientRect();
+    const layer = document.querySelector('.onboarding-connector')?.getBoundingClientRect();
+    const expected = [box.x - 7 - (layer?.x ?? 0), box.y - 7 - (layer?.y ?? 0), box.width + 14, box.height + 14];
+    return ['x', 'y', 'width', 'height'].every((name, index) => Math.abs(Number(ring.getAttribute(name)) - expected[index]) < 1);
+  }, { id: item.id, targeted: Boolean(item.target) }, { timeout: 5000 });
   const state = await frame.evaluate(() => {
     const card = document.querySelector('.onboarding-popover'), target = document.querySelector('.driver-active-element');
     const a = card.getBoundingClientRect(), b = target?.getBoundingClientRect();
@@ -179,7 +191,7 @@ async function assertStep(frame, item, size) {
     if (item.id === 'invite') assert.equal(state.inviteSubmit, true);
     assert.ok(state.overlap < 1, `${item.id} card covers control: ${JSON.stringify(state)}`);
     if (size.width >= 1440 && state.panelOverlap !== undefined) assert.ok(state.panelOverlap < 1, `${item.id} card covers disclosure`);
-    for (let index = 0; index < 4; index++) assert.ok(Math.abs(state.ring[index] - (state.targetBox[index] + (index < 2 ? -7 - state.layerOffset[index] : 14))) < 1, `${item.id} ring follows target`);
+    for (let index = 0; index < 4; index++) assert.ok(Math.abs(state.ring[index] - (state.targetBox[index] + (index < 2 ? -7 - state.layerOffset[index] : 14))) < 1, `${item.id} ring follows target: ${JSON.stringify(state)}`);
   } else assert.equal(state.target, 'driver-dummy-element', 'overview centered');
 }
 async function walk(page, frame, topic, prefix) {
@@ -318,7 +330,19 @@ try {
   // The native toggle event portals the panel asynchronously. Wait before
   // focusing a child, otherwise moving that child can clear its focus.
   await page.waitForFunction(() => document.querySelector('.session-context-panel').parentElement === document.body);
-  await page.locator('#history-summary-select-button').evaluate((node) => { node.disabled = true; });
+  await page.evaluate(() => {
+    const button = document.querySelector('#history-summary-select-button');
+    const fixture = { button, disabled: button.disabled, restores: 0 };
+    button.disabled = true;
+    // Keep this deliberately disabled-control scenario stable while normal
+    // member/avatar polling recomputes summary availability in the background.
+    fixture.observer = new MutationObserver(() => {
+      if (!button.disabled) { fixture.restores += 1; button.disabled = true; }
+    });
+    fixture.observer.observe(button, { attributes: true, attributeFilter: ['disabled'] });
+    window.__disabledSummaryFixture = fixture;
+  });
+  await page.waitForFunction(() => window.__disabledSummaryFixture.restores > 0);
   await disclosure.focus();
   const visitedPanelControls = new Set();
   let reachedLastPanelControl = false;
@@ -339,6 +363,7 @@ try {
     JSON.stringify(await page.evaluate(() => ({ active: document.activeElement?.id, driverActive: document.body.classList.contains('driver-active'), open: document.querySelector('#session-context-details').open,
       controls: [...document.querySelector('.session-context-panel').querySelectorAll('button, input, select, a[href]')].map(node => ({ id: node.id, disabled: node.disabled, hidden: Boolean(node.closest('[hidden]')), rects: node.getClientRects().length })) }))));
   await page.locator('#upload-local-turns-button').press('Tab');
+  assert.equal(await page.locator('#history-summary-select-button').isDisabled(), true, 'disabled-control fixture survives polling');
   assert.equal(await page.locator('#mentions-button').evaluate((node) => node === document.activeElement), true);
   let reachedDocumentEnd = false;
   for (let i = 0; i < 200; i++) {
@@ -356,6 +381,12 @@ try {
     await page.keyboard.press('Tab');
   }
   assert.equal(reachedDocumentEnd, true, 'Tab must reach the end of the document');
+  await page.evaluate(() => {
+    const fixture = window.__disabledSummaryFixture;
+    fixture.observer.disconnect();
+    fixture.button.disabled = fixture.disabled;
+    delete window.__disabledSummaryFixture;
+  });
   await page.keyboard.press('Escape');
   await disclosure.click(); await page.locator('#logout-button').click();
   await page.locator('#auth-view:not([hidden])').waitFor();

@@ -1,10 +1,12 @@
+import { renderAvatar, isAgentReply, eventAuthorLabel } from "./avatars.js";
+import { mountAvatarSettings } from "./avatar-settings.js";
 import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-3";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountAccountDevices } from "./account-devices.js";
 import { mountAgentRequestControl } from "./agent-request-control.js";
 import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261006-mobile-2";
 import { mountRegistration } from "./registration.js";
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261004-3";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261004-avatars";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
 import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
 import { ExampleCollaborationApi } from "./example-api.js";
@@ -132,6 +134,8 @@ function elementAfterReady(id, text) {
 
 const state = {
   currentUser: null,
+  avatarProfiles: new Map(),
+  avatarProfileRevision: 0,
   projects: [],
   project: null,
   projectMembers: [],
@@ -239,6 +243,65 @@ const createInvitationForm = element("create-invitation-form");
 const invitationList = element("invitation-list");
 const settingsDialog = element("settings-dialog");
 const settingsForm = element("settings-form");
+
+function renderCurrentAvatar() {
+  const user = state.currentUser;
+  renderAvatar(document, element("current-user-avatar"), { userId: user?.id, username: user?.username, avatarId: user?.avatar_id });
+}
+
+function renderEventAvatar(node, event) {
+  return renderAvatar(document, node, { userId: event.actor.id, username: event.actor.username,
+    avatarId: state.avatarProfiles.get(event.actor.id) ?? null,
+    agent: isAgentReply(event), harness: event.provenance?.harness ?? "" });
+}
+
+function applyAccountAvatar(profile) {
+  if (state.currentUser?.id !== profile.user_id) return;
+  // Every confirmed account read/write supersedes older in-flight reads, even
+  // when the image is unchanged. Keep header and history metadata in sync.
+  state.avatarProfileRevision += 1;
+  state.currentUser.avatar_id = profile.avatar_id;
+  state.avatarProfiles.set(profile.user_id, profile.avatar_id);
+  renderCurrentAvatar();
+}
+
+function applyAvatarProfiles(profiles) {
+  state.avatarProfiles = new Map(profiles.map((profile) => [profile.user_id, profile.avatar_id]));
+  const own = profiles.find(profile => profile.user_id === state.currentUser?.id);
+  if (own) applyAccountAvatar(own);
+}
+
+async function refreshAccountAvatar() {
+  const user = state.currentUser;
+  const authentication = authenticationGeneration;
+  const revision = state.avatarProfileRevision;
+  try {
+    const profile = await api.getAccountAvatar();
+    if (authentication !== authenticationGeneration || user !== state.currentUser
+      || revision !== state.avatarProfileRevision || profile?.user_id !== user?.id) return;
+    applyAccountAvatar(profile);
+    renderMembers();
+    renderTimeline({ preserveAnchor: true });
+  } catch { /* Presentation metadata must not block workspace access. */ }
+}
+
+let avatarProfilesRefreshInFlight = null;
+async function refreshAvatarProfiles(sessionId) {
+  if (state.session?.id !== sessionId || avatarProfilesRefreshInFlight?.isCurrent()) return;
+  const isCurrent = captureWorkspaceScope();
+  const revision = state.avatarProfileRevision;
+  const request = { isCurrent };
+  avatarProfilesRefreshInFlight = request;
+  try {
+    const profiles = await api.listAvatarProfiles(sessionId);
+    if (!isCurrent() || state.session?.id !== sessionId || revision !== state.avatarProfileRevision) return;
+    applyAvatarProfiles(profiles);
+    renderMembers();
+    renderTimeline({ preserveAnchor: true });
+  } catch { /* Keep confirmed avatars; permissions refresh independently. */ }
+  finally { if (avatarProfilesRefreshInFlight === request) avatarProfilesRefreshInFlight = null; }
+}
+
 const agentRequestControl = mountAgentRequestControl({
   button: sendAgentButton, targetLabel: element("agent-target-label"), errorNode: sendError, api,
   getContext: () => ({
@@ -272,6 +335,15 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
+const avatarSettings = mountAvatarSettings({ document, api, localizer,
+  getUser: () => state.currentUser,
+  getRevision: () => state.avatarProfileRevision,
+  onSaved: (profile) => {
+    applyAccountAvatar(profile);
+    renderMembers();
+    renderTimeline({ preserveAnchor: true });
+  },
+});
 const mobileWorkspace = mountMobileWorkspace({ document, window, t: text => localizer.t(text),
   enabled: !exampleMode || window.__examplePresentation?.layout === "mobile",
   // Mount can change layout before mobileWorkspace is assigned. Refresh after it returns.
@@ -344,7 +416,7 @@ for (const button of document.querySelectorAll("[data-onboarding-topic]")) {
   });
 }
 const historySummaryUi = mountHistorySummaries({
-  document, api, localizer, renderMarkdown,
+  document, api, localizer, renderMarkdown, renderEventAvatar, eventAuthorLabel,
   getContext: () => ({
     scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.currentUser?.id ?? ""}:${state.session?.id ?? ""}`,
     sessionId: state.session?.id,
@@ -1228,6 +1300,8 @@ function resetWorkspaceToAuth() {
   historySummaryUi.reset();
   projectSelectionGuard.invalidate();
   api.clearCredential?.();
+  avatarSettings.reset();
+  state.avatarProfiles.clear();
   state.currentUser = null;
   state.projects = [];
   state.project = null;
@@ -1291,7 +1365,8 @@ async function enterWorkspace(preferredProjectId) {
   const noticeDeviceId = state.currentUser.device_id;
   if (!exampleMode) codeSyncUi.showFirstLoginNotice(noticeDeviceId);
   element("current-username").textContent = state.currentUser.username;
-  element("current-user-avatar").textContent = initials(state.currentUser.username);
+  renderCurrentAvatar();
+  void refreshAccountAvatar();
   const projects = await api.listProjects();
   if (!isCurrent() || selection !== selectedSessionGeneration) return;
   state.projects = projects;
@@ -1435,12 +1510,15 @@ async function selectSession(sessionId) {
   importVisibleHistoryButton.removeAttribute("aria-busy");
   downloadCodexButton.disabled = true;
   try {
+    const avatarRevision = state.avatarProfileRevision;
     const [session, members] = await Promise.all([
       api.getSession(sessionId),
       api.listMembers(sessionId),
     ]);
     if (generation !== selectedSessionGeneration) return;
+    if (avatarRevision === state.avatarProfileRevision) applyAvatarProfiles(members.map(member => ({ user_id: member.userId, avatar_id: member.avatar_id ?? null })));
     state.session = { ...session, members };
+    void refreshAvatarProfiles(sessionId);
     state.executionRuntimes = [];
     startMemberRefresh(sessionId);
     location.hash = new URLSearchParams({ project: projectId, session: sessionId }).toString();
@@ -1626,6 +1704,7 @@ async function refreshMembers(sessionId) {
   const isCurrent = captureWorkspaceScope();
   memberRefreshInFlight = isCurrent;
   try {
+    void refreshAvatarProfiles(sessionId);
     const members = await api.listMembers(sessionId);
     if (!isCurrent() || state.session?.id !== sessionId) return;
     state.session = { ...state.session, members };
@@ -1757,9 +1836,8 @@ function renderMembers() {
     item.className = "member-row";
 
     const avatar = document.createElement("span");
-    avatar.className = "avatar";
-    avatar.textContent = initials(member.username);
-    avatar.setAttribute("aria-hidden", "true");
+    renderAvatar(document, avatar, { userId: member.userId, username: member.username,
+      avatarId: state.avatarProfiles.has(member.userId) ? state.avatarProfiles.get(member.userId) : member.avatar_id });
 
     const details = document.createElement("span");
     details.className = "member-copy";
@@ -2077,11 +2155,9 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     const failedResponse = isFailedAgentResponse(event);
     if (failedResponse) article.classList.add("event-agent_response-failed");
     article.setAttribute("aria-labelledby", `event-${event.id}-actor`);
-    avatar.className = "avatar";
-    avatar.textContent = event.type.includes("agent") ? "✦" : initials(event.actor.username);
-    avatar.setAttribute("aria-hidden", "true");
+    renderEventAvatar(avatar, event);
     actor.id = `event-${event.id}-actor`;
-    actor.textContent = event.actor.username;
+    actor.textContent = eventAuthorLabel(event, localizer.t);
     type.className = "event-type";
     type.textContent = localizer.t(eventLabel(event.type));
     sequence.className = "event-sequence";
@@ -3233,7 +3309,7 @@ function applyVisualSettings(settings) {
     window.__examplePresentation.locale = normalized.general.locale;
     if (state.currentUser) {
       element("current-username").textContent = state.currentUser.username;
-      element("current-user-avatar").textContent = initials(state.currentUser.username);
+      renderCurrentAvatar();
     }
     renderProjectSelect();
     renderSessionList();
@@ -3694,6 +3770,7 @@ function openSettingsDialog(sectionId) {
   deviceInput.disabled = true;
   element("settings-device-status").textContent = localizer.t("Loading this device…");
   settingsDialog.showModal();
+  void avatarSettings.load();
   void refreshHostedAgentStatus();
   void codeStorageSettings.load();
   void loadCurrentDeviceSettings();

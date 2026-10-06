@@ -2,7 +2,7 @@ import { createIdempotencyKey, eventContent } from "./domain.js";
 import { eligibleHistorySources, historySelectionError, historySummaryTimeline, selectedHistorySourceIds } from "./history-summaries.js";
 
 /** Derived display state is tab-local. It never edits canonical history or drafts. */
-export function mountHistorySummaries({ document, api, localizer, getContext, onChange, renderMarkdown }) {
+export function mountHistorySummaries({ document, api, localizer, getContext, onChange, renderMarkdown, renderEventAvatar, eventAuthorLabel }) {
   const el = (id) => document.getElementById(id);
   const t = (text) => localizer.t(text);
   const confirmation = el("history-summary-confirm-dialog");
@@ -220,7 +220,18 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
       regenerate.disabled = !version.available || !canGenerate() || busy();
       controls.append(regenerate);
     }
-    header.append(title, controls);
+    if (version.response && renderEventAvatar) {
+      const identity = document.createElement("div");
+      identity.className = "event-identity";
+      const avatar = document.createElement("span");
+      renderEventAvatar(avatar, version.response);
+      const meta = document.createElement("div");
+      const author = document.createElement("strong");
+      author.textContent = eventAuthorLabel(version.response, t);
+      meta.append(author, title);
+      identity.append(avatar, meta);
+      header.append(identity, controls);
+    } else header.append(title, controls);
     if (version.response && version.status === "completed") {
       const checkbox = sourceControl(version.response);
       if (checkbox) {

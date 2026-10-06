@@ -2,6 +2,8 @@ import { createHash, createHmac, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import type {
+  AccountAvatarProfile,
+  AvatarId,
   AppendEventInput,
   CanonicalEvent,
   CaptureFidelity,
@@ -36,6 +38,7 @@ import type {
   SnapshotRequestStatus,
 } from "@gatherthread/protocol";
 import {
+  AvatarIdSchema, SetAccountAvatarInputSchema,
   MAX_SNAPSHOT_RESULT_BYTES, RuntimeExecutionProfilesSchema, MessageMentionsSchema, isCodeSyncRequestKind,
   GitHubConnectionInputSchema, githubCodeSyncRequestKinds, isGitHubCodeSyncRequestKind,
   HISTORY_SUMMARY_MAX_CONTEXT_BYTES, HistorySummaryError, buildHistoryContext,
@@ -82,6 +85,7 @@ export interface ProjectRecord {
 }
 
 export interface ProjectMemberRecord {
+  avatar_id: AvatarId | null;
   user_id: string;
   display_name: string;
   role: MembershipRole;
@@ -104,6 +108,7 @@ export interface RuntimeRecord {
 }
 
 export interface SessionMemberRecord {
+  avatar_id: AvatarId | null;
   user_id: string;
   display_name: string;
   role: MembershipRole;
@@ -371,6 +376,7 @@ const SCHEMA = `
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
+  avatar_id TEXT,
   created_at TEXT NOT NULL,
   can_create_projects INTEGER NOT NULL DEFAULT 0 CHECK (can_create_projects IN (0, 1))
 ) STRICT;
@@ -997,6 +1003,7 @@ export class CollaborationDatabase {
       revision TEXT NOT NULL
     ) STRICT;`);
     this.migrateAccountCapabilities();
+    this.migrateAccountAvatar();
     this.migrateRuntimePurposeColumn();
     this.migrateRuntimeExecutionProfilesColumn();
     this.migrateEventActorDisplayNameColumn();
@@ -2010,15 +2017,45 @@ export class CollaborationDatabase {
     });
   }
 
+  accountAvatar(userId: string): AvatarId | null {
+    const row = this.sqlite.prepare("SELECT avatar_id FROM users WHERE id = ?").get(userId) as { avatar_id: string | null } | undefined;
+    return AvatarIdSchema.safeParse(row?.avatar_id).data ?? null;
+  }
+
+  setAccountAvatar(actor: Actor, avatarId: AvatarId | null): AccountAvatarProfile {
+    const input = SetAccountAvatarInputSchema.parse({ avatar_id: avatarId });
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      this.sqlite.prepare("UPDATE users SET avatar_id = ? WHERE id = ?").run(input.avatar_id, actor.user_id);
+      return { user_id: actor.user_id, avatar_id: input.avatar_id };
+    });
+  }
+
+  // A separate mutable read model: canonical events and their frozen names do not change.
+  listSessionAvatarProfiles(actor: Actor, sessionId: string): AccountAvatarProfile[] {
+    this.assertActiveDevice(actor);
+    const role = this.membershipRole(sessionId, actor.user_id);
+    if (!role) throw notFound("Session");
+    const rows = this.sqlite.prepare(`
+      SELECT users.id AS user_id, users.avatar_id FROM users WHERE users.id IN (
+        SELECT user_id FROM project_memberships WHERE project_id = (SELECT project_id FROM sessions WHERE id = ?)
+        UNION
+        SELECT actor_user_id FROM events WHERE session_id = ? AND (visibility = 'session' OR ? = 'owner')
+      ) ORDER BY users.id
+    `).all(sessionId, sessionId, role) as unknown as Array<{ user_id: string; avatar_id: string | null }>;
+    return rows.map((row) => ({ user_id: row.user_id, avatar_id: AvatarIdSchema.safeParse(row.avatar_id).data ?? null }));
+  }
+
   listProjectMembers(projectId: string): ProjectMemberRecord[] {
-    return this.sqlite.prepare(`
-      SELECT project_memberships.user_id, users.display_name, project_memberships.role
+    const rows = this.sqlite.prepare(`
+      SELECT project_memberships.user_id, users.display_name, users.avatar_id, project_memberships.role
       FROM project_memberships
       JOIN users ON users.id = project_memberships.user_id
       WHERE project_memberships.project_id = ?
       ORDER BY CASE project_memberships.role WHEN 'owner' THEN 0 WHEN 'participant' THEN 1 ELSE 2 END,
                users.display_name ASC
-    `).all(projectId) as unknown as ProjectMemberRecord[];
+    `).all(projectId) as unknown as Array<Omit<ProjectMemberRecord, "avatar_id"> & { avatar_id: string | null }>;
+    return rows.map((row) => ({ ...row, avatar_id: AvatarIdSchema.safeParse(row.avatar_id).data ?? null }));
   }
 
   setProjectMembership(
@@ -2779,7 +2816,7 @@ export class CollaborationDatabase {
 
   listSessionMembers(sessionId: string): SessionMemberRecord[] {
     const rows = this.sqlite.prepare(`
-      SELECT project_memberships.user_id, users.display_name, project_memberships.role,
+      SELECT project_memberships.user_id, users.display_name, users.avatar_id, project_memberships.role,
              runtimes.id AS runtime_id, runtimes.session_id AS runtime_session_id,
              runtimes.user_id AS runtime_user_id, runtimes.device_id,
              runtimes.purpose,
@@ -2808,6 +2845,7 @@ export class CollaborationDatabase {
     return rows.map((row) => ({
       user_id: String(row.user_id),
       display_name: String(row.display_name),
+      avatar_id: AvatarIdSchema.safeParse(row.avatar_id).data ?? null,
       role: row.role as MembershipRole,
       runtime: row.runtime_id === null ? null : {
         id: String(row.runtime_id),
@@ -4224,12 +4262,12 @@ export class CollaborationDatabase {
 
   private requireProjectMember(projectId: string, userId: string): ProjectMemberRecord {
     const row = this.sqlite.prepare(`
-      SELECT project_memberships.user_id, users.display_name, project_memberships.role
+      SELECT project_memberships.user_id, users.display_name, users.avatar_id, project_memberships.role
       FROM project_memberships JOIN users ON users.id = project_memberships.user_id
       WHERE project_memberships.project_id = ? AND project_memberships.user_id = ?
     `).get(projectId, userId) as unknown as ProjectMemberRecord | undefined;
     if (!row) throw notFound("Project membership");
-    return row;
+    return { ...row, avatar_id: AvatarIdSchema.safeParse(row.avatar_id).data ?? null };
   }
 
   private publicProject(row: ProjectRow | ProjectRecord): ProjectRecord {
@@ -4484,6 +4522,11 @@ export class CollaborationDatabase {
     if (!columns("code_mutations").has("invalidated_at")) {
       this.sqlite.exec("ALTER TABLE code_mutations ADD COLUMN invalidated_at TEXT");
     }
+  }
+
+  private migrateAccountAvatar(): void {
+    const columns = this.sqlite.prepare("PRAGMA table_info(users)").all() as Array<{ name: string }>;
+    if (!columns.some((column) => column.name === "avatar_id")) this.sqlite.exec("ALTER TABLE users ADD COLUMN avatar_id TEXT");
   }
 
   private migrateAccountCapabilities(): void {
