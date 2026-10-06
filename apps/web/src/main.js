@@ -255,14 +255,20 @@ function renderEventAvatar(node, event) {
     agent: isAgentReply(event), harness: event.provenance?.harness ?? "" });
 }
 
+function applyAccountAvatar(profile) {
+  if (state.currentUser?.id !== profile.user_id) return;
+  // Every confirmed account read/write supersedes older in-flight reads, even
+  // when the image is unchanged. Keep header and history metadata in sync.
+  state.avatarProfileRevision += 1;
+  state.currentUser.avatar_id = profile.avatar_id;
+  state.avatarProfiles.set(profile.user_id, profile.avatar_id);
+  renderCurrentAvatar();
+}
+
 function applyAvatarProfiles(profiles) {
   state.avatarProfiles = new Map(profiles.map((profile) => [profile.user_id, profile.avatar_id]));
-  if (state.currentUser && state.avatarProfiles.has(state.currentUser.id)) {
-    const avatar = state.avatarProfiles.get(state.currentUser.id);
-    if (state.currentUser.avatar_id !== avatar) state.avatarProfileRevision += 1;
-    state.currentUser.avatar_id = avatar;
-    renderCurrentAvatar();
-  }
+  const own = profiles.find(profile => profile.user_id === state.currentUser?.id);
+  if (own) applyAccountAvatar(own);
 }
 
 async function refreshAccountAvatar() {
@@ -273,8 +279,9 @@ async function refreshAccountAvatar() {
     const profile = await api.getAccountAvatar();
     if (authentication !== authenticationGeneration || user !== state.currentUser
       || revision !== state.avatarProfileRevision || profile?.user_id !== user?.id) return;
-    user.avatar_id = profile.avatar_id;
-    renderCurrentAvatar();
+    applyAccountAvatar(profile);
+    renderMembers();
+    renderTimeline({ preserveAnchor: true });
   } catch { /* Presentation metadata must not block workspace access. */ }
 }
 
@@ -332,11 +339,7 @@ const avatarSettings = mountAvatarSettings({ document, api, localizer,
   getUser: () => state.currentUser,
   getRevision: () => state.avatarProfileRevision,
   onSaved: (profile) => {
-    if (state.currentUser?.id !== profile.user_id) return;
-    state.avatarProfileRevision += 1;
-    state.currentUser.avatar_id = profile.avatar_id;
-    state.avatarProfiles.set(profile.user_id, profile.avatar_id);
-    renderCurrentAvatar();
+    applyAccountAvatar(profile);
     renderMembers();
     renderTimeline({ preserveAnchor: true });
   },

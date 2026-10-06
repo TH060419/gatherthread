@@ -39,7 +39,7 @@ function harness(names, overrides = {}) {
   const context = vm.createContext({
     exampleMode: false,
     authenticationGeneration: 1, selectedSessionGeneration: 1, workspaceLoadGeneration: 0,
-    state: { currentUser: { id: "u1", username: "User", device_id: "d1" }, project: { id: "p1" },
+    state: { currentUser: { id: "u1", username: "User", device_id: "d1" }, avatarProfiles: new Map(), avatarProfileRevision: 0, project: { id: "p1" },
       projects: [], session: { id: "s1" }, settings: { composer: {} }, invitations: [], snapshotRequests: [] },
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
@@ -58,7 +58,7 @@ function harness(names, overrides = {}) {
     ...overrides,
     api: { getAccountAvatar: async () => ({ user_id: "u1", avatar_id: null }), listAvatarProfiles: async () => [], ...overrides.api },
   });
-  vm.runInContext([...new Set(["captureWorkspaceScope", "refreshAccountAvatar", "refreshAvatarProfiles", ...names])]
+  vm.runInContext([...new Set(["captureWorkspaceScope", "applyAccountAvatar", "refreshAccountAvatar", "refreshAvatarProfiles", ...names])]
     .map(functionSource).join("\n"), context);
   return context;
 }
