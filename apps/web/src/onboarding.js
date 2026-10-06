@@ -45,6 +45,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   let restorePresentation;
   let ownedCodeDialog = false;
   let ownedSettingsDialog = false;
+  const mobileDialogs = ["mobile-sessions-dialog", "mobile-agent-dialog", "mobile-tools-dialog", "mobile-members-dialog"];
   let initialOffer = true;
   let pendingKey = null;
   let autoFrame;
@@ -62,10 +63,23 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   function prepare(item) {
     prepareScenario?.(item);
     const view = item.view;
-    if (view !== "summary-settings" && ownedSettingsDialog) { ownedSettingsDialog = false; el("settings-dialog").close(); }
-    if (view === "summary-settings" && !el("settings-dialog").open) {
+    const mobile = getContext().layout === "mobile";
+    const settingsView = ["summary-settings", "account-device", "account-delete"].includes(view);
+    if (!settingsView && ownedSettingsDialog) { ownedSettingsDialog = false; el("settings-dialog").close(); }
+    if (settingsView && !el("settings-dialog").open) {
       ownedSettingsDialog = true; openSettings();
-      el("settings-summaries").scrollIntoView({ block: "start", behavior: "instant" });
+    }
+    if (mobile) {
+      const wanted = ({ "mobile-rail": "mobile-sessions-dialog", "mobile-agent": "mobile-agent-dialog",
+        "mobile-tools": "mobile-tools-dialog", "mobile-details": "mobile-tools-dialog",
+        "mobile-members": "mobile-members-dialog" })[view];
+      for (const id of mobileDialogs) if (el(id).open && id !== wanted) el(id).close();
+      if (wanted && !el(wanted).open) {
+        const trigger = ({ "mobile-sessions-dialog": "toggle-session-rail-button", "mobile-agent-dialog": "mobile-agent-button",
+          "mobile-tools-dialog": "mobile-tools-button", "mobile-members-dialog": "mobile-members-button" })[wanted];
+        if (wanted === "mobile-members-dialog" && !el("mobile-tools-dialog").open) el("mobile-tools-button").click();
+        el(trigger).click();
+      }
     }
 
     const workspace = el("workspace");
@@ -75,25 +89,25 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       ownedCodeDialog = false;
       el("project-code-dialog").close();
     }
-    if (view === "rail") {
+    if (view === "rail" && !mobile) {
       el("workspace").dataset.leftRailCollapsed = "false";
       el("toggle-session-rail-button").setAttribute("aria-expanded", "true");
     }
-    if (["conversation", "details", "snapshot", "summary-selection"].includes(view) && win.innerWidth <= 760) {
+    if (["conversation", "details", "snapshot", "summary-selection"].includes(view) && !mobile && win.innerWidth <= 760) {
       el("workspace").dataset.leftRailCollapsed = "true";
       el("toggle-session-rail-button").setAttribute("aria-expanded", "false");
       if (el("member-panel").classList.contains("member-panel-open")) el("member-panel").classList.remove("member-panel-open");
       el("mobile-members-button").setAttribute("aria-expanded", "false");
     }
-    if (view === "details" && getContext().session) {
+    if (["details", "mobile-details"].includes(view) && getContext().session) {
       if (!el("session-context-details").open) el("session-context-details").open = true;
       positionDetailsPanel();
     } else if (el("session-context-details").open) el("session-context-details").open = false;
-    if (view === "leave") {
+    if (view === "leave" && !mobile) {
       el("workspace").dataset.leftRailCollapsed = "false";
       el("toggle-session-rail-button").setAttribute("aria-expanded", "true");
     }
-    if (view === "members") {
+    if (view === "members" && !mobile) {
       el("workspace").dataset.rightPanelCollapsed = "false";
       if (!el("member-panel").classList.contains("member-panel-open")) el("member-panel").classList.add("member-panel-open");
       el("mobile-members-button").setAttribute("aria-expanded", "true");
@@ -104,8 +118,12 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
         // This existing entry only reads status. All transfer/enable/merge
         // controls remain blocked by the tour; no synthetic mutation clicks.
         ownedCodeDialog = true;
+        if (mobile && !el("mobile-tools-dialog").open) el("mobile-tools-button").click();
         el("project-code-button").click();
       }
+      if (view === "code-github") {
+        if (el("code-github-panel").hidden) el("code-provider-github").click();
+      } else if (el("code-gt-cloud-panel").hidden) el("code-provider-gt-cloud").click();
       const viewButton = { "code-overview": "code-back-device-view", "code-device": "code-open-device-view", "code-branches": "code-open-branches-view" }[view];
       const viewPanel = { "code-overview": "code-enabled-home", "code-device": "code-device-view", "code-branches": "code-branches-view" }[view];
       if (!el("code-enabled-content").hidden && viewButton && el(viewPanel).hidden) el(viewButton).click();
@@ -120,6 +138,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     doc.removeEventListener("focusin", containFocus, true);
     if (ownedCodeDialog) { ownedCodeDialog = false; el("project-code-dialog").close(); }
     if (ownedSettingsDialog) { ownedSettingsDialog = false; el("settings-dialog").close(); }
+    for (const id of mobileDialogs) if (el(id).open) el(id).close();
     positionSessionContextPanel(doc);
     delete el("workspace").dataset.onboardingStep;
     doc.documentElement.style.removeProperty("--example-guide-height");
@@ -184,6 +203,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     const overlay = tour.getState("__overlaySvg");
     if (popup && popup.parentElement !== parent) parent.append(popup);
     if (overlay && overlay.parentElement !== parent) parent.append(overlay);
+    if (overlay) overlay.style.display = parent === doc.body ? "" : "none";
     if (line && line.parentElement !== parent) parent.append(line);
     const toolbar = doc.querySelector(".example-toolbar"); if (toolbar && toolbar.parentElement !== parent) parent.append(toolbar);
   }
@@ -204,10 +224,12 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       line.innerHTML = '<defs><marker id="onboarding-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs><rect class="onboarding-ring"/><path class="onboarding-line" marker-end="url(#onboarding-arrow)"/>';
       (modal() ?? doc.body).append(line);
     }
-    line.setAttribute("viewBox", `0 0 ${win.innerWidth} ${win.innerHeight}`);
+    const lineBox = line.getBoundingClientRect();
+    const offsetX = lineBox.left, offsetY = lineBox.top;
+    line.setAttribute("viewBox", `0 0 ${lineBox.width} ${lineBox.height}`);
     const ring = line.querySelector(".onboarding-ring");
     const radius = tour.getConfig().stageRadius;
-    for (const [name, value] of Object.entries({ x: box.left - 7, y: box.top - 7, width: box.width + 14, height: box.height + 14, rx: radius, ry: radius })) ring.setAttribute(name, String(value));
+    for (const [name, value] of Object.entries({ x: box.left - offsetX - 7, y: box.top - offsetY - 7, width: box.width + 14, height: box.height + 14, rx: radius, ry: radius })) ring.setAttribute(name, String(value));
     const cx = box.left + box.width / 2, cy = box.top + box.height / 2;
     const x = Math.max(card.left + 12, Math.min(card.right - 12, cx));
     const y = cy < card.top ? card.top : cy > card.bottom ? card.bottom : Math.max(card.top + 12, Math.min(card.bottom - 12, cy));
@@ -215,24 +237,41 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
     const endX = Math.max(box.left, Math.min(box.right, startX));
     const endY = Math.max(box.top, Math.min(box.bottom, y));
     // A short crisp connector reaches the actual control, never an invented spot.
-    line.querySelector(".onboarding-line").setAttribute("d", `M ${startX} ${y} L ${endX} ${endY}`);
+    line.querySelector(".onboarding-line").setAttribute("d", `M ${startX - offsetX} ${y - offsetY} L ${endX - offsetX} ${endY - offsetY}`);
   }
 
   function positionCard(popup, target) {
     popup.style.right = "auto"; popup.style.bottom = "auto";
-    const width = popup.offsetWidth, height = popup.offsetHeight, margin = 14, gap = 24;
+    const margin = 14;
+    const layer = modal()?.getBoundingClientRect();
+    popup.style.maxWidth = layer ? `${Math.max(200, layer.width - margin * 2)}px` : "";
+    const width = popup.offsetWidth, height = popup.offsetHeight;
     if (target?.id === "timeline-region" && activeItems[tour.getActiveIndex()]?.id === "answer") {
       doc.documentElement.style.setProperty("--example-guide-height", `${height}px`);
     }
     const box = target?.getBoundingClientRect();
-    const topLimit = 54;
+    const gap = layer ? 12 : 24;
+    const offsetX = layer?.left ?? 0, offsetY = layer?.top ?? 0;
+    const leftLimit = layer ? layer.left + margin : margin;
+    const rightLimit = layer ? layer.right - margin : win.innerWidth - margin;
+    const topLimit = layer ? layer.top + (layer.width < 600 ? 48 : margin) : 54;
+    const bottomLimit = layer ? layer.bottom - margin : win.innerHeight - margin;
+    const place = (x, y) => {
+      popup.style.setProperty("--guide-left", `${x - offsetX}px`);
+      popup.style.setProperty("--guide-top", `${y - offsetY}px`);
+      // Fixed descendants of native dialogs use different containing blocks
+      // across engines. Measure the actual card and align it to the chosen
+      // viewport point instead of assuming the dialog is the containing block.
+      const actual = popup.getBoundingClientRect();
+      popup.style.setProperty("--guide-left", `${x - offsetX + x - actual.left}px`);
+      popup.style.setProperty("--guide-top", `${y - offsetY + y - actual.top}px`);
+    };
     if (!box || target.id === "driver-dummy-element") {
-      popup.style.setProperty("--guide-left", `${Math.max(margin, (win.innerWidth - width) / 2)}px`);
-      popup.style.setProperty("--guide-top", `${Math.max(topLimit, (win.innerHeight - height) / 2)}px`);
+      place(Math.max(leftLimit, (leftLimit + rightLimit - width) / 2), Math.max(topLimit, (topLimit + bottomLimit - height) / 2));
       return;
     }
-    const clampX = (x) => Math.max(margin, Math.min(win.innerWidth - width - margin, x));
-    const clampY = (y) => Math.max(topLimit, Math.min(win.innerHeight - height - margin, y));
+    const clampX = (x) => Math.max(leftLimit, Math.min(rightLimit - width, x));
+    const clampY = (y) => Math.max(topLimit, Math.min(bottomLimit - height, y));
     // Prefer the outside of the whole disclosure, keeping its other controls
     // readable. On short/narrow screens fall back beside the highlighted control.
     const panel = target.closest('.session-context-panel');
@@ -242,9 +281,9 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       [clampX(anchor.left + (anchor.width - width) / 2), anchor.bottom + gap],
       [clampX(anchor.left + (anchor.width - width) / 2), anchor.top - height - gap],
     ]);
-    const fit = candidates.find(([x, y]) => x >= margin && y >= topLimit && x + width <= win.innerWidth - margin && y + height <= win.innerHeight - margin);
+    const fit = candidates.find(([x, y]) => x >= leftLimit && y >= topLimit && x + width <= rightLimit && y + height <= bottomLimit);
     const [x, y] = fit ?? [clampX(box.left), clampY(box.bottom + gap)];
-    popup.style.setProperty("--guide-left", `${x}px`); popup.style.setProperty("--guide-top", `${y}px`);
+    place(x, y);
   }
 
   function start(topic = "basics") {
@@ -278,7 +317,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       element: () => {
         prepare(item);
         // All scrolling happens inside the disposable example, never real history.
-        if (item.target) {
+        if (item.target && !visibleGuideTarget(doc, item.target)) {
           const node = [...doc.querySelectorAll(item.target)].find((candidate) => !candidate.closest("[hidden]"));
           node?.scrollIntoView({ block: ["invite", "join"].includes(item.id) ? "center" : "nearest", inline: "nearest", behavior: "instant" });
         }
@@ -369,13 +408,17 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
   }
   const observer = new win.MutationObserver((records) => {
     if (pendingKey) autoStart();
-    if (!records.some((record) => !record.target.closest?.(".onboarding-popover, .onboarding-connector, .driver-overlay")
-      && (el("workspace").contains(record.target) || el("project-code-dialog").contains(record.target)))) return;
+    if (!records.some((record) => {
+      if (record.target.closest?.(".onboarding-popover, .onboarding-connector, .driver-overlay")) return false;
+      if (record.type === "childList" && [...record.addedNodes, ...record.removedNodes].every((node) =>
+        node.nodeType === 1 && node.matches(".onboarding-popover, .onboarding-connector, .driver-overlay, .example-toolbar"))) return false;
+      return el("workspace").contains(record.target) || el("project-code-dialog").contains(record.target);
+    })) return;
     reconcileLayout();
   });
   observer.observe(doc.body, { attributes: true, attributeFilter: ["open", "hidden", "class", "style"], childList: true, subtree: true });
   win.addEventListener("resize", reconcileLayout);
-  doc.addEventListener("scroll", reconcileLayout, true);
+  doc.addEventListener("scroll", () => { if (tour) win.requestAnimationFrame(drawLine); }, true);
   el("project-code-dialog").addEventListener("close", () => { if (tour && ownedCodeDialog && !el("project-code-dialog").open) end("skipped"); });
   const controls = {
     start,

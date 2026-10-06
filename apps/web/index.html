@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261004-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261006-mobile-2" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -202,6 +202,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false" shape-rendering="geometricPrecision"><path d="M8.939 4.609L9.929 4.273L10.044 1.938L13.956 1.938L14.071 4.273L15.061 4.609L16 5.072L17.732 3.502L20.498 6.268L18.928 8L19.391 8.939L19.727 9.929L22.062 10.044L22.062 13.956L19.727 14.071L19.391 15.061L18.928 16L20.498 17.732L17.732 20.498L16 18.928L15.061 19.391L14.071 19.727L13.956 22.062L10.044 22.062L9.929 19.727L8.939 19.391L8 18.928L6.268 20.498L3.502 17.732L5.072 16L4.609 15.061L4.273 14.071L1.938 13.956L1.938 10.044L4.273 9.929L4.609 8.939L5.072 8L3.502 6.268L6.268 3.502L8 5.072Z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
           <button id="logout-button" class="text-button" type="button">Log out</button>
+          <button id="mobile-tools-button" class="icon-button workspace-icon-button mobile-workspace-only" type="button" aria-label="Conversation tools" title="Conversation tools" aria-haspopup="dialog" aria-controls="mobile-tools-dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
           <button id="mobile-members-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Collapse member sidebar" title="Collapse member sidebar" aria-controls="member-panel" aria-expanded="true" data-tooltip>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M15.5 4.5v15"/><path d="m10 9 3 3-3 3"/></svg>
           </button>
@@ -271,6 +272,7 @@
             </button>
           </div>
           <ul id="session-list" class="session-list"></ul>
+          <p class="mobile-device-note" hidden>Use an Agent already connected on your computer. Keep that computer and its connector online.</p>
         </nav>
 
         <div id="left-layout-resizer" class="layout-resizer" role="separator" aria-label="Resize session sidebar" aria-orientation="vertical" aria-valuemin="210" aria-valuemax="420" tabindex="0"></div>
@@ -494,9 +496,11 @@
                 <label for="cloud-agent-include-code"><input id="cloud-agent-include-code" type="checkbox"><span>Use GT Cloud code and save changes to my GT Cloud branch</span></label>
               </div>
               <div class="composer-actions">
+                <button id="mobile-compose-tools-button" class="icon-button mobile-workspace-only" type="button" aria-label="Conversation tools" title="Conversation tools" aria-haspopup="dialog" aria-controls="mobile-tools-dialog"><span aria-hidden="true">＋</span></button>
+                <button id="mobile-agent-button" class="mobile-agent-button mobile-workspace-only" type="button" aria-label="Agent, model and reasoning" title="Agent, model and reasoning" aria-haspopup="dialog" aria-controls="mobile-agent-dialog" aria-expanded="false"><span id="mobile-agent-label" data-i18n-skip>Codex</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg></button>
                 <div class="intent-help" id="send-chat-help">
                   <button id="send-chat-button" class="button button-secondary" type="button">
-                    <span aria-hidden="true">↗</span> Send chat
+                    <span aria-hidden="true">↗</span><span class="desktop-send-label">Send chat</span><span class="mobile-send-label">Chat only</span>
                   </button>
                   <span>Share only · no agent run</span>
                 </div>
@@ -894,6 +898,25 @@
       </form>
     </dialog>
 
+    <dialog id="mobile-sessions-dialog" class="mobile-workspace-dialog mobile-sessions-dialog" aria-labelledby="mobile-sessions-title">
+      <div class="mobile-dialog-heading"><h2 id="mobile-sessions-title">Projects and sessions</h2><button class="icon-button" type="button" data-mobile-close aria-label="Close projects and sessions">×</button></div>
+      <div id="mobile-sessions-content"></div>
+    </dialog>
+    <dialog id="mobile-agent-dialog" class="mobile-workspace-dialog" aria-labelledby="mobile-agent-title" aria-describedby="mobile-agent-help">
+      <div class="mobile-dialog-heading"><h2 id="mobile-agent-title">Agent, model and reasoning</h2><button class="icon-button" type="button" data-mobile-close aria-label="Close Agent options">×</button></div>
+      <p id="mobile-agent-help">Choose who answers and how deeply it thinks. This does not start a request.</p>
+      <p class="mobile-device-note" hidden>Use an Agent already connected on your computer. Keep that computer and its connector online.</p>
+      <div id="mobile-agent-content"></div>
+    </dialog>
+    <dialog id="mobile-tools-dialog" class="mobile-workspace-dialog" aria-labelledby="mobile-tools-title">
+      <div class="mobile-dialog-heading"><h2 id="mobile-tools-title">Conversation tools</h2><button class="icon-button" type="button" data-mobile-close aria-label="Close conversation tools">×</button></div>
+      <div id="mobile-tools-content"></div>
+    </dialog>
+    <dialog id="mobile-members-dialog" class="mobile-workspace-dialog" aria-labelledby="members-title">
+      <button class="icon-button mobile-members-close" type="button" data-mobile-close aria-label="Close members">×</button>
+      <div id="mobile-members-content"></div>
+    </dialog>
+
     <dialog
       id="connect-codex-dialog"
       class="create-dialog codex-connect-dialog"
@@ -1120,6 +1143,7 @@ codex plugin add gatherthread@gatherthread</code>
                   <button class="button button-secondary" type="button" data-onboarding-topic="history">Share conversation history</button>
                   <button class="button button-secondary" type="button" data-onboarding-topic="files">Share project files</button>
                   <button class="button button-secondary" type="button" data-onboarding-topic="summaries">Organize history with summaries</button>
+                  <button class="button button-secondary" type="button" data-onboarding-topic="account">Your account and devices</button>
                   <button class="button button-secondary" type="button" data-onboarding-topic="browse">Browse example project</button>
                 </div>
               </div>
@@ -1325,6 +1349,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20261005-3"></script>
+    <script type="module" src="./src/main.js?v=20261006-mobile-2"></script>
   </body>
 </html>

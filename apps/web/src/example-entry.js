@@ -1,5 +1,6 @@
 // This classic bundle starts before the application and never imports remote code.
-const config = window.name ? JSON.parse(window.name) : Object.fromEntries(new URLSearchParams(location.search));
+const raw = window.name ? JSON.parse(window.name) : Object.fromEntries(new URLSearchParams(location.search));
+const config = { ...raw, layout: raw.layout === 'mobile' ? 'mobile' : 'desktop' };
 const query = new URLSearchParams(config);
 window.__examplePresentation = config;
 const memory = new Map();

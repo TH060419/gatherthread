@@ -305,7 +305,8 @@ test("the timeline tints bubbles by role and keeps failures on the warning wash"
   assert.match(styles, /\.event-card\.event-bubble-agent \{[\s\S]*?background: var\(--bubble-agent-bg\);/);
   // These have to outrank the later generic .event-card layers without !important.
   const bubbleRule = styles.indexOf(".event-card.event-bubble-self");
-  assert.ok(bubbleRule > styles.lastIndexOf(".event-card {"), "Bubble tints must follow the generic card rules");
+  const genericRules = [...styles.matchAll(/^\.event-card \{/gm)];
+  assert.ok(bubbleRule > genericRules.at(-1).index, "Bubble tints must follow the generic card rules");
   // A failed answer is agent-produced but must not read as an ordinary one.
   assert.match(styles, /\.event-card\.event-bubble-agent\.event-agent_response-failed \{[\s\S]*?background: var\(--amber-wash\);/);
   assert.match(main, /eventBubbleRole\(event, state\.currentUser\?\.id/);

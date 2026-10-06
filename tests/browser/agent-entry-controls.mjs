@@ -102,7 +102,13 @@ async function runWork(page, delay) {
 }
 
 async function exerciseControl(page, harness, locale, prefix) {
-  await page.locator("#agent-harness-select").selectOption(harness);
+  const choose = async value => {
+    const mobile = await page.locator("#mobile-agent-button").isVisible();
+    if (mobile) await page.locator("#mobile-agent-button").click();
+    await page.locator("#agent-harness-select").selectOption(value);
+    if (mobile) await page.locator("#mobile-agent-dialog [data-mobile-close]").click();
+  };
+  await choose(harness);
   await page.evaluate(() => { window.primaryAgentButton = document.querySelector("#send-agent-button"); });
   const draft = `UNSENT_${harness}`;
   await page.locator("#message-input").fill(`LOCAL_MOCK_${harness}`);
@@ -114,18 +120,18 @@ async function exerciseControl(page, harness, locale, prefix) {
   await page.locator("#message-input").fill(draft);
   await runWork(page, 220);
   await page.waitForFunction(() => document.querySelector("#send-agent-button").dataset.agentAction === "pause");
-  assert.match(await page.locator("#send-agent-button").innerText(), locale === "zh-CN" ? /暂停 Agent/ : /Pause Agent/);
+  assert.match(await page.locator("#send-agent-button").innerText(), locale === "zh-CN" ? /暂停/ : /Pause/);
   const first = await page.evaluate(() => window.agentWrites.filter(item => item.method === "appendAgentRequest").at(-1));
   await page.screenshot({ path: `${artifacts}/${prefix}-${harness}-pause.png` });
   await page.locator("#send-agent-button").click();
   await page.waitForFunction(() => document.querySelector("#send-agent-button").dataset.agentAction === "resume");
-  assert.match(await page.locator("#send-agent-button").innerText(), locale === "zh-CN" ? /恢复 Agent/ : /Resume Agent/);
+  assert.match(await page.locator("#send-agent-button").innerText(), locale === "zh-CN" ? /恢复 Agent|继续/ : /Resume/);
   assert.equal(await page.locator("#message-input").inputValue(), draft, "pause retains draft");
   assert.ok(await page.locator(".agent-paused-notice").count() >= 1, "paused request remains understandable in history");
   await runWork(page, 430); await runWork(page, 650);
   assert.equal(await page.locator("#send-agent-button").getAttribute("data-agent-action"), "resume", "paused work never produces a late mock reply");
   // Change the composer selection. Resume must still use the original target.
-  await page.locator("#agent-harness-select").selectOption(harness === "codex" ? "deepseek-harness" : "codex");
+  await choose(harness === "codex" ? "deepseek-harness" : "codex");
   const beforeResume = await page.evaluate(() => window.agentWrites.length);
   const cancelled = page.waitForEvent("dialog").then(async dialog => {
     assert.match(dialog.message(), locale === "zh-CN" ? /原 Agent.*新请求/ : /original Agent.*new request/);
@@ -175,7 +181,8 @@ try {
       await openAgentSettings(page, width);
       await page.screenshot({ path: `${artifacts}/${prefix}-settings.png` });
       await page.locator("#close-settings-button").click();
-      await page.waitForFunction(() => document.activeElement?.id === "add-agent-button");
+      if (width < 760 && !await page.locator("#add-agent-button").isVisible()) await page.locator("#toggle-session-rail-button").click();
+      else await page.waitForFunction(() => document.activeElement?.id === "add-agent-button");
       await page.locator("#add-agent-button").click();
       await page.locator("#settings-enabled-dsh").check();
       await page.locator("#settings-confirm-agent").check();

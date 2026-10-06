@@ -55,7 +55,8 @@ try {
             await page.frameLocator('.onboarding-example-dialog iframe').getByRole('button', { name: /Exit example|退出示例/ }).click();
             await page.locator('.onboarding-example-dialog').waitFor({ state: 'hidden' });
             const me = await context.request.get(origin + '/v1/me'); assert.equal(me.status(), 200);
-            actors.push((await me.json()).data);
+            const actor = (await me.json()).data;
+            actors.push({ user_id: actor.id, device_id: actor.device_id });
           }
           assert.equal(actors[0].user_id, actors[1].user_id);
           assert.notEqual(actors[0].device_id, actors[1].device_id);
@@ -66,6 +67,7 @@ try {
           const longName = '<Phone> ' + '设备名称'.repeat(24);
           const renamed = await contexts[1].request.patch(`${origin}/v1/devices/${actors[1].device_id}`,
             { headers: { origin }, data: { name: longName } }); assert.equal(renamed.status(), 200);
+          if (!await pages[0].locator('#settings-button').isVisible()) await pages[0].locator('#mobile-tools-button').click();
           await pages[0].locator('#settings-button').click();
           await pages[0].locator('.settings-navigation a[href="#settings-device"]').click();
           await pages[0].locator('#settings-devices-list strong').getByText(longName, { exact: true }).waitFor();
