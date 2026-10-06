@@ -96,8 +96,17 @@ export class HttpCollaborationApi {
     }
   }
 
-  async getAccountAvatar({ signal = AbortSignal.timeout(4_000) } = {}) {
-    const actor = await this.request("/v1/me", { signal });
+  async #readAvatar(path) {
+    // Keep the existing Safari 15 / Chrome 100 baseline; timeout() is newer.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new DOMException("Avatar read timed out", "TimeoutError")), 4_000);
+    timer.unref?.();
+    try { return await this.request(path, { signal: controller.signal }); }
+    finally { clearTimeout(timer); }
+  }
+
+  async getAccountAvatar() {
+    const actor = await this.#readAvatar("/v1/me");
     return { user_id: actor.id, avatar_id: actor.avatar_id ?? null };
   }
 
@@ -105,8 +114,8 @@ export class HttpCollaborationApi {
     return this.request("/v1/me/avatar", { method: "PUT", body: JSON.stringify({ avatar_id: avatarId }) });
   }
 
-  async listAvatarProfiles(sessionId, { signal = AbortSignal.timeout(4_000) } = {}) {
-    const { profiles } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/avatar-profiles`, { signal });
+  async listAvatarProfiles(sessionId) {
+    const { profiles } = await this.#readAvatar(`/v1/sessions/${encodeURIComponent(sessionId)}/avatar-profiles`);
     return profiles;
   }
 

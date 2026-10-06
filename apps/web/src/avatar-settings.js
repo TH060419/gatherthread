@@ -1,6 +1,6 @@
 import { AVATAR_CATALOG, renderAvatar } from "./avatars.js";
 
-export function mountAvatarSettings({ document, api, localizer, getUser, onSaved }) {
+export function mountAvatarSettings({ document, api, localizer, getUser, getRevision = () => 0, onSaved }) {
   const el = (id) => document.getElementById(id);
   const t = (text) => localizer.t(text);
   let generation = 0;
@@ -51,6 +51,7 @@ export function mountAvatarSettings({ document, api, localizer, getUser, onSaved
 
   async function load() {
     const user = getUser();
+    const revision = getRevision();
     const request = ++generation;
     busy = true;
     selected = saved = user?.avatar_id ?? null;
@@ -60,6 +61,11 @@ export function mountAvatarSettings({ document, api, localizer, getUser, onSaved
       const profile = await api.getAccountAvatar();
       if (request !== generation || user !== getUser() || !el("settings-dialog").open) return;
       if (profile.user_id !== user?.id) throw new Error(t("Unable to load avatar. Reopen Settings to retry."));
+      if (revision !== getRevision()) {
+        selected = saved = user?.avatar_id ?? null;
+        status.textContent = "";
+        return;
+      }
       selected = saved = profile.avatar_id;
       onSaved(profile);
       status.textContent = "";

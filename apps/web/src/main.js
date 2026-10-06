@@ -258,7 +258,9 @@ function renderEventAvatar(node, event) {
 function applyAvatarProfiles(profiles) {
   state.avatarProfiles = new Map(profiles.map((profile) => [profile.user_id, profile.avatar_id]));
   if (state.currentUser && state.avatarProfiles.has(state.currentUser.id)) {
-    state.currentUser.avatar_id = state.avatarProfiles.get(state.currentUser.id);
+    const avatar = state.avatarProfiles.get(state.currentUser.id);
+    if (state.currentUser.avatar_id !== avatar) state.avatarProfileRevision += 1;
+    state.currentUser.avatar_id = avatar;
     renderCurrentAvatar();
   }
 }
@@ -328,6 +330,7 @@ const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
 const avatarSettings = mountAvatarSettings({ document, api, localizer,
   getUser: () => state.currentUser,
+  getRevision: () => state.avatarProfileRevision,
   onSaved: (profile) => {
     if (state.currentUser?.id !== profile.user_id) return;
     state.avatarProfileRevision += 1;
