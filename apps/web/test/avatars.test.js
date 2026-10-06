@@ -25,10 +25,11 @@ function fixture() {
   const el = id => { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); };
   const document = { getElementById: el, createElement: () => new Node() };
   let user = { id: "u1", username: "Same name", avatar_id: "cat" };
+  let revision = 0;
   const saved = [], writes = [];
   let loader = async () => ({ user_id: "u1", avatar_id: "cat" });
   let writer = async avatarId => ({ user_id: "u1", avatar_id: avatarId });
-  const ui = mountAvatarSettings({ document, localizer: { t: text => text }, getUser: () => user,
+  const ui = mountAvatarSettings({ document, localizer: { t: text => text }, getUser: () => user, getRevision: () => revision,
     onSaved: profile => saved.push(profile), api: { getAccountAvatar: () => loader(), setAccountAvatar: id => { writes.push(id); return writer(id); } } });
   el("settings-dialog").open = true;
   const pick = id => {
@@ -38,7 +39,9 @@ function fixture() {
     input.dispatch("change");
     return input;
   };
-  return { ui, el, saved, writes, pick, document, setUser: value => { user = value; }, setLoader: value => { loader = value; }, setWriter: value => { writer = value; } };
+  return { ui, el, saved, writes, pick, document, setUser: value => { user = value; },
+    updateAvatar: value => { user.avatar_id = value; revision += 1; },
+    setLoader: value => { loader = value; }, setWriter: value => { writer = value; } };
 }
 
 test("official catalog matches the server allowlist and contains self-contained reviewed images", async () => {
@@ -100,6 +103,18 @@ test("save failures keep the draft retryable; closing or changing accounts fence
   const load = app.ui.load(); app.setUser({ id: "u2", username: "Same name" });
   resolve({ user_id: "u1", avatar_id: "cat" }); await load;
   assert.equal(app.saved.length, 0);
+});
+
+test("a pending Settings load keeps a newer account avatar instead of applying its stale response", async () => {
+  const app = fixture();
+  let resolve;
+  app.setLoader(() => new Promise(yes => { resolve = yes; }));
+  const load = app.ui.load();
+  app.updateAvatar("fox");
+  resolve({ user_id: "u1", avatar_id: "cat" });
+  await load;
+  assert.equal(app.saved.length, 0);
+  assert.equal(app.el("settings-avatar-preview").children[1].src, avatarImage("fox"));
 });
 
 test("HTTP avatar APIs use strict self assignment and scoped profile reads; mock changes affect both sessions without changing events", async () => {
