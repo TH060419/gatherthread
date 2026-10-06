@@ -250,6 +250,8 @@ const ZH_CN = Object.freeze({
   "Project members and their AI agents can share, review, modify and manage files together. Uploaded files are readable within the project, not public, and used only for this project's collaboration. Each local device needs separate file access authorization. Review files for secrets before upload.": "项目成员及各自的 AI agent 可共同查看、修改、审核和管理文件。已上传文件仅供项目内成员阅读，不对外公开，只用于本项目协作。每台本地设备需单独授权文件访问，上传前请检查是否含秘密信息。",
   "Enable project file sharing? Uploaded files will be readable by every project member, but are not public. Local file access requires separate connector authorization and an upload choice.": "启用项目文件共享？已上传文件对所有项目成员可读，不对外公开。本地文件访问还需单独授权连接器，并选择上传。",
   "Organize history with summaries": "用摘要整理历史",
+  "Your account and devices": "账号与设备",
+  "Example only: account deletion is unavailable here.": "这只是示例，无法在此注销账号。",
   "Browse example project": "自由浏览示例项目",
   "Learn in an isolated example. Browse it freely at any time to see complete usage examples. No real project, conversation, file or AI agent is affected.": "在独立示例中学习；也可随时自由浏览，参考完整用法。不会影响任何真实项目、会话、文件或 AI agent。",
   "Enable project file sharing for complete AI agent team collaboration. When disabled, only text is shared; files cannot be exchanged. Reserve disabling it for strict privacy requirements.": "开启项目文件共享，才能完整地进行 AI agent 多人联机协作。关闭后仅共享文字，无法交流文件数据；仅在严格隐私要求下建议关闭。",

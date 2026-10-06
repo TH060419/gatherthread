@@ -6030,8 +6030,15 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
   /* PR54: an empty project must not retain a phantom rail row when collapsed. */
   .workspace-grid { grid-template-rows: auto minmax(0, 1fr); }
   .workspace[data-left-rail-collapsed="true"] .workspace-grid { grid-template-rows: minmax(0, 1fr); }
+}
+
+/* Device-gated by mobile-workspace.js; a narrow desktop keeps its own controls. */
+@media (max-width: 1366px) {
   .workspace[data-mobile-ui="true"] { min-height: 0; height: var(--mobile-viewport-height, 100dvh); grid-template-rows: 64px minmax(0, 1fr); }
   .workspace[data-mobile-ui="true"] .workspace-grid { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .workspace[data-mobile-ui="true"] .session-view.has-composer { grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto; }
+  .workspace[data-mobile-ui="true"] .composer-layout-resizer { display: none; }
+  .workspace[data-mobile-ui="true"] .composer { grid-row: 7; }
   .workspace[data-mobile-ui="true"] .topbar { gap: 6px; padding-inline: 10px; }
   .workspace[data-mobile-ui="true"] .topbar-brand-cluster { gap: 6px; }
   .workspace[data-mobile-ui="true"] .wordmark { width: 44px; height: 44px; padding-inline: 8px; overflow: hidden; display: flex; align-items: center; }
@@ -6069,6 +6076,10 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
   .workspace[data-mobile-ui="true"] .message-action { min-width: 44px; width: 44px; min-height: 44px; height: 44px; }
   .workspace[data-mobile-ui="true"] .event-bubble { max-width: 100%; }
   .workspace[data-mobile-ui="true"] .event-card { padding-inline: 12px; }
+}
+
+@media (min-width: 761px) and (max-width: 1366px) {
+  .workspace[data-mobile-ui="true"] .conversation { width: 100%; max-width: 960px; min-width: 0; justify-self: center; }
 }
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {

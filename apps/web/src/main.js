@@ -2,7 +2,7 @@ import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-3";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountAccountDevices } from "./account-devices.js";
 import { mountAgentRequestControl } from "./agent-request-control.js";
-import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js";
+import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261006-mobile-2";
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261004-3";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
@@ -250,7 +250,7 @@ const agentRequestControl = mountAgentRequestControl({
   confirmResume: () => !state.settings.composer.confirmAgentRequest
     || window.confirm(localizer.t("Resume with the original Agent and latest history? This starts a new request and may consume model quota.")),
   onChange: renderComposerPermissions, makeKey: createIdempotencyKey,
-  t: (text) => localizer.t(!exampleMode && window.matchMedia("(max-width: 760px)").matches ? mobileControlLabel(text) : text),
+  t: (text) => localizer.t(document.documentElement.dataset.mobileWorkspace === "true" ? mobileControlLabel(text) : text),
 });
 settingsDialog.querySelector(".settings-navigation").addEventListener("click", (event) => {
   const link = event.target.closest("a[href^='#']");
@@ -272,7 +272,8 @@ const attentionNotice = element("attention-notice");
 const attentionNoticeMessage = element("attention-notice-message");
 const ambientCanvas = createAmbientCanvas(element("ambient-canvas"));
 const localizer = createLocalizer(document);
-const mobileWorkspace = mountMobileWorkspace({ document, window, t: text => localizer.t(text), enabled: !exampleMode,
+const mobileWorkspace = mountMobileWorkspace({ document, window, t: text => localizer.t(text),
+  enabled: !exampleMode || window.__examplePresentation?.layout === "mobile",
   // Mount can change layout before mobileWorkspace is assigned. Refresh after it returns.
   onLayoutChange: () => queueMicrotask(() => handleWorkspaceBreakpointChange()) });
 const accountDevices = mountAccountDevices({ document, api, localizer,
@@ -328,6 +329,7 @@ const onboarding = mountOnboarding({
     userId: state.currentUser?.id, deviceId: state.currentUser?.device_id,
     origin: location.origin, locale: document.documentElement.lang,
     project: state.project, session: state.session,
+    layout: document.documentElement.dataset.mobileWorkspace === "true" ? "mobile" : "desktop",
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
   }),
   openSettings: openSettingsDialog,
@@ -356,6 +358,10 @@ const historySummaryUi = mountHistorySummaries({
 });
 function prepareExampleScenario(item) {
   if (!exampleMode || !state.project || !state.session) return;
+  if (item.view === "code-github" && !api.githubConnections.has(state.project.id)) {
+    api.githubConnections.set(state.project.id, { repository: "example-club/signup-page",
+      base_branch: "main", enabled: true, revision: "example-revision" });
+  }
   if (item.view?.startsWith("code-")) {
     const repository = api.codeRepositories.get(state.project.id)?.repository;
     if (repository && repository.enabled !== (item.view !== "code-enable")) {
@@ -370,11 +376,11 @@ function prepareExampleScenario(item) {
     else { historySummaryUi.reset(); renderTimeline(); }
   }
   const role = item.id === "leave" ? "participant" : "owner";
-  if (state.project.role !== role || state.session.mode !== (item.view === "snapshot" ? "solo" : "multi")) {
+  if (state.project.role !== role || state.session.mode !== (item.id === "snapshot" ? "solo" : "multi")) {
     state.project.role = role;
     api.projects.find((project) => project.id === state.project.id).role = role;
-    state.session.mode = item.view === "snapshot" ? "solo" : "multi";
-    state.session.ownerUserId = item.view === "snapshot" ? "user-maya" : state.currentUser.id;
+    state.session.mode = item.id === "snapshot" ? "solo" : "multi";
+    state.session.ownerUserId = item.id === "snapshot" ? "user-maya" : state.currentUser.id;
     state.session.members.find((member) => member.userId === state.currentUser.id).role = role;
     state.projectMembers.find((member) => member.userId === state.currentUser.id).role = role;
     renderProjectSelect(); renderSessionHeader(); renderComposerPermissions(); renderSessionDeliveryControls(); renderMembers();
@@ -3722,7 +3728,8 @@ async function loadAccountDeletionPreview() {
   element("settings-account-confirmation").value = "";
   updateAccountDeleteButton();
   if (mockEnabled) {
-    element("settings-account").hidden = true;
+    element("settings-account").hidden = !exampleMode;
+    if (exampleMode) impact.textContent = localizer.t("Example only: account deletion is unavailable here.");
     return;
   }
   element("settings-account").hidden = false;
@@ -3886,6 +3893,7 @@ function cancelSettingsDialog() {
   settingsDeviceLoadGeneration += 1;
   settingsHistoryPolicyGeneration += 1;
   settingsHistoryPolicy = null;
+  if (exampleMode) state.settings = settingsStore.get();
   applyVisualSettings(state.settings);
   settingsPreview = state.settings;
   if (settingsDialog.open) settingsDialog.close();

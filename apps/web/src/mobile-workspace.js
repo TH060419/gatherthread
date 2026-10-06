@@ -1,7 +1,13 @@
 // Presentation only: move the existing controls, never duplicate request paths.
+export const MOBILE_WORKSPACE_MAX_WIDTH = 1366;
+
 export function isMobileDevice(navigator = {}) {
   return /Android|iPhone|iPad|iPod/i.test(navigator.userAgent ?? "")
     || (/Mac/i.test(navigator.platform ?? "") && navigator.maxTouchPoints > 1);
+}
+
+export function usesMobileWorkspace(navigator, width) {
+  return isMobileDevice(navigator) && width <= MOBILE_WORKSPACE_MAX_WIDTH;
 }
 
 export function mobileAgentLabel(harness, effort, t = text => text) {
@@ -17,7 +23,7 @@ export function mobileControlLabel(text) {
 export function mountMobileWorkspace({ document: doc, window: win, t, enabled = true, onLayoutChange = () => {} }) {
   const el = id => doc.getElementById(id);
   const workspace = el("workspace");
-  const query = win.matchMedia("(max-width: 760px)");
+  const query = win.matchMedia(`(max-width: ${MOBILE_WORKSPACE_MAX_WIDTH}px)`);
   const mobileDevice = isMobileDevice(win.navigator);
   doc.documentElement.dataset.mobileDevice = String(mobileDevice && enabled);
   const rail = el("session-rail");
@@ -90,7 +96,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   }, true);
 
   function update() {
-    const next = enabled && query.matches;
+    const next = enabled && mobileDevice && query.matches;
     const changed = next !== active;
     if (changed) {
       closeAll();
@@ -157,6 +163,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   update();
   return {
     update, close: closeAll,
+    isActive: () => active,
     canConnectLocally: () => !mobileDevice || !enabled,
     toggleRail: () => {
       if (!active) return false;

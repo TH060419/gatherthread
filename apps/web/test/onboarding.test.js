@@ -34,14 +34,24 @@ test("all account states get the complete isolated example guides", () => {
     assert.equal(guideSteps("basics", context).length, 10);
   }
   assert.equal(guideSteps("history").length, 5);
-  assert.equal(guideSteps("files").length, 7);
+  assert.equal(guideSteps("files").length, 14);
   assert.equal(guideSteps("members").length, 7);
   assert.equal(guideSteps("summaries").length, 5);
+  assert.equal(guideSteps("account").length, 4);
   assert.equal(guideSteps("basics")[0].target, "");
   assert.equal(guideSteps("history")[0].target, "");
-  assert.deepEqual(Object.keys(GUIDE_LABELS), ["basics", "members", "history", "files", "summaries"]);
+  assert.deepEqual(Object.keys(GUIDE_LABELS), ["basics", "members", "history", "files", "summaries", "account"]);
   assert.equal(guideSteps("basics").find((item) => item.id === "create-conversation").target, "#new-session-button");
   assert.equal(guideSteps("members").find((item) => item.id === "invite").target, "#create-invitation-form button[type=submit]");
+});
+
+test("mobile guide uses visible drawer and Agent controls without mobile installation instructions", () => {
+  const basics = guideSteps("basics", { layout: "mobile" });
+  assert.equal(basics.find((item) => item.id === "project").target, "#toggle-session-rail-button");
+  assert.equal(basics.find((item) => item.id === "model").target, "#mobile-agent-button");
+  assert.match(basics.find((item) => item.id === "connect").text[1], /电脑.*同一账号.*在线/u);
+  assert.match(basics.find((item) => item.id === "connect").text[1], /公网访问.*其他网络/u);
+  assert.equal(guideSteps("files", { layout: "mobile" }).find((item) => item.id === "files").target, "#mobile-tools-button");
 });
 
 test("beginner copy explains shared history and summary limits without technical units", () => {

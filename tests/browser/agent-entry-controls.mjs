@@ -181,7 +181,7 @@ try {
       await openAgentSettings(page, width);
       await page.screenshot({ path: `${artifacts}/${prefix}-settings.png` });
       await page.locator("#close-settings-button").click();
-      if (width < 760) await page.locator("#toggle-session-rail-button").click();
+      if (width < 760 && !await page.locator("#add-agent-button").isVisible()) await page.locator("#toggle-session-rail-button").click();
       else await page.waitForFunction(() => document.activeElement?.id === "add-agent-button");
       await page.locator("#add-agent-button").click();
       await page.locator("#settings-enabled-dsh").check();

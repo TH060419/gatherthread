@@ -21,6 +21,7 @@ const server = await startCollaborationServer({ databasePath: ":memory:",
 const output = resolve(process.env.BROWSER_OUTPUT_DIRECTORY ?? "output/playwright/mobile-workspace");
 mkdirSync(output, { recursive: true });
 const mobileUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1";
+const tabletUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15";
 let scenarios = 0;
 const runtimes = [];
 const heartbeat = setInterval(() => {
@@ -230,13 +231,14 @@ try {
           // Draft and native control identity survive mobile/desktop reparenting.
           await page.locator("#message-input").fill("Resize draft");
           await page.evaluate(() => { window.originalProfile = document.querySelector("#agent-request-profile"); });
-          for (const [width, height] of [[320, 720], [390, 460], [844, 390], [1440, 900], [390, 844]]) {
+          for (const [width, height] of [[320, 720], [390, 460], [844, 390], [768, 1024], [820, 1180],
+            [1024, 768], [1180, 820], [1366, 1024], [1440, 900], [390, 844]]) {
             await page.setViewportSize({ width, height });
-            await page.waitForFunction(width => document.querySelector("#workspace").dataset.mobileUi === String(width <= 760), width);
+            await page.waitForFunction(width => document.querySelector("#workspace").dataset.mobileUi === String(width <= 1366), width);
             assert.equal(await page.locator("#message-input").inputValue(), "Resize draft");
             assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name} ${width}: no horizontal overflow`);
             assert.equal(await page.evaluate(() => window.originalProfile === document.querySelector("#agent-request-profile")), true);
-            if (width <= 760) {
+            if (width <= 1366) {
               await page.waitForFunction(() => Math.abs(document.querySelector('#workspace').getBoundingClientRect().height - visualViewport.height) < 2);
               const bounds = await page.locator("#composer").boundingBox();
               assert.ok(bounds.y + bounds.height <= height + 1, `composer fits ${width}x${height}: ${JSON.stringify(bounds)}`);
@@ -258,7 +260,7 @@ try {
           // Closing a modal on resize must not overwrite the restored desktop disclosure state.
           await page.locator("#toggle-session-rail-button").click();
           await page.locator("#mobile-sessions-dialog[open]").waitFor();
-          await page.setViewportSize({ width: 844, height: 390 });
+          await page.setViewportSize({ width: 1440, height: 900 });
           await page.waitForFunction(() => document.querySelector("#workspace").dataset.mobileUi === "false");
           await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
           assert.equal(await page.locator("#mobile-sessions-dialog").evaluate(node => node.open), false);
@@ -294,6 +296,68 @@ try {
           if (errors.length) console.error("Browser page errors:", errors);
           await page.screenshot({ path: join(output, `${name}-${locale}-failure.png`) }).catch(() => {});
           throw error;
+        } finally { await context.close(); }
+      }
+      // Reuse an account across device layouts rather than bypassing signup's real global budget.
+      const layoutFixture = await seed("en");
+      // Real device classification, not width alone: desktop browsers keep the desktop controls.
+      for (const device of [
+        { label: "ipad-desktop-ua", mobile: true, userAgent: tabletUA, platform: "MacIntel", touch: 5 },
+        { label: "android-tablet", mobile: true, userAgent: "Mozilla/5.0 (Linux; Android 16; Tablet) Chrome/154.0 Safari/537.36", platform: "Linux armv8l", touch: 5 },
+        { label: "mac-desktop", mobile: false, userAgent: tabletUA, platform: "MacIntel", touch: 0 },
+        { label: "windows-touch-laptop", mobile: false, userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/154.0 Safari/537.36", platform: "Win32", touch: 10 },
+      ]) {
+        const f = layoutFixture;
+        const context = await browser.newContext({ viewport: { width: 1024, height: 768 },
+          userAgent: device.userAgent, hasTouch: device.touch > 0, reducedMotion: "reduce" });
+        await context.route(/^https?:/, route => route.request().url().startsWith(origin + "/") ? route.continue() : route.abort());
+        await context.addInitScript(device => {
+          Object.defineProperty(navigator, "platform", { get: () => device.platform });
+          Object.defineProperty(navigator, "maxTouchPoints", { get: () => device.touch });
+          localStorage.setItem("gt-lang", "en");
+          const read = Storage.prototype.getItem;
+          Storage.prototype.getItem = function(key) {
+            return key.startsWith("gatherthread.onboarding.v1:") ? "skipped" : read.call(this, key);
+          };
+        }, device);
+        const page = await context.newPage(), errors = [];
+        page.on("pageerror", error => errors.push(error.message));
+        try {
+          await login(page, f);
+          await page.locator("#message-input").fill("Device layout draft");
+          await page.evaluate(() => { window.layoutProfile = document.querySelector("#agent-request-profile"); });
+          for (const [width, height] of [[768, 1024], [820, 1180], [1024, 768], [1180, 820], [1366, 1024], [390, 844], [1440, 900]]) {
+            await page.setViewportSize({ width, height });
+            const mobile = device.mobile && width <= 1366;
+            await page.waitForFunction(mobile => document.querySelector("#workspace").dataset.mobileUi === String(mobile), mobile);
+            assert.equal(await page.evaluate(() => window.layoutProfile === document.querySelector("#agent-request-profile")), true);
+            assert.equal(await page.locator("#message-input").inputValue(), "Device layout draft");
+            assert.equal(await page.locator("#agent-request-profile").evaluate(node => node.parentElement.id), mobile ? "mobile-agent-content" : "composer");
+            assert.equal(await page.locator("#settings-button").evaluate(node => node.parentElement.className), mobile ? "" : "account-cluster");
+            assert.equal(await page.locator("#connect-codex-button").evaluate(node => getComputedStyle(node).display === "none"), device.mobile);
+            assert.match(await page.locator("#send-agent-button").innerText(), mobile ? /Ask AI/ : /Request my agent/);
+            if (mobile) {
+              await page.waitForFunction(() => Math.abs(document.querySelector('#workspace').getBoundingClientRect().height - visualViewport.height) < 2);
+              assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name} ${device.label} ${width}: no horizontal overflow`);
+              const composer = await page.locator("#composer").boundingBox();
+              assert.ok(composer.y + composer.height <= height + 1, `${device.label} composer fits at ${width}: ${JSON.stringify(composer)}`);
+              await page.locator("#mobile-agent-button").click();
+              await page.locator("#mobile-agent-dialog[open]").waitFor();
+              assert.equal(await page.locator("#agent-model-select").isVisible(), true);
+              await page.keyboard.press("Escape");
+              await tools(page, "settings-button");
+              await page.locator("#settings-dialog[open]").waitFor();
+              await page.keyboard.press("Escape");
+              if (width === 1024) await page.screenshot({ path: join(output, `${name}-${device.label}.png`) });
+            } else {
+              assert.equal(await page.locator("#mobile-agent-button").isVisible(), false);
+              assert.equal(await page.locator("#mobile-tools-button").isVisible(), false);
+              assert.equal(await page.locator("#settings-button").isVisible(), true);
+            }
+          }
+          assert.deepEqual(errors, []);
+          scenarios++;
+          console.log(`PASS ${name} ${device.label}: tablet portrait/landscape and narrow desktop separation`);
         } finally { await context.close(); }
       }
     } finally { await browser.close(); }

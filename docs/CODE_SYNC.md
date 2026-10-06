@@ -12,8 +12,8 @@ The GitHub integration described below is an **unreleased source preview**, not 
 
 | Option / 方式 | Suitable use / 适用场景 | Source destination / 代码去向 | Local snapshot handling / 本地快照处理 |
 |---|---|---|---|
-| GatherThread cloud / 共序云端 | Small projects and first trials / 小项目与初次体验 | GatherThread server / 共序服务器 | 1,000 files; 2 MiB/file; 8 MiB/tree |
-| GitHub | Recommended for longer-term collaboration and larger source trees / 推荐用于长期协作和较大源码项目 | Local computer directly to GitHub / 本机直接传到 GitHub | No GT storage quota; preview handles 10,000 files, 20 MiB/file, 128 MiB/tree |
+| GatherThread cloud / 共序云端 | Limited-quota storage for lightweight trials / 有限额存储，适合轻量体验 | GatherThread server / 共序服务器 | 1,000 files; 2 MiB/file; 8 MiB/tree |
+| GitHub | Recommended first for real development, especially larger or long-term projects / 实际开发优先推荐，尤其适合较大或长期项目 | Local computer directly to GitHub / 本机直接传到 GitHub | No GT storage quota; preview handles 10,000 files, 20 MiB/file, 128 MiB/tree |
 | Native Git / 原生 Git | Trees outside these preview limits, LFS or submodules / 超出预览限制、使用 LFS 或子模块 | Your selected Git remote / 自行选择的远端 | Governed by your tools and hosting provider / 由工具和托管服务决定 |
 
 GitHub uploads do not count against GatherThread storage quotas. The preview numbers are local memory and file-handling safeguards, not a GitHub storage allowance; repositories beyond them can still use native Git with the same GitHub repository. The first fetch also caches the selected branches' Git history locally and can require more disk space and time than a single source snapshot. GitHub repository visibility and collaborator permissions are independent of GatherThread project membership. A private GatherThread project does not make a public GitHub repository private, and a GatherThread invitation does not grant GitHub access.
