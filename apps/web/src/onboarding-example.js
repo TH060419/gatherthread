@@ -31,6 +31,7 @@ export function mountExampleGateway({ document: doc, getContext, openSettings, s
     frame.setAttribute('referrerpolicy', 'no-referrer');
     presentation = JSON.stringify([getContext().locale, doc.documentElement.dataset.theme]);
     frame.name = JSON.stringify({ topic: activeTopic, channel, locale,
+      layout: getContext().layout === 'mobile' ? 'mobile' : 'desktop',
       theme: doc.documentElement.dataset.theme ?? 'system' });
     // This public, self-contained example alone permits same-site embedding.
     // It has no API access, credentials or external script/style requests.

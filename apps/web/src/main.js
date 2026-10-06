@@ -4,6 +4,7 @@ import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-3";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountAccountDevices } from "./account-devices.js";
 import { mountAgentRequestControl } from "./agent-request-control.js";
+import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261006-mobile-2";
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261004-avatars";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
@@ -48,7 +49,7 @@ import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-
 import { mountHistorySummaries } from "./history-summary-view.js";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261005-1";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261005-mobile-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   CODEX_HARNESS,
@@ -272,7 +273,8 @@ const agentRequestControl = mountAgentRequestControl({
   }),
   confirmResume: () => !state.settings.composer.confirmAgentRequest
     || window.confirm(localizer.t("Resume with the original Agent and latest history? This starts a new request and may consume model quota.")),
-  onChange: renderComposerPermissions, makeKey: createIdempotencyKey, t: (text) => localizer.t(text),
+  onChange: renderComposerPermissions, makeKey: createIdempotencyKey,
+  t: (text) => localizer.t(document.documentElement.dataset.mobileWorkspace === "true" ? mobileControlLabel(text) : text),
 });
 settingsDialog.querySelector(".settings-navigation").addEventListener("click", (event) => {
   const link = event.target.closest("a[href^='#']");
@@ -306,6 +308,10 @@ const avatarSettings = mountAvatarSettings({ document, api, localizer,
     renderTimeline({ preserveAnchor: true });
   },
 });
+const mobileWorkspace = mountMobileWorkspace({ document, window, t: text => localizer.t(text),
+  enabled: !exampleMode || window.__examplePresentation?.layout === "mobile",
+  // Mount can change layout before mobileWorkspace is assigned. Refresh after it returns.
+  onLayoutChange: () => queueMicrotask(() => handleWorkspaceBreakpointChange()) });
 const accountDevices = mountAccountDevices({ document, api, localizer,
   getContext: () => settingsDialog.open && state.currentUser ? {
     scope: `${authenticationGeneration}:${state.currentUser.id}:${state.currentUser.device_id}`,
@@ -359,6 +365,7 @@ const onboarding = mountOnboarding({
     userId: state.currentUser?.id, deviceId: state.currentUser?.device_id,
     origin: location.origin, locale: document.documentElement.lang,
     project: state.project, session: state.session,
+    layout: document.documentElement.dataset.mobileWorkspace === "true" ? "mobile" : "desktop",
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
   }),
   openSettings: openSettingsDialog,
@@ -387,6 +394,10 @@ const historySummaryUi = mountHistorySummaries({
 });
 function prepareExampleScenario(item) {
   if (!exampleMode || !state.project || !state.session) return;
+  if (item.view === "code-github" && !api.githubConnections.has(state.project.id)) {
+    api.githubConnections.set(state.project.id, { repository: "example-club/signup-page",
+      base_branch: "main", enabled: true, revision: "example-revision" });
+  }
   if (item.view?.startsWith("code-")) {
     const repository = api.codeRepositories.get(state.project.id)?.repository;
     if (repository && repository.enabled !== (item.view !== "code-enable")) {
@@ -401,11 +412,11 @@ function prepareExampleScenario(item) {
     else { historySummaryUi.reset(); renderTimeline(); }
   }
   const role = item.id === "leave" ? "participant" : "owner";
-  if (state.project.role !== role || state.session.mode !== (item.view === "snapshot" ? "solo" : "multi")) {
+  if (state.project.role !== role || state.session.mode !== (item.id === "snapshot" ? "solo" : "multi")) {
     state.project.role = role;
     api.projects.find((project) => project.id === state.project.id).role = role;
-    state.session.mode = item.view === "snapshot" ? "solo" : "multi";
-    state.session.ownerUserId = item.view === "snapshot" ? "user-maya" : state.currentUser.id;
+    state.session.mode = item.id === "snapshot" ? "solo" : "multi";
+    state.session.ownerUserId = item.id === "snapshot" ? "user-maya" : state.currentUser.id;
     state.session.members.find((member) => member.userId === state.currentUser.id).role = role;
     state.projectMembers.find((member) => member.userId === state.currentUser.id).role = role;
     renderProjectSelect(); renderSessionHeader(); renderComposerPermissions(); renderSessionDeliveryControls(); renderMembers();
@@ -1149,17 +1160,20 @@ if (typeof compactWorkspaceQuery.addEventListener === "function") {
 element("close-members-button").addEventListener("click", closeMembersPanel);
 
 function closeMembersPanel() {
+  if (mobileWorkspace.closeMembers()) return;
   memberPanel.classList.remove("member-panel-open");
   updateSidebarControls();
   toggleMemberPanelButton.focus();
 }
 
 function toggleSessionRail() {
+  if (mobileWorkspace.toggleRail()) return;
   workspace.dataset.leftRailCollapsed = String(workspace.dataset.leftRailCollapsed !== "true");
   updateSidebarControls();
 }
 
 function toggleMemberPanel() {
+  if (mobileWorkspace.toggleMembers()) return;
   if (compactWorkspaceQuery.matches) {
     memberPanel.classList.toggle("member-panel-open");
   } else {
@@ -1176,6 +1190,8 @@ function updateSidebarControls() {
     : workspace.dataset.rightPanelCollapsed !== "true";
   updateIconDisclosure(toggleSessionRailButton, sessionRailExpanded, "Collapse session sidebar", "Expand session sidebar");
   updateIconDisclosure(toggleMemberPanelButton, memberPanelExpanded, "Collapse member sidebar", "Expand member sidebar");
+  mobileWorkspace.update();
+  agentRequestControl.update();
 }
 
 function updateIconDisclosure(button, expanded, collapseLabel, expandLabel) {
@@ -1216,6 +1232,7 @@ async function restoreBrowserSession() {
 }
 
 function resetWorkspaceToAuth() {
+  mobileWorkspace.close();
   codexDeviceAuthorization.clear();
   onboarding.cancel();
   sessionContextDetails.open = false;
@@ -1354,6 +1371,7 @@ async function enterWorkspace(preferredProjectId) {
 
 async function selectProject(projectId) {
   if (!state.currentUser) return;
+  mobileWorkspace.close();
   onboarding.cancel();
   sessionContextDetails.open = false;
   updateSessionContextDisclosure();
@@ -1429,6 +1447,7 @@ async function selectProject(projectId) {
 
 async function selectSession(sessionId) {
   if (!state.currentUser || !state.project) return;
+  mobileWorkspace.close();
   onboarding.cancel();
   selectionRetry = null;
   codeSyncUi.close();
@@ -1526,8 +1545,8 @@ function renderProjectSelect() {
 
 function renderProjectAgentButtons(settings = state.settings) {
   const enabled = state.project ? new Set(projectEnabledHarnesses(settings, state.project.id)) : new Set();
-  connectCodexButton.hidden = !enabled.has("codex");
-  connectDshButton.hidden = !enabled.has(DSH_HARNESS);
+  connectCodexButton.hidden = !mobileWorkspace.canConnectLocally() || !enabled.has("codex");
+  connectDshButton.hidden = !mobileWorkspace.canConnectLocally() || !enabled.has(DSH_HARNESS);
 }
 
 function renderProjectPermissions() {
@@ -2979,6 +2998,7 @@ function openDeleteCloudDialog(type) {
 }
 
 function openConnectCodexDialog() {
+  if (!mobileWorkspace.canConnectLocally()) return;
   codexDeviceAuthorization.clear();
   if (!state.project) return;
   const launcherAvailable = canOpenCodexLauncher({
@@ -3045,6 +3065,7 @@ async function copyCodexCommand(platform) {
 }
 
 function openConnectDshDialog() {
+  if (!mobileWorkspace.canConnectLocally()) return;
   if (!state.project) return;
   connectDshReturnFocus = document.activeElement;
   element("connect-dsh-start-command").textContent = DSH_START_COMMAND;
@@ -3753,7 +3774,8 @@ async function loadAccountDeletionPreview() {
   element("settings-account-confirmation").value = "";
   updateAccountDeleteButton();
   if (mockEnabled) {
-    element("settings-account").hidden = true;
+    element("settings-account").hidden = !exampleMode;
+    if (exampleMode) impact.textContent = localizer.t("Example only: account deletion is unavailable here.");
     return;
   }
   element("settings-account").hidden = false;
@@ -3917,6 +3939,7 @@ function cancelSettingsDialog() {
   settingsDeviceLoadGeneration += 1;
   settingsHistoryPolicyGeneration += 1;
   settingsHistoryPolicy = null;
+  if (exampleMode) state.settings = settingsStore.get();
   applyVisualSettings(state.settings);
   settingsPreview = state.settings;
   if (settingsDialog.open) settingsDialog.close();

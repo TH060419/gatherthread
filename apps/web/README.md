@@ -30,9 +30,25 @@ With an existing Playwright installation and Chrome, build the app and keep `nod
 PLAYWRIGHT_MODULE=/absolute/path/to/playwright/index.mjs node tests/browser/onboarding.mjs
 ```
 
-The script uses only `/app/?mock=1`, disposable browser profiles and mock API fixtures. It walks all five guides at 1440×900, 390×844 and 320×568, including Chinese/English and empty/read-only accounts. It checks target visibility, ring geometry, cards beside controls, native-dialog layering, focus, example storage/origin isolation, absence of parent business writes, free practice, reset, toolbar navigation and language updates. Screenshots go to `/tmp/gatherthread-onboarding` by default. `ONBOARDING_ORIGIN`, `ONBOARDING_ARTIFACTS` and `ONBOARDING_BROWSER` override the preview, output directory and installed browser channel. `webkit` exercises Playwright WebKit and must not be reported as a real Safari check.
+The script uses only `/app/?mock=1`, disposable browser profiles and mock API fixtures. It walks all six guides at 1440×900, 390×844, 320×568, 820×1180 and 1024×768, including Chinese/English and empty/read-only accounts. It checks target visibility, ring geometry, cards beside controls, native-dialog layering, focus, example storage/origin isolation, absence of parent business writes, free practice, reset, toolbar navigation and language updates. Mobile/tablet runs use a mobile user agent and touch context to exercise the compact project drawer, Agent picker and tools sheets. Screenshots go to `/tmp/gatherthread-onboarding` by default. `ONBOARDING_ORIGIN`, `ONBOARDING_ARTIFACTS`, `ONBOARDING_BROWSER` and `ONBOARDING_WIDTH` override the preview, output directory, installed browser channel and selected width. `webkit` exercises Playwright WebKit and must not be reported as a real Safari check.
 
 ## Client contract
+
+### Mobile workspace
+
+On phones and tablets up to 1366 CSS pixels wide, projects/sessions, members and conversation tools open in modal sheets. The small Agent pill opens the **existing** Agent/model/reasoning controls; **Chat only** and **Ask AI** remain separate actions, and the same Ask button becomes Pause/Resume during a request. Quotes, mentions, summary generation/original-view switching, project files and Settings remain available. Tablet portrait and landscape use the same controls, with a centered reading area. Beyond that width, the original controls return without changing drafts or runtime selection.
+
+On iPhone, iPad (including its desktop-style browser identity) and Android, local connection/install shortcuts are hidden. Sign in with the same account as your computer to invoke its authorized online Codex/DSH runtime; keep that computer and connector online. With an Internet-reachable GatherThread server, the phone need not be near the computer or on the same network. A local-only server still needs a separately configured reachable connection. Desktop browsers, including touch laptops and narrow windows, retain the desktop controls and connection shortcuts. This is presentation, not authorization: the server keeps enforcing membership, session permissions, exact user-owned runtime/model routing and the existing Cloud Agent availability gate. The isolated beginner example uses the corresponding desktop or compact mobile/tablet controls, with its own guide toolbar and temporary mock state.
+
+After `npm run build`, run the local HTTP/WebSocket browser fixture (no live provider calls):
+
+```bash
+PLAYWRIGHT_MODULE_PATH=/absolute/path/to/playwright/index.mjs node tests/browser/mobile-workspace.mjs
+```
+
+The fixture covers bilingual phone controls, remote same-account Codex/DSH selection and model/effort, pause/resume target and draft preservation, quotes/mentions, summaries, modal keyboard/focus, empty projects and layout resizing. It also checks iPad desktop-style and Android tablet identities at 768/820/1024/1180/1366 widths and verifies that Mac desktops and Windows touch laptops never enter the mobile presentation. Use `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` for an existing Chrome and `BROWSER_OUTPUT_DIRECTORY` for screenshots. Chrome and Playwright WebKit are exercised; emulation does not certify a physical iPad/iPhone keyboard or native Safari behavior.
+
+### Transport
 
 `src/api.js` defines the replaceable transport boundary. `MockCollaborationApi` and `HttpCollaborationApi` expose the same operations:
 

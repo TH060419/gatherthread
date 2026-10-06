@@ -20,8 +20,12 @@ async function example(page) {
   await frame.locator('#session-view:not([hidden])').waitFor();
   return frame;
 }
-async function launchPage({ locale = 'en', width = 1440, height = 900, empty = false, viewer = false, deniedStorage = false } = {}) {
-  const context = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce' });
+async function launchPage({ locale = 'en', width = 1440, height = 900, empty = false, viewer = false, deniedStorage = false, mobile = width <= 760 } = {}) {
+  const context = await browser.newContext({ viewport: { width, height }, reducedMotion: 'reduce',
+    ...(mobile ? { isMobile: true, hasTouch: true,
+      userAgent: width >= 768
+        ? 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'
+        : 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1' } : {}) });
   const page = await context.newPage();
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`${origin}/app/?mock=1`);
@@ -34,7 +38,7 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
     if (!specifier) throw new Error("Fixture could not resolve the application's API module");
     const { MockCollaborationApi } = await import(new URL(specifier, mainUrl).href);
     const proto = MockCollaborationApi.prototype;
-    for (const name of ['appendHumanChat', 'appendAgentRequest', 'createHistorySummary', 'createSnapshotRequest', 'createProject', 'createSession', 'mutateProjectCode', 'clearOwnCodeBranch', 'clearProjectCode', 'setProjectMemberRole', 'createInvitation', 'acceptInvitation', 'setProjectContextPolicy']) {
+    for (const name of ['appendHumanChat', 'appendAgentRequest', 'createHistorySummary', 'createSnapshotRequest', 'createProject', 'createSession', 'mutateProjectCode', 'clearOwnCodeBranch', 'clearProjectCode', 'putProjectGithub', 'setProjectMemberRole', 'createInvitation', 'acceptInvitation', 'setProjectContextPolicy', 'transferProjectOwnership', 'deleteAccount', 'revokeDevice']) {
       const original = proto[name];
       proto[name] = function (...args) { window.realWrites.push(name); return original.apply(this, args); };
     }
@@ -59,6 +63,8 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   assert.equal(await page.locator('iframe').count(), 0, 'required notice precedes guide');
   await page.locator('#code-notice-continue').click();
   const frame = await example(page); await frame.locator(popup).waitFor();
+  assert.equal(await frame.evaluate(() => document.documentElement.dataset.mobileWorkspace === 'true'), mobile,
+    `${width}px ${mobile ? 'mobile/tablet' : 'desktop'} example uses the matching controls`);
   await page.waitForTimeout(500); await page.evaluate(() => { window.realWrites = []; });
   assert.equal(await page.locator('iframe').getAttribute('sandbox'), 'allow-scripts');
   const isolation = await frame.evaluate(() => {
@@ -70,11 +76,15 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   return { page, context, frame };
 }
 async function start(page, topic) {
-  await page.locator('#settings-button').click(); await page.locator(`[data-onboarding-topic="${topic}"]`).click();
+  await openSettings(page); await page.locator(`[data-onboarding-topic="${topic}"]`).click();
   const frame = await example(page); if (topic !== 'browse') await frame.locator(popup).waitFor(); return frame;
 }
-async function checkSummarySettingsNavigation(page, locale) {
+async function openSettings(page) {
+  if (!await page.locator('#settings-button').isVisible()) await page.locator('#mobile-tools-button').click();
   await page.locator('#settings-button').click();
+}
+async function checkSummarySettingsNavigation(page, locale) {
+  await openSettings(page);
   await page.locator('#settings-dialog[open]').waitFor();
   const syncLink = page.locator('.settings-navigation a[href="#settings-sync"]');
   const link = page.locator('.settings-navigation a[href="#settings-summaries"]');
@@ -131,17 +141,25 @@ async function assertStep(frame, item, size) {
     const card = document.querySelector('.onboarding-popover'), target = document.querySelector('.driver-active-element');
     const a = card.getBoundingClientRect(), b = target?.getBoundingClientRect();
     const ring = document.querySelector('.onboarding-ring');
+    const modal = [...document.querySelectorAll('dialog[open]')].at(-1)?.getBoundingClientRect();
+    const connector = document.querySelector('.onboarding-connector')?.getBoundingClientRect();
     const panel = target?.closest('.session-context-panel')?.getBoundingClientRect();
     return { card: [a.x, a.y, a.width, a.height], target: target?.id, inviteSubmit: target?.matches('#create-invitation-form button[type=submit]'), hint: card.innerText.includes('正在准备') || card.innerText.includes('Preparing this example'),
       overlap: b && Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)),
       panelOverlap: panel && Math.max(0, Math.min(a.right, panel.right) - Math.max(a.left, panel.left)) * Math.max(0, Math.min(a.bottom, panel.bottom) - Math.max(a.top, panel.top)),
-      targetBox: b && [b.x, b.y, b.width, b.height], ring: ring && ['x', 'y', 'width', 'height'].map((name) => Number(ring.getAttribute(name))),
+      targetBox: b && [b.x, b.y, b.width, b.height], ring: ring && ['x', 'y', 'width', 'height'].map((name) => Number(ring.getAttribute(name))), layerOffset: [connector?.x ?? 0, connector?.y ?? 0],
+      modalBox: modal && [modal.x, modal.y, modal.width, modal.height],
       focus: card.contains(document.activeElement) || Boolean(document.activeElement.closest('.example-toolbar')),
       closeOutline: getComputedStyle(card.querySelector('.driver-popover-close-btn')).outlineStyle };
   });
   assert.equal(state.hint, false, item.id);
   const [x, y, w, h] = state.card;
   assert.ok(x >= 0 && y >= 0 && x + w <= size.width + 1 && y + h <= size.height + 1, `${item.id}: ${JSON.stringify(state)}`);
+  if (state.modalBox) {
+    const [mx, my, mw, mh] = state.modalBox;
+    assert.ok(x >= mx - 1 && y >= my - 1 && x + w <= mx + mw + 1 && y + h <= my + mh + 1,
+      `${item.id} card stays inside its dialog: ${JSON.stringify(state)}`);
+  }
   // Narrow WebKit suppresses scripted button focus before user activation.
   // Require genuine keyboard entry and a working focus cycle in that case.
   if (!state.focus && browserName === 'webkit' && size.width <= 760) {
@@ -161,15 +179,23 @@ async function assertStep(frame, item, size) {
     if (item.id === 'invite') assert.equal(state.inviteSubmit, true);
     assert.ok(state.overlap < 1, `${item.id} card covers control: ${JSON.stringify(state)}`);
     if (size.width >= 1440 && state.panelOverlap !== undefined) assert.ok(state.panelOverlap < 1, `${item.id} card covers disclosure`);
-    for (let index = 0; index < 4; index++) assert.ok(Math.abs(state.ring[index] - (state.targetBox[index] + (index < 2 ? -7 : 14))) < 1, `${item.id} ring follows target`);
+    for (let index = 0; index < 4; index++) assert.ok(Math.abs(state.ring[index] - (state.targetBox[index] + (index < 2 ? -7 - state.layerOffset[index] : 14))) < 1, `${item.id} ring follows target`);
   } else assert.equal(state.target, 'driver-dummy-element', 'overview centered');
 }
 async function walk(page, frame, topic, prefix) {
-  const steps = guideSteps(topic), size = page.viewportSize();
+  const layout = await frame.evaluate(() => document.documentElement.dataset.mobileWorkspace === 'true' ? 'mobile' : 'desktop');
+  const steps = guideSteps(topic, { layout }), size = page.viewportSize();
   for (let index = 0; index < steps.length; index++) {
+    if (process.env.ONBOARDING_DEBUG) console.log(`  ${topic}/${steps[index].id}`);
     try { await assertStep(frame, steps[index], size); }
     catch (error) { await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}-failure.png` }); error.message = `${prefix} ${topic}/${steps[index].id}: ${error.message}`; throw error; }
     if (['welcome', 'create-conversation', 'model', 'answer', 'upload', 'roles', 'invite', 'enable', 'original'].includes(steps[index].id)) await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}.png` });
+    if (layout === 'mobile' && index === 1) {
+      await frame.locator('.driver-popover-prev-btn').click();
+      await assertStep(frame, steps[0], size);
+      await frame.locator('.driver-popover-next-btn').click();
+      await assertStep(frame, steps[index], size);
+    }
     if (['create-conversation', 'invite'].includes(steps[index].id)) await page.keyboard.press('ArrowRight');
     else await frame.locator('.driver-popover-next-btn').click();
   }
@@ -197,12 +223,14 @@ try {
     { locale: 'zh-CN', width: 1440, height: 900, empty: true },
     { locale: 'zh-CN', width: 390, height: 844, viewer: true },
     { locale: 'zh-CN', width: 320, height: 568, empty: true, deniedStorage: true },
+    { locale: 'en', width: 820, height: 1180, mobile: true },
+    { locale: 'zh-CN', width: 1024, height: 768, mobile: true },
   ].filter(options => !process.env.ONBOARDING_WIDTH || options.width === Number(process.env.ONBOARDING_WIDTH))) {
     console.log(`${browserName}: checking ${options.locale} ${options.width}×${options.height}${options.empty ? ' empty' : ''}${options.viewer ? ' viewer' : ''}`);
     const { page, context, frame } = await launchPage(options);
     const prefix = `${options.locale}-${options.width}`;
     await walk(page, frame, 'basics', prefix);
-    for (const topic of ['members', 'history', 'files', 'summaries']) await walk(page, await start(page, topic), topic, prefix);
+    for (const topic of ['members', 'history', 'files', 'summaries', 'account']) await walk(page, await start(page, topic), topic, prefix);
     await checkSummarySettingsNavigation(page, options.locale);
     // Free practice may mutate only fresh mock data inside the frame.
     const before = await page.evaluate(() => ({ hash: location.hash, title: document.querySelector('#session-title').textContent,
