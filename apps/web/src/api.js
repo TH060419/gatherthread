@@ -96,8 +96,8 @@ export class HttpCollaborationApi {
     }
   }
 
-  async getAccountAvatar() {
-    const actor = await this.request("/v1/me");
+  async getAccountAvatar({ signal = AbortSignal.timeout(4_000) } = {}) {
+    const actor = await this.request("/v1/me", { signal });
     return { user_id: actor.id, avatar_id: actor.avatar_id ?? null };
   }
 
@@ -105,8 +105,8 @@ export class HttpCollaborationApi {
     return this.request("/v1/me/avatar", { method: "PUT", body: JSON.stringify({ avatar_id: avatarId }) });
   }
 
-  async listAvatarProfiles(sessionId) {
-    const { profiles } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/avatar-profiles`);
+  async listAvatarProfiles(sessionId, { signal = AbortSignal.timeout(4_000) } = {}) {
+    const { profiles } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/avatar-profiles`, { signal });
     return profiles;
   }
 

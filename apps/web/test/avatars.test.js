@@ -119,3 +119,19 @@ test("HTTP avatar APIs use strict self assignment and scoped profile reads; mock
   for (const session of mock.sessions) assert.equal((await mock.listAvatarProfiles(session.id)).find(profile => profile.user_id === mock.currentUser.id)?.avatar_id, "owl");
   assert.deepEqual([...mock.events], before);
 });
+
+test("HTTP avatar reads have a finite default deadline without cancelling unrelated requests", async () => {
+  const originalFetch = globalThis.fetch;
+  const keepAlive = setTimeout(() => {}, 6_000);
+  globalThis.fetch = async (_url, { signal }) => new Promise((_resolve, reject) => {
+    assert.ok(signal instanceof AbortSignal);
+    signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+  });
+  try {
+    const api = new HttpCollaborationApi();
+    await Promise.all([
+      assert.rejects(api.getAccountAvatar(), { name: "TimeoutError" }),
+      assert.rejects(api.listAvatarProfiles("s1"), { name: "TimeoutError" }),
+    ]);
+  } finally { clearTimeout(keepAlive); globalThis.fetch = originalFetch; }
+});

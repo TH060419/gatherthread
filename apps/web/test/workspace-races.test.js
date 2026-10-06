@@ -53,12 +53,13 @@ function harness(names, overrides = {}) {
     renderCurrentAvatar: noop, applyAvatarProfiles: noop,
     renderMembers: noop, renderTimeline: noop, renderComposerPermissions: noop,
     renderSessionDeliveryControls: noop, announce: noop,
-    memberRefreshInFlight: false, stopMemberRefresh: noop, stopSnapshotPolling: noop,
+    memberRefreshInFlight: false, avatarProfilesRefreshInFlight: null, stopMemberRefresh: noop, stopSnapshotPolling: noop,
     sync: { disconnect: noop }, resetWorkspaceToAuth: noop,
     ...overrides,
     api: { getAccountAvatar: async () => ({ user_id: "u1", avatar_id: null }), listAvatarProfiles: async () => [], ...overrides.api },
   });
-  vm.runInContext(names.map(functionSource).join("\n"), context);
+  vm.runInContext([...new Set(["captureWorkspaceScope", "refreshAccountAvatar", "refreshAvatarProfiles", ...names])]
+    .map(functionSource).join("\n"), context);
   return context;
 }
 
@@ -251,6 +252,68 @@ test("pending avatar metadata cannot delay opening a session or connecting realt
     assert.equal(connections, 1);
     assert.equal(app.sessionView.hidden, false);
   } finally { pending.resolve([]); await work; }
+});
+
+test("avatar reads are single-flight per selection and late profiles cannot cross a session or save fence", async () => {
+  const first = deferred(), second = deferred();
+  const applied = [];
+  let calls = 0;
+  const app = harness(["refreshAvatarProfiles"], {
+    api: { listAvatarProfiles: () => (++calls === 1 ? first.promise : second.promise) },
+    applyAvatarProfiles: profiles => applied.push(profiles),
+  });
+  app.state.avatarProfileRevision = 0;
+  const stale = app.refreshAvatarProfiles("s1");
+  await app.refreshAvatarProfiles("s1");
+  assert.equal(calls, 1);
+  app.selectedSessionGeneration += 1;
+  app.state.session = { id: "s2" };
+  const current = app.refreshAvatarProfiles("s2");
+  first.resolve([{ user_id: "u1", avatar_id: "cat" }]);
+  await stale;
+  assert.equal(applied.length, 0);
+  assert.ok(app.avatarProfilesRefreshInFlight);
+  app.state.avatarProfileRevision += 1;
+  second.resolve([{ user_id: "u1", avatar_id: "fox" }]);
+  await current;
+  assert.equal(applied.length, 0);
+  assert.equal(app.avatarProfilesRefreshInFlight, null);
+});
+
+test("late account avatar reads cannot overwrite a save or a new authenticated account", async () => {
+  for (const change of ["save", "account"]) {
+    const pending = deferred();
+    let renders = 0;
+    const app = harness(["refreshAccountAvatar"], {
+      api: { getAccountAvatar: () => pending.promise }, renderCurrentAvatar: () => { renders += 1; },
+    });
+    app.state.avatarProfileRevision = 0;
+    const work = app.refreshAccountAvatar();
+    if (change === "save") app.state.avatarProfileRevision += 1;
+    else { app.authenticationGeneration += 1; app.state.currentUser = { id: "u2", avatar_id: "owl" }; }
+    pending.resolve({ user_id: "u1", avatar_id: "cat" });
+    await work;
+    assert.equal(renders, 0);
+    assert.notEqual(app.state.currentUser.avatar_id, "cat");
+  }
+});
+
+test("avatar refresh failures release their own slot and a successful retry updates presentation", async () => {
+  let calls = 0;
+  const applied = [];
+  const app = harness(["refreshAvatarProfiles", "refreshAccountAvatar"], {
+    api: { listAvatarProfiles: async () => {
+      if (++calls === 1) throw new Error("profile timeout");
+      return [{ user_id: "u1", avatar_id: "owl" }];
+    }, getAccountAvatar: async () => ({ user_id: "u1", avatar_id: "owl" }) },
+    applyAvatarProfiles: profiles => applied.push(profiles),
+  });
+  await app.refreshAvatarProfiles("s1");
+  assert.equal(app.avatarProfilesRefreshInFlight, null);
+  await app.refreshAvatarProfiles("s1");
+  assert.equal(applied[0][0].avatar_id, "owl");
+  await app.refreshAccountAvatar();
+  assert.equal(app.state.currentUser.avatar_id, "owl");
 });
 
 test("context policy save failure stays in settings with a relevant bilingual error and no false local save", async () => {

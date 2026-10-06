@@ -263,6 +263,36 @@ function applyAvatarProfiles(profiles) {
   }
 }
 
+async function refreshAccountAvatar() {
+  const user = state.currentUser;
+  const authentication = authenticationGeneration;
+  const revision = state.avatarProfileRevision;
+  try {
+    const profile = await api.getAccountAvatar();
+    if (authentication !== authenticationGeneration || user !== state.currentUser
+      || revision !== state.avatarProfileRevision || profile?.user_id !== user?.id) return;
+    user.avatar_id = profile.avatar_id;
+    renderCurrentAvatar();
+  } catch { /* Presentation metadata must not block workspace access. */ }
+}
+
+let avatarProfilesRefreshInFlight = null;
+async function refreshAvatarProfiles(sessionId) {
+  if (state.session?.id !== sessionId || avatarProfilesRefreshInFlight?.isCurrent()) return;
+  const isCurrent = captureWorkspaceScope();
+  const revision = state.avatarProfileRevision;
+  const request = { isCurrent };
+  avatarProfilesRefreshInFlight = request;
+  try {
+    const profiles = await api.listAvatarProfiles(sessionId);
+    if (!isCurrent() || state.session?.id !== sessionId || revision !== state.avatarProfileRevision) return;
+    applyAvatarProfiles(profiles);
+    renderMembers();
+    renderTimeline({ preserveAnchor: true });
+  } catch { /* Keep confirmed avatars; permissions refresh independently. */ }
+  finally { if (avatarProfilesRefreshInFlight === request) avatarProfilesRefreshInFlight = null; }
+}
+
 const agentRequestControl = mountAgentRequestControl({
   button: sendAgentButton, targetLabel: element("agent-target-label"), errorNode: sendError, api,
   getContext: () => ({
@@ -1330,12 +1360,8 @@ async function enterWorkspace(preferredProjectId) {
   if (!exampleMode) codeSyncUi.showFirstLoginNotice(noticeDeviceId);
   element("current-username").textContent = state.currentUser.username;
   renderCurrentAvatar();
-  const avatarRevision = state.avatarProfileRevision;
-  const [projects, profile] = await Promise.all([api.listProjects(), api.getAccountAvatar().catch(() => null)]);
-  if (isCurrent() && avatarRevision === state.avatarProfileRevision && profile?.user_id === state.currentUser?.id) {
-    state.currentUser.avatar_id = profile.avatar_id;
-    renderCurrentAvatar();
-  }
+  void refreshAccountAvatar();
+  const projects = await api.listProjects();
   if (!isCurrent() || selection !== selectedSessionGeneration) return;
   state.projects = projects;
   renderProjectSelect();
@@ -1479,14 +1505,14 @@ async function selectSession(sessionId) {
   downloadCodexButton.disabled = true;
   try {
     const avatarRevision = state.avatarProfileRevision;
-    const [session, members, profiles] = await Promise.all([
+    const [session, members] = await Promise.all([
       api.getSession(sessionId),
       api.listMembers(sessionId),
-      api.listAvatarProfiles(sessionId).catch(() => null),
     ]);
     if (generation !== selectedSessionGeneration) return;
-    if (avatarRevision === state.avatarProfileRevision) applyAvatarProfiles(profiles ?? members.map(member => ({ user_id: member.userId, avatar_id: member.avatar_id ?? null })));
+    if (avatarRevision === state.avatarProfileRevision) applyAvatarProfiles(members.map(member => ({ user_id: member.userId, avatar_id: member.avatar_id ?? null })));
     state.session = { ...session, members };
+    void refreshAvatarProfiles(sessionId);
     state.executionRuntimes = [];
     startMemberRefresh(sessionId);
     location.hash = new URLSearchParams({ project: projectId, session: sessionId }).toString();
@@ -1672,10 +1698,9 @@ async function refreshMembers(sessionId) {
   const isCurrent = captureWorkspaceScope();
   memberRefreshInFlight = isCurrent;
   try {
-    const avatarRevision = state.avatarProfileRevision;
-    const [members, profiles] = await Promise.all([api.listMembers(sessionId), api.listAvatarProfiles(sessionId).catch(() => null)]);
+    void refreshAvatarProfiles(sessionId);
+    const members = await api.listMembers(sessionId);
     if (!isCurrent() || state.session?.id !== sessionId) return;
-    if (profiles && avatarRevision === state.avatarProfileRevision) applyAvatarProfiles(profiles);
     state.session = { ...state.session, members };
     renderMembers();
     renderTimeline();
