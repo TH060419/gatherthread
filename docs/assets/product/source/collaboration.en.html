@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GatherThread · Work together. Stay in control.</title>
+  <link rel="stylesheet" href="posters.css">
+</head>
+<body>
+  <!-- Approved direction C. The illustration is schematic, not product UI.
+       Shared cloud discussion and file versions connect people's local computers.
+       Agent calls are per-person and explicit. File changes are reviewed by people. -->
+  <main class="poster collaboration" aria-label="Work together. Stay in control.">
+    <img class="brand" src="../gatherthread-lockup.svg" alt="GatherThread">
+    <p class="top-note">People initiate. People review.</p>
+    <h1 class="headline collaboration-headline"><span>Work together.</span><span>Stay in control.</span></h1>
+    <p class="collaboration-pillar">People · Devices · Agents</p>
+    <div class="collaboration-claims">
+      <p><strong>Discuss together</strong>People decide what to build.</p>
+      <p><strong>Call your own Agent</strong>Use your own Codex / DSH.</p>
+      <p><strong>Review file changes</strong>Share versions. Review changes.</p>
+    </div>
+    <figure class="collaboration-diagram" aria-label="Collaboration schematic connecting shared cloud discussion and file versions with each person's local computer and Agent">
+      <div class="diagram-image-crop"><img src="../collaboration-illustration.png" alt="Conceptual illustration of three people using their own local computers and Agents, sharing cloud discussion and file versions, and continuing on a phone"></div>
+      <figcaption class="diagram-caption">Collaboration schematic</figcaption>
+      <p class="node-label cloud-label">Shared cloud discussion</p>
+      <p class="node-label file-label">Shared file versions</p>
+      <p class="node-label local-left">Your computer &amp; Agent</p>
+      <p class="node-label local-right">Your computer &amp; Agent</p>
+      <p class="node-label local-bottom">Your computer &amp; Agent</p>
+      <p class="node-label phone-label">Continue on mobile</p>
+    </figure>
+    <p class="shared-label">Shared discussion · Shared file versions</p>
+    <p class="shared-subline">Discuss together. Build together. Continue on another device.</p>
+    <p class="fineprint">Collaboration schematic</p>
+  </main>
+  <script type="application/json" id="design-signal">
+    {"type":"DesignSignalPacket","composition_state":{"approved_direction":"C","approval_quote":"按你说的来吧 别忘了实机图的事","canvas":[1600,1000],"grid":"copy-illustration split field","primary_anchor":[576,235],"secondary_anchor":[96,199],"feature_model":"cloud discussion and file versions connect people and their local computers; Agent execution is per-person and human-initiated; humans review changes","image_role":"schematic"},"typography_state":{"locale":"en","font_families":["SF Pro Display","Helvetica Neue","PingFang SC","sans-serif"],"headline_locked":"Work together.\nStay in control.","diagram_copy_locks":["Shared cloud discussion","Shared file versions","Your computer & Agent","Continue on mobile"],"headline_zone":[96,199,480,190],"claim_zone":[100,532,451,325]}}
+  </script>
+  <script>
+    const fitPoster = () => document.documentElement.style.setProperty('--poster-scale', Math.min(innerWidth / 1600, innerHeight / 1000));
+    fitPoster(); addEventListener('resize', fitPoster);
+    Promise.all(Array.from(document.images, img => img.complete ? Promise.resolve() : new Promise(resolve => { img.onload = resolve; img.onerror = resolve; }))).then(async () => {
+      await document.fonts.ready;
+      window.__assetErrors = Array.from(document.images).filter(img => !img.naturalWidth).map(img => img.getAttribute('src'));
+      window.__ready = window.__assetErrors.length === 0;
+    });
+  </script>
+</body>
+</html>

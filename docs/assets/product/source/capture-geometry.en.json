@@ -1,0 +1,462 @@
+[
+  {
+    "name": "01-workspace",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 18,
+        "y": 456,
+        "width": 303,
+        "height": 517,
+        "text": "Choose a conversation"
+      },
+      {
+        "x": 347,
+        "y": 110,
+        "width": 766,
+        "height": 890,
+        "text": "Discuss and work together"
+      },
+      {
+        "x": 1139,
+        "y": 207,
+        "width": 283,
+        "height": 271,
+        "text": "Follow your teammates"
+      }
+    ]
+  },
+  {
+    "name": "02-discussion",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 381,
+        "y": 221.515625,
+        "width": 698,
+        "height": 156.84375,
+        "text": "Suggest a goal"
+      },
+      {
+        "x": 381,
+        "y": 390.359375,
+        "width": 698,
+        "height": 156.84375,
+        "text": "Agree on the first version"
+      },
+      {
+        "x": 626,
+        "y": 892.5,
+        "width": 220,
+        "height": 40,
+        "text": "Chat without starting AI"
+      }
+    ]
+  },
+  {
+    "name": "03-summary",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 857.015625,
+        "y": 120.5,
+        "width": 36,
+        "height": 36,
+        "text": "Select messages to summarize"
+      },
+      {
+        "x": 381,
+        "y": 221.515625,
+        "width": 698,
+        "height": 278.390625,
+        "text": "Keep an agreed checklist"
+      },
+      {
+        "x": 949.015625,
+        "y": 120.5,
+        "width": 93.984375,
+        "height": 36,
+        "text": "Return to the originals"
+      }
+    ]
+  },
+  {
+    "name": "04-agent-work",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 381,
+        "y": 290.75,
+        "width": 698,
+        "height": 204.96875,
+        "text": "See whose Agent did the work"
+      },
+      {
+        "x": 381,
+        "y": 507.71875,
+        "width": 698,
+        "height": 177.765625,
+        "text": "Teammates check the result"
+      },
+      {
+        "x": 858,
+        "y": 892.5,
+        "width": 220,
+        "height": 40,
+        "text": "Explicitly ask your Agent"
+      }
+    ]
+  },
+  {
+    "name": "05-quote-and-mention",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 368,
+        "y": 737,
+        "width": 696,
+        "height": 28,
+        "text": "Reply to a specific message"
+      },
+      {
+        "x": 368,
+        "y": 770,
+        "width": 696,
+        "height": 40,
+        "text": "Mention a specific teammate"
+      }
+    ]
+  },
+  {
+    "name": "06-mentions",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 448,
+        "y": 483.921875,
+        "width": 544,
+        "height": 86.15625,
+        "text": "Open the relevant message"
+      }
+    ]
+  },
+  {
+    "name": "07-file-service",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 464.390625,
+        "y": 310.53125,
+        "width": 78.8125,
+        "height": 44,
+        "text": "GitHub for real development"
+      },
+      {
+        "x": 364,
+        "y": 310.53125,
+        "width": 92.390625,
+        "height": 44,
+        "text": "GT Cloud for small trials"
+      },
+      {
+        "x": 364,
+        "y": 672.796875,
+        "width": 712,
+        "height": 59.046875,
+        "text": "Review members’ versions"
+      }
+    ]
+  },
+  {
+    "name": "07-file-versions",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 364,
+        "y": 663.046875,
+        "width": 712,
+        "height": 108,
+        "text": "Everyone has a file branch"
+      },
+      {
+        "x": 364,
+        "y": 605.046875,
+        "width": 218.625,
+        "height": 44,
+        "text": "Ask for a human review"
+      }
+    ]
+  },
+  {
+    "name": "08-review-changes",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 364,
+        "y": 514.734375,
+        "width": 712,
+        "height": 326.75,
+        "text": "Inspect the actual files"
+      },
+      {
+        "x": 364,
+        "y": 857.484375,
+        "width": 218.59375,
+        "height": 44,
+        "text": "Integrate only after review"
+      }
+    ]
+  },
+  {
+    "name": "09-github",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 364,
+        "y": 420.953125,
+        "width": 712,
+        "height": 272,
+        "text": "Choose a repository and base"
+      },
+      {
+        "x": 364,
+        "y": 743.953125,
+        "width": 712,
+        "height": 25,
+        "text": "Authorize your computer too"
+      }
+    ]
+  },
+  {
+    "name": "15-history-controls",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 678.625,
+        "y": 361.34375,
+        "width": 124.390625,
+        "height": 17,
+        "text": "Import into a new local task"
+      },
+      {
+        "x": 371.015625,
+        "y": 482.5625,
+        "width": 230.671875,
+        "height": 48,
+        "text": "Control local-to-cloud upload"
+      },
+      {
+        "x": 613.6875,
+        "y": 496.0625,
+        "width": 189.328125,
+        "height": 30,
+        "text": "Manually upload completed turns"
+      }
+    ]
+  },
+  {
+    "name": "10-summary-settings",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 945,
+        "y": 317.46875,
+        "width": 300,
+        "height": 40,
+        "text": "Choose summary or originals"
+      },
+      {
+        "x": 415,
+        "y": 503.1875,
+        "width": 830,
+        "height": 192.75,
+        "text": "Customize summary instructions"
+      }
+    ]
+  },
+  {
+    "name": "11-focused-workspace",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 0,
+        "y": 110,
+        "width": 1426,
+        "height": 890,
+        "text": "Give the conversation more room"
+      }
+    ]
+  },
+  {
+    "name": "12-phone",
+    "locale": "en",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "points": [
+      {
+        "x": 21,
+        "y": 678.609375,
+        "width": 348,
+        "height": 90.390625,
+        "text": "Continue the discussion"
+      },
+      {
+        "x": 69,
+        "y": 773,
+        "width": 92.34375,
+        "height": 44,
+        "text": "Choose your online Agent"
+      }
+    ]
+  },
+  {
+    "name": "12-phone-agent",
+    "locale": "en",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "points": [
+      {
+        "x": 39,
+        "y": 490.546875,
+        "width": 312,
+        "height": 44,
+        "text": "Choose a supported model"
+      },
+      {
+        "x": 39,
+        "y": 573.546875,
+        "width": 312,
+        "height": 44,
+        "text": "Adjust reasoning level"
+      }
+    ]
+  },
+  {
+    "name": "13-tablet",
+    "locale": "en",
+    "viewport": {
+      "width": 820,
+      "height": 1180
+    },
+    "points": [
+      {
+        "x": 21,
+        "y": 1014.609375,
+        "width": 778,
+        "height": 90.390625,
+        "text": "Keep working on a tablet"
+      },
+      {
+        "x": 69,
+        "y": 1109,
+        "width": 92.34375,
+        "height": 44,
+        "text": "Open compact Agent controls"
+      }
+    ]
+  },
+  {
+    "name": "13-tablet-agent",
+    "locale": "en",
+    "viewport": {
+      "width": 820,
+      "height": 1180
+    },
+    "points": [
+      {
+        "x": 171,
+        "y": 649.90625,
+        "width": 478,
+        "height": 44,
+        "text": "Choose a supported model"
+      },
+      {
+        "x": 171,
+        "y": 732.90625,
+        "width": 478,
+        "height": 44,
+        "text": "Adjust reasoning level"
+      }
+    ]
+  },
+  {
+    "name": "14-working-result",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 553.84375,
+        "y": 536.296875,
+        "width": 146.1875,
+        "height": 51,
+        "text": "Try the real example button"
+      },
+      {
+        "x": 553.84375,
+        "y": 607.296875,
+        "width": 332.296875,
+        "height": 23,
+        "text": "Check the agreed result"
+      }
+    ]
+  }
+]

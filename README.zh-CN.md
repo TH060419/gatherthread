@@ -1,171 +1,106 @@
-# GatherThread
+# GatherThread 共序
 
-**GatherThread（共序）** 是面向多人联机协作、各自使用本地 AI 编程 Agent 的开源、可自托管工作区。Codex Desktop 与 DeepSeek Harness 可以接入同一项目的有序历史和共享上下文：会话按参与者标注、可重放并实时同步，Solo/Multi 模式有明确的角色权限。每位成员保留自己的本地 Agent 和凭据；Git 代码检查点需单独主动授权，不是默认上传。
+**多人、多端、多 Agent，一起做项目。**
 
-**Alpha 8** 新增中英文初次使用引导与隔离练习项目、消息引用和 @成员、会话阅读与定位优化、由本地 Agent 声明的模型选择、可选的 Windows/macOS Codex 启动器原型、账号自行注销。限制与验证要求见 [Alpha 8 说明](docs/releases/0.1.0-alpha.8.md)。
+让讨论和开发发生在同一个地方。GatherThread 把**多人联机、共享会话、各自的 AI Agent 和文件协作**放在一起：说清楚要做什么，请自己的 Agent 开始做，同伴一起看进展、检查成果。换到手机或平板，也能接着推进。
 
-**云端体验 Agent 源码预览：**正在准备一个可选的隔离 [OpenCode](https://github.com/anomalyco/opencode) 工作区，供初次使用者编辑代码和运行终端命令。读取项目云端代码及保存到个人分支均须主动选择。启用后可在工作页及设置中选择与 Codex、DSH 并列的云端 Agent；管理员可配置多个 API 账号提供并行容量。管理员接入模型 API 并验证容器前，该功能默认关闭；这不表示 gatherthread.cn 现已开放云端 Agent。见[用户指南](docs/HOSTED_AGENT_GUIDE.zh-CN.md)和[运维指南](docs/HOSTED_AGENT.md)。 另有[云端 GitHub 开发预览](docs/HOSTED_GITHUB.md)，支持账号授权、npm 依赖准备、私有源码保存、改动查看和主动创建草稿 PR，首期面向 Node.js/TypeScript 项目；真实 App、模型与 Linux 容器验证仍是启用前的必要步骤。
+[开始使用](https://gatherthread.cn/app/) · [自由示例](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse) · [图文指南](docs/PRODUCT_GUIDE.zh-CN.md) · [English](README.md)
 
-> **Alpha 7：可选的项目代码协作。** 云端 Git 代码检查点支持每位成员独立分支、手动/空闲时自动上传、安全下载、恢复到新目录，以及创建者审核合并。Codex 需显式添加 `--code-sync` 授权，DSH 可在插件设置中逐项目授权并操作。聊天上传与实时上下文注入不受影响，原有本地 Git 分支和暂存区不被改动。所有项目成员均可读取代码分支，Solo 不提供代码隐私隔离。详见[使用流程、边界与测试清单](docs/CODE_SYNC.md)。
+![GatherThread：多人、多端、多 Agent，一起做项目](docs/assets/product/cover.zh-CN.jpg)
 
-> **Alpha 7：云端代码配额与清理。** 每用户有效云端代码快照限额为 128 MiB；成员可在设置中清理自己的云端分支，项目创建者还可选择清理整个项目的云端 Git。清理个人分支不会撤销已合入共享 `main` 的代码；任何云端清理都不会改动本地 Git 或 Agent 文件。它会撤销云端访问并释放逻辑配额，但物理 Git 对象和旧备份需另行按运维保留策略清理。详见[代码协作指南](docs/CODE_SYNC.md)。
+开源 · 可自托管 · 当前版本标识 **0.1.0-alpha.8** · [Apache 2.0](LICENSE)
 
-> **原生上下文管理与审计修复。** Alpha 8 优先使用 Codex 原生窗口与用量，保留 DSH 自身模型及压缩设置，不再直接裁剪限额内接收的公开历史。原生压缩不是无限或无损记忆，特殊恢复仍有限制；详见 [Codex 指南](docs/CODEX_CONNECT.zh-CN.md)和 [DSH 指南](docs/DSH_CONNECT.zh-CN.md)。
+## 一起聊，一起做，换个设备接着来
 
-[English](README.md) | [简体中文](README.zh-CN.md)
+**多人：让讨论直接推动开发。** 大家共用一段会话，聊天、引用、@同伴、AI 进展和回答都在一起。各自的 Agent 能参考共享讨论，少一点复制转发，多一点真正协作。
 
-[![Alpha](https://img.shields.io/badge/alpha-0.1.0--alpha.8-0f766e.svg)](docs/releases/0.1.0-alpha.8.md) [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+**多端：人离开电脑，项目不必停。** 同一账号可在电脑、手机、平板同时登录。路上回同伴、看进展、请电脑上的 Agent 继续做；换电脑时，也能下载已保存的文件版本接着工作。
 
-**一个空间，汇聚众智。**
+**多 Agent：每个人用合适的帮手。** 带上熟悉的 Codex 或 DeepSeek Harness，也可直接选择云端体验 Agent 做小项目。各自选择自己的 Agent、模型和思考强度，团队共享讨论和成果。
 
-**GatherThread** 不绑定具体 Agent harness，每位协作者都可以保留自己熟悉的本地 Agent、模型选择和工作方式。
+![共享讨论和文件版本，各自调用 Agent，检查后整合](docs/assets/product/collaboration.zh-CN.jpg)
 
-> **账号更新尚未发布。** 当前线上 Alpha 尚未切换本分支，也未开放公众注册。开放前需完成审核与运维检查。
+## 看一个小项目怎么完成
 
-Git 标签、npm 包和 GitHub Release 的对应信息见[发布记录索引](docs/releases/README.md)。
+以下实机图为应用内自由示例的完整界面，并配以重点标注；人物、讨论和 Agent 回答均为演示内容。
 
-## 注册与登录
+### 1. 先说清楚，再请 AI 做
 
-验证邮箱并设置密码后，即可用邮箱和密码登录，创建项目或接受项目邀请。Agent 通过独立设备授权连接。忘记密码时，在登录页请求邮箱验证码并设置新密码；重设后所有设备退出登录、Agent 授权撤销，项目保留。
+林悦和陈晓约定：做一个社团报名页，显示时间、地点，点击按钮后提示报名成功。聊天不会启动 Agent；讨论较长时，可以先请自己已连接的电脑 Agent 把选中的消息整理成清单，原文仍可查看。
 
-同一账号可在电脑、手机和平板同时登录，每个浏览器拥有独立会话，退出当前浏览器不会影响其他端。在“设置 → 当前设备 → 账号下的设备”可查看并单独撤销设备。手机调用已连接的电脑 Agent 时，请保持电脑连接器运行并选择该 Agent 设备；新增 Agent 仍需单独授权。
+![完整界面与重点标注：报名页制作清单与原文切换](docs/assets/product/zh-CN/annotated/03-summary.jpg)
 
-注册和找回密码默认关闭，完成[运维配置](docs/OPERATIONS.md)后分别启用。当前线上 Alpha 尚未部署此源码预览。账号及设备设计见 [ADR-0036](docs/adr/0036-verified-email-registration-and-password-login.md)。
+### 2. 各自调用，同伴跟进
 
-使用疑问、缺陷和非敏感反馈，请[提交 GitHub Issue](https://github.com/TH060419/gatherthread/issues)；安全问题请私下联系 [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn)，不要附上凭据或未脱敏的私人会话。
+陈晓明确请求自己的 Agent 制作页面。回复标明归属，公开工作进展和最终回答留在同一段会话里；林悦能接着检查，不必再去群聊索要结果。
 
-- `solo`：由创建者发布完整的规范化会话事件流；项目内其他所有人只读，即使对方是项目创建者。
-- `multi`：多人共享一个有序的项目会话。普通聊天消息只进入共享会话，不会调用 Agent；连接本地 Agent 后，请求只由发送者自己的本地 runtime 领取。服务器启用云端体验功能后，用户可另行发起在隔离容器中运行的云端请求。回复会标注用户名、harness、provider、模型和上下文保真度，不会向其他成员暴露本地设备或原生会话标识。
+![完整界面与重点标注：Agent 制作结果与同伴反馈](docs/assets/product/zh-CN/annotated/04-agent-work.jpg)
 
-服务器使用 SQLite WAL 持久化只追加的规范事件日志，为每个会话分配权威序号，执行基于角色的访问控制，并提供可持久重放的历史记录和 WebSocket 实时推送。Codex 与 DeepSeek Harness 分别维护同一份规范历史的原生投影，通过持久游标和 outbox 断线恢复；每个 Agent 请求只会路由到用户明确选择的 runtime。
+### 3. 保存进度，看过改动再整合
 
-中英文网页工作区会响应窗口尺寸，并允许调整主要区域大小。项目级设置统一管理默认 Agent 模型、推理强度和 Codex 备用上下文预算；无障碍自定义控件、默认高对比度和适配日夜主题的环境柔光，让界面保持清晰，同时不干扰会话内容。
+林悦改善报名提示，把文件上传到自己的版本并提交审核。在这个 GT Cloud 示例中，项目创建者查看差异后决定是否合并。使用 GitHub 时，则走仓库的 PR 审核。自动上传帮忙保存进度，不替人做合并决定。
 
-网页 Agent 回合采用接近 Codex Desktop 的阅读层级：公开工作进展实时出现，最终答复到达后自动收进可展开的“工作过程”。最终答复与工作进展均使用安全的 GitHub 风格 Markdown 渲染，并通过本地打包的 KaTeX 显示行内与块级公式；隐藏推理不会上传或显示。
+![完整界面与重点标注：审核报名提示的文件改动](docs/assets/product/zh-CN/annotated/08-review-changes.jpg)
 
-## 项目与权限模型
+### 4. 换到手机，继续推进
 
-项目是协作、邀请和权限的边界。项目创建者（`owner`）可以重命名项目、创建 `multi` 会话、在 `solo` 与 `multi` 之间切换自己创建的会话，并可随时把其他成员调整为参与者（`participant`）或访者（`viewer`）。创建者与参与者都可以创建自己的个人 `solo`；只有该 Solo 的创建者可以写入或改名，项目内其他人全部只读。参与者还可以在所有 `multi` 会话中聊天并请求自己的本地 Agent。访者对整个项目只读，其本地新任务不会创建任何云端会话。会话创建者或项目创建者可永久删除该会话的云端副本，只有项目创建者可删除整个云端项目。云端删除会停止同步并清除服务器上的共享历史，但不会删除任何本地工作区、文件、Codex 任务或 Agent 对话。
+不用在手机安装本地 Agent：调用同一账号已连接的电脑 Agent，或使用云端体验 Agent 即可。电脑 Agent 需保持电脑和连接器在线；手机不必靠近电脑，只需能访问服务器。
 
-## “完整上下文”的含义
+<img src="docs/assets/product/zh-CN/annotated/12-phone.jpg" alt="完整界面与重点标注：手机上继续共享会话" width="390">
 
-项目明确记录三种上下文保真度：
+[看完整流程：讨论、引用/@、摘要、文件成果、手机和平板 →](docs/PRODUCT_GUIDE.zh-CN.md)
 
-1. `canonical_history`：该成员可见的完整共享事件历史。
-2. `harness_transcript`：从已授权的本地 harness 会话记录中实际观察到的内容。
-3. `provider_request`：由明确授权的 harness hook 或 provider 代理观察到的原始请求。
+## 文件协作：实际开发优先 GitHub
 
-MCP 服务器无法自行读取 host 中的完整会话。因此，根据历史重建的上下文绝不会被标记为 `provider_request`；只有本地 bridge 获得明确授权并确认捕获到原始请求时，才能上传这一保真度的上下文。上下文压缩由每个本地 Agent 自行处理，共享的规范事件日志保持完整和持久。
-
-Alpha 7 还支持**手动总结部分会话历史**：只有该会话的写入者能选取公开且已完成的消息，交给自己已连接的本地 Agent 生成带作者与来源的共享总结；访者能阅读和切换视图，不能发起生成。原文永远保留，可切换查看、再次选择，也可将已有总结的正文与其他消息一起选入下一次总结。每位成员可独立设置今后从 GatherThread 网页发起的 Agent 请求默认注入“总结后内容”（默认，较精简但可能遗漏细节）或“原文”（更完整但占用更多上下文），并修改或重置自己的总结提示词；这一选择也适用于显式读取派生上下文的 MCP 工具，但不会反向改写 Codex/DSH 已有原生会话。这与原生自动压缩及本地回合自动上传开关相互独立。详见 [ADR-0027](docs/adr/0027-shared-manual-history-summaries.md)。
-
-## 仓库结构
-
-| 路径 | 职责 |
-|---|---|
-| `apps/server` | 带身份验证的 HTTP/WebSocket 服务、SQLite WAL、ACL、历史重放和 runtime 请求领取 |
-| `apps/web` | 支持中英文、区域调节、Agent 设置、solo/multi、聊天/Agent 请求和断线补偿的响应式工作区 |
-| `site` | 介绍 GatherThread 并进入同源应用的中英文产品首页 |
-| `packages/protocol` | 规范事件和 API schema |
-| `packages/adapters` | 已授权的 Codex、Claude Code 会话发现、解析和脱敏 |
-| `packages/bridge` | 本地 runtime 注册、游标、上下文上传和请求领取/完成流程 |
-| `packages/dsh-host` | 默认关闭的 DeepSeek Harness Host/Client 插件、配对、项目绑定、恢复与脱敏 |
-| `packages/mcp` | MCP 工具、资源和无状态 Streamable HTTP JSON-RPC handler |
-| `tests` | 契约、安全、备份和真实 server-to-bridge 集成测试 |
-
-## 环境要求与验证
-
-服务器使用 `node:sqlite`，因此需要 Node.js 24 或更新版本。
-
-```bash
-npm install
-npm run verify
-```
-
-`verify` 会运行严格的 TypeScript 检查、server/protocol/adapter/bridge/MCP 测试、Web 测试和构建、真实的 server-to-bridge Agent 回合、协作契约测试、参考项目与许可证检查、密钥扫描和 npm 漏洞审计。密钥扫描检查所有可能被 Git 提交的文件，但不会读取 `.gitignore` 已排除的本地 `.env`；如果有人强制跟踪 `.env`，扫描仍会阻止提交。
-
-## 本地端到端运行
-
-首次初始化会在缺少 `.env` 或 Pepper 留空时自动生成权限为 `0600` 的私有 `.env` 和稳定随机 Pepper。仅准备私有配置，不创建账号；然后启动同源的 Web/API/WebSocket 服务：
-
-```bash
-npm run connection:local
-npm run owner-host:init
-npm run owner-host
-```
-
-如需自定义端口或路径，可以在初始化前手动复制 `.env.example`；`owner-host:init` 会只填充空的 Pepper，不会覆盖其他设置。`owner-host` 每次启动都会自动构建当前源码。
-
-打开 `http://127.0.0.1:18787`，进入 `/app/` 后用邮箱验证注册，再用自设密码登录。注册默认关闭，需按 [运维检查](docs/OPERATIONS.md) 配置邮件与安全验证服务后启用。找回密码需独立开启并完成相同的邮件与安全验证配置。浏览器仅持有 HttpOnly 会话 Cookie，默认 24 小时，勾选“记住此设备”为 30 天；退出即撤销当前会话。Agent 独立设备授权在连接器中兑换，不复用用户密码。
-
-如果只开发 UI，运行 `npm --workspace apps/web run dev` 即可启动仅绑定 loopback 的预览服务并代理本地 API。产品首页位于 `http://127.0.0.1:4173/`；工作区显式 mock 模式只在 `http://127.0.0.1:4173/app/?mock=1` 可用，演示凭据为 示例邮箱 `demo@example.invalid` 和示例密码 `isolated demo password`。
-
-## 服务器 Alpha 与其他连接方式
-
-当前服务器 Alpha 入口为 [https://gatherthread.cn](https://gatherthread.cn/)，同源工作区位于 `/app/`。所有者管理的 ECS 服务由 Caddy 提供 HTTPS，应用本身只监听 loopback；邮箱注册默认关闭，不提供公开 Git 传输。加入项目后，再从自己的设备连接 Codex 或 DeepSeek Harness。普通产品测试不需要服务器 SSH 账号。
-
-如需独立自托管，无需阿里云账号也可使用三种方式；它们保留该部署自己的私有 `.env`、数据库、凭据 Pepper、用户和历史：
-
-| 方式 | 命令 | 场景 |
+| 选择 | 适合谁 | 怎样协作 |
 |---|---|---|
-| 仅本机 | `npm run connection:local` | 一台电脑完整测试，不开放网络 |
-| 局域网 HTTPS | `npm run lan:start` | 同一可信局域网内的已知设备；自动选址并启动两个服务 |
-| Tailscale Serve | `npm run connection:tailscale -- --url https://主机.tailnet.ts.net` | 跨网络的小规模已知协作者 |
+| **GitHub，优先推荐** | 实际开发、长期项目 | 各自授权，上传到个人分支，文件直达 GitHub、不占 GT 文件额度；按仓库规则审核 PR。 |
+| **GT Cloud，轻量体验** | 小项目、先体验协作 | 每用户 128 MiB 有效文件版本额度；在工作页查看分支和差异，由项目创建者审核合并。 |
 
-局域网模式仍把应用限制在 loopback，只让专用 Caddy HTTPS 代理绑定选定的私网地址；客户端必须显式信任专用本地 CA，不能绕过证书警告，也不能配置路由器端口转发。校园网通常属于学校管理的局域网络，但不保证终端可以直接互访：只有校方策略允许且设备间可达时才使用局域网模式；遇到客户端隔离或 VLAN 分区时，已有资格的测试者可改用服务器 Alpha，或使用私有 Tailscale 部署。完整操作与模式切换参见[无云账户连接方案](docs/CONNECTION_MODES.zh-CN.md)，Tailscale 权限和备份参见[单主机部署指南](docs/SELF_HOSTING.md)。
+支持手动上传、空闲时自动上传、下载更新和恢复到新目录。**不自动下载、不自动合并**；恢复只能找回已上传且符合规则的项目文件。文件传输需要授权且在线的电脑设备。
 
-## 接入本地 Codex Agent
+两种服务分别管理，不会自动搬迁已有文件。GitHub 仍有自身规则和本地传输安全限制；GT 项目权限不会替代 GitHub 仓库权限。个人分支不隔离本地目录，多人或多个工具同时改文件时，请各自使用独立目录。
 
-网页里的 **连接 Codex** 统一为三个步骤：
+[文件协作与恢复指南 →](docs/CODE_SYNC.md)
 
-1. 一次性安装固定版本的 **共序 / GatherThread** Codex 插件。
-2. 复制网页生成的 macOS/Linux 或 PowerShell 连接命令。命令已包含 `--plugin-hooks`，但不含任何凭据。
-3. 重启 Codex Desktop，审查并启用插件 Hooks，然后保持连接器终端运行。
+## 从这里开始
 
-插件只需安装一次：
+1. [验证邮箱、设置密码并登录](https://gatherthread.cn/app/)，创建项目和一个 **Multi 多人会话**，邀请同伴；也可接受已有项目的邀请。
+2. 选择云端体验 Agent，直接尝试小任务；或在电脑上连接自己的 Agent：[Codex 启动器](docs/CODEX_CONNECT.zh-CN.md)、[DSH 插件配对](docs/DSH_CONNECT.zh-CN.md)。
+3. 与人交流用 **发送 chat**，请 AI 做事用 **请求我的 Agent**。例如：“做一个报名页，只要活动时间、地点和报名按钮。”
+4. 需要分享文件时，再选择 GitHub 或 GT Cloud，检查目录并授权上传。
 
-如果终端提示 `command not found: codex`，Mac 上安装的 ChatGPT Desktop 可能已经带有 CLI，只是其目录尚未加入 `PATH`。先检查该文件并临时加入 `PATH`，确认可用后再保存到 `~/.zshrc`；具体命令见 [Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md#1-一次性安装-codex-插件)。其他系统请参阅 [Codex CLI 官方安装指南](https://learn.chatgpt.com/docs/codex/cli)。继续前请确认 `codex plugin --help` 可用。
+不确定先做什么？打开[自由示例](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse)或设置中的新手引导。示例可以重置，不使用你的模型额度，也不改变真实项目。云端体验 Agent 适合额度内的小任务，已有电脑 Agent 也可随时选用。
 
-```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
-codex plugin add gatherthread@gatherthread
-```
+## 核心能力，一处用起来
 
-连接器会在终端隐藏提示中读取一次性设备授权，创建或复用本地项目，打开 Codex Desktop，并自动发现后续会话。可编辑的 GatherThread 会话会成为 Codex 任务；网页 Agent 请求在隔离的后台投影中运行，经信任的 Hooks 则把 Desktop 直接回合写回同一份规范历史。工作页为当前对话提供“本地回合自动上传至云端”开关和“立即从本地上传至云端”保底操作，Codex 插件也提供相同控制；Hook 漏记或失效时可扫描并补传已完成回合，且不会擅自重新开启自动上传。默认在每个会话首次于本地建立时导入一次经过验证、可直接阅读的原生历史快照；设置中可以关闭这次初始导入。“导入 Codex 历史”每次都会创建一个经过验证的新本地任务，公开消息不再按备用预算直接裁剪；在独立快照资源限额内，长历史由 Codex 原生压缩，后续 Hook 和上下文投递会切换到新任务。GatherThread 不覆盖或归档旧任务，请用户检查后自行归档。无论是否启用初次导入或执行手动导入，实时上下文注入都继续独立运行。本地新任务只有在首个回合成功完成后才会创建个人 Solo，访者任务始终留在本地。
+| 能力 | 你能做什么 |
+|---|---|
+| **多人和个人会话** | Multi 共同讨论；Solo 由本人操作，项目成员仍可阅读，不是私人聊天。 |
+| **引用和 @定位** | 引用聊天、Agent 回复或摘要；从提及入口找到相关消息。 |
+| **共享摘要** | 用自己已连接的 Codex/DSH 总结选中的历史，保留原文与版本，再次整理；默认让后续网页任务参考摘要，可在设置中改用原文。 |
+| **本地与共享历史** | 共享消息传给已连接的 Agent；本地完成的回合可自动或手动上传，每条会话可独立关闭自动上传。 |
+| **Codex 可见历史导入** | 初次连接可自动导入，也可随时手动建立新的本地任务；旧任务自行归档，实时历史传递不受影响。 |
+| **Agent 请求控制** | 按所选 Agent 提供的能力换模型和思考强度，电脑 Agent 请求处理中可暂停、继续；不是冻结原生 Agent 的内部推理状态。 |
+| **邀请与权限** | 创建者、参与者、访者分工；查看、发言、请求自己的 Agent 和文件操作按权限执行。 |
+| **账号与设备** | 邮箱账号、多设备同时登录、独立撤销设备、退出项目和账号注销。 |
+| **清晰阅读** | Markdown、代码、公式和可展开的工作过程；中英切换、手机和平板专属操作与引导。 |
+| **自托管** | 在自己的服务器部署，管理协作数据和服务配置。 |
 
-固定 Alpha 命令见[Codex 接入指南](docs/CODEX_CONNECT.zh-CN.md)。安装前请核对 `v0.1.0-alpha.8` Git 引用与同版 npm 包均已发布；同一指南也提供源码路径。
+摘要有损，生成会使用所选 Agent 的额度；切换阅读视图不会自动更改后续任务的摘要设置。[图文指南](docs/PRODUCT_GUIDE.zh-CN.md)里有操作示例与说明。
 
-## 接入 DeepSeek Harness
+## 共享由你选择
 
-DeepSeek Harness 使用四步流程：
+讨论与主动上传的本地回合进入 GatherThread；授权的文件进入所选文件服务。**文件上传、会话上传和设备授权分别管理**。本地模型凭据和工具批准权不会因为共享会话就交给同伴，但上传前仍请检查文件和消息中的秘密信息。
 
-1. 把 `@gatherthread/dsh-host` 安装到已验证的 DSH Web profile。
-2. 启动 `@deepseek-ai/dsh@0.1.2-rc.1 web` 并保持运行。
-3. 打开 **Settings → GatherThread / 共序**，输入当前服务器地址，并在已经登录的 GatherThread 浏览器中批准一次性配对码。
-4. 返回 DSH 设置，选择 Provider 和 Model，确认连接项目；仅配对不会注册可用的 Agent runtime。
+[隐私与删除说明](https://gatherthread.cn/privacy/) · [安全问题私下反馈](SECURITY.md)
 
-一次明确配对会连接该身份可见的全部活跃项目，并继续发现后续新增权限。可写的 GatherThread 会话会成为可编辑的 DSH 原生会话；完成的 DSH 回合只上传一次，服务器规范历史按顺序投影回来。DSH 设置页会为每个已连接对话提供“自动上传”开关和“手动上传”。在 DSH 新会话中完成首个成功回合会创建本人所有的云端 Solo；空会话、失败回合和访者会话继续留在本地。连接的 DSH 路由公开 DeepSeek 模型元数据时，GatherThread 工作页可为每次 Agent 请求选择该 runtime 实际支持的模型和推理强度；该选择只作用于本次 GatherThread 回合，不会永久改写 DSH 内的模型设置。旧版或未声明动态能力的路由继续使用固定模型。Agent 请求只交给用户明确选择的 runtime，不会回退到 Codex。
+## 下一步：让多个 Agent 更主动地合作
 
-获批测试者可在 DSH 插件中选择共序官方服务，或输入 `https://gatherthread.cn`；本机、局域网、自托管和 Tailscale 地址也可使用。包与源码测试路径见[DSH 接入指南](docs/DSH_CONNECT.zh-CN.md)。
+我们希望让一个人指挥多个 Agent 自动分工，让不同成员的 Agent 直接合作，并接入多个云端 Agent 组成团队。**这些自动团队能力是未来规划**；现在的特色是多人共享讨论、各自调用 Agent、共同检查和整合成果。
 
-## 安全机制与当前限制
+## 参与项目
 
-**未发布源码预览：本机直连 GitHub 同步。** 实际开发优先推荐 GitHub，尤其适合较大或长期项目；共序提供的有限额云端检查点适合轻量体验。成员在每台设备用自己的 GitHub CLI 登录并单独授权，上传只推进稳定的个人分支，GitHub 源码和凭据不经过共序服务器。GitHub 权限、Actions 与远端清理仍需独立管理。本说明不代表已发布安装包或线上服务已经支持；配置流程、预览限制和超限时使用原生 Git 的说明见[代码同步指南](docs/CODE_SYNC.md)与 [ADR-0035](docs/adr/0035-direct-local-github-code-synchronization.md)。
+欢迎[反馈体验或缺陷](https://github.com/TH060419/gatherthread/issues)，也欢迎贡献。请勿在公开 Issue 发布密码、邮箱验证码、设备凭据或私有代码。版本 PR 由项目负责人审核后发布。
 
-首个版本已经包含：使用 pepper 保护的设备凭据、仅存 HMAC 摘要且可撤销的浏览器会话、严格的 Cookie 写请求 Origin 校验、一次性邀请与设备授权、绑定设备的 runtime 来源证明、设备或项目权限撤销后立即使对应浏览器会话、socket 和授权失效、solo/multi ACL、事件脱敏、限定会话的幂等校验、单 runtime 请求串行化、一次性实时连接 ticket、严格的生产环境 WebSocket Origin 检查、有界 JSON 复杂度和按字节分页的历史重放、按设备限流、按用户/项目/部署限制会话数量、事件与快照任务存储配额、断线重放，以及 SQLite 备份/恢复脚本。成员查看他人活动时，只会看到用户名、harness、provider、model 和捕获保真度，不会得到本地设备或原生会话标识。用户通过邮箱和密码登录；Agent 的独立设备凭据保留在连接器中。
-
-[gatherthread.cn](https://gatherthread.cn/) 已向获批测试者开放邀请制 Alpha；公众注册和公共 Beta 仍未开放。本机、局域网 HTTPS 与私有 Tailscale Serve 也可使用。[阿里云 ECS 方案](docs/ALIYUN_ECS.zh-CN.md)说明当前服务器部署模式。所有方式都让应用只监听 loopback，只有文档规定的 Caddy 边界可以接收公网流量。
-
-尚未实现：主机自动故障转移、多进程 WebSocket fan-out、Agent token 级流式显示、附件对象存储、通用会话保留期清理任务、Web 离线 outbox、会话搜索，以及经正式签名的原生安装包。Alpha 8 增加账号注销及 ECS 备份、云端 Git、日志保留期任务；仅在更新后的任务和异地副本策略均部署并验证后，才能认为服务器满足相应期限。参见[隐私说明](site/privacy/)与[运维指南](docs/OPERATIONS.md)。
-
-更多信息请参阅[文档索引](docs/README.md)、[`0.1.0-alpha.8` 说明](docs/releases/0.1.0-alpha.8.md)、[产品规格](docs/PRODUCT_SPEC.md)、[架构](docs/ARCHITECTURE.md)、[连接方式](docs/CONNECTION_MODES.zh-CN.md)、[Codex 指南](docs/CODEX_CONNECT.zh-CN.md)、[DSH 指南](docs/DSH_CONNECT.zh-CN.md)、[单主机部署](docs/SELF_HOSTING.md)、[安全模型](docs/SECURITY.md)和[运维说明](docs/OPERATIONS.md)。
-
-## 参与开发与版本治理
-
-开发者和用于开发的 Agent 应先阅读 [`AGENTS.md`](AGENTS.md) 与 [`CONTRIBUTING.md`](CONTRIBUTING.md)；公开及内部接口边界统一记录在 [`docs/INTERFACE_CONTRACTS.md`](docs/INTERFACE_CONTRACTS.md)。
-
-每个版本更新都必须通过 Pull Request，由项目主要负责人及指定发布维护者（目前为 `@TH060419`）审核后才能合并和发布。未经负责人对该次操作的明确授权，开发者与 Agent 不得发布 npm 包、创建或移动版本标签、创建 GitHub Release、部署服务器或删除其他贡献者的分支。`CODEOWNERS` 会自动请求负责人审核；要在 GitHub 上强制执行，还需由仓库管理员按开发规范开启 `main` 分支保护。
-
-## 许可证
-
-本项目使用 [Apache License 2.0](LICENSE)。版权所有 © 2026 Yuhan He 及项目贡献者。
+[贡献规范](CONTRIBUTING.md) · [AI 开发规范](AGENTS.md) · [文档目录](docs/README.md) · [自托管](docs/SELF_HOSTING.md) · [接口与架构](docs/INTERFACE_CONTRACTS.md) · [更新记录](CHANGELOG.md) · [版本记录](docs/releases/README.md)

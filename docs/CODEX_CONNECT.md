@@ -4,7 +4,7 @@ GatherThread keeps one selected cloud project connected to Codex Desktop through
 
 For optional **project code** upload/download/recovery, use the `0.1.0-alpha.8` connector with the separate `--code-sync` opt-in; follow [Project code collaboration](CODE_SYNC.md). This is independent of conversation/history synchronization.
 
-> Unreleased account update: the host is `https://gatherthread.cn`. Sign in on the Web with email and password, then authorize the connector device separately. Use a fixed release command only after its Git ref and matching npm package are published.
+Sign in at `https://gatherthread.cn/app/` with email and password, then authorize the connector device separately. Use the command shown in the workspace for the matching connector and plugin version. If a corresponding package or tag is unavailable, use the source-checkout fallback below.
 
 ## Launcher setup · official site, Windows/macOS
 
@@ -89,7 +89,7 @@ Use the server URL and project ID displayed by the Web app; for the hosted Alpha
 - Reviewed Hooks upload completed direct Desktop turns and deliver new shared context.
 - Each local conversation defaults to automatic upload. The GatherThread workspace shows the selected Codex device, an **Auto-upload local turns to cloud** switch, pending cloud-upload status, and **Upload local turns to cloud now** for the open session. The reviewed Codex plugin exposes the same controls by session name.
 - With the connector still running in reviewed `--plugin-hooks` mode, manual upload scans the Desktop task itself, so it can recover an eligible completed turn even when the trusted Hook did not run, missed it, or failed. It never re-enables automation implicitly.
-- New local tasks create a creator-owned cloud Solo only after the first completed turn. Empty tasks and viewer tasks stay local.
+- A new local task creates and binds a creator-owned cloud Solo when its first trusted prompt is submitted; content uploads after an eligible completed turn. Empty tasks and viewer tasks stay local.
 - Cloud deletion never deletes local files or Codex tasks.
 
 Canonical history is always injected for model context. The connector separately imports a verified native history snapshot so the first connected task has readable Desktop bubbles. Settings has two choices: `first-connect` imports once when each session is first established locally (default), while `never` disables automatic visible-history import. Use **Import Codex history** in the workspace or `collaboration_import_codex_history` in the reviewed plugin at any time. Every manual import creates a new local Codex task, retains public text within a separate snapshot resource limit and uses native Codex compaction when needed, verifies the result, then switches the durable binding and Hook allowlist. It does not overwrite, delete, or archive the previous task; review and archive that task yourself. If you continue the previous task before archiving it, the work stays local and cannot create another GatherThread task or cloud session. Realtime delta injection remains active independently, including when automatic visible-history import is disabled.

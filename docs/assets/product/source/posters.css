@@ -1,0 +1,123 @@
+/* Approved GatherThread A/C poster sources. Canvas: 1600 × 1000.
+   A: editorial product proof. C: people, cloud discussion, and local Agents.
+   Interface imagery is captured from the app; the relationship image is schematic. */
+:root {
+  --ink: #1d1d1f;
+  --paper: #ffffff;
+  --soft: #f5f5f7;
+  --teal: #087f73;
+  --font: "SF Pro Display", "Helvetica Neue", "PingFang SC", sans-serif;
+  font-synthesis: none;
+  line-break: strict;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  color: var(--ink);
+  font-family: var(--font);
+  -webkit-font-smoothing: antialiased;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: #dedee1;
+}
+h1, p, figure { margin: 0; }
+h1 { text-wrap: balance; }
+p { text-wrap: pretty; }
+img { display: block; }
+.poster {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1600px;
+  height: 1000px;
+  overflow: hidden;
+  transform: translate(-50%, -50%) scale(var(--poster-scale, 1));
+  background: var(--paper);
+}
+.brand { position: absolute; left: 96px; top: 64px; width: 286px; height: auto; }
+.top-note {
+  position: absolute;
+  right: 96px;
+  top: 79px;
+  font-size: 22px;
+  font-weight: 500;
+  color: #59646a;
+}
+.headline { font-weight: 650; letter-spacing: -.018em; line-height: 1.16; }
+.headline span { display: block; }
+.fineprint { position: absolute; left: 96px; bottom: 42px; font-size: 20px; line-height: 1.4; color: #646d72; }
+.capture { overflow: hidden; background: #fff; }
+.capture img { width: 100%; height: 100%; }
+
+/* Approved A iteration: complete desktop / phone captures in their original proportions. */
+.cover { background: #fff; }
+.cover-headline { position: absolute; left: 96px; top: 132px; max-width: 1408px; font-size: 66px; line-height: 1.12; white-space: nowrap; }
+.cover-headline span { display: inline; }
+.cover-headline span + span { margin-left: 22px; }
+.cover-subline { position: absolute; left: 100px; top: 216px; font-size: 26px; font-weight: 400; line-height: 1.4; color: #586167; }
+.cover-proof { position: absolute; left: 96px; top: 260px; width: 1408px; height: 668px; }
+.cover-desktop {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 960px;
+  height: 666.6667px;
+  border: 1px solid #dfe4e4;
+  border-radius: 14px;
+  box-shadow: 0 20px 48px #23342e13;
+}
+.cover-desktop img { object-fit: contain; object-position: center; }
+.cover-phone {
+  position: absolute;
+  left: 1092px;
+  top: 52px;
+  width: 284px;
+  height: 614.6px;
+  border: 1px solid #cbd4d2;
+  border-radius: 22px;
+  box-shadow: 0 18px 44px #18342e25;
+}
+.cover-phone img { object-fit: contain; }
+.cover .fineprint { bottom: 30px; }
+html[lang="en"] .cover-headline { font-size: 66px; line-height: 1.12; }
+
+/* Approved C: the exact relationship labels remain editable outside the image. */
+.collaboration { background: var(--soft); }
+.collaboration-headline { position: absolute; left: 96px; top: 199px; font-size: 88px; }
+.collaboration-pillar { position: absolute; left: 100px; top: 445px; font-size: 28px; font-weight: 600; color: var(--teal); }
+.collaboration-claims { position: absolute; left: 100px; top: 532px; width: 451px; }
+.collaboration-claims p { font-size: 26px; line-height: 1.65; margin-bottom: 24px; color: #48545a; }
+.collaboration-claims p:last-child { margin-bottom: 0; }
+.collaboration-claims strong { display: block; font-size: 28px; font-weight: 600; color: var(--ink); }
+.collaboration-diagram { position: absolute; left: 576px; top: 235px; width: 952px; height: 590px; }
+.diagram-image-crop { position: absolute; inset: 20px 0 25px; overflow: hidden; }
+.diagram-image-crop img { position: absolute; top: -140px; left: 0; width: 952px; height: auto; }
+.diagram-caption { position: absolute; left: 365px; top: 0; font-size: 22px; color: #4e6569; }
+.diagram-caption::before { content: ""; display: inline-block; width: 24px; height: 2px; background: var(--teal); margin-right: 12px; vertical-align: middle; }
+.node-label { position: absolute; font-size: 21px; font-weight: 500; line-height: 1.4; color: #284942; background: var(--soft); padding: 3px 7px; white-space: nowrap; }
+.cloud-label { left: 366px; top: 281px; }
+.file-label { left: 549px; top: 66px; }
+.local-left { left: 21px; top: 337px; }
+.local-right { left: 686px; top: 337px; }
+.local-bottom { left: 289px; top: 484px; }
+.phone-label { left: 661px; top: 474px; }
+.shared-label { position: absolute; left: 654px; top: 825px; font-size: 30px; font-weight: 600; }
+.shared-subline { position: absolute; left: 654px; top: 872px; font-size: 24px; color: #58656a; }
+html[lang="en"] .collaboration-headline { font-size: 70px; line-height: 1.25; letter-spacing: -.025em; }
+html[lang="en"] .collaboration-claims p { font-size: 24px; }
+html[lang="en"] .collaboration-pillar { font-size: 26px; }
+html[lang="en"] .cloud-label { left: 335px; }
+html[lang="en"] .file-label { left: 543px; }
+html[lang="en"] .local-left { left: 10px; }
+html[lang="en"] .local-right { left: 678px; }
+html[lang="en"] .local-bottom { left: 276px; }
+html[lang="en"] .phone-label { left: 645px; }
+html[lang="en"] .shared-subline { font-size: 23px; }
+
+@media print {
+  @page { size: 1600px 1000px; margin: 0; }
+  body { width: 1600px; height: 1000px; background: white; }
+  .poster { top: 0; left: 0; transform: none; }
+}

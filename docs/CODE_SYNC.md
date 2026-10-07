@@ -1,26 +1,26 @@
 # Project code collaboration / 项目代码协作
 
-Project code collaboration is included in the `0.1.0-alpha.8` Alpha. The invitation-only hosted service at `https://gatherthread.cn` may use it only after project and local-device opt-in; public registration and public Git transport remain closed. Use the matching Codex connector and DSH plugin if their packages are available, or build a reviewed source checkout.
+Choose where your project files are stored, authorize the local device, then save progress to your personal branch. Prefer GitHub for actual development and GT Cloud for small trials. Use the matching Codex connector and DSH plugin; build a reviewed source checkout when a corresponding package is unavailable. [Illustrated guide](PRODUCT_GUIDE.md).
 
-项目代码协作已纳入 `0.1.0-alpha.8` Alpha。邀请制服务器 `https://gatherthread.cn` 仅在项目与本地设备分别授权后使用该功能；公众注册和公开 Git 传输仍未开放。若匹配的 Codex 连接器与 DSH 插件包可用，可直接安装；否则从经过审核的源码构建。
+选择项目文件的存储服务，单独授权本地设备，再把进度保存到个人分支。实际开发优先 GitHub，小项目体验可用 GT Cloud。连接器与 DSH 插件需使用匹配版本；对应包不可用时，从经过审核的源码构建。[图文指南](PRODUCT_GUIDE.zh-CN.md)。
 
 ## Choose source storage / 选择代码存储
 
-The GitHub integration described below is an **unreleased source preview**, not a claim about the hosted service or published packages. Use a reviewed source checkout containing the matching server, Web client, connector and DSH plugin. The existing GatherThread cloud checkpoint option remains available with its existing limits; nothing migrates or uploads automatically when you choose GitHub.
+The two services are independent. Choosing GitHub does not move or delete GT Cloud files, grant repository permissions, or authorize local file uploads. Keep server, Web client, connector and DSH plugin compatible.
 
-下述 GitHub 接入是**尚未发布的源码预览**，不代表线上服务或已发布安装包已经支持。测试时需使用同一份经过审核的源码构建服务端、网页、连接器和 DSH 插件。原有 GatherThread 云端检查点保留；选择 GitHub 不会自动迁移或上传已有代码。
+两种服务分别管理。选择 GitHub 不会迁移或删除 GT Cloud 文件，不会自动授予仓库权限或授权本地文件上传。服务端、网页、连接器与 DSH 插件需保持兼容。
 
 | Option / 方式 | Suitable use / 适用场景 | Source destination / 代码去向 | Local snapshot handling / 本地快照处理 |
 |---|---|---|---|
 | GatherThread cloud / 共序云端 | Limited-quota storage for lightweight trials / 有限额存储，适合轻量体验 | GatherThread server / 共序服务器 | 1,000 files; 2 MiB/file; 8 MiB/tree |
-| GitHub | Recommended first for real development, especially larger or long-term projects / 实际开发优先推荐，尤其适合较大或长期项目 | Local computer directly to GitHub / 本机直接传到 GitHub | No GT storage quota; preview handles 10,000 files, 20 MiB/file, 128 MiB/tree |
-| Native Git / 原生 Git | Trees outside these preview limits, LFS or submodules / 超出预览限制、使用 LFS 或子模块 | Your selected Git remote / 自行选择的远端 | Governed by your tools and hosting provider / 由工具和托管服务决定 |
+| GitHub | Recommended first for real development, especially larger or long-term projects / 实际开发优先推荐，尤其适合较大或长期项目 | Local computer directly to GitHub / 本机直接传到 GitHub | No GT storage quota; local handling: 10,000 files, 20 MiB/file, 128 MiB/tree |
+| Native Git / 原生 Git | Trees outside these local limits, LFS or submodules / 超出本地处理限制、使用 LFS 或子模块 | Your selected Git remote / 自行选择的远端 | Governed by your tools and hosting provider / 由工具和托管服务决定 |
 
-GitHub uploads do not count against GatherThread storage quotas. The preview numbers are local memory and file-handling safeguards, not a GitHub storage allowance; repositories beyond them can still use native Git with the same GitHub repository. The first fetch also caches the selected branches' Git history locally and can require more disk space and time than a single source snapshot. GitHub repository visibility and collaborator permissions are independent of GatherThread project membership. A private GatherThread project does not make a public GitHub repository private, and a GatherThread invitation does not grant GitHub access.
+GitHub uploads do not count against GatherThread storage quotas. The numbers above are local memory and file-handling safeguards, not a GitHub storage allowance; repositories beyond them can still use native Git with the same GitHub repository. The first fetch also caches the selected branches' Git history locally and can require more disk space and time than a single source snapshot. GitHub repository visibility and collaborator permissions are independent of GatherThread project membership. A private GatherThread project does not make a public GitHub repository private, and a GatherThread invitation does not grant GitHub access.
 
-GitHub 上传不计入共序的存储额度。表中数字是本地预览同步器的内存与文件处理保护，并非 GitHub 存储额度；超出范围的仓库仍可使用原生 Git 操作同一仓库。首次获取还会在本机缓存所选分支的 Git 历史，占用空间和耗时可能大于单次源码快照。GitHub 仓库的可见性和协作者权限独立管理：共序中的私有项目不会把公开 GitHub 仓库变成私有仓库，共序邀请也不会自动授予 GitHub 权限。
+GitHub 上传不计入共序的存储额度。表中数字是本地同步器的内存与文件处理保护，并非 GitHub 存储额度；超出范围的仓库仍可使用原生 Git 操作同一仓库。首次获取还会在本机缓存所选分支的 Git 历史，占用空间和耗时可能大于单次源码快照。GitHub 仓库的可见性和协作者权限独立管理：共序中的私有项目不会把公开 GitHub 仓库变成私有仓库，共序邀请也不会自动授予 GitHub 权限。
 
-## GitHub source preview / GitHub 源码预览
+## Connect GitHub / 连接 GitHub
 
 ### Configure and authorize / 配置与授权
 
@@ -39,7 +39,7 @@ GitHub 上传不计入共序的存储额度。表中数字是本地预览同步�
 
 ### Codex source commands / Codex 源码命令
 
-In the source preview, add explicit GitHub authorization to the existing connection command. This is separate from cloud `--code-sync` and requires reviewed Hooks for normal connected operation:
+When running from a source checkout, add explicit GitHub authorization to the existing connection command. This is separate from GT Cloud `--code-sync` and requires reviewed Hooks for normal connected operation:
 
 ```sh
 npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --workspace '/absolute/path/to/project' --plugin-hooks --github-code-sync OWNER/REPO --github-base-branch main
@@ -53,9 +53,9 @@ For explicit one-shot recovery with no Agent startup, the source CLI adds `--rec
 npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --workspace '/absolute/path/to/previous/project' --github-code-sync OWNER/REPO --github-base-branch main --recover-github-code
 ```
 
-Recovery creates a new directory for uploaded eligible files. It does not restore excluded secrets/dependencies, unuploaded changes or native conversation state. Inspect the returned path and recovered files before opening or running them. These flags belong to the unreleased source integration; do not assume an older npm package accepts them.
+Recovery creates a new directory for uploaded eligible files. It does not restore excluded secrets/dependencies, unuploaded changes or native conversation state. Inspect the returned path and recovered files before opening or running them. Use a compatible connector: an older npm package may not accept these flags.
 
-这些参数仅适用于未发布源码中的新连接器。正常连接需审阅并信任 Hooks；一次性恢复不启动 Agent，也不需要 Hooks。GitHub 凭据由本机 `gh` 管理，不能粘贴到共序设备 token 提示或网页中。恢复会创建新目录，不会改绑旧会话，也无法恢复未上传修改、被排除的文件或原生对话。
+这些参数需使用兼容连接器，较旧的 npm 包可能不支持。正常连接需审阅并信任 Hooks；一次性恢复不启动 Agent，也不需要 Hooks。GitHub 凭据由本机 `gh` 管理，不能粘贴到共序设备 token 提示或网页中。恢复会创建新目录，不会改绑旧会话，也无法恢复未上传修改、被排除的文件或原生对话。
 
 ### DSH and daily use / DSH 与日常使用
 
@@ -71,11 +71,11 @@ GitHub source bytes and GitHub credentials travel directly between the local com
 
 Turning off GitHub synchronization, removing a GatherThread member or deleting the GatherThread project does not revoke that person's GitHub permissions or delete any GitHub branch, repository, clone or backup. Manage those in GitHub separately. Stop active transfers before changing configuration; a push already sent cannot be recalled by pausing GatherThread. GitHub pushes may trigger [repository Actions workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#push), including from automatic uploads. Review workflow triggers and secrets before enabling automation.
 
-The preview refuses symlinks, submodules, Git LFS pointers, non-portable/private paths and tracked generated/dependency trees instead of silently dropping them from a remote snapshot. Secret checks cover recognizable patterns, not all possible sensitive content. Review files before sharing, and use native Git for unsupported repositories. Synchronization operations share a local workspace lock, but this does not lock native Agent tools or editors: use separate working copies for simultaneous writers.
+The local synchronizer refuses symlinks, submodules, Git LFS pointers, non-portable/private paths and tracked generated/dependency trees instead of silently dropping them from a remote snapshot. Secret checks cover recognizable patterns, not all possible sensitive content. Review files before sharing, and use native Git for unsupported repositories. Synchronization operations share a local workspace lock, but this does not lock native Agent tools or editors: use separate working copies for simultaneous writers.
 
 GitHub 源码和 GitHub 凭据由本机直接传给 GitHub，共序只保存连接与任务状态元数据。若另外使用共序云端代码上传，代码仍会按该功能存储在共序服务器。暂停、移除共序成员或删除共序项目，不会撤销 GitHub 权限，也不会删除 GitHub 分支、仓库、克隆或备份；需在 GitHub 单独处理。已发出的推送不能由暂停操作撤回。自动上传同样可能触发仓库 Actions，请先检查触发规则与机密使用范围。
 
-本预览拒绝符号链接、子模块、LFS 指针、不安全路径和远端已跟踪的生成产物或依赖树；超限或不支持的仓库请使用原生 Git。已知密钥扫描不能证明文件完全不含敏感内容。不同 Agent 同时写入时仍需使用独立工作目录。实现与验证边界见 [ADR-0035](adr/0035-direct-local-github-code-synchronization.md)。
+本地同步器拒绝符号链接、子模块、LFS 指针、不安全路径和远端已跟踪的生成产物或依赖树；超限或不支持的仓库请使用原生 Git。已知密钥扫描不能证明文件完全不含敏感内容。不同 Agent 同时写入时仍需使用独立工作目录。实现与验证边界见 [ADR-0035](adr/0035-direct-local-github-code-synchronization.md)。
 
 ## GatherThread cloud: what is synchronized
 
@@ -114,7 +114,7 @@ Build/install the local plugin as described in [DSH_CONNECT.md](DSH_CONNECT.md),
 
 Expand a project and explicitly enable **允许此 DSH 同步该项目代码**. The native panel provides status, upload, download, recovery and **空闲时自动上传本地代码至云端**. Automatic upload is initially off. The Web code dialog can control the same project after selecting this DSH runtime; a Web request cannot grant the plugin's local file-access consent.
 
-Both adapters use the already-bound project directory. Switching between Codex and DSH on the same machine can share the same checkpoint baseline when they use the same canonical directory and authenticated user/project/server. Another directory or device is a separate checkout and must first download or verify the current cloud content. Never run two Agents writing the same directory at once; this preview does not introduce task worktrees or a cross-harness tool lock.
+Both adapters use the already-bound project directory. Switching between Codex and DSH on the same machine can share the same checkpoint baseline when they use the same canonical directory and authenticated user/project/server. Another directory or device is a separate checkout and must first download or verify the current cloud content. Never run two Agents writing the same directory at once; code synchronization does not introduce task worktrees or a cross-harness tool lock.
 
 An explicitly customized `DSH_HOME` isolates its private code metadata as well. Such a profile is treated as a separate local checkout even for the same source directory; use **Download updates** on matching files to acknowledge the cloud baseline before changing harnesses. Normal default profiles use the shared local metadata location.
 
@@ -168,8 +168,8 @@ It prints the new local recovery directory and exits without starting an Agent. 
 - A checkpoint: at most 1,000 regular files, 2 MiB per file and 8 MiB total decoded content. No submodules, symlinks or arbitrary local paths from Web commands.
 - Common generated/dependency directories, `.git`, private GatherThread/Codex/DSH state, `.env` secrets and credential-file patterns are excluded or refused. `.env.example` may be shared if it contains only placeholders. Recognizable secret scanning is a safety net, not proof that a file contains no secrets.
 - Names must be portable across supported filesystems: malformed Unicode, Windows device names, NTFS short-name aliases and paths aliasing private state on HFS are refused. Known credentials are checked before sending file content and again before server persistence. Chinese and normal emoji file names remain supported.
-- A project has at most 128 member branches and 4,096 active idempotent code-mutation receipts; invalidated receipts fail closed for up to 30 days before pruning. Per-user, project, deployment and physical-disk limits also apply. These preview limits are deliberately bounded, not a large-repository backup service.
-- Disk checks are bounded and cached; exceeding their safety budget pauses code writes until operator maintenance/restart. Large concurrent rewrites may need local resolution instead of server merge. This preview is for small private projects, not high-throughput Git hosting.
+- A project has at most 128 member branches and 4,096 active idempotent code-mutation receipts; invalidated receipts fail closed for up to 30 days before pruning. Per-user, project, deployment and physical-disk limits also apply. These safety limits are deliberately bounded, not a large-repository backup service.
+- Disk checks are bounded and cached; exceeding their safety budget pauses code writes until operator maintenance/restart. Large concurrent rewrites may need local resolution instead of server merge. GT Cloud is for small projects, not high-throughput Git hosting.
 - Local code metadata and download recovery journals stay in the user's private state outside the source tree. Source sync never resets, commits or switches the original Git repository.
 - A temporary local lock or lost completion acknowledgement is retryable. Corrupt/unknown bindings are preserved and block code operations, not conversation synchronization; inspect the connector error before retrying, and do not delete binding files to force an upload. Auto-upload rechecks the exact stable inventory before sending it.
 - Server storage is `<absolute database path>.code` plus additive SQLite metadata. Back up both together; see [OPERATIONS.md](OPERATIONS.md). Git is required only when the feature is used; deployments that never enable code collaboration retain their existing workflow.
