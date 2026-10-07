@@ -1,14 +1,14 @@
-# Cloud GitHub development preview
+# GitHub cloud workspace
 
-This is an unreleased, disabled-by-default source preview. It extends Cloud Agent with a GitHub + npm Node.js/TypeScript workflow. It does not certify the public deployment or claim Codex-equivalent model quality.
+The GitHub cloud workspace extends the cloud trial Agent with an npm Node.js/TypeScript workflow: authorize a repository, request a change, inspect saved source, and explicitly create a draft PR. This is separate from local computer-to-GitHub synchronization. Operators must configure and verify the service using the activation gates below; model quality depends on the chosen provider.
 
-Current Web entry: open **Cloud Git**, then choose **GitHub**, beside **GT Cloud**. Local device GitHub sync and GitHub App account authorization/repository binding remain available in this panel. Saved task review and explicit draft PR publication remain available. New/continued cloud Agent tasks are disabled for a later release. There is no separate Cloud GitHub dialog or connection button in the composer or Agent settings.
+Open **Project file collaboration → GitHub**, beside **GT Cloud**. Local device synchronization and the separate GitHub App account/repository connection are in this panel, along with saved task review and explicit draft PR creation. There is no separate GitHub connection dialog in the composer or Agent settings.
 
-中文：当前在“云端 Git”内选择与“GT Cloud”并列的“GitHub”。设备端同步、GitHub 账号授权、仓库绑定和已有任务查看保持可用；新建及继续云端 Agent 任务暂不开放。输入区和 Agent 设置不再另设 GitHub 连接入口。
+中文：在“项目文件协作 → GitHub”中管理设备端同步，以及独立的云端任务账号授权与仓库绑定；查看已保存任务，确认后主动创建草稿 PR。输入区和 Agent 设置不另设 GitHub 连接窗口。
 
-## User flow after Cloud Agent opens / 使用流程
+## User flow / 使用流程
 
-1. Open **Cloud Git → GitHub** to connect your repository. Once Cloud Agent opens, select **Cloud Agent** in the work page. Choose a DeepSeek or HTTPS Chat Completions-compatible coding profile supplied by the operator. The small Cloudflare trial profile does not support repository tasks.
+1. Open **Project file collaboration → GitHub** to connect your repository, then select **Cloud Agent** in the work page. Choose an eligible coding profile supplied by the operator. The small Cloudflare trial profile does not support repository tasks.
 2. Use the existing **Cloud Git → GitHub** panel. Install the operator's GitHub App on only the intended repositories, then **Connect your GitHub account**. Organization approval or an active SAML session may be required.
 3. Enter an existing `OWNER/REPO` and base branch, then select **Use this repository in cloud tasks**. Each member authorizes their own account and chooses their own repository binding; GT membership does not grant GitHub permissions. Both the App and that GitHub user need access and write permission.
 4. In the composer, choose **Cloud workspace → GitHub repository**, describe a change, and select **Request my agent**. This explicitly sends eligible repository source and shared conversation context to the selected model. The Agent answer is published to this GT conversation, whose existing membership rules apply. Task source and detailed diffs remain private to the requester. Human chat does not start a task.

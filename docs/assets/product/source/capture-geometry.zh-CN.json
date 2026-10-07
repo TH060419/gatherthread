@@ -1,0 +1,462 @@
+[
+  {
+    "name": "01-workspace",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 18,
+        "y": 476,
+        "width": 303,
+        "height": 497,
+        "text": "选择项目内的会话"
+      },
+      {
+        "x": 347,
+        "y": 110,
+        "width": 766,
+        "height": 890,
+        "text": "讨论与 AI 工作放在一起"
+      },
+      {
+        "x": 1139,
+        "y": 219,
+        "width": 283,
+        "height": 302.234375,
+        "text": "查看同伴与进展"
+      }
+    ]
+  },
+  {
+    "name": "02-discussion",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 381,
+        "y": 222.671875,
+        "width": 698,
+        "height": 170.796875,
+        "text": "提出想做的事情"
+      },
+      {
+        "x": 381,
+        "y": 405.46875,
+        "width": 698,
+        "height": 170.796875,
+        "text": "确认这次要做什么"
+      },
+      {
+        "x": 626,
+        "y": 892.5,
+        "width": 220,
+        "height": 40,
+        "text": "聊天不会启动 AI"
+      }
+    ]
+  },
+  {
+    "name": "03-summary",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 908.125,
+        "y": 120.5,
+        "width": 36,
+        "height": 36,
+        "text": "选取消息生成摘要"
+      },
+      {
+        "x": 381,
+        "y": 222.671875,
+        "width": 698,
+        "height": 307.8125,
+        "text": "整理成制作清单"
+      },
+      {
+        "x": 1000.125,
+        "y": 120.5,
+        "width": 42.875,
+        "height": 36,
+        "text": "切回查看原文"
+      }
+    ]
+  },
+  {
+    "name": "04-agent-work",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 381,
+        "y": 284.28125,
+        "width": 698,
+        "height": 217.53125,
+        "text": "看清谁的 Agent 做了什么"
+      },
+      {
+        "x": 381,
+        "y": 513.8125,
+        "width": 698,
+        "height": 170.796875,
+        "text": "同伴接着检查成果"
+      },
+      {
+        "x": 858,
+        "y": 892.5,
+        "width": 220,
+        "height": 40,
+        "text": "明确请求自己的 Agent"
+      }
+    ]
+  },
+  {
+    "name": "05-quote-and-mention",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 382,
+        "y": 737,
+        "width": 696,
+        "height": 28,
+        "text": "引用具体消息"
+      },
+      {
+        "x": 382,
+        "y": 770,
+        "width": 696,
+        "height": 40,
+        "text": "提及具体同伴"
+      }
+    ]
+  },
+  {
+    "name": "06-mentions",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 448,
+        "y": 481.859375,
+        "width": 544,
+        "height": 90.28125,
+        "text": "定位提到自己的消息"
+      }
+    ]
+  },
+  {
+    "name": "07-file-service",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 467.09375,
+        "y": 341.234375,
+        "width": 80.40625,
+        "height": 44,
+        "text": "实际开发优先 GitHub"
+      },
+      {
+        "x": 364,
+        "y": 341.234375,
+        "width": 95.09375,
+        "height": 44,
+        "text": "GT Cloud 适合轻量体验"
+      },
+      {
+        "x": 364,
+        "y": 669.3125,
+        "width": 712,
+        "height": 61.4375,
+        "text": "查看同伴文件版本"
+      }
+    ]
+  },
+  {
+    "name": "07-file-versions",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 364,
+        "y": 668.09375,
+        "width": 712,
+        "height": 126,
+        "text": "各自先保存文件版本"
+      },
+      {
+        "x": 364,
+        "y": 610.09375,
+        "width": 145.640625,
+        "height": 44,
+        "text": "提交给同伴审核"
+      }
+    ]
+  },
+  {
+    "name": "08-review-changes",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 364,
+        "y": 476.234375,
+        "width": 712,
+        "height": 365.25,
+        "text": "展开查看文件内容"
+      },
+      {
+        "x": 364,
+        "y": 857.484375,
+        "width": 165.1875,
+        "height": 44,
+        "text": "确认后再整合"
+      }
+    ]
+  },
+  {
+    "name": "09-github",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 364,
+        "y": 426.3125,
+        "width": 712,
+        "height": 282,
+        "text": "选择仓库和主分支"
+      },
+      {
+        "x": 364,
+        "y": 763.3125,
+        "width": 712,
+        "height": 30,
+        "text": "电脑也需单独授权"
+      }
+    ]
+  },
+  {
+    "name": "15-history-controls",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 772.21875,
+        "y": 373.34375,
+        "width": 95.90625,
+        "height": 21,
+        "text": "导入新的本地任务"
+      },
+      {
+        "x": 436.125,
+        "y": 490.46875,
+        "width": 283.65625,
+        "height": 48,
+        "text": "开关本地自动上传"
+      },
+      {
+        "x": 731.78125,
+        "y": 503.96875,
+        "width": 136.34375,
+        "height": 30,
+        "text": "手动补传已完成回合"
+      }
+    ]
+  },
+  {
+    "name": "10-summary-settings",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 945,
+        "y": 324.9375,
+        "width": 300,
+        "height": 40,
+        "text": "选择摘要或原文"
+      },
+      {
+        "x": 415,
+        "y": 525.296875,
+        "width": 830,
+        "height": 192.75,
+        "text": "自定义总结要求"
+      }
+    ]
+  },
+  {
+    "name": "11-focused-workspace",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 0,
+        "y": 110,
+        "width": 1440,
+        "height": 890,
+        "text": "给中间会话留更多空间"
+      }
+    ]
+  },
+  {
+    "name": "12-phone",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "points": [
+      {
+        "x": 21,
+        "y": 678.609375,
+        "width": 348,
+        "height": 90.390625,
+        "text": "继续共同讨论"
+      },
+      {
+        "x": 69,
+        "y": 773,
+        "width": 89.71875,
+        "height": 44,
+        "text": "选择自己的在线 Agent"
+      }
+    ]
+  },
+  {
+    "name": "12-phone-agent",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 390,
+      "height": 844
+    },
+    "points": [
+      {
+        "x": 39,
+        "y": 486.921875,
+        "width": 312,
+        "height": 44,
+        "text": "选择可用模型"
+      },
+      {
+        "x": 39,
+        "y": 576.921875,
+        "width": 312,
+        "height": 44,
+        "text": "调整思考强度"
+      }
+    ]
+  },
+  {
+    "name": "13-tablet",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 820,
+      "height": 1180
+    },
+    "points": [
+      {
+        "x": 21,
+        "y": 1014.609375,
+        "width": 778,
+        "height": 90.390625,
+        "text": "在平板上继续讨论"
+      },
+      {
+        "x": 69,
+        "y": 1109,
+        "width": 89.71875,
+        "height": 44,
+        "text": "展开紧凑的 Agent 设置"
+      }
+    ]
+  },
+  {
+    "name": "13-tablet-agent",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 820,
+      "height": 1180
+    },
+    "points": [
+      {
+        "x": 171,
+        "y": 645.59375,
+        "width": 478,
+        "height": 44,
+        "text": "选择可用模型"
+      },
+      {
+        "x": 171,
+        "y": 735.59375,
+        "width": 478,
+        "height": 44,
+        "text": "调整思考强度"
+      }
+    ]
+  },
+  {
+    "name": "14-working-result",
+    "locale": "zh-CN",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 599.171875,
+        "y": 540.796875,
+        "width": 129.53125,
+        "height": 56,
+        "text": "试一下实际报名按钮"
+      },
+      {
+        "x": 599.171875,
+        "y": 616.796875,
+        "width": 241.65625,
+        "height": 28,
+        "text": "检查是否符合约定"
+      }
+    ]
+  }
+]

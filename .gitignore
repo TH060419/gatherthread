@@ -14,4 +14,7 @@ coverage/
 .idea/
 release-artifacts/
 design-demos/
+# Local product-document review boards and raw browser captures
+/docs/product-story/review/
+/output/playwright/product-story/
 .codex/hooks.json

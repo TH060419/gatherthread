@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GatherThread · 多人、多端、多 Agent，一起做项目</title>
+  <link rel="stylesheet" href="posters.css">
+</head>
+<body>
+  <!-- Approved direction A. Real screenshots are not reconstructed.
+       This iteration preserves the complete desktop and phone screenshots.
+       They remain proportional and separate, so neither image obscures the other. -->
+  <main class="poster cover" aria-label="多人、多端、多 Agent，一起做项目">
+    <img class="brand" src="../gatherthread-lockup.svg" alt="GatherThread">
+    <p class="top-note">一起讨论 · 一起开发</p>
+    <h1 class="headline cover-headline"><span>多人、多端、多 Agent</span><span>一起做项目。</span></h1>
+    <p class="cover-subline">一起讨论，一起开发，换个设备接着做。</p>
+    <figure class="cover-proof" aria-label="同一项目的完整桌面和手机实机界面">
+      <div class="capture cover-desktop"><img src="../zh-CN/11-focused-workspace.jpg" alt="GatherThread 自由示例的完整桌面项目实机界面"></div>
+      <div class="capture cover-phone"><img src="../zh-CN/12-phone.jpg" alt="同一自由示例的完整手机实机界面"></div>
+    </figure>
+    <p class="fineprint">实机界面 · 自由示例</p>
+  </main>
+  <script type="application/json" id="design-signal">
+    {"type":"DesignSignalPacket","composition_state":{"approved_direction":"A","approval_quote":"按你说的来吧 别忘了实机图的事","iteration_request":"全屏截图但是用标注来突出重点","canvas":[1600,1000],"grid":"editorial headline with complete side-by-side device captures","primary_anchor":[96,132],"secondary_anchor":[96,260],"desktop_box":[96,260,960,666.6667],"phone_box":[1188,312,284,614.6],"image_fit":"contain","feature_model":"people explicitly call their own Agents; shared discussion and file versions; human review"},"typography_state":{"locale":"zh-CN","font_families":["SF Pro Display","Helvetica Neue","PingFang SC","sans-serif"],"headline_locked":"多人、多端、多 Agent 一起做项目。","subline_locked":"一起讨论，一起开发，换个设备接着做。","headline_zone":[96,132,1408,80],"subline_zone":[100,216,1404,37]}}
+  </script>
+  <script>
+    const fitPoster = () => document.documentElement.style.setProperty('--poster-scale', Math.min(innerWidth / 1600, innerHeight / 1000));
+    fitPoster(); addEventListener('resize', fitPoster);
+    Promise.all(Array.from(document.images, img => img.complete ? Promise.resolve() : new Promise(resolve => { img.onload = resolve; img.onerror = resolve; }))).then(async () => {
+      await document.fonts.ready;
+      window.__assetErrors = Array.from(document.images).filter(img => !img.naturalWidth).map(img => img.getAttribute('src'));
+      window.__ready = window.__assetErrors.length === 0;
+    });
+  </script>
+</body>
+</html>

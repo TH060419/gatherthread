@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GatherThread · Work together. Bring your Agents.</title>
+  <link rel="stylesheet" href="posters.css">
+</head>
+<body>
+  <!-- Approved direction A. Screenshots come from the real English app.
+       Full proportional captures remain separate so no part of either interface is obscured.
+       People select and call their own Agents; this artwork makes no automatic-team claim. -->
+  <main class="poster cover" aria-label="Work together. Bring your Agents.">
+    <img class="brand" src="../gatherthread-lockup.svg" alt="GatherThread">
+    <p class="top-note">People · Devices · Agents</p>
+    <h1 class="headline cover-headline"><span>Work together.</span><span>Bring your Agents.</span></h1>
+    <p class="cover-subline">Discuss together. Build together. Continue on another device.</p>
+    <figure class="cover-proof" aria-label="Complete real desktop and phone interfaces for the same project">
+      <div class="capture cover-desktop"><img src="../en/11-focused-workspace.jpg" alt="Complete real English GatherThread desktop interface with example project content"></div>
+      <div class="capture cover-phone"><img src="../en/12-phone.jpg" alt="Complete real English phone interface for the same example project"></div>
+    </figure>
+    <p class="fineprint">Real interface · Example content</p>
+  </main>
+  <script type="application/json" id="design-signal">
+    {"type":"DesignSignalPacket","composition_state":{"approved_direction":"A","approval_quote":"按你说的来吧 别忘了实机图的事","iteration_request":"全屏截图但是用标注来突出重点","canvas":[1600,1000],"grid":"editorial headline with complete side-by-side device captures","primary_anchor":[96,132],"secondary_anchor":[96,260],"desktop_box":[96,260,960,666.6667],"phone_box":[1188,312,284,614.6],"image_fit":"contain","feature_model":"people explicitly call their own Agents; shared discussion and file versions; human review"},"typography_state":{"locale":"en","font_families":["SF Pro Display","Helvetica Neue","PingFang SC","sans-serif"],"headline_locked":"Work together. Bring your Agents.","subline_locked":"Discuss together. Build together. Continue on another device.","headline_zone":[96,132,1408,80],"subline_zone":[100,216,1404,37]}}
+  </script>
+  <script>
+    const fitPoster = () => document.documentElement.style.setProperty('--poster-scale', Math.min(innerWidth / 1600, innerHeight / 1000));
+    fitPoster(); addEventListener('resize', fitPoster);
+    Promise.all(Array.from(document.images, img => img.complete ? Promise.resolve() : new Promise(resolve => { img.onload = resolve; img.onerror = resolve; }))).then(async () => {
+      await document.fonts.ready;
+      window.__assetErrors = Array.from(document.images).filter(img => !img.naturalWidth).map(img => img.getAttribute('src'));
+      window.__ready = window.__assetErrors.length === 0;
+    });
+  </script>
+</body>
+</html>

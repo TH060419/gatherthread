@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>GatherThread · 一起协作，各自掌控</title>
+  <link rel="stylesheet" href="posters.css">
+</head>
+<body>
+  <!-- Approved direction C. The image is schematic, not product UI.
+       Lines express shared cloud discussion and file versions.
+       Each person explicitly calls their own local Agent; humans review changes.
+       All exact labels remain editable HTML, outside the generated image. -->
+  <main class="poster collaboration" aria-label="一起协作，各自掌控">
+    <img class="brand" src="../gatherthread-lockup.svg" alt="GatherThread">
+    <p class="top-note">由人发起，由人审核。</p>
+    <h1 class="headline collaboration-headline"><span>一起协作，</span><span>各自掌控。</span></h1>
+    <p class="collaboration-pillar">多人、多端、多 Agent</p>
+    <div class="collaboration-claims">
+      <p><strong>人一起讨论</strong>共同决定项目怎么做。</p>
+      <p><strong>Agent 各自调用</strong>每个人调用自己的 Codex / DSH。</p>
+      <p><strong>改动由人查看</strong>共享文件版本，人工查看改动。</p>
+    </div>
+    <figure class="collaboration-diagram" aria-label="云端讨论与文件版本连接各自的本地电脑和 Agent 的协作示意">
+      <div class="diagram-image-crop"><img src="../collaboration-illustration.png" alt="三位成员各自使用本地电脑和 Agent，云端共享讨论与文件版本，并在手机继续项目的概念插画"></div>
+      <figcaption class="diagram-caption">协作关系示意</figcaption>
+      <p class="node-label cloud-label">云端共享讨论</p>
+      <p class="node-label file-label">共享文件版本</p>
+      <p class="node-label local-left">各自的电脑与 Agent</p>
+      <p class="node-label local-right">各自的电脑与 Agent</p>
+      <p class="node-label local-bottom">各自的电脑与 Agent</p>
+      <p class="node-label phone-label">手机继续</p>
+    </figure>
+    <p class="shared-label">共享讨论 · 共享文件版本</p>
+    <p class="shared-subline">一起讨论，一起开发，换个设备接着做。</p>
+    <p class="fineprint">协作关系示意</p>
+  </main>
+  <script type="application/json" id="design-signal">
+    {"type":"DesignSignalPacket","composition_state":{"approved_direction":"C","approval_quote":"按你说的来吧 别忘了实机图的事","canvas":[1600,1000],"grid":"copy-illustration split field","primary_anchor":[576,235],"secondary_anchor":[96,199],"feature_model":"cloud discussion and file versions connect people and their local computers; Agent execution is per-person and human-initiated; humans review changes","image_role":"schematic"},"typography_state":{"locale":"zh-CN","font_families":["SF Pro Display","Helvetica Neue","PingFang SC","sans-serif"],"headline_locked":"一起协作，\n各自掌控。","diagram_copy_locks":["云端共享讨论","共享文件版本","各自的电脑与 Agent","手机继续"],"headline_zone":[96,199,480,220],"claim_zone":[100,532,451,325]}}
+  </script>
+  <script>
+    const fitPoster = () => document.documentElement.style.setProperty('--poster-scale', Math.min(innerWidth / 1600, innerHeight / 1000));
+    fitPoster(); addEventListener('resize', fitPoster);
+    Promise.all(Array.from(document.images, img => img.complete ? Promise.resolve() : new Promise(resolve => { img.onload = resolve; img.onerror = resolve; }))).then(async () => {
+      await document.fonts.ready;
+      window.__assetErrors = Array.from(document.images).filter(img => !img.naturalWidth).map(img => img.getAttribute('src'));
+      window.__ready = window.__assetErrors.length === 0;
+    });
+  </script>
+</body>
+</html>

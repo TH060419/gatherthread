@@ -1,6 +1,13 @@
 # GatherThread documentation
 
-This index separates current product contracts, operator guidance, connection guides, and point-in-time release records. See the [release record index](releases/README.md) for current hosted-source, Git-tag, npm-package, and GitHub Release status. Later `main` changes may still be undeployed; do not infer live state from the branch tip alone.
+Start with the product story and illustrated workflow, then choose the setup or developer reference you need. Version history and operational checks have their own sections below.
+
+## Use GatherThread
+
+- [Product introduction](../README.md) · [中文](../README.zh-CN.md): work together, across devices, with your Agents.
+- [Illustrated product guide](PRODUCT_GUIDE.md) · [中文](PRODUCT_GUIDE.zh-CN.md): a real-interface walkthrough from shared discussion to reviewed files.
+- [Disposable example](https://gatherthread.cn/app/example.html?locale=en&topic=browse) · [中文](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse): practice without model quota or changes to real projects.
+- [Cloud trial Agent](HOSTED_AGENT_GUIDE.md) · [中文](HOSTED_AGENT_GUIDE.zh-CN.md): a first small task without local Agent setup.
 
 ## Product and system contracts
 
@@ -11,7 +18,6 @@ This index separates current product contracts, operator guidance, connection gu
 - [Privacy notice](../site/privacy/): account deletion, shared data, and deletion/retention boundaries.
 - [Architecture decisions](adr/README.md): accepted ADRs and their status.
 - [Hosted trial Agent](HOSTED_AGENT.md): isolated OpenCode runner, provider budget, and operator setup.
-- [Try the cloud Agent](HOSTED_AGENT_GUIDE.md) · [中文](HOSTED_AGENT_GUIDE.zh-CN.md): first run, code choice, and limits.
 - [Hosted model API options](HOSTED_AGENT_PROVIDERS.md): pricing, terms, adapter work, and operator handoff.
 
 ## Connect local Agent harnesses
@@ -30,6 +36,8 @@ This index separates current product contracts, operator guidance, connection gu
 - [Legacy Oracle Cloud alternative](ORACLE_CLOUD.md) · [中文](ORACLE_CLOUD.zh-CN.md)
 
 ## Release and contribution records
+
+These are point-in-time records. A source commit, Git tag, npm package and server deployment are separate artifacts; consult the relevant record rather than inferring live state from a branch tip.
 
 - [Changelog](../CHANGELOG.md): Alpha 8 changes and subsequent version history.
 - [Release record index](releases/README.md): which version records have tags or GitHub Releases.

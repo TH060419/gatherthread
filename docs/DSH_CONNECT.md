@@ -2,9 +2,9 @@
 
 The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and connects outward to the selected GatherThread server. The browser never probes `localhost` or starts a local process.
 
-The `0.1.0-alpha.8` plugin adds optional **project code** upload/download/recovery in DSH settings, with separate per-project consent. Automatic code upload defaults off. See [Project code collaboration](CODE_SYNC.md).
+The plugin provides optional **project code** upload/download/recovery in DSH settings, with separate per-project consent. GT Cloud automatic code upload defaults off; a newly authorized GitHub binding defaults on and can be switched off. See [Project code collaboration](CODE_SYNC.md).
 
-> The email-account update is unreleased and registration stays closed by default. This source flow requires a signed-in email account to approve pairing. The hosted Alpha at `https://gatherthread.cn` has not switched to this flow. You can select the official service in the plugin or enter a self-hosted server address. The fixed npm command requires the package to have been published; otherwise use the source-checkout path below.
+Sign in with email and password before approving pairing. In the plugin, select the official service at `https://gatherthread.cn` or enter your self-hosted server address. Use the matching package version shown in the workspace; if it is unavailable, use the source-checkout path below.
 
 ## Normal four-step setup
 
