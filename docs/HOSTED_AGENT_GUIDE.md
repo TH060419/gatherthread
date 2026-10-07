@@ -27,4 +27,4 @@ For container build, quotas, and credentials, see the [operator guide](HOSTED_AG
 
 ## GitHub cloud projects
 
-For eligible npm Node.js/TypeScript repositories, open **Project file collaboration → GitHub** and connect your GitHub account for cloud tasks. Choose a repository, explicitly allow its source to be used, then select the GitHub cloud workspace for a task. Review saved changes and create a draft PR only when you choose. This is separate from local computer-to-GitHub synchronization; its own limits and operator setup are in [Cloud GitHub workflow and setup](HOSTED_GITHUB.md).
+Computer-to-GitHub synchronization is available independently in **Project file collaboration → GitHub**. The separate cloud repository-task entry is reserved for a later enabled Web update and an eligible coding profile; the small trial profile does not support it. For its conditional workflow, saved task review, limits and operator setup, see [GitHub cloud workspace](HOSTED_GITHUB.md).

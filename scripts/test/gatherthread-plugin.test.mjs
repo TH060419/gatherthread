@@ -81,14 +81,24 @@ test("repo marketplace exposes the real plugin and all install surfaces pin one 
     readFile(path.join(root, "apps", "web", "src", "i18n.js"), "utf8"),
   ]);
   const installCommand = "codex plugin add gatherthread@gatherthread";
-  for (const surface of [html, english, chinese, rootEnglish, rootChinese, packageReadme, release]) {
+  for (const surface of [html, english, chinese, packageReadme, release]) {
     assert.match(surface, new RegExp(fixedCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
     assert.match(surface, new RegExp(installCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   }
-  for (const guide of [html, english, chinese, rootEnglish, rootChinese]) {
+  for (const guide of [html, english, chinese]) {
     assert.match(guide, /command not found: codex/);
     assert.match(guide, /codex plugin --help/);
     assert.doesNotMatch(guide, /npm install -g @openai\/codex/);
+  }
+  // Product READMEs route users to the canonical localized setup guides instead
+  // of duplicating version-sensitive manual commands beside the Launcher flow.
+  assert.match(rootEnglish, /\]\(docs\/CODEX_CONNECT\.md\)/);
+  assert.match(rootChinese, /\]\(docs\/CODEX_CONNECT\.zh-CN\.md\)/);
+  assert.match(rootEnglish, /launcher/i);
+  assert.match(rootChinese, /启动器/);
+  for (const readme of [rootEnglish, rootChinese]) {
+    assert.match(readme, /0\.1\.0-alpha\.8/);
+    assert.doesNotMatch(readme, /npm install -g @openai\/codex/);
   }
   for (const guide of [html, english, chinese]) {
     assert.match(guide, /CodexCLI\.app\/Contents\/MacOS/);
