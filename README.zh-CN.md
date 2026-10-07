@@ -65,7 +65,7 @@
 
 ## 从这里开始
 
-1. [注册并登录](https://gatherthread.cn/app/)，创建项目和一个 **Multi 多人会话**，邀请同伴；也可接受已有项目的邀请。
+1. [验证邮箱、设置密码并登录](https://gatherthread.cn/app/)，创建项目和一个 **Multi 多人会话**，邀请同伴；也可接受已有项目的邀请。
 2. 选择云端体验 Agent，直接尝试小任务；或在电脑上连接自己的 Agent：[Codex 启动器](docs/CODEX_CONNECT.zh-CN.md)、[DSH 插件配对](docs/DSH_CONNECT.zh-CN.md)。
 3. 与人交流用 **发送 chat**，请 AI 做事用 **请求我的 Agent**。例如：“做一个报名页，只要活动时间、地点和报名按钮。”
 4. 需要分享文件时，再选择 GitHub 或 GT Cloud，检查目录并授权上传。

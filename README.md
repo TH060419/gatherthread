@@ -64,7 +64,7 @@ GitHub's permissions, platform rules, and local transfer safeguards still apply.
 
 ## Get started
 
-1. **Sign in with email and password.** New here? Verify your email, choose a password, then create a project and a Multi conversation. Invite your teammates, or accept an existing project's invitation.
+1. **Sign in with a verified email address and password.** New here? Verify your email, choose a password, then create a project and a Multi conversation. Invite your teammates, or accept an existing project's invitation.
 2. **Choose your Agent.** Try the cloud trial Agent for a small project, or connect a computer Agent: use the [Codex launcher and connection guide](docs/CODEX_CONNECT.md) or [DeepSeek Harness plugin](docs/DSH_CONNECT.md).
 3. **Talk, then ask for work.** Use Chat for discussion and the separate Agent request button for AI work. Select an available Agent and its supported model options before requesting it.
 4. **Share files when you need to.** Prefer GitHub for development; choose GT Cloud for a small trial. Authorize file access separately.
