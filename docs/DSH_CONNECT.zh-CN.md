@@ -19,7 +19,7 @@ npm install --global pnpm@10
 再把固定版本的共序插件加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.8
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
 ```
 
 ### 2. 打开 DSH
@@ -32,7 +32,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 
 ### 3. 配对当前服务器
 
-输入共序服务器地址（服务器 Alpha 为 `https://gatherthread.cn`），选择 **登录并配对**，核对页面显示的短码，再到已经登录的共序网页批准相同短码。短码只能使用一次，并会很快过期。
+输入所用服务器地址（Beta 1 测试服为 `https://test.gatherthread.cn`，独立部署的正式服为 `https://gatherthread.cn`），选择 **登录并配对**，核对页面显示的短码，再到已经登录同一环境的网页批准相同短码。测试服需先准入、登录独立邮箱账号，再单独授权设备、选择测试工作区；不复用正式服配对或凭据。短码只能使用一次，并会很快过期。
 
 ### 4. 选择 DSH Provider 与 Model
 
@@ -46,7 +46,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.8.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -65,7 +65,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 
 DSH 使用其自身配置的 Provider 额度。`Insufficient Balance` 或 `QUOTA` 表示所选 DSH 模型账户当前无法运行，不是共序同步故障。
 
-Alpha 8 还允许会话写入者在共序网页选取已完成的公开消息，由**本人已连接的 DSH Agent**生成有作者和来源的共享总结。原文和旧版本均保留。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图，也可切换为原文。需要总结视图时，网页请求使用共序自有、同工作区且已验证原生工具预设继承的 DSH 辅助执行会话；没有总结的普通会话仍走原有原生路径。DSH 原会话、本地回合及原生自动压缩不会被改写。远端 Agent 回复在 DSH 中显示为带明确来源标签的插件引用，而非伪造成本机模型回合；这样可保持下一个本地回合的原生编号。共序规范事件仍保留原有作者与类型。若无法验证兼容的原生接口或预设继承，请求会明确失败，不会偷偷回退到原文注入。总结可能遗漏细节，提示词也不是限制工作区工具或文件访问的安全沙箱。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
+Beta 1 还允许会话写入者在共序网页选取已完成的公开消息，由**本人已连接的 DSH Agent**生成有作者和来源的共享总结。原文和旧版本均保留。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图，也可切换为原文。需要总结视图时，网页请求使用共序自有、同工作区且已验证原生工具预设继承的 DSH 辅助执行会话；没有总结的普通会话仍走原有原生路径。DSH 原会话、本地回合及原生自动压缩不会被改写。远端 Agent 回复在 DSH 中显示为带明确来源标签的插件引用，而非伪造成本机模型回合；这样可保持下一个本地回合的原生编号。共序规范事件仍保留原有作者与类型。若无法验证兼容的原生接口或预设继承，请求会明确失败，不会偷偷回退到原文注入。总结可能遗漏细节，提示词也不是限制工作区工具或文件访问的安全沙箱。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
 
 ## 上下文与原生压缩
 
@@ -101,4 +101,4 @@ npm run release:pack-npm
 npm run release:dry-run-npm
 ```
 
-这些命令会验证无 Git 元数据安装与导入、真实 DSH profile 安装流程、被 Git 忽略的候选 tarball，以及使用非默认 `alpha` dist-tag 的 npm 发布预检。
+这些命令会验证无 Git 元数据安装与导入、真实 DSH profile 安装流程、被 Git 忽略的候选 tarball，以及使用非默认 `beta` dist-tag 的 npm 发布预检。

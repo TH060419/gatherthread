@@ -6,7 +6,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 
-const VERSION = "0.1.0-alpha.8";
+const VERSION = "0.1.0-beta.1";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const temporaryBase = process.platform === "darwin" ? "/private/tmp" : tmpdir();
 const temporaryRoot = await mkdtemp(path.join(temporaryBase, "gtdshp-"));
@@ -33,7 +33,7 @@ try {
   const packageRoot = path.join(installDirectory, "node_modules", "@gatherthread", "dsh-host");
   const manifest = JSON.parse(await readFile(path.join(packageRoot, "package.json"), "utf8"));
   assert.equal(manifest.version, VERSION);
-  assert.deepEqual(manifest.publishConfig, { access: "public", tag: "alpha" });
+  assert.deepEqual(manifest.publishConfig, { access: "public", tag: "beta" });
   assert.deepEqual(manifest.dependencies ?? {}, {});
   const plugin = await import(pathToFileURL(path.join(packageRoot, "dist", "bundle", "native-plugin.js")).href);
   assert.equal(plugin.name, "gatherthread-dsh-native");

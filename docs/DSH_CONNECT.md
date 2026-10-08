@@ -19,7 +19,7 @@ npm install --global pnpm@10
 Then add the fixed GatherThread plugin to the DSH Web profile:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.8
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
 ```
 
 ### 2. Open DSH
@@ -32,7 +32,7 @@ Keep DSH running. Open **Settings → GatherThread / 共序**.
 
 ### 3. Pair the current server
 
-Paste the GatherThread server address (`https://gatherthread.cn` for the hosted Alpha), choose **Sign in and pair**, and compare the short code. Approve the same code in the GatherThread browser that is already signed in. The code is single-use and expires shortly.
+Paste the selected GatherThread server address (`https://test.gatherthread.cn` for Beta 1 testing; `https://gatherthread.cn` for the independently deployed production service), choose **Sign in and pair**, and compare the short code. Approve it in a browser already signed in to that same environment. Test requires its own admitted email account, device authorization and workspace; do not reuse production pairing or credentials. The code is single-use and expires shortly.
 
 ### 4. Select a DSH provider and model
 
@@ -46,7 +46,7 @@ From a source checkout with repository access:
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.8.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -65,7 +65,7 @@ Do not add `--offline` unless the complete dependency metadata is already cached
 
 DSH uses its configured provider quota. `Insufficient Balance` or `QUOTA` means the selected DSH model account cannot run the turn; it is not a GatherThread synchronization failure.
 
-`0.1.0-alpha.8` also lets a session writer select completed public messages in GatherThread Web and ask their **own connected DSH Agent** to make an attributed shared summary. Originals and earlier versions remain available. The per-user project setting defaults to summarized context for **future Web-triggered Agent requests**, or can use original text. A summary-aware Web turn uses a GatherThread-owned DSH execution Session with the same workspace and validated native tool preset; ordinary sessions without summaries retain the existing native path. The original DSH conversation, its local turns, and native compaction are not rewritten. Remote Agent replies appear there as clearly labelled plugin relay quotations, not as fabricated DSH-local model turns; this preserves the native Agent's next turn number. The canonical GatherThread event still retains its original actor and type. If the compatible native surface or preset inheritance cannot be verified, the summarized turn fails visibly instead of silently injecting the originals. Summaries are lossy and prompt instructions are not a security sandbox for workspace tools or files. See [ADR-0027](adr/0027-shared-manual-history-summaries.md).
+`0.1.0-beta.1` also lets a session writer select completed public messages in GatherThread Web and ask their **own connected DSH Agent** to make an attributed shared summary. Originals and earlier versions remain available. The per-user project setting defaults to summarized context for **future Web-triggered Agent requests**, or can use original text. A summary-aware Web turn uses a GatherThread-owned DSH execution Session with the same workspace and validated native tool preset; ordinary sessions without summaries retain the existing native path. The original DSH conversation, its local turns, and native compaction are not rewritten. Remote Agent replies appear there as clearly labelled plugin relay quotations, not as fabricated DSH-local model turns; this preserves the native Agent's next turn number. The canonical GatherThread event still retains its original actor and type. If the compatible native surface or preset inheritance cannot be verified, the summarized turn fails visibly instead of silently injecting the originals. Summaries are lossy and prompt instructions are not a security sandbox for workspace tools or files. See [ADR-0027](adr/0027-shared-manual-history-summaries.md).
 
 ## Context and long histories
 
@@ -101,4 +101,4 @@ npm run release:pack-npm
 npm run release:dry-run-npm
 ```
 
-These commands verify a Git-less package install/import, exercise the real DSH profile installer, create the candidate tarballs in ignored `release-artifacts/npm/`, and check npm's publish path with the non-default `alpha` dist-tag.
+These commands verify a Git-less package install/import, exercise the real DSH profile installer, create the candidate tarballs in ignored `release-artifacts/npm/`, and check npm's publish path with the non-default `beta` dist-tag.

@@ -1,5 +1,7 @@
 # 试用云端 Agent
 
+**Beta 1 开放情况：**当前构建仍关闭云端 Agent 入口。以下步骤须在入口变更单独审核、模型与容器验证并由运营启用后使用；发布 npm 或部署测试服不会自动开放。当前可使用本人已连接的 Codex/DSH。
+
 选择云端体验 Agent，说清楚想做的小任务，回答会留在同一段共享会话中。不需要安装本地 Agent，也不用填写自己的 API Key。可用模型、使用额度与服务状态以工作页显示为准。
 
 [图文使用流程](PRODUCT_GUIDE.zh-CN.md) · [English](HOSTED_AGENT_GUIDE.md)

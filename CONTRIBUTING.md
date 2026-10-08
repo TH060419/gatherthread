@@ -23,7 +23,7 @@ The project lead and designated release maintainer is currently `@TH060419`.
 5. **Local autonomy.** Never delete or rewrite local files, workspaces, tasks, or conversations as a side effect of a cloud mutation.
 6. **Privacy by construction.** Share only allowlisted, redacted content. Never transmit hidden reasoning, credentials, private instructions, headers, raw tool payloads, or native identifiers by default.
 7. **Durable recovery.** Cursors, outboxes, snapshot jobs, and projected-event IDs must survive retries and must advance only after the authoritative operation succeeds.
-8. **Compatibility over convenience.** Preserve current clients when changing `/v1`, MCP, connector, DSH, persistent state, Hook, or UI contracts. Alpha status permits change, not silent breakage.
+8. **Compatibility over convenience.** Preserve current clients when changing `/v1`, MCP, connector, DSH, persistent state, Hook, or UI contracts. Prerelease status permits change, not silent breakage.
 9. **Accessible and practical UI.** Preserve keyboard access, focus, reduced motion/transparency, high contrast, responsive layout, bilingual behavior, and Safari/Chromium parity.
 10. **Evidence before claims.** A build is not proof of runtime behavior. Report the exact tests and real entry points exercised, plus anything that still needs manual validation.
 
@@ -60,7 +60,7 @@ An interface-changing PR must include:
 - contract tests at both sides of the boundary;
 - updated canonical documentation and an ADR when the decision is durable or hard to reverse.
 
-Do not remove or reinterpret a field in place. During Alpha, an intentional breaking change still requires an explicit version or migration boundary and release-note disclosure.
+Do not remove or reinterpret a field in place. During Beta, an intentional breaking change still requires an explicit version or migration boundary and release-note disclosure.
 
 ## Verification
 

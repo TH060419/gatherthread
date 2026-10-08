@@ -7,7 +7,7 @@ The standalone GatherThread connector for a locally installed and authenticated 
 Copy the fixed-version command from GatherThread Web. It contains the server origin and project ID, but no browser cookie, invitation secret, device token, or local path:
 
 ```sh
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.8 --url https://gatherthread.example --project PROJECT_ID --create-workspace --plugin-hooks --visible-history-sync first-connect
+npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url https://gatherthread.example --project PROJECT_ID --create-workspace --plugin-hooks --visible-history-sync first-connect
 ```
 
 Create a one-time device authorization in the signed-in Connect Codex dialog, then paste it into the hidden terminal input within ten minutes. The connector claims its own device token, never your password. It supports Web **Request my agent**, canonical per-session projections, read-only snapshots, and a verified Desktop-visible history snapshot. `first-connect` imports once when each session is first established locally; `never` disables automatic import. Each manual import creates a new task and leaves the previous task for the user to archive. Realtime context injection stays active in both modes. Keep the process running.
@@ -15,7 +15,7 @@ Create a one-time device authorization in the signed-in Connect Codex dialog, th
 After the matching Git release ref exists, install the fixed plugin source and plugin explicitly:
 
 ```sh
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -27,9 +27,9 @@ For direct Codex Desktop turns to synchronize back to GatherThread, install and 
 
 Each bound Desktop conversation keeps its own local-to-cloud automatic-upload preference, enabled by default. The GatherThread workspace and the user MCP tools can show that state, turn automatic upload off or on, and manually scan and upload completed eligible turns to the cloud. Manual upload is the recovery path when a Hook did not run or did not leave a draft; it keeps the preference unchanged and uses the same idempotent local-turn outbox. Turning automatic upload off blocks Hook commits without disabling cloud-to-local context projection or Web Agent requests.
 
-## GitHub code synchronization: unreleased source preview
+## GitHub code synchronization
 
-The GitHub integration is available only in a matching reviewed source build; the `0.1.0-alpha.8` npm command above is not a claim that the published package supports it. The project owner first connects an existing `OWNER/REPO` and base branch in Web. Install Git 2.38+ and GitHub CLI, then restart the source connector with trusted `--plugin-hooks` and `--github-code-sync OWNER/REPO --github-base-branch main`. If this device needs GitHub login, the connector opens browser sign-in through the local CLI; the Web code panel also provides **Connect GitHub on this device** for a selected online Codex runtime. `gh auth login --hostname github.com --git-protocol https --web` remains a local fallback. GitHub consent is separate from GT Cloud `--code-sync`; a new binding automatically uploads settled changes while idle and can be switched off without affecting conversation sync. Configuration changes, including pause/resume, require renewed local authorization.
+Beta 1 includes direct GitHub synchronization and requires a matching server and Web release. The project owner first connects an existing `OWNER/REPO` and base branch in Web. Install Git 2.38+ and GitHub CLI, then restart the connector with trusted `--plugin-hooks` and `--github-code-sync OWNER/REPO --github-base-branch main`. If this device needs GitHub login, the connector opens browser sign-in through the local CLI; the Web code panel also provides **Connect GitHub on this device** for a selected online Codex runtime. `gh auth login --hostname github.com --git-protocol https --web` remains a local fallback. GitHub consent is separate from GT Cloud `--code-sync`; a new binding automatically uploads settled changes while idle and can be switched off without affecting conversation sync. Configuration changes, including pause/resume, require renewed local authorization.
 
 GitHub code and credentials travel directly from this device to GitHub. GitHub collaborator permissions are independent of GatherThread membership; pausing or deleting a GT project does not revoke GitHub access or delete GitHub data. See [Project code collaboration](../../docs/CODE_SYNC.md#github-source-preview--github-源码预览) for source commands, recovery, limits and workflow-trigger risks.
 

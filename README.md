@@ -8,9 +8,9 @@ GatherThread puts your team's discussion, AI-assisted work, and file review in o
 
 ![GatherThread: work together across devices, with your own Agents](docs/assets/product/cover.en.jpg)
 
-Open source · Self-hostable · Current version identifier **0.1.0-alpha.8** · [Apache 2.0](LICENSE)
+Open source · Self-hostable · Current version identifier **0.1.0-beta.1** · [Apache 2.0](LICENSE)
 
-Preparing a publicly registrable Beta: verify your email and sign in with a password, without an account invitation or qualification code. Registration availability is shown on the sign-in page; project invitations are separate.
+Beta 1 is the npm and isolated-test release. [Test service](https://test.gatherthread.cn/): enter your private tester code, then verify your email and sign in with a password. Production is upgraded separately; project invitations are not account registration codes. The cloud trial Agent is still disabled in this build and needs a separately reviewed activation before the workflow described below becomes available.
 
 ## Your team. Your devices. Your Agents.
 

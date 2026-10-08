@@ -1,5 +1,7 @@
 # Try the cloud Agent
 
+**Beta 1 availability:** the Cloud Agent entry remains disabled in this build. These instructions apply only after a separately reviewed entry change, provider/container checks and operator activation. npm publication or test deployment alone does not make it available; use your connected Codex or DSH Agent meanwhile.
+
 Choose the cloud trial Agent, describe a small task, and read its answer in the same shared conversation. You do not need to install a local Agent or provide an API key. Available models, usage allowances and service status are shown in the workspace.
 
 [Illustrated workflow](PRODUCT_GUIDE.md) · [简体中文](HOSTED_AGENT_GUIDE.zh-CN.md)

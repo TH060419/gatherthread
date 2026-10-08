@@ -6,6 +6,8 @@
 
 在 `https://gatherthread.cn/app/` 用邮箱和密码登录，再单独授权 Agent 设备。在“连接 Codex”中创建十分钟有效的一次性设备授权，输入连接器隐藏提示或启动器。请使用工作页显示的匹配版本命令；对应包或标签不可用时，使用下方源码路径。
 
+**Beta 1 测试服：**通过测试准入后，在 `https://test.gatherthread.cn/app/` 登录，使用该工作页生成的终端命令，并单独授权测试设备、选择测试工作区。正式服凭据不能混用。启动器 v1 仅支持正式官网地址，测试服不提供启动器入口。
+
 ## 启动器连接 · 官网 Windows / macOS
 
 安装同版 [Windows 启动器](../prototypes/codex-launcher/README.md)或 [macOS 启动器](../prototypes/codex-launcher/macos/README.md)，打开已登录的 Codex Desktop。在官网的「连接 Codex」窗口创建一次性设备授权，点击「打开启动器」，把授权填入启动器，再点击「开始连接」。首次使用可在启动器内安装配套插件；重启 Codex，检查并启用 Hooks 后再使用本地自动上传。保持启动器运行，这条流程无需输入终端命令。
@@ -40,7 +42,7 @@ codex plugin --help
 如果找不到该文件、ChatGPT Desktop 安装在其他位置，或你使用其他系统，请按照 [Codex CLI 官方安装指南](https://learn.chatgpt.com/docs/codex/cli)操作，不要把不存在的目录加入 `PATH`。运行 `codex plugin --help` 确认当前 Codex 版本支持插件后，再安装共序：
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -51,7 +53,7 @@ codex plugin add gatherthread@gatherthread
 在共序网页打开目标项目，选择 **连接 Codex**，复制与系统对应的命令。命令形式如下：
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.8 \
+npx --yes @gatherthread/codex-connect@0.1.0-beta.1 \
   --url 'https://你的共序服务器地址' \
   --project 'PROJECT_ID' \
   --create-workspace \
@@ -80,7 +82,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-服务器地址和项目 ID 以网页显示内容为准；服务器 Alpha 的地址是 `https://gatherthread.cn`。使用 `npx` 前请核对 `v0.1.0-alpha.8` 插件引用和同版连接器包均已发布。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
+服务器地址和项目 ID 以网页显示内容为准：Beta 1 测试使用 `https://test.gatherthread.cn`，独立部署的正式服使用 `https://gatherthread.cn`。使用 `npx` 前请核对 `v0.1.0-beta.1` 插件引用和同版连接器包均已发布。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
 
 ## 会同步什么
 
@@ -94,7 +96,7 @@ npm run codex:connect -- \
 
 规范历史始终会注入模型上下文。连接器还会单独导入经过验证的原生历史快照，让本地任务具有可直接阅读的 Desktop 气泡。设置只保留两档：`first-connect` 默认在每个会话首次于本地建立时导入一次；`never` 关闭自动可见历史导入。可随时在工作页选择“导入 Codex 历史”，或通过已审查插件调用 `collaboration_import_codex_history`。每次手动导入都会创建一个新的本地 Codex 任务；在独立快照资源限额内保留公开消息，需要时交给 Codex 原生压缩，验证新任务后再切换持久绑定和 Hook 许可。系统不会覆盖、删除或归档旧任务，请用户检查后自行归档。在旧任务继续工作的内容仅留在本地，不会创建新的共序任务或云端会话。实时增量上下文注入始终独立保持启用，包括关闭自动可见历史导入时。
 
-Alpha 8 支持在共序网页选取已完成的公开消息，由**本人已连接的 Codex runtime**生成有作者和来源的共享总结。原文与旧版本仍可查看。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图；需要精确细节时可改用原文。这只调整连接器私有的后台执行上下文，不改写已有的 Desktop 可见任务、气泡或本地文件。Codex 自身的自动压缩与本地回合上传开关互不受影响。总结可能遗漏细节，应对照来源核查；提示词也不构成禁止 Agent 使用工作区工具或文件的安全保证。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
+Beta 1 支持在共序网页选取已完成的公开消息，由**本人已连接的 Codex runtime**生成有作者和来源的共享总结。原文与旧版本仍可查看。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图；需要精确细节时可改用原文。这只调整连接器私有的后台执行上下文，不改写已有的 Desktop 可见任务、气泡或本地文件。Codex 自身的自动压缩与本地回合上传开关互不受影响。总结可能遗漏细节，应对照来源核查；提示词也不构成禁止 Agent 使用工作区工具或文件的安全保证。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
 
 ## 项目与工作区规则
 
@@ -109,7 +111,7 @@ Alpha 8 支持在共序网页选取已完成的公开消息，由**本人已连�
 
 可见历史不再通过删去旧消息或插入静态“已压缩”文字来假装完成压缩。超过独立 8 MiB JSON 资源限额时会明确拒绝导入；限额内的长历史需要真实原生压缩。压缩失败，或新用量仍超安全预算时，不切换原任务绑定。原生压缩可能消耗模型额度，也可能遗漏细节，不能保证无限或无损记忆；云端原始记录不因此缩短。
 
-压缩后若未得到新的可用用量报告，后台投影会持久暂停，避免每次轮询重复压缩或重建。只有新的可用原生报告才能恢复，相同报告重连、换更大模型都不能绕过。当前 Alpha 尚无后台重置按钮或命令；若原生任务已消失，请保留状态并反馈问题，后续需要单独实现经用户授权的恢复。该保护不关闭独立的 Desktop 实时注入及 Hook 路径，手动导入 Desktop 快照也不等于重置后台投影。
+压缩后若未得到新的可用用量报告，后台投影会持久暂停，避免每次轮询重复压缩或重建。只有新的可用原生报告才能恢复，相同报告重连、换更大模型都不能绕过。当前版本尚无后台重置按钮或命令；若原生任务已消失，请保留状态并反馈问题，后续需要单独实现经用户授权的恢复。该保护不关闭独立的 Desktop 实时注入及 Hook 路径，手动导入 Desktop 快照也不等于重置后台投影。
 
 旧的首次导入快照不会自动替换；若此前有文字被省略，请手动重新导入，再自行归档旧任务。新增字段兼容现有版本 3 状态；旧连接器不支持新的恢复保护，遇到 `unknown_after_compaction` 或 `contextRecovery` 时不要降级运行，也不要删除绑定或日志绕过。RPC 分块及 7 KiB Hook 胶囊仍有传输限额，但不是模型总上下文窗口。详见 [ADR-0026](adr/0026-native-first-context-management.md)。
 
@@ -143,4 +145,4 @@ npm run release:pack-npm
 npm run release:dry-run-npm
 ```
 
-第一条命令会在不含 Git 元数据的临时目录中重建、打包、安装并冒烟测试独立连接器；第二条会把候选 tarball 生成到被 Git 忽略的 `release-artifacts/npm/`；第三条使用 `alpha` dist-tag 走完 npm 发布预检，但不会真正发布。
+第一条命令会在不含 Git 元数据的临时目录中重建、打包、安装并冒烟测试独立连接器；第二条会把候选 tarball 生成到被 Git 忽略的 `release-artifacts/npm/`；第三条使用 `beta` dist-tag 走完 npm 发布预检，但不会真正发布。
