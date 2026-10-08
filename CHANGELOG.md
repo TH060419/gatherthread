@@ -4,7 +4,9 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
-No additional changes are recorded after the Beta 1 release candidate below.
+### Fixed
+
+- Make cloud trial and GitHub repository-task input and control mounts readable by their non-root containers under private service umasks. Preserve private job roots, read-only mounts, host-side credentials and resource limits; cover deeply nested source and success/failure cleanup with permission regressions and production-path Linux container smoke tests. This server-only correction does not change the published Beta 1 npm packages or tag.
 
 ## [0.1.0-beta.1] - 2026-10-08
 
