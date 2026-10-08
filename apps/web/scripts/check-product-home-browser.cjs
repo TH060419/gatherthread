@@ -10,30 +10,68 @@ async (page) => {
     if (!pass) throw new Error(JSON.stringify(results));
   };
   const delay = ms => page.waitForTimeout(ms);
-  await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'none' });
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(origin + '/?theme=light');
-  if (await page.evaluate(() => document.documentElement.lang) !== 'zh-CN') await page.locator('#language').click();
-  await delay(2100);
-  await page.evaluate(() => {
-    window.homeScrollAudit = [];
-    const original = window.scrollTo.bind(window);
-    window.scrollTo = (...args) => { homeScrollAudit.push(args); return original(...args); };
-  });
-  await page.mouse.move(700, 500);
-  await page.mouse.wheel(0, 450);
-  await delay(900);
-  const middle = await page.evaluate(() => scrollY);
-  await delay(1000);
-  check('no delayed or scripted snap', await page.evaluate(y => Math.abs(scrollY - y) < 2 && homeScrollAudit.length === 0, middle));
-  await page.mouse.wheel(0, 370);
-  await delay(1100);
-  await page.mouse.wheel(0, -100);
-  await delay(1000);
-  // Exactly one ordinary pointer click after wheel/reverse; never force or retry.
-  await page.locator('[data-chapter-link][href="#workflow"]').click();
-  await delay(1400);
-  check('WebKit wheel then first chapter click', await page.evaluate(() => location.hash === '#workflow' && Math.abs(document.querySelector('#workflow').getBoundingClientRect().top) < 3 && homeScrollAudit.length === 1));
+  async function checkFirstChapterClick(label) {
+    await page.emulateMedia({ reducedMotion: 'no-preference', forcedColors: 'none' });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto(origin + '/?theme=light');
+    if (await page.evaluate(() => document.documentElement.lang) !== 'zh-CN') await page.locator('#language').click();
+    await delay(2100);
+    await page.evaluate(() => {
+      window.homeScrollAudit = [];
+      window.homePointerAudit = [];
+      const original = window.scrollTo.bind(window);
+      window.scrollTo = (...args) => { homeScrollAudit.push(args); return original(...args); };
+      for (const type of ['pointerdown', 'pointerup', 'click']) document.addEventListener(type, event =>
+        homePointerAudit.push({ type, target: event.target.closest('a')?.getAttribute('href') ?? event.target.tagName, trusted: event.isTrusted }));
+    });
+    await page.mouse.move(700, 500);
+    await page.mouse.wheel(0, 450);
+    await delay(900);
+    const middle = await page.evaluate(() => scrollY);
+    await delay(1000);
+    check('no delayed or scripted snap ' + label, await page.evaluate(y => Math.abs(scrollY - y) < 2 && homeScrollAudit.length === 0, middle));
+    await page.mouse.wheel(0, 370);
+    await delay(1100);
+    await page.mouse.wheel(0, -100);
+    await delay(1000);
+    const target = page.locator('[data-chapter-link][href="#workflow"]');
+    const box = await target.boundingBox();
+    if (!box) throw new Error('Chapter target has no visible box: ' + label);
+    const before = await page.evaluate(rect => {
+      const point = { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 };
+      return { y: scrollY, visible: rect.x >= 0 && rect.y >= 0 && rect.x + rect.width <= innerWidth
+        && rect.y + rect.height <= innerHeight, hit: document.elementFromPoint(point.x, point.y)?.closest('a')?.getAttribute('href') };
+    }, box);
+    await delay(100);
+    const stableBox = await target.boundingBox();
+    const stable = stableBox && ['x', 'y', 'width', 'height'].every(key => Math.abs(stableBox[key] - box[key]) < 0.5)
+      && await page.evaluate(y => Math.abs(scrollY - y) < 2, before.y);
+    check('chapter target is visible and hit-tested ' + label,
+      await target.isVisible() && stable && before.visible && before.hit === '#workflow', before);
+    // Exactly one ordinary pointer click after wheel/reverse; never force or retry.
+    await target.click();
+    await delay(1400);
+    const navigation = await page.evaluate(() => ({
+      hash: location.hash,
+      top: document.querySelector('#workflow').getBoundingClientRect().top,
+      calls: homeScrollAudit.length,
+      pointers: homePointerAudit,
+    }));
+    check('wheel then first chapter click ' + label,
+      navigation.hash === '#workflow' && Math.abs(navigation.top) < 3 && navigation.calls === 1
+        && navigation.pointers.length === 3
+        && navigation.pointers.every(event => event.target === '#workflow' && event.trusted), navigation);
+  }
+  await checkFirstChapterClick('initial');
+  // Warm navigation has its own rendering/input lifecycle; cold loads alone miss it.
+  await page.goto(origin + '/privacy/');
+  await checkFirstChapterClick('from privacy');
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto(origin + '/');
+  await checkFirstChapterClick('after reduced motion');
+  if (await page.evaluate(() => document.documentElement.lang) !== 'en') await page.locator('#language').click();
+  await page.goto(origin + '/privacy/');
+  await checkFirstChapterClick('from English privacy');
   for (let index = 0; index < 4; index++) {
     await page.locator('#step-tab-' + index).click();
     check('workflow pointer tab ' + index, await page.locator('#step-panel-' + index).isVisible());
