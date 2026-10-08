@@ -276,19 +276,28 @@ test("home retains the shared cross-page language contract", async () => {
   }
 });
 
-test("product copy explains current local execution, mobile requirements and pending cloud availability", async () => {
+test("Beta product copy explains local execution, mobile requirements and cloud trial allowances", async () => {
   const [html] = await source;
   const zh = authoredCopy(html, "zh");
   const en = authoredCopy(html, "en");
   assert.match(zh, /电脑和连接器.*在线/u);
   assert.match(en, /computer and its connector.*online/iu);
-  assert.match(zh, /云端体验 Agent.*开放情况/u);
-  assert.match(en, /cloud trial Agent.*(?:planned|availability)/iu);
+  assert.match(zh, /直接选择云端体验 Agent.*使用额度.*工作页/u);
+  assert.match(en, /Choose the cloud trial Agent.*usage allowances.*workspace/iu);
   assert.match(zh, /自己已连接的 Codex\s*\/\s*DSH.*共享摘要/u);
   assert.match(en, /connected Codex\s*\/\s*DSH.*(?:shared summary|summarize)/iu);
   assert.match(zh, /电脑 Agent.*暂停/u);
   assert.match(en, /computer Agent request.*(?:pause|continue)|pause a computer Agent/iu);
-  assert.doesNotMatch(zh, /直接选择云端体验 Agent|选择云端体验 Agent，或/u);
+  assert.doesNotMatch(zh, /云端体验 Agent.*(?:后续开放|将提供)/u);
+  assert.doesNotMatch(en, /cloud trial Agent.*(?:planned|coming later)/iu);
+  const [settings, operations, readiness] = await Promise.all([
+    readFile(new URL("apps/web/src/settings.js", repositoryRoot), "utf8"),
+    readFile(new URL("docs/HOSTED_AGENT.md", repositoryRoot), "utf8"),
+    readFile(new URL("docs/PRODUCT_HOME_VERIFICATION.md", repositoryRoot), "utf8"),
+  ]);
+  assert.match(settings, /CLOUD_AGENT_ENTRY_ENABLED\s*=\s*false/u);
+  assert.match(operations, /Beta launch prerequisite.*CLOUD_AGENT_ENTRY_ENABLED=false/u);
+  assert.match(readiness, /server configuration alone cannot enable it/u);
 });
 
 test("file and conversation uploads, manual imports and human integration remain separate", async () => {

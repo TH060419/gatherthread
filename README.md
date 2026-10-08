@@ -18,7 +18,7 @@ Preparing a publicly registrable Beta: verify your email and sign in with a pass
 
 **Keep going beyond your desk.** The same account can be signed in on computers, phones, and tablets at once. On your phone, continue the discussion, review progress, or ask your connected computer Agent to keep working. Move to another computer by downloading the file version you saved.
 
-**Bring the helper you know.** Connect Codex or DeepSeek Harness. Choose the supported model and reasoning level for your request. Each teammate keeps their own setup while sharing discussion and results. A cloud trial Agent for small projects is coming later.
+**Choose the helper that fits.** Connect Codex or DeepSeek Harness, or use the cloud trial Agent for a small task without local setup. Choose from that Agent's supported models and options. Each teammate keeps their own setup while sharing discussion and results; cloud usage allowances are shown in the workspace.
 
 ![People share discussion and file versions while keeping their own Agents](docs/assets/product/collaboration.en.jpg)
 
@@ -67,7 +67,7 @@ GitHub's permissions, platform rules, and local transfer safeguards still apply.
 ## Get started
 
 1. **Sign in with a verified email address and password.** New here? Verify your email, choose a password, then create a project and a Multi conversation. Invite your teammates, or accept an existing project's invitation.
-2. **Connect your Agent on a computer.** Use the [Codex launcher and connection guide](docs/CODEX_CONNECT.md) or [DeepSeek Harness plugin](docs/DSH_CONNECT.md). A phone can use that same account's connected Agent while the computer and connector stay online.
+2. **Choose your Agent.** Try the [cloud Agent](docs/HOSTED_AGENT_GUIDE.md) without installing anything, or connect your computer with the [Codex launcher](docs/CODEX_CONNECT.md) or [DeepSeek Harness plugin](docs/DSH_CONNECT.md). A phone can use the cloud Agent directly, or that same account's connected computer Agent while the computer and connector stay online.
 3. **Talk, then ask for work.** Use Chat for discussion and the separate Agent request button for AI work. Select an available Agent and its supported model options before requesting it.
 4. **Share files when you need to.** Prefer GitHub for development; choose GT Cloud for a small trial. Authorize file access separately.
 
@@ -83,6 +83,7 @@ Want to practice first? Open the [free example](https://gatherthread.cn/app/exam
 | Conversation synchronization | Send shared history to connected Agents; switch local-to-cloud automatic uploads on or off per conversation, or manually upload completed turns. |
 | Codex history import | Create a new visible local task from shared history. Review it and archive the old task yourself; live history delivery remains independent. |
 | Models and request controls | Choose supported models and reasoning levels. During a computer Agent request, the request button becomes Pause or Resume. |
+| Cloud trial Agent | Try small tasks in an isolated workspace without local installation or your own API key; workspace usage allowances apply. |
 | Members and invitations | Manage owner, participant, and viewer roles; leave another person's project or remove members after resolving shared files. |
 | Accounts and devices | Sign in on multiple devices, revoke a device independently, change your profile, or review the impact before deleting your account. |
 | Bilingual onboarding | Use Chinese or English and learn through visual guides tailored to computers, phones, and tablets. |
