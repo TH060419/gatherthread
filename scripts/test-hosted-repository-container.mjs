@@ -18,6 +18,7 @@ const memoryMiB = hostedContainerMemoryMiB('repository', process.env.GATHERTHREA
   ? undefined : Number(process.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB));
 const directory = mkdtempSync(join(tmpdir(), 'gt-repository-smoke-'));
 let calls = 0, tarballCalls = 0, issued = false, observedChecks = false;
+let reportedFixtureFailure = false;
 
 function toolOutputLines(messages) {
   return messages.filter((message) => message.role === 'tool').flatMap((message) =>
@@ -89,10 +90,22 @@ try {
     const body = JSON.parse(String(init.body));
     const useTool = !issued && body.tools?.some((tool) => tool.function?.name === 'bash');
     if (useTool) issued = true;
-    if (body.messages.some((message) => message.role === 'tool')) {
-      const lines = toolOutputLines(body.messages);
-      for (const marker of ['TEST_OK', 'BUILD_OK', 'READONLY_OK', 'SECRETS_ABSENT', commandMarker]) assert.ok(lines.includes(marker));
-      observedChecks = true;
+    try {
+      if (body.messages.some((message) => message.role === 'tool')) {
+        const lines = toolOutputLines(body.messages);
+        for (const marker of ['TEST_OK', 'BUILD_OK', 'READONLY_OK', 'SECRETS_ABSENT', commandMarker]) {
+          assert.ok(lines.includes(marker), `Missing fixture tool stdout marker: ${marker}`);
+        }
+        observedChecks = true;
+      }
+    } catch (error) {
+      if (!reportedFixtureFailure) {
+        reportedFixtureFailure = true;
+        // Only fixed fixture tool text, never the full provider request or production output.
+        process.stderr.write(`Repository fixture assertion (tool stdout, call ${calls}, tool issued ${issued}): ${String(error.message).slice(0, 600)}\n`);
+        process.stderr.write(`Fixture tool text: ${JSON.stringify(toolOutputLines(body.messages)).slice(0, 4000)}\n`);
+      }
+      throw error;
     }
     const delta = useTool ? { role: 'assistant', tool_calls: [{ index: 0, id: 'call_repository', type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command, description: 'Verify read-only input and edit and test nested source' }) } }] } : { role: 'assistant', content: 'TEST_OK BUILD_OK' };
     const chunk = (delta, finish_reason = null) => JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: endpoint.model, choices: [{ index: 0, delta, finish_reason }] });

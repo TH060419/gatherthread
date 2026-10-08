@@ -49,15 +49,30 @@ function toolOutputLines(messages) {
 let calls = 0;
 let toolIssued = false;
 let observedChecks = false;
+let reportedFixtureFailure = false;
 const fetcher = async (url, init) => {
     assert.equal(String(url), `${endpoint.baseUrl}/chat/completions`);
     calls += 1;
     const body = JSON.parse(String(init?.body));
-    assert.match(JSON.stringify(body.messages), /Update the nested source/);
-    if (body.messages.some((message) => message.role === "tool")) {
-      const lines = toolOutputLines(body.messages);
-      for (const marker of ["TEST_OK", "READONLY_OK", "SECRETS_ABSENT", commandMarker]) assert.ok(lines.includes(marker));
-      observedChecks = true;
+    let check = "prompt";
+    try {
+      assert.match(JSON.stringify(body.messages), /Update the nested source/, "Fixture user instruction missing from model request");
+      if (body.messages.some((message) => message.role === "tool")) {
+        check = "tool stdout";
+        const lines = toolOutputLines(body.messages);
+        for (const marker of ["TEST_OK", "READONLY_OK", "SECRETS_ABSENT", commandMarker]) {
+          assert.ok(lines.includes(marker), `Missing fixture tool stdout marker: ${marker}`);
+        }
+        observedChecks = true;
+      }
+    } catch (error) {
+      if (!reportedFixtureFailure) {
+        reportedFixtureFailure = true;
+        // Only fixed fixture tool text, never the full provider request or production output.
+        process.stderr.write(`Trial fixture assertion (${check}, call ${calls}, tool issued ${toolIssued}): ${String(error.message).slice(0, 600)}\n`);
+        process.stderr.write(`Fixture tool text: ${JSON.stringify(toolOutputLines(body.messages)).slice(0, 4000)}\n`);
+      }
+      throw error;
     }
     const bash = Array.isArray(body.tools) && body.tools.some((tool) => tool?.function?.name === "bash");
     const useTool = bash && !toolIssued;
