@@ -258,6 +258,9 @@ h1 { font-size: clamp(48px, 6.2vw, 84px); line-height: 1.12; margin-inline: auto
 .footer-links a:hover { color: var(--strong); text-decoration: underline; text-underline-offset: 4px; }
 .footer-bottom { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px 24px; margin-top: 25px; font-size: 12px; color: var(--muted); line-height: 1.65; }
 .footer-bottom p { min-width: 0; overflow-wrap: anywhere; }
+.footer-filings { display: grid; gap: 4px; }
+.public-security-record { display: inline-flex; align-items: center; gap: 5px; }
+.public-security-record img { flex: none; }
 .footer-bottom .language { flex-shrink: 0; }
 
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
