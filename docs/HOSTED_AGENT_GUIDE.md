@@ -1,6 +1,6 @@
 # Try the cloud Agent
 
-Try a small task without installing a computer Agent. Choose the cloud trial Agent in GatherThread, describe what to make, and read its answer in the same shared conversation. Available models and usage allowances are shown in the workspace.
+Choose the cloud trial Agent, describe a small task, and read its answer in the same shared conversation. You do not need to install a local Agent or provide an API key. Available models, usage allowances and service status are shown in the workspace.
 
 [Illustrated workflow](PRODUCT_GUIDE.md) · [简体中文](HOSTED_AGENT_GUIDE.zh-CN.md)
 
@@ -27,4 +27,4 @@ For container build, quotas, and credentials, see the [operator guide](HOSTED_AG
 
 ## GitHub cloud projects
 
-Computer-to-GitHub synchronization is available independently in **Project file collaboration → GitHub**. The separate cloud repository-task entry is reserved for a later enabled Web update and an eligible coding profile; the small trial profile does not support it. For its conditional workflow, saved task review, limits and operator setup, see [GitHub cloud workspace](HOSTED_GITHUB.md).
+Computer-to-GitHub synchronization is available independently in **Project file collaboration → GitHub**. The small trial profile does not support cloud GitHub repository tasks. Those tasks need a separately enabled service and an eligible coding profile; for their workflow, saved task review, limits and operator setup, see [GitHub cloud workspace](HOSTED_GITHUB.md).

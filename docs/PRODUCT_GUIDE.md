@@ -6,7 +6,7 @@ From “shall we make a signup page?” to a button that works: follow one small
 
 ## Meet the workspace
 
-Pick a project and conversation on the left, discuss and request AI work in the middle, and find members and invitations on the right. Each person can connect Codex or DeepSeek Harness, or choose the cloud trial Agent for a small project within its usage limits.
+Pick a project and conversation on the left, discuss and request AI work in the middle, and find members and invitations on the right. Each person can connect Codex or DeepSeek Harness, or choose the cloud trial Agent for a small task without local setup. Cloud usage allowances are shown in the workspace.
 
 ![Full interface with annotations: conversation, members, and Agent controls](assets/product/en/annotated/01-workspace.jpg)
 
@@ -104,7 +104,7 @@ Sign in to the same account on a phone or tablet. Continue the discussion, check
 
 <img src="assets/product/en/annotated/13-tablet.jpg" width="640" alt="Full interface with annotations: the tablet conversation and controls">
 
-Keep the computer and connector online. Your phone does not need to be nearby or on the same Wi-Fi when both can reach the GatherThread server. A local-only server still needs a reachable connection. You can also choose the cloud trial Agent without installing a computer Agent.
+For a computer Agent, keep the computer and connector online. Your phone does not need to be nearby or on the same Wi-Fi when both can reach the GatherThread server. A local-only server still needs a reachable connection. You do not install a computer Agent on your phone. Alternatively, choose the [cloud trial Agent](HOSTED_AGENT_GUIDE.md) directly on your phone; no connected computer is required, and cloud usage allowances apply.
 
 To continue on another computer, download an uploaded file version. If the original folder is lost, recovery creates a new folder rather than deleting the old one. Unuploaded local changes are not a cloud backup. Review the target version and resolve local modifications before downloading.
 

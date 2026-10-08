@@ -1,8 +1,8 @@
 # Experimental Oracle Always Free deployment
 
-This legacy alternative is retained for reference only. The current invitation-only Alpha runs on Alibaba Cloud ECS at `https://gatherthread.cn`; public registration and public Beta are not open. If this Oracle path is revived later, it keeps the GatherThread process on `127.0.0.1:18787` and places Caddy in front on public ports 80/443. It does **not** create an anonymous public service: GatherThread device credentials, one-use invitations, project roles, exact browser origins, secure cookies, one-use WebSocket tickets, and application rate limits still apply.
+This experimental alternative is retained for reference; the recommended operator-managed public profile is [Alibaba Cloud ECS](ALIYUN_ECS.md). This Oracle path keeps GatherThread on `127.0.0.1:18787` and Caddy on public 80/443. Public Beta accounts use verified-email registration and password sign-in, with signup closed until operator preflight passes. Project invitations, native-device authorization, exact browser origins, secure cookies, one-use WebSocket tickets and application rate limits remain separate requirements.
 
-Direct Internet ingress expands the supported private Tailscale alpha threat boundary. The installer therefore requires an explicit `--acknowledge-experimental-public-ingress` flag. Do not use this path for sensitive or regulated data until the deployment has completed an external security review, restore drill, and multi-user field test.
+Direct Internet ingress expands the private Tailscale threat boundary. The installer therefore requires an explicit `--acknowledge-experimental-public-ingress` flag. Do not use this path for sensitive or regulated data until the deployment has completed an external security review, restore drill, and multi-user field test.
 
 ## 1. Create the Oracle resources
 
@@ -36,7 +36,7 @@ sudo deploy/oracle-free/install.sh \
 
 The installer supports Ubuntu 22.04/24.04 on ARM64 or x86-64. It installs a checksum-verified pinned Node.js 24 binary and the official Caddy package, builds the lockfile-pinned application, creates a non-login `gatherthread` service account, writes a root-owned production environment, starts hardened systemd services, and enables a daily SQLite online-backup timer. Re-running it preserves the existing environment and authentication pepper; it refuses a different domain instead of silently invalidating credentials.
 
-## 3. Verify before creating the owner
+## 3. Verify before opening account registration
 
 Run the complete host and public-path check:
 
@@ -46,24 +46,15 @@ sudo /opt/gatherthread/app/deploy/oracle-free/preflight.sh gatherthread.example.
 
 The preflight must show that the app listens only on loopback, local and public `/health` return SQLite `wal`, Caddy and the backup timer are active, and private paths have restrictive permissions. Also test from a second network that `https://gatherthread.example.com` opens while `http://PUBLIC_IP:18787` does not connect.
 
-## 4. Create the first owner
+## 4. Configure verified-email accounts
 
-Bootstrap writes directly to SQLite; there is no public bootstrap endpoint. The following command prints the first device credential once:
+The installer does not configure email/security providers or open registration. Complete the [public registration preflight](OPERATIONS.md#public-beta-registration-preflight) using the private `/etc/gatherthread/gatherthread.env`; keep `GATHERTHREAD_PUBLIC_REGISTRATION=false` until the approved checks pass. Password recovery has its own independent default-closed gate.
 
-```bash
-cd /opt/gatherthread/app
-sudo -u gatherthread /usr/local/bin/node \
-  --env-file=/etc/gatherthread/gatherthread.env \
-  apps/server/dist/src/cli.js bootstrap \
-  --display-name "Owner name" \
-  --device-name "Owner device"
-```
-
-Store the credential in a password manager and enter it only on the exact HTTPS origin. Never put it in a URL, command argument, screenshot, log, or shared message.
+Once registration is enabled, open the exact HTTPS site, verify your email, set a password, sign in and create a project. Teammates register or sign in before accepting project invitations. Computer Agents receive separate device authorization after sign-in. Do not run retired bootstrap commands or distribute user-login tokens.
 
 ## 5. Backups, updates, and rollback
 
-The timer writes online SQLite backups to `/var/backups/gatherthread` on the VM. That protects against database-level failure but not loss of the Oracle account, region, instance, or boot volume. Copy encrypted backups off the VM and protect the matching `/etc/gatherthread/gatherthread.env` pepper separately. Verify and restore a backup before inviting testers.
+The timer writes online SQLite backups to `/var/backups/gatherthread` on the VM. That protects against database-level failure but not loss of the Oracle account, region, instance, or boot volume. Copy encrypted backups off the VM and protect the matching `/etc/gatherthread/gatherthread.env` pepper separately. Verify and restore a backup before opening access.
 
 Before an update, take and export a backup, record the current Git commit, then stop the service, check out a reviewed release, run `npm ci && npm run build`, and restart. Roll back by restoring the prior commit and, only when a schema change requires it, the matching verified database backup. Never overwrite the live database with a raw copy while WAL writes are active.
 

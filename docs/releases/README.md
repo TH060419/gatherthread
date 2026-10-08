@@ -2,6 +2,8 @@
 
 Files in this directory are point-in-time release or candidate records. They may retain historical ports, package status, or deployment assumptions. Use the current top-level README and operational guides for present-day setup.
 
+Current preparation (2026-10-08): the next Beta uses publicly registrable verified-email accounts and password sign-in, not historical qualification/token activation. The source identifier remains `0.1.0-alpha.8`; this note declares no new release. Follow [current account behavior](../PRODUCT_SPEC.md#browser-entry-flow) and the [operator preflight](../OPERATIONS.md#public-beta-registration-preflight).
+
 | Version | Git tag | GitHub Release | Record |
 |---|---:|---:|---|
 | `0.1.0-alpha.1` | yes | no | [notes](0.1.0-alpha.1.md) |

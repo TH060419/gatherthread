@@ -1342,6 +1342,7 @@ test("owner host serves only the configured static tree without authentication",
   writeFileSync(join(staticDirectory, "app", "index.html"), "<!doctype html><title>GatherThread app</title>");
   writeFileSync(join(staticDirectory, "app", "example.html"), "<!doctype html><title>Isolated example</title>");
   writeFileSync(join(staticDirectory, "assets", "app.js"), "export const ready = true;\n");
+  writeFileSync(join(staticDirectory, "assets", "product.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   writeFileSync(join(directory, "private.txt"), "must not leak");
   const running = await startCollaborationServer({
     databasePath: join(directory, "server.sqlite"),
@@ -1379,6 +1380,13 @@ test("owner host serves only the configured static tree without authentication",
     assert.equal(asset.status, 200);
     assert.equal(asset.headers.get("content-type"), "text/javascript; charset=utf-8");
     assert.equal(asset.headers.get("cache-control"), "no-cache");
+
+    const screenshot = await fetch(`${running.origin}/assets/product.jpg`);
+    assert.equal(screenshot.status, 200);
+    assert.equal(screenshot.headers.get("content-type"), "image/jpeg");
+    assert.equal(screenshot.headers.get("x-content-type-options"), "nosniff");
+    assert.match(screenshot.headers.get("content-security-policy") ?? "", /frame-ancestors 'none'/u);
+    assert.deepEqual(Buffer.from(await screenshot.arrayBuffer()), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
 
     const traversal = await fetch(`${running.origin}/..%2Fprivate.txt`);
     assert.notEqual(traversal.status, 200);

@@ -14,9 +14,11 @@ The default bind address is `127.0.0.1`. Configure only the documented `GATHERTH
 
 ## Authentication
 
-`POST /v1/bootstrap` is a development-only first-user path. Production creates the first owner directly with `npm run owner-host:init`. The first device credential is returned once; SQLite stores only its peppered HMAC-SHA256 digest. New identities enter through a single-use project invitation. Additional devices use a separate ten-minute device authorization. `DELETE /v1/devices/:device_id` revokes that credential, its runtimes, delegated authorizations, browser sessions, and active sockets.
+Users verify an email address, set a password and sign in with that email and password. Public Beta registration is not invitation-only; it stays closed by default until the operator completes the [registration preflight](../../docs/OPERATIONS.md#public-beta-registration-preflight). `owner-host:init` prepares private hosting configuration; it does not create an account or issue a user token. Project invitations grant membership to an already signed-in account. Retired bootstrap, qualification activation, user-token login and invitation-created identity routes return `410 account_flow_retired`.
 
-All other endpoints require `Authorization: Bearer <token>` or the same-origin HttpOnly browser session. Native WebSocket clients may send the bearer header. Browser clients call `POST /v1/realtime-ticket` and carry the returned 30-second, one-use, session-scoped ticket in the `Sec-WebSocket-Protocol` header. Credentials in WebSocket query strings are not accepted.
+Each browser device has an independent HttpOnly Cookie session, allowing one account on multiple devices. Native Agent devices use separate ten-minute authorizations or browser-approved DSH pairing; SQLite stores only peppered credential digests. `DELETE /v1/devices/:device_id` revokes that device's credential, runtimes, delegated authorizations, browser sessions and active sockets. Password recovery has its own default-closed operator switch; a completed reset revokes every device and Agent authorization without deleting projects.
+
+Account-entry and health routes have their own public validation and limits. Workspace routes require the same-origin HttpOnly browser session or an independently authorized native Bearer credential where that route permits it; account-management routes do not accept native credentials. Native WebSocket clients may send the bearer header. Browser clients call `POST /v1/realtime-ticket` and carry the returned 30-second, one-use, session-scoped ticket in the `Sec-WebSocket-Protocol` header. Credentials in WebSocket query strings are not accepted.
 
 ## HTTP contract
 
@@ -26,8 +28,13 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 |---|---|---|
 | `GET` | `/health/live` | Unauthenticated process liveness only |
 | `GET` | `/health` or `/health/ready` | Unauthenticated SQLite WAL, foreign-key, and write readiness |
-| `POST` | `/v1/bootstrap` | One-time first identity and device token |
-| `POST` | `/v1/browser-sessions` | Exchange a device credential for an HttpOnly browser session |
+| `GET` | `/v1/registration` | Public registration availability and browser-bound challenge configuration |
+| `POST` | `/v1/registration/send` | Validate the challenge and send a browser-bound email code |
+| `POST` | `/v1/registration/verify` | Verify the email code and atomically create an account, password and Cookie session |
+| `GET/POST` | `/v1/email-login` | Read login availability or sign in with email and password |
+| `GET` | `/v1/password-reset` | Read independently gated password-recovery availability |
+| `POST` | `/v1/password-reset/{send,verify}` | Send a recovery code or reset the password and revoke all devices |
+| `DELETE` | `/v1/browser-sessions/current` | Log out the current browser session |
 | `PATCH` | `/v1/devices/:device_id` | Rename one of the authenticated user's devices |
 | `POST/GET` | `/v1/device-authorizations` | Create or list delegated device authorizations |
 | `POST` | `/v1/device-authorizations/claim` | Claim a delegated authorization on a new device |
@@ -38,9 +45,8 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 | `PATCH` | `/v1/projects/:project_id` | Owner-only idempotent project title update |
 | `POST/GET` | `/v1/projects/:project_id/sessions` | Owner creates solo/multi; participant creates personal solo; members list sessions |
 | `GET` | `/v1/projects/:project_id/members` | List project members |
-| `PUT/DELETE` | `/v1/projects/:project_id/members/:user_id` | Owner-change or remove another member |
+| `PUT/DELETE` | `/v1/projects/:project_id/members/:user_id` | Owner-change or remove a member; non-owners may leave their own membership after file checks |
 | `POST/GET/DELETE` | `/v1/projects/:project_id/invitations[/invite_id]` | Owner-manage project invitations |
-| `POST` | `/v1/invitations/claim` | Atomically claim a project invitation as a new identity/device |
 | `POST` | `/v1/invitations/accept` | Accept a project invitation as an authenticated identity |
 | `GET` | `/v1/sessions` | Compatibility list of all visible sessions |
 | `GET/PATCH` | `/v1/sessions/:session_id` | Read; project owner manages multi; Solo creator manages own Solo |
@@ -99,4 +105,4 @@ Set `GATHERTHREAD_ALLOWED_ORIGINS` to a comma-separated exact Origin allowlist w
 
 ## Security and first-release scope
 
-Projects are private and owner-managed. Solo writes are creator-only; multi writes allow owners and participants; viewers are read-only. New sessions default to hard limits of 512 per creator, 2,048 per project, and 8,192 per deployment; exact idempotent retries still return the original session at the limit. Project invitations are single-use, peppered, and expire after one hour, 24 hours, or seven days. Payloads redact common credentials and default-private thinking/system/developer fields before persistence. A non-owner member reading another user's activity receives public attribution rather than local device, runtime, or native-session identifiers. Snapshot jobs are charged at least 1 KiB each, completion data is bounded to 8 KiB, cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment, and unfinished jobs default to 64/256/4096 respectively. The beta still lacks multi-process fan-out, automatic retention jobs, attachment blob storage, and open registration. Use a documented connection profile; public access is supported only through the invitation-only Alibaba Cloud ECS profile with the application retained on loopback.
+Projects are private and owner-managed. Solo writes are creator-only; multi writes allow owners and participants; viewers are read-only. New sessions default to hard limits of 512 per creator, 2,048 per project, and 8,192 per deployment; exact idempotent retries still return the original session at the limit. Project invitations are single-use, peppered, and expire after one hour, 24 hours, or seven days. Payloads redact common credentials and default-private thinking/system/developer fields before persistence. A non-owner member reading another user's activity receives public attribution rather than local device, runtime, or native-session identifiers. Snapshot jobs are charged at least 1 KiB each, completion data is bounded to 8 KiB, cumulative storage defaults to 4 MiB per user, 8 MiB per session, and 64 MiB per deployment, and unfinished jobs default to 64/256/4096 respectively. Multi-process fan-out, attachment blob storage and general conversation-retention jobs remain out of scope; operator backup and unreachable-Git retention jobs are separate. Public verified-email registration requires approved provider and abuse-control configuration. Keep the application on loopback behind the documented HTTPS profile, including Alibaba Cloud ECS. See the [interface contracts](../../docs/INTERFACE_CONTRACTS.md) for exact route authentication and quotas.

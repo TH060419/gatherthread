@@ -1,12 +1,12 @@
 # 独立测试环境准备与验收
 
-状态：源码准备，尚未上线。目标是 `https://test.gatherthread.cn`。本分支基于 main `ca4860d4fb26375eff26191fc7993fba21af7b4e`，包含已合入的 [PR62](https://github.com/TH060419/gatherthread/pull/62)；修复版与当前 main `4aa5a1b3ac06d6e0ff7d0613f062f201177a27b3` 的干净临时合并候选已通过本地验收，记录见 [TEST_ENVIRONMENT_VALIDATION](TEST_ENVIRONMENT_VALIDATION.md)。本门禁改动仍独立审核，不代表服务器已发布新账号系统。部署由服务器管理会话执行，需负责人逐次授权。
+本指南用于 `https://test.gatherthread.cn` 的独立测试环境：账号、密码、设备授权、文件与密钥都和正式环境分开。源码能力以最新 `main` 为准，实际启用状态由运营配置决定；历史候选验收记录见 [TEST_ENVIRONMENT_VALIDATION](TEST_ENVIRONMENT_VALIDATION.md)，不能替代最新固定提交的复测。部署由服务器管理会话执行，需负责人逐次授权。
 
 ## 用户流程与依赖
 
 打开测试站 → 输入负责人私下发放的测试人员代码 → 邮箱验证注册或邮箱/密码登录 → 完整工作页 → 单独授权测试环境的 Codex/DSH。测试代码只控制环境准入，不创建账号、提升项目角色或替代密码。两环境的同一邮箱可分别注册并设置不同密码；不迁移、合并或继承旧账号。
 
-当前 main 已包含 PR62 的 `registration` 服务接口；通过门禁后复用其邮箱注册、找回、登录与独立设备授权。旧浏览器 token、资格码激活、记住账号菜单和邀请创建身份的路由保持退役。本分支没有重写账号实现。直接使用库接口但缺少账号配置时，仅显示“账号系统准备中”的安全拒绝页面；正常 CLI 总是加载已有账号配置。
+通过门禁后复用当前邮箱注册、找回、登录与独立设备授权。旧浏览器 token、资格码激活、记住账号菜单和邀请创建身份的路由保持退役。测试门禁不重写账号实现；直接使用库接口但缺少账号配置时，仅显示“账号系统准备中”的安全拒绝页面；正常 CLI 加载本环境的账号配置。正式公开 Beta 注册不需要测试人员代码。
 
 服务端门禁位于 Origin/OPTIONS 处理之后、**所有账号与回调路由之前**。保留已有账号配置、原验证器与 Turnstile CSP。后续改动不能把门禁块放回 DSH 路由旁边，因为邮箱 API 在它之前。
 
@@ -58,15 +58,15 @@ HTTP 在入口、异步读取请求体后及账号异步操作后的写入边界
 
 所有浏览器 Cookie 都无 Domain 属性。上线前实际检查正式站 Set-Cookie，若存在历史 `Domain=.gatherthread.cn` Cookie，先由负责人清理/迁移并确认浏览器不再将它发送到测试站。默认代码符合 `__Host-` 规则，测试会话不被正式 pepper/数据库接受；不要为了“方便”设置父域 Cookie。配对回调、设备 state 与本地连接器工作区也必须选择测试 Origin，并使用新的私密连接器状态目录。
 
-Turnstile 建议新建测试 widget，只准许 `test.gatherthread.cn`，PR62 服务端继续核对 hostname、action、cData；正式 widget/API secret 不进入测试配置。[官方 hostname 配置](https://developers.cloudflare.com/turnstile/additional-configuration/hostname-management/)。
+Turnstile 建议新建测试 widget，只准许 `test.gatherthread.cn`，邮箱服务端继续核对 hostname、action、cData；正式 widget/API secret 不进入测试配置。[官方 hostname 配置](https://developers.cloudflare.com/turnstile/additional-configuration/hostname-management/)。
 
 Resend 建议独立测试发件子域和仅发送权限的域限定 API key；可在现有提供商账号内建隔离配置，但账号级配额仍共享，测试预算不能耗尽正式邮件额度。先确认现有套餐支持域数量，不自行升级或购买。[官方子域说明](https://resend.com/docs/dashboard/domains/introduction)、[API key 权限](https://resend.com/docs/dashboard/api-keys/introduction)。模板只留空值；模拟测试没有真实发信。
 
-设备端 GitHub 连接仍由本地连接器授权/操作。可选服务器端 GitHub 功能依 [HOSTED_GITHUB](HOSTED_GITHUB.md) 单独配置；门禁仍覆盖其授权、回调、绑定和 PR 发布。Strict Cookie 的跨站返回使用公共 403 门禁页进行同站复查，规则由 [Security](SECURITY.md#test-admission-boundary) 定义。管理员须核对真实回调，不推测其已配置；推荐独立测试 App 与测试仓库。[GitHub App 可配置多个 callback](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url)，仍须为测试明确选择 redirect_uri、独立 client secret 和环境绑定 state。测试不能接收正式 OAuth state 或使用正式 GitHub 仓库/用户代码。未知回调仍默认拒绝，不宽泛放行门禁。可选 Launcher v1 当前固定正式 Origin，测试先用手动终端命令；不要放宽已发布 v1 协议。PR62 的新 Launcher 需其独立审核与版本配套。
+设备端 GitHub 连接仍由本地连接器授权/操作。可选服务器端 GitHub 功能依 [HOSTED_GITHUB](HOSTED_GITHUB.md) 单独配置；门禁仍覆盖其授权、回调、绑定和 PR 发布。Strict Cookie 的跨站返回使用公共 403 门禁页进行同站复查，规则由 [Security](SECURITY.md#test-admission-boundary) 定义。管理员须核对真实回调，不推测其已配置；推荐独立测试 App 与测试仓库。[GitHub App 可配置多个 callback](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url)，仍须为测试明确选择 redirect_uri、独立 client secret 和环境绑定 state。测试不能接收正式 OAuth state 或使用正式 GitHub 仓库/用户代码。未知回调仍默认拒绝，不宽泛放行门禁。可选 Launcher v1 固定正式 Origin，测试先用工作页生成的手动终端命令；不要放宽已发布 v1 协议。其他 Origin 的启动器支持需要独立协议审核与配套版本。
 
 ## 先测试，再由人工推广
 
-1. PR62 已合入 main，门禁分支仍需独立审核。门禁合并后的最终 full SHA 是唯一候选来源。提交、推送、合并、发 tag/npm、DNS/TLS/服务器变更各按 [CONTRIBUTING](../CONTRIBUTING.md) 授权。当前任务仅准备代码/模板。
+1. 选择经审核的最终 `main` full SHA 作为唯一候选来源。提交、推送、合并、发 tag/npm、DNS/TLS/服务器变更各按 [CONTRIBUTING](../CONTRIBUTING.md) 授权，不因文档更新自动执行。
 2. 在目标兼容 Linux/架构/Node 24 环境，运行 `bash scripts/test-environment/prepare-candidate.sh FULL_SHA ABSOLUTE_NEW_DIR`。脚本从固定提交归档到新目录，`npm ci`、完整 `release:verify`、构建后生成带 commit/Node/平台信息的 tarball 和 SHA256。没有 env、Git 或真实数据；不切换任何服务。代码更新后用新 SHA 重建，不在服务器重编两份产物。
 3. 服务器管理会话验证 tarball 校验和，将**同一产物**解到测试的版本目录；env 与数据在产物外。创建 `gatherthread-test` 用户、0700 数据/备份目录、私密配置与独立随机密钥，检查报告、磁盘/内存余量与 backup/restore。只安装测试 units，追加独立 Caddy block，不能替换正式配置。28787/18787 都不开放公网；防火墙只让 Caddy 80/443 入站。
 4. 获 DNS/TLS 授权后添加 test 子域 A/AAAA、签发 TLS；Caddy validate 成功才由管理会话 reload。核对反向代理 Host、可信 client-IP 覆写与证书，测试 service ready 和页面标记。在邮件接入复测后，负责人只在测试 env 开注册/找回并用少量授权收件地址验证，无批量邮件或付费模型测试。
@@ -79,7 +79,7 @@ Resend 建议独立测试发件子域和仅发送权限的域限定 API key；�
 
 每次测试升级前做各自 verified backup，验证 SQLite integrity/foreign keys、事件 replay 与代码 heads。门禁恢复校验 SHA256、`PRAGMA integrity_check` 和 namespace，恢复到**新的测试路径**，先删恢复副本的 `sessions`，重放恢复时间之后的代码撤销记录，再开放。账号恢复依 [OPERATIONS](OPERATIONS.md) 的独立删除/设备撤销登记，不复活已删除账号；检查测试 pepper 与 Origin 仍匹配。备份和密钥分别受限保存。
 
-代码回滚只能指向与当前 schema 兼容的旧产物；不兼容时停测试进程并恢复测试自己的完整应用+Git+门禁备份到新路径。PR62 之前的二进制会重新暴露旧账号路径，不得作为开放测试/正式账号的回滚服务；必要时保持外部流量关闭。正式回滚绝不能使用测试 DB、Cookie、Git 或密钥。不要覆盖失败现场。
+代码回滚只能指向与当前 schema 兼容的旧产物；不兼容时停测试进程并恢复测试自己的完整应用+Git+门禁备份到新路径。邮箱账号整合前的二进制会重新暴露旧账号路径，不得作为开放测试/正式账号的回滚服务；必要时保持外部流量关闭。正式回滚绝不能使用测试 DB、Cookie、Git 或密钥。不要覆盖失败现场。
 
 ## 验收记录要求
 

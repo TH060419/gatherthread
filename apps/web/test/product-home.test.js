@@ -1,37 +1,88 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 
 const productRoot = new URL("../../../site/", import.meta.url);
+const repositoryRoot = new URL("../../../", import.meta.url);
+const source = Promise.all(["index.html", "app.js", "styles.css", "boot.js"].map((name) =>
+  readFile(new URL(name, productRoot), "utf8")));
 
-test("home prominently links the repository and leads Codex setup with the Launcher", async () => {
-  const html = await readFile(new URL("index.html", productRoot), "utf8");
-  const app = await readFile(new URL("app.js", productRoot), "utf8");
-  const hero = html.slice(html.indexOf('class="hero-ctas"'), html.indexOf('class="hero-mark"'));
-  assert.match(hero, /class="btn-pill btn-repository" href="https:\/\/github.com\/TH060419\/gatherthread" target="_blank" rel="noopener noreferrer"/);
-  assert.match(app, /"hero.github":\s*\{ zh: "GitHub 项目", en: "GitHub repository" \}/);
-  assert.match(html, /data-i18n="setup.codex.2">.*连接 Codex → 打开启动器/);
-  assert.match(app, /Keep the Launcher running; no terminal commands are needed/);
-  assert.match(app, /For Linux, self-hosting or an unavailable Launcher/);
-  assert.match(html, /href="https:\/\/github.com\/TH060419\/gatherthread\/tree\/main\/prototypes\/codex-launcher"/);
+// Inspect authored semantic markup, not a particular presentation class or order.
+function elements(html, name) {
+  return [...html.matchAll(new RegExp(`<${name}\\b([^>]*)>`, "gu"))].map((match) => {
+    const attributes = {};
+    for (const attribute of match[1].matchAll(/([^\s=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'))?/gu)) {
+      attributes[attribute[1]] = (attribute[2] ?? attribute[3] ?? "").replaceAll("&amp;", "&");
+    }
+    return attributes;
+  });
+}
+
+function authoredCopy(html, language) {
+  return [...html.matchAll(new RegExp(`data-${language}="([^"]*)"`, "gu"))]
+    .map((match) => match[1]).join("\n");
+}
+
+function mediaBlocks(css, condition) {
+  const blocks = [];
+  for (const match of css.matchAll(/@media\s*([^{}]+)\{/gu)) {
+    if (!match[1].includes(condition)) continue;
+    let depth = 1;
+    let end = match.index + match[0].length;
+    const start = end;
+    while (depth && end < css.length) {
+      if (css[end] === "{") depth++;
+      if (css[end] === "}") depth--;
+      end++;
+    }
+    assert.equal(depth, 0, `Complete media block: ${condition}`);
+    blocks.push(css.slice(start, end - 1));
+  }
+  assert.ok(blocks.length, `Media fallback: ${condition}`);
+  return blocks.join("\n");
+}
+
+test("home names GatherThread and clearly presents people, devices and individually requested Agents", async () => {
+  const [html] = await source;
+  const headings = elements(html, "h1");
+  assert.equal(headings.length, 1);
+  assert.equal(headings[0]["data-zh"], "GatherThread，一起做项目。");
+  assert.equal(headings[0]["data-en"], "GatherThread. Build together.");
+  const zh = authoredCopy(html, "zh");
+  const en = authoredCopy(html, "en");
+  assert.match(zh, /多人、多端、多 Agent/u);
+  assert.match(en, /people[\s\S]*screens[\s\S]*Agents/iu);
+  assert.match(zh, /普通聊天不会启动 AI/u);
+  assert.match(en, /chat message does not start AI/iu);
+  assert.match(zh, /未来规划[\s\S]*自动分工[\s\S]*当前/u);
+  assert.match(en, /Future plans[\s\S]*automatic collaboration[\s\S]*Today/iu);
+});
+
+test("home prominently links the source and leads computer setup with the Codex Launcher and DSH plugin", async () => {
+  const [html] = await source;
+  const header = html.slice(html.indexOf("<header"), html.indexOf("</header>"));
+  const repository = elements(header, "a").find((link) => link.href === "https://github.com/TH060419/gatherthread");
+  assert.ok(repository, "Repository entry in the main header");
+  assert.equal(repository.target, "_blank");
+  assert.ok(repository.rel.split(/\s+/u).includes("noopener"));
+  assert.ok(repository.rel.split(/\s+/u).includes("noreferrer"));
+  assert.match(authoredCopy(html, "zh"), /Codex 启动器.*DSH 插件/u);
+  assert.match(authoredCopy(html, "en"), /Codex launcher.*DSH plugin/iu);
+  for (const name of ["CODEX_CONNECT", "DSH_CONNECT"]) {
+    for (const suffix of [".md", ".zh-CN.md"]) {
+      assert.ok((await readFile(new URL(`docs/${name}${suffix}`, repositoryRoot), "utf8")).length);
+    }
+  }
 });
 
 test("product home enters the same-origin app and preserves operational deep links", async () => {
-  const [html, boot, app] = await Promise.all([
-    readFile(new URL("index.html", productRoot), "utf8"),
-    readFile(new URL("boot.js", productRoot), "utf8"),
-    readFile(new URL("app.js", productRoot), "utf8"),
-  ]);
-
-  assert.match(html, /<script src="boot\.js"><\/script>/u);
-  assert.doesNotMatch(html, /<script>(?:.|\n)*?<\/script>/u);
-  assert.equal((html.match(/href="\.\/app\/"/gu) ?? []).length, 7);
-  assert.match(html, /data-i18n="nav\.app">进入共序/u);
-  assert.match(html, /data-i18n="hero\.cta1">开始使用/u);
-  assert.match(html, /data-i18n="final\.cta1">打开登录页/u);
-  assert.match(app, /"nav\.app":\s*\{ zh: "进入共序", en: "Open App" \}/u);
+  const [html, , , boot] = await source;
+  const links = elements(html, "a");
+  assert.ok(links.some((link) => link.href === "./app/"));
+  for (const link of links.filter((link) => /(?:\/app\/|\/privacy\/)/u.test(link.href ?? ""))) {
+    assert.ok(link.href.startsWith("./"), `Stay on the selected server: ${link.href}`);
+  }
 
   for (const deepLink of ["project", "session", "dsh-pair"]) {
     assert.match(boot, new RegExp(`hash\\.has\\("${deepLink}"\\)`));
@@ -78,112 +129,228 @@ test("product home enters the same-origin app and preserves operational deep lin
   }
 });
 
-test("product home keeps required accessibility and reduced-effect paths", async () => {
-  const [html, styles] = await Promise.all([
-    readFile(new URL("index.html", productRoot), "utf8"),
-    readFile(new URL("styles.css", productRoot), "utf8"),
-  ]);
+test("home has usable same-origin examples and no-JavaScript chapter destinations", async () => {
+  const [html, , , boot] = await source;
+  const ids = [...html.matchAll(/\bid="([^"]+)"/gu)].map((match) => match[1]);
+  assert.equal(new Set(ids).size, ids.length, "Unique control and destination IDs");
+  for (const link of elements(html, "a")) {
+    if (link.href?.startsWith("#")) assert.ok(ids.includes(link.href.slice(1)), `Destination: ${link.href}`);
+    if (Object.hasOwn(link, "data-example")) {
+      const destination = new URL(link.href, "https://self-host.example/");
+      assert.equal(destination.origin, "https://self-host.example");
+      assert.equal(destination.pathname, "/app/example.html");
+      assert.equal(destination.searchParams.get("locale"), "zh-CN");
+      assert.equal(destination.searchParams.get("topic"), "browse");
+    }
+  }
+  for (const fragment of ["overview", "workflow", "devices", "files", "faq", "start"]) {
+    const replacements = [];
+    runInNewContext(boot, {
+      URL, URLSearchParams,
+      window: {
+        location: { href: `https://self-host.example/#${fragment}`, replace: (value) => replacements.push(value) },
+        matchMedia: () => ({ matches: true }),
+      },
+      document: { documentElement: { setAttribute() {} } },
+      localStorage: { getItem: () => null },
+      navigator: { userAgent: "Chromium" },
+    });
+    assert.deepEqual(replacements, [], `Product chapter stays on the home: ${fragment}`);
+  }
+});
 
-  assert.match(html, /aria-label="主导航"/u);
-  assert.match(html, /data-i18n-aria="nav\.aria"/u);
-  assert.match(html, /aria-label="Switch language \/ 切换语言"/u);
-  assert.match(html, /<span class="line" data-split data-i18n="hero\.l1">/u);
-  assert.doesNotMatch(html, /class="line gradient"/u);
-  assert.match(styles, /\.hero-title\s*\{[\s\S]*?color:\s*var\(--text\)/u);
-  assert.doesNotMatch(styles, /\.hero-title \.gradient \.char/u);
-  assert.match(styles, /:focus-visible/u);
-  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)/u);
-  assert.match(styles, /@media \(prefers-reduced-motion: reduce\)[\s\S]*?\.hero-eyebrow,[\s\S]*?\.hero-mark,[\s\S]*?\.page \.fx[\s\S]*?opacity:\s*1 !important/u);
-  assert.match(styles, /@media \(prefers-reduced-transparency: reduce\)/u);
-  assert.match(styles, /@media \(prefers-contrast: more\)[\s\S]*?--text-2:\s*#f5f5f7[\s\S]*?-webkit-backdrop-filter:\s*none/u);
-  assert.match(styles, /@media \(forced-colors: active\)/u);
-  assert.match(styles, /--text-3:\s*rgba\(29, 29, 31, 0\.66\)/u);
+test("home ships local scripts, styles and real bilingual product images without external execution", async () => {
+  const [html, app] = await source;
+  const scripts = elements(html, "script");
+  assert.ok(scripts.some((script) => script.src === "boot.js"));
+  assert.ok(scripts.some((script) => script.src === "app.js" && Object.hasOwn(script, "defer")));
+  for (const script of scripts) {
+    assert.ok(script.src && !/^(?:https?:)?\/\//u.test(script.src), "Only packaged local scripts");
+    assert.ok((await readFile(new URL(script.src, productRoot))).length);
+  }
+  assert.doesNotMatch(html, /<script\b[^>]*>\s*[^<\s]/iu);
+  assert.doesNotMatch(html, /\bon(?:click|load|error)\s*=/iu);
+  assert.doesNotMatch(app, /\bfetch\s*\(|\bXMLHttpRequest\b|new\s+WebSocket\s*\(/u);
+  for (const link of elements(html, "link").filter((link) => ["stylesheet", "icon"].includes(link.rel))) {
+    assert.ok(!/^(?:https?:)?\/\//u.test(link.href), `Packaged resource: ${link.href}`);
+    assert.ok((await readFile(new URL(link.href, productRoot))).length);
+  }
+  const images = elements(html, "img");
+  assert.ok(images.some((image) => image["data-image"] === "desktop"));
+  assert.ok(images.some((image) => image["data-image"] === "phone"));
+  for (const image of images) {
+    assert.ok(image.alt, `Useful image description: ${image.src}`);
+    assert.ok(Number(image.width) > 0 && Number(image.height) > 0, "Reserve image dimensions");
+    assert.ok(!/^(?:https?:)?\/\//u.test(image.src));
+    assert.ok((await readFile(new URL(image.src, productRoot))).length);
+    if (image["data-image"]) {
+      assert.ok(image["data-alt-zh"] && image["data-alt-en"], "Bilingual screenshot descriptions");
+      for (const language of ["zh-CN", "en"]) {
+        const asset = new URL(`assets/product/${language}/${image["data-image"]}.jpg`, productRoot);
+        const content = await readFile(asset);
+        assert.equal(content.readUInt16BE(0), 0xffd8, `Valid JPEG resource: ${asset.pathname}`);
+      }
+    }
+  }
+});
+
+test("published documentation links resolve to source files and bilingual guides", async () => {
+  const [html, app] = await source;
+  const root = "https://github.com/TH060419/gatherthread/blob/main/";
+  const docs = elements(html, "a").filter((link) => link.href?.startsWith(root));
+  assert.ok(docs.some((link) => link.href.endsWith("docs/CODE_SYNC.md")));
+  assert.ok(docs.some((link) => link.href.endsWith("docs/SELF_HOSTING.md")));
+  for (const link of docs) {
+    assert.ok((await readFile(new URL(link.href.slice(root.length), repositoryRoot))).length, link.href);
+  }
+  for (const name of ["PRODUCT_GUIDE", "CODEX_CONNECT", "DSH_CONNECT"]) {
+    assert.ok(app.includes(name), `Translated document target: ${name}`);
+    for (const suffix of [".md", ".zh-CN.md"]) {
+      assert.ok((await readFile(new URL(`docs/${name}${suffix}`, repositoryRoot))).length);
+    }
+  }
+});
+
+test("menu and workflow tabs expose complete semantic relationships", async () => {
+  const [html] = await source;
+  const buttons = elements(html, "button");
+  const navigation = elements(html, "nav");
+  const menu = buttons.find((button) => button["aria-controls"] === "navigation");
+  assert.ok(menu?.["aria-label"]);
+  assert.equal(menu.type, "button");
+  assert.equal(menu["aria-expanded"], "false");
+  assert.ok(navigation.some((nav) => nav.id === menu["aria-controls"] && nav["aria-label"]));
+  const chapterLinks = elements(html, "a").filter((link) => "data-chapter-link" in link);
+  assert.deepEqual(chapterLinks.map((link) => link.href), ["#together", "#workflow", "#devices", "#files", "#faq"]);
+  assert.doesNotMatch(html, /class="chapter-nav"|aria-owns/u);
+  assert.ok(elements(html, "div").some((element) => element.role === "tablist" && element["aria-label"]));
+  const tabs = buttons.filter((button) => button.role === "tab");
+  const panels = elements(html, "div").filter((element) => element.role === "tabpanel");
+  assert.ok(tabs.length >= 3);
+  assert.equal(tabs.length, panels.length);
+  assert.equal(tabs.filter((tab) => tab["aria-selected"] === "true").length, 1);
+  for (const tab of tabs) {
+    assert.equal(tab.type, "button");
+    const panel = panels.find((candidate) => candidate.id === tab["aria-controls"]);
+    assert.ok(panel, `Panel for ${tab.id}`);
+    assert.equal(panel["aria-labelledby"], tab.id);
+    assert.equal(tab.tabindex, tab["aria-selected"] === "true" ? "0" : "-1");
+    assert.equal(Object.hasOwn(panel, "hidden"), tab["aria-selected"] !== "true");
+  }
+  assert.ok(elements(html, "a").some((link) => link.href === "#main" && link["data-en"] === "Skip to content"));
+});
+
+test("home preserves native scrolling and readable reduced-effect fallbacks", async () => {
+  const [, app, styles] = await source;
   assert.match(styles, /scroll-snap-type:\s*y proximity/u);
   assert.doesNotMatch(styles, /scroll-snap-type:\s*y mandatory/u);
-  assert.match(styles, /@media \(max-width: 520px\)[\s\S]*?\.hero \{ padding: 112px 20px 64px; \}[\s\S]*?\.hero-title[\s\S]*?8\.2vw[\s\S]*?\.sec-grid \{ grid-template-columns: 1fr; \}/u);
-  assert.match(styles, /@media \(max-width: 380px\)[\s\S]*?\.nav-inner[\s\S]*?padding:\s*0 12px[\s\S]*?\.nav-actions \{ gap: 8px; \}/u);
+  assert.doesNotMatch(app, /addEventListener\s*\(\s*['"](?:wheel|touchmove)['"]/u);
+  assert.match(styles, /:focus-visible/u);
+  const reducedMotion = mediaBlocks(styles, "prefers-reduced-motion");
+  assert.match(reducedMotion, /scroll-snap-type:\s*none/u);
+  assert.match(reducedMotion, /scroll-behavior:\s*auto/u);
+  assert.match(reducedMotion, /opacity:\s*1/u);
+  const transparency = mediaBlocks(styles, "prefers-reduced-transparency");
+  assert.match(transparency, /backdrop-filter:\s*none/u);
+  const contrast = mediaBlocks(styles, "prefers-contrast");
+  assert.match(contrast, /backdrop-filter:\s*none/u);
+  const forced = mediaBlocks(styles, "forced-colors");
+  assert.match(forced, /CanvasText/u);
+  assert.match(forced, /Highlight/u);
+  assert.match(styles, /html:not\(\.glass-ready\)[^{]*\.story-panel\[hidden\]\s*\{[^}]*display:\s*grid/u);
 });
 
-test("product home uses the application's bilingual session terminology", async () => {
-  const [html, app] = await Promise.all([
-    readFile(new URL("index.html", productRoot), "utf8"),
-    readFile(new URL("app.js", productRoot), "utf8"),
+test("home retains the shared cross-page language contract", async () => {
+  const [html, app] = await source;
+  const language = elements(html, "button").find((button) => button.id === "language");
+  assert.ok(language?.["aria-label"]);
+  assert.equal(language.type, "button");
+  assert.match(app, /localStorage\.getItem\(['"]gt-lang['"]\)/u);
+  assert.match(app, /localStorage\.setItem\(['"]gt-lang['"]/u);
+  assert.match(app, /localStorage\.getItem\(['"]gatherthread\.settings\.v1['"]\)/u);
+  assert.match(app, /addEventListener\(['"]storage['"]/u);
+  assert.match(app, /event\.key\s*===\s*['"]gt-lang['"]/u);
+  assert.match(app, /event\.newValue\s*,\s*false/u);
+  for (const element of [...html.matchAll(/<[a-z][^>]*\bdata-zh="([^"]*)"[^>]*>/gu)]) {
+    assert.match(element[0], /\bdata-en="[^"]+"/u, `English partner for ${element[1]}`);
+  }
+});
+
+test("Beta product copy explains local execution, mobile requirements and cloud trial allowances", async () => {
+  const [html] = await source;
+  const zh = authoredCopy(html, "zh");
+  const en = authoredCopy(html, "en");
+  assert.match(zh, /电脑和连接器.*在线/u);
+  assert.match(en, /computer and its connector.*online/iu);
+  assert.match(zh, /直接选择云端体验 Agent.*使用额度.*工作页/u);
+  assert.match(en, /Choose the cloud trial Agent.*usage allowances.*workspace/iu);
+  assert.match(zh, /自己已连接的 Codex\s*\/\s*DSH.*共享摘要/u);
+  assert.match(en, /connected Codex\s*\/\s*DSH.*(?:shared summary|summarize)/iu);
+  assert.match(zh, /电脑 Agent.*暂停/u);
+  assert.match(en, /computer Agent request.*(?:pause|continue)|pause a computer Agent/iu);
+  assert.doesNotMatch(zh, /云端体验 Agent.*(?:后续开放|将提供)/u);
+  assert.doesNotMatch(en, /cloud trial Agent.*(?:planned|coming later)/iu);
+  const [settings, operations, readiness] = await Promise.all([
+    readFile(new URL("apps/web/src/settings.js", repositoryRoot), "utf8"),
+    readFile(new URL("docs/HOSTED_AGENT.md", repositoryRoot), "utf8"),
+    readFile(new URL("docs/PRODUCT_HOME_VERIFICATION.md", repositoryRoot), "utf8"),
   ]);
-
-  assert.match(html, /data-i18n="sessions\.solo\.h3">Solo · 个人会话/u);
-  assert.match(html, /data-i18n="sessions\.multi\.h3">Multi · 协作会话/u);
-  assert.match(app, /"sessions\.solo\.h3": \{ zh: "Solo · 个人会话", en: "Solo" \}/u);
-  assert.match(app, /"sessions\.multi\.h3": \{ zh: "Multi · 协作会话", en: "Multi" \}/u);
+  assert.match(settings, /CLOUD_AGENT_ENTRY_ENABLED\s*=\s*false/u);
+  assert.match(operations, /Beta launch prerequisite.*CLOUD_AGENT_ENTRY_ENABLED=false/u);
+  assert.match(readiness, /server configuration alone cannot enable it/u);
 });
 
-test("product home uses the shared workspace language and follows changes from another tab", async () => {
-  const app = await readFile(new URL("app.js", productRoot), "utf8");
-  assert.match(app, /localStorage\.getItem\("gt-lang"\)/u);
-  assert.match(app, /localStorage\.getItem\("gatherthread\.settings\.v1"\)/u);
-  assert.match(app, /savedLanguage === "zh" \|\| savedLanguage === "en"/u);
-  assert.match(app, /window\.addEventListener\("storage", function \(event\)/u);
-  assert.match(app, /event\.key === "gt-lang"/u);
-  assert.match(app, /applyLang\(event\.newValue, false, false\)/u);
+test("file and conversation uploads, manual imports and human integration remain separate", async () => {
+  const [html] = await source;
+  const zh = authoredCopy(html, "zh");
+  const en = authoredCopy(html, "en");
+  assert.match(zh, /文件.*上传.*会话回合上传另行控制/u);
+  assert.match(en, /Upload files.*Conversation uploads have separate controls/iu);
+  assert.match(zh, /不会自动下载.*不会自动合并/u);
+  assert.match(en, /No automatic downloads or merges/iu);
+  assert.match(zh, /手动导入.*新建本地任务.*旧任务.*自行归档/u);
+  assert.match(en, /manual import creates a new local task.*archive the old/iu);
+  assert.match(zh, /历史传递不受影响/u);
+  assert.match(en, /history transfer is unaffected/iu);
+  assert.match(zh, /GitHub.*PR 审核.*GT Cloud.*创建者/u);
+  assert.match(en, /GitHub.*PR reviews.*project owner.*GT Cloud/iu);
+  assert.match(zh, /不占 GatherThread 文件额度/u);
+  assert.match(zh, /每用户有效文件版本额度/u);
+  assert.match(zh, /本地密钥.*工具批准权.*不会自动交给同伴/u);
 });
 
-test("product home labels the invitation-only preview without pinning a release version", async () => {
-  const [html, app] = await Promise.all([
-    readFile(new URL("index.html", productRoot), "utf8"),
-    readFile(new URL("app.js", productRoot), "utf8"),
-  ]);
-  assert.match(html, /\[ ALPHA 预览版 · 邀请制测试 \]/u);
-  assert.match(app, /\[ ALPHA PREVIEW · BY INVITATION \]/u);
-  assert.doesNotMatch(html, /0\.1\.0-alpha\.8/u);
+test("home uses email/password and project visibility terms, not retired account entry flows", async () => {
+  const [html] = await source;
+  const zh = authoredCopy(html, "zh");
+  const en = authoredCopy(html, "en");
+  assert.match(zh, /邮箱.*密码/u);
+  assert.match(zh, /注册.*找回密码.*登录页/u);
+  assert.match(en, /email.*password/iu);
+  assert.match(en, /sign-in page.*registration.*password[- ]recovery/iu);
+  assert.match(zh, /Solo 不是私聊.*其他成员仍可阅读/u);
+  assert.match(en, /Solo is not a private chat.*project members can still read/iu);
+  assert.doesNotMatch(html, /template=test-access|qualification code|申请测试资格|邀请码登录|邀请制测试/iu);
+  assert.doesNotMatch(html, /0\.1\.0-alpha\.\d+/u);
 });
 
-test("product home exposes canonical and bilingual social discovery metadata", async () => {
-  const html = await readFile(new URL("index.html", productRoot), "utf8");
-  assert.match(html, /<link rel="canonical" href="https:\/\/gatherthread\.cn\/">/u);
-  assert.match(html, /<title>GatherThread 共序 \| 本地 AI Agent 多人联机协作<\/title>/u);
-  assert.match(html, /name="description" content="GatherThread 共序是开源、可自托管的多人 AI Agent 协作工作区/u);
-  assert.match(html, /property="og:title" content="GatherThread 共序 \| Local AI Agent Collaboration"/u);
-  assert.match(html, /property="og:description" content="Self-hostable AI Agent collaboration/u);
-  assert.match(html, /property="og:url" content="https:\/\/gatherthread\.cn\/"/u);
-  assert.match(html, /name="twitter:card" content="summary"/u);
-});
-
-test("product home explains email sign-in and default registration closure", async () => {
-  const [html, app] = await Promise.all([readFile(new URL("index.html", productRoot), "utf8"), readFile(new URL("app.js", productRoot), "utf8")]);
-  assert.match(html, /邮箱和密码登录/u); assert.match(html, /注册默认关闭/u);
-  assert.doesNotMatch(html + app, /template=test-access|qualification code|申请测试资格/u);
-  assert.match(html, /忘记密码/u);
-});
-
-test("product home distinguishes local Agents from the pending cloud trial", async () => {
-  const html = await readFile(new URL("index.html", productRoot), "utf8");
-  assert.match(html, /当前 Alpha 尚未开放公众注册/u);
-  assert.match(html, /Agent 与工作目录仍留在自己的设备上/u);
-  assert.match(html, /id="cloud-agent"/u);
-  assert.match(html, /目前仍待模型 API、GitHub App 接入与部署验证/u);
-  assert.match(html, /data-i18n="connect\.c3\.h3">连接本地 Agent/u);
-  assert.doesNotMatch(html, /npm run connection:local/u);
-});
-
-test("product home ends with public contact and the gatherthread.cn ICP record", async () => {
-  const [html, app, styles] = await Promise.all([
-    readFile(new URL("index.html", productRoot), "utf8"),
-    readFile(new URL("app.js", productRoot), "utf8"),
-    readFile(new URL("styles.css", productRoot), "utf8"),
-  ]);
-  const footer = html.slice(html.indexOf('<footer class="footer">'));
-
-  assert.match(footer, /先注册或登录，再接受项目邀请/u);
-  assert.doesNotMatch(footer, /公开 Issue 中发送资格码、设备 Token 或个人信息/u);
-  assert.match(app, /Register or sign in before accepting project invitations/u);
-  assert.doesNotMatch(app, /personal information in a public Issue/u);
-  assert.match(footer, /data-i18n="foot\.contact">联系与反馈：/u);
-  assert.match(footer, /href="https:\/\/github\.com\/TH060419\/gatherthread\/issues"[^>]*>GitHub Issues<\/a>/u);
-  assert.match(footer, /data-i18n="foot\.icp">gatherthread\.cn 备案：/u);
-  assert.match(footer, /href="https:\/\/beian\.miit\.gov\.cn\/"[^>]*>冀ICP备2026037466号-1<\/a>/u);
-  assert.ok(footer.indexOf('data-i18n="foot.contact"') < footer.indexOf('data-i18n="foot.icp"'));
-  assert.match(app, /"foot\.contact": \{ zh: "联系与反馈：", en: "Contact & feedback:" \}/u);
-  assert.match(app, /"foot\.icp": \{ zh: "gatherthread\.cn 备案：", en: "gatherthread\.cn ICP filing:" \}/u);
-  assert.match(styles, /\.footer \{ scroll-snap-align: end; \}/u);
+test("home retains useful discovery metadata and public privacy, contact and filing links", async () => {
+  const [html] = await source;
+  const links = elements(html, "link");
+  assert.ok(links.some((link) => link.rel === "canonical" && link.href === "https://gatherthread.cn/"));
+  const metadata = elements(html, "meta");
+  for (const property of ["og:title", "og:description", "og:url", "og:type", "og:locale", "og:locale:alternate"]) {
+    assert.ok(metadata.some((meta) => meta.property === property && meta.content), property);
+  }
+  assert.ok(metadata.some((meta) => meta.name === "description" && meta.content.includes("GatherThread")));
+  assert.ok(metadata.some((meta) => meta.name === "twitter:card" && meta.content === "summary"));
+  const footer = html.slice(html.indexOf("<footer"), html.indexOf("</footer>"));
+  const resources = elements(footer, "a");
+  for (const href of ["./privacy/", "mailto:coolhezi@sjtu.edu.cn", "https://github.com/TH060419/gatherthread/issues", "https://beian.miit.gov.cn/"]) {
+    assert.ok(resources.some((link) => link.href === href), href);
+  }
+  assert.match(footer, /冀ICP备2026037466号-1/u);
+  assert.match(authoredCopy(footer, "zh"), /联系与反馈/u);
+  assert.match(authoredCopy(footer, "en"), /Contact & feedback/iu);
 });
 
 test("product home reuses the canonical application lockups", async () => {
@@ -195,4 +362,26 @@ test("product home reuses the canonical application lockups", async () => {
     ]);
     assert.equal(home, application);
   }
+});
+
+test("product home and privacy prepare public-registration Beta without retired access gates", async () => {
+  const [html] = await source;
+  const privacy = await readFile(new URL("privacy/index.html", productRoot), "utf8");
+  assert.match(authoredCopy(html, "zh"), /公开注册 Beta/u);
+  assert.match(authoredCopy(html, "en"), /Public-registration Beta/u);
+  assert.match(privacy, /Beta 测试采用公开邮箱注册/u);
+  assert.match(privacy, /Beta uses public email registration/u);
+  assert.doesNotMatch(html + privacy, /邀请制|invitation-only|invite-only|资格码激活|not deployed|待上线功能/iu);
+  assert.match(privacy, /独立测试服[\s\S]*不代表正式服的注册要求/u);
+  assert.match(privacy, /separate test environment[\s\S]*not a production registration requirement/u);
+  assert.match(privacy, /最多 14 天[\s\S]*最多 30 天/u);
+  assert.match(privacy, /no more than 14 days[\s\S]*no more than 30 days/u);
+  assert.match(privacy, /你的任务、按项目历史设置整理的共享会话内容[\s\S]*主动勾选的 GT Cloud 项目代码[\s\S]*所选模型服务商/u);
+  assert.match(privacy, /your task, shared conversation context prepared under the project's history settings and GT Cloud project code you opt in to use[\s\S]*selected model provider/u);
+  assert.match(privacy, /在这一同步方式中[\s\S]*不接收 GitHub 登录凭据/u);
+  assert.match(privacy, /In this sync mode[\s\S]*not GitHub credentials/u);
+  assert.match(privacy, /加密保存授权凭据和私有任务源码[\s\S]*任务有效期七天，到期后不再提供读取[\s\S]*服务启动或相关请求触发清理[\s\S]*备份另按下述保留政策/u);
+  assert.match(privacy, /encrypts stored authorization credentials and private task source[\s\S]*Tasks expire after seven days and can no longer be read[\s\S]*server startup or when related requests trigger cleanup[\s\S]*backups after deletion follow the retention policy/u);
+  assert.match(privacy, /Deleting a conversation, task or account does not refund that day's usage/u);
+  assert.match(privacy, /expired usage days are pruned at server startup or when a new task is accepted/u);
 });

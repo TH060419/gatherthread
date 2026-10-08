@@ -2,6 +2,8 @@
 
 Architecture Decision Records document significant technical choices, their rationale, and their consequences. Accepted records remain in this index even when a later ADR supersedes them.
 
+Current account guidance (2026-10-08): `main` uses verified-email registration and password sign-in, with independent native-device authorization. Public Beta accounts are not invitation-only; project invitations and isolated test admission are separate. Earlier qualification/token/vault decisions below are historical, not current signup instructions. See [PRODUCT_SPEC](../PRODUCT_SPEC.md#browser-entry-flow) and the default-closed [operator preflight](../OPERATIONS.md#public-beta-registration-preflight); original ADR statuses and release decisions are preserved.
+
 | ADR | Title | Status | Date |
 |-----|-------|--------|------|
 | [0001](0001-trusted-self-hosted-collaboration-server.md) | Trust the self-hosted collaboration server with canonical plaintext | accepted | 2026-08-25 |
