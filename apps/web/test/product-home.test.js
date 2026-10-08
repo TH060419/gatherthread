@@ -376,8 +376,8 @@ test("product home and privacy prepare public-registration Beta without retired 
   assert.match(privacy, /separate test environment[\s\S]*not a production registration requirement/u);
   assert.match(privacy, /最多 14 天[\s\S]*最多 30 天/u);
   assert.match(privacy, /no more than 14 days[\s\S]*no more than 30 days/u);
-  assert.match(privacy, /你的任务、选取的共享会话历史[\s\S]*主动勾选的 GT Cloud 项目代码[\s\S]*所选模型服务商/u);
-  assert.match(privacy, /your task, selected shared conversation history and GT Cloud project code you opt in to use[\s\S]*selected model provider/u);
+  assert.match(privacy, /你的任务、按项目历史设置整理的共享会话内容[\s\S]*主动勾选的 GT Cloud 项目代码[\s\S]*所选模型服务商/u);
+  assert.match(privacy, /your task, shared conversation context prepared under the project's history settings and GT Cloud project code you opt in to use[\s\S]*selected model provider/u);
   assert.match(privacy, /在这一同步方式中[\s\S]*不接收 GitHub 登录凭据/u);
   assert.match(privacy, /In this sync mode[\s\S]*not GitHub credentials/u);
   assert.match(privacy, /加密保存授权凭据和私有任务源码[\s\S]*任务有效期七天，到期后不再提供读取[\s\S]*服务启动或相关请求触发清理[\s\S]*备份另按下述保留政策/u);
