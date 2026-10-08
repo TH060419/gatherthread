@@ -2,17 +2,15 @@
 
 All notable changes to GatherThread are documented here. The project follows Semantic Versioning while pre-release APIs may still change.
 
-## Unreleased account flow
-
-- Replace user access-token login, test qualification activation and guest account creation with verified-email registration and password sign-in. No old-account inheritance or destructive cleanup. Keep Alpha project permissions, invitations after login, independent Agent/device authorization and revocation. Signup is closed by default; password recovery is not implemented. Future hosted-model usage will have a separate quota.
-
 ## [Unreleased]
 
 ### Added
 
+- Prepare the publicly registrable Beta account path: verified-email registration and password sign-in replace user-token login, qualification activation and invitation-created identities. Browser-bound email-code password recovery is implemented behind its independent default-closed switch. Project invitations grant membership after sign-in; isolated test admission codes do not replace accounts. Provider setup, abuse limits and approved rollout remain required before opening registration or recovery. No Beta version, package or deployment is declared by this documentation update.
+
 - Add a disabled cloud GitHub/npm development source preview: expiring App authorization with PKCE, private encrypted task source, bounded dependency preparation, asynchronous OpenCode runs, revision review and explicit draft PR publication. Real App/provider and new Linux container activation checks remain required.
 - Prepare an optional OpenCode cloud Agent with isolated terminal/file tools, explicit GT Cloud code consent, own-branch checkpoints, and the same workspace Agent selector and Settings entry as local harnesses. Add multiple provider/account pools, atomic daily and concurrency limits, pinned model routing, failure cooldowns, and assistant-text-only output. Add bilingual guides and operator/provider setup documentation. Disabled by default; live model integration and deployment validation remain pending.
-- Prepare a separate, default-disabled test-environment admission gate, private operator code issuance/revocation, bilingual entry/banner, negative API/WebSocket isolation checks and independent deployment templates. The email/password account flow remains dependent on separately reviewed PR62; no test or production deployment is performed.
+- Prepare a separate, default-disabled test-environment admission gate, private operator code issuance/revocation, bilingual entry/banner, negative API/WebSocket isolation checks and independent deployment templates. It reuses the current email/password account flow with independent test accounts and provider checks; no test or production deployment is performed.
 
 ### Changed and fixed
 

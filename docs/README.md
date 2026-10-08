@@ -7,7 +7,7 @@ Start with the product story and illustrated workflow, then choose the setup or 
 - [Product introduction](../README.md) · [中文](../README.zh-CN.md): work together, across devices, with your Agents.
 - [Illustrated product guide](PRODUCT_GUIDE.md) · [中文](PRODUCT_GUIDE.zh-CN.md): a real-interface walkthrough from shared discussion to reviewed files.
 - [Disposable example](https://gatherthread.cn/app/example.html?locale=en&topic=browse) · [中文](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse): practice without model quota or changes to real projects.
-- [Cloud trial Agent](HOSTED_AGENT_GUIDE.md) · [中文](HOSTED_AGENT_GUIDE.zh-CN.md): a first small task without local Agent setup.
+- [Cloud trial Agent](HOSTED_AGENT_GUIDE.md) · [中文](HOSTED_AGENT_GUIDE.zh-CN.md): planned small-task experience without local Agent setup; the workspace entry is currently disabled.
 
 ## Product and system contracts
 
@@ -39,7 +39,7 @@ Start with the product story and illustrated workflow, then choose the setup or 
 
 These are point-in-time records. A source commit, Git tag, npm package and server deployment are separate artifacts; consult the relevant record rather than inferring live state from a branch tip.
 
-- [Changelog](../CHANGELOG.md): Alpha 8 changes and subsequent version history.
+- [Changelog](../CHANGELOG.md): released Alpha 8 history and current public-Beta preparation.
 - [Release record index](releases/README.md): which version records have tags or GitHub Releases.
 - [Contributing guide](../CONTRIBUTING.md): review, verification, and ownership rules.
 - [Repository security policy](../SECURITY.md): private reporting entry point shown by GitHub.

@@ -2,12 +2,12 @@
 
 ## Supported versions
 
-GatherThread is currently an invitation-only Alpha. Security fixes target the current hosted Alpha and the current `main` branch. Historical preview tags and release candidates do not receive separate security support. Because `main` may contain unreleased work, do not infer the hosted deployment version from the branch tip.
+GatherThread is preparing a publicly registrable Beta using verified-email accounts and password sign-in, not invitation-only account activation. Security fixes target the current supported deployment and the current `main` branch. Historical preview tags and release candidates do not receive separate security support. The source version identifier remains `0.1.0-alpha.8`; source, package publication and server deployment are separate. Registration opens only after the operator's provider, security and rollout checks in [OPERATIONS](docs/OPERATIONS.md#public-beta-registration-preflight) pass.
 
 ## Report a vulnerability privately
 
-Do not open a public Issue for a vulnerability, exploit payload, production log, private transcript, credential, or other sensitive data. Email [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn) with the affected version or deployment, a minimal redacted reproduction, the expected impact, and a safe way to contact you. Never send live qualification codes, device tokens, passwords, private keys, or unredacted private source.
+Do not open a public Issue for a vulnerability, exploit payload, production log, private transcript, credential, or other sensitive data. Email [coolhezi@sjtu.edu.cn](mailto:coolhezi@sjtu.edu.cn) with the affected version or deployment, a minimal redacted reproduction, the expected impact, and a safe way to contact you. Never send email verification codes, device credentials, passwords, private keys, test-environment admission codes or unredacted private source.
 
-Alpha test-access requests use the separate public [Alpha access Issue template](https://github.com/TH060419/gatherthread/issues/new?template=test-access.yml). That workflow is not a vulnerability-reporting channel. Its email field is optional and public; applicants should use it only if they are comfortable publishing that address.
+Normal account registration happens on the sign-in page, never through an Issue or privately issued qualification code. Project invitations grant project membership after sign-in. The separate test service may require an operator-issued admission code; that grants test-environment access only. Public [Issues](https://github.com/TH060419/gatherthread/issues) remain available for non-sensitive product feedback, not vulnerability reports.
 
 The repository threat model, trust boundaries, and incident expectations are documented in [`docs/SECURITY.md`](docs/SECURITY.md).

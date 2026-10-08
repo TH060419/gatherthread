@@ -1,6 +1,6 @@
 # Try the cloud Agent
 
-Try a small task without installing a computer Agent. Choose the cloud trial Agent in GatherThread, describe what to make, and read its answer in the same shared conversation. Available models and usage allowances are shown in the workspace.
+A cloud trial Agent for small tasks is coming later; its workspace entry is currently disabled. The following guide describes the experience when the service is enabled: choose the cloud trial Agent, describe what to make, and read its answer in the same shared conversation. Available models and usage allowances will be shown in the workspace.
 
 [Illustrated workflow](PRODUCT_GUIDE.md) · [简体中文](HOSTED_AGENT_GUIDE.zh-CN.md)
 

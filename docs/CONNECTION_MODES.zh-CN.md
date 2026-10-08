@@ -1,6 +1,6 @@
-# 无云账户连接方案
+# 本机与私网连接方案
 
-在暂不使用公网服务器时，GatherThread 提供三种可直接使用的连接方式。三种方式运行同一个单主机服务、SQLite 数据库和权限模型；切换方式只会改写私有 `.env` 中的网络参数，不会更换 Pepper、删除数据库或重新创建用户。
+不使用共序官方服务器时，GatherThread 提供以下三种连接方式；开放账号注册前，运营者仍需配置邮件与安全验证服务。三种方式运行同一个单主机服务、SQLite 数据库和权限模型；切换方式只会改写私有 `.env` 中的网络参数，不会更换 Pepper、删除数据库或重新创建用户。
 
 | 方式 | 适合场景 | 用户需要安装 | 入口 | 安全边界 |
 |---|---|---|---|---|
@@ -8,7 +8,7 @@
 | 局域网 HTTPS | 同一家庭、实验室或办公室网络 | 主机安装 Caddy；客户端信任专用本地 CA | `https://私网地址:8443` | 指定私网网卡与主机防火墙 |
 | Tailscale Serve | 跨网络的小规模已知协作者 | 所有人安装 Tailscale | `https://主机.tailnet.ts.net` | Tailnet、Serve 与 GatherThread ACL |
 
-需要稳定的统一入口时，获批 Alpha 测试者可使用 [https://gatherthread.cn](https://gatherthread.cn/)，该服务采用仅凭邀请加入的[阿里云 ECS 部署方案](ALIYUN_ECS.zh-CN.md)。不要把局域网或 Tailscale 配置改造成路由器端口转发、Tailscale Funnel 或匿名公网隧道。
+需要稳定的统一入口时，可使用 [https://gatherthread.cn](https://gatherthread.cn/)，注册开放情况以登录页为准。公开 Beta 使用邮箱验证注册和密码登录，采用运营者管理的[阿里云 ECS 部署方案](ALIYUN_ECS.zh-CN.md)；项目邀请单独管理。不要把局域网或 Tailscale 配置改造成路由器端口转发、Tailscale Funnel 或匿名公网隧道。
 
 ## 局域网最快流程
 
@@ -18,7 +18,7 @@
 2. 在仓库根目录运行一次 `npm ci` 安装项目依赖。
 3. 运行 `npm run lan:start`。
 4. 如果检测到多个私网地址，选择当前可信网络对应的地址；只有一个时会自动选择。
-5. 新数据库会询问创建者显示名称和设备名称，并打印一次性设备 Token。立即保存该 Token。
+5. 脚本准备私密环境配置，不会创建账号或显示用户 Token。按[注册预检](OPERATIONS.md#public-beta-registration-preflight)配置邮件和安全验证服务，通过审核后开放邮箱注册。
 6. 脚本自动生成局域网配置、构建项目、启动 GatherThread 与 Caddy，然后打印访问地址、根证书路径和 SHA-256。
 7. 每台客户端安装该根证书后，打开脚本打印的 HTTPS 地址。
 
@@ -34,14 +34,12 @@ npm run lan:start
 npm run lan:start -- --address 192.168.50.20 --port 8443
 ```
 
-无交互终端首次初始化时，同时提供名称：
+无交互终端可固定网络参数：
 
 ```bash
 npm run lan:start -- \
   --address 192.168.50.20 \
-  --port 8443 \
-  --display-name "你的名字" \
-  --device-name "实验室主机"
+  --port 8443
 ```
 
 ### 首次安装 Caddy
@@ -71,15 +69,13 @@ caddy version
 npm ci
 ```
 
-使用仅本机、Tailscale 或手动局域网流程时，第一次使用该数据库需创建首位创建者：
+使用仅本机、Tailscale 或手动局域网流程时，先准备私密环境配置：
 
 ```bash
-npm run owner-host:init -- \
-  --display-name "你的名字" \
-  --device-name "这台电脑"
+npm run owner-host:init
 ```
 
-`lan:start` 会在新数据库上自动询问这些名称并完成同一步骤，无需再运行本命令。设备 Token 只显示一次；立即保存到密码管理器，不要把它放进 URL、聊天、截图、命令参数或 Git 文件。之后切换连接方式时不要再次初始化。
+`lan:start` 会完成同一配置步骤，无需再运行本命令。初始化不创建账号，也不签发登录 Token。完成邮件与安全验证服务配置及注册预检后，用户验证邮箱、设置密码并登录，再接受项目邀请。电脑 Agent 在登录后单独授权。切换连接方式时保留数据库与 Pepper。
 
 ## 方案一：仅本机
 
@@ -104,7 +100,7 @@ http://127.0.0.1:18787
 
 局域网模式仍让 GatherThread 只监听 `127.0.0.1:18787`。独立的 Caddy 进程仅绑定选定的 RFC1918/ULA 私网地址，在未特权端口上提供 HTTPS 和 WebSocket。它不会监听公网地址，也不会自动配置路由器。
 
-校园网通常属于学校统一管理的局域网络，因此在校方策略允许终端间入站访问、两台设备能够直接互访时，可以使用本方案。但校园 Wi-Fi 常启用客户端隔离、VLAN 分区或额外防火墙；连接同一 SSID 不代表一定可达，也不应自动视为可信网络。先测试下面的 `/health` 地址；无法互访时，改用项目已经配置的远程入口。当前可使用 Tailscale；已有测试资格时也可使用 gatherthread.cn 服务器入口。
+校园网通常属于学校统一管理的局域网络，因此在校方策略允许终端间入站访问、两台设备能够直接互访时，可以使用本方案。但校园 Wi-Fi 常启用客户端隔离、VLAN 分区或额外防火墙；连接同一 SSID 不代表一定可达，也不应自动视为可信网络。先测试下面的 `/health` 地址；无法互访时，改用项目已经配置的远程入口，例如 Tailscale 或使用邮箱账号登录 gatherthread.cn。
 
 ### 1. 固定主机私网地址
 
@@ -233,7 +229,7 @@ npm run owner-host:tailscale-serve
 tailscale serve status
 ```
 
-状态必须显示 **within your tailnet**。助手明确不会启用 Funnel。成员仍需 GatherThread 项目邀请和自己的设备 Token；Tailscale 身份不能替代 GatherThread 权限。
+状态必须显示 **within your tailnet**。助手明确不会启用 Funnel。成员仍需自己的邮箱账号和项目成员资格；电脑 Agent 另行授权。Tailscale 身份不能替代 GatherThread 权限。
 
 双人操作步骤和最小授权方式参见 [Tailscale 双人线上测试指南](ONLINE_TESTING_TAILSCALE.zh-CN.md)。
 

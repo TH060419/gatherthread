@@ -28,7 +28,7 @@ GatherThread 始终只监听主机的 `127.0.0.1:18787`。Tailscale Serve 在外
 - Node.js 24 或更新版本。
 - GatherThread 仓库的最新 `main`。
 - Tailscale 账号和客户端。
-- GatherThread owner 设备 Token；如果是首次初始化，将在后续步骤中生成。
+- 可验证的邮箱账号；主机运营者需完成邮件与安全验证配置，再开放注册。
 
 ### 远程协作者
 
@@ -129,7 +129,7 @@ GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP=false
 
 - `.env`；
 - `GATHERTHREAD_AUTH_TOKEN_PEPPER`；
-- owner 设备 Token；
+- 邮箱密码、验证码和 Agent 设备凭据；
 - SQLite 数据库及备份。
 
 建议确认本地权限：
@@ -139,20 +139,16 @@ chmod 600 .env
 chmod 700 .local
 ```
 
-## 7. 首次创建 owner
+## 7. 准备邮箱注册
 
-只有当前数据库从未初始化时才执行：
+准备私密环境配置：
 
 ```bash
 npm ci
-npm run owner-host:init -- \
-  --display-name "主机用户姓名" \
-  --device-name "主机设备名称"
+npm run owner-host:init
 ```
 
-命令只显示一次 owner 设备 Token。立即保存到密码管理器，不要把它发给协作者。
-
-如果数据库中已经存在 owner，则不要再次运行 `owner-host:init`，直接使用之前保存的 owner Token。
+命令不创建账号，也不显示用户 Token。按[注册预检](OPERATIONS.md#public-beta-registration-preflight)配置邮件和安全验证服务，通过审核后才开启 `GATHERTHREAD_PUBLIC_REGISTRATION`。用户验证邮箱、设置密码并登录；项目邀请只负责登录后的项目成员资格。已有数据库必须保留原 Pepper，不能通过重新初始化替换凭据。
 
 ## 8. 启动线上服务
 
@@ -239,7 +235,7 @@ https://gatherthread-host.example-tailnet.ts.net/health
 主机用户：
 
 1. 打开 GatherThread 的 `.ts.net` 地址。
-2. 输入 owner 设备 Token 登录。页面会把它交换为 `HttpOnly` 浏览器会话，不会保存到 Web Storage。
+2. 用邮箱和密码登录；首次使用先验证邮箱并设置密码。登录状态使用独立设备的 `HttpOnly` Cookie，不保存密码到 Web Storage。
 3. 点击 **Create project**，创建这次协作使用的项目。
 4. 在项目中点击 **Create session**，选择 `multi` 并创建测试会话。
 5. 在项目的 **Invitations** 中选择 `Participant`。Participant 可以编辑该项目的 multi，会实时编辑本人创建的 solo，但对其他成员创建的 solo 只读。
@@ -260,14 +256,12 @@ https://gatherthread-host.example-tailnet.ts.net/health
 协作者：
 
 1. 打开 GatherThread `.ts.net` 地址。
-2. 在 **Join with an invitation** 中输入 invitation secret。
-3. 填写自己的 Display name。
-4. 填写容易识别的 Device name，例如 `Alice MacBook`。
-5. 点击 **Join workspace**。
-6. 保存页面只显示一次的个人设备 Token。
-7. 进入主机创建的项目及其中的 `multi` 会话。
+2. 验证自己的邮箱、设置密码并登录；已有账号直接用邮箱和密码登录。
+3. 在工作页右侧栏的项目邀请输入框中填写 invitation secret，点击 **接受邀请**。
+4. 进入主机创建的项目及其中的 `multi` 会话。
+5. 需要电脑 Agent 时，按 Codex 启动器或 DSH 插件指引单独授权设备。
 
-协作者不能使用主机的 owner Token。每个用户和设备必须有自己的凭据，方便独立归因和撤销。
+协作者使用自己的邮箱账号，不共用主机用户的密码或 Agent 凭据。同一账号的浏览器设备和 Agent 授权独立管理，方便单独撤销。
 
 ## 12. 双人验收清单
 
@@ -281,10 +275,10 @@ https://gatherthread-host.example-tailnet.ts.net/health
 
 ### B. 身份与邀请
 
-- [ ] 主机使用 owner Token 登录。
-- [ ] 协作者使用 invitation secret 创建自己的身份。
+- [ ] 主机使用邮箱和密码登录。
+- [ ] 协作者先注册或登录自己的邮箱账号，再接受项目邀请。
 - [ ] 同一个 invitation secret 不能再次领取。
-- [ ] 主机看不到协作者的设备 Token。
+- [ ] 主机无法通过产品界面取得协作者的密码或 Agent 设备凭据。
 - [ ] 双方刷新网页后保持登录并恢复工作区。
 - [ ] Owner 可以把协作者在 Participant 和 Viewer 之间切换，刷新后仍保持新权限。
 
@@ -312,7 +306,7 @@ https://gatherthread-host.example-tailnet.ts.net/health
 
 ### F. Agent 路径
 
-- [ ] 每位用户使用自己的设备 Token。
+- [ ] 每位用户登录自己的邮箱账号，并单独授权自己的 Agent。
 - [ ] 每位 Participant 在自己的电脑运行一个项目级 Codex 连接器，并保持终端开启。
 - [ ] 连接器使用完整的 HTTPS 主机地址和各自的本地项目目录，并选择正确的 GatherThread 项目。
 - [ ] 同一连接器自动发现该项目中新建的 multi 会话；各会话使用独立 Codex thread。

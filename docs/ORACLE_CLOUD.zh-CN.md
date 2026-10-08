@@ -1,8 +1,8 @@
 # Oracle Always Free 公网试用部署
 
-这套方案面向小规模、仅凭邀请加入的公网测试：GatherThread 仍只监听 `127.0.0.1:18787`，由 Caddy 在公网 `80/443` 端口提供 HTTPS 和 WebSocket。它不会把产品变成匿名公共服务；设备凭据、一次性邀请、项目权限、精确浏览器 Origin、安全 Cookie、一次性 WebSocket ticket 和应用限流仍然生效。
+这套实验性方案保留供参考；推荐的公网方案是运营者管理的[阿里云 ECS](ALIYUN_ECS.zh-CN.md)。GatherThread 仍只监听 `127.0.0.1:18787`，由 Caddy 在公网 `80/443` 提供 HTTPS 和 WebSocket。公开 Beta 使用邮箱验证注册和密码登录，注册需通过运营预检后开启；项目邀请、Agent 设备授权、精确 Origin、安全 Cookie、一次性 WebSocket ticket 和应用限流各自独立生效。
 
-直接接入互联网扩大了当前 Tailscale 私有 Alpha 的威胁边界，因此安装器必须显式传入 `--acknowledge-experimental-public-ingress`。在完成外部安全审查、恢复演练和多人实测前，不要用这套试用部署承载敏感或受监管数据。
+直接接入互联网扩大了 Tailscale 私网的威胁边界，因此安装器必须显式传入 `--acknowledge-experimental-public-ingress`。在完成外部安全审查、恢复演练和多人实测前，不要用这套试用部署承载敏感或受监管数据。
 
 ## 1. 创建 Oracle 资源
 
@@ -36,7 +36,7 @@ sudo deploy/oracle-free/install.sh \
 
 安装器支持 ARM64 或 x86-64 的 Ubuntu 22.04/24.04。它会安装经过校验和验证的固定版 Node.js 24 和 Caddy 官方软件包，按 lockfile 构建应用，创建不可登录的 `gatherthread` 服务用户，生成由 root 管理的生产环境文件，启动加固后的 systemd 服务，并启用每日 SQLite 在线备份。再次运行会保留既有环境和认证 Pepper；若域名不同，它会拒绝覆盖，避免凭据被静默破坏。
 
-## 3. 创建首位用户前完成预检
+## 3. 开放注册前完成预检
 
 运行主机与公网链路的完整检查：
 
@@ -46,24 +46,15 @@ sudo /opt/gatherthread/app/deploy/oracle-free/preflight.sh gatherthread.example.
 
 预检必须确认：应用仅监听回环地址；本机和公网 `/health` 都返回 SQLite `wal`；Caddy 与备份定时器均已运行；私有目录权限正确。还要从另一条网络验证 `https://gatherthread.example.com` 可以打开，而 `http://公网IP:18787` 无法连接。
 
-## 4. 创建首位创建者
+## 4. 配置邮箱账号
 
-初始化命令直接写入 SQLite，不存在公网初始化接口。下面的命令只显示一次首台设备凭据：
+安装器不会配置邮件、安全验证服务或开放注册。通过私密 `/etc/gatherthread/gatherthread.env` 完成[公开注册预检](OPERATIONS.md#public-beta-registration-preflight)，审核通过前保持 `GATHERTHREAD_PUBLIC_REGISTRATION=false`。找回密码有独立的默认关闭开关。
 
-```bash
-cd /opt/gatherthread/app
-sudo -u gatherthread /usr/local/bin/node \
-  --env-file=/etc/gatherthread/gatherthread.env \
-  apps/server/dist/src/cli.js bootstrap \
-  --display-name "创建者姓名" \
-  --device-name "创建者设备"
-```
-
-把凭据保存到密码管理器，只在完全一致的 HTTPS 地址中输入。不要把它放进 URL、命令参数、截图、日志或共享消息。
+开放注册后，在完全一致的 HTTPS 网站验证邮箱、设置密码、登录并创建项目。同伴注册或登录后再接受项目邀请；电脑 Agent 在登录后单独授权。不要使用已退役的 bootstrap 命令或分发用户登录 Token。
 
 ## 5. 备份、更新与回滚
 
-定时器会把 SQLite 在线备份写入虚拟机的 `/var/backups/gatherthread`。这能防范数据库层故障，却不能防范 Oracle 账号、区域、实例或启动卷整体丢失。必须把加密备份复制到虚拟机之外，并单独保护 `/etc/gatherthread/gatherthread.env` 中与数据库匹配的 Pepper。邀请测试者前先完成一次校验与恢复演练。
+定时器会把 SQLite 在线备份写入虚拟机的 `/var/backups/gatherthread`。这能防范数据库层故障，却不能防范 Oracle 账号、区域、实例或启动卷整体丢失。必须把加密备份复制到虚拟机之外，并单独保护 `/etc/gatherthread/gatherthread.env` 中与数据库匹配的 Pepper。开放访问前先完成一次校验与恢复演练。
 
 更新前先创建并导出备份、记录当前 Git 提交，再停止服务、切换到经过审查的发布版本、运行 `npm ci && npm run build` 并重启。回滚时恢复旧提交；只有数据库 schema 变化确实要求时，才恢复与旧版本匹配且已验证的备份。WAL 正在写入时，绝不能用普通文件复制覆盖在线数据库。
 

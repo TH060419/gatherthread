@@ -57,6 +57,7 @@ test("Web preview serves the product home and nested application entry", async (
   await writeFile(join(root, "app", "index.html"), "<!doctype html><title>Application</title>");
   await writeFile(join(root, "app", "example.html"), "<!doctype html><title>Isolated example</title>");
   await writeFile(join(root, "assets", "mark.svg"), '<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+  await writeFile(join(root, "assets", "product.jpg"), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
   const server = createWebServer({ ...loadWebServerConfig({}), root });
   await new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -103,6 +104,12 @@ test("Web preview serves the product home and nested application entry", async (
     assert.equal(asset.statusCode, 200);
     assert.equal(asset.headers["content-type"], "image/svg+xml");
     asset.resume();
+
+    const screenshot = await fetch(`http://127.0.0.1:${server.address().port}/assets/product.jpg`);
+    assert.equal(screenshot.status, 200);
+    assert.equal(screenshot.headers.get("content-type"), "image/jpeg");
+    assert.equal(screenshot.headers.get("x-content-type-options"), "nosniff");
+    assert.deepEqual(Buffer.from(await screenshot.arrayBuffer()), Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
 
     const redirect = await new Promise((resolve, reject) => {
       const request = httpRequest({

@@ -17,6 +17,8 @@ Application source: `main` commit `ee540236a22f158424d718ff099cb82d26e4a54d`. Ca
 
 Capture viewports: desktop 1440×1000, phone 390×844, tablet 820×1180, all at 2× pixel density. Phone/tablet contexts use their corresponding device layout and touch settings. Every guide image preserves the complete viewport and original aspect ratio. The numbered frames are documentation annotations, not application controls. This is Chrome capture evidence, not native Safari certification.
 
+The product homepage keeps byte-identical publishing copies in `site/assets/product/{en,zh-CN}/`: `desktop.jpg` maps to `11-focused-workspace.jpg`, `phone.jpg` to `12-phone.jpg`, and `summary.jpg`, `github.jpg`, and `review.jpg` to annotated images 03, 09, and 08 respectively. Rounded frames and glass materials are presentation CSS, not edits to the screenshot pixels. Homepage language switching selects the matching language folder.
+
 Export: annotated screenshots are JPEG at quality 88 with 4:4:4 chroma, capped at 2400 pixels wide without enlargement; phone images remain 780 pixels wide. Plain cover screenshots are capped at 2000 pixels. Poster exports are 2400×1500 JPEG at quality 91 with 4:4:4 chroma. Rendered-image metadata is stripped by the export pipeline. Raw captures and review boards remain local ignored artifacts, not duplicate repository assets.
 
 ## Editing the annotations

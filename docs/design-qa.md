@@ -1,5 +1,7 @@
 # GatherThread visual QA, 2026-08-29
 
+Historical QA record. Account-state names and onboarding steps below describe the tested commits, not current registration instructions. As of 2026-10-08, users register with verified email and sign in with a password; account invitations and qualification activation are retired. Current product guidance is in [PRODUCT_SPEC](PRODUCT_SPEC.md#browser-entry-flow) and the [product guide](PRODUCT_GUIDE.md).
+
 ## Source states
 
 - Safari dark workspace report: `/var/folders/lc/cgkxcwnd4tb00l_5q24wsj140000gn/T/codex-clipboard-77bd9112-281f-497b-b471-1ebb7081b278.png` and the full-page Safari captures supplied in the active design review.

@@ -10,13 +10,15 @@
 
 开源 · 可自托管 · 当前版本标识 **0.1.0-alpha.8** · [Apache 2.0](LICENSE)
 
+正在准备公开注册 Beta：验证邮箱、设置密码即可注册，不需要账号邀请或测试资格码。注册开放情况以登录页为准；项目邀请单独管理。
+
 ## 一起聊，一起做，换个设备接着来
 
 **多人：让讨论直接推动开发。** 大家共用一段会话，聊天、引用、@同伴、AI 进展和回答都在一起。各自的 Agent 能参考共享讨论，少一点复制转发，多一点真正协作。
 
 **多端：人离开电脑，项目不必停。** 同一账号可在电脑、手机、平板同时登录。路上回同伴、看进展、请电脑上的 Agent 继续做；换电脑时，也能下载已保存的文件版本接着工作。
 
-**多 Agent：每个人用合适的帮手。** 带上熟悉的 Codex 或 DeepSeek Harness，也可直接选择云端体验 Agent 做小项目。各自选择自己的 Agent、模型和思考强度，团队共享讨论和成果。
+**多 Agent：每个人用合适的帮手。** 带上熟悉的 Codex 或 DeepSeek Harness，各自选择自己的 Agent、模型和思考强度，团队共享讨论和成果。面向小项目的云端体验 Agent 将后续开放。
 
 ![共享讨论和文件版本，各自调用 Agent，检查后整合](docs/assets/product/collaboration.zh-CN.jpg)
 
@@ -44,7 +46,7 @@
 
 ### 4. 换到手机，继续推进
 
-不用在手机安装本地 Agent：调用同一账号已连接的电脑 Agent，或使用云端体验 Agent 即可。电脑 Agent 需保持电脑和连接器在线；手机不必靠近电脑，只需能访问服务器。
+不用在手机安装本地 Agent：调用同一账号已连接的电脑 Agent 即可。电脑和连接器需保持在线；手机不必靠近电脑，只需能访问服务器。
 
 <img src="docs/assets/product/zh-CN/annotated/12-phone.jpg" alt="完整界面与重点标注：手机上继续共享会话" width="390">
 
@@ -66,11 +68,11 @@
 ## 从这里开始
 
 1. [验证邮箱、设置密码并登录](https://gatherthread.cn/app/)，创建项目和一个 **Multi 多人会话**，邀请同伴；也可接受已有项目的邀请。
-2. 选择云端体验 Agent，直接尝试小任务；或在电脑上连接自己的 Agent：[Codex 启动器](docs/CODEX_CONNECT.zh-CN.md)、[DSH 插件配对](docs/DSH_CONNECT.zh-CN.md)。
+2. 在电脑上连接自己的 Agent：[Codex 启动器](docs/CODEX_CONNECT.zh-CN.md)、[DSH 插件配对](docs/DSH_CONNECT.zh-CN.md)。手机可调用同一账号已连接的 Agent，电脑和连接器需保持在线。
 3. 与人交流用 **发送 chat**，请 AI 做事用 **请求我的 Agent**。例如：“做一个报名页，只要活动时间、地点和报名按钮。”
 4. 需要分享文件时，再选择 GitHub 或 GT Cloud，检查目录并授权上传。
 
-不确定先做什么？打开[自由示例](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse)或设置中的新手引导。示例可以重置，不使用你的模型额度，也不改变真实项目。云端体验 Agent 适合额度内的小任务，已有电脑 Agent 也可随时选用。
+不确定先做什么？打开[自由示例](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse)或设置中的新手引导。示例可以重置，不使用你的模型额度，也不改变真实项目。
 
 ## 核心能力，一处用起来
 

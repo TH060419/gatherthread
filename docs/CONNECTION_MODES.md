@@ -1,6 +1,6 @@
-# Connection modes without a cloud account
+# Local and private-network connection modes
 
-GatherThread has three ready-to-use connection modes that do not require a public server. All three run the same single authoritative process, SQLite database, and authorization model. Switching modes updates only network-related values in the private `.env`; it preserves the credential pepper, database, users, quotas, and history.
+GatherThread has three connection modes that do not require the official GatherThread server. Operators still configure email delivery and security verification before opening account registration. All three run the same single authoritative process, SQLite database, and authorization model. Switching modes updates only network-related values in the private `.env`; it preserves the credential pepper, database, users, quotas, and history.
 
 | Mode | Best for | Client requirement | Entry point |
 |---|---|---|---|
@@ -8,18 +8,16 @@ GatherThread has three ready-to-use connection modes that do not require a publi
 | LAN HTTPS | A trusted home, lab, or office network | Caddy on the host; the dedicated local CA trusted by clients | `https://private-address:8443` |
 | Tailscale Serve | A small known group across networks | Tailscale on every device | `https://host.tailnet.ts.net` |
 
-For a stable shared entry point, approved Alpha testers use [https://gatherthread.cn](https://gatherthread.cn/), which follows the invitation-only [Alibaba Cloud ECS profile](ALIYUN_ECS.md). Never turn the LAN or Tailscale profiles into router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
+For a stable shared entry point, use [https://gatherthread.cn](https://gatherthread.cn/), with registration availability shown on its sign-in page. The public Beta account path uses verified-email registration and password sign-in through the operator-managed [Alibaba Cloud ECS profile](ALIYUN_ECS.md); project invitations are separate. Never turn the LAN or Tailscale profiles into router port forwarding, Tailscale Funnel, or an unauthenticated public tunnel.
 
 ## Shared initialization
 
 ```bash
 npm ci
-npm run owner-host:init -- \
-  --display-name "Your name" \
-  --device-name "This computer"
+npm run owner-host:init
 ```
 
-Use the explicit `owner-host:init` step for local-only, Tailscale, or manual LAN setup. `lan:start` performs the same initialization interactively when the database does not yet exist. Initialize a database only once. Save the one-time device token in a password manager; do not place it in a URL, chat, screenshot, command argument, or Git file.
+Use `owner-host:init` for local-only, Tailscale or manual LAN setup; `lan:start` prepares the same private hosting configuration. Initialization does not create a user or issue a login token. Configure email delivery and security verification, complete the [registration preflight](OPERATIONS.md#public-beta-registration-preflight), then explicitly open registration. Users verify an email, set a password and sign in before accepting project invitations. Native Agents receive independent device authorization after sign-in. Preserve the database and credential pepper when switching modes.
 
 ## Local-only
 
@@ -34,9 +32,9 @@ Open `http://127.0.0.1:18787` for the product home, then choose **Get Started** 
 
 Reserve a stable RFC1918 address for the host in DHCP, for example `192.168.50.20`. Advanced local DNS setups may map `gatherthread.home.arpa` to that address. Install [Caddy 2](https://caddyserver.com/docs/install), then configure an unprivileged HTTPS port:
 
-A campus network is normally institution-managed LAN infrastructure, so this mode can work on campus when policy permits inbound peer traffic and the devices can reach each other. Campus Wi-Fi frequently applies client isolation, VLAN separation, or firewall rules; sharing the same SSID alone does not establish reachability or trust. When direct access is blocked, use the deployment's configured remote entry point. Tailscale remains available; qualified testers can also use the hosted `gatherthread.cn` Alpha.
+A campus network is normally institution-managed LAN infrastructure, so this mode can work on campus when policy permits inbound peer traffic and the devices can reach each other. Campus Wi-Fi frequently applies client isolation, VLAN separation, or firewall rules; sharing the same SSID alone does not establish reachability or trust. When direct access is blocked, use the deployment's configured remote entry point, such as Tailscale or `gatherthread.cn` with an email account.
 
-For normal use, one command discovers private interfaces, asks for a choice only when necessary, configures the exact origin, initializes a new database interactively, builds the app, and starts both GatherThread and Caddy:
+For normal use, one command discovers private interfaces, asks for a choice only when necessary, configures the exact origin, prepares hosting configuration, builds the app, and starts both GatherThread and Caddy:
 
 ```bash
 npm run lan:start

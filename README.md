@@ -10,13 +10,15 @@ GatherThread puts your team's discussion, AI-assisted work, and file review in o
 
 Open source · Self-hostable · Current version identifier **0.1.0-alpha.8** · [Apache 2.0](LICENSE)
 
+Preparing a publicly registrable Beta: verify your email and sign in with a password, without an account invitation or qualification code. Registration availability is shown on the sign-in page; project invitations are separate.
+
 ## Your team. Your devices. Your Agents.
 
 **Work together in the same conversation.** Agree on a goal, ask your Agent to work, and let teammates follow the result. Quote a particular message or mention someone instead of explaining the same thing twice. Discussion and development stay together.
 
 **Keep going beyond your desk.** The same account can be signed in on computers, phones, and tablets at once. On your phone, continue the discussion, review progress, or ask your connected computer Agent to keep working. Move to another computer by downloading the file version you saved.
 
-**Bring the helper you know.** Connect Codex or DeepSeek Harness, or start a small project with the cloud trial Agent. Choose the supported model and reasoning level for your request. Each teammate keeps their own setup while sharing discussion and results.
+**Bring the helper you know.** Connect Codex or DeepSeek Harness. Choose the supported model and reasoning level for your request. Each teammate keeps their own setup while sharing discussion and results. A cloud trial Agent for small projects is coming later.
 
 ![People share discussion and file versions while keeping their own Agents](docs/assets/product/collaboration.en.jpg)
 
@@ -65,11 +67,11 @@ GitHub's permissions, platform rules, and local transfer safeguards still apply.
 ## Get started
 
 1. **Sign in with a verified email address and password.** New here? Verify your email, choose a password, then create a project and a Multi conversation. Invite your teammates, or accept an existing project's invitation.
-2. **Choose your Agent.** Try the cloud trial Agent for a small project, or connect a computer Agent: use the [Codex launcher and connection guide](docs/CODEX_CONNECT.md) or [DeepSeek Harness plugin](docs/DSH_CONNECT.md).
+2. **Connect your Agent on a computer.** Use the [Codex launcher and connection guide](docs/CODEX_CONNECT.md) or [DeepSeek Harness plugin](docs/DSH_CONNECT.md). A phone can use that same account's connected Agent while the computer and connector stay online.
 3. **Talk, then ask for work.** Use Chat for discussion and the separate Agent request button for AI work. Select an available Agent and its supported model options before requesting it.
 4. **Share files when you need to.** Prefer GitHub for development; choose GT Cloud for a small trial. Authorize file access separately.
 
-Want to practice first? Open the [free example](https://gatherthread.cn/app/example.html?locale=en&topic=browse) or the visual guides in Settings. Example changes are disposable, use no model quota, and do not affect real projects. The cloud trial Agent runs real tasks within the service's usage limits.
+Want to practice first? Open the [free example](https://gatherthread.cn/app/example.html?locale=en&topic=browse) or the visual guides in Settings. Example changes are disposable, use no model quota, and do not affect real projects.
 
 ## More ways to work together
 

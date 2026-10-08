@@ -55,22 +55,20 @@ function validateAddress(raw) {
 export function parseLanStartArguments(args) {
   let address;
   let port = DEFAULT_PORT;
-  let displayName;
-  let deviceName;
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index];
     const value = args[index + 1];
-    if (!new Set(["--address", "--port", "--display-name", "--device-name"]).has(option) || !value) {
-      throw new Error("Usage: npm run lan:start -- [--address PRIVATE_IP] [--port 8443] [--display-name NAME] [--device-name NAME]");
+    if (option === "--display-name" || option === "--device-name") {
+      throw new Error(`${option} is no longer supported; LAN startup prepares the environment only and creates no account`);
+    }
+    if (!new Set(["--address", "--port"]).has(option) || !value) {
+      throw new Error("Usage: npm run lan:start -- [--address PRIVATE_IP] [--port 8443]");
     }
     if (option === "--address") address = validateAddress(value);
     if (option === "--port") port = validatePort(value);
-    if (option === "--display-name") displayName = value.trim();
-    if (option === "--device-name") deviceName = value.trim();
     index += 1;
   }
-  if (displayName === "" || deviceName === "") throw new Error("display and device names must not be blank");
-  return { address, port, displayName, deviceName };
+  return { address, port };
 }
 
 export function lanOrigin(address, port = DEFAULT_PORT) {
@@ -163,7 +161,7 @@ function environmentValue(contents, name) {
   return match ? unquote(match[1].trim()) : undefined;
 }
 
-async function initializeIfNeeded(envPath, displayName, deviceName) {
+export async function initializeIfNeeded(envPath) {
   const contents = await readFile(envPath, "utf8");
   const databasePath = resolve(process.cwd(), environmentValue(contents, "GATHERTHREAD_DATABASE_PATH") || ".local/collaboration.sqlite");
   let databaseExists = true;
@@ -181,21 +179,8 @@ async function initializeIfNeeded(envPath, displayName, deviceName) {
     return;
   }
 
-  if ((!displayName || !deviceName) && (!process.stdin.isTTY || !process.stdout.isTTY)) {
-    throw new Error("a new database requires --display-name and --device-name when no interactive terminal is available");
-  }
-  let prompt;
-  try {
-    if (!displayName || !deviceName) prompt = createInterface({ input: process.stdin, output: process.stdout });
-    const ownerName = displayName || (await prompt.question("Creator display name: ")).trim();
-    const ownerDevice = deviceName || (await prompt.question("This device name: ")).trim();
-    if (!ownerName || !ownerDevice) throw new Error("display and device names must not be blank");
-    process.stdout.write("\nCreating the first account. Save the device token printed below; it is shown only once.\n\n");
-    const init = npmCommand("owner-host:init", ["--display-name", ownerName, "--device-name", ownerDevice]);
-    await runAndWait(init.command, init.args);
-  } finally {
-    prompt?.close();
-  }
+  const init = npmCommand("owner-host:init");
+  await runAndWait(init.command, init.args);
 }
 
 async function waitForHealth(port, serverExit) {
@@ -244,7 +229,7 @@ async function main() {
   const address = await chooseAddress(options.address);
   const origin = lanOrigin(address, options.port);
   const configured = await configureConnectionEnvironment({ mode: "lan", rawUrl: origin });
-  await initializeIfNeeded(configured.envPath, options.displayName, options.deviceName);
+  await initializeIfNeeded(configured.envPath);
 
   process.stdout.write(`\nLAN configuration ready: ${origin}\nBuilding and starting GatherThread...\n\n`);
   const build = npmCommand("build");
