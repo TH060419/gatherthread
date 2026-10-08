@@ -468,7 +468,7 @@
                 <select id="agent-harness-select" name="agent-harness">
                   <option value="codex">Codex</option>
                   <option value="deepseek-harness">DeepSeek Harness</option>
-                  <option value="cloud" disabled>Cloud Agent · coming later</option>
+                  <option value="cloud" disabled>Cloud Agent</option>
                 </select>
                 <div id="codex-agent-profile-fields" class="agent-profile-fields">
                   <label for="agent-model-select">Model</label>
@@ -511,6 +511,7 @@
                   <span id="agent-target-label">No runtime available</span>
                 </div>
               </div>
+              <p id="mobile-cloud-status" class="mobile-cloud-status mobile-workspace-only" role="status" hidden></p>
               <p id="send-error" class="form-error" role="alert"></p>
             </form>
           </div>
@@ -686,7 +687,7 @@
             <p>Requires an npm project with package.json and package-lock.json. Public npm dependencies are installed without lifecycle scripts. Each run allows up to 15 minutes; saved source expires after seven days.</p>
             <button id="cloud-github-refresh" type="button" class="text-button">Refresh cloud tasks</button>
             <button id="cloud-github-new" type="button" class="text-button" disabled aria-describedby="cloud-github-agent-availability">New repository task</button>
-            <p id="cloud-github-agent-availability" class="field-help">Cloud Agent · coming later</p>
+            <p id="cloud-github-agent-availability" class="field-help">Select an available cloud model.</p>
             <nav id="cloud-github-task-list" aria-label="Your cloud tasks"></nav>
             <p id="cloud-github-task-status" role="status"></p><pre id="cloud-github-answer"></pre>
             <section id="cloud-github-changes" aria-label="Source changes"></section>
@@ -938,7 +939,7 @@
           <button id="open-codex-launcher-button" class="button button-secondary" type="button" disabled>Open Launcher</button>
         </div>
         <div class="connection-preview-banner" role="note">
-          <span class="connection-preview-badge">Alpha preview</span>
+          <span class="connection-preview-badge">Beta 1</span>
           <span>Current server only</span>
         </div>
         <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
@@ -959,7 +960,7 @@ codex plugin --help</code>
               <span id="connect-codex-marketplace-title" class="command-label">Codex plugin</span>
               <button class="button button-secondary" type="button" data-copy-command="marketplace" aria-describedby="copy-marketplace-command-status">Copy commands</button>
             </div>
-            <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
+            <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread</code>
           <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
           </li>
@@ -1032,7 +1033,7 @@ codex plugin add gatherthread@gatherthread</code>
         </div>
         <p id="connect-dsh-summary" class="connection-lead">The plugin connects outward from DSH to the current GatherThread server. Setup takes three steps.</p>
         <div class="connection-preview-banner" role="note">
-          <span class="connection-preview-badge">Alpha preview</span>
+          <span class="connection-preview-badge">Beta 1</span>
           <span>Current server only</span>
         </div>
         <ol class="connection-guide dsh-connect-steps">
@@ -1292,14 +1293,14 @@ codex plugin add gatherthread@gatherthread</code>
               </div>
               <fieldset class="settings-agent-picker">
                 <legend>Available Agents</legend>
-                <p>Choose the Agents available in this project. Cloud Agent will open in a later release.</p>
+                <p>Choose the Agents available in this project. Cloud Agent needs no local connection.</p>
                 <div class="settings-agent-options">
                   <label class="settings-agent-option" for="settings-enabled-codex"><input id="settings-enabled-codex" name="enabled-agent" type="checkbox" value="codex" /><span>Codex</span></label>
                   <label class="settings-agent-option" for="settings-enabled-dsh"><input id="settings-enabled-dsh" name="enabled-agent" type="checkbox" value="deepseek-harness" /><span>DeepSeek Harness</span></label>
-                  <label class="settings-agent-option" for="settings-enabled-cloud"><input id="settings-enabled-cloud" name="enabled-agent" type="checkbox" value="cloud" disabled /><span>Cloud Agent · coming later</span></label>
+                  <label class="settings-agent-option" for="settings-enabled-cloud"><input id="settings-enabled-cloud" name="enabled-agent" type="checkbox" value="cloud" disabled /><span>Cloud Agent</span></label>
                 </div>
               </fieldset>
-              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="cloud" disabled>Cloud Agent · coming later</option><option disabled>Claude Code · coming later</option></select></label>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="cloud" disabled>Cloud Agent</option><option disabled>Claude Code · coming later</option></select></label>
               <div id="settings-codex-agent-fields" class="settings-agent-fields">
                 <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
                 <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>

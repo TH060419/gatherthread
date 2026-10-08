@@ -4,31 +4,31 @@ This document identifies GatherThread's integration boundaries, their canonical 
 
 ## Stability labels
 
-- **Public Alpha:** exposed to Web clients, published packages, plugins, or self-hosted operators. It may evolve before Beta, but changes require compatibility analysis, tests, documentation, and release notes.
+- **Public prerelease:** exposed to Web clients, published packages, plugins, or self-hosted operators. It may evolve during Beta, but changes require compatibility analysis, tests, documentation, and release notes.
 - **Internal versioned:** used between repository modules or persisted locally. It may change only with all consumers and stored-state migration or rejection logic updated together.
 - **Implementation detail:** not promised to outside consumers. Security and data-integrity guarantees still apply.
 
-Alpha status never permits silent reinterpretation of persisted data, identity, authorization, event fidelity, or idempotency semantics.
+Prerelease status never permits silent reinterpretation of persisted data, identity, authorization, event fidelity, or idempotency semantics.
 
 ## Canonical owners
 
 | Contract | Stability | Canonical source | Main consumers |
 |---|---|---|---|
-| Domain values, input validation, events, replay, runtime, invitation, local-turn, and snapshot schemas | Public Alpha | `packages/protocol/src/index.ts` | Server, Web normalization, bridge, MCP, DSH |
-| HTTP and WebSocket route behavior | Public Alpha | `apps/server/src/server.ts` plus `apps/server/src/service.ts` | Web, bridge, DSH, MCP transport |
-| Authorization and persistence invariants | Public Alpha | `apps/server/src/service.ts`, `apps/server/src/database.ts`, `docs/SECURITY.md` | Every client and operator |
+| Domain values, input validation, events, replay, runtime, invitation, local-turn, and snapshot schemas | Public prerelease | `packages/protocol/src/index.ts` | Server, Web normalization, bridge, MCP, DSH |
+| HTTP and WebSocket route behavior | Public prerelease | `apps/server/src/server.ts` plus `apps/server/src/service.ts` | Web, bridge, DSH, MCP transport |
+| Authorization and persistence invariants | Public prerelease | `apps/server/src/service.ts`, `apps/server/src/database.ts`, `docs/SECURITY.md` | Every client and operator |
 | Harness-neutral connector API | Internal versioned | `packages/bridge/src/types.ts` | Codex connector, adapters, local MCP relay |
 | Browser API mapping | Internal versioned | `apps/web/src/api.js`, `apps/web/src/domain.js` | Web workspace |
 | Realtime recovery state machine | Internal versioned | `apps/web/src/realtime.js` | Web workspace |
-| User-facing MCP tools and resources | Public Alpha | `packages/mcp/src/service.ts`, `packages/mcp/README.md` | GatherThread Codex plugin and user Agents |
+| User-facing MCP tools and resources | Public prerelease | `packages/mcp/src/service.ts`, `packages/mcp/README.md` | GatherThread Codex plugin and user Agents |
 | Capability-protected local connector relay | Internal versioned | `packages/bridge/src/local-api-relay.ts` | GatherThread Codex plugin MCP only |
 | Codex App Server adapter and persisted projection state | Internal versioned | `packages/bridge/src/codex-app-server.ts`, `packages/bridge/src/project-harness.ts` | Codex connector |
-| DSH native plugin RPC and persisted state | Public Alpha package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
-| Browser entry routes and legacy deep-link forwarding | Public Alpha | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
+| DSH native plugin RPC and persisted state | Public prerelease package / internal versioned state | `packages/dsh-host/src/native-plugin.ts`, `connector.ts`, `state-store.ts`, `types.ts` | DSH Host and bundled settings client |
+| Browser entry routes and legacy deep-link forwarding | Public prerelease | `site/index.html`, `site/boot.js`, `apps/web/scripts/build.mjs`, `apps/server/src/server.ts` | Browsers, invitations, DSH pairing, shared project/session links |
 | Stable Web control IDs and accessible names | Internal versioned | `apps/web/index.html`, `apps/web/test/static-accessibility.test.js` | Web event bindings, accessibility, browser tests |
 | Codex Launcher URI (Windows/macOS) | Internal versioned | `apps/web/src/domain.js`, `prototypes/codex-launcher/launcher.py`, `prototypes/codex-launcher/macos/Launcher.swift`, shared `contract-vectors.json` | GatherThread Web, per-user Windows and macOS URL Scheme handlers |
-| Opt-in code repository snapshots, review and merge | Public Alpha, Alpha 8 | `packages/protocol/src/code-sync.ts`, `apps/server/src/code-repository.ts` | Web, shared local code-sync module, Codex, DSH |
-| Shared manual history summaries and derived context | Public Alpha, Alpha 8 | `packages/protocol/src/history-summary.ts`, `apps/server/src/database.ts` | Web, bridge, MCP, Codex, DSH |
+| Opt-in code repository snapshots, review and merge | Public prerelease, Beta 1 | `packages/protocol/src/code-sync.ts`, `apps/server/src/code-repository.ts` | Web, shared local code-sync module, Codex, DSH |
+| Shared manual history summaries and derived context | Public prerelease, Beta 1 | `packages/protocol/src/history-summary.ts`, `apps/server/src/database.ts` | Web, bridge, MCP, Codex, DSH |
 
 When this document conflicts with the schemas or tested implementation, stop and resolve the discrepancy in the same PR. Do not silently choose whichever behavior is more convenient.
 
@@ -53,7 +53,7 @@ The same-origin API is rooted at `/v1`.
 - Errors use `{ "error": { "code": string, "message": string, "details"?: JSON } }` with an appropriate HTTP status.
 - JSON responses are `no-store`. Bodies and JSON structure are bounded before reaching business logic.
 - Browser authentication is exchanged into an opaque `HttpOnly; SameSite=Strict` cookie. HTTPS adds `Secure` and the `__Host-` prefix.
-- Account identity responses include `can_create_projects`, separate from project roles. All new email accounts have the current Alpha project-creation capability. Password login does not edit the display name or change roles.
+- Account identity responses include `can_create_projects`, separate from project roles. All new email accounts have the current project-creation capability. Password login does not edit the display name or change roles.
 - Connectors use an HTTP bearer credential kept in the connector process. Credentials never belong in URLs, WebSocket query strings, page storage, MCP arguments, logs, or canonical events.
 - Cookie-authenticated writes require an allowed `Origin`. Bearer-authenticated connectors remain device- and role-scoped.
 - Retryable mutations carry a stable `idempotency_key`. An exact same-actor retry returns the original result; a changed actor, operation, target, or canonical payload conflicts.
@@ -163,7 +163,7 @@ Direct HTTPS Git transport and local GitHub CLI authentication live in `packages
 
 Authoritative shapes and 1,000-file / 2-MiB-file / 8-MiB-snapshot limits are in `code-sync.ts`. Only the checkpoint-upload route has an increased bounded body budget; event and authentication limits are not widened. SQLite owns atomic heads and retry receipts; immutable Git objects are stored before acknowledgement. Backups require both stores.
 
-Alpha 8 `GET /v1/code-storage` returns the current actor's logical 128 MiB limit, usage, visible-project breakdown and only their own pre-upgrade `detached_branches`. A project member may call `POST /v1/projects/:id/code/clear-branch` only for their own current branch, with `expected_head_commit` and `idempotency_key`. A former member may call `POST /v1/code-storage/detached-branches/:projectId/clear` with the same CAS and idempotency fields only for their own orphan; its strict response is `{released_bytes}`. The project owner may additionally call `POST /v1/projects/:id/code/clear-project` with `expected_main_commit`, the complete `expected_branches` set and an idempotency key. These cleanup routes are available while paused or archived; normal cookie Origin and active-device checks still apply. Clearing invalidates old mutation receipts, removes the selected cloud refs and releases logical current-head usage without changing local Git. Clearing one branch cannot erase content already merged into main. Append-only Git objects and existing backups remain until separate operator-approved physical cleanup, so project/deployment disk limits do not immediately fall.
+`GET /v1/code-storage` returns the current actor's logical 128 MiB limit, usage, visible-project breakdown and only their own pre-upgrade `detached_branches`. A project member may call `POST /v1/projects/:id/code/clear-branch` only for their own current branch, with `expected_head_commit` and `idempotency_key`. A former member may call `POST /v1/code-storage/detached-branches/:projectId/clear` with the same CAS and idempotency fields only for their own orphan; its strict response is `{released_bytes}`. The project owner may additionally call `POST /v1/projects/:id/code/clear-project` with `expected_main_commit`, the complete `expected_branches` set and an idempotency key. These cleanup routes are available while paused or archived; normal cookie Origin and active-device checks still apply. Clearing invalidates old mutation receipts, removes the selected cloud refs and releases logical current-head usage without changing local Git. Clearing one branch cannot erase content already merged into main. Append-only Git objects and existing backups remain until separate operator-approved physical cleanup, so project/deployment disk limits do not immediately fall.
 
 The private snapshot-job protocol adds `code_sync_status`, `code_upload`, `code_download`, `code_recover`, `code_auto_upload_enable` and `code_auto_upload_disable`. These target one exact same-user execution runtime (Codex or DSH), never a snapshot worker, arbitrary directory or fallback device. New transfers, mutation jobs and their completion fail while the cloud repository is paused; status and the request to turn off an existing local auto-upload preference remain available. Local code authorization is separately required and cannot be granted by these jobs. Results contain only bounded status/commit/count metadata and a recovery directory basename, never absolute paths or credentials.
 
@@ -180,7 +180,7 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - The local connector relay is protected by a per-run capability and current-user filesystem permissions. Its endpoint or named pipe is not authorization by itself.
 - Ambiguous routing across multiple connector registrations fails closed.
 - HTTP/stdio MCP messages default to 1 MiB, with at most 128 requests per batch and bounded JSON depth/node count; oversized inputs are rejected before any batch member executes. Valid batches and silent notifications remain supported. Manual visible-history import creates a new native task and is explicitly non-idempotent.
-- Renaming or removing an MCP tool/resource, parameter, URI, or result field is a Public Alpha interface change.
+- Renaming or removing an MCP tool/resource, parameter, URI, or result field is a Public prerelease interface change.
 
 ## Codex and DSH native boundaries
 
@@ -196,7 +196,9 @@ The published MCP surface is intentionally narrower than the internal collaborat
 
 ## Web presentation boundary
 
-The Cloud Git dialog keeps `project-code-button` and `project-code-dialog` as its single entry/container. `code-provider-gt-cloud` and `code-provider-github` select peer views with `aria-pressed` and `aria-controls`; switching views has no repository mutation. Existing `github-code-*` local controls are retained. Private `cloud-github-*` account/task controls are inline in the GitHub view; the preview's separate `cloud-github-dialog`, `cloud-github-open`, `settings-cloud-github-open` and close button are removed with their bindings. The public Cloud Agent entry is held independently of these GitHub controls, as specified in [Product specification](PRODUCT_SPEC.md).
+Hosted memory and Docker-client settings are private operator controls, not browser or public API fields. Their defaults, tightening bounds, local-daemon isolation and test-host acceptance are owned by [the hosted operator guide](HOSTED_AGENT.md#operator-setup). A secondary private-resource cleanup failure must not hide an unconfirmed executor exit or release its reserved capacity.
+
+The Cloud Git dialog keeps `project-code-button` and `project-code-dialog` as its single entry/container. `code-provider-gt-cloud` and `code-provider-github` select peer views with `aria-pressed` and `aria-controls`; switching views has no repository mutation. Existing `github-code-*` local controls are retained. Private `cloud-github-*` account/task controls are inline in the GitHub view; the preview's separate `cloud-github-dialog`, `cloud-github-open`, `settings-cloud-github-open` and close button are removed with their bindings. Beta 1 opens the shared Cloud Agent Web entry for trial and eligible repository tasks without changing their separately configured server enablement, exact profile routing or default local Codex selection, as specified in [Product specification](PRODUCT_SPEC.md).
 
 ### Windows/macOS Codex Launcher URI v1
 

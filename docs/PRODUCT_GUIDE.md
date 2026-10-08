@@ -4,6 +4,8 @@
 
 From “shall we make a signup page?” to a button that works: follow one small project through discussion, AI work, review, and handoff. All screenshots show the full interface of the application running its disposable example, with key controls annotated. People, messages, and Agent replies are demonstration content.
 
+**Beta 1:** this release targets npm and the [isolated test service](https://test.gatherthread.cn/), not a production upgrade. Local Codex/DSH needs separate device authorization. The Cloud Agent entry is open, with model availability dependent on validated operator configuration; cloud tasks do not yet support shared-summary generation or Pause/Resume. The optional Launcher v1 is production-origin-only, so testers use the generated terminal command.
+
 ## Meet the workspace
 
 Pick a project and conversation on the left, discuss and request AI work in the middle, and find members and invitations on the right. Each person can connect Codex or DeepSeek Harness, or choose the cloud trial Agent for a small task without local setup. Cloud usage allowances are shown in the workspace.

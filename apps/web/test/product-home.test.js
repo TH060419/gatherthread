@@ -295,9 +295,13 @@ test("Beta product copy explains local execution, mobile requirements and cloud 
     readFile(new URL("docs/HOSTED_AGENT.md", repositoryRoot), "utf8"),
     readFile(new URL("docs/PRODUCT_HOME_VERIFICATION.md", repositoryRoot), "utf8"),
   ]);
-  assert.match(settings, /CLOUD_AGENT_ENTRY_ENABLED\s*=\s*false/u);
-  assert.match(operations, /Beta launch prerequisite.*CLOUD_AGENT_ENTRY_ENABLED=false/u);
-  assert.match(readiness, /server configuration alone cannot enable it/u);
+  assert.match(settings, /CLOUD_AGENT_ENTRY_ENABLED\s*=\s*true/u);
+  const workspace = await readFile(new URL("apps/web/index.html", repositoryRoot), "utf8");
+  assert.match(workspace, /Choose the Agents available in this project\. Cloud Agent needs no local connection\./u);
+  assert.doesNotMatch(workspace, /Cloud Agent (?:· coming later|will open in a later release)/u);
+  assert.match(operations, /GATHERTHREAD_HOSTED_AGENT_ENABLED/u);
+  assert.match(operations, /provider\/model.*image.*deployment-host verification/iu);
+  assert.match(readiness, /end to end/iu);
 });
 
 test("file and conversation uploads, manual imports and human integration remain separate", async () => {

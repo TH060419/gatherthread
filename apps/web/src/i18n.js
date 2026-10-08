@@ -726,7 +726,7 @@ const ZH_CN = Object.freeze({
   "Project connector": "项目连接",
   "Close Connect Codex dialog": "关闭连接 Codex 对话框",
   "The terminal keeps this project connected to Codex Desktop. Setup takes three steps.": "终端会持续连接当前项目与 Codex Desktop，只需三步即可完成。",
-  "Alpha preview": "Alpha 预览版",
+  "Beta 1": "Beta 1 测试版",
   "Codex launcher": "Codex 启动器",
   "After installing the local Launcher, open it for this project. Enter the device token in its window.": "安装本地启动器后，为当前项目打开它。请在启动器窗口输入设备 token。",
   "Open Launcher": "打开启动器",

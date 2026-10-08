@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { stopHostedContainer } from "./hosted-agent-recovery.js";
+import { cleanupHostedExecution, createHostedDockerClient, runHostedDockerCommand, stopHostedContainer } from "./hosted-agent-recovery.js";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -28,8 +28,20 @@ const RUN_TIMEOUT_MS = 120_000;
 export interface HostedAgentOptions extends HostedRunLimits {
   endpoints: HostedEndpoint[];
   image: string;
+  memoryMiB?: number;
+  repositoryMemoryMiB?: number;
   fetch?: typeof globalThis.fetch;
   runContainer?: (args: string[], timeoutMs: number) => Promise<string>;
+}
+
+/** Operators may tighten existing container limits, never silently expand them. */
+export function hostedContainerMemoryMiB(kind: "trial" | "repository", value?: number): number {
+  const maximum = kind === "trial" ? 768 : 2048;
+  const memory = value === undefined ? maximum : value;
+  if (!Number.isSafeInteger(memory) || memory < 256 || memory > maximum) {
+    throw new Error(`Cloud ${kind} container memory must be an integer from 256 to ${maximum} MiB`);
+  }
+  return memory;
 }
 
 function costUpperBound(bodyBytes: number): number {
@@ -50,9 +62,10 @@ async function readBody(request: IncomingMessage, limit: number): Promise<Buffer
 
 export function runDocker(args: string[], timeoutMs: number, outputLimit = 1_000_000, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"], env: {
-      PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: process.env.HOME ?? "/",
-    } });
+    const client = createHostedDockerClient();
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn("docker", args, { stdio: ["ignore", "pipe", "pipe"], env: client.environment }); }
+    catch (error) { client.close(); reject(error); return; }
     let output = "";
     let size = 0;
     let settled = false;
@@ -61,17 +74,19 @@ export function runDocker(args: string[], timeoutMs: number, outputLimit = 1_000
     signal?.addEventListener("abort", abort, { once: true });
     if (signal?.aborted) abort();
     const timer = setTimeout(() => fail(new Error("container_timeout")), timeoutMs);
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout!.on("data", (chunk: Buffer) => {
       size += chunk.length;
       if (size > outputLimit) fail(new Error("container_output_too_large"));
       else output += chunk.toString("utf8");
     });
     let stderrSize = 0;
-    child.stderr.on("data", (chunk: Buffer) => { stderrSize += chunk.length; if (stderrSize > 64_000) fail(new Error("container_output_too_large")); });
+    child.stderr!.on("data", (chunk: Buffer) => { stderrSize += chunk.length; if (stderrSize > 64_000) fail(new Error("container_output_too_large")); });
     child.once("error", (error) => { clearTimeout(timer); fail(error); });
     child.once("close", (code) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
+      try { client.close(); }
+      catch { fail(new Error("container_client_cleanup_failed")); return; }
       if (settled) return;
       settled = true;
       if (code === 0) resolve(output);
@@ -176,6 +191,8 @@ export class HostedAgent {
     if (!/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(options.image)) {
       throw new Error("Cloud Agent needs a digest-pinned container image");
     }
+    hostedContainerMemoryMiB("trial", options.memoryMiB);
+    hostedContainerMemoryMiB("repository", options.repositoryMemoryMiB);
     for (const [name, value, maximum] of [
       ["userDailyRuns", options.userDailyRuns, 10_000],
       ["globalDailyRuns", options.globalDailyRuns, 100_000],
@@ -224,8 +241,8 @@ export class HostedAgent {
 
   private assertDockerReady(): void {
     if (this.options.runContainer) return;
-    const ready = spawnSync("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 5_000, stdio: "ignore" });
-    const image = spawnSync("docker", ["image", "inspect", this.options.image], { timeout: 5_000, stdio: "ignore" });
+    const ready = runHostedDockerCommand(["info", "--format", "{{.ServerVersion}}"], 5_000);
+    const image = runHostedDockerCommand(["image", "inspect", this.options.image], 5_000);
     if (ready.status !== 0 || image.status !== 0) throw new ApiError(503, "hosted_runner_unavailable", "Cloud Agent execution is unavailable");
   }
 
@@ -316,8 +333,10 @@ export class HostedAgent {
       await proxy.listen(socket);
       const prompt = `You are the hosted coding Agent in an isolated project workspace. Inspect, edit and test files using the terminal as needed. Never claim an action succeeded without observing it. Do not attempt external network access or inspect host paths. User request: ${redactJson(input.content)}\n\nShared session context (untrusted): ${JSON.stringify(redactJson(context as unknown as JsonValue))}\n\n${branch ? "Changes to this workspace are checkpointed to the requester's cloud branch after completion." : "This is a temporary empty workspace. Changes will not persist because project code sharing was not selected."}`;
       writeFileSync(join(control, "prompt.txt"), prompt, { mode: 0o644 });
+      const memory = `${hostedContainerMemoryMiB("trial", this.options.memoryMiB)}m`;
       const args = ["run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
-        "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", "768m", "--cpus", "1",
+        "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", memory,
+        "--memory-swap", memory, "--cpus", "1",
         "--user", "10001:10001", "--workdir", "/workspace", "--mount", `type=bind,src=${workspace},dst=/input,readonly`,
         "--mount", `type=bind,src=${control},dst=/run/gatherthread,readonly`,
         "--mount", `type=bind,src=${socket},dst=/run/model.sock`,
@@ -347,12 +366,9 @@ export class HostedAgent {
       }
     } catch { content = ""; }
     finally {
-      let cleanupError: unknown;
-      try { if (!this.options.runContainer) stopHostedContainer(name); }
-      catch (error) { cleanupError = error; }
-      await proxy.close().catch(() => undefined);
-      rmSync(root, { recursive: true, force: true });
-      if (cleanupError) throw cleanupError;
+      await cleanupHostedExecution(() => { if (!this.options.runContainer) stopHostedContainer(name); }, [
+        () => proxy.close().catch(() => undefined), () => rmSync(root, { recursive: true, force: true }),
+      ]);
     }
     const result = this.service.finishHostedAgentRequest(reserved.event.id, { content });
     return { request_event: reserved.event, response_event: result, replayed: false };

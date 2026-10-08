@@ -1,11 +1,11 @@
 {
   "name": "@gatherthread/dsh-host",
-  "version": "0.1.0-alpha.8",
+  "version": "0.1.0-beta.1",
   "description": "Opt-in GatherThread integration for the DeepSeek Harness Web profile",
   "license": "Apache-2.0",
   "publishConfig": {
     "access": "public",
-    "tag": "alpha"
+    "tag": "beta"
   },
   "repository": {
     "type": "git",

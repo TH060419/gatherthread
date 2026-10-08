@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
-const EXPECTED_VERSION = "0.1.0-alpha.8";
+const EXPECTED_VERSION = "0.1.0-beta.1";
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 const manifestPaths = [
   "package.json",
@@ -55,7 +55,7 @@ assert.deepEqual(dshBundle.deepseekHarness?.sourceFallback, {
 });
 assert.deepEqual(dshBundle.runtimeDependencies, [], "GatherThread installation must not acquire a DSH runtime dependency");
 assert.equal(dshPackage.private, undefined, "DSH plugin package must remain publishable through the official profile installer");
-assert.deepEqual(dshPackage.publishConfig, { access: "public", tag: "alpha" });
+assert.deepEqual(dshPackage.publishConfig, { access: "public", tag: "beta" });
 assert.equal(dshPackage.engines?.node, ">=24");
 assert.equal(
   Object.keys(dshPackage.dependencies ?? {}).some((name) => name.startsWith("@deepseek-ai/")),
@@ -88,7 +88,7 @@ const requiredFiles = [
   "docs/INTERFACE_CONTRACTS.md",
   "docs/ALIYUN_ECS.md",
   "docs/ALIYUN_ECS.zh-CN.md",
-  "docs/releases/0.1.0-alpha.8.md",
+  "docs/releases/0.1.0-beta.1.md",
   "docs/CODEX_CONNECT.md",
   "docs/CODEX_CONNECT.zh-CN.md",
   "docs/DSH_CONNECT.md",
@@ -145,7 +145,7 @@ await Promise.all(requiredFiles.map((path) => readFile(join(root, path), "utf8")
 const connector = await json("packages/codex-connect/package.json");
 assert.equal(connector.name, "@gatherthread/codex-connect");
 assert.equal(connector.private, undefined);
-assert.deepEqual(connector.publishConfig, { access: "public", tag: "alpha" });
+assert.deepEqual(connector.publishConfig, { access: "public", tag: "beta" });
 assert.deepEqual(connector.bin, { "gatherthread-codex-connect": "dist/codex-connect.js" });
 assert.deepEqual(connector.dependencies ?? {}, {});
 
@@ -153,6 +153,8 @@ const plugin = await json("plugins/gatherthread/.codex-plugin/plugin.json");
 assert.equal(plugin.version, EXPECTED_VERSION);
 assert.equal(plugin.interface?.displayName, "共序 / GatherThread");
 assert.equal(plugin.hooks, undefined, "hooks/hooks.json must use automatic discovery");
+const macLauncher = await readFile(join(root, "prototypes/codex-launcher/macos/Info.plist"), "utf8");
+assert.ok(macLauncher.includes(`<key>GatherThreadReleaseVersion</key><string>${EXPECTED_VERSION}</string>`), "macOS Launcher must declare the current release");
 const pluginMcp = await json("plugins/gatherthread/.mcp.json");
 assert.equal(pluginMcp.mcpServers?.gatherthread?.command, "node");
 assert.deepEqual(pluginMcp.mcpServers?.gatherthread?.args, ["${PLUGIN_ROOT}/scripts/mcp-launcher.mjs"]);
@@ -168,17 +170,28 @@ assert.equal(marketplace.interface?.displayName, "共序 / GatherThread");
 assert.deepEqual(marketplace.plugins?.[0]?.source, { source: "local", path: "./plugins/gatherthread" });
 const marketplaceCommand = `codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v${EXPECTED_VERSION} --sparse .agents/plugins --sparse plugins/gatherthread`;
 const pluginInstallCommand = "codex plugin add gatherthread@gatherthread";
-for (const path of ["apps/web/index.html", "README.md", "README.zh-CN.md", "docs/CODEX_CONNECT.md", "docs/CODEX_CONNECT.zh-CN.md", "docs/releases/0.1.0-alpha.8.md", "packages/codex-connect/README.md"]) {
+for (const path of ["apps/web/index.html", "docs/CODEX_CONNECT.md", "docs/CODEX_CONNECT.zh-CN.md", "docs/releases/0.1.0-beta.1.md", "packages/codex-connect/README.md"]) {
   assert.match(await readFile(join(root, path), "utf8"), new RegExp(marketplaceCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(await readFile(join(root, path), "utf8"), new RegExp(pluginInstallCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+}
+// Product READMEs link to canonical setup guides instead of duplicating
+// version-sensitive manual commands beside the Launcher flow.
+for (const [path, guide, launcher] of [
+  ["README.md", "docs/CODEX_CONNECT.md", /launcher/i],
+  ["README.zh-CN.md", "docs/CODEX_CONNECT.zh-CN.md", /启动器/],
+]) {
+  const readme = await readFile(join(root, path), "utf8");
+  assert.ok(readme.includes(`](${guide})`), `${path} must link to its setup guide`);
+  assert.ok(readme.includes(EXPECTED_VERSION), `${path} must declare the current version`);
+  assert.match(readme, launcher);
 }
 assert.doesNotMatch(`${marketplaceCommand}\n${pluginInstallCommand}`, /gta_|Bearer|cookie|token=|password|client_secret/i);
 
 const webDomain = await readFile(join(root, "apps/web/src/domain.js"), "utf8");
-assert.match(webDomain, /@gatherthread\/codex-connect@0\.1\.0-alpha\.8/);
+assert.match(webDomain, /@gatherthread\/codex-connect@0\.1\.0-beta\.1/);
 
 const installer = await readFile(join(root, "deploy/aliyun-ecs/install.sh"), "utf8");
-assert.match(installer, /release_version="0\.1\.0-alpha\.8"/);
+assert.match(installer, /release_version="0\.1\.0-beta\.1"/);
 assert.match(installer, /GATHERTHREAD_SERVER_HOST=127\.0\.0\.1/);
 assert.match(installer, /GATHERTHREAD_ALLOW_HTTP_BOOTSTRAP=false/);
 assert.match(installer, /GATHERTHREAD_TLS_TERMINATED_BY_PROXY=true/);

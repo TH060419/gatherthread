@@ -19,7 +19,7 @@ The package does not install a DSH runtime dependency.
 After `@gatherthread/dsh-host` is published, the ordinary three-step path is:
 
 ```text
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.8
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
 ```
@@ -60,9 +60,9 @@ other plugins remain untouched. The repository-level `npm run dsh:connect --
 --help` source-checkout connector and the examples under `bundle/` remain
 advanced/offline diagnostics, not the normal user path.
 
-## GitHub code synchronization: unreleased source preview
+## GitHub code synchronization
 
-GitHub controls require matching reviewed source builds of the server, Web app and native plugin; the `0.1.0-alpha.8` package command above does not imply this unreleased integration is published. The project owner first connects an existing repository and base branch in Web. Install Git 2.38+ and GitHub CLI on the device, then open **Settings → GatherThread / 共序 → 项目代码 · GitHub（推荐）**. Click **连接 GitHub · 打开浏览器** to start local browser sign-in if needed, then authorize that exact project/repository configuration. `gh auth login --hostname github.com --git-protocol https --web` remains a local fallback. This consent is separate from GT Cloud and conversation sync; a new GitHub binding automatically uploads settled changes while idle and can be switched off. Configuration changes, including pause/resume, require renewed local authorization.
+Beta 1 includes direct GitHub controls and requires matching server, Web app and native plugin releases. The project owner first connects an existing repository and base branch in Web. Install Git 2.38+ and GitHub CLI on the device, then open **Settings → GatherThread / 共序 → 项目代码 · GitHub（推荐）**. Click **连接 GitHub · 打开浏览器** to start local browser sign-in if needed, then authorize that exact project/repository configuration. `gh auth login --hostname github.com --git-protocol https --web` remains a local fallback. This consent is separate from GT Cloud and conversation sync; a new GitHub binding automatically uploads settled changes while idle and can be switched off. Configuration changes, including pause/resume, require renewed local authorization.
 
 The Web app may request code operations only on your selected online runtime and cannot grant this local consent. Code and GitHub credentials travel directly to GitHub. GitHub permissions remain independent of GT membership; removing a GT member or project does not revoke GitHub access or delete GitHub data. See [Project code collaboration](../../docs/CODE_SYNC.md) for setup, recovery, limits and GitHub workflow-trigger risks.
 

@@ -4,7 +4,8 @@ import { z } from "zod";
 import { parseHostedEndpoints, HOSTED_MODEL, siliconFlowFreePreset,
   HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./hosted-agent-pool.js";
 import type { HostedGithubOptions } from "./hosted-github.js";
-import type { HostedAgentOptions } from "./hosted-agent.js";
+import { hostedContainerMemoryMiB, type HostedAgentOptions } from "./hosted-agent.js";
+import { hostedDockerEnvironment } from "./hosted-agent-recovery.js";
 import { registrationFromEnvironment } from "./registration-providers.js";
 import type { RegistrationOptions } from "./registration.js";
 import type { TestGateOptions } from "./test-gate.js";
@@ -165,10 +166,16 @@ export function loadServerConfig(
   const maxProjectSessions = parseCountLimit("GATHERTHREAD_MAX_PROJECT_SESSIONS", env.GATHERTHREAD_MAX_PROJECT_SESSIONS, 2_048);
   const maxTotalSessions = parseCountLimit("GATHERTHREAD_MAX_TOTAL_SESSIONS", env.GATHERTHREAD_MAX_TOTAL_SESSIONS, 8_192);
   const rawAuthTokenPepper = env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
+  if (env.GATHERTHREAD_SILICONFLOW_FREE_MODELS !== undefined
+    && env.GATHERTHREAD_HOSTED_AGENT_PRESET?.trim() !== "siliconflow-free") {
+    throw new ConfigurationError("SiliconFlow free-model selection requires the siliconflow-free preset");
+  }
   const hostedEnabled = parseBoolean("GATHERTHREAD_HOSTED_AGENT_ENABLED", env.GATHERTHREAD_HOSTED_AGENT_ENABLED, false);
   let hostedAgent: HostedAgentOptions | undefined;
   if (hostedEnabled) {
     if (process.platform === "win32") throw new ConfigurationError("Cloud Agent requires a Linux Docker host with Unix sockets");
+    try { hostedDockerEnvironment(env); }
+    catch { throw new ConfigurationError("Cloud Agent Docker configuration requires a local Unix socket without contexts or TLS"); }
     const image = env.GATHERTHREAD_HOSTED_AGENT_IMAGE?.trim() ?? "";
     if (!/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(image)) {
       throw new ConfigurationError("Cloud Agent requires a digest-pinned runner image");
@@ -193,13 +200,23 @@ export function loadServerConfig(
       env.GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MIN_INTERVAL_SECONDS);
     const userMaxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT",
       env.GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT, HOSTED_USER_MAX_CONCURRENT);
+    let memoryMiB: number, repositoryMemoryMiB: number;
+    try {
+      memoryMiB = hostedContainerMemoryMiB("trial", parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB",
+        env.GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB, 768));
+      repositoryMemoryMiB = hostedContainerMemoryMiB("repository", parseCountLimit("GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB",
+        env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB, 2048));
+    } catch {
+      throw new ConfigurationError("Cloud Agent memory must be 256–768 MiB; cloud GitHub memory must be 256–2048 MiB (integers)");
+    }
     if ((userDailyRuns !== null && (userDailyRuns < 1 || userDailyRuns > 10_000))
       || (globalDailyRuns !== null && (globalDailyRuns < 1 || globalDailyRuns > 100_000))
       || maxConcurrent > 8 || userMaxConcurrent > maxConcurrent || userMinIntervalSeconds > 3600) {
       throw new ConfigurationError("Cloud Agent limits exceed the supported capacity");
     }
     try {
-      const raw = freePreset ? siliconFlowFreePreset(maxConcurrent, env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true")
+      const raw = freePreset ? siliconFlowFreePreset(maxConcurrent, env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true",
+        env.GATHERTHREAD_SILICONFLOW_FREE_MODELS)
         : env.GATHERTHREAD_HOSTED_AGENT_ENDPOINTS?.trim() || JSON.stringify([{
         id: "default", profile_id: "default", label: "Qwen3 · Cloudflare", provider: "cloudflare-workers-ai",
         model: HOSTED_MODEL, account_id: env.GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID?.trim(),
@@ -210,7 +227,8 @@ export function loadServerConfig(
       if ((userDailyRuns === null || globalDailyRuns === null) && endpoints.some((endpoint) => endpoint.dailyRuns !== null)) {
         throw new Error("unlimited user or global runs require only confirmed zero-price endpoints");
       }
-      hostedAgent = { image, endpoints, userDailyRuns, globalDailyRuns, maxConcurrent, userMinIntervalSeconds, userMaxConcurrent };
+      hostedAgent = { image, endpoints, userDailyRuns, globalDailyRuns, maxConcurrent, userMinIntervalSeconds, userMaxConcurrent,
+        memoryMiB, repositoryMemoryMiB };
     } catch {
       // Validation errors can contain the private JSON input; never print them.
       throw new ConfigurationError("Invalid Cloud Agent endpoints, account quotas, or credential environment variables");

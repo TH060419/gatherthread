@@ -1,6 +1,8 @@
-# Alibaba Cloud ECS deployment: 0.1.0-alpha.8 preview
+# Alibaba Cloud ECS deployment: 0.1.0-beta.1
 
 This profile keeps the application on `127.0.0.1:18787` and Caddy on public 80/443. Never open 18787. The public Beta account path uses verified-email registration and password sign-in; signup stays closed by default until provider and security preflight passes. Use reviewed deployment commands and do not reinstall an existing host.
+
+This is the production profile, not the Beta 1 test-upgrade procedure. The current release targets only npm and the independent test service: use [TEST_ENVIRONMENT.md](TEST_ENVIRONMENT.md). Do not run this installer or switch production's current release as part of that test deployment.
 
 ## 1. Prerequisites
 
@@ -8,19 +10,19 @@ This profile keeps the application on `127.0.0.1:18787` and Caddy on public 80/4
 - A verified domain with an A record for the ECS public IP.
 - Complete the required ICP filing before opening a Web service on a mainland-China instance. Alibaba Cloud states that a domain pointing to a mainland server must be filed through the actual access provider regardless of port or use; follow the current [Alibaba Cloud filing guide](https://help.aliyun.com/zh/icp-filing/basic-icp-service/user-guide/icp-filing-application-overview) and the rules for the filing owner's province.
 - Security-group ingress: TCP 22 from fixed administrator addresses only, TCP 80/443 for intended users, and no rule for 18787. See the [Alibaba Cloud ECS security-group guide](https://help.aliyun.com/zh/ecs/user-guide/start-using-security-groups).
-- A local `v0.1.0-alpha.8` preview commit or archive that has passed `npm run release:verify`.
+- A local `v0.1.0-beta.1` release commit or archive that has passed `npm run release:verify`.
 
 Before filing approval, system installation and loopback checks may be prepared, but do not point the domain at the instance or open public Web ingress.
 
 ## 2. Upload the candidate
 
-Upload the candidate archive as `/tmp/gatherthread-0.1.0-alpha.8.tar.gz`, then run on the ECS host:
+Upload the candidate archive as `/tmp/gatherthread-0.1.0-beta.1.tar.gz`, then run on the ECS host:
 
 ```sh
-sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-alpha.8
-sudo tar -xzf /tmp/gatherthread-0.1.0-alpha.8.tar.gz \
-  -C /opt/gatherthread/releases/0.1.0-alpha.8 --strip-components=1
-cd /opt/gatherthread/releases/0.1.0-alpha.8
+sudo install -d -m 0755 /opt/gatherthread/releases/0.1.0-beta.1
+sudo tar -xzf /tmp/gatherthread-0.1.0-beta.1.tar.gz \
+  -C /opt/gatherthread/releases/0.1.0-beta.1 --strip-components=1
+cd /opt/gatherthread/releases/0.1.0-beta.1
 ```
 
 After a Git tag exists, the exact tag may instead be cloned into the same path. The installer deliberately rejects temporary source paths and mismatched release metadata.
@@ -74,6 +76,6 @@ Use a new `/opt/gatherthread/releases/<version>` for every upgrade; never overwr
 
 Restore is an operator-approved destructive procedure. Follow [OPERATIONS.md](OPERATIONS.md), preserving the original database, WAL, and SHM as restricted evidence rather than overwriting them.
 
-## Alpha limitations
+## Beta limitations
 
 This is one Node.js process with one SQLite database. It has no automatic failover, horizontal scaling, attachment storage, general conversation-retention worker, or token-level Agent streaming. Public verified-email registration is available after approved provider and abuse-control preflight. Roll out within verified capacity and alert on ECS disk/memory pressure, certificate expiry, service exit, backup/retention-task failure, and database-integrity failure.

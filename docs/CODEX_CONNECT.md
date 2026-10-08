@@ -2,9 +2,11 @@
 
 GatherThread keeps one selected cloud project connected to Codex Desktop through a small local connector. The browser never launches Codex and never places a credential in a copied command.
 
-For optional **project code** upload/download/recovery, use the `0.1.0-alpha.8` connector with the separate `--code-sync` opt-in; follow [Project code collaboration](CODE_SYNC.md). This is independent of conversation/history synchronization.
+For optional **project code** upload/download/recovery, use the `0.1.0-beta.1` connector with the separate `--code-sync` opt-in; follow [Project code collaboration](CODE_SYNC.md). This is independent of conversation/history synchronization.
 
 Sign in at `https://gatherthread.cn/app/` with email and password, then authorize the connector device separately. Use the command shown in the workspace for the matching connector and plugin version. If a corresponding package or tag is unavailable, use the source-checkout fallback below.
+
+**Beta 1 test service:** sign in at `https://test.gatherthread.cn/app/` after test admission and use that page's generated terminal command. Authorize a separate test device and workspace; production credentials do not cross over. Launcher v1 is limited to the official production origin and is not offered for test.
 
 ## Launcher setup · official site, Windows/macOS
 
@@ -40,7 +42,7 @@ codex plugin --help
 If that file is missing, ChatGPT Desktop is installed elsewhere, or you use another system, follow the [official Codex CLI installation guide](https://learn.chatgpt.com/docs/codex/cli) instead. Do not add a nonexistent directory to `PATH`. Run `codex plugin --help` to confirm that the available Codex build supports plugins, then install GatherThread:
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread
+codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -51,7 +53,7 @@ Restart Codex Desktop. Open Settings, review the **共序 / GatherThread** MCP s
 Open that project in GatherThread, select **Connect Codex**, and copy the command shown for your operating system. It has this shape:
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-alpha.8 \
+npx --yes @gatherthread/codex-connect@0.1.0-beta.1 \
   --url 'https://your-gatherthread-server.example' \
   --project 'PROJECT_ID' \
   --create-workspace \
@@ -80,7 +82,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-Use the server URL and project ID displayed by the Web app; for the hosted Alpha, the URL is `https://gatherthread.cn`. Verify both the `v0.1.0-alpha.8` plugin ref and matching connector package before using `npx`. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
+Use the server URL and project ID displayed by the Web app: `https://test.gatherthread.cn` for Beta 1 testing, or `https://gatherthread.cn` for the independently deployed production service. Verify both the `v0.1.0-beta.1` plugin ref and matching connector package before using `npx`. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
 
 ## What synchronizes
 
@@ -94,7 +96,7 @@ Use the server URL and project ID displayed by the Web app; for the hosted Alpha
 
 Canonical history is always injected for model context. The connector separately imports a verified native history snapshot so the first connected task has readable Desktop bubbles. Settings has two choices: `first-connect` imports once when each session is first established locally (default), while `never` disables automatic visible-history import. Use **Import Codex history** in the workspace or `collaboration_import_codex_history` in the reviewed plugin at any time. Every manual import creates a new local Codex task, retains public text within a separate snapshot resource limit and uses native Codex compaction when needed, verifies the result, then switches the durable binding and Hook allowlist. It does not overwrite, delete, or archive the previous task; review and archive that task yourself. If you continue the previous task before archiving it, the work stays local and cannot create another GatherThread task or cloud session. Realtime delta injection remains active independently, including when automatic visible-history import is disabled.
 
-In `0.1.0-alpha.8`, a session writer can select completed public messages in the GatherThread Web timeline and ask their **own connected Codex runtime** to make a shared, attributed summary. The original messages and earlier versions remain readable. The per-user project setting defaults to using the summarized view for **future Web-triggered Agent requests**; switch it to original text when exact detail matters. This changes only the connector-owned background execution context, never an existing visible Desktop task, its bubbles, or its local files. Native Codex compaction and local-turn upload consent remain separate. An Agent summary is lossy and should be checked against its cited originals; it is not a guarantee that the Agent cannot access workspace tools or files. See [ADR-0027](adr/0027-shared-manual-history-summaries.md).
+In `0.1.0-beta.1`, a session writer can select completed public messages in the GatherThread Web timeline and ask their **own connected Codex runtime** to make a shared, attributed summary. The original messages and earlier versions remain readable. The per-user project setting defaults to using the summarized view for **future Web-triggered Agent requests**; switch it to original text when exact detail matters. This changes only the connector-owned background execution context, never an existing visible Desktop task, its bubbles, or its local files. Native Codex compaction and local-turn upload consent remain separate. An Agent summary is lossy and should be checked against its cited originals; it is not a guarantee that the Agent cannot access workspace tools or files. See [ADR-0027](adr/0027-shared-manual-history-summaries.md).
 
 ## Project and workspace rules
 
@@ -145,4 +147,4 @@ npm run release:pack-npm
 npm run release:dry-run-npm
 ```
 
-The first command rebuilds, packs, installs, and smoke-tests the standalone connector from a Git-less temporary directory. The second creates the candidate tarball under the ignored `release-artifacts/npm/` directory; the third checks both packages through npm's publish path with the `alpha` dist-tag without publishing them.
+The first command rebuilds, packs, installs, and smoke-tests the standalone connector from a Git-less temporary directory. The second creates the candidate tarball under the ignored `release-artifacts/npm/` directory; the third checks both packages through npm's publish path with the `beta` dist-tag without publishing them.

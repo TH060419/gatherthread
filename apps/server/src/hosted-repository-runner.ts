@@ -2,15 +2,17 @@ import { randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { stopHostedContainer } from "./hosted-agent-recovery.js";
+import { cleanupHostedExecution, stopHostedContainer } from "./hosted-agent-recovery.js";
 import { CodeFilesSchema, containsCodeSyncSecret, type CodeFile } from "@gatherthread/protocol";
-import { HostedModelProxy, runDocker, type HostedAgentOptions } from "./hosted-agent.js";
+import { HostedModelProxy, hostedContainerMemoryMiB, runDocker, type HostedAgentOptions } from "./hosted-agent.js";
 import { HostedNpmProxy } from "./hosted-npm-proxy.js";
 import type { HostedEndpoint } from "./hosted-agent-pool.js";
 import { redactJson } from "./redaction.js";
 
 export class HostedRepositoryRunner {
-  constructor(private readonly options: HostedAgentOptions) {}
+  constructor(private readonly options: HostedAgentOptions) {
+    hostedContainerMemoryMiB("repository", options.repositoryMemoryMiB);
+  }
   async run(files: CodeFile[], prompt: string, endpoint: HostedEndpoint, onUnavailable: (ms: number) => void,
     controlOptions?: { taskId: string; signal: AbortSignal; authorize: () => void }) {
     CodeFilesSchema.parse(files);
@@ -42,8 +44,10 @@ export class HostedRepositoryRunner {
         permission: { read: "allow", edit: "allow", bash: "allow", task: "deny", external_directory: "allow", webfetch: "deny", websearch: "deny" },
       }), { mode: 0o644 });
       await model.listen(modelSocket); await npm.listen(npmSocket);
+      const memory = `${hostedContainerMemoryMiB("repository", this.options.repositoryMemoryMiB)}m`;
       const args = ["run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
-        "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", "2g", "--cpus", "2",
+        "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", memory,
+        "--memory-swap", memory, "--cpus", "2",
         "--user", "10001:10001", "--workdir", "/workspace",
         "--mount", `type=bind,src=${workspace},dst=/input,readonly`,
         "--mount", `type=bind,src=${control},dst=/run/gatherthread,readonly`,
@@ -62,12 +66,10 @@ export class HostedRepositoryRunner {
       }
       return { answer: String(redactJson(String(result.answer))).slice(0, 12000), files: changed };
     } finally {
-      let cleanupError: unknown;
-      try { if (!this.options.runContainer) stopHostedContainer(name); }
-      catch (error) { cleanupError = error; }
-      await model.close().catch(() => undefined); await npm.close().catch(() => undefined);
-      rmSync(root, { recursive: true, force: true });
-      if (cleanupError) throw cleanupError;
+      await cleanupHostedExecution(() => { if (!this.options.runContainer) stopHostedContainer(name); }, [
+        () => model.close().catch(() => undefined), () => npm.close().catch(() => undefined),
+        () => rmSync(root, { recursive: true, force: true }),
+      ]);
     }
   }
 }

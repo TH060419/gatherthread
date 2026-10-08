@@ -104,10 +104,10 @@ test("free tasks share one user slot across models, devices and projects; other 
       endpoints.slice(0, 1), limits), errorCode("idempotency_conflict"));
     f.advance();
     assert.throws(() => f.db.reserveHostedAgentRequest(phone, second.id, input("two", endpoints[1]!.profileId),
-      endpoints.slice(1), limits), errorCode("hosted_user_busy"));
+      endpoints.slice(1, 2), limits), errorCode("hosted_user_busy"));
     const other = f.db.createIdentity({ display_name: "Other", device_name: "Laptop", can_create_projects: true }).actor;
     const otherSession = f.create("other", other);
-    const parallel = f.db.reserveHostedAgentRequest(other, otherSession.id, input("other", endpoints[1]!.profileId), endpoints.slice(1), limits);
+    const parallel = f.db.reserveHostedAgentRequest(other, otherSession.id, input("other", endpoints[1]!.profileId), endpoints.slice(1, 2), limits);
     assert.equal(f.db.hostedActiveRuns(), 2);
     const status = HostedAgentStatusSchema.parse(f.agent.status(f.actor));
     assert.ok(status.enabled);
@@ -117,7 +117,7 @@ test("free tasks share one user slot across models, devices and projects; other 
     assert.doesNotMatch(JSON.stringify(status), /fixture-only-key|siliconflow-primary|baseUrl|apiToken/);
     f.db.finishHostedAgentRequest(parallel.event.id, {});
     f.db.finishHostedAgentRequest(run.event.id, { content: "done" });
-    assert.equal(f.db.reserveHostedAgentRequest(phone, second.id, input("two", endpoints[1]!.profileId), endpoints.slice(1), limits).created, true);
+    assert.equal(f.db.reserveHostedAgentRequest(phone, second.id, input("two", endpoints[1]!.profileId), endpoints.slice(1, 2), limits).created, true);
   } finally { f.db.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });
 
@@ -185,4 +185,40 @@ test("unlimited endpoints cannot point at paid models or another host", () => {
     { free_plan_confirmed: false }, { daily_runs: 0 }]) {
     assert.throws(() => parseHostedEndpoints(JSON.stringify([{ ...raw[0], ...override }]), { GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-key" }));
   }
+});
+
+test("all six free profiles share host/account slots and user cooldown even under reduced capacity", () => {
+  const f = fixture();
+  try {
+    const reduced = parseHostedEndpoints(siliconFlowFreePreset(1, true), { GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-only-key" });
+    const bounded = { ...limits, maxConcurrent: 1 };
+    const first = f.create("catalog-owner");
+    const other = f.db.createIdentity({ display_name: "Other", device_name: "Phone", can_create_projects: true }).actor;
+    const second = f.create("catalog-other", other);
+    assert.equal(reduced.length, 6);
+    for (const [index, endpoint] of reduced.entries()) {
+      const run = f.db.reserveHostedAgentRequest(f.actor, first.id, input(`catalog-run-${index}`, endpoint.profileId), [endpoint], bounded);
+      assert.equal(run.endpointId, endpoint.id);
+      assert.ok(reduced.every((candidate) => f.db.hostedEndpointUsage(candidate).active === 1));
+      for (const candidate of reduced) {
+        assert.throws(() => f.db.reserveHostedAgentRequest(f.actor, first.id,
+          input(`catalog-owner-blocked-${index}-${candidate.id}`, candidate.profileId), [candidate],
+          { ...bounded, maxConcurrent: 2 }), errorCode("hosted_user_busy"));
+        assert.throws(() => f.db.reserveHostedAgentRequest(other, second.id,
+          input(`catalog-other-blocked-${index}-${candidate.id}`, candidate.profileId), [candidate], bounded), errorCode("hosted_agent_busy"));
+        assert.throws(() => f.db.reserveHostedAgentRequest(other, second.id,
+          input(`catalog-account-blocked-${index}-${candidate.id}`, candidate.profileId), [candidate],
+          { ...bounded, maxConcurrent: 2 }), errorCode("hosted_profile_busy"));
+      }
+      f.db.finishHostedAgentRequest(run.event.id, { content: "Complete" });
+      assert.equal(f.db.hostedActiveRuns(), 0);
+      for (const candidate of reduced) {
+        assert.throws(() => f.db.reserveHostedAgentRequest(f.actor, first.id,
+          input(`catalog-cooldown-${index}-${candidate.id}`, candidate.profileId), [candidate], bounded), errorCode("hosted_user_rate_limit"));
+      }
+      f.advance();
+    }
+    assert.ok(reduced.every((candidate) => f.db.hostedEndpointUsage(candidate).daily === 6));
+    assert.equal(f.db.hostedAgentUsage(f.actor, null, null).user_used_runs, 6);
+  } finally { f.db.close(); rmSync(f.directory, { recursive: true, force: true }); }
 });

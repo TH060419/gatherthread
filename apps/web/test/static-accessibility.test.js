@@ -313,7 +313,7 @@ test("official light and dark lockups include the approved mark and outlined wor
   assert.match(dark, /color="#FFFFFF"/);
 });
 
-test("project Codex connector presents a concise Alpha install-connect-confirm flow", async () => {
+test("project Codex connector presents a concise Beta install-connect-confirm flow", async () => {
   const [html, main, domain, styles, i18n] = await Promise.all([
     readFile(htmlPath, "utf8"),
     readFile(mainPath, "utf8"),
@@ -321,7 +321,7 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
     readFile(stylesPath, "utf8"),
     readFile(i18nPath, "utf8"),
   ]);
-  assert.match(html, /Alpha preview/i);
+  assert.match(html, /Beta 1/);
   assert.doesNotMatch(html, /Official service is not open yet/i);
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Connect this project<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Confirm in Codex<\/h3>/);
   assert.match(html, /A local connector keeps this project connected/i);
@@ -338,13 +338,13 @@ test("project Codex connector presents a concise Alpha install-connect-confirm f
   assert.match(html, /official Codex CLI installation guide/);
   assert.doesNotMatch(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);
-  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-alpha\.8 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-beta\.1 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
   assert.match(domain, /--plugin-hooks/);
   const pluginCommands = (html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "")
     .replace(/\r\n?/gu, "\n");
-  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-alpha.8 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
-  assert.match(i18n, /Alpha 预览版/);
+  assert.match(i18n, /Beta 1 测试版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);
   assert.match(i18n, /如果终端提示.*command not found: codex/);
   assert.match(i18n, /如果显示版本号，再将 PATH 修改保存/);
@@ -391,7 +391,7 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
     "settings-dsh-runtime",
   ]) assert.match(html, new RegExp(`id="${id}"`));
   assert.match(html, /value="deepseek-harness">DeepSeek Harness<\/option>/);
-  assert.match(html, /Alpha preview/i);
+  assert.match(html, /Beta 1/);
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Open DSH<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Pair this server<\/h3>/);
   assert.doesNotMatch(html, /Official service is not open yet/i);
   assert.match(html, /The plugin connects outward/i);
@@ -421,6 +421,12 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(i18n, /"DSH runtime": "DSH 运行环境"/);
   assert.match(i18n, /在当前浏览器批准一次性短码；保存后的设备凭据只留在 DSH 内/);
   assert.match(i18n, /长期设备凭据只保存在 DSH 本机凭据库/);
+});
+
+test("mobile Cloud status has a visible live region separate from hidden local labels", async () => {
+  const [html, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(stylesPath, "utf8")]);
+  assert.match(html, /id="mobile-cloud-status"[^>]*role="status"[^>]*hidden/u);
+  assert.match(styles, /\.workspace\[data-mobile-ui="true"\] \.mobile-cloud-status \{ display: block;/u);
 });
 
 test("read-only Codex downloads remain one-way and poll independent snapshot jobs", async () => {

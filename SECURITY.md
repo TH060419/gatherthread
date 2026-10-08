@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-GatherThread is preparing a publicly registrable Beta using verified-email accounts and password sign-in, not invitation-only account activation. Security fixes target the current supported deployment and the current `main` branch. Historical preview tags and release candidates do not receive separate security support. The source version identifier remains `0.1.0-alpha.8`; source, package publication and server deployment are separate. Registration opens only after the operator's provider, security and rollout checks in [OPERATIONS](docs/OPERATIONS.md#public-beta-registration-preflight) pass.
+GatherThread Beta 1 (`0.1.0-beta.1`) uses verified-email accounts and password sign-in, not invitation-only account activation. This release targets npm and the isolated test service; production promotion is separate. Security fixes target the current supported deployment and the current `main` branch. Historical preview tags and release candidates do not receive separate security support. Source, package publication and server deployment are separate verification gates. Registration opens only after the operator's provider, security and rollout checks in [OPERATIONS](docs/OPERATIONS.md#public-beta-registration-preflight) pass.
 
 ## Report a vulnerability privately
 

@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
 
-const VERSION = "0.1.0-alpha.8";
+const VERSION = "0.1.0-beta.1";
 const root = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const output = path.join(root, "release-artifacts", "npm");
 const cacheRoot = await mkdtemp(path.join(tmpdir(), "gatherthread-npm-publish-dry-run-"));
@@ -20,7 +20,7 @@ try {
       "--cache", cacheRoot,
       "publish", "--dry-run",
       "--access", "public",
-      "--tag", "alpha",
+      "--tag", "beta",
       path.join(output, archive),
     ], root);
   }
@@ -28,7 +28,7 @@ try {
   await rm(cacheRoot, { recursive: true, force: true });
 }
 
-process.stdout.write("Both npm candidates passed publish --dry-run with the alpha dist-tag.\n");
+process.stdout.write("Both npm candidates passed publish --dry-run with the beta dist-tag.\n");
 
 function runNpm(args, cwd) {
   const npmCli = process.env.npm_execpath?.trim();

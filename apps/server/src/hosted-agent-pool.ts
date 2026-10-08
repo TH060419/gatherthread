@@ -1,7 +1,18 @@
 import { z } from "zod";
 
 export const HOSTED_MODEL = "@cf/qwen/qwen3-30b-a3b-fp8";
-export const SILICONFLOW_FREE_MODELS = ["Qwen/Qwen3.5-4B", "Qwen/Qwen3-8B"] as const;
+// Reviewed on 2026-10-08 against SiliconFlow's zero input/output pricing and
+// Tools capability labels. Pricing/availability must be reconfirmed before use.
+// Existing endpoint/profile IDs and the default first model remain stable.
+const SILICONFLOW_FREE_CATALOG = [
+  { id: "sf-free-1", profileId: "sf-qwen35-4b", label: "Qwen3.5-4B", model: "Qwen/Qwen3.5-4B" },
+  { id: "sf-free-2", profileId: "sf-qwen3-8b", label: "Qwen3-8B", model: "Qwen/Qwen3-8B" },
+  { id: "sf-free-3", profileId: "sf-qwen25-7b", label: "Qwen2.5-7B-Instruct", model: "Qwen/Qwen2.5-7B-Instruct" },
+  { id: "sf-free-4", profileId: "sf-glm4-9b-0414", label: "GLM-4-9B-0414", model: "THUDM/GLM-4-9B-0414" },
+  { id: "sf-free-5", profileId: "sf-glmz1-9b-0414", label: "GLM-Z1-9B-0414", model: "THUDM/GLM-Z1-9B-0414" },
+  { id: "sf-free-6", profileId: "sf-xing40-29b", label: "Xing4.0-29B", model: "XingChenAGI/Xing4.0-29B" },
+] as const;
+export const SILICONFLOW_FREE_MODELS = SILICONFLOW_FREE_CATALOG.map((entry) => entry.model);
 export const HOSTED_USER_MIN_INTERVAL_SECONDS = 30;
 export const HOSTED_USER_MAX_CONCURRENT = 1;
 const id = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/u);
@@ -29,11 +40,23 @@ export function isSiliconFlowFreeEndpoint(endpoint: Pick<HostedEndpoint, "provid
     && SILICONFLOW_FREE_MODELS.some((model) => model === endpoint.model);
 }
 
+/** Private reviewed-model selection; never accepts provider URLs or paid IDs. */
+function siliconFlowFreeSelection(raw: string | undefined): typeof SILICONFLOW_FREE_CATALOG[number][] {
+  if (raw === undefined) return [...SILICONFLOW_FREE_CATALOG];
+  if (Buffer.byteLength(raw, "utf8") > 1024) throw new Error("invalid free-model selection");
+  const input: unknown = JSON.parse(raw);
+  if (!Array.isArray(input) || input.length < 1 || input.length > SILICONFLOW_FREE_CATALOG.length
+    || input.some((model) => typeof model !== "string" || !SILICONFLOW_FREE_MODELS.some((known) => known === model))
+    || new Set(input).size !== input.length) throw new Error("invalid free-model selection");
+  // Operator input order cannot accidentally change the established default.
+  return SILICONFLOW_FREE_CATALOG.filter((entry) => input.includes(entry.model));
+}
+
 /** Reviewed zero-price candidates only; activation still requires a real provider test. */
-export function siliconFlowFreePreset(maxConcurrent: number, freePlanConfirmed: boolean): string {
-  return JSON.stringify(SILICONFLOW_FREE_MODELS.map((model, index) => ({
-    id: `sf-free-${index + 1}`, profile_id: index === 0 ? "sf-qwen35-4b" : "sf-qwen3-8b",
-    label: model.slice(5), provider: "openai-compatible", model,
+export function siliconFlowFreePreset(maxConcurrent: number, freePlanConfirmed: boolean, selectedModelsRaw?: string): string {
+  return JSON.stringify(siliconFlowFreeSelection(selectedModelsRaw).map((entry) => ({
+    id: entry.id, profile_id: entry.profileId,
+    label: entry.label, provider: "openai-compatible", model: entry.model,
     base_url: "https://api.siliconflow.cn/v1", token_env: "GATHERTHREAD_SILICONFLOW_API_KEY",
     quota_group: "siliconflow-primary", daily_runs: null, max_concurrent: maxConcurrent,
     free_plan_confirmed: freePlanConfirmed,

@@ -90,6 +90,109 @@ test("closed Cloud Agent never counts as the last available Agent or becomes the
  assert.equal(nodes["settings-agent-harness"].value, "deepseek-harness");
 });
 
+test("open Cloud Agent can be explicitly selected without changing existing local defaults", () => {
+ const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud",
+  "settings-agent-harness", "settings-codex-agent-fields", "settings-dsh-agent-fields", "settings-cloud-agent-fields",
+  "settings-agent-summary"].map((id) => [id, element()]));
+ for (const [id, value] of [["settings-enabled-codex", "codex"], ["settings-enabled-dsh", "deepseek-harness"], ["settings-enabled-cloud", "cloud"]]) nodes[id].value = value;
+ nodes["settings-enabled-codex"].checked = true; nodes["settings-enabled-cloud"].checked = false;
+ nodes["settings-agent-harness"].value = "codex";
+ nodes["settings-agent-harness"].options = ["codex", "deepseek-harness", "cloud"].map((value) => ({ value }));
+ const app = harness(["settingsEnabledHarnesses", "syncSettingsAgentControls"], { element: (id) => nodes[id],
+  CLOUD_AGENT_ENTRY_ENABLED: true, DSH_HARNESS: "deepseek-harness", renderCloudStatus: noop, settingsAgentSummary: (value) => value });
+ app.syncSettingsAgentControls();
+ assert.equal(nodes["settings-enabled-cloud"].disabled, false);
+ assert.equal(nodes["settings-agent-harness"].value, "codex");
+ nodes["settings-enabled-cloud"].checked = true;
+ app.syncSettingsAgentControls({ changedCheckbox: nodes["settings-enabled-cloud"] });
+ assert.equal(nodes["settings-agent-harness"].value, "codex");
+ nodes["settings-agent-harness"].value = "cloud";
+ app.syncSettingsAgentControls();
+ assert.equal(nodes["settings-cloud-agent-fields"].hidden, false);
+ nodes["settings-enabled-codex"].checked = false;
+ app.syncSettingsAgentControls({ changedCheckbox: nodes["settings-enabled-codex"] });
+ assert.deepEqual([...app.settingsEnabledHarnesses()], ["cloud"]);
+ assert.equal(nodes["settings-enabled-cloud"].disabled, true);
+ assert.equal(nodes["settings-agent-harness"].value, "cloud");
+});
+
+test("cloud entry still fails closed for missing service, missing model and exhausted capacity", () => {
+ const app = harness(["currentCloudProfile", "cloudStatusText"], {
+  CLOUD_AGENT_ENTRY_ENABLED: true, projectCloudProfile: () => null,
+ });
+ assert.equal(app.currentCloudProfile(), undefined);
+ assert.equal(app.cloudStatusText(), "Cloud Agent is not enabled on this server.");
+ app.hostedAgentStatus = { enabled: true, profiles: [], user_limit_runs: null };
+ assert.equal(app.cloudStatusText(), "Select an available cloud model.");
+ for (const [status, message] of [["busy", "Cloud Agent is busy; try again later"],
+  ["user_busy", "Your Cloud Agent task is still running; wait for it to finish"],
+  ["rate_limit", "Please wait before starting another Cloud Agent task"]]) {
+  app.hostedAgentStatus.profiles = [{ id: "selected", provider: "fixture", model: "model", available: false, status }];
+  assert.equal(app.currentCloudProfile().available, false);
+  assert.equal(app.cloudStatusText(), `fixture · model · ${message}`);
+ }
+ const selected = harness(["currentCloudProfile"], { projectCloudProfile: () => "deleted-profile",
+  hostedAgentStatus: { enabled: true, profiles: [{ id: "other", available: true }] } });
+ assert.equal(selected.currentCloudProfile(), undefined, "never replace a missing selected model");
+});
+
+test("mobile Cloud rejection reasons stay visible while ready and local labels stay compact", () => {
+ const nodes = new Map();
+ const el = (id) => {
+  if (!nodes.has(id)) nodes.set(id, { ...element(), closest: () => element() });
+  return nodes.get(id);
+ };
+ let writable = true, selectedHarness = "cloud";
+ const app = harness(["currentCloudProfile", "cloudStatusText", "renderComposerPermissions"], {
+  element: el, CLOUD_AGENT_ENTRY_ENABLED: true, DSH_HARNESS: "deepseek-harness",
+  pendingMessageSend: null, codeSyncUi: { updateContext: noop },
+  canAppend: () => ({ allowed: writable, reason: "This conversation is read-only." }),
+  currentProjectHarness: () => selectedHarness, projectCloudProfile: () => null,
+  currentCodexResolution: () => ({ runtime: null, reason: "Connect your Agent on a computer." }),
+  currentDshResolution: () => ({ runtime: null, reason: "Connect DSH on a computer." }),
+  sendChatButton: element(), sendAgentButton: element(), messageInput: element(),
+  renderAgentProfileControls: noop, historySummaryUi: { updateContext: noop }, agentRequestControl: { update: noop },
+ });
+ app.state.sync = { phase: "live" };
+ let reasonWrites = 0, reasonText = "";
+ Object.defineProperty(el("mobile-cloud-status"), "textContent", {
+  get: () => reasonText,
+  set: (value) => { reasonText = value; reasonWrites += 1; },
+ });
+ app.renderComposerPermissions();
+ assert.equal(el("mobile-cloud-status").hidden, false);
+ assert.equal(el("mobile-cloud-status").textContent, "Cloud Agent is not enabled on this server.");
+ assert.equal(reasonWrites, 1);
+ app.renderComposerPermissions();
+ assert.equal(reasonWrites, 1, "unchanged polling must not repeatedly replace the status live-region text");
+ for (const status of ["busy", "user_busy", "rate_limit", "cooldown", "daily_limit", "unavailable"]) {
+  app.hostedAgentStatus = { enabled: true, user_limit_runs: null,
+   profiles: [{ id: "selected", provider: "fixture", model: "model", available: false, status }] };
+  app.renderComposerPermissions();
+  assert.equal(el("mobile-cloud-status").hidden, false, status);
+  assert.equal(el("mobile-cloud-status").textContent, el("agent-target-label").textContent, status);
+  assert.equal(app.sendAgentButton.disabled, true, status);
+  const previousWrites = reasonWrites;
+  app.renderComposerPermissions();
+  assert.equal(reasonWrites, previousWrites, status);
+ }
+ app.hostedAgentStatus.profiles[0] = { ...app.hostedAgentStatus.profiles[0], available: true, status: "available" };
+ app.renderComposerPermissions();
+ assert.equal(el("mobile-cloud-status").hidden, true);
+ assert.equal(el("mobile-cloud-status").textContent, "");
+ assert.equal(app.sendAgentButton.disabled, false);
+ writable = false;
+ app.renderComposerPermissions();
+ assert.equal(el("mobile-cloud-status").hidden, false);
+ assert.equal(el("mobile-cloud-status").textContent, "This conversation is read-only.");
+ for (const local of ["codex", "deepseek-harness"]) {
+  selectedHarness = local;
+  app.renderComposerPermissions();
+  assert.equal(el("mobile-cloud-status").hidden, true, local);
+  assert.equal(el("mobile-cloud-status").textContent, "", local);
+ }
+});
+
 test("the global badge reports live delivery regardless of viewer-to-participant transitions", () => {
   const nodes = new Map();
   const el = (id) => {

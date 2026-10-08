@@ -254,7 +254,7 @@ test("version 6 connection shortcuts become the default for newly opened project
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
 });
 
-test("new and migrated local settings never auto-enable the closed cloud entry", () => {
+test("opening the cloud entry preserves local defaults and explicit cloud-only choices", () => {
  assert.deepEqual(DEFAULT_SETTINGS.agents.enabledHarnesses, ["codex"]);
  for (const version of [0, 6, 12, 13]) {
   const migrated = createSettingsStore({ getItem: () => JSON.stringify({ version,
@@ -265,7 +265,7 @@ test("new and migrated local settings never auto-enable the closed cloud entry",
  }
  const prior = normalizeSettings({ agents: { activeHarness: "cloud", enabledHarnesses: ["cloud"] } });
  assert.equal(prior.agents.activeHarness, "cloud");
- assert.deepEqual(prior.agents.enabledHarnesses, ["cloud", "codex"]);
+ assert.deepEqual(prior.agents.enabledHarnesses, ["cloud"]);
 });
 
 test("context budget keeps a precise configured value while reporting connector limits", () => {

@@ -10,7 +10,7 @@ import { CodeRepository } from "../src/code-repository.js";
 import { HostedAgent, type HostedAgentOptions } from "../src/hosted-agent.js";
 import { HostedGithub } from "../src/hosted-github.js";
 import { ApiError } from "../src/errors.js";
-import { HostedExecutorCleanupError } from "../src/hosted-agent-recovery.js";
+import { cleanupHostedExecution, HostedExecutorCleanupError, stopHostedContainer } from "../src/hosted-agent-recovery.js";
 import { HostedNpmProxy } from "../src/hosted-npm-proxy.js";
 import { HostedGithubStatusSchema, type CodeFile } from "@gatherthread/protocol";
 import { createServer, request } from "node:http";
@@ -60,7 +60,8 @@ function fixture() {
  };
  const runOptions: HostedAgentOptions = { ...options, runContainer: async (args, timeout) => {
    runs++;
-   assert.ok(args.includes("none") && args.includes("2g") && args.includes("GT_HOSTED_REPOSITORY=1"));
+   assert.ok(args.includes("none") && args.includes("2048m") && args.includes("GT_HOSTED_REPOSITORY=1"));
+   assert.equal(args[args.indexOf("--memory-swap") + 1], "2048m");
    assert.equal(timeout, 900000);
    assert.ok(!JSON.stringify(args).includes("ghu_test") && !JSON.stringify(args).includes("fake-model-secret"));
    const mount = args.find((arg) => arg.endsWith("dst=/input,readonly"))!;
@@ -528,9 +529,16 @@ unixTest("deleted GitHub account retains an anonymous executor slot until the he
  } finally { release.resolve(); await f.close(); }
 });
 
-unixTest("repository cleanup failure retains capacity until confirmed startup recovery", async () => {
+for (const cleanupFailure of ["classified", "unexpected-client", "client-and-filesystem"]) {
+unixTest(`repository cleanup failure retains capacity until confirmed startup recovery (${cleanupFailure})`, async () => {
  const f = fixture();
  (f.github as unknown as { runner: { run: () => Promise<never> } }).runner.run = async () => {
+  if (cleanupFailure === "client-and-filesystem") await cleanupHostedExecution(() => {
+   throw new Error("ENOSPC: private Docker client fixture");
+  }, [() => { throw new Error("EACCES: private directory fixture"); }]);
+  if (cleanupFailure === "unexpected-client") stopHostedContainer(`gt-repository-${"b".repeat(32)}`, () => {
+   throw new Error("ENOSPC: private Docker client fixture");
+  });
   throw new HostedExecutorCleanupError();
  };
  try {
@@ -543,6 +551,7 @@ unixTest("repository cleanup failure retains capacity until confirmed startup re
   f.db.failInterruptedHostedAgentJobs(); assert.equal(f.db.hostedActiveRuns(), 0);
  } finally { await f.close(); }
 });
+}
 
 for (const state of ["failed", "interrupted"] as const) {
  unixTest(`continuing a ${state} child retains its actual starting source and cumulative PR baseline`, async () => {

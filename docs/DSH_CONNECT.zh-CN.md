@@ -19,7 +19,7 @@ npm install --global pnpm@10
 再把固定版本的共序插件加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-alpha.8
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
 ```
 
 ### 2. 打开 DSH
@@ -32,7 +32,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 
 ### 3. 配对当前服务器
 
-输入共序服务器地址（服务器 Alpha 为 `https://gatherthread.cn`），选择 **登录并配对**，核对页面显示的短码，再到已经登录的共序网页批准相同短码。短码只能使用一次，并会很快过期。
+输入所用服务器地址（Beta 1 测试服为 `https://test.gatherthread.cn`，独立部署的正式服为 `https://gatherthread.cn`），选择 **登录并配对**，核对页面显示的短码，再到已经登录同一环境的网页批准相同短码。测试服需先准入、登录独立邮箱账号，再单独授权设备、选择测试工作区；不复用正式服配对或凭据。短码只能使用一次，并会很快过期。
 
 ### 4. 选择 DSH Provider 与 Model
 
@@ -46,7 +46,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 npm install
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-alpha.8.tgz
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 ```
 
@@ -65,7 +65,7 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 
 DSH 使用其自身配置的 Provider 额度。`Insufficient Balance` 或 `QUOTA` 表示所选 DSH 模型账户当前无法运行，不是共序同步故障。
 
-Alpha 8 还允许会话写入者在共序网页选取已完成的公开消息，由**本人已连接的 DSH Agent**生成有作者和来源的共享总结。原文和旧版本均保留。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图，也可切换为原文。需要总结视图时，网页请求使用共序自有、同工作区且已验证原生工具预设继承的 DSH 辅助执行会话；没有总结的普通会话仍走原有原生路径。DSH 原会话、本地回合及原生自动压缩不会被改写。远端 Agent 回复在 DSH 中显示为带明确来源标签的插件引用，而非伪造成本机模型回合；这样可保持下一个本地回合的原生编号。共序规范事件仍保留原有作者与类型。若无法验证兼容的原生接口或预设继承，请求会明确失败，不会偷偷回退到原文注入。总结可能遗漏细节，提示词也不是限制工作区工具或文件访问的安全沙箱。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
+Beta 1 还允许会话写入者在共序网页选取已完成的公开消息，由**本人已连接的 DSH Agent**生成有作者和来源的共享总结。原文和旧版本均保留。每位用户的项目设置默认让**之后从网页发起的 Agent 请求**使用总结视图，也可切换为原文。需要总结视图时，网页请求使用共序自有、同工作区且已验证原生工具预设继承的 DSH 辅助执行会话；没有总结的普通会话仍走原有原生路径。DSH 原会话、本地回合及原生自动压缩不会被改写。远端 Agent 回复在 DSH 中显示为带明确来源标签的插件引用，而非伪造成本机模型回合；这样可保持下一个本地回合的原生编号。共序规范事件仍保留原有作者与类型。若无法验证兼容的原生接口或预设继承，请求会明确失败，不会偷偷回退到原文注入。总结可能遗漏细节，提示词也不是限制工作区工具或文件访问的安全沙箱。详见 [ADR-0027](adr/0027-shared-manual-history-summaries.md)。
 
 ## 上下文与原生压缩
 
@@ -81,10 +81,17 @@ DSH `0.1.2-rc.1` 存在首次导入限制：自动压缩需要之前的原生请
 |---|---|
 | `pnpm not found on PATH` | 安装 `pnpm@10`，关闭旧终端后重试。 |
 | 使用 `--offline` 时出现 `Failed to resolve dependency tree` | 去掉 `--offline` 重试，或修复当前 pnpm registry/cache。 |
+| 启动后出现 `user patch-layer watching requires the Cordis HMR service` | 见下方启动模式处理；这是 DSH 上游配置热重载失败，不是配对错误。 |
 | 插件按钮空白或文字不可见 | 重新构建并安装 tarball，重启 DSH，再强制刷新网页。 |
 | 配对提示操作未完成 | 检查服务器地址、当前共序浏览器登录状态和 DSH Provider/模型配置。 |
 | runtime 在线但回合显示 `QUOTA` | 在 DSH 配置有可用额度的 Provider 模型后重试。 |
 | 同步会话显示只读 | 确认共序角色和会话权限后刷新配对。访者及他人创建的 Solo 本来就只读。 |
+
+### DSH 上游配置热重载失败
+
+新安装的 DSH `0.1.2-rc.1` 可能解析到较新的间接依赖，导致默认 `live` 配置热重载启动失败。Beta 1 已在隔离 DSH 和浏览器中用上游支持的“仅启动时加载配置”模式跑通完整共序流程；这不代表默认热重载通过验证。
+
+仅出现上述 HMR 错误时：先关闭 DSH，备份 `<DSH_HOME>/profiles/web/package.json`（一般为 `~/.dsh/profiles/web/package.json`），把现有 `dsh.profile.patchReload` 改为 `"startup"`，保留其他字段、依赖和 bundles，**不要替换整个文件**。再用第 2 步命令启动。之后修改用户配置层需要重启 DSH；共序会话历史与实时同步不会关闭。不要清空凭据或随意更换上游版本来绕过错误。
 
 ## 安全边界
 
@@ -101,4 +108,6 @@ npm run release:pack-npm
 npm run release:dry-run-npm
 ```
 
-这些命令会验证无 Git 元数据安装与导入、真实 DSH profile 安装流程、被 Git 忽略的候选 tarball，以及使用非默认 `alpha` dist-tag 的 npm 发布预检。
+这些命令会验证无 Git 元数据安装与导入、真实 DSH profile 安装流程、被 Git 忽略的候选 tarball，以及使用非默认 `beta` dist-tag 的 npm 发布预检。
+
+针对上述上游错误，可选测试开关 `GATHERTHREAD_DSH_PATCH_RELOAD_STARTUP_FIXTURE=1` 只为脚本创建的临时 DSH 设置启动模式，并明确记录 `defaultLiveReloadVerified=false`，不会修改操作者的真实 DSH，也不代替上方手动处理。原生测试使用模拟模型，不证明真实 Provider 额度或模型能力。

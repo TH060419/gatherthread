@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stopInterruptedHostedContainers, stopHostedContainer, HostedExecutorCleanupError } from "../src/hosted-agent-recovery.js";
+import { cleanupHostedExecution, stopInterruptedHostedContainers, stopHostedContainer, HostedExecutorCleanupError } from "../src/hosted-agent-recovery.js";
 
 test("runtime cleanup confirms exit and fails closed for a remaining executor", () => {
  const name = `gt-hosted-${"a".repeat(16)}`; let present = true;
@@ -11,6 +11,35 @@ test("runtime cleanup confirms exit and fails closed for a remaining executor", 
  assert.equal(present, false);
  assert.throws(() => stopHostedContainer(name, () => ({ status: 0, stdout: name })), HostedExecutorCleanupError);
  assert.throws(() => stopHostedContainer(name, () => ({ status: 1, stdout: "" })), HostedExecutorCleanupError);
+});
+
+for (const stage of ["first-list", "remove", "confirm-list"]) {
+ test(`runtime cleanup classifies an unexpected Docker client exception: ${stage}`, () => {
+  const name = `gt-repository-${"b".repeat(32)}`;
+  let checks = 0;
+  assert.throws(() => stopHostedContainer(name, (args) => {
+   if (args[0] === "ps") checks++;
+   if ((stage === "first-list" && checks === 1)
+    || (stage === "remove" && args[0] === "rm")
+    || (stage === "confirm-list" && checks === 2)) {
+    throw new Error("ENOSPC: private Docker client fixture");
+   }
+   return { status: 0, stdout: args[0] === "ps" && checks === 1 ? name : "" };
+  }), HostedExecutorCleanupError);
+ });
+}
+
+test("resource cleanup failure cannot mask an unknown executor exit", async () => {
+ const attempted: string[] = [];
+ await assert.rejects(cleanupHostedExecution(() => { throw new Error("client fixture failure"); }, [
+  () => { attempted.push("model"); },
+  () => { attempted.push("files"); throw new Error("filesystem fixture failure"); },
+  () => { attempted.push("remaining socket"); },
+ ]), HostedExecutorCleanupError);
+ assert.deepEqual(attempted, ["model", "files", "remaining socket"]);
+ await assert.rejects(cleanupHostedExecution(() => {}, [
+  () => { throw new Error("filesystem fixture failure"); },
+ ]), /filesystem fixture failure/);
 });
 
 test("startup confirms executor exit including orphan names and preserves unrelated containers", () => {
