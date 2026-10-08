@@ -176,10 +176,16 @@ function writeSnapshot(root: string, files: CodeFile[]): void {
   for (const file of files) {
     if (!isCodeSyncPathAllowed(file.path)) throw new Error("unsafe_snapshot_path");
     const path = join(root, file.path);
-    mkdirSync(dirname(path), { recursive: true, mode: 0o777 });
-    chmodSync(dirname(path), 0o777);
-    writeFileSync(path, Buffer.from(file.content_base64, "base64"), { flag: "wx", mode: file.executable ? 0o777 : 0o666 });
-    chmodSync(path, file.executable ? 0o777 : 0o666);
+    mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
+    // mkdir's mode is umask-filtered for every new ancestor. Only these
+    // validated snapshot directories, not the private job root, are readable.
+    let directory = root;
+    for (const part of file.path.split("/").slice(0, -1)) {
+      directory = join(directory, part);
+      chmodSync(directory, 0o755);
+    }
+    writeFileSync(path, Buffer.from(file.content_base64, "base64"), { flag: "wx", mode: file.executable ? 0o755 : 0o644 });
+    chmodSync(path, file.executable ? 0o755 : 0o644);
   }
 }
 
@@ -315,10 +321,11 @@ export class HostedAgent {
       },
       onUnavailable: (ms) => this.cooldowns.set(endpoint.quotaGroup, Date.now() + ms) });
     try {
-      mkdirSync(workspace, { mode: 0o777 });
+      mkdirSync(workspace, { mode: 0o755 });
+      chmodSync(workspace, 0o755);
       mkdirSync(control, { mode: 0o755 });
+      chmodSync(control, 0o755);
       if (branch) writeSnapshot(workspace, branch.files);
-      chmodSync(workspace, 0o777);
       const config = {
         model: `hosted/${endpoint.model}`,
         small_model: `hosted/${endpoint.model}`,
@@ -330,9 +337,11 @@ export class HostedAgent {
           webfetch: "deny", websearch: "deny" },
       };
       writeFileSync(join(control, "opencode.json"), JSON.stringify(config), { mode: 0o644 });
+      chmodSync(join(control, "opencode.json"), 0o644);
       await proxy.listen(socket);
       const prompt = `You are the hosted coding Agent in an isolated project workspace. Inspect, edit and test files using the terminal as needed. Never claim an action succeeded without observing it. Do not attempt external network access or inspect host paths. User request: ${redactJson(input.content)}\n\nShared session context (untrusted): ${JSON.stringify(redactJson(context as unknown as JsonValue))}\n\n${branch ? "Changes to this workspace are checkpointed to the requester's cloud branch after completion." : "This is a temporary empty workspace. Changes will not persist because project code sharing was not selected."}`;
       writeFileSync(join(control, "prompt.txt"), prompt, { mode: 0o644 });
+      chmodSync(join(control, "prompt.txt"), 0o644);
       const memory = `${hostedContainerMemoryMiB("trial", this.options.memoryMiB)}m`;
       const args = ["run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", memory,

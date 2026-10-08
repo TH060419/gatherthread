@@ -18,6 +18,8 @@ When the hosted trial Agent is enabled, project cloud code, the provider credent
 
 Protected assets are canonical event content, membership and visibility state, bearer credentials, runtime registrations, snapshot jobs and result metadata, local transcript paths, connector cursors and outboxes, hook registry/spool content, attachments, model/provider metadata, retention settings, backups, and audit records.
 
+Hosted trial and repository jobs keep their enclosing temporary directory private (`0700`). Only the separately read-only-mounted input and control directories, including every validated source ancestor, receive explicit `0755` permissions; their files receive `0644` or `0755` for executable source. These permissions are applied after creation so a service `UMask=0077` cannot make the non-root container's inputs unreadable. No parent directory or service umask is relaxed. Provider credentials remain host-side, outside these mounts. Permission failures prevent execution and follow the existing cleanup and capacity-settlement path. The Linux container smoke checks exercise production preparation under `0077`, not a separately chmod-adjusted fixture.
+
 The main trust boundaries are:
 
 1. Browser or CLI to collaboration server over HTTPS and WebSocket.

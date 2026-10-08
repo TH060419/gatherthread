@@ -29,13 +29,22 @@ export class HostedRepositoryRunner {
       ...(this.options.fetch ? { fetch: this.options.fetch } : {}) });
     try {
       mkdirSync(workspace, { mode: 0o755 }); mkdirSync(control, { mode: 0o755 });
+      chmodSync(workspace, 0o755); chmodSync(control, 0o755);
       for (const file of files) {
         const path = join(workspace, file.path);
         mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
+        // Restore non-owner traversal after umask filtering, only within the
+        // validated snapshot. The enclosing job root remains private (0700).
+        let directory = workspace;
+        for (const part of file.path.split("/").slice(0, -1)) {
+          directory = join(directory, part);
+          chmodSync(directory, 0o755);
+        }
         writeFileSync(path, Buffer.from(file.content_base64, "base64"), { flag: "wx", mode: file.executable ? 0o755 : 0o644 });
         chmodSync(path, file.executable ? 0o755 : 0o644);
       }
       writeFileSync(join(control, "prompt.txt"), String(redactJson(prompt)), { mode: 0o644 });
+      chmodSync(join(control, "prompt.txt"), 0o644);
       writeFileSync(join(control, "opencode.json"), JSON.stringify({
         model: `hosted/${endpoint.model}`, small_model: `hosted/${endpoint.model}`, share: "disabled",
         provider: { hosted: { npm: "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
@@ -43,6 +52,7 @@ export class HostedRepositoryRunner {
           models: { [endpoint.model]: { name: endpoint.label, limit: { context: 32000, output: 2048 } } } } },
         permission: { read: "allow", edit: "allow", bash: "allow", task: "deny", external_directory: "allow", webfetch: "deny", websearch: "deny" },
       }), { mode: 0o644 });
+      chmodSync(join(control, "opencode.json"), 0o644);
       await model.listen(modelSocket); await npm.listen(npmSocket);
       const memory = `${hostedContainerMemoryMiB("repository", this.options.repositoryMemoryMiB)}m`;
       const args = ["run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
