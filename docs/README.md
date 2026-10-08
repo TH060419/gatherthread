@@ -7,7 +7,7 @@ Start with the product story and illustrated workflow, then choose the setup or 
 - [Product introduction](../README.md) · [中文](../README.zh-CN.md): work together, across devices, with your Agents.
 - [Illustrated product guide](PRODUCT_GUIDE.md) · [中文](PRODUCT_GUIDE.zh-CN.md): a real-interface walkthrough from shared discussion to reviewed files.
 - [Disposable example](https://gatherthread.cn/app/example.html?locale=en&topic=browse) · [中文](https://gatherthread.cn/app/example.html?locale=zh-CN&topic=browse): practice without model quota or changes to real projects.
-- [Cloud trial Agent](HOSTED_AGENT_GUIDE.md) · [中文](HOSTED_AGENT_GUIDE.zh-CN.md): operator-gated small-task workflow; the entry remains disabled in Beta 1.
+- [Cloud trial Agent](HOSTED_AGENT_GUIDE.md) · [中文](HOSTED_AGENT_GUIDE.zh-CN.md): Beta 1 entry for small tasks; running models require validated operator configuration.
 
 ## Product and system contracts
 
@@ -18,6 +18,7 @@ Start with the product story and illustrated workflow, then choose the setup or 
 - [Privacy notice](../site/privacy/): account deletion, shared data, and deletion/retention boundaries.
 - [Architecture decisions](adr/README.md): accepted ADRs and their status.
 - [Hosted trial Agent](HOSTED_AGENT.md): isolated OpenCode runner, provider budget, and operator setup.
+- [GitHub cloud workspace](HOSTED_GITHUB.md): authorized npm repository tasks, saved source review and explicit draft PRs; independent App and server activation required.
 - [Hosted model API options](HOSTED_AGENT_PROVIDERS.md): pricing, terms, adapter work, and operator handoff.
 
 ## Connect local Agent harnesses

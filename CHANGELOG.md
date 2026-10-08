@@ -8,7 +8,7 @@ No additional changes are recorded after the Beta 1 release candidate below.
 
 ## [0.1.0-beta.1] - 2026-10-08
 
-This release brings current `main` into matching npm packages and the isolated test deployment. Production promotion is separate; the public Cloud Agent entry remains disabled.
+This release brings current `main` into matching npm packages and the isolated test deployment. Production promotion is separate. Cloud trial and GitHub repository-task Web entries are open; actual availability depends on independently configured and validated server services.
 
 ### Added
 
@@ -19,23 +19,25 @@ This release brings current `main` into matching npm packages and the isolated t
 - Add a compact phone/tablet workspace with folded navigation/tools and combined Agent/model/reasoning selection, without replacing desktop controls. Keep invocation of the same account's authorized online computer Agent and add mobile-specific beginner guides.
 - Add official catalog avatars with account-wide selection, historical-author presentation and member-owned Agent badges. Fence profile refresh so presentation failures cannot delay authorization or realtime updates.
 
-- Add a disabled cloud GitHub/npm development source preview: expiring App authorization with PKCE, private encrypted task source, bounded dependency preparation, asynchronous OpenCode runs, revision review and explicit draft PR publication. Real App/provider and new Linux container activation checks remain required.
-- Prepare an optional OpenCode cloud Agent with isolated terminal/file tools, explicit GT Cloud code consent, own-branch checkpoints, and the same workspace Agent selector and Settings entry as local harnesses. Add multiple provider/account pools, atomic daily and concurrency limits, pinned model routing, failure cooldowns, and assistant-text-only output. Add bilingual guides and operator/provider setup documentation. Disabled by default; live model integration and deployment validation remain pending.
+- Add the cloud GitHub/npm development workflow: expiring App authorization with PKCE, private encrypted task source, bounded dependency preparation, asynchronous OpenCode runs, revision review and explicit draft PR publication. Its Beta 1 Web entry is open; server GitHub enablement, independent test App/provider and real Linux container activation checks remain required.
+- Open the optional OpenCode cloud trial Agent entry with isolated terminal/file tools, explicit GT Cloud code consent, own-branch checkpoints, and the existing workspace selector/Settings. Preserve default local Codex selection. Add multiple provider/account pools, atomic daily and concurrency limits, pinned model routing, failure cooldowns and assistant-text-only output. Server services remain disabled by default until private configuration and real model/container validation pass; cloud tasks do not add local shared-summary generation or Pause/Resume.
 - Add a separate, default-disabled test-environment admission gate, private operator code issuance/revocation, bilingual entry/banner, negative API/WebSocket isolation checks and independent deployment templates. It reuses the current email/password account flow with independent test accounts and provider checks. Beta 1 targets test deployment only, with fixed-commit acceptance before any separately authorized production promotion.
 
 ### Changed and fixed
 
 - Reuse the Agent request button for Pause/Resume of the requester's eligible local work. Continuing uses a new request with the original exact profile and references; it is not lossless native-turn continuation.
 - Refresh bilingual beginner tutorials, GitHub-first file guidance, illustrated product documentation and the product home around shared collaboration across people and devices. Preserve isolated practice, same-origin application entry, accessibility and legacy operational links; add the public-security filing icon/link beside the existing ICP record.
-- Align current source, package, plugin, launcher, executable and setup references with `0.1.0-beta.1` and the npm `beta` channel. Preserve immutable Alpha records and the separate unpublished pre-Alpha Beta-name candidate. Keep deployment and held-feature status distinct from release metadata.
+- Align current source, package, plugin, launcher, executable and setup references with `0.1.0-beta.1` and the npm `beta` channel. Preserve immutable Alpha records and the separate unpublished pre-Alpha Beta-name candidate. Keep Web-entry availability, configured service status and deployment distinct from release metadata.
 - Fence hosted OAuth, repository binding and PR publication with live test admission/browser authorization after asynchronous waits. Cancel older OAuth completions across devices with a durable authorization generation. Recheck model execution permissions after slow request bodies, validate declared npm workspace source/links, and share strict private GitHub response schemas between server and Web.
+- Allow operators to tighten trial/repository container memory within existing ceilings, without additional swap. Isolate every Docker CLI command from inherited client credentials/proxies, use one reviewed local daemon, and retain capacity whenever executor exit cannot be confirmed, including double cleanup failures. Test templates start at 512 MiB per container and concurrency one; actual host acceptance remains required.
+- Update the real DSH integration gate for email-account fixtures and post-launch readiness. Verify the complete native/browser/mock-model workflow with an explicit temporary startup-mode workaround for the upstream live hot-reload failure; never modify a user's real DSH profile or claim default live reload passed.
 - Preserve Strict admission Cookies on cross-site GitHub return using a public 403 gate document and a live same-site admission recheck before the protected callback retry.
 
 ### Migration and safety
 
 - Retired account-flow endpoints return `410 account_flow_retired`; old user Cookies cannot authenticate the email account flow. Historical rows are retained without enrollment/merging, and independently authorized native devices remain separate.
 - Coordinate server/Web upgrades and stop old task runners before additive account, OAuth/task-source and hosted-budget migrations. Retain verified application/cloud-Git/admission backups, independent secrets and deletion/revocation records; do not restore legacy account endpoints or downgrade a runner against migrated task/budget state.
-- This publication does not enable the held Cloud Agent entry, open default-closed registration/recovery switches, widen Launcher v1 beyond the production origin or deploy production. Live providers, native Agents and the test host require their own recorded checks.
+- Opening cloud Web entries does not configure or enable server runners, open default-closed registration/recovery switches, widen Launcher v1 beyond the production origin or deploy production. Live providers, independent GitHub App, native Agents and the complete test systemd/Docker/socket path require recorded checks. Test starts at host concurrency one, without weakening the sandbox or Docker permissions.
 
 ## [0.1.0-alpha.8] - 2026-09-28
 

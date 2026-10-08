@@ -10,7 +10,7 @@ GatherThread puts your team's discussion, AI-assisted work, and file review in o
 
 Open source · Self-hostable · Current version identifier **0.1.0-beta.1** · [Apache 2.0](LICENSE)
 
-Beta 1 is the npm and isolated-test release. [Test service](https://test.gatherthread.cn/): enter your private tester code, then verify your email and sign in with a password. Production is upgraded separately; project invitations are not account registration codes. The cloud trial Agent is still disabled in this build and needs a separately reviewed activation before the workflow described below becomes available.
+Beta 1 is the npm and isolated-test release. [Test service](https://test.gatherthread.cn/): enter your private tester code, then verify your email and sign in with a password. Production is upgraded separately; project invitations are not account registration codes. The Cloud Agent entry is open in Beta 1; usable models depend on the test operator's validated provider and container configuration, with availability shown in the workspace.
 
 ## Your team. Your devices. Your Agents.
 
@@ -84,6 +84,7 @@ Want to practice first? Open the [free example](https://gatherthread.cn/app/exam
 | Codex history import | Create a new visible local task from shared history. Review it and archive the old task yourself; live history delivery remains independent. |
 | Models and request controls | Choose supported models and reasoning levels. During a computer Agent request, the request button becomes Pause or Resume. |
 | Cloud trial Agent | Try small tasks in an isolated workspace without local installation or your own API key; workspace usage allowances apply. |
+| GitHub cloud workspace | With a validated cloud coding model and your repository authorization, request an npm project change, review its saved source and explicitly create a draft PR. |
 | Members and invitations | Manage owner, participant, and viewer roles; leave another person's project or remove members after resolving shared files. |
 | Accounts and devices | Sign in on multiple devices, revoke a device independently, change your profile, or review the impact before deleting your account. |
 | Bilingual onboarding | Use Chinese or English and learn through visual guides tailored to computers, phones, and tablets. |

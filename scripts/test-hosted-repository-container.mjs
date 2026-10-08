@@ -1,39 +1,29 @@
 // Real Docker/OpenCode/npm/test/build execution. All GitHub/model/registry responses are local fixtures.
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HostedRepositoryRunner } from '../apps/server/dist/src/hosted-repository-runner.js';
+import { hostedContainerMemoryMiB, runDocker } from '../apps/server/dist/src/hosted-agent.js';
+import { runHostedDockerCommand, stopHostedContainer } from '../apps/server/dist/src/hosted-agent-recovery.js';
 const image = process.env.GATHERTHREAD_TEST_HOSTED_IMAGE;
 assert.ok(image, 'Set GATHERTHREAD_TEST_HOSTED_IMAGE');
-const inspected = spawnSync('docker', ['image', 'inspect', '--format', '{{.Id}}', image], { encoding: 'utf8' });
+const inspected = runHostedDockerCommand(['image', 'inspect', '--format', '{{.Id}}', image]);
 assert.equal(inspected.status, 0);
+const memoryMiB = hostedContainerMemoryMiB('repository', process.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB === undefined
+  ? undefined : Number(process.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB));
 const directory = mkdtempSync(join(tmpdir(), 'gt-repository-smoke-'));
 let calls = 0, tarballCalls = 0, issued = false, observedChecks = false;
 // This smoke uses only fixtures. Production keeps raw container output private.
 async function runFixtureDocker(args) {
   const name = args[args.indexOf('--name') + 1];
-  let timer;
   try {
-    return await new Promise((resolve, reject) => {
-      const child = spawn('docker', [...args.slice(0, -1), '-e', 'GT_HOSTED_SMOKE_DEBUG=1', args.at(-1)],
-        { stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '', stderr = '', size = 0;
-      timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('repository smoke timeout')); }, 90_000);
-      child.stdout.on('data', (chunk) => {
-        size += chunk.length;
-        if (size > 12 * 1024 * 1024) child.kill('SIGKILL'); else stdout += chunk.toString();
-      });
-      child.stderr.on('data', (chunk) => { stderr = (stderr + chunk.toString()).slice(-8000); });
-      child.once('error', reject);
-      child.once('close', (code) => code === 0 && size <= 12 * 1024 * 1024 ? resolve(stdout)
-        : reject(new Error(`repository container exited ${code}: ${stderr}`)));
-    });
+    return await runDocker([...args.slice(0, -1), '-e', 'GT_HOSTED_SMOKE_DEBUG=1', args.at(-1)],
+      90_000, 12 * 1024 * 1024);
   } finally {
-    clearTimeout(timer);
-    spawnSync('docker', ['rm', '-f', name], { timeout: 5000, stdio: 'ignore' });
+    stopHostedContainer(name);
   }
 }
 try {
@@ -70,11 +60,11 @@ try {
     const chunk = (delta, finish_reason = null) => JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: endpoint.model, choices: [{ index: 0, delta, finish_reason }] });
     return new Response(`data: ${chunk(delta)}\n\ndata: ${chunk({}, useTool ? 'tool_calls' : 'stop')}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
   };
-  const runner = new HostedRepositoryRunner({ endpoints: [endpoint], image: inspected.stdout.trim(), userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, fetch: fetcher, runContainer: runFixtureDocker });
+  const runner = new HostedRepositoryRunner({ endpoints: [endpoint], image: inspected.stdout.trim(), userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, repositoryMemoryMiB: memoryMiB, fetch: fetcher, runContainer: runFixtureDocker });
   const result = await runner.run(files, 'Update value.cjs to export two; run npm test and npm run build.', endpoint, () => {});
   assert.ok(issued && calls >= 2 && tarballCalls > 0 && observedChecks);
   assert.equal(Buffer.from(result.files.find((f) => f.path === 'value.cjs').content_base64, 'base64').toString(), 'module.exports = 2;\n');
   assert.ok(result.files.every((f) => !f.path.includes('node_modules') && !f.path.startsWith('dist/') && !f.path.startsWith('.git/')));
   assert.equal(result.files.find((f) => f.path === 'package-lock.json').content_base64, files.find((f) => f.path === 'package-lock.json').content_base64);
-  process.stdout.write(`PASS real repository container: npm dependency installed, OpenCode bash edited source, tests/build ran, lockfile restored; ${calls} model fixture calls.\n`);
+  process.stdout.write(`PASS real repository container at ${memoryMiB}m: npm dependency installed, OpenCode bash edited source, tests/build ran, lockfile restored; ${calls} model fixture calls.\n`);
 } finally { rmSync(directory, { recursive: true, force: true }); }

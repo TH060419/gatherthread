@@ -1,6 +1,6 @@
 # Try the cloud Agent
 
-**Beta 1 availability:** the Cloud Agent entry remains disabled in this build. These instructions apply only after a separately reviewed entry change, provider/container checks and operator activation. npm publication or test deployment alone does not make it available; use your connected Codex or DSH Agent meanwhile.
+**Beta 1 availability:** the Cloud Agent entry is open. Running a task still requires the operator's validated provider/container configuration; publishing npm or deploying the build does not supply API credentials or enable an unconfigured server. Check the workspace's current model/status before requesting a task. This release targets the isolated test service, not production activation.
 
 Choose the cloud trial Agent, describe a small task, and read its answer in the same shared conversation. You do not need to install a local Agent or provide an API key. Available models, usage allowances and service status are shown in the workspace.
 
@@ -24,9 +24,10 @@ The limits below describe temporary-workspace and GT Cloud code tasks. GitHub re
 - Ordinary chat does not call an Agent. Local Agent requests still run on your own device; the cloud trial uses the same Agent selector and send action.
 - By default, each user may run one task at a time, with at least 30 seconds between accepted starts across projects, models and devices. Wait for the current task or short cooldown; the status field shows the reason. Any configured daily allowance and provider/server capacity limits also apply.
 - Settings and the composer show the selected provider/model; remaining daily runs appear only if an administrator configured a daily allowance. Busy models and temporarily unavailable providers never switch silently to a different model. API keys are managed by the operator, so you do not need to enter one. If the runner is unavailable, contact the server operator.
+- Shared history summaries and the composer's Pause/Resume controls currently use connected local Codex/DSH Agents, not this cloud trial runner. Cloud answers can still be read, quoted and discussed in the shared conversation.
 
 For container build, quotas, and credentials, see the [operator guide](HOSTED_AGENT.md).
 
 ## GitHub cloud projects
 
-Computer-to-GitHub synchronization is available independently in **Project file collaboration → GitHub**. The small trial profile does not support cloud GitHub repository tasks. Those tasks need a separately enabled service and an eligible coding profile; for their workflow, saved task review, limits and operator setup, see [GitHub cloud workspace](HOSTED_GITHUB.md).
+Computer-to-GitHub synchronization is available independently in **Project file collaboration → GitHub**. Beta 1 also opens the cloud repository-task workflow there, but running it needs the separately enabled GitHub service, App authorization and an eligible coding profile. The Cloudflare small-trial profile does not support repository tasks; other profiles still require actual coding and resource validation. For saved task review, limits and operator setup, see [GitHub cloud workspace](HOSTED_GITHUB.md).

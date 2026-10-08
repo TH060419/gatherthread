@@ -22,6 +22,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { startCollaborationServer } from "../apps/server/dist/src/server.js";
+import { browserSessionFixture, identityFixture } from "../apps/server/dist/test/auth-fixtures.js";
 import { DSH_NPM_COMPATIBILITY } from "../packages/dsh-host/dist/src/index.js";
 
 const ROOT = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -192,17 +193,42 @@ async function freePort() {
   return address.port;
 }
 
-function startDsh(bin, port, environment, workspace) {
+export function dshExitDiagnosis(host, result) {
+  // Child output may contain a one-use launch token, model credentials, cookies
+  // or private paths. Return only allowlisted diagnostic categories, never logs.
+  const reason = /user patch-layer watching requires the Cordis HMR service/u.test(host.stderr)
+    ? "upstream profile hot-reload service is incompatible; the explicit isolated startup fixture may be used for separate plugin verification"
+    : "isolated runtime terminated";
+  return new Error(`DSH ${reason} (code ${result.code ?? "none"}, signal ${result.signal ?? "none"})`);
+}
+
+export async function configureStartupFixture(root, dshHome, enabled) {
+  if (!enabled) return;
+  const canonicalRoot = await realpath(root);
+  const canonicalHome = await realpath(dshHome);
+  assert.equal(canonicalHome, path.join(canonicalRoot, "dsh-home"), "startup fixture must stay in the script-created temporary home");
+  const manifestPath = path.join(canonicalHome, "profiles/web/package.json");
+  assert.equal(await realpath(manifestPath), manifestPath, "startup fixture manifest must not redirect outside its profile");
+  const stat = await lstat(manifestPath);
+  assert.ok(stat.isFile() && stat.nlink === 1, "startup fixture requires a single-link regular manifest");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  assert.ok(manifest.dsh?.profile, "official installation must create its profile first");
+  manifest.dsh.profile.patchReload = "startup";
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
+  await chmod(manifestPath, 0o600);
+}
+
+export function startDsh(bin, port, environment, workspace) {
   const child = spawn(process.execPath, [bin, "web", "--no-open", "--port", String(port)], {
     cwd: workspace,
     env: environment,
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });
-  const host = { child, stdout: "", stderr: "", launchUrl: undefined };
+  const host = { child, stdout: "", stderr: "", launchUrl: undefined, exitResult: undefined };
   let readyResolve;
   let readyReject;
-  host.ready = new Promise((resolve, reject) => {
+  const launch = new Promise((resolve, reject) => {
     readyResolve = resolve;
     readyReject = reject;
   });
@@ -218,16 +244,40 @@ function startDsh(bin, port, environment, workspace) {
   child.stderr.setEncoding("utf8");
   child.stdout.on("data", (chunk) => append("stdout", chunk));
   child.stderr.on("data", (chunk) => append("stderr", chunk));
-  host.exit = new Promise((resolve, reject) => {
-    child.once("error", (error) => {
-      readyReject(error);
-      reject(error);
+  host.exit = new Promise((resolve) => {
+    child.once("error", () => {
+      const result = { code: null, signal: null };
+      host.exitResult = result;
+      readyReject(dshExitDiagnosis(host, result));
+      resolve(result);
     });
     child.once("exit", (code, signal) => {
-      if (host.launchUrl === undefined) readyReject(new Error(`DSH exited before readiness (${code}, ${signal})`));
-      resolve({ code, signal });
+      const result = { code, signal };
+      host.exitResult = result;
+      if (host.launchUrl === undefined) readyReject(dshExitDiagnosis(host, result));
+      resolve(result);
     });
   });
+  host.ready = Promise.race([
+    launch.then(async (launchUrl) => {
+      // Printing the launch URL is not readiness: an upstream boot failure can
+      // follow immediately. Require the plugin route to refuse authentication
+      // repeatedly while the child stays alive before returning its private URL.
+      let consecutive = 0;
+      while (true) {
+        if (host.exitResult) throw dshExitDiagnosis(host, host.exitResult);
+        try {
+          const response = await rawHttp({ port, pathname: "/gatherthread/status/get", host: `127.0.0.1:${port}`, timeoutMs: 2_000 });
+          consecutive = response.status === 401 ? consecutive + 1 : 0;
+          if (consecutive >= 4) return launchUrl;
+        } catch {
+          consecutive = 0;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 125));
+      }
+    }),
+    host.exit.then((result) => { throw dshExitDiagnosis(host, result); }),
+  ]);
   return host;
 }
 
@@ -302,7 +352,7 @@ async function stopDsh(host) {
   return host ? withTimeout(host.exit, "DSH shutdown", 20_000) : undefined;
 }
 
-function rawHttp({ port, pathname, method = "GET", host, cookie, origin, body }) {
+function rawHttp({ port, pathname, method = "GET", host, cookie, origin, body, timeoutMs = 15_000 }) {
   return new Promise((resolve, reject) => {
     const encoded = body === undefined ? undefined : Buffer.from(JSON.stringify(body));
     const request = httpRequest({
@@ -329,6 +379,7 @@ function rawHttp({ port, pathname, method = "GET", host, cookie, origin, body })
       }));
     });
     request.once("error", reject);
+    request.setTimeout(timeoutMs, () => request.destroy(new Error("Isolated DSH HTTP request timed out")));
     if (encoded !== undefined) request.write(encoded);
     request.end();
   });
@@ -382,6 +433,9 @@ function assertAbsent(text, values, label) {
 }
 
 async function main() {
+  const fixtureOption = process.env.GATHERTHREAD_DSH_PATCH_RELOAD_STARTUP_FIXTURE;
+  assert.ok(fixtureOption === undefined || fixtureOption === "0" || fixtureOption === "1", "GATHERTHREAD_DSH_PATCH_RELOAD_STARTUP_FIXTURE must be 0 or 1");
+  const startupFixture = fixtureOption === "1";
   const dshRoot = await locatePinnedDsh();
   const dshManifest = JSON.parse(await readFile(path.join(dshRoot, "package.json"), "utf8"));
   const dshBin = path.join(dshRoot, dshManifest.bin.dsh);
@@ -451,6 +505,8 @@ async function main() {
       1,
       "repeated official installation must keep exactly one owned profile layer",
     );
+    await configureStartupFixture(root, dshHome, startupFixture);
+    if (startupFixture) process.stderr.write("DSH gate: explicit temporary startup-only fixture enabled; default upstream live reload is not verified\n");
 
     const dump = await runProcess(process.execPath, [dshBin, "web", "--dump-config"], {
       cwd: ROOT,
@@ -480,12 +536,14 @@ async function main() {
       staticDirectory,
     }, collaborationPort);
     assert.equal(collaboration.origin, collaborationOrigin);
-    const owner = (collaboration.database.bootstrapIdentity({
+    // Reuse the account-aware authorization fixtures. The retired public token
+    // bootstrap/session endpoints must not be restored for integration tests.
+    const owner = identityFixture(collaboration, { body: {
         user_id: "dsh-npm-real-owner",
         display_name: "DSH npm real owner",
         device_id: "dsh-npm-real-browser",
         device_name: "Ephemeral browser",
-      })).data;
+      } }).body.data;
     await requestData(collaboration.origin, "/v1/projects", {
       method: "POST",
       token: owner.token,
@@ -538,8 +596,7 @@ async function main() {
         payload: { text: `Second Project seed\n${longPublicHistory}` },
       },
     });
-    const browserSession = await requestData(collaboration.origin, "/v1/browser-sessions", {
-      method: "POST",
+    const browserSession = browserSessionFixture(collaboration, {
       token: owner.token,
       body: { remember_device: false },
     });
@@ -547,15 +604,19 @@ async function main() {
     assert.ok(gatherthreadCookie);
 
     const port = await freePort();
+    process.stderr.write("DSH gate: starting isolated Web runtime\n");
     host = startDsh(dshBin, port, environment, workspace);
     const launchUrl = await withTimeout(host.ready, "published DSH Web readiness");
+    process.stderr.write("DSH gate: checking authentication and RPC\n");
     const parsedLaunch = new URL(launchUrl);
     assert.equal(parsedLaunch.origin, `http://127.0.0.1:${String(port)}`);
     assert.match(parsedLaunch.searchParams.get("token") ?? "", /^[A-Za-z0-9_-]{43}$/u);
     const unauthenticated = await rawHttp({ port, pathname: "/gatherthread/status/get", host: parsedLaunch.host });
     assert.equal(unauthenticated.status, 401);
+    process.stderr.write("DSH gate: unauthenticated RPC refused\n");
     const exchange = await fetch(launchUrl, { redirect: "manual" });
     assert.equal(exchange.status, 303);
+    process.stderr.write("DSH gate: local browser credential exchanged\n");
     const dshCookie = exchange.headers.get("set-cookie")?.split(";", 1)[0];
     assert.ok(dshCookie);
     const rpcId = randomUUID();
@@ -578,11 +639,13 @@ async function main() {
       version: "0.1.2-rc.1",
       profile: "web",
     });
+    process.stderr.write("DSH gate: authenticated RPC verified; starting browser\n");
 
     browser = await playwright.chromium.launch({
       headless: true,
       ...(CHROME_PATH ? { executablePath: CHROME_PATH } : {}),
     });
+    process.stderr.write("DSH gate: checking browser pairing and model selection\n");
     const browserContext = await browser.newContext({ viewport: { width: 1280, height: 860 }, locale: "zh-CN" });
     const page = await browserContext.newPage();
     page.on("dialog", (dialog) => void dialog.accept());
@@ -660,6 +723,7 @@ async function main() {
     });
 
     await page.getByRole("button", { name: "关闭", exact: true }).click();
+    process.stderr.write("DSH gate: checking native history and cloud adoption\n");
     const firstProjectEntry = page.getByText("DSH npm real project", { exact: true });
     const secondProjectEntry = page.getByText("DSH npm second project", { exact: true });
     await firstProjectEntry.waitFor({ timeout: 30_000 });
@@ -720,6 +784,7 @@ async function main() {
       `${collaboration.origin}/#project=dsh-npm-real-project&session=dsh-npm-real-session`,
       { waitUntil: "load" },
     );
+    process.stderr.write("DSH gate: checking workspace request and reload\n");
     await gatherthreadPage.locator("#workspace:not([hidden])").waitFor({ timeout: 30_000 });
     // A fresh browser/device must acknowledge the first-workspace cloud-code notice
     // before opening Settings. This is a real modal, not a dismissible test overlay.
@@ -833,6 +898,7 @@ async function main() {
     // Exercise code collaboration through the shipped native and Web controls.
     // Both source and private sync state stay inside this isolated DSH_HOME.
     const codeProjectId = "dsh-npm-real-project";
+    process.stderr.write("DSH gate: checking source authorization and recovery\n");
     const codeRoot = path.join(root, "GatherThread Projects", "DSH npm real project");
     const codeApiPath = `/v1/projects/${codeProjectId}/code`;
     await access(codeRoot);
@@ -978,6 +1044,8 @@ async function main() {
       command: "npx @deepseek-ai/dsh@0.1.2-rc.1 web",
       pluginMechanism: "dsh plugin --profile web add <package>",
       profile: "web",
+      patchReloadFixture: startupFixture ? "startup" : "default",
+      defaultLiveReloadVerified: !startupFixture,
       lifecycle: ["pack", "add", "idempotent-add", "load", "authenticated-rpc", "browser-auto-discovery", "browser-pair", "configure", "writable-native-session", "native-full-history", "native-cloud-adoption", "web-request", "progress", "final", "reload", "native-code-consent", "native-code-upload", "native-code-auto-upload", "web-exact-device-code-upload", "native-code-recovery", "code-consent-revocation", "disconnect", "remove"],
       realDshHome: false,
       networkDownloads: false,
@@ -988,6 +1056,9 @@ async function main() {
         clearedBeforeRemove: true,
       },
     })}\n`);
+  } catch (error) {
+    if (host?.exitResult) throw dshExitDiagnosis(host, host.exitResult);
+    throw error;
   } finally {
     await browser?.close().catch(() => undefined);
     await stopDsh(host).catch(() => undefined);
@@ -997,4 +1068,4 @@ async function main() {
   }
 }
 
-await main();
+if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) await main();

@@ -2,7 +2,7 @@
 
 本指南用于 `https://test.gatherthread.cn` 的独立测试环境：账号、密码、设备授权、文件与密钥都和正式环境分开。源码能力以最新 `main` 为准，实际启用状态由运营配置决定；历史候选验收记录见 [TEST_ENVIRONMENT_VALIDATION](TEST_ENVIRONMENT_VALIDATION.md)，不能替代最新固定提交的复测。部署由服务器管理会话执行，需负责人逐次授权。
 
-本轮版本为 **Beta 1 / `0.1.0-beta.1`**，只发布同版 npm 包并部署测试服；不更新正式服。具体候选提交、产物校验和及实际验收以 [Beta 1 记录](releases/0.1.0-beta.1.md)与部署报告为准，不能仅以分支名判断。当前构建仍关闭云端 Agent 入口；不会因配置测试服务器自动开放。
+本轮版本为 **Beta 1 / `0.1.0-beta.1`**，只发布同版 npm 包并部署测试服；不更新正式服。具体候选提交、产物校验和及实际验收以 [Beta 1 记录](releases/0.1.0-beta.1.md)与部署报告为准，不能仅以分支名判断。云端 Agent 网页入口已开放，服务端默认关闭；实际运行需私密模型配置及真实模型、镜像、Docker/socket 验收后由运营启用。入口开放不代表服务器已验收，不自动修改账号注册/找回开关。
 
 ## 用户流程与依赖
 
@@ -65,6 +65,8 @@ Turnstile 建议新建测试 widget，只准许 `test.gatherthread.cn`，邮箱�
 Resend 建议独立测试发件子域和仅发送权限的域限定 API key；可在现有提供商账号内建隔离配置，但账号级配额仍共享，测试预算不能耗尽正式邮件额度。先确认现有套餐支持域数量，不自行升级或购买。[官方子域说明](https://resend.com/docs/dashboard/domains/introduction)、[API key 权限](https://resend.com/docs/dashboard/api-keys/introduction)。模板只留空值；模拟测试没有真实发信。
 
 设备端 GitHub 连接仍由本地连接器授权/操作。可选服务器端 GitHub 功能依 [HOSTED_GITHUB](HOSTED_GITHUB.md) 单独配置；门禁仍覆盖其授权、回调、绑定和 PR 发布。Strict Cookie 的跨站返回使用公共 403 门禁页进行同站复查，规则由 [Security](SECURITY.md#test-admission-boundary) 定义。管理员须核对真实回调，不推测其已配置；推荐独立测试 App 与测试仓库。[GitHub App 可配置多个 callback](https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/about-the-user-authorization-callback-url)，仍须为测试明确选择 redirect_uri、独立 client secret 和环境绑定 state。测试不能接收正式 OAuth state 或使用正式 GitHub 仓库/用户代码。未知回调仍默认拒绝，不宽泛放行门禁。可选 Launcher v1 固定正式 Origin，测试先用工作页生成的手动终端命令；不要放宽已发布 v1 协议。其他 Origin 的启动器支持需要独立协议审核与配套版本。
+
+Beta 1 的轻量云端任务与 GitHub 云端仓库任务都已开放网页入口，但服务端分别依赖 `GATHERTHREAD_HOSTED_AGENT_ENABLED`、`GATHERTHREAD_HOSTED_GITHUB_ENABLED` 与独立私密配置。按 [完整测试宿主预检](HOSTED_AGENT.md#isolated-test-host-activation) 保留 systemd 沙箱，使用宿主可见的 `TMPDIR=/var/lib/gatherthread-test/hosted-tmp`，以实际服务 UID 验证镜像、Docker、只读文件与 socket 挂载和清理。测试模板将两类容器内存各设为 512 MiB、全局及用户并发设为 1，禁止容器使用额外 swap；保留现有主机配置，实测完整任务及正式服务响应后才启用，超限须明确失败而非自动扩容或重试。API/App 秘密不得进入聊天或源码，也不通过放宽 Docker socket 权限、开放 daemon 或取消沙箱来解决配置失败。真实模型价格/条款与工具调用、独立 App 回调和少量私有测试仓库任务须验收后才启用；不因此变更正式服。
 
 ## 先测试，再由人工推广
 

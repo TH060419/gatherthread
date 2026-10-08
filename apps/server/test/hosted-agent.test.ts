@@ -150,6 +150,7 @@ unixSocketTest("hosted run uses isolated Docker arguments, persists an event, an
       assert.ok(args.includes(required), `missing ${required}`);
     }
     assert.ok(args.some((argument) => argument.includes("dst=/input,readonly")));
+    assert.equal(args[args.indexOf("--memory-swap") + 1], "768m");
     assert.equal(args.includes(options.endpoints[0]!.apiToken), false);
     assert.equal(args.some((argument) => argument.includes(input.content)), false);
     assert.equal((await agent.request(owner, session.id, input)).replayed, true);

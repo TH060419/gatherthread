@@ -81,10 +81,17 @@ DSH `0.1.2-rc.1` has a first-import limitation: its automatic pre-step compactio
 |---|---|
 | `pnpm not found on PATH` | Install `pnpm@10`, close the old terminal, and retry. |
 | `Failed to resolve dependency tree` with `--offline` | Retry without `--offline`, or repair the configured pnpm registry/cache. |
+| `user patch-layer watching requires the Cordis HMR service` after launch | See the startup-mode workaround below; this is an upstream profile hot-reload failure, not a pairing failure. |
 | Blank or unreadable plugin button | Rebuild/reinstall the tarball, restart DSH, and hard-refresh the Web page. |
 | Pairing says operation not completed | Confirm the server address, current GatherThread browser login, and the selected DSH provider/model. |
 | Runtime is online but a turn fails with `QUOTA` | Configure a funded/available provider model in DSH and retry. |
 | A synchronized conversation is read-only | Refresh the pairing after confirming the GatherThread role and session permission. Viewer and another creator's Solo are intentionally read-only. |
+
+### Upstream profile hot-reload failure
+
+A fresh DSH `0.1.2-rc.1` install can resolve newer transitive packages that fail its default `live` configuration reload. The Beta 1 isolated native/browser test passed the complete GatherThread flow with the supported **startup-only** configuration mode; it does not certify default live reload.
+
+Only if the exact HMR error above occurs: stop DSH, back up `<DSH_HOME>/profiles/web/package.json` (normally `~/.dsh/profiles/web/package.json`), and change the existing `dsh.profile.patchReload` value to `"startup"`. Preserve every other field, dependency and bundle; do not replace the whole manifest. Then start DSH again with the command in step 2. Configuration-layer changes now require restarting DSH; GatherThread history/realtime synchronization is not disabled. Do not clear credentials or install arbitrary upstream versions to bypass this error.
 
 ## Security boundary
 
@@ -102,3 +109,5 @@ npm run release:dry-run-npm
 ```
 
 These commands verify a Git-less package install/import, exercise the real DSH profile installer, create the candidate tarballs in ignored `release-artifacts/npm/`, and check npm's publish path with the non-default `beta` dist-tag.
+
+For the known upstream HMR failure, the optional test-only `GATHERTHREAD_DSH_PATCH_RELOAD_STARTUP_FIXTURE=1` switch uses startup mode **only in the script-created temporary DSH home**, and records `defaultLiveReloadVerified=false`. It never edits the operator's DSH profile and is not a replacement for the manual troubleshooting steps above. Native tests use a fake model; they do not prove a real provider has quota or supports the selected model.

@@ -2,7 +2,7 @@
 
 ## Cloud GitHub task plane
 
-The disabled source preview in `apps/server/src/hosted-github.ts` provides requester-private GitHub App authorization, repository binding and asynchronous development tasks. `hosted-repository-runner.ts` uses the existing OpenCode image with a lockfile-restricted npm proxy; GitHub credentials never enter the container. Private encrypted source snapshots support explicit continuation, and a reviewed revision can create a draft PR via Git Data APIs. This is separate from direct local GitHub sync. See [ADR-0039](adr/0039-cloud-github-repository-tasks.md) and [operator/user guide](HOSTED_GITHUB.md).
+The operator-gated task plane in `apps/server/src/hosted-github.ts` provides requester-private GitHub App authorization, repository binding and asynchronous development tasks. Beta 1 opens the Web task entry, while the corresponding server services remain disabled by default until configured and validated. `hosted-repository-runner.ts` uses the existing OpenCode image with a lockfile-restricted npm proxy; GitHub credentials never enter the container. Private encrypted source snapshots support explicit continuation, and a reviewed revision can create a draft PR via Git Data APIs. This is separate from direct local GitHub sync. See [ADR-0039](adr/0039-cloud-github-repository-tasks.md) and [operator/user guide](HOSTED_GITHUB.md).
 
 ## Code version plane
 

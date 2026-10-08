@@ -64,11 +64,42 @@ test("hosted Agent requires explicit Free-plan confirmation and immutable image"
   }, "/srv/gatherthread");
   assert.equal(config.hostedAgent?.image, enabled.GATHERTHREAD_HOSTED_AGENT_IMAGE);
   assert.equal(config.hostedAgent?.userDailyRuns, 1);
+  assert.equal(config.hostedAgent?.memoryMiB, 768);
+  assert.equal(config.hostedAgent?.repositoryMemoryMiB, 2048);
   const localImage = `sha256:${"c".repeat(64)}`;
   assert.equal(loadServerConfig({ ...enabled,
     GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
     GATHERTHREAD_HOSTED_AGENT_IMAGE: localImage,
   }, "/srv/gatherthread").hostedAgent?.image, localImage);
+});
+
+test("hosted memory caps are strict independent reductions of existing defaults", { skip: process.platform === "win32" }, () => {
+  const enabled = {
+    GATHERTHREAD_HOSTED_AGENT_ENABLED: "true", GATHERTHREAD_HOSTED_AGENT_PRESET: "siliconflow-free",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: `sha256:${"b".repeat(64)}`,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true", GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-only-key",
+  };
+  const low = loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB: "512",
+    GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB: "256" }, "/srv/gatherthread").hostedAgent!;
+  assert.equal(low.memoryMiB, 512); assert.equal(low.repositoryMemoryMiB, 256);
+  assert.equal(low.maxConcurrent, 2); assert.equal(low.userMaxConcurrent, 1);
+  assert.equal(loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB: "256" },
+    "/srv/gatherthread").hostedAgent?.repositoryMemoryMiB, 2048);
+  assert.equal(loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB: "512" },
+    "/srv/gatherthread").hostedAgent?.memoryMiB, 768);
+  for (const [name, maximum] of [["GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB", 768],
+    ["GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB", 2048]] as const) {
+    for (const invalid of ["", "0", "255", String(maximum + 1), "512.5", "512m", "1e3", " 512", "512 ", "Infinity",
+      "9007199254740992"]) {
+      assert.throws(() => loadServerConfig({ ...enabled, [name]: invalid }, "/srv/gatherthread"), ConfigurationError);
+    }
+  }
+  for (const invalidDocker of [{ DOCKER_HOST: "tcp://127.0.0.1:2375" }, { DOCKER_CONTEXT: "remote" },
+    { DOCKER_TLS_VERIFY: "1" }, { DOCKER_CONFIG: "/custom/client" }]) {
+    assert.throws(() => loadServerConfig({ ...enabled, ...invalidDocker }, "/srv/gatherthread"), ConfigurationError);
+  }
+  assert.ok(loadServerConfig({ ...enabled, DOCKER_HOST: "unix:///run/user/1001/docker.sock" },
+    "/srv/gatherthread").hostedAgent);
 });
 
 test("owner-host credentials require a stable pepper even outside production", () => {

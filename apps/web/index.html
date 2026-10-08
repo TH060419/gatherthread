@@ -468,7 +468,7 @@
                 <select id="agent-harness-select" name="agent-harness">
                   <option value="codex">Codex</option>
                   <option value="deepseek-harness">DeepSeek Harness</option>
-                  <option value="cloud" disabled>Cloud Agent · coming later</option>
+                  <option value="cloud" disabled>Cloud Agent</option>
                 </select>
                 <div id="codex-agent-profile-fields" class="agent-profile-fields">
                   <label for="agent-model-select">Model</label>
@@ -686,7 +686,7 @@
             <p>Requires an npm project with package.json and package-lock.json. Public npm dependencies are installed without lifecycle scripts. Each run allows up to 15 minutes; saved source expires after seven days.</p>
             <button id="cloud-github-refresh" type="button" class="text-button">Refresh cloud tasks</button>
             <button id="cloud-github-new" type="button" class="text-button" disabled aria-describedby="cloud-github-agent-availability">New repository task</button>
-            <p id="cloud-github-agent-availability" class="field-help">Cloud Agent · coming later</p>
+            <p id="cloud-github-agent-availability" class="field-help">Select an available cloud model.</p>
             <nav id="cloud-github-task-list" aria-label="Your cloud tasks"></nav>
             <p id="cloud-github-task-status" role="status"></p><pre id="cloud-github-answer"></pre>
             <section id="cloud-github-changes" aria-label="Source changes"></section>
@@ -1292,14 +1292,14 @@ codex plugin add gatherthread@gatherthread</code>
               </div>
               <fieldset class="settings-agent-picker">
                 <legend>Available Agents</legend>
-                <p>Choose the Agents available in this project. Cloud Agent will open in a later release.</p>
+                <p>Choose the Agents available in this project. Cloud Agent needs no local connection.</p>
                 <div class="settings-agent-options">
                   <label class="settings-agent-option" for="settings-enabled-codex"><input id="settings-enabled-codex" name="enabled-agent" type="checkbox" value="codex" /><span>Codex</span></label>
                   <label class="settings-agent-option" for="settings-enabled-dsh"><input id="settings-enabled-dsh" name="enabled-agent" type="checkbox" value="deepseek-harness" /><span>DeepSeek Harness</span></label>
-                  <label class="settings-agent-option" for="settings-enabled-cloud"><input id="settings-enabled-cloud" name="enabled-agent" type="checkbox" value="cloud" disabled /><span>Cloud Agent · coming later</span></label>
+                  <label class="settings-agent-option" for="settings-enabled-cloud"><input id="settings-enabled-cloud" name="enabled-agent" type="checkbox" value="cloud" disabled /><span>Cloud Agent</span></label>
                 </div>
               </fieldset>
-              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="cloud" disabled>Cloud Agent · coming later</option><option disabled>Claude Code · coming later</option></select></label>
+              <label class="settings-row" for="settings-agent-harness"><span><strong>Default Agent</strong><small>New requests use this Agent only and never fall back to another harness.</small></span><select id="settings-agent-harness" name="agent-harness"><option value="codex">Codex</option><option value="deepseek-harness">DeepSeek Harness</option><option value="cloud" disabled>Cloud Agent</option><option disabled>Claude Code · coming later</option></select></label>
               <div id="settings-codex-agent-fields" class="settings-agent-fields">
                 <label class="settings-row" for="settings-default-model"><span><strong>Default model</strong><small>Used by connector commands and as the initial chatbox choice.</small></span><select id="settings-default-model" name="default-model"></select></label>
                 <label class="settings-row" for="settings-default-effort"><span><strong>Default reasoning</strong><small>Available levels depend on the selected model.</small></span><select id="settings-default-effort" name="default-effort"></select></label>

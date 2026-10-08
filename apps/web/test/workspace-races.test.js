@@ -90,6 +90,52 @@ test("closed Cloud Agent never counts as the last available Agent or becomes the
  assert.equal(nodes["settings-agent-harness"].value, "deepseek-harness");
 });
 
+test("open Cloud Agent can be explicitly selected without changing existing local defaults", () => {
+ const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud",
+  "settings-agent-harness", "settings-codex-agent-fields", "settings-dsh-agent-fields", "settings-cloud-agent-fields",
+  "settings-agent-summary"].map((id) => [id, element()]));
+ for (const [id, value] of [["settings-enabled-codex", "codex"], ["settings-enabled-dsh", "deepseek-harness"], ["settings-enabled-cloud", "cloud"]]) nodes[id].value = value;
+ nodes["settings-enabled-codex"].checked = true; nodes["settings-enabled-cloud"].checked = false;
+ nodes["settings-agent-harness"].value = "codex";
+ nodes["settings-agent-harness"].options = ["codex", "deepseek-harness", "cloud"].map((value) => ({ value }));
+ const app = harness(["settingsEnabledHarnesses", "syncSettingsAgentControls"], { element: (id) => nodes[id],
+  CLOUD_AGENT_ENTRY_ENABLED: true, DSH_HARNESS: "deepseek-harness", renderCloudStatus: noop, settingsAgentSummary: (value) => value });
+ app.syncSettingsAgentControls();
+ assert.equal(nodes["settings-enabled-cloud"].disabled, false);
+ assert.equal(nodes["settings-agent-harness"].value, "codex");
+ nodes["settings-enabled-cloud"].checked = true;
+ app.syncSettingsAgentControls({ changedCheckbox: nodes["settings-enabled-cloud"] });
+ assert.equal(nodes["settings-agent-harness"].value, "codex");
+ nodes["settings-agent-harness"].value = "cloud";
+ app.syncSettingsAgentControls();
+ assert.equal(nodes["settings-cloud-agent-fields"].hidden, false);
+ nodes["settings-enabled-codex"].checked = false;
+ app.syncSettingsAgentControls({ changedCheckbox: nodes["settings-enabled-codex"] });
+ assert.deepEqual([...app.settingsEnabledHarnesses()], ["cloud"]);
+ assert.equal(nodes["settings-enabled-cloud"].disabled, true);
+ assert.equal(nodes["settings-agent-harness"].value, "cloud");
+});
+
+test("cloud entry still fails closed for missing service, missing model and exhausted capacity", () => {
+ const app = harness(["currentCloudProfile", "cloudStatusText"], {
+  CLOUD_AGENT_ENTRY_ENABLED: true, projectCloudProfile: () => null,
+ });
+ assert.equal(app.currentCloudProfile(), undefined);
+ assert.equal(app.cloudStatusText(), "Cloud Agent is not enabled on this server.");
+ app.hostedAgentStatus = { enabled: true, profiles: [], user_limit_runs: null };
+ assert.equal(app.cloudStatusText(), "Select an available cloud model.");
+ for (const [status, message] of [["busy", "Cloud Agent is busy; try again later"],
+  ["user_busy", "Your Cloud Agent task is still running; wait for it to finish"],
+  ["rate_limit", "Please wait before starting another Cloud Agent task"]]) {
+  app.hostedAgentStatus.profiles = [{ id: "selected", provider: "fixture", model: "model", available: false, status }];
+  assert.equal(app.currentCloudProfile().available, false);
+  assert.equal(app.cloudStatusText(), `fixture · model · ${message}`);
+ }
+ const selected = harness(["currentCloudProfile"], { projectCloudProfile: () => "deleted-profile",
+  hostedAgentStatus: { enabled: true, profiles: [{ id: "other", available: true }] } });
+ assert.equal(selected.currentCloudProfile(), undefined, "never replace a missing selected model");
+});
+
 test("the global badge reports live delivery regardless of viewer-to-participant transitions", () => {
   const nodes = new Map();
   const el = (id) => {

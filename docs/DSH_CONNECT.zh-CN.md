@@ -81,10 +81,17 @@ DSH `0.1.2-rc.1` 存在首次导入限制：自动压缩需要之前的原生请
 |---|---|
 | `pnpm not found on PATH` | 安装 `pnpm@10`，关闭旧终端后重试。 |
 | 使用 `--offline` 时出现 `Failed to resolve dependency tree` | 去掉 `--offline` 重试，或修复当前 pnpm registry/cache。 |
+| 启动后出现 `user patch-layer watching requires the Cordis HMR service` | 见下方启动模式处理；这是 DSH 上游配置热重载失败，不是配对错误。 |
 | 插件按钮空白或文字不可见 | 重新构建并安装 tarball，重启 DSH，再强制刷新网页。 |
 | 配对提示操作未完成 | 检查服务器地址、当前共序浏览器登录状态和 DSH Provider/模型配置。 |
 | runtime 在线但回合显示 `QUOTA` | 在 DSH 配置有可用额度的 Provider 模型后重试。 |
 | 同步会话显示只读 | 确认共序角色和会话权限后刷新配对。访者及他人创建的 Solo 本来就只读。 |
+
+### DSH 上游配置热重载失败
+
+新安装的 DSH `0.1.2-rc.1` 可能解析到较新的间接依赖，导致默认 `live` 配置热重载启动失败。Beta 1 已在隔离 DSH 和浏览器中用上游支持的“仅启动时加载配置”模式跑通完整共序流程；这不代表默认热重载通过验证。
+
+仅出现上述 HMR 错误时：先关闭 DSH，备份 `<DSH_HOME>/profiles/web/package.json`（一般为 `~/.dsh/profiles/web/package.json`），把现有 `dsh.profile.patchReload` 改为 `"startup"`，保留其他字段、依赖和 bundles，**不要替换整个文件**。再用第 2 步命令启动。之后修改用户配置层需要重启 DSH；共序会话历史与实时同步不会关闭。不要清空凭据或随意更换上游版本来绕过错误。
 
 ## 安全边界
 
@@ -102,3 +109,5 @@ npm run release:dry-run-npm
 ```
 
 这些命令会验证无 Git 元数据安装与导入、真实 DSH profile 安装流程、被 Git 忽略的候选 tarball，以及使用非默认 `beta` dist-tag 的 npm 发布预检。
+
+针对上述上游错误，可选测试开关 `GATHERTHREAD_DSH_PATCH_RELOAD_STARTUP_FIXTURE=1` 只为脚本创建的临时 DSH 设置启动模式，并明确记录 `defaultLiveReloadVerified=false`，不会修改操作者的真实 DSH，也不代替上方手动处理。原生测试使用模拟模型，不证明真实 Provider 额度或模型能力。
