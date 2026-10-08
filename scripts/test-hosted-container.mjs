@@ -25,12 +25,15 @@ const endpoint = { id: "smoke", profileId: "default", label: "Smoke model", prov
 const file = (path, content, executable = false) => ({ path,
   content_base64: Buffer.from(content).toString("base64"), executable });
 const sourcePath = "src/deep/nested/value.cjs";
+// Workspace tmpfs forbids direct execution. Preserve executable metadata, then use its interpreter.
 const initialFiles = [file(sourcePath, "module.exports = 1;\n"),
   file("src/deep/nested/check.sh", "#!/bin/sh\nset -eu\nnode -e \"require('node:assert/strict').equal(require('./src/deep/nested/value.cjs'), 2)\"\nprintf '%s\\n' EXECUTABLE_OK\n", true),
-  file("test.cjs", "require('node:assert/strict').equal(require('./src/deep/nested/value.cjs'), 2); require('node:assert/strict').equal(require('node:child_process').execFileSync('./src/deep/nested/check.sh', {encoding:'utf8'}), 'EXECUTABLE_OK\\n'); console.log('TEST_OK');\n")];
+  file("test.cjs", "require('node:assert/strict').equal(require('./src/deep/nested/value.cjs'), 2); require('node:assert/strict').equal(require('node:child_process').execFileSync('/bin/sh', ['./src/deep/nested/check.sh'], {encoding:'utf8'}), 'EXECUTABLE_OK\\n'); console.log('TEST_OK');\n")];
 const checks = "const assert=require('node:assert/strict'),fs=require('node:fs');"
   + "assert.equal(process.getuid(),10001);"
   + "assert.equal(fs.readFileSync('/input/src/deep/nested/value.cjs','utf8'),'module.exports = 1;\\n');"
+  + "assert.equal(fs.statSync('/input/src/deep/nested/check.sh').mode & 0o111,0o111);"
+  + "assert.equal(fs.statSync('src/deep/nested/check.sh').mode & 0o100,0o100);"
   + "assert.throws(()=>fs.writeFileSync('/input/src/deep/nested/value.cjs','tampered'),e=>e.code==='EROFS');"
   + "assert.throws(()=>fs.writeFileSync('/run/gatherthread/prompt.txt','tampered'),e=>e.code==='EROFS');"
   + "assert.equal(fs.readFileSync('/run/gatherthread/opencode.json','utf8').includes('test-only-provider-token'),false);"
