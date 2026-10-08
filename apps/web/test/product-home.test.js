@@ -380,8 +380,8 @@ test("product home and privacy prepare public-registration Beta without retired 
   assert.match(privacy, /your task, selected shared conversation history and GT Cloud project code you opt in to use[\s\S]*selected model provider/u);
   assert.match(privacy, /在这一同步方式中[\s\S]*不接收 GitHub 登录凭据/u);
   assert.match(privacy, /In this sync mode[\s\S]*not GitHub credentials/u);
-  assert.match(privacy, /加密保存授权凭据和私有任务源码[\s\S]*最长保留七天/u);
-  assert.match(privacy, /encrypts stored authorization credentials and private task source[\s\S]*at most seven days/u);
+  assert.match(privacy, /加密保存授权凭据和私有任务源码[\s\S]*任务有效期七天，到期后不再提供读取[\s\S]*服务启动或相关请求触发清理[\s\S]*备份另按下述保留政策/u);
+  assert.match(privacy, /encrypts stored authorization credentials and private task source[\s\S]*Tasks expire after seven days and can no longer be read[\s\S]*server startup or when related requests trigger cleanup[\s\S]*backups after deletion follow the retention policy/u);
   assert.match(privacy, /Deleting a conversation, task or account does not refund that day's usage/u);
   assert.match(privacy, /expired usage days are pruned at server startup or when a new task is accepted/u);
 });
