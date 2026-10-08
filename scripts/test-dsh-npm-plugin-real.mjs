@@ -391,7 +391,7 @@ async function main() {
   const pluginManifest = JSON.parse(await readFile(path.join(PACKAGE_ROOT, "package.json"), "utf8"));
   assert.equal(pluginManifest.private, undefined, "the official profile package must remain publishable");
   assert.equal(pluginManifest.publishConfig?.access, "public");
-  assert.equal(pluginManifest.publishConfig?.tag, "alpha");
+  assert.equal(pluginManifest.publishConfig?.tag, "beta");
   assert.equal(pluginManifest.dsh?.bundle?.patch, "./cordis.patch.yml");
   const playwright = await loadPlaywright(dshRoot);
   if (CHROME_PATH) await access(CHROME_PATH);
