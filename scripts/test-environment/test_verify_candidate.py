@@ -128,6 +128,11 @@ class CandidateTests(unittest.TestCase):
         self.reject([row for row in baseline() if row[0].name != "apps/server/dist"])
         self.reject(baseline() + [entry("missing/file", b"fixture")])
 
+    def test_archive_root_if_present_must_be_a_directory(self):
+        for root in [entry(".", kind=tarfile.SYMTYPE, link=".."), entry(".", b"fixture")]:
+            with self.subTest(kind=root[0].type):
+                self.reject([root, *baseline()[1:]])
+
     def test_special_files_and_privileged_modes_are_rejected(self):
         for kind in [tarfile.FIFOTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE]:
             self.reject(baseline() + [entry("special", kind=kind)])
@@ -150,6 +155,18 @@ class CandidateTests(unittest.TestCase):
         result = self.check(baseline() + [entry("copy", kind=tarfile.LNKTYPE, link="./package.json")])
         self.assertEqual(result["expanded_bytes"], sum(info.size for info, _ in baseline()))
 
+    def test_regular_hardlink_chains_and_symlink_to_regular_chain_are_allowed(self):
+        self.check(baseline() + [entry("copy", kind=tarfile.LNKTYPE, link="package.json"),
+                                entry("copy2", kind=tarfile.LNKTYPE, link="copy"),
+                                entry("apps/copy", kind=tarfile.SYMTYPE, link="../copy2")])
+
+    def test_hardlinks_must_not_relocate_symlink_inodes(self):
+        for target, additional in [("apps/alias", []),
+                                   ("apps/copy", [entry("apps/copy", kind=tarfile.LNKTYPE, link="apps/alias")])]:
+            with self.subTest(target=target):
+                self.reject(baseline() + [entry("apps/alias", kind=tarfile.SYMTYPE, link="../package.json"),
+                                         *additional, entry("relocated", kind=tarfile.LNKTYPE, link=target)])
+
     def test_links_cannot_escape_be_empty_or_use_backslashes(self):
         for kind in [tarfile.SYMTYPE, tarfile.LNKTYPE]:
             for target in ["", "/outside", "../outside", "bad\\name", "x" * 4097]:
@@ -170,6 +187,28 @@ class CandidateTests(unittest.TestCase):
         self.reject(baseline() + [entry("alias", kind=tarfile.SYMTYPE, link="apps"),
                                  entry("alias/file", b"fixture")])
 
+    def test_symlink_prefix_then_parent_cannot_escape_release(self):
+        self.reject(baseline() + [entry("apps/package.json", b"fixture"),
+                                 entry("apps/alias", kind=tarfile.SYMTYPE, link=".."),
+                                 entry("apps/escape", kind=tarfile.SYMTYPE, link="alias/../package.json")])
+
+    def test_hardlink_target_symlink_prefix_then_parent_cannot_escape_release(self):
+        self.reject(baseline() + [entry("apps/package.json", b"fixture"),
+                                 entry("apps/alias", kind=tarfile.SYMTYPE, link=".."),
+                                 entry("apps/escape", kind=tarfile.LNKTYPE, link="apps/alias/../package.json")])
+
+    def test_symlink_prefix_then_parent_stays_inside_when_physically_valid(self):
+        self.check(baseline() + [entry("apps/alias", kind=tarfile.SYMTYPE, link="server/dist"),
+                                entry("apps/result", kind=tarfile.SYMTYPE, link="alias/../dist/src/cli.js")])
+
+    def test_parent_and_dot_cannot_traverse_a_regular_file(self):
+        for target in ["package.json/../package.json", "package.json/./", "missing/../package.json"]:
+            self.reject(baseline() + [entry("link", kind=tarfile.SYMTYPE, link=target)])
+
+    def test_symlink_to_internal_hardlink_keeps_hardlink_root_semantics(self):
+        self.check(baseline() + [entry("apps/copy", kind=tarfile.LNKTYPE, link="package.json"),
+                                entry("apps/alias", kind=tarfile.SYMTYPE, link="copy")])
+
     def test_checksum_format_filename_and_digest_are_exact(self):
         self.write()
         digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
@@ -185,6 +224,95 @@ class CandidateTests(unittest.TestCase):
         data[10] ^= 1
         self.archive.write_bytes(data)
         with self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_checksum_read_is_bounded_before_decoding(self):
+        self.write()
+        original = validator.regular_stream
+
+        class Witness:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def read(inner, size=-1):
+                self.assertEqual(size, 201)
+                return inner.stream.read(size)
+
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *arguments):
+                return self.stream.__exit__(*arguments)
+
+        def checked(path, maximum):
+            stream, metadata = original(path, maximum)
+            return (Witness(stream) if path == self.checksum else stream), metadata
+
+        with patch.object(validator, "regular_stream", checked):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_archive_copy_cannot_follow_a_growing_source_past_initial_size(self):
+        raw = self.write()
+        original = validator.regular_stream
+        consumed = 0
+
+        class Growing:
+            def __init__(self, stream):
+                self.stream = stream
+
+            def read(inner, size):
+                nonlocal consumed
+                self.assertLessEqual(size, len(raw) + 1 - consumed)
+                data = (raw + bytes(4096))[consumed:consumed + size]
+                consumed += len(data)
+                return data
+
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *arguments):
+                return self.stream.__exit__(*arguments)
+
+        def checked(path, maximum):
+            stream, metadata = original(path, maximum)
+            return (Growing(stream) if path == self.archive else stream), metadata
+
+        with patch.object(validator, "regular_stream", checked), self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+        self.assertLessEqual(consumed, len(raw) + 1)
+
+    def test_hash_preflight_and_parser_use_one_private_snapshot_not_source_path(self):
+        self.write()
+        original_stream = validator.regular_stream
+        original_preflight = validator.preflight_tar
+        original_open = tarfile.open
+        source = snapshot = None
+
+        def checked(path, maximum):
+            nonlocal source
+            stream, metadata = original_stream(path, maximum)
+            if path == self.archive:
+                source = stream
+            return stream, metadata
+
+        def preflight(stream):
+            nonlocal snapshot
+            self.assertIsNot(stream, source)
+            snapshot = stream
+            return original_preflight(stream)
+
+        def parser(*arguments, **keywords):
+            self.assertIs(keywords["fileobj"], snapshot)
+            return original_open(*arguments, **keywords)
+
+        with patch.object(validator, "regular_stream", checked), patch.object(validator, "preflight_tar", preflight), \
+                patch.object(tarfile, "open", parser):
             validator.validate_archive(self.archive, COMMIT)
 
     def test_compressed_size_boundary(self):
@@ -220,6 +348,14 @@ class CandidateTests(unittest.TestCase):
             validator.validate_archive(self.archive, COMMIT)
         with patch.object(validator, "MAX_METADATA_BYTES", 16), self.assertRaises(ValueError):
             validator.validate_archive(self.archive, COMMIT)
+
+    def test_solaris_pax_metadata_uses_the_same_small_extended_cap(self):
+        metadata = b"9 path=a\n"
+        header = tarfile.TarInfo("metadata")
+        header.type, header.size = tarfile.SOLARIS_XHDTYPE, len(metadata)
+        raw = header.tobuf(format=tarfile.GNU_FORMAT) + metadata.ljust(512, b"\0") + bytes(1024)
+        with patch.object(validator, "MAX_EXTENDED_BYTES", len(metadata) - 1), self.assertRaises(ValueError):
+            validator.preflight_tar(io.BytesIO(gzip.compress(raw, mtime=0)))
 
     def test_truncated_and_appended_archives_are_rejected(self):
         raw = gzip.decompress(self.write())
@@ -300,6 +436,27 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(result.stdout, "")
         self.assertNotIn(str(self.directory), result.stderr)
         self.assertFalse(output.exists())
+
+    def test_deep_pax_parse_failure_never_exposes_a_traceback(self):
+        metadata = b"9 path=a\n"
+        header = tarfile.TarInfo("metadata")
+        header.type, header.size = tarfile.XHDTYPE, len(metadata)
+        record = header.tobuf(format=tarfile.GNU_FORMAT) + metadata.ljust(512, b"\0")
+        raw = gzip.decompress(self.write())
+        self.write(raw=gzip.compress(record * 1200 + raw, mtime=0))
+        result = subprocess.run([sys.executable, str(SCRIPT), str(self.archive), COMMIT],
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "STOP: candidate validation failed\n")
+
+    def test_invalid_deflate_block_never_exposes_a_traceback(self):
+        self.write(raw=b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\x07" + bytes(8))
+        result = subprocess.run([sys.executable, str(SCRIPT), str(self.archive), COMMIT],
+                                capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertEqual(result.stderr, "STOP: candidate validation failed\n")
 
     def test_provenance_is_separate_new_public_file(self):
         self.write()

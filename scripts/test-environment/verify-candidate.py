@@ -9,6 +9,8 @@ import posixpath
 import re
 import stat
 import tarfile
+import tempfile
+import zlib
 from pathlib import Path
 
 VERSION = "0.1.0-beta.1"
@@ -102,7 +104,7 @@ def preflight_tar(stream):
             records += 1
             require(records <= MAX_MEMBERS, "Archive member count exceeds limit")
             require(record.size >= 0, "Invalid archive entry size")
-            if record.type in {tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.GNUTYPE_LONGNAME,
+            if record.type in {tarfile.XHDTYPE, tarfile.XGLTYPE, tarfile.SOLARIS_XHDTYPE, tarfile.GNUTYPE_LONGNAME,
                                tarfile.GNUTYPE_LONGLINK}:
                 require(record.size <= MAX_EXTENDED_BYTES, "Archive metadata exceeds limit")
                 metadata_bytes += record.size
@@ -122,13 +124,30 @@ def validate_archive(path, commit):
     checksum_path = path.with_name("candidate.tar.gz.sha256")
     checksum, checksum_before = regular_stream(checksum_path, 200)
     with checksum:
-        checksum_text = checksum.read().decode("ascii")
+        checksum_bytes = checksum.read(201)
+        require(len(checksum_bytes) == checksum_before.st_size and len(checksum_bytes) <= 200,
+                "Candidate checksum changed or exceeds limit")
+        checksum_text = checksum_bytes.decode("ascii")
         require(identity(checksum_before) == identity(os.fstat(checksum.fileno()))
                 == identity(checksum_path.lstat()), "Candidate checksum changed")
     match = re.fullmatch(r"([a-f0-9]{64})  candidate\.tar\.gz\n", checksum_text)
     require(match is not None, "Invalid candidate checksum file")
-    stream, before = regular_stream(path, MAX_ARCHIVE_BYTES)
-    with stream:
+    source, before = regular_stream(path, MAX_ARCHIVE_BYTES)
+    # One disk-backed private snapshot serves every pass. Never retain a whole
+    # 500 MiB archive in memory or reparse a mutable source path after preflight.
+    with source, tempfile.TemporaryFile(mode="w+b") as stream:
+        copied = 0
+        while True:
+            chunk = source.read(min(1024 * 1024, before.st_size - copied + 1))
+            copied += len(chunk)
+            require(copied <= before.st_size and copied <= MAX_ARCHIVE_BYTES, "Candidate file grew during copy")
+            if not chunk:
+                break
+            require(stream.write(chunk) == len(chunk), "Candidate snapshot write failed")
+        require(copied == before.st_size, "Candidate file shrank during copy")
+        require(identity(before) == identity(os.fstat(source.fileno())) == identity(path.lstat()),
+                "Candidate file changed during copy")
+        stream.seek(0)
         digest = hashlib.sha256()
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
@@ -145,6 +164,7 @@ def validate_archive(path, commit):
                 require(not forbidden(name), "Archive contains private configuration, credentials, or database files")
                 require(member.isdir() or member.isreg() or member.issym() or member.islnk(), "Special archive member refused")
                 require(not member.issparse(), "Sparse archive member refused")
+                require(name != "." or member.isdir(), "Archive root must be a directory")
                 require(member.mode & 0o7000 == 0, "Privileged file mode refused")
                 entries[name] = member
                 if member.isreg():
@@ -155,20 +175,43 @@ def validate_archive(path, commit):
                     target = member.linkname
                     require(target and len(target.encode("utf-8")) <= MAX_NAME_BYTES and "\x00" not in target
                             and "\\" not in target and not target.startswith("/"), "Invalid archive link")
-                    target = posixpath.normpath(posixpath.join(posixpath.dirname(name), target) if member.issym() else target)
-                    require(target != ".." and not target.startswith("../"), "Archive link escapes release")
+                    # Preserve component order: alias/.. is not equivalent to
+                    # lexical normalization when alias itself is a symlink.
                     links[name] = target
 
-            def resolve(name, visited=()):
-                components = [] if name == "." else name.split("/")
-                for index in range(len(components)):
-                    prefix = "/".join(components[:index + 1])
-                    if prefix in links:
-                        require(prefix not in visited and len(visited) < 64, "Cyclic archive link")
-                        rewritten = posixpath.normpath(posixpath.join(links[prefix], *components[index + 1:]))
-                        require(rewritten != ".." and not rewritten.startswith("../"), "Resolved archive link escapes release")
-                        return resolve(rewritten, visited + (prefix,))
-                return name
+            def resolve(name):
+                hops = 0
+
+                def walk(components, resolved, active=(), hardlink_target=False):
+                    nonlocal hops
+                    for index, component in enumerate(components):
+                        if component in {"", "."}:
+                            continue
+                        if component == "..":
+                            require(resolved, "Resolved archive link escapes release")
+                            resolved.pop()
+                            continue
+                        prefix = "/".join([*resolved, component])
+                        require(prefix in entries, "Archive link points to a missing target")
+                        if prefix in links:
+                            require(not hardlink_target or not entries[prefix].issym(),
+                                    "Hardlink target must not contain a symbolic link")
+                            require(prefix not in active and hops < 64, "Cyclic or excessive archive links")
+                            hops += 1
+                            # Hardlink names are relative to the archive root;
+                            # symlink names are relative to their physical parent.
+                            base = [] if entries[prefix].islnk() else resolved.copy()
+                            resolved = walk(links[prefix].split("/"), base, (*active, prefix),
+                                            hardlink_target or entries[prefix].islnk())
+                        else:
+                            resolved.append(component)
+                        if index < len(components) - 1:
+                            current = "/".join(resolved) or "."
+                            require(current in entries and entries[current].isdir(),
+                                    "Archive link traverses a non-directory")
+                    return resolved
+
+                return "/".join(walk([] if name == "." else name.split("/"), [])) or "."
 
             for name, member in entries.items():
                 resolved = resolve(name)
@@ -190,7 +233,7 @@ def validate_archive(path, commit):
                     "Candidate identity mismatch")
             manifest = read_json("package.json")
             require(isinstance(manifest, dict) and manifest.get("version") == VERSION, "Candidate version mismatch")
-        require(identity(before) == identity(os.fstat(stream.fileno())) == identity(path.lstat()), "Candidate file changed")
+        require(identity(before) == identity(os.fstat(source.fileno())) == identity(path.lstat()), "Candidate file changed")
     return {"source_commit": commit, "version": VERSION, "node": NODE, "platform": "linux", "arch": "x64",
             "archive": "candidate.tar.gz", "archive_sha256": digest.hexdigest(), "archive_bytes": before.st_size,
             "expanded_bytes": expanded, "member_count": len(entries)}
@@ -233,6 +276,6 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, OSError, UnicodeError, tarfile.TarError, EOFError):
+    except (ValueError, OSError, UnicodeError, tarfile.TarError, EOFError, RecursionError, zlib.error):
         # Do not echo a malicious filename, file content, traceback, or private environment.
         raise SystemExit("STOP: candidate validation failed") from None
