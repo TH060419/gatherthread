@@ -1,0 +1,361 @@
+"""Synthetic archive tests only: no network, extraction, providers, or host installation."""
+import gzip
+import hashlib
+import importlib.util
+import io
+import json
+import stat
+import subprocess
+import sys
+import tarfile
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
+
+SCRIPT = Path(__file__).with_name("verify-candidate.py")
+SPEC = importlib.util.spec_from_file_location("candidate_validator", SCRIPT)
+validator = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(validator)
+COMMIT = "a" * 40
+METADATA = {"commit": COMMIT, "node": "v24.16.0", "platform": "linux", "arch": "x64"}
+DIRECTORIES = [".", "apps", "apps/server", "apps/server/dist", "apps/server/dist/src",
+               "apps/web", "apps/web/dist"]
+
+
+def entry(name, data=b"", kind=tarfile.REGTYPE, link="", mode=0o644):
+    info = tarfile.TarInfo(name)
+    info.type, info.linkname, info.mode = kind, link, mode
+    info.size = len(data) if kind == tarfile.REGTYPE else 0
+    return info, data
+
+
+def baseline():
+    return [*(entry(name, kind=tarfile.DIRTYPE, mode=0o755) for name in DIRECTORIES),
+            entry("candidate.json", json.dumps(METADATA).encode()),
+            entry("package.json", b'{"version":"0.1.0-beta.1"}'),
+            entry("apps/server/dist/src/cli.js", b"// synthetic fixture\n"),
+            entry("apps/web/dist/index.html", b"<p>fixture</p>")]
+
+
+class CandidateTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix="gt-candidate-test-")
+        self.directory = Path(self.temporary.name)
+        self.archive = self.directory / "candidate.tar.gz"
+        self.checksum = self.directory / "candidate.tar.gz.sha256"
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def write(self, entries=None, raw=None, archive_format=tarfile.GNU_FORMAT):
+        if raw is None:
+            stream = io.BytesIO()
+            with tarfile.open(fileobj=stream, mode="w", format=archive_format) as archive:
+                for info, data in entries if entries is not None else baseline():
+                    archive.addfile(info, io.BytesIO(data) if info.isreg() else None)
+            raw = gzip.compress(stream.getvalue(), mtime=0)
+        self.archive.write_bytes(raw)
+        self.checksum.write_text(hashlib.sha256(raw).hexdigest() + "  candidate.tar.gz\n", encoding="ascii")
+        return raw
+
+    def check(self, entries=None):
+        self.write(entries)
+        return validator.validate_archive(self.archive, COMMIT)
+
+    def reject(self, entries):
+        with self.assertRaises((ValueError, tarfile.TarError, EOFError, OSError)):
+            self.check(entries)
+
+    def test_valid_identity_and_public_stats(self):
+        result = self.check()
+        self.assertEqual(result["source_commit"], COMMIT)
+        self.assertEqual(result["archive_bytes"], self.archive.stat().st_size)
+        self.assertEqual(result["member_count"], len(baseline()))
+        self.assertNotIn(str(self.directory), json.dumps(result))
+
+    def test_metadata_requires_exact_four_fields(self):
+        for field, value in [("commit", "b" * 40), ("node", "v24.15.0"), ("platform", "darwin"),
+                             ("arch", "arm64"), ("provenance", {})]:
+            with self.subTest(field=field):
+                rows = baseline()
+                rows[7] = entry("candidate.json", json.dumps({**METADATA, field: value}).encode())
+                self.reject(rows)
+        rows = baseline()
+        rows[7] = entry("candidate.json", b'{}')
+        self.reject(rows)
+
+    def test_duplicate_json_keys_are_rejected(self):
+        rows = baseline()
+        rows[7] = entry("candidate.json", ('{"commit":"' + COMMIT + '",' + json.dumps(METADATA)[1:]).encode())
+        self.reject(rows)
+
+    def test_version_is_pinned_and_package_must_be_object(self):
+        for value in [b'{"version":"0.1.0-alpha.8"}', b'[]', b'null']:
+            rows = baseline()
+            rows[8] = entry("package.json", value)
+            self.reject(rows)
+
+    def test_required_files_must_be_present_and_regular(self):
+        for name in ["candidate.json", "package.json", "apps/server/dist/src/cli.js", "apps/web/dist/index.html"]:
+            with self.subTest(name=name):
+                rows = [row for row in baseline() if row[0].name != name]
+                self.reject(rows)
+                self.reject(rows + [entry(name, kind=tarfile.SYMTYPE, link="package.json")])
+
+    def test_private_paths_and_databases_are_rejected(self):
+        for name in [".git/config", ".ssh/id_rsa", ".aws/config", ".workbench/state", ".local/state",
+                     ".env", ".env.local", ".env.production", ".git-credentials", ".netrc", ".npmrc",
+                     "authorized_keys", "known_hosts", "id_rsa", "id_ed25519", "secret.pem", "secret.key",
+                     "data.db", "data.sqlite", "data.sqlite3"]:
+            with self.subTest(name=name):
+                self.reject(baseline() + [entry(name)])
+
+    def test_public_environment_templates_are_allowed(self):
+        self.check(baseline() + [entry(name, b"# no secrets\n") for name in
+                                [".env.example", ".env.sample", ".env.template"]])
+
+    def test_absolute_backslash_parent_and_overlong_paths_are_rejected(self):
+        for name in ["/outside", "../outside", "apps/../outside", "apps\\outside", "x" * 4097]:
+            self.reject(baseline() + [entry(name)])
+
+    def test_duplicate_normalized_members_are_rejected(self):
+        self.reject(baseline() + [entry("./package.json", b"duplicate")])
+
+    def test_all_parents_must_be_explicit_directories(self):
+        self.reject([row for row in baseline() if row[0].name != "apps/server/dist"])
+        self.reject(baseline() + [entry("missing/file", b"fixture")])
+
+    def test_special_files_and_privileged_modes_are_rejected(self):
+        for kind in [tarfile.FIFOTYPE, tarfile.CHRTYPE, tarfile.BLKTYPE]:
+            self.reject(baseline() + [entry("special", kind=kind)])
+        for mode in [0o4644, 0o2644, 0o1644]:
+            self.reject(baseline() + [entry("privileged", mode=mode)])
+
+    def test_sparse_payload_is_rejected(self):
+        self.write()
+        with patch.object(tarfile.TarInfo, "issparse", return_value=True), self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_internal_workspace_and_bin_symlinks_are_allowed(self):
+        self.check(baseline() + [entry("node_modules", kind=tarfile.DIRTYPE),
+                               entry("node_modules/.bin", kind=tarfile.DIRTYPE),
+                               entry("node_modules/package", kind=tarfile.SYMTYPE, link="../apps/server"),
+                               entry("node_modules/.bin/tool", kind=tarfile.SYMTYPE,
+                                     link="../package/dist/src/cli.js")])
+
+    def test_valid_internal_hardlink_is_allowed_and_not_double_charged(self):
+        result = self.check(baseline() + [entry("copy", kind=tarfile.LNKTYPE, link="./package.json")])
+        self.assertEqual(result["expanded_bytes"], sum(info.size for info, _ in baseline()))
+
+    def test_links_cannot_escape_be_empty_or_use_backslashes(self):
+        for kind in [tarfile.SYMTYPE, tarfile.LNKTYPE]:
+            for target in ["", "/outside", "../outside", "bad\\name", "x" * 4097]:
+                self.reject(baseline() + [entry("link", kind=kind, link=target)])
+
+    def test_link_target_must_exist_and_hardlink_target_must_be_regular(self):
+        self.reject(baseline() + [entry("link", kind=tarfile.SYMTYPE, link="missing")])
+        self.reject(baseline() + [entry("link", kind=tarfile.LNKTYPE, link="apps")])
+
+    def test_link_cycles_and_deep_chains_are_rejected(self):
+        self.reject(baseline() + [entry("a", kind=tarfile.SYMTYPE, link="b"),
+                                 entry("b", kind=tarfile.SYMTYPE, link="a")])
+        rows = [entry(f"link{index}", kind=tarfile.SYMTYPE,
+                      link=f"link{index + 1}" if index < 64 else "package.json") for index in range(65)]
+        self.reject(baseline() + rows)
+
+    def test_no_member_can_traverse_a_link_parent(self):
+        self.reject(baseline() + [entry("alias", kind=tarfile.SYMTYPE, link="apps"),
+                                 entry("alias/file", b"fixture")])
+
+    def test_checksum_format_filename_and_digest_are_exact(self):
+        self.write()
+        digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
+        for text in [digest + "  other.tar.gz\n", digest + "  candidate.tar.gz\nextra\n",
+                     "0" * 64 + "  candidate.tar.gz\n", digest + " *candidate.tar.gz\n"]:
+            self.checksum.write_text(text)
+            with self.assertRaises(ValueError):
+                validator.validate_archive(self.archive, COMMIT)
+
+    def test_changed_archive_is_rejected_by_checksum(self):
+        self.write()
+        data = bytearray(self.archive.read_bytes())
+        data[10] ^= 1
+        self.archive.write_bytes(data)
+        with self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_compressed_size_boundary(self):
+        size = len(self.write())
+        with patch.object(validator, "MAX_ARCHIVE_BYTES", size):
+            validator.validate_archive(self.archive, COMMIT)
+        with patch.object(validator, "MAX_ARCHIVE_BYTES", size - 1), self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_expanded_file_and_member_boundaries(self):
+        self.write()
+        expanded = sum(info.size for info, _ in baseline())
+        for constant, limit in [("MAX_EXPANDED_BYTES", expanded),
+                                ("MAX_FILE_BYTES", max(info.size for info, _ in baseline())),
+                                ("MAX_MEMBERS", len(baseline()))]:
+            with patch.object(validator, constant, limit):
+                validator.validate_archive(self.archive, COMMIT)
+            with patch.object(validator, constant, limit - 1), self.assertRaises(ValueError):
+                validator.validate_archive(self.archive, COMMIT)
+
+    def test_whole_decompressed_stream_is_bounded_including_padding(self):
+        raw = self.write()
+        size = len(gzip.decompress(raw))
+        with patch.object(validator, "MAX_TAR_BYTES", size):
+            validator.validate_archive(self.archive, COMMIT)
+        with patch.object(validator, "MAX_TAR_BYTES", size - 1), self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_extended_metadata_is_bounded_before_parsing(self):
+        rows = baseline() + [entry("x" * 200, b"fixture")]
+        self.write(rows, archive_format=tarfile.PAX_FORMAT)
+        with patch.object(validator, "MAX_EXTENDED_BYTES", 16), self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+        with patch.object(validator, "MAX_METADATA_BYTES", 16), self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_truncated_and_appended_archives_are_rejected(self):
+        raw = gzip.decompress(self.write())
+        for altered in [raw[:300], raw + b"hidden"]:
+            self.write(raw=gzip.compress(altered, mtime=0))
+            with self.assertRaises((ValueError, tarfile.TarError, EOFError)):
+                validator.validate_archive(self.archive, COMMIT)
+
+    def test_truncated_gzip_footer_is_rejected(self):
+        raw = self.write()
+        self.write(raw=raw[:-6])
+        with self.assertRaises((ValueError, tarfile.TarError, EOFError, OSError)):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_archive_and_checksum_symlinks_are_refused(self):
+        # Windows CI may require privilege for symlink creation. Use lstat metadata
+        # rather than skip, so every platform exercises this refusal contract.
+        self.write()
+        for target in [self.archive, self.checksum]:
+            original = Path.lstat
+
+            def linked(path, *args, **kwargs):
+                result = original(path, *args, **kwargs)
+                if path == target:
+                    class Metadata:
+                        st_mode = stat.S_IFLNK | 0o777
+                        st_nlink, st_size = 1, result.st_size
+                    return Metadata()
+                return result
+
+            with patch.object(Path, "lstat", linked), self.assertRaises(ValueError):
+                validator.validate_archive(self.archive, COMMIT)
+
+    def test_archive_and_checksum_identity_changes_are_refused(self):
+        self.write()
+        original = Path.lstat
+        for target in [self.archive, self.checksum]:
+            calls = 0
+
+            def changed(path, *args, **kwargs):
+                nonlocal calls
+                result = original(path, *args, **kwargs)
+                if path == target:
+                    calls += 1
+                    if calls == 2:
+                        return SimpleNamespace(**{name: getattr(result, name) + (1 if name == "st_ino" else 0)
+                                                  for name in ["st_dev", "st_ino", "st_size", "st_mtime_ns",
+                                                               "st_ctime_ns", "st_mode", "st_nlink"]})
+                return result
+
+            with patch.object(Path, "lstat", changed), self.assertRaises(ValueError):
+                validator.validate_archive(self.archive, COMMIT)
+
+    def test_opened_file_identity_must_match_checked_file(self):
+        self.write()
+        original = validator.os.fstat
+
+        def changed(descriptor):
+            result = original(descriptor)
+            return SimpleNamespace(**{name: getattr(result, name) + (1 if name == "st_ino" else 0)
+                                      for name in ["st_dev", "st_ino", "st_size", "st_mtime_ns",
+                                                   "st_ctime_ns", "st_mode", "st_nlink"]})
+
+        with patch.object(validator.os, "fstat", changed), self.assertRaises(ValueError):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_invalid_commit_is_refused_before_file_access(self):
+        for commit in ["main", "-x", "A" * 40, "a" * 39, "a" * 41, "a" * 40 + ";echo bad"]:
+            with self.assertRaises(ValueError):
+                validator.validate_archive(self.archive, commit)
+
+    def test_cli_failure_is_generic_and_writes_no_provenance(self):
+        self.write()
+        output = self.directory / "provenance.json"
+        result = subprocess.run([sys.executable, str(SCRIPT), str(self.archive), "b" * 40,
+                                 "--provenance", str(output)], capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.stdout, "")
+        self.assertNotIn(str(self.directory), result.stderr)
+        self.assertFalse(output.exists())
+
+    def test_provenance_is_separate_new_public_file(self):
+        self.write()
+        output = self.directory / "provenance.json"
+        command = [sys.executable, str(SCRIPT), str(self.archive), COMMIT, "--provenance", str(output),
+                   "--workflow-sha", "b" * 40, "--run-id", "123", "--run-attempt", "1",
+                   "--event", "workflow_dispatch", "--ref", "refs/heads/main",
+                   "--repository", validator.REPOSITORY, "--workflow-ref", validator.WORKFLOW + "refs/heads/main"]
+        subprocess.run(command, check=True, capture_output=True, timeout=10)
+        metadata = json.loads(output.read_text())
+        self.assertTrue(metadata["reviewed_main"])
+        self.assertEqual(metadata["workflow_sha"], "b" * 40)
+        self.assertNotIn(str(self.directory), output.read_text())
+        self.assertNotEqual(subprocess.run(command, capture_output=True, timeout=10).returncode, 0)
+
+    def test_premerge_provenance_never_claims_reviewed_main(self):
+        self.write()
+        output = self.directory / "provenance.json"
+        subprocess.run([sys.executable, str(SCRIPT), str(self.archive), COMMIT, "--provenance", str(output),
+                        "--workflow-sha", COMMIT, "--run-id", "123", "--run-attempt", "1", "--event", "push",
+                        "--ref", validator.FEATURE_REF, "--repository", validator.REPOSITORY,
+                        "--workflow-ref", validator.WORKFLOW + validator.FEATURE_REF],
+                       check=True, capture_output=True, timeout=10)
+        self.assertFalse(json.loads(output.read_text())["reviewed_main"])
+
+    def test_main_verifier_public_provenance_and_output_without_extraction(self):
+        self.write()
+        output = self.directory / "provenance.json"
+        arguments = [str(SCRIPT), str(self.archive), COMMIT, "--provenance", str(output),
+                     "--workflow-sha", "b" * 40, "--run-id", "123", "--run-attempt", "1",
+                     "--event", "workflow_dispatch", "--ref", "refs/heads/main",
+                     "--repository", validator.REPOSITORY, "--workflow-ref", validator.WORKFLOW + "refs/heads/main"]
+        capture = io.StringIO()
+        with patch.object(sys, "argv", arguments), redirect_stdout(capture):
+            validator.main()
+        result = json.loads(capture.getvalue())
+        self.assertEqual(result["release_verify_exit_code"], 0)
+        self.assertEqual(json.loads(output.read_text()), result)
+        self.assertEqual(sorted(path.name for path in self.directory.iterdir()),
+                         ["candidate.tar.gz", "candidate.tar.gz.sha256", "provenance.json"])
+
+    def test_provenance_ref_repository_and_run_identity_are_allowlisted(self):
+        self.write()
+        for flag, bad in [("--workflow-ref", validator.WORKFLOW + "refs/heads/other"),
+                          ("--repository", "other/repository"), ("--run-id", "123;echo bad"),
+                          ("--run-attempt", "0"), ("--workflow-sha", "b" * 39),
+                          ("--event", "pull_request_target"), ("--ref", "refs/heads/other")]:
+            output = self.directory / "rejected-provenance.json"
+            command = [sys.executable, str(SCRIPT), str(self.archive), COMMIT, "--provenance", str(output),
+                       "--workflow-sha", "b" * 40, "--run-id", "123", "--run-attempt", "1",
+                       "--event", "workflow_dispatch", "--ref", "refs/heads/main",
+                       "--repository", validator.REPOSITORY, "--workflow-ref", validator.WORKFLOW + "refs/heads/main"]
+            command[command.index(flag) + 1] = bad
+            self.assertNotEqual(subprocess.run(command, capture_output=True, timeout=10).returncode, 0)
+            self.assertFalse(output.exists())
+
+
+if __name__ == "__main__":
+    unittest.main()

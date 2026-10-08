@@ -71,11 +71,19 @@ Beta 1 的轻量云端任务与 GitHub 云端仓库任务都已开放网页入�
 ## 先测试，再由人工推广
 
 1. 选择经审核的最终 `main` full SHA 作为唯一候选来源。提交、推送、合并、发 tag/npm、DNS/TLS/服务器变更各按 [CONTRIBUTING](../CONTRIBUTING.md) 授权，不因文档更新自动执行。
-2. 在目标兼容 Linux/架构/Node 24 环境，运行 `bash scripts/test-environment/prepare-candidate.sh FULL_SHA ABSOLUTE_NEW_DIR`。脚本从固定提交归档到新目录，`npm ci`、完整 `release:verify`、构建后生成带 commit/Node/平台信息的 tarball 和 SHA256。没有 env、Git 或真实数据；不切换任何服务。代码更新后用新 SHA 重建，不在服务器重编两份产物。
+2. 使用下述隔离构建器，或在独立的目标兼容 Linux/架构/Node 24 环境运行 `bash scripts/test-environment/prepare-candidate.sh FULL_SHA ABSOLUTE_NEW_DIR`。脚本从固定提交归档到新目录，`npm ci`、完整 `release:verify`、构建全部成功后生成带 commit/Node/平台信息的 tarball 和 SHA256。没有 env、Git 或真实数据；不切换任何服务。代码更新后用新 SHA 重建，不在正式服务所在的小容量 ECS 上运行完整构建，也不在服务器重编两份产物。
 3. 服务器管理会话验证 tarball 校验和，将**同一产物**解到测试的版本目录；env 与数据在产物外。创建 `gatherthread-test` 用户、0700 数据/备份目录、私密配置与独立随机密钥，检查报告、磁盘/内存余量与 backup/restore。只安装测试 units，追加独立 Caddy block，不能替换正式配置。28787/18787 都不开放公网；防火墙只让 Caddy 80/443 入站。
 4. 获 DNS/TLS 授权后添加 test 子域 A/AAAA、签发 TLS；Caddy validate 成功才由管理会话 reload。核对反向代理 Host、可信 client-IP 覆写与证书，测试 service ready 和页面标记。在邮件接入复测后，负责人只在测试 env 开注册/找回并用少量授权收件地址验证，无批量邮件或付费模型测试。
 5. 完成下表验收，记录 commit、产物 SHA、配置指纹、浏览器/OS 版本、模拟与真实检查范围；负责人审核后再给正式推广授权。测试通过**不自动**修改正式配置、公开注册或更新正式服务。
 6. 正式推广使用已验收的同一 tarball/SHA，保留正式 env、生产默认关闭门禁、现有独立 DB/密钥。在正式自己的 verified backup 后，按既有 [OPERATIONS](OPERATIONS.md) 升级与有限烟测。正式与测试日志、定时器、删除登记与回滚记录分别管理。
+
+### 隔离 Linux 候选构建与校验
+
+经审核合并后，在 GitHub Actions 的 **Isolated test candidate** 工作流选择 `main`，填入本次审核的完整 40 位小写提交 SHA。工作流拒绝非 `main` 的手动调用及不属于已获取 `origin/main` 历史的提交；运行时固定为 GitHub 托管 Ubuntu 24.04 / Linux x64 / Node `24.16.0`，不用生产 ECS。它在新建 0700 目录、`umask 077` 和无私密配置的环境中调用原有完整构建脚本；不跳过检查、不拼接多次失败的部分结果、不调用真实模型，也不自动部署。构建器的特定开发分支 push 仅用于合并前验证，其产物标为 `reviewed_main: false`，不能作为正式审核后的安装候选。
+
+只有完整构建与归档安全验证都成功，才上传 **三个文件**：`candidate.tar.gz`、`candidate.tar.gz.sha256`、`provenance.json`，保留三天。下载后在隔离目录运行 `python3 scripts/test-environment/verify-candidate.py candidate.tar.gz FULL_SHA` 再次验证。包内 `candidate.json` 固定只有 `commit`、`node`、`platform`、`arch` 四字段；单独的公开 provenance 记录源提交、实际工作流提交/运行编号、版本、tar SHA256、压缩大小与展开大小，不含环境、私密路径、账号或项目数据。`reviewed_main` 只是工作流来源标记，不是审批签名或部署许可。
+
+归档验证拒绝私密配置、凭据/数据库文件、路径逃逸、特殊文件、危险或循环链接，以及超出安装器边界的包（100,000 个成员、单文件 64 MiB、文件展开总量 512 MiB）。额外限制压缩包 500 MiB、完整解压 tar 流 640 MiB 和扩展元数据，防止在解析前耗尽资源。内部依赖链接仍须指向包内已存在目标。GitHub Actions 显示的 artifact digest 是其外层产物的校验，不等于 tar SHA256；普通 SHA256 也不是加密签名。服务器会话须以实际新提交、tar SHA/字节数和新的版本路径重新固定安装器，再独立核验磁盘余量、权限和真实宿主验收；旧产物、旧路径、CI 成功都不能替代这些门。
 
 ## 备份与回滚
 

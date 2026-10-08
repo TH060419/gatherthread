@@ -450,6 +450,9 @@ test("Codex hook relay refuses to tighten a symbolic-link directory", {
   const root = await mkdtemp(path.join(tmpdir(), "gatherthread-codex-hook-symlink-mode-"));
   const target = path.join(root, "shared-target");
   await mkdir(target, { mode: 0o755 });
+  // Establish the shared-directory fixture even when the runner uses a private umask.
+  await chmod(target, 0o755);
+  assert.equal((await stat(target)).mode & 0o777, 0o755);
   const linkedDirectory = path.join(root, "linked-state");
   await symlink(target, linkedDirectory);
   const relay = new CodexHookRelayServer({
