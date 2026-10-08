@@ -1,6 +1,6 @@
 // Real Docker/OpenCode/npm/test/build execution. All GitHub/model/registry responses are local fixtures.
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -18,6 +18,14 @@ const memoryMiB = hostedContainerMemoryMiB('repository', process.env.GATHERTHREA
   ? undefined : Number(process.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB));
 const directory = mkdtempSync(join(tmpdir(), 'gt-repository-smoke-'));
 let calls = 0, tarballCalls = 0, issued = false, observedChecks = false;
+
+function toolOutputLines(messages) {
+  return messages.filter((message) => message.role === 'tool').flatMap((message) =>
+    typeof message.content === 'string' ? [message.content]
+      : Array.isArray(message.content) ? message.content.filter((block) =>
+        block.type === 'text' && typeof block.text === 'string').map((block) => block.text) : [])
+    .flatMap((content) => content.split(/\r?\n/u));
+}
 // This smoke uses only fixtures. Production keeps raw container output private.
 async function runFixtureDocker(args) {
   const name = args[args.indexOf('--name') + 1];
@@ -71,8 +79,9 @@ try {
     + "assert.throws(()=>fs.writeFileSync('/run/gatherthread/prompt.txt','tampered'),e=>e.code==='EROFS');"
     + "assert.equal(fs.readFileSync('/run/gatherthread/opencode.json','utf8').includes('test-only-model-credential'),false);"
     + "assert.equal(Object.keys(process.env).some(k=>/^(GATHERTHREAD_|GITHUB_TOKEN$|GH_TOKEN$|AWS_|SILICONFLOW_API_KEY$|OPENAI_API_KEY$)/.test(k)),false);"
-    + "fs.writeFileSync('src/deep/nested/value.cjs','module.exports = 2;\\n');console.log('READONLY_OK SECRETS_ABSENT');";
-  const command = `node -e ${JSON.stringify(checks)} && npm test && npm run build`;
+    + "fs.writeFileSync('src/deep/nested/value.cjs','module.exports = 2;\\n');console.log('READONLY_OK');console.log('SECRETS_ABSENT');";
+  const commandMarker = `GT_SMOKE_COMMAND_OK_${randomBytes(12).toString('hex')}`;
+  const command = `node -e ${JSON.stringify(checks)} && npm test && npm run build && printf '\\n%s\\n' ${commandMarker}`;
   const fetcher = async (url, init) => {
     if (String(url) === 'https://registry.npmjs.org/gt-smoke-dependency/-/gt-smoke-dependency-1.0.0.tgz') { tarballCalls++; return new Response(tarball); }
     assert.equal(String(url), 'https://model.example/v1/chat/completions');
@@ -81,8 +90,8 @@ try {
     const useTool = !issued && body.tools?.some((tool) => tool.function?.name === 'bash');
     if (useTool) issued = true;
     if (body.messages.some((message) => message.role === 'tool')) {
-      const transcript = JSON.stringify(body.messages);
-      for (const marker of ['TEST_OK', 'BUILD_OK', 'READONLY_OK', 'SECRETS_ABSENT']) assert.ok(transcript.includes(marker));
+      const lines = toolOutputLines(body.messages);
+      for (const marker of ['TEST_OK', 'BUILD_OK', 'READONLY_OK', 'SECRETS_ABSENT', commandMarker]) assert.ok(lines.includes(marker));
       observedChecks = true;
     }
     const delta = useTool ? { role: 'assistant', tool_calls: [{ index: 0, id: 'call_repository', type: 'function', function: { name: 'bash', arguments: JSON.stringify({ command, description: 'Verify read-only input and edit and test nested source' }) } }] } : { role: 'assistant', content: 'TEST_OK BUILD_OK' };

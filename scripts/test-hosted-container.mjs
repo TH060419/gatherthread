@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,8 +26,8 @@ const file = (path, content, executable = false) => ({ path,
   content_base64: Buffer.from(content).toString("base64"), executable });
 const sourcePath = "src/deep/nested/value.cjs";
 const initialFiles = [file(sourcePath, "module.exports = 1;\n"),
-  file("src/deep/nested/check.sh", "#!/bin/sh\nnode -e \"require('node:assert/strict').equal(require('./src/deep/nested/value.cjs'), 2)\"\nprintf EXECUTABLE_OK\n", true),
-  file("test.cjs", "require('node:assert/strict').equal(require('./src/deep/nested/value.cjs'), 2); require('node:assert/strict').match(require('node:child_process').execFileSync('./src/deep/nested/check.sh', {encoding:'utf8'}), /EXECUTABLE_OK/); console.log('TEST_OK');\n")];
+  file("src/deep/nested/check.sh", "#!/bin/sh\nset -eu\nnode -e \"require('node:assert/strict').equal(require('./src/deep/nested/value.cjs'), 2)\"\nprintf '%s\\n' EXECUTABLE_OK\n", true),
+  file("test.cjs", "require('node:assert/strict').equal(require('./src/deep/nested/value.cjs'), 2); require('node:assert/strict').equal(require('node:child_process').execFileSync('./src/deep/nested/check.sh', {encoding:'utf8'}), 'EXECUTABLE_OK\\n'); console.log('TEST_OK');\n")];
 const checks = "const assert=require('node:assert/strict'),fs=require('node:fs');"
   + "assert.equal(process.getuid(),10001);"
   + "assert.equal(fs.readFileSync('/input/src/deep/nested/value.cjs','utf8'),'module.exports = 1;\\n');"
@@ -34,8 +35,17 @@ const checks = "const assert=require('node:assert/strict'),fs=require('node:fs')
   + "assert.throws(()=>fs.writeFileSync('/run/gatherthread/prompt.txt','tampered'),e=>e.code==='EROFS');"
   + "assert.equal(fs.readFileSync('/run/gatherthread/opencode.json','utf8').includes('test-only-provider-token'),false);"
   + "assert.equal(Object.keys(process.env).some(k=>/^(GATHERTHREAD_|GITHUB_TOKEN$|GH_TOKEN$|AWS_|SILICONFLOW_API_KEY$|OPENAI_API_KEY$)/.test(k)),false);"
-  + "fs.writeFileSync('src/deep/nested/value.cjs','module.exports = 2;\\n');console.log('READONLY_OK SECRETS_ABSENT');";
-const command = `node -e ${JSON.stringify(checks)} && node test.cjs`;
+  + "fs.writeFileSync('src/deep/nested/value.cjs','module.exports = 2;\\n');console.log('READONLY_OK');console.log('SECRETS_ABSENT');";
+const commandMarker = `GT_SMOKE_COMMAND_OK_${randomBytes(12).toString("hex")}`;
+const command = `node -e ${JSON.stringify(checks)} && node test.cjs && printf '\\n%s\\n' ${commandMarker}`;
+
+function toolOutputLines(messages) {
+  return messages.filter((message) => message.role === "tool").flatMap((message) =>
+    typeof message.content === "string" ? [message.content]
+      : Array.isArray(message.content) ? message.content.filter((block) =>
+        block.type === "text" && typeof block.text === "string").map((block) => block.text) : [])
+    .flatMap((content) => content.split(/\r?\n/u));
+}
 let calls = 0;
 let toolIssued = false;
 let observedChecks = false;
@@ -45,8 +55,8 @@ const fetcher = async (url, init) => {
     const body = JSON.parse(String(init?.body));
     assert.match(JSON.stringify(body.messages), /Update the nested source/);
     if (body.messages.some((message) => message.role === "tool")) {
-      const transcript = JSON.stringify(body.messages);
-      for (const marker of ["TEST_OK", "READONLY_OK", "SECRETS_ABSENT"]) assert.ok(transcript.includes(marker));
+      const lines = toolOutputLines(body.messages);
+      for (const marker of ["TEST_OK", "READONLY_OK", "SECRETS_ABSENT", commandMarker]) assert.ok(lines.includes(marker));
       observedChecks = true;
     }
     const bash = Array.isArray(body.tools) && body.tools.some((tool) => tool?.function?.name === "bash");
