@@ -1,0 +1,94 @@
+name: Isolated test candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: Reviewed full main commit SHA (40 lowercase hex characters)
+        required: true
+        type: string
+  # Pre-merge proof only. These artifacts must never be installed as reviewed main.
+  push:
+    branches: [codex/isolated-beta-candidate-builder-20261009]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: test-candidate-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  candidate:
+    if: github.repository == 'TH060419/gatherthread' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/codex/isolated-beta-candidate-builder-20261009'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.16.0
+      - name: Pin and authorize source identity
+        id: source
+        env:
+          REQUESTED_COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          task_commit="${REQUESTED_COMMIT:-$GITHUB_SHA}"
+          [[ "$task_commit" =~ ^[a-f0-9]{40}$ ]]
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          git cat-file -e "$task_commit^{commit}"
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            [[ "$GITHUB_REF" == refs/heads/main ]]
+            git merge-base --is-ancestor "$task_commit" refs/remotes/origin/main
+          else
+            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/codex/isolated-beta-candidate-builder-20261009 ]]
+            [[ "$task_commit" == "$GITHUB_SHA" ]]
+          fi
+          node -e 'if(process.version!=="v24.16.0"||process.platform!=="linux"||process.arch!=="x64") process.exit(1)'
+          printf 'commit=%s\n' "$task_commit" >> "$GITHUB_OUTPUT"
+      - name: Full canonical gate and fresh Git-less candidate
+        id: build
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+        run: |
+          set -euo pipefail
+          umask 077
+          task_private="$(mktemp -d "$RUNNER_TEMP/gt-test-candidate.XXXXXXXX")"
+          [[ ! -L "$task_private" && "$(stat -c %a "$task_private")" == 700 ]]
+          mkdir "$task_private/home" "$task_private/cache"
+          task_candidate="$task_private/candidate"
+          [[ ! -e "$task_candidate" && ! -L "$task_candidate" ]]
+          # No runner credentials, private configuration or actual model keys reach the gate.
+          env -i PATH="$PATH" HOME="$task_private/home" CI=true \
+            NPM_CONFIG_CACHE="$task_private/cache" NODE_OPTIONS=--max-old-space-size=2048 \
+            bash scripts/test-environment/prepare-candidate.sh "$SOURCE_COMMIT" "$task_candidate"
+          [[ "$(stat -c %a "$task_candidate")" == 700 ]]
+          printf 'directory=%s\n' "$task_candidate" >> "$GITHUB_OUTPUT"
+      - name: Verify archive and write public provenance
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+          CANDIDATE_DIRECTORY: ${{ steps.build.outputs.directory }}
+        run: |
+          set -euo pipefail
+          umask 077
+          python3 scripts/test-environment/verify-candidate.py \
+            "$CANDIDATE_DIRECTORY/candidate.tar.gz" "$SOURCE_COMMIT" \
+            --provenance "$CANDIDATE_DIRECTORY/provenance.json" \
+            --workflow-sha "$GITHUB_WORKFLOW_SHA" --workflow-ref "$GITHUB_WORKFLOW_REF" \
+            --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" \
+            --run-attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
+      - name: Upload verified candidate only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-candidate-${{ steps.source.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.build.outputs.directory }}/candidate.tar.gz
+            ${{ steps.build.outputs.directory }}/candidate.tar.gz.sha256
+            ${{ steps.build.outputs.directory }}/provenance.json
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
