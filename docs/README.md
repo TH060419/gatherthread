@@ -18,6 +18,7 @@ Start with the product story and illustrated workflow, then choose the setup or 
 - [Privacy notice](../site/privacy/): account deletion, shared data, and deletion/retention boundaries.
 - [Architecture decisions](adr/README.md): accepted ADRs and their status.
 - [Hosted trial Agent](HOSTED_AGENT.md): isolated OpenCode runner, provider budget, and operator setup.
+- [Free-model inventory](HOSTED_AGENT_FREE_MODELS.md): exact reviewed SiliconFlow coding candidates, specialist exclusions and activation checks.
 - [GitHub cloud workspace](HOSTED_GITHUB.md): authorized npm repository tasks, saved source review and explicit draft PRs; independent App and server activation required.
 - [Hosted model API options](HOSTED_AGENT_PROVIDERS.md): pricing, terms, adapter work, and operator handoff.
 

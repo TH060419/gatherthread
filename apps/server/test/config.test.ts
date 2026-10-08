@@ -109,14 +109,15 @@ test("owner-host credentials require a stable pepper even outside production", (
   assert.doesNotThrow(() => assertPersistentCredentialPepper(config));
 });
 
-test("SiliconFlow free preset selects two exact models with user throttling and no daily allowance", { skip: process.platform === "win32" }, () => {
+test("SiliconFlow free preset selects six exact models with one shared capacity and no daily allowance", { skip: process.platform === "win32" }, () => {
   const enabled = {
     GATHERTHREAD_HOSTED_AGENT_ENABLED: "true", GATHERTHREAD_HOSTED_AGENT_PRESET: "siliconflow-free",
     GATHERTHREAD_HOSTED_AGENT_IMAGE: `sha256:${"b".repeat(64)}`,
     GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true", GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-only-key",
   };
   const hosted = loadServerConfig(enabled, "/srv/gatherthread").hostedAgent!;
-  assert.deepEqual(hosted.endpoints.map((endpoint) => endpoint.model), ["Qwen/Qwen3.5-4B", "Qwen/Qwen3-8B"]);
+  assert.deepEqual(hosted.endpoints.map((endpoint) => endpoint.model), ["Qwen/Qwen3.5-4B", "Qwen/Qwen3-8B",
+    "Qwen/Qwen2.5-7B-Instruct", "THUDM/GLM-4-9B-0414", "THUDM/GLM-Z1-9B-0414", "XingChenAGI/Xing4.0-29B"]);
   assert.ok(hosted.endpoints.every((endpoint) => endpoint.dailyRuns === null
     && endpoint.baseUrl === "https://api.siliconflow.cn/v1" && endpoint.quotaGroup === "siliconflow-primary"));
   assert.equal(hosted.userDailyRuns, null); assert.equal(hosted.globalDailyRuns, null);
@@ -137,6 +138,39 @@ test("SiliconFlow free preset selects two exact models with user throttling and 
   assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_PRESET: "",
     GATHERTHREAD_HOSTED_AGENT_ENDPOINTS: paid, PAID_TOKEN: "fixture-paid-key", GATHERTHREAD_HOSTED_AGENT_USER_DAILY_RUNS: "none",
   }, "/srv/gatherthread"), ConfigurationError);
+});
+
+test("free-model subsets are strict, retain stable identities and cannot select paid or unsupported models", { skip: process.platform === "win32" }, () => {
+  const enabled = {
+    GATHERTHREAD_HOSTED_AGENT_ENABLED: "true", GATHERTHREAD_HOSTED_AGENT_PRESET: "siliconflow-free",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: `sha256:${"b".repeat(64)}`,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true", GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-only-key",
+    GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT: "1",
+  };
+  const hosted = loadServerConfig({ ...enabled,
+    GATHERTHREAD_SILICONFLOW_FREE_MODELS: '["XingChenAGI/Xing4.0-29B","Qwen/Qwen3.5-4B"]',
+  }, "/srv/gatherthread").hostedAgent!;
+  assert.deepEqual(hosted.endpoints.map(({ id, profileId, label, model }) => ({ id, profileId, label, model })), [
+    { id: "sf-free-1", profileId: "sf-qwen35-4b", label: "Qwen3.5-4B", model: "Qwen/Qwen3.5-4B" },
+    { id: "sf-free-6", profileId: "sf-xing40-29b", label: "Xing4.0-29B", model: "XingChenAGI/Xing4.0-29B" },
+  ]);
+  assert.ok(hosted.endpoints.every((endpoint) => endpoint.maxConcurrent === 1 && endpoint.quotaGroup === "siliconflow-primary"));
+  assert.equal(hosted.maxConcurrent, 1); assert.equal(hosted.userMaxConcurrent, 1);
+  for (const selection of ["", "not JSON", "null", "{}", '"Qwen/Qwen3-8B"', "[]", "[42]",
+    '[{"model":"Qwen/Qwen3-8B"}]', '["Qwen/Qwen3-8B","Qwen/Qwen3-8B"]',
+    '["Pro/Qwen/Qwen3-8B"]', '["Qwen/Qwen3.5-9B"]', '["THUDM/GLM-4-9B"]',
+    '["deepseek-ai/DeepSeek-R1-0528-Qwen3-8B"]', '["Qwen/Qwen2.5-7B-Instruct","paid/model"]',
+    '["https://api.example.com/model"]', `["${"x".repeat(1025)}"]`,
+  ]) {
+    assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_SILICONFLOW_FREE_MODELS: selection },
+      "/srv/gatherthread"), ConfigurationError);
+  }
+  assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "false",
+    GATHERTHREAD_SILICONFLOW_FREE_MODELS: '["XingChenAGI/Xing4.0-29B"]' }, "/srv/gatherthread"), ConfigurationError);
+  for (const preset of [undefined, "", "other"]) {
+    assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_PRESET: preset,
+      GATHERTHREAD_SILICONFLOW_FREE_MODELS: '["Qwen/Qwen3-8B"]' }, "/srv/gatherthread"), ConfigurationError);
+  }
 });
 
 test("canonical GatherThread variables are parsed without falling back to generic HOST or PORT", () => {

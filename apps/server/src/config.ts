@@ -166,6 +166,10 @@ export function loadServerConfig(
   const maxProjectSessions = parseCountLimit("GATHERTHREAD_MAX_PROJECT_SESSIONS", env.GATHERTHREAD_MAX_PROJECT_SESSIONS, 2_048);
   const maxTotalSessions = parseCountLimit("GATHERTHREAD_MAX_TOTAL_SESSIONS", env.GATHERTHREAD_MAX_TOTAL_SESSIONS, 8_192);
   const rawAuthTokenPepper = env.GATHERTHREAD_AUTH_TOKEN_PEPPER;
+  if (env.GATHERTHREAD_SILICONFLOW_FREE_MODELS !== undefined
+    && env.GATHERTHREAD_HOSTED_AGENT_PRESET?.trim() !== "siliconflow-free") {
+    throw new ConfigurationError("SiliconFlow free-model selection requires the siliconflow-free preset");
+  }
   const hostedEnabled = parseBoolean("GATHERTHREAD_HOSTED_AGENT_ENABLED", env.GATHERTHREAD_HOSTED_AGENT_ENABLED, false);
   let hostedAgent: HostedAgentOptions | undefined;
   if (hostedEnabled) {
@@ -211,7 +215,8 @@ export function loadServerConfig(
       throw new ConfigurationError("Cloud Agent limits exceed the supported capacity");
     }
     try {
-      const raw = freePreset ? siliconFlowFreePreset(maxConcurrent, env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true")
+      const raw = freePreset ? siliconFlowFreePreset(maxConcurrent, env.GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED === "true",
+        env.GATHERTHREAD_SILICONFLOW_FREE_MODELS)
         : env.GATHERTHREAD_HOSTED_AGENT_ENDPOINTS?.trim() || JSON.stringify([{
         id: "default", profile_id: "default", label: "Qwen3 · Cloudflare", provider: "cloudflare-workers-ai",
         model: HOSTED_MODEL, account_id: env.GATHERTHREAD_CLOUDFLARE_ACCOUNT_ID?.trim(),

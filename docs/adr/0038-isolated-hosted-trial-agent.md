@@ -32,8 +32,11 @@ container. User start intervals, user/account/host slots and any configured dail
 allocations are reserved before the canonical request is appended; retry uses
 the same idempotency key and cannot double-run.
 
-The initial free candidates are SiliconFlow Qwen3.5-4B and Qwen3-8B. A reviewed
-operator preset selects exactly these two models, retains one shared account
+The initial free candidates were SiliconFlow Qwen3.5-4B and Qwen3-8B. The Beta 1
+catalog review on 2026-10-08 expands the preset to exact, current zero-price
+models with the provider's Tools marker, with an optional strict subset for
+deployment-validated models; the inventory and activation checks are owned by
+[the operator guide](../HOSTED_AGENT.md#selected-free-model-setup). It retains one shared account
 group and has no daily run-count allowance by default. It admits one task per
 user at a time with a 30-second minimum interval across models, projects and
 devices. Persistent bounded control records survive conversation deletion;

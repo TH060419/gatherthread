@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CollaborationDatabase } from "../src/database.js";
-import { parseHostedEndpoints, HOSTED_MODEL } from "../src/hosted-agent-pool.js";
+import { parseHostedEndpoints, HOSTED_MODEL, SILICONFLOW_FREE_MODELS, siliconFlowFreePreset } from "../src/hosted-agent-pool.js";
 import { HostedAgent } from "../src/hosted-agent.js";
 import { CollaborationService } from "../src/service.js";
 import { CodeRepository } from "../src/code-repository.js";
@@ -15,6 +15,28 @@ const config = { id: "a", profile_id: "coding", label: "Coding", provider: "deep
   token_env: "PROVIDER_A", quota_group: "account-a", daily_runs: 4, max_concurrent: 1 };
 const env = { PROVIDER_A: "private-credential-a", PROVIDER_B: "private-credential-b" };
 const parse = (items: unknown[]) => parseHostedEndpoints(JSON.stringify(items), env);
+
+test("reviewed free tool catalog preserves original IDs, exact model labels and a single account group", () => {
+  const key = { GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-free-key" };
+  const endpoints = parseHostedEndpoints(siliconFlowFreePreset(1, true), key);
+  assert.deepEqual(endpoints.map((entry) => [entry.id, entry.profileId, entry.label, entry.model]), [
+    ["sf-free-1", "sf-qwen35-4b", "Qwen3.5-4B", "Qwen/Qwen3.5-4B"],
+    ["sf-free-2", "sf-qwen3-8b", "Qwen3-8B", "Qwen/Qwen3-8B"],
+    ["sf-free-3", "sf-qwen25-7b", "Qwen2.5-7B-Instruct", "Qwen/Qwen2.5-7B-Instruct"],
+    ["sf-free-4", "sf-glm4-9b-0414", "GLM-4-9B-0414", "THUDM/GLM-4-9B-0414"],
+    ["sf-free-5", "sf-glmz1-9b-0414", "GLM-Z1-9B-0414", "THUDM/GLM-Z1-9B-0414"],
+    ["sf-free-6", "sf-xing40-29b", "Xing4.0-29B", "XingChenAGI/Xing4.0-29B"],
+  ]);
+  assert.deepEqual(endpoints.map((entry) => entry.model), SILICONFLOW_FREE_MODELS);
+  assert.ok(endpoints.every((entry) => entry.quotaGroup === "siliconflow-primary" && entry.maxConcurrent === 1
+    && entry.dailyRuns === null && entry.baseUrl === "https://api.siliconflow.cn/v1"));
+  assert.throws(() => parseHostedEndpoints(siliconFlowFreePreset(1, false), key));
+  const raw = JSON.parse(siliconFlowFreePreset(1, true));
+  for (const model of ["Pro/Qwen/Qwen3-8B", "Pro/THUDM/GLM-4-9B-0414", "Qwen/Qwen3.5-9B",
+    "THUDM/GLM-4-9B", "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "Qwen/Qwen2.5-7B-instruct"]) {
+    assert.throws(() => parseHostedEndpoints(JSON.stringify([{ ...raw[0], model }]), key));
+  }
+});
 
 test("operator pool validates exact model profiles, credentials, shared account quotas and HTTPS", () => {
   const pool = parse([config, { ...config, id: "b", token_env: "PROVIDER_B", quota_group: "account-b" }]);
