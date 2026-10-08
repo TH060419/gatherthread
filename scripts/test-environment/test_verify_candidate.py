@@ -58,7 +58,7 @@ class CandidateTests(unittest.TestCase):
                     archive.addfile(info, io.BytesIO(data) if info.isreg() else None)
             raw = gzip.compress(stream.getvalue(), mtime=0)
         self.archive.write_bytes(raw)
-        self.checksum.write_text(hashlib.sha256(raw).hexdigest() + "  candidate.tar.gz\n", encoding="ascii")
+        self.checksum.write_bytes((hashlib.sha256(raw).hexdigest() + "  candidate.tar.gz\n").encode("ascii"))
         return raw
 
     def check(self, entries=None):
@@ -75,6 +75,42 @@ class CandidateTests(unittest.TestCase):
         self.assertEqual(result["archive_bytes"], self.archive.stat().st_size)
         self.assertEqual(result["member_count"], len(baseline()))
         self.assertNotIn(str(self.directory), json.dumps(result))
+
+    def test_checksum_fixture_is_exact_lf_bytes_and_crlf_is_refused(self):
+        raw = self.write()
+        expected = (hashlib.sha256(raw).hexdigest() + "  candidate.tar.gz\n").encode("ascii")
+        self.assertEqual(self.checksum.read_bytes(), expected)
+        self.checksum.write_bytes(expected.replace(b"\n", b"\r\n"))
+        with self.assertRaisesRegex(ValueError, "Invalid candidate checksum file"):
+            validator.validate_archive(self.archive, COMMIT)
+
+    def test_windows_cross_api_creation_time_does_not_discard_fd_change_time(self):
+        common = dict(st_dev=1, st_ino=2, st_size=3, st_mtime_ns=4, st_mode=stat.S_IFREG | 0o666,
+                      st_nlink=1, st_birthtime_ns=5)
+        path_metadata = SimpleNamespace(**common, st_ctime_ns=5)
+        opened = SimpleNamespace(**common, st_ctime_ns=6)
+        with patch.object(validator, "WINDOWS", True):
+            self.assertEqual(validator.identity(path_metadata, cross_api=True),
+                             validator.identity(opened, cross_api=True))
+            self.assertTrue(validator.unchanged_file(opened, opened, path_metadata))
+            # A real FD metadata change must still fail, even with unchanged
+            # mtime, size, birthtime and path metadata.
+            changed = SimpleNamespace(**common, st_ctime_ns=7)
+            self.assertFalse(validator.unchanged_file(opened, changed, path_metadata))
+            for field in common:
+                changed_values = {**common, field: common[field] + 1}
+                changed_path = SimpleNamespace(**changed_values, st_ctime_ns=5)
+                self.assertFalse(validator.unchanged_file(opened, opened, changed_path))
+
+    def test_posix_cross_api_comparison_keeps_precise_ctime(self):
+        common = dict(st_dev=1, st_ino=2, st_size=3, st_mtime_ns=4, st_mode=stat.S_IFREG | 0o644,
+                      st_nlink=1, st_birthtime_ns=5)
+        first = SimpleNamespace(**common, st_ctime_ns=6)
+        changed = SimpleNamespace(**common, st_ctime_ns=7)
+        with patch.object(validator, "WINDOWS", False):
+            self.assertNotEqual(validator.identity(first, cross_api=True),
+                                validator.identity(changed, cross_api=True))
+            self.assertFalse(validator.unchanged_file(first, first, changed))
 
     def test_metadata_requires_exact_four_fields(self):
         for field, value in [("commit", "b" * 40), ("node", "v24.15.0"), ("platform", "darwin"),
@@ -214,7 +250,7 @@ class CandidateTests(unittest.TestCase):
         digest = hashlib.sha256(self.archive.read_bytes()).hexdigest()
         for text in [digest + "  other.tar.gz\n", digest + "  candidate.tar.gz\nextra\n",
                      "0" * 64 + "  candidate.tar.gz\n", digest + " *candidate.tar.gz\n"]:
-            self.checksum.write_text(text)
+            self.checksum.write_bytes(text.encode("ascii"))
             with self.assertRaises(ValueError):
                 validator.validate_archive(self.archive, COMMIT)
 

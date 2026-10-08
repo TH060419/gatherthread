@@ -27,6 +27,7 @@ MAX_NAME_BYTES = 4096
 FEATURE_REF = "refs/heads/codex/isolated-beta-candidate-builder-20261009"
 REPOSITORY = "TH060419/gatherthread"
 WORKFLOW = f"{REPOSITORY}/.github/workflows/test-candidate.yml@"
+WINDOWS = os.name == "nt"
 
 
 def require(condition, message):
@@ -41,15 +42,25 @@ def regular_stream(path, maximum):
     descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     stream = os.fdopen(descriptor, "rb")
     opened = os.fstat(stream.fileno())
-    if identity(before) != identity(opened):
+    if identity(before, cross_api=True) != identity(opened, cross_api=True):
         stream.close()
         raise ValueError("Candidate file changed")
     return stream, opened
 
 
-def identity(metadata):
+def identity(metadata, cross_api=False):
+    # CPython 3.12 Windows path stat exposes creation time as legacy ctime,
+    # whereas fstat exposes FILE_BASIC_INFO.ChangeTime. Compare birthtime
+    # across APIs, but retain full FD ctime in the same-API mutation check.
+    timestamp = (getattr(metadata, "st_birthtime_ns", metadata.st_ctime_ns)
+                 if WINDOWS and cross_api else metadata.st_ctime_ns)
     return (metadata.st_dev, metadata.st_ino, metadata.st_size,
-            metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_mode, metadata.st_nlink)
+            metadata.st_mtime_ns, timestamp, metadata.st_mode, metadata.st_nlink)
+
+
+def unchanged_file(before, current, path_metadata):
+    return (identity(before) == identity(current)
+            and identity(before, cross_api=True) == identity(path_metadata, cross_api=True))
 
 
 def unique_object(pairs):
@@ -128,8 +139,8 @@ def validate_archive(path, commit):
         require(len(checksum_bytes) == checksum_before.st_size and len(checksum_bytes) <= 200,
                 "Candidate checksum changed or exceeds limit")
         checksum_text = checksum_bytes.decode("ascii")
-        require(identity(checksum_before) == identity(os.fstat(checksum.fileno()))
-                == identity(checksum_path.lstat()), "Candidate checksum changed")
+        require(unchanged_file(checksum_before, os.fstat(checksum.fileno()), checksum_path.lstat()),
+                "Candidate checksum changed")
     match = re.fullmatch(r"([a-f0-9]{64})  candidate\.tar\.gz\n", checksum_text)
     require(match is not None, "Invalid candidate checksum file")
     source, before = regular_stream(path, MAX_ARCHIVE_BYTES)
@@ -145,7 +156,7 @@ def validate_archive(path, commit):
                 break
             require(stream.write(chunk) == len(chunk), "Candidate snapshot write failed")
         require(copied == before.st_size, "Candidate file shrank during copy")
-        require(identity(before) == identity(os.fstat(source.fileno())) == identity(path.lstat()),
+        require(unchanged_file(before, os.fstat(source.fileno()), path.lstat()),
                 "Candidate file changed during copy")
         stream.seek(0)
         digest = hashlib.sha256()
@@ -233,7 +244,7 @@ def validate_archive(path, commit):
                     "Candidate identity mismatch")
             manifest = read_json("package.json")
             require(isinstance(manifest, dict) and manifest.get("version") == VERSION, "Candidate version mismatch")
-        require(identity(before) == identity(os.fstat(source.fileno())) == identity(path.lstat()), "Candidate file changed")
+        require(unchanged_file(before, os.fstat(source.fileno()), path.lstat()), "Candidate file changed")
     return {"source_commit": commit, "version": VERSION, "node": NODE, "platform": "linux", "arch": "x64",
             "archive": "candidate.tar.gz", "archive_sha256": digest.hexdigest(), "archive_bytes": before.st_size,
             "expanded_bytes": expanded, "member_count": len(entries)}
