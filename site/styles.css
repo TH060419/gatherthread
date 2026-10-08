@@ -260,23 +260,6 @@ h1 { font-size: clamp(48px, 6.2vw, 84px); line-height: 1.12; margin-inline: auto
 .footer-bottom p { min-width: 0; overflow-wrap: anywhere; }
 .footer-bottom .language { flex-shrink: 0; }
 
-/* ARIA ownership keeps the independent viewport links in one navigation
-   landmark, without a filtered fixed DOM parent that can mis-hit WebKit's
-   first pointer click when a native chapter snap completes. */
-.chapter-nav { display: none; position: fixed; width: 0; height: 0; right: 15px; top: calc(50svh - 160px); pointer-events: none; }
-.chapter-glass { display: none; position: fixed; z-index: 25; right: 15px; top: calc(50svh - 160px); height: 320px; width: 54px; border: 1px solid rgba(255, 255, 255, .48); border-radius: 29px; background: var(--header-solid); pointer-events: none; box-shadow: 0 5px 20px rgba(20, 46, 41, .035), 0 1px 2px rgba(20, 46, 41, .025), inset 0 1px 0 var(--control-spec); }
-.chapter-link { --chapter-index: 0; position: fixed; z-index: 26; right: 19px; top: calc(50svh - 154px + var(--chapter-index) * 44px); display: none; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 50%; outline-offset: 2px; }
-.chapter-link[href="#together"] { --chapter-index: 1; }
-.chapter-link[href="#workflow"] { --chapter-index: 2; }
-.chapter-link[href="#devices"] { --chapter-index: 3; }
-.chapter-link[href="#files"] { --chapter-index: 4; }
-.chapter-link[href="#faq"] { --chapter-index: 5; }
-.chapter-link[href="#start"] { --chapter-index: 6; }
-.chapter-link .dot { display: block; width: 6px; height: 6px; border-radius: 8px; background: #687970; box-shadow: inset 0 0 0 1px #1d1d1f, 0 0 0 1px #fff; }
-.chapter-link[aria-current="location"] .dot { height: 19px; background: #05665d; }
-.rail-label { position: absolute; right: 59px; top: 50%; transform: translateY(-50%); padding: 9px 14px; white-space: nowrap; font-size: 14px; line-height: 1.55; font-weight: 550; border: 1px solid var(--line); border-radius: 16px; background: var(--control-solid); color: var(--ink); box-shadow: 0 5px 16px rgba(17, 19, 24, .07); opacity: 0; visibility: hidden; pointer-events: none; }
-.chapter-link:hover .rail-label, .chapter-link:focus-visible .rail-label { opacity: 1; visibility: visible; }
-
 @supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .glass-ready .header-inner { background: var(--header-glass); backdrop-filter: blur(20px) saturate(115%); -webkit-backdrop-filter: blur(20px) saturate(115%); }
   .language, .menu, .theme-toggle, .github, .button { background: var(--control-glass); backdrop-filter: blur(16px) saturate(120%); -webkit-backdrop-filter: blur(16px) saturate(120%); }
@@ -287,11 +270,6 @@ h1 { font-size: clamp(48px, 6.2vw, 84px); line-height: 1.12; margin-inline: auto
   .desktop-frame, .phone-frame, .story-panel { background: var(--product-glass); backdrop-filter: blur(40px) saturate(200%); -webkit-backdrop-filter: blur(40px) saturate(200%); }
   .story-tabs { background: rgba(255, 255, 255, .1); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
   .story-lens { background: rgba(255, 255, 255, .18); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-  .glass-ready .chapter-glass { background: rgba(255, 255, 255, .24); backdrop-filter: blur(16px) saturate(115%); -webkit-backdrop-filter: blur(16px) saturate(115%); }
-  .glass-ready .chapter-glass.is-dark { background: rgba(255, 255, 255, .08); border-color: rgba(255, 255, 255, .26); }
-  .chapter-link.is-on-dark .dot { background: #d8e4de; }
-  .chapter-link.is-on-dark[aria-current="location"] .dot { background: #fff; }
-  .chapter-link.is-on-dark:focus-visible { outline-color: #fff; }
   .start-stage .button.primary { background: rgba(0, 37, 30, .12); }
   .start-stage .button.secondary { background: rgba(0, 37, 30, .07); }
   .site-header.is-over-dark .header-inner { background: rgba(255, 255, 255, .08); color: #f5f5f7; border-color: rgba(255, 255, 255, .24); }
@@ -573,9 +551,6 @@ h1 { font-size: clamp(48px, 6.2vw, 84px); line-height: 1.12; margin-inline: auto
   .start-steps h3 { font-size: 19px; }
   .start-steps p { font-size: 15px; }
   .start-stage .actions { margin-top: 28px; }
-  .chapter-nav { display: block; }
-  .chapter-link { display: flex; }
-  .chapter-glass { display: block; }
   .hero-watermark { width: 520px; opacity: .18; }
   .hero::before, .workflow::before { translate: 0 var(--ambient-y, 0px); }
 }
@@ -622,7 +597,6 @@ h1 { font-size: clamp(48px, 6.2vw, 84px); line-height: 1.12; margin-inline: auto
 @media (max-width: 900px), (max-height: 619px) {
   html { scroll-snap-type: none; scroll-padding-top: 96px; }
   .chapter.motion-ready .scroll-scene { opacity: 1; transform: none; transition: none; }
-  .chapter-nav, .chapter-link, .chapter-glass { display: none; }
   .principles { grid-template-columns: 1fr; gap: 18px; }
   .principle { border: 0; padding: 0; }
 }
@@ -637,16 +611,14 @@ html:not(.glass-ready) .story-panel[hidden] { display: grid !important; margin-t
   .hero-watermark, .hero::before, .workflow::before, .desktop-frame::after, .phone-frame::after { display: none; }
   .header-inner, .site-header.is-over-dark .header-inner, .nav,
   .language, .menu, .theme-toggle, .github, .button.secondary, .desktop-frame, .phone-frame,
-  .story-tabs, .story-lens, .story-panel, .chapter-glass {
+  .story-tabs, .story-lens, .story-panel {
     background: var(--control-solid) !important; color: var(--ink) !important; border-color: var(--line) !important;
     backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background-image: none !important;
   }
   .site-header.is-over-dark :is(.nav a, .language, .menu, .theme-toggle, .github) { color: var(--ink) !important; }
-  .site-header :is(a, button):focus-visible, .chapter-link:focus-visible { outline-color: var(--action-text) !important; }
+  .site-header :is(a, button):focus-visible { outline-color: var(--action-text) !important; }
   .button.primary { background: #05665d !important; color: #fff !important; backdrop-filter: none !important; -webkit-backdrop-filter: none !important; background-image: none !important; }
   .start-stage .button.secondary { background: #05665d !important; color: #fff !important; }
-  .chapter-link .dot, .chapter-link.is-on-dark .dot { background: #687970; }
-  .chapter-link[aria-current="location"] .dot, .chapter-link.is-on-dark[aria-current="location"] .dot { background: var(--strong); }
 }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; scroll-snap-type: none; }
@@ -660,7 +632,7 @@ html:not(.glass-ready) .story-panel[hidden] { display: grid !important; margin-t
   .dark, .start-stage, .storage-choice, .roadmap { background: Canvas; color: CanvasText; }
   .header-inner, .site-header.is-over-dark .header-inner, .nav, .language, .menu, .theme-toggle, .github,
   .button, .button.primary, .button.secondary, .start-stage .button, .desktop-frame, .phone-frame,
-  .story-panel, .story-tabs, .story-lens, .chapter-glass, .rail-label {
+  .story-panel, .story-tabs, .story-lens {
     background: Canvas !important; color: CanvasText !important; border: 1px solid ButtonText !important;
     box-shadow: none !important; background-image: none !important;
     backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
@@ -671,13 +643,11 @@ html:not(.glass-ready) .story-panel[hidden] { display: grid !important; margin-t
   .start-stage .section-heading .eyebrow, .start-stage .section-heading p, .start-steps p { color: CanvasText !important; }
   a:focus-visible, button:focus-visible, summary:focus-visible { outline-color: Highlight !important; }
   .text-link, .dark .text-link, .device-facts .tick { color: LinkText; }
-  .chapter-link .dot, .chapter-link.is-on-dark .dot { background: ButtonText; box-shadow: none; }
-  .chapter-link[aria-current="location"] .dot, .chapter-link.is-on-dark[aria-current="location"] .dot { background: Highlight; }
   .story-tab[aria-selected="true"] { outline: 2px solid Highlight; outline-offset: -3px; }
 }
 @media print {
   html { scroll-snap-type: none; }
   .chapter { min-height: 0 !important; padding-block: 30px; break-inside: avoid; }
   .scroll-scene { opacity: 1 !important; transform: none !important; translate: none !important; scale: none !important; transition: none !important; }
-  .site-header, .chapter-nav, .chapter-link, .chapter-glass { display: none; }
+  .site-header { display: none; }
 }

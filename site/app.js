@@ -112,18 +112,6 @@
         "aria-label",
         language === "zh" ? "GatherThread 共序首页" : "GatherThread home",
       );
-    document
-      .querySelector(".chapter-nav")
-      .setAttribute(
-        "aria-label",
-        language === "zh" ? "章节导航" : "Chapter navigation",
-      );
-    document.querySelectorAll("[data-chapter-link]").forEach((link) => {
-      link.setAttribute(
-        "aria-label",
-        language === "zh" ? link.dataset.labelZh : link.dataset.labelEn,
-      );
-    });
     requestAnimationFrame(() => {
       updateLens(false);
       updateActiveChapter();
@@ -225,7 +213,6 @@
   const motionEase = "cubic-bezier(.16,1,.3,1)";
   const lens = document.querySelector(".story-lens");
   const tabContainer = document.querySelector(".story-tabs");
-  const chapterGlass = document.querySelector(".chapter-glass");
   const siteHeader = document.querySelector(".site-header");
   const headerInner = document.querySelector(".header-inner");
   const headerLogo = siteHeader.querySelector(".brand img");
@@ -390,22 +377,6 @@
         else link.removeAttribute("aria-current");
       });
     }
-    const rail = chapterGlass.getBoundingClientRect();
-    chapterGlass.classList.toggle(
-      "is-dark",
-      Boolean(
-        surfaceBehind(rail.top + rail.height / 2, rail.left + rail.width / 2),
-      ),
-    );
-    chapterLinks.forEach((link) => {
-      const dot = link.querySelector(".dot").getBoundingClientRect();
-      link.classList.toggle(
-        "is-on-dark",
-        Boolean(
-          surfaceBehind(dot.top + dot.height / 2, dot.left + dot.width / 2),
-        ),
-      );
-    });
   }
   function surfaceBehind(y, x) {
     if (document.documentElement.getAttribute("data-theme") === "dark")

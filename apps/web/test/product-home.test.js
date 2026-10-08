@@ -220,11 +220,9 @@ test("menu and workflow tabs expose complete semantic relationships", async () =
   assert.equal(menu.type, "button");
   assert.equal(menu["aria-expanded"], "false");
   assert.ok(navigation.some((nav) => nav.id === menu["aria-controls"] && nav["aria-label"]));
-  const chapterNavigation = navigation.find((nav) => nav.class === "chapter-nav");
   const chapterLinks = elements(html, "a").filter((link) => "data-chapter-link" in link);
-  assert.equal(chapterLinks.length, 7);
-  assert.deepEqual(chapterNavigation["aria-owns"].split(" "), chapterLinks.map((link) => link.id));
-  assert.equal(new Set(chapterLinks.map((link) => link.id)).size, 7);
+  assert.deepEqual(chapterLinks.map((link) => link.href), ["#together", "#workflow", "#devices", "#files", "#faq"]);
+  assert.doesNotMatch(html, /class="chapter-nav"|aria-owns/u);
   assert.ok(elements(html, "div").some((element) => element.role === "tablist" && element["aria-label"]));
   const tabs = buttons.filter((button) => button.role === "tab");
   const panels = elements(html, "div").filter((element) => element.role === "tabpanel");
