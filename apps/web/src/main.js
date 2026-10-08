@@ -2813,7 +2813,10 @@ function renderComposerPermissions() {
   // Mobile hides verbose local runtime labels, but a disabled Cloud action must
   // still explain its current reason without opening another panel.
   element("mobile-cloud-status").hidden = !cloud || agentAllowed;
-  element("mobile-cloud-status").textContent = cloud && !agentAllowed ? agentReason : "";
+  const mobileCloudReason = cloud && !agentAllowed ? agentReason : "";
+  if (element("mobile-cloud-status").textContent !== mobileCloudReason) {
+    element("mobile-cloud-status").textContent = mobileCloudReason;
+  }
   renderAgentProfileControls();
   historySummaryUi.updateContext();
   agentRequestControl.update();

@@ -154,9 +154,17 @@ test("mobile Cloud rejection reasons stay visible while ready and local labels s
   renderAgentProfileControls: noop, historySummaryUi: { updateContext: noop }, agentRequestControl: { update: noop },
  });
  app.state.sync = { phase: "live" };
+ let reasonWrites = 0, reasonText = "";
+ Object.defineProperty(el("mobile-cloud-status"), "textContent", {
+  get: () => reasonText,
+  set: (value) => { reasonText = value; reasonWrites += 1; },
+ });
  app.renderComposerPermissions();
  assert.equal(el("mobile-cloud-status").hidden, false);
  assert.equal(el("mobile-cloud-status").textContent, "Cloud Agent is not enabled on this server.");
+ assert.equal(reasonWrites, 1);
+ app.renderComposerPermissions();
+ assert.equal(reasonWrites, 1, "unchanged polling must not repeatedly replace the status live-region text");
  for (const status of ["busy", "user_busy", "rate_limit", "cooldown", "daily_limit", "unavailable"]) {
   app.hostedAgentStatus = { enabled: true, user_limit_runs: null,
    profiles: [{ id: "selected", provider: "fixture", model: "model", available: false, status }] };
@@ -164,6 +172,9 @@ test("mobile Cloud rejection reasons stay visible while ready and local labels s
   assert.equal(el("mobile-cloud-status").hidden, false, status);
   assert.equal(el("mobile-cloud-status").textContent, el("agent-target-label").textContent, status);
   assert.equal(app.sendAgentButton.disabled, true, status);
+  const previousWrites = reasonWrites;
+  app.renderComposerPermissions();
+  assert.equal(reasonWrites, previousWrites, status);
  }
  app.hostedAgentStatus.profiles[0] = { ...app.hostedAgentStatus.profiles[0], available: true, status: "available" };
  app.renderComposerPermissions();
