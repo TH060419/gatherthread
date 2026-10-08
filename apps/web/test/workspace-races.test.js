@@ -136,6 +136,52 @@ test("cloud entry still fails closed for missing service, missing model and exha
  assert.equal(selected.currentCloudProfile(), undefined, "never replace a missing selected model");
 });
 
+test("mobile Cloud rejection reasons stay visible while ready and local labels stay compact", () => {
+ const nodes = new Map();
+ const el = (id) => {
+  if (!nodes.has(id)) nodes.set(id, { ...element(), closest: () => element() });
+  return nodes.get(id);
+ };
+ let writable = true, selectedHarness = "cloud";
+ const app = harness(["currentCloudProfile", "cloudStatusText", "renderComposerPermissions"], {
+  element: el, CLOUD_AGENT_ENTRY_ENABLED: true, DSH_HARNESS: "deepseek-harness",
+  pendingMessageSend: null, codeSyncUi: { updateContext: noop },
+  canAppend: () => ({ allowed: writable, reason: "This conversation is read-only." }),
+  currentProjectHarness: () => selectedHarness, projectCloudProfile: () => null,
+  currentCodexResolution: () => ({ runtime: null, reason: "Connect your Agent on a computer." }),
+  currentDshResolution: () => ({ runtime: null, reason: "Connect DSH on a computer." }),
+  sendChatButton: element(), sendAgentButton: element(), messageInput: element(),
+  renderAgentProfileControls: noop, historySummaryUi: { updateContext: noop }, agentRequestControl: { update: noop },
+ });
+ app.state.sync = { phase: "live" };
+ app.renderComposerPermissions();
+ assert.equal(el("mobile-cloud-status").hidden, false);
+ assert.equal(el("mobile-cloud-status").textContent, "Cloud Agent is not enabled on this server.");
+ for (const status of ["busy", "user_busy", "rate_limit", "cooldown", "daily_limit", "unavailable"]) {
+  app.hostedAgentStatus = { enabled: true, user_limit_runs: null,
+   profiles: [{ id: "selected", provider: "fixture", model: "model", available: false, status }] };
+  app.renderComposerPermissions();
+  assert.equal(el("mobile-cloud-status").hidden, false, status);
+  assert.equal(el("mobile-cloud-status").textContent, el("agent-target-label").textContent, status);
+  assert.equal(app.sendAgentButton.disabled, true, status);
+ }
+ app.hostedAgentStatus.profiles[0] = { ...app.hostedAgentStatus.profiles[0], available: true, status: "available" };
+ app.renderComposerPermissions();
+ assert.equal(el("mobile-cloud-status").hidden, true);
+ assert.equal(el("mobile-cloud-status").textContent, "");
+ assert.equal(app.sendAgentButton.disabled, false);
+ writable = false;
+ app.renderComposerPermissions();
+ assert.equal(el("mobile-cloud-status").hidden, false);
+ assert.equal(el("mobile-cloud-status").textContent, "This conversation is read-only.");
+ for (const local of ["codex", "deepseek-harness"]) {
+  selectedHarness = local;
+  app.renderComposerPermissions();
+  assert.equal(el("mobile-cloud-status").hidden, true, local);
+  assert.equal(el("mobile-cloud-status").textContent, "", local);
+ }
+});
+
 test("the global badge reports live delivery regardless of viewer-to-participant transitions", () => {
   const nodes = new Map();
   const el = (id) => {

@@ -423,6 +423,12 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(i18n, /长期设备凭据只保存在 DSH 本机凭据库/);
 });
 
+test("mobile Cloud status has a visible live region separate from hidden local labels", async () => {
+  const [html, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(stylesPath, "utf8")]);
+  assert.match(html, /id="mobile-cloud-status"[^>]*role="status"[^>]*hidden/u);
+  assert.match(styles, /\.workspace\[data-mobile-ui="true"\] \.mobile-cloud-status \{ display: block;/u);
+});
+
 test("read-only Codex downloads remain one-way and poll independent snapshot jobs", async () => {
   const [html, main, domain] = await Promise.all([
     readFile(htmlPath, "utf8"),
