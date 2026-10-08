@@ -345,10 +345,18 @@ test("home retains useful discovery metadata and public privacy, contact and fil
   assert.ok(metadata.some((meta) => meta.name === "twitter:card" && meta.content === "summary"));
   const footer = html.slice(html.indexOf("<footer"), html.indexOf("</footer>"));
   const resources = elements(footer, "a");
-  for (const href of ["./privacy/", "mailto:coolhezi@sjtu.edu.cn", "https://github.com/TH060419/gatherthread/issues", "https://beian.miit.gov.cn/"]) {
+  for (const href of ["./privacy/", "mailto:coolhezi@sjtu.edu.cn", "https://github.com/TH060419/gatherthread/issues", "https://beian.miit.gov.cn/", "https://beian.mps.gov.cn/#/query/webSearch?code=13010202004764"]) {
     assert.ok(resources.some((link) => link.href === href), href);
   }
   assert.match(footer, /冀ICP备2026037466号-1/u);
+  assert.match(footer, /冀公网安备13010202004764号/u);
+  const publicSecurityLink = resources.find((link) => link.href === "https://beian.mps.gov.cn/#/query/webSearch?code=13010202004764");
+  assert.equal(publicSecurityLink.target, "_blank");
+  assert.ok(publicSecurityLink.rel.split(/\s+/u).includes("noopener"));
+  assert.ok(publicSecurityLink.rel.split(/\s+/u).includes("noreferrer"));
+  assert.match(footer, /<a class="public-security-record"[^>]*><img src="assets\/public-security-filing\.png"[^>]*>冀公网安备13010202004764号<\/a>/u);
+  const badge = await readFile(new URL("assets/public-security-filing.png", productRoot));
+  assert.equal(badge.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
   assert.match(authoredCopy(footer, "zh"), /联系与反馈/u);
   assert.match(authoredCopy(footer, "en"), /Contact & feedback/iu);
 });
