@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -176,8 +176,33 @@ test("local export helper preserves one-build immutable-image order and has no p
   }
 });
 
-test("candidate workflow uploads separate exact-source application/image artifacts only after all image checks succeed", () => {
-  const script = readFileSync(".github/workflows/test-candidate.yml", "utf8");
+test("public image modules explicitly remain readable by the nonroot user from a private 0600 source tree", () => {
+  const dockerfile = readFileSync("ops/hosted-agent/Dockerfile", "utf8").replace(/\r\n/gu, "\n");
+  const copies = dockerfile.split("\n").filter((line) => line.startsWith("COPY "));
+  assert.deepEqual(copies, [
+    "COPY --chmod=0644 ops/hosted-agent/entrypoint.mjs /usr/local/lib/gatherthread-hosted-entrypoint.mjs",
+    "COPY --chmod=0555 ops/hosted-agent/cpuset-entrypoint.mjs /usr/local/lib/gatherthread-hosted-cpuset-entrypoint.mjs",
+    "COPY --chmod=0644 ops/hosted-agent/resource-check.mjs /usr/local/lib/resource-check.mjs",
+    "COPY --chmod=0644 ops/hosted-agent/public-answer.mjs /usr/local/lib/public-answer.mjs",
+    "COPY --chmod=0644 ops/hosted-agent/npm-setup.mjs /usr/local/lib/npm-setup.mjs",
+  ]);
+  assert.match(dockerfile, /^USER 10001:10001$/mu);
+  assert.match(dockerfile, /^ENTRYPOINT \["node", "\/usr\/local\/lib\/gatherthread-hosted-entrypoint\.mjs"\]$/mu);
+  const directory = mkdtempSync(join(tmpdir(), "gt-image-source-mode-"));
+  try {
+    for (const copy of copies) {
+      const [, mode, source] = /^COPY --chmod=(0[0-7]{3}) (\S+) /u.exec(copy);
+      const path = join(directory, source.split("/").at(-1));
+      writeFileSync(path, readFileSync(source), { flag: "wx", mode: 0o600 });
+      if (process.platform !== "win32") assert.equal(statSync(path).mode & 0o777, 0o600);
+      assert.ok(Number.parseInt(mode, 8) & 0o004, "public runtime modules must be readable by the nonroot image user");
+      assert.equal(Number.parseInt(mode, 8) & 0o022, 0, "group and others must never gain write permission");
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+function assertCandidateWorkflowUploads(raw) {
+  const script = raw.replace(/\r\n/gu, "\n");
   const build = script.indexOf("Full canonical gate and fresh Git-less candidate");
   const verify = script.indexOf("Verify archive and write public provenance");
   const image = script.indexOf("Build, verify and export the same-source hosted image");
@@ -213,6 +238,12 @@ test("candidate workflow uploads separate exact-source application/image artifac
   assert.deepEqual(selectedFiles, [["build/candidate.tar.gz", "build/candidate.tar.gz.sha256", "build/provenance.json"],
     ["image/hosted-image.tar.gz", "image/hosted-image.tar.gz.sha256", "image/hosted-image-provenance.json"]]);
   assert.doesNotMatch(script, /secrets\.|continue-on-error|always\(\)|docker push|docker login|npm publish|ssh|sudo|pull_request_target/u);
+}
+
+test("candidate workflow uploads exact-source artifacts only after all checks succeed with either LF or CRLF checkout", () => {
+  const source = readFileSync(".github/workflows/test-candidate.yml", "utf8");
+  assertCandidateWorkflowUploads(source.replace(/\r?\n/gu, "\n"));
+  assertCandidateWorkflowUploads(source.replace(/\r?\n/gu, "\r\n"));
 });
 
 test("workflow metadata producer records only its seven public identity fields, never inherited environment", () => {
