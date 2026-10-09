@@ -16,7 +16,7 @@
   },
   "dependencies": {
     "@gatherthread/protocol": "0.1.0-beta.1",
-    "driver.js": "1.8.0",
+    "driver.js": "1.9.0",
     "katex": "0.18.2",
     "micromark": "^4.0.2",
     "micromark-extension-gfm": "^3.0.0"
