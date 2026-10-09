@@ -175,3 +175,63 @@ test("local export helper preserves one-build immutable-image order and has no p
     assert.match(invalid.stderr, /^Usage:/u);
   }
 });
+
+test("candidate workflow uploads separate exact-source application/image artifacts only after all image checks succeed", () => {
+  const script = readFileSync(".github/workflows/test-candidate.yml", "utf8");
+  const build = script.indexOf("Full canonical gate and fresh Git-less candidate");
+  const verify = script.indexOf("Verify archive and write public provenance");
+  const image = script.indexOf("Build, verify and export the same-source hosted image");
+  const uploads = [...script.matchAll(/- name: Upload verified ([^\n]+)\n([\s\S]*?)(?=\n      - name:|$)/gu)];
+  assert.equal(uploads.length, 2);
+  assert.ok(build >= 0 && build < verify && verify < image && image < uploads[0].index);
+  const imageStep = script.slice(image, uploads[0].index);
+  assert.match(imageStep, /SOURCE_COMMIT: \$\{\{ steps\.source\.outputs\.commit \}\}/u);
+  assert.match(imageStep, /CANDIDATE_DIRECTORY: \$\{\{ steps\.build\.outputs\.directory \}\}/u);
+  assert.match(imageStep, /set -euo pipefail/u);
+  assert.match(imageStep, /umask 077/u);
+  assert.match(imageStep, /env -i PATH="\$PATH" HOME="\$task_private\/home" CI=true/u);
+  assert.match(imageStep, /bash "\$CANDIDATE_DIRECTORY\/build\/scripts\/test-environment\/export-hosted-image\.sh"/u);
+  assert.match(imageStep, /"\$SOURCE_COMMIT" "\$CANDIDATE_DIRECTORY\/build" "\$task_output" "\$task_private\/workflow\.json"/u);
+  assert.doesNotMatch(imageStep, /process\.env|JSON\.stringify\(process|docker build|--build-arg|--secret/u);
+  for (const name of ["GITHUB_REPOSITORY", "GITHUB_WORKFLOW_SHA", "GITHUB_WORKFLOW_REF", "GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_EVENT_NAME", "GITHUB_REF"]) {
+    assert.ok(imageStep.includes(`"$${name}"`));
+  }
+  const names = [];
+  const selectedFiles = [];
+  for (const [, , upload] of uploads) {
+    assert.match(upload, /if: \$\{\{ success\(\) \}\}/u);
+    assert.match(upload, /uses: actions\/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02/u);
+    assert.match(upload, /retention-days: 3/u);
+    assert.match(upload, /if-no-files-found: error/u);
+    assert.match(upload, /compression-level: 0/u);
+    names.push(upload.match(/^\s+name: ([^\n]+)$/mu)[1]);
+    selectedFiles.push([...upload.matchAll(/^\s+\$\{\{ steps\.(build|image)\.outputs\.directory \}\}\/([^\n]+)$/gmu)]
+      .map(([, owner, file]) => `${owner}/${file}`));
+  }
+  assert.deepEqual(names, ["test-candidate-${{ steps.source.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}",
+    "test-hosted-image-${{ steps.source.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}"]);
+  assert.deepEqual(selectedFiles, [["build/candidate.tar.gz", "build/candidate.tar.gz.sha256", "build/provenance.json"],
+    ["image/hosted-image.tar.gz", "image/hosted-image.tar.gz.sha256", "image/hosted-image-provenance.json"]]);
+  assert.doesNotMatch(script, /secrets\.|continue-on-error|always\(\)|docker push|docker login|npm publish|ssh|sudo|pull_request_target/u);
+});
+
+test("workflow metadata producer records only its seven public identity fields, never inherited environment", () => {
+  const workflowSource = readFileSync(".github/workflows/test-candidate.yml", "utf8");
+  const producer = workflowSource.match(/env -i PATH="\$PATH" HOME="\$task_private\/home" node -e '([^']+)'/u)?.[1];
+  assert.ok(producer);
+  const directory = mkdtempSync(join(tmpdir(), "gt-image-producer-test-"));
+  try {
+    const path = join(directory, "workflow.json");
+    const fields = ["repository", "workflow_sha", "workflow_ref", "run_id", "run_attempt", "event", "ref"];
+    const result = spawnSync(process.execPath, ["-e", producer, path, ...fields.map((field) => workflow[field])], {
+      encoding: "utf8", env: { GITHUB_TOKEN: "fixture-private-token", OPENAI_API_KEY: "fixture-private-key",
+        HTTPS_PROXY: "fixture-private-proxy", HOME: directory },
+    });
+    assert.equal(result.status, 0); assert.equal(result.stdout, ""); assert.equal(result.stderr, "");
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), workflow);
+    assert.doesNotMatch(readFileSync(path, "utf8"), /fixture-private/u);
+    const again = spawnSync(process.execPath, ["-e", producer, path, ...fields.map((field) => workflow[field])], { encoding: "utf8", env: {} });
+    assert.notEqual(again.status, 0, "producer must refuse replacing existing workflow identity");
+    assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), workflow);
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
