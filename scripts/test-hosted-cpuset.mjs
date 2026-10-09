@@ -46,7 +46,9 @@ export function runCpusetSmoke({ image, status, platform = process.platform, env
     const env = cpusetSmokeEnvironment(image, cpu, home, environment);
     for (const script of ["test-hosted-container.mjs", "test-hosted-repository-container.mjs"]) {
       const result = execute(process.execPath, [join(directory, "scripts", script)], {
-        cwd: directory, env, stdio: "inherit", timeout: 120_000,
+        // Allow setup, the unchanged 90s fixture run, bounded diagnostics and
+        // confirmed-exit cleanup to finish without killing its finally block.
+        cwd: directory, env, stdio: "inherit", timeout: 180_000,
       });
       if (result.error || result.status !== 0 || result.signal) throw new Error("Hosted cpuset smoke failed; image must not be delivered");
     }

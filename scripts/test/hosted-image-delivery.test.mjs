@@ -54,7 +54,7 @@ test("smoke children share one immutable image with bounded memory and no inheri
     assert.equal(settings.env.GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB, "512");
     assert.equal(settings.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB, "512");
     assert.equal(settings.env.DOCKER_HOST, "unix:///var/run/docker.sock");
-    assert.equal(settings.timeout, 120_000);
+    assert.equal(settings.timeout, 180_000);
     assert.ok(!existsSync(settings.env.HOME), "private home is cleaned after fixture execution");
     for (const name of ["DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CONFIG", "HTTPS_PROXY", "GITHUB_TOKEN", "OPENAI_API_KEY", "NODE_OPTIONS", "BASH_ENV"]) {
       assert.equal(settings.env[name], undefined);

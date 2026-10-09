@@ -7,8 +7,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HostedRepositoryRunner } from '../apps/server/dist/src/hosted-repository-runner.js';
 import { hostedContainerMemoryMiB, runDocker } from '../apps/server/dist/src/hosted-agent.js';
-import { runHostedDockerCommand, stopHostedContainer } from '../apps/server/dist/src/hosted-agent-recovery.js';
+import { createHostedDockerClient, runHostedDockerCommand, stopHostedContainer } from '../apps/server/dist/src/hosted-agent-recovery.js';
 import { HOSTED_CPUSET_ENTRYPOINT, parseHostedCpuSet } from '../apps/server/dist/src/hosted-container-cpu.js';
+import { reportRepositoryFixtureFailure } from './hosted-repository-fixture-diagnostics.mjs';
 // Exercise production mount preparation with the hardened Linux service umask.
 if (process.platform === 'linux') process.umask(0o077);
 const image = process.env.GATHERTHREAD_TEST_HOSTED_IMAGE;
@@ -32,6 +33,8 @@ function toolOutputLines(messages) {
 // This smoke uses only fixtures. Production keeps raw container output private.
 async function runFixtureDocker(args) {
   const name = args[args.indexOf('--name') + 1];
+  assert.ok(typeof name === 'string' && /^gt-repository-[a-f0-9]{20}$/u.exec(name)?.[0] === name);
+  assert.equal(args.filter((argument) => argument === '--rm').length, 1);
   assert.equal(args[args.indexOf('--user') + 1], '10001:10001');
   assert.equal(args[args.indexOf('--network') + 1], 'none');
   assert.equal(args[args.indexOf('--cap-drop') + 1], 'ALL');
@@ -55,8 +58,14 @@ async function runFixtureDocker(args) {
   assert.equal(readFileSync(join(control, 'opencode.json'), 'utf8').includes('test-only-model-credential'), false);
   assert.equal(args.includes('test-only-model-credential'), false);
   try {
-    return await runDocker([...args.slice(0, -1), '-e', 'GT_HOSTED_SMOKE_DEBUG=1', args.at(-1)],
+    // Keep only this fixture's container until failure inspection or normal cleanup.
+    const fixtureArgs = args.filter((argument) => argument !== '--rm');
+    return await runDocker([...fixtureArgs.slice(0, -1), '-e', 'GT_HOSTED_SMOKE_DEBUG=1', fixtureArgs.at(-1)],
       90_000, 12 * 1024 * 1024);
+  } catch (error) {
+    try { process.stderr.write(`Repository fixture container failed: ${calls} model calls, ${tarballCalls} npm fixture calls.\n`); } catch {}
+    reportRepositoryFixtureFailure(name, { createClient: createHostedDockerClient });
+    throw error;
   } finally {
     stopHostedContainer(name);
   }
