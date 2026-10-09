@@ -6,6 +6,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Fixed
 
+- Add an explicit Linux single-CPU cpuset compatibility path for hosted tasks without changing the default CFS quota path. Require concurrency one and a new entrypoint that verifies actual CPU, memory, swap and PID controls before Agent work; retain the separate host-aggregate acceptance gate and every existing sandbox/accounting boundary. Exercise both CPU modes in provider-free Linux container checks and deliver the same reviewed test-source image with immutable identity and short-lived CI provenance.
+- Pin the Web renderer to KaTeX `0.18.2`, the upstream fix for GHSA-238p-pmpm-9mq7, with focused inherited-option/macro and rendering-limit regressions. Preserve the existing Markdown/math safety policy; this post-release source change does not move the published Beta 1 tag or npm versions.
 - Make the Codex shared-directory symlink fixture independent of the runner's umask without changing production permissions. Add a read-only, fixed-commit Linux x64 / Node 24.16.0 candidate workflow with complete release gates, bounded archive validation and short-lived public provenance; successful candidate builds do not publish packages or deploy services.
 - Make cloud trial and GitHub repository-task input and control mounts readable by their non-root containers under private service umasks. Preserve private job roots, read-only mounts, host-side credentials and resource limits; cover deeply nested source and success/failure cleanup with permission regressions and production-path Linux container smoke tests. This server-only correction does not change the published Beta 1 npm packages or tag.
 

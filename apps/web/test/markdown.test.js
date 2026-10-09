@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import katex from "katex";
 import { formulaToSafeHtml, markdownToSafeHtml } from "../src/markdown.js";
 
 test("agent Markdown renders GFM structure without executable HTML", () => {
@@ -26,6 +27,55 @@ test("KaTeX renders bounded formulas without trusting formula-supplied links", (
   assert.match(display, /class="katex-display"/);
   assert.doesNotMatch(untrusted, /href=/i);
   assert.doesNotMatch(`${inline}${display}${untrusted}`, /<script/i);
+});
+
+test("KaTeX ignores inherited renderer settings and macro definitions", () => {
+  const options = Object.assign(Object.create({ trust: true }), {
+    throwOnError: false,
+    strict: "ignore",
+  });
+  const untrusted = katex.renderToString("\\href{https://example.invalid/math}{link}", options);
+  assert.doesNotMatch(untrusted, /href=/i);
+
+  const macros = Object.assign(Object.create({ "\\gtInherited": "\\text{prototype-macro}" }), {
+    "\\gtOwned": "\\text{own-macro}",
+  });
+  const inherited = katex.renderToString("\\gtInherited", { throwOnError: false, macros });
+  const undefinedCommand = katex.renderToString("\\gtInherited", {
+    throwOnError: false,
+    macros: Object.create(null),
+  });
+  const owned = katex.renderToString("\\gtOwned", { throwOnError: false, macros });
+  assert.equal(inherited, undefinedCommand);
+  assert.doesNotMatch(inherited, /prototype-macro/);
+  assert.match(owned, /own-macro/);
+});
+
+test("application formulas ignore inherited setting processors", () => {
+  const original = Object.getOwnPropertyDescriptor(Object.prototype, "processor");
+  try {
+    Object.defineProperty(Object.prototype, "processor", {
+      configurable: true,
+      value: (value) => value === false ? true : value,
+    });
+    const html = formulaToSafeHtml("\\href{https://example.invalid/math}{link}");
+    const ordinary = formulaToSafeHtml("E = mc^2");
+    assert.doesNotMatch(html, /href=|<img|<script/i);
+    assert.match(ordinary, /class="katex"/);
+    assert.match(ordinary, /<math/);
+  } finally {
+    if (original) Object.defineProperty(Object.prototype, "processor", original);
+    else delete Object.prototype.processor;
+  }
+});
+
+test("application formulas keep macro expansion and size limits", () => {
+  const loop = formulaToSafeHtml("\\def\\a{\\a}\\a");
+  const size = formulaToSafeHtml("\\rule{999em}{999em}");
+  assert.match(loop, /class="katex-error"/);
+  assert.match(loop, /Too many expansions/);
+  assert.match(size, /width:20em/);
+  assert.doesNotMatch(size, /(?:width|height):999em/);
 });
 
 test("Markdown preserves escaped LaTeX delimiters for the DOM formula pass", () => {

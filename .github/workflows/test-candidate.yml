@@ -9,7 +9,7 @@ on:
         type: string
   # Pre-merge proof only. These artifacts must never be installed as reviewed main.
   push:
-    branches: [codex/isolated-beta-candidate-builder-20261009]
+    branches: [codex/hosted-cpuset-katex-20261010]
 
 permissions:
   contents: read
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   candidate:
-    if: github.repository == 'TH060419/gatherthread' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/codex/isolated-beta-candidate-builder-20261009'))
+    if: github.repository == 'TH060419/gatherthread' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/codex/hosted-cpuset-katex-20261010'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -45,7 +45,7 @@ jobs:
             [[ "$GITHUB_REF" == refs/heads/main ]]
             git merge-base --is-ancestor "$task_commit" refs/remotes/origin/main
           else
-            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/codex/isolated-beta-candidate-builder-20261009 ]]
+            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/codex/hosted-cpuset-katex-20261010 ]]
             [[ "$task_commit" == "$GITHUB_SHA" ]]
           fi
           node -e 'if(process.version!=="v24.16.0"||process.platform!=="linux"||process.arch!=="x64") process.exit(1)'
@@ -81,7 +81,32 @@ jobs:
             --workflow-sha "$GITHUB_WORKFLOW_SHA" --workflow-ref "$GITHUB_WORKFLOW_REF" \
             --repository "$GITHUB_REPOSITORY" --run-id "$GITHUB_RUN_ID" \
             --run-attempt "$GITHUB_RUN_ATTEMPT" --event "$GITHUB_EVENT_NAME" --ref "$GITHUB_REF"
+      - name: Build, verify and export the same-source hosted image
+        id: image
+        env:
+          SOURCE_COMMIT: ${{ steps.source.outputs.commit }}
+          CANDIDATE_DIRECTORY: ${{ steps.build.outputs.directory }}
+        run: |
+          set -euo pipefail
+          umask 077
+          task_private="$(mktemp -d "$RUNNER_TEMP/gt-hosted-image.XXXXXXXX")"
+          [[ ! -L "$task_private" && "$(stat -c %a "$task_private")" == 700 ]]
+          mkdir "$task_private/home"
+          task_output="$task_private/verified"
+          # Public CI identity only; no runner environment, keys or user data enter metadata.
+          env -i PATH="$PATH" HOME="$task_private/home" node -e 'const [path,repository,workflow_sha,workflow_ref,run_id,run_attempt,event,ref]=process.argv.slice(1);require("node:fs").writeFileSync(path,JSON.stringify({repository,workflow_sha,workflow_ref,run_id,run_attempt,event,ref})+"\n",{flag:"wx",mode:0o600})' \
+            "$task_private/workflow.json" "$GITHUB_REPOSITORY" "$GITHUB_WORKFLOW_SHA" "$GITHUB_WORKFLOW_REF" \
+            "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" "$GITHUB_EVENT_NAME" "$GITHUB_REF"
+          # The exporter and Docker context both come from the application candidate's fixed commit.
+          env -i PATH="$PATH" HOME="$task_private/home" CI=true \
+            bash "$CANDIDATE_DIRECTORY/build/scripts/test-environment/export-hosted-image.sh" \
+            "$SOURCE_COMMIT" "$CANDIDATE_DIRECTORY/build" "$task_output" "$task_private/workflow.json"
+          for task_file in hosted-image.tar.gz hosted-image.tar.gz.sha256 hosted-image-provenance.json; do
+            [[ -f "$task_output/$task_file" && ! -L "$task_output/$task_file" ]]
+          done
+          printf 'directory=%s\n' "$task_output" >> "$GITHUB_OUTPUT"
       - name: Upload verified candidate only
+        if: ${{ success() }}
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: test-candidate-${{ steps.source.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -89,6 +114,20 @@ jobs:
             ${{ steps.build.outputs.directory }}/candidate.tar.gz
             ${{ steps.build.outputs.directory }}/candidate.tar.gz.sha256
             ${{ steps.build.outputs.directory }}/provenance.json
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+      # Public-repository Actions artifacts contain reviewed source/dependencies only.
+      # No registry push or automatic deployment; host acceptance remains independent.
+      - name: Upload verified hosted image only
+        if: ${{ success() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: test-hosted-image-${{ steps.source.outputs.commit }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ steps.image.outputs.directory }}/hosted-image.tar.gz
+            ${{ steps.image.outputs.directory }}/hosted-image.tar.gz.sha256
+            ${{ steps.image.outputs.directory }}/hosted-image-provenance.json
           if-no-files-found: error
           retention-days: 3
           compression-level: 0

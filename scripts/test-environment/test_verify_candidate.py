@@ -518,6 +518,18 @@ class CandidateTests(unittest.TestCase):
                        check=True, capture_output=True, timeout=10)
         self.assertFalse(json.loads(output.read_text())["reviewed_main"])
 
+    def test_premerge_provenance_refuses_previous_or_unreviewed_feature_refs(self):
+        self.write()
+        for ref in ["refs/heads/codex/isolated-beta-candidate-builder-20261009", "refs/heads/codex/other"]:
+            output = self.directory / "rejected-premerge-provenance.json"
+            result = subprocess.run([sys.executable, str(SCRIPT), str(self.archive), COMMIT, "--provenance", str(output),
+                                     "--workflow-sha", COMMIT, "--run-id", "123", "--run-attempt", "1", "--event", "push",
+                                     "--ref", ref, "--repository", validator.REPOSITORY,
+                                     "--workflow-ref", validator.WORKFLOW + ref],
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse(output.exists())
+
     def test_main_verifier_public_provenance_and_output_without_extraction(self):
         self.write()
         output = self.directory / "provenance.json"

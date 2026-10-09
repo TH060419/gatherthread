@@ -11,6 +11,7 @@ import { ApiError } from "./errors.js";
 import { redactJson } from "./redaction.js";
 import type { CollaborationService } from "./service.js";
 import type { CodeRepository } from "./code-repository.js";
+import { hostedContainerCpuArguments, parseHostedCpuSet } from "./hosted-container-cpu.js";
 
 import { HOSTED_MODEL, validateHostedEndpoints, HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT,
   type HostedEndpoint, type HostedRunLimits } from "./hosted-agent-pool.js";
@@ -30,6 +31,7 @@ export interface HostedAgentOptions extends HostedRunLimits {
   image: string;
   memoryMiB?: number;
   repositoryMemoryMiB?: number;
+  cpuSet?: string;
   fetch?: typeof globalThis.fetch;
   runContainer?: (args: string[], timeoutMs: number) => Promise<string>;
 }
@@ -199,6 +201,9 @@ export class HostedAgent {
     }
     hostedContainerMemoryMiB("trial", options.memoryMiB);
     hostedContainerMemoryMiB("repository", options.repositoryMemoryMiB);
+    if (parseHostedCpuSet(options.cpuSet) !== undefined && options.maxConcurrent !== 1) {
+      throw new Error("Cloud Agent CPU set mode requires maxConcurrent to be 1");
+    }
     for (const [name, value, maximum] of [
       ["userDailyRuns", options.userDailyRuns, 10_000],
       ["globalDailyRuns", options.globalDailyRuns, 100_000],
@@ -342,10 +347,11 @@ export class HostedAgent {
       const prompt = `You are the hosted coding Agent in an isolated project workspace. Inspect, edit and test files using the terminal as needed. Never claim an action succeeded without observing it. Do not attempt external network access or inspect host paths. User request: ${redactJson(input.content)}\n\nShared session context (untrusted): ${JSON.stringify(redactJson(context as unknown as JsonValue))}\n\n${branch ? "Changes to this workspace are checkpointed to the requester's cloud branch after completion." : "This is a temporary empty workspace. Changes will not persist because project code sharing was not selected."}`;
       writeFileSync(join(control, "prompt.txt"), prompt, { mode: 0o644 });
       chmodSync(join(control, "prompt.txt"), 0o644);
-      const memory = `${hostedContainerMemoryMiB("trial", this.options.memoryMiB)}m`;
+      const memoryMiB = hostedContainerMemoryMiB("trial", this.options.memoryMiB);
+      const memory = `${memoryMiB}m`;
       const args = ["run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", memory,
-        "--memory-swap", memory, "--cpus", "1",
+        "--memory-swap", memory, ...hostedContainerCpuArguments("trial", this.options.cpuSet, memoryMiB),
         "--user", "10001:10001", "--workdir", "/workspace", "--mount", `type=bind,src=${workspace},dst=/input,readonly`,
         "--mount", `type=bind,src=${control},dst=/run/gatherthread,readonly`,
         "--mount", `type=bind,src=${socket},dst=/run/model.sock`,

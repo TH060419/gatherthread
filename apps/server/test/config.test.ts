@@ -109,6 +109,37 @@ test("owner-host credentials require a stable pepper even outside production", (
   assert.doesNotThrow(() => assertPersistentCredentialPepper(config));
 });
 
+test("hosted single-CPU cpuset mode is explicit, canonical and Linux-only", { skip: process.platform === "win32" }, () => {
+  const enabled = {
+    GATHERTHREAD_HOSTED_AGENT_ENABLED: "true", GATHERTHREAD_HOSTED_AGENT_PRESET: "siliconflow-free",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: `sha256:${"b".repeat(64)}`,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true", GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-only-key",
+    GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT: "1",
+  };
+  assert.equal(loadServerConfig(enabled, "/srv/gatherthread").hostedAgent?.cpuSet, undefined);
+  if (process.platform !== "linux") {
+    assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_CPUSET: "1" },
+      "/srv/gatherthread"), /Linux deployment host/);
+  } else {
+    for (const cpuSet of ["0", "1", "4095"]) {
+      const hosted = loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_CPUSET: cpuSet }, "/srv/gatherthread").hostedAgent!;
+      assert.equal(hosted.cpuSet, cpuSet);
+      assert.equal(hosted.maxConcurrent, 1);
+      assert.equal(hosted.memoryMiB, 768);
+      assert.equal(hosted.repositoryMemoryMiB, 2048);
+      assert.equal(hosted.userMinIntervalSeconds, 30);
+    }
+    assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_CPUSET: "1",
+      GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT: "2" }, "/srv/gatherthread"), /concurrency one/);
+  }
+  for (const invalid of ["", "01", "-1", "4096", "0-1", "0,1", "1.0", "1e0", " 1", "1 ", "1\n", "Infinity"]) {
+    assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_CPUSET: invalid },
+      "/srv/gatherthread"), ConfigurationError);
+  }
+  assert.equal(loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_ENABLED: "false",
+    GATHERTHREAD_HOSTED_AGENT_CPUSET: "invalid" }, "/srv/gatherthread").hostedAgent, undefined);
+});
+
 test("SiliconFlow free preset selects six exact models with one shared capacity and no daily allowance", { skip: process.platform === "win32" }, () => {
   const enabled = {
     GATHERTHREAD_HOSTED_AGENT_ENABLED: "true", GATHERTHREAD_HOSTED_AGENT_PRESET: "siliconflow-free",

@@ -9,6 +9,7 @@ import { CodeRepository } from "../src/code-repository.js";
 import { HostedAgent, hostedContainerMemoryMiB, runDocker, type HostedAgentOptions } from "../src/hosted-agent.js";
 import { hostedDockerEnvironment, stopInterruptedHostedContainers } from "../src/hosted-agent-recovery.js";
 import { HostedRepositoryRunner } from "../src/hosted-repository-runner.js";
+import { HOSTED_CPUSET_ENTRYPOINT } from "../src/hosted-container-cpu.js";
 import type { CodeFile } from "@gatherthread/protocol";
 
 const unixTest = process.platform === "win32" ? test.skip : test;
@@ -43,6 +44,16 @@ test("direct runner options reject invalid memory and preserve original default 
     assert.throws(() => new HostedAgent(f.service, f.code, { ...options, memoryMiB: 769 }), /memory/);
     assert.throws(() => new HostedRepositoryRunner({ ...options, repositoryMemoryMiB: 2049 }), /memory/);
     assert.throws(() => hostedContainerMemoryMiB("trial", null as unknown as number), /memory/);
+    for (const cpuSet of ["", "0,1", "0-1", "01", "4096"]) {
+      assert.throws(() => new HostedAgent(f.service, f.code, { ...options, cpuSet }), /CPU index/);
+      assert.throws(() => new HostedRepositoryRunner({ ...options, cpuSet }), /CPU index/);
+    }
+    for (const maxConcurrent of [0, 2, 8, NaN, Infinity, 1.5]) {
+      assert.throws(() => new HostedAgent(f.service, f.code, { ...options, cpuSet: "1", maxConcurrent }), /maxConcurrent/);
+      assert.throws(() => new HostedRepositoryRunner({ ...options, cpuSet: "1", maxConcurrent }), /maxConcurrent/);
+    }
+    assert.doesNotThrow(() => new HostedAgent(f.service, f.code, { ...options, maxConcurrent: 2 }));
+    assert.doesNotThrow(() => new HostedRepositoryRunner({ ...options, maxConcurrent: 2 }));
   } finally { f.close(); }
 });
 
@@ -94,6 +105,52 @@ unixTest("low-memory container failure never saves a partial answer or reports s
     const runner = new HostedRepositoryRunner({ ...options, repositoryMemoryMiB: 512,
       runContainer: async () => { throw new Error("container_failed"); } });
     await assert.rejects(runner.run(files, "Fixture", options.endpoints[0]!, () => undefined), /container_failed/);
+  } finally { f.close(); }
+});
+
+unixTest("explicit affinity applies to both runners without unsupported CPU quotas or weaker sandbox controls", async () => {
+  const f = fixture();
+  const check = (args: string[], pids: "128" | "256") => {
+    assert.equal(args[args.indexOf("--cpuset-cpus") + 1], "1");
+    assert.ok(!args.includes("--cpus"));
+    assert.equal(args[args.indexOf("--entrypoint") + 1], HOSTED_CPUSET_ENTRYPOINT);
+    for (const argument of ["none", "--read-only", "ALL", "no-new-privileges", "10001:10001",
+      "GT_HOSTED_CPUSET=1", "GT_HOSTED_MEMORY_BYTES=536870912", `GT_HOSTED_PIDS=${pids}`]) assert.ok(args.includes(argument));
+    assert.equal(args[args.indexOf("--pids-limit") + 1], pids);
+    assert.equal(args[args.indexOf("--memory") + 1], "512m");
+    assert.equal(args[args.indexOf("--memory-swap") + 1], "512m");
+    assert.ok(args.some((argument) => argument.endsWith("dst=/input,readonly")));
+    assert.ok(!args.join(" ").includes(options.endpoints[0]!.apiToken));
+  };
+  try {
+    const agent = new HostedAgent(f.service, f.code, { ...options, cpuSet: "1", memoryMiB: 512,
+      runContainer: async (args) => { check(args, "128"); return JSON.stringify({ answer: "Fixture completed", files: [], save_error: null }); } });
+    const result = await agent.request(f.actor, f.session.id, { profile_id: "fixture", content: "Fixture",
+      include_code: false, idempotency_key: "affinity-trial" });
+    assert.equal((result.response_event?.payload as { status: string }).status, "completed");
+    const runner = new HostedRepositoryRunner({ ...options, cpuSet: "1", repositoryMemoryMiB: 512,
+      runContainer: async (args) => { check(args, "256"); return JSON.stringify({ answer: "Fixture completed", files, save_error: null }); } });
+    assert.deepEqual((await runner.run(files, "Fixture", options.endpoints[0]!, () => undefined)).files, files);
+  } finally { f.close(); }
+});
+
+unixTest("affinity guard refusal settles failure without a provider call or a replacement executor", async () => {
+  const f = fixture();
+  let calls = 0, executions = 0;
+  const refusal = { ...options, cpuSet: "1", memoryMiB: 512, repositoryMemoryMiB: 512,
+    fetch: async () => { calls++; throw new Error("unexpected_provider_call"); },
+    runContainer: async () => { executions++; throw new Error("hosted_resource_controls_unavailable"); } };
+  try {
+    const agent = new HostedAgent(f.service, f.code, refusal);
+    const result = await agent.request(f.actor, f.session.id, { profile_id: "fixture", content: "Fixture",
+      include_code: false, idempotency_key: "affinity-refused" });
+    assert.equal((result.response_event?.payload as { status: string }).status, "failed");
+    assert.equal(f.db.hostedActiveRuns(), 0);
+    assert.equal(executions, 1);
+    await assert.rejects(new HostedRepositoryRunner(refusal).run(files, "Fixture", options.endpoints[0]!, () => undefined),
+      /hosted_resource_controls_unavailable/);
+    assert.equal(executions, 2);
+    assert.equal(calls, 0);
   } finally { f.close(); }
 });
 

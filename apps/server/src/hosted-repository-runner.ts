@@ -8,10 +8,14 @@ import { HostedModelProxy, hostedContainerMemoryMiB, runDocker, type HostedAgent
 import { HostedNpmProxy } from "./hosted-npm-proxy.js";
 import type { HostedEndpoint } from "./hosted-agent-pool.js";
 import { redactJson } from "./redaction.js";
+import { hostedContainerCpuArguments, parseHostedCpuSet } from "./hosted-container-cpu.js";
 
 export class HostedRepositoryRunner {
   constructor(private readonly options: HostedAgentOptions) {
     hostedContainerMemoryMiB("repository", options.repositoryMemoryMiB);
+    if (parseHostedCpuSet(options.cpuSet) !== undefined && options.maxConcurrent !== 1) {
+      throw new Error("Cloud Agent CPU set mode requires maxConcurrent to be 1");
+    }
   }
   async run(files: CodeFile[], prompt: string, endpoint: HostedEndpoint, onUnavailable: (ms: number) => void,
     controlOptions?: { taskId: string; signal: AbortSignal; authorize: () => void }) {
@@ -54,10 +58,11 @@ export class HostedRepositoryRunner {
       }), { mode: 0o644 });
       chmodSync(join(control, "opencode.json"), 0o644);
       await model.listen(modelSocket); await npm.listen(npmSocket);
-      const memory = `${hostedContainerMemoryMiB("repository", this.options.repositoryMemoryMiB)}m`;
+      const memoryMiB = hostedContainerMemoryMiB("repository", this.options.repositoryMemoryMiB);
+      const memory = `${memoryMiB}m`;
       const args = ["run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
         "--security-opt", "no-new-privileges", "--pids-limit", "256", "--memory", memory,
-        "--memory-swap", memory, "--cpus", "2",
+        "--memory-swap", memory, ...hostedContainerCpuArguments("repository", this.options.cpuSet, memoryMiB),
         "--user", "10001:10001", "--workdir", "/workspace",
         "--mount", `type=bind,src=${workspace},dst=/input,readonly`,
         "--mount", `type=bind,src=${control},dst=/run/gatherthread,readonly`,
