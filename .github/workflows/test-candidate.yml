@@ -9,7 +9,7 @@ on:
         type: string
   # Pre-merge proof only. These artifacts must never be installed as reviewed main.
   push:
-    branches: [codex/isolated-beta-candidate-builder-20261009]
+    branches: [codex/hosted-cpuset-katex-20261010]
 
 permissions:
   contents: read
@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   candidate:
-    if: github.repository == 'TH060419/gatherthread' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/codex/isolated-beta-candidate-builder-20261009'))
+    if: github.repository == 'TH060419/gatherthread' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event_name == 'push' && github.ref == 'refs/heads/codex/hosted-cpuset-katex-20261010'))
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -45,7 +45,7 @@ jobs:
             [[ "$GITHUB_REF" == refs/heads/main ]]
             git merge-base --is-ancestor "$task_commit" refs/remotes/origin/main
           else
-            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/codex/isolated-beta-candidate-builder-20261009 ]]
+            [[ "$GITHUB_EVENT_NAME" == push && "$GITHUB_REF" == refs/heads/codex/hosted-cpuset-katex-20261010 ]]
             [[ "$task_commit" == "$GITHUB_SHA" ]]
           fi
           node -e 'if(process.version!=="v24.16.0"||process.platform!=="linux"||process.arch!=="x64") process.exit(1)'

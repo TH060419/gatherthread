@@ -24,7 +24,7 @@ MAX_TAR_BYTES = 640 * 1024 * 1024
 MAX_EXTENDED_BYTES = 64 * 1024
 MAX_METADATA_BYTES = 8 * 1024 * 1024
 MAX_NAME_BYTES = 4096
-FEATURE_REF = "refs/heads/codex/isolated-beta-candidate-builder-20261009"
+FEATURE_REF = "refs/heads/codex/hosted-cpuset-katex-20261010"
 REPOSITORY = "TH060419/gatherthread"
 WORKFLOW = f"{REPOSITORY}/.github/workflows/test-candidate.yml@"
 WINDOWS = os.name == "nt"

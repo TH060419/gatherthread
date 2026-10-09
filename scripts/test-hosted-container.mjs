@@ -8,6 +8,7 @@ import { runHostedDockerCommand, stopHostedContainer } from "../apps/server/dist
 import { CollaborationDatabase } from "../apps/server/dist/src/database.js";
 import { CollaborationService } from "../apps/server/dist/src/service.js";
 import { CodeRepository } from "../apps/server/dist/src/code-repository.js";
+import { HOSTED_CPUSET_ENTRYPOINT, parseHostedCpuSet } from "../apps/server/dist/src/hosted-container-cpu.js";
 
 // Match the hardened Linux service before production creates any mounted files.
 if (process.platform === "linux") process.umask(0o077);
@@ -18,6 +19,7 @@ const inspected = runHostedDockerCommand(["image", "inspect", "--format", "{{.Id
 assert.equal(inspected.status, 0, "The reviewed local daemon must have the smoke image");
 const memoryMiB = hostedContainerMemoryMiB("trial", process.env.GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB === undefined
   ? undefined : Number(process.env.GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB));
+const cpuSet = parseHostedCpuSet(process.env.GATHERTHREAD_HOSTED_AGENT_CPUSET);
 const directory = mkdtempSync(join(tmpdir(), "gt-hosted-smoke-"));
 const endpoint = { id: "smoke", profileId: "default", label: "Smoke model", provider: "cloudflare-workers-ai",
   model: HOSTED_MODEL, baseUrl: `https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/ai/v1`,
@@ -112,7 +114,14 @@ async function runFixtureDocker(args) {
   assert.equal(args[args.indexOf("--network") + 1], "none");
   assert.equal(args[args.indexOf("--cap-drop") + 1], "ALL");
   assert.equal(args[args.indexOf("--pids-limit") + 1], "128");
-  assert.equal(args[args.indexOf("--cpus") + 1], "1");
+  if (cpuSet === undefined) assert.equal(args[args.indexOf("--cpus") + 1], "1");
+  else {
+    assert.ok(!args.includes("--cpus"));
+    assert.equal(args[args.indexOf("--cpuset-cpus") + 1], cpuSet);
+    assert.equal(args[args.indexOf("--entrypoint") + 1], HOSTED_CPUSET_ENTRYPOINT);
+    assert.ok(args.includes(`GT_HOSTED_CPUSET=${cpuSet}`) && args.includes(`GT_HOSTED_MEMORY_BYTES=${memoryMiB * 1024 * 1024}`)
+      && args.includes("GT_HOSTED_PIDS=128"));
+  }
   assert.equal(args[args.indexOf("--memory") + 1], `${memoryMiB}m`);
   assert.equal(args[args.indexOf("--memory-swap") + 1], `${memoryMiB}m`);
   assert.ok(args.includes("--read-only") && args.includes("no-new-privileges"));
@@ -138,7 +147,7 @@ try {
   repository.checkpoint(actor, session.project_id, { base_commit: null, files: initialFiles,
     message: "Fixture source", idempotency_key: "smoke-initial-code" });
   const agent = new HostedAgent(service, repository, { endpoints: [endpoint], image: inspected.stdout.trim(),
-    memoryMiB, userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, fetch: fetcher, runContainer: runFixtureDocker });
+    memoryMiB, ...(cpuSet === undefined ? {} : { cpuSet }), userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, fetch: fetcher, runContainer: runFixtureDocker });
   const result = await agent.request(actor, session.id, { profile_id: endpoint.profileId, include_code: true,
     content: "Update the nested source to export two, run its test, then reply READY.", idempotency_key: "smoke-run" });
   assert.ok(result.response_event, "the production trial must produce a terminal response");
@@ -149,7 +158,7 @@ try {
   const snapshot = repository.snapshot(actor, session.project_id, status.own_branch_id).snapshot;
   assert.deepEqual(snapshot.files, initialFiles.map((entry) => entry.path === sourcePath
     ? file(sourcePath, "module.exports = 2;\n") : entry).sort((a, b) => a.path.localeCompare(b.path)));
-  process.stdout.write(`Hosted OpenCode production-path smoke passed at ${memoryMiB}m under strict Linux umask: nested source edited and tested, read-only input and credential isolation verified; ${calls} fake model call(s).\n`);
+  process.stdout.write(`Hosted OpenCode production-path smoke passed at ${memoryMiB}m${cpuSet === undefined ? "" : ` with guarded CPU ${cpuSet}`} under strict Linux umask: nested source edited and tested, read-only input and credential isolation verified; ${calls} fake model call(s).\n`);
 } finally {
   database.close();
   rmSync(directory, { recursive: true, force: true });

@@ -8,6 +8,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 RUN npm install --global opencode-ai@1.18.32 && opencode --version
 COPY ops/hosted-agent/entrypoint.mjs /usr/local/lib/gatherthread-hosted-entrypoint.mjs
+COPY --chmod=0555 ops/hosted-agent/cpuset-entrypoint.mjs /usr/local/lib/gatherthread-hosted-cpuset-entrypoint.mjs
+COPY ops/hosted-agent/resource-check.mjs /usr/local/lib/resource-check.mjs
 COPY ops/hosted-agent/public-answer.mjs /usr/local/lib/public-answer.mjs
 COPY ops/hosted-agent/npm-setup.mjs /usr/local/lib/npm-setup.mjs
 RUN groupadd --gid 10001 agent && useradd --uid 10001 --gid 10001 --home-dir /home/agent agent

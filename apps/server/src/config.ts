@@ -6,6 +6,7 @@ import { parseHostedEndpoints, HOSTED_MODEL, siliconFlowFreePreset,
 import type { HostedGithubOptions } from "./hosted-github.js";
 import { hostedContainerMemoryMiB, type HostedAgentOptions } from "./hosted-agent.js";
 import { hostedDockerEnvironment } from "./hosted-agent-recovery.js";
+import { parseHostedCpuSet } from "./hosted-container-cpu.js";
 import { registrationFromEnvironment } from "./registration-providers.js";
 import type { RegistrationOptions } from "./registration.js";
 import type { TestGateOptions } from "./test-gate.js";
@@ -176,6 +177,12 @@ export function loadServerConfig(
     if (process.platform === "win32") throw new ConfigurationError("Cloud Agent requires a Linux Docker host with Unix sockets");
     try { hostedDockerEnvironment(env); }
     catch { throw new ConfigurationError("Cloud Agent Docker configuration requires a local Unix socket without contexts or TLS"); }
+    let cpuSet: string | undefined;
+    try { cpuSet = parseHostedCpuSet(env.GATHERTHREAD_HOSTED_AGENT_CPUSET); }
+    catch { throw new ConfigurationError("GATHERTHREAD_HOSTED_AGENT_CPUSET must be one canonical CPU index from 0 to 4095"); }
+    if (cpuSet !== undefined && process.platform !== "linux") {
+      throw new ConfigurationError("Cloud Agent cpuset mode requires a Linux deployment host");
+    }
     const image = env.GATHERTHREAD_HOSTED_AGENT_IMAGE?.trim() ?? "";
     if (!/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(image)) {
       throw new ConfigurationError("Cloud Agent requires a digest-pinned runner image");
@@ -196,6 +203,9 @@ export function loadServerConfig(
         ? null : legacyRuns(env.GATHERTHREAD_HOSTED_AGENT_GLOBAL_DAILY_NEURONS, 4));
     const maxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT",
       env.GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT, 2);
+    if (cpuSet !== undefined && maxConcurrent !== 1) {
+      throw new ConfigurationError("Cloud Agent cpuset mode requires host concurrency one");
+    }
     const userMinIntervalSeconds = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS",
       env.GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MIN_INTERVAL_SECONDS);
     const userMaxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT",
@@ -228,7 +238,7 @@ export function loadServerConfig(
         throw new Error("unlimited user or global runs require only confirmed zero-price endpoints");
       }
       hostedAgent = { image, endpoints, userDailyRuns, globalDailyRuns, maxConcurrent, userMinIntervalSeconds, userMaxConcurrent,
-        memoryMiB, repositoryMemoryMiB };
+        memoryMiB, repositoryMemoryMiB, ...(cpuSet !== undefined ? { cpuSet } : {}) };
     } catch {
       // Validation errors can contain the private JSON input; never print them.
       throw new ConfigurationError("Invalid Cloud Agent endpoints, account quotas, or credential environment variables");

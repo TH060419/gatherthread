@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { HostedRepositoryRunner } from '../apps/server/dist/src/hosted-repository-runner.js';
 import { hostedContainerMemoryMiB, runDocker } from '../apps/server/dist/src/hosted-agent.js';
 import { runHostedDockerCommand, stopHostedContainer } from '../apps/server/dist/src/hosted-agent-recovery.js';
+import { HOSTED_CPUSET_ENTRYPOINT, parseHostedCpuSet } from '../apps/server/dist/src/hosted-container-cpu.js';
 // Exercise production mount preparation with the hardened Linux service umask.
 if (process.platform === 'linux') process.umask(0o077);
 const image = process.env.GATHERTHREAD_TEST_HOSTED_IMAGE;
@@ -16,6 +17,7 @@ const inspected = runHostedDockerCommand(['image', 'inspect', '--format', '{{.Id
 assert.equal(inspected.status, 0);
 const memoryMiB = hostedContainerMemoryMiB('repository', process.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB === undefined
   ? undefined : Number(process.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB));
+const cpuSet = parseHostedCpuSet(process.env.GATHERTHREAD_HOSTED_AGENT_CPUSET);
 const directory = mkdtempSync(join(tmpdir(), 'gt-repository-smoke-'));
 let calls = 0, tarballCalls = 0, issued = false, observedChecks = false;
 let reportedFixtureFailure = false;
@@ -34,7 +36,14 @@ async function runFixtureDocker(args) {
   assert.equal(args[args.indexOf('--network') + 1], 'none');
   assert.equal(args[args.indexOf('--cap-drop') + 1], 'ALL');
   assert.equal(args[args.indexOf('--pids-limit') + 1], '256');
-  assert.equal(args[args.indexOf('--cpus') + 1], '2');
+  if (cpuSet === undefined) assert.equal(args[args.indexOf('--cpus') + 1], '2');
+  else {
+    assert.ok(!args.includes('--cpus'));
+    assert.equal(args[args.indexOf('--cpuset-cpus') + 1], cpuSet);
+    assert.equal(args[args.indexOf('--entrypoint') + 1], HOSTED_CPUSET_ENTRYPOINT);
+    assert.ok(args.includes(`GT_HOSTED_CPUSET=${cpuSet}`) && args.includes(`GT_HOSTED_MEMORY_BYTES=${memoryMiB * 1024 * 1024}`)
+      && args.includes('GT_HOSTED_PIDS=256'));
+  }
   assert.equal(args[args.indexOf('--memory') + 1], `${memoryMiB}m`);
   assert.equal(args[args.indexOf('--memory-swap') + 1], `${memoryMiB}m`);
   assert.ok(args.includes('--read-only') && args.includes('no-new-privileges'));
@@ -111,11 +120,12 @@ try {
     const chunk = (delta, finish_reason = null) => JSON.stringify({ id: 'fixture', object: 'chat.completion.chunk', created: 1, model: endpoint.model, choices: [{ index: 0, delta, finish_reason }] });
     return new Response(`data: ${chunk(delta)}\n\ndata: ${chunk({}, useTool ? 'tool_calls' : 'stop')}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
   };
-  const runner = new HostedRepositoryRunner({ endpoints: [endpoint], image: inspected.stdout.trim(), userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, repositoryMemoryMiB: memoryMiB, fetch: fetcher, runContainer: runFixtureDocker });
+  const runner = new HostedRepositoryRunner({ endpoints: [endpoint], image: inspected.stdout.trim(), userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, repositoryMemoryMiB: memoryMiB,
+    ...(cpuSet === undefined ? {} : { cpuSet }), fetch: fetcher, runContainer: runFixtureDocker });
   const result = await runner.run(files, 'Update src/deep/nested/value.cjs to export two; run npm test and npm run build.', endpoint, () => {});
   assert.ok(issued && calls >= 2 && tarballCalls > 0 && observedChecks);
   assert.equal(Buffer.from(result.files.find((f) => f.path === sourcePath).content_base64, 'base64').toString(), 'module.exports = 2;\n');
   assert.ok(result.files.every((f) => !f.path.includes('node_modules') && !f.path.startsWith('dist/') && !f.path.startsWith('.git/')));
   assert.equal(result.files.find((f) => f.path === 'package-lock.json').content_base64, files.find((f) => f.path === 'package-lock.json').content_base64);
-  process.stdout.write(`PASS real repository container at ${memoryMiB}m under strict Linux umask: npm dependency installed, nested source edited, tests/build ran, read-only input and credential isolation verified, lockfile restored; ${calls} model fixture calls.\n`);
+  process.stdout.write(`PASS real repository container at ${memoryMiB}m${cpuSet === undefined ? '' : ` with guarded CPU ${cpuSet}`} under strict Linux umask: npm dependency installed, nested source edited, tests/build ran, read-only input and credential isolation verified, lockfile restored; ${calls} model fixture calls.\n`);
 } finally { rmSync(directory, { recursive: true, force: true }); }

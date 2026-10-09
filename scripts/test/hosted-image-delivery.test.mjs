@@ -1,0 +1,177 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { firstAllowedCpu, cpusetSmokeEnvironment, runCpusetSmoke } from "../test-hosted-cpuset.mjs";
+import { validateSource, validateImage, validateWorkflow, imageProvenance, writeHostedArchive,
+  MAX_IMAGE_BYTES, MAX_IMAGE_ARCHIVE_BYTES } from "../test-environment/hosted-image-metadata.mjs";
+
+const commit = "a".repeat(40), image = `sha256:${"b".repeat(64)}`;
+const source = { commit, node: "v24.16.0", platform: "linux", arch: "x64" };
+const runtime = { node: source.node, platform: source.platform, arch: source.arch };
+const inspection = [{ Id: image, Os: "linux", Architecture: "amd64", Size: 1234, Config: { User: "10001:10001",
+  Entrypoint: ["node", "/usr/local/lib/gatherthread-hosted-entrypoint.mjs"] } }];
+const workflow = { repository: "TH060419/gatherthread", workflow_sha: commit,
+  workflow_ref: "TH060419/gatherthread/.github/workflows/test-candidate.yml@refs/heads/main",
+  run_id: "123", run_attempt: "1", event: "workflow_dispatch", ref: "refs/heads/main" };
+const cpuset = { image_id: image, cpu: "24", memory_mib: 512, trial: "passed", repository: "passed" };
+const quota = { image_id: image, memory_mib: 512, trial: "passed", repository: "passed" };
+const options = { source, commit, inspection, image, runtime, quota, cpuset, workflow,
+  docker: { Client: { Version: "29.0.1" }, Server: { Version: "29.0.1" } },
+  archive: { sha256: "c".repeat(64), bytes: 1234 } };
+const failure = { message: "Hosted image delivery identity is invalid" };
+
+test("CI selects the first actual allowed canonical CPU, never assumes zero", () => {
+  assert.equal(firstAllowedCpu("Name:\tnode\nCpus_allowed_list:\t24-27,30,40-63\n", "linux"), "24");
+  assert.equal(firstAllowedCpu("Cpus_allowed_list: 0\n", "linux"), "0");
+  assert.equal(firstAllowedCpu("Cpus_allowed_list:\t4095\n", "linux"), "4095");
+  for (const status of ["", "Cpus_allowed_list:\t\n", "Cpus_allowed_list:\t01\n", "Cpus_allowed_list:\t4096\n",
+    "Cpus_allowed_list:\t0-0\n", "Cpus_allowed_list:\t2-1\n", "Cpus_allowed_list:\t1,1\n",
+    "Cpus_allowed_list:\t2,0\n", "Cpus_allowed_list:\t1-2,2-3\n", "Cpus_allowed_list:\t1,\n",
+    "Cpus_allowed_list:\t1\r\n", "Cpus_allowed_list:\t1\nCpus_allowed_list:\t2\n", "x".repeat(65_537)]) {
+    assert.throws(() => firstAllowedCpu(status, "linux"));
+  }
+  for (const platform of ["darwin", "win32"]) assert.throws(() => firstAllowedCpu("Cpus_allowed_list:\t0\n", platform));
+});
+
+test("smoke children share one immutable image with bounded memory and no inherited credential/client state", () => {
+  const secretEnvironment = { PATH: process.env.PATH, HOME: "/private-account", DOCKER_CONTEXT: "remote",
+    DOCKER_TLS_VERIFY: "1", DOCKER_HOST: "tcp://remote", DOCKER_CONFIG: "/private-config",
+    HTTPS_PROXY: "private-proxy", GITHUB_TOKEN: "private-token", OPENAI_API_KEY: "private-key",
+    NODE_OPTIONS: "--require=/private-injection", BASH_ENV: "/private-injection" };
+  const calls = [];
+  const report = runCpusetSmoke({ image, platform: "linux", status: "Cpus_allowed_list:\t24-25\n", environment: secretEnvironment,
+    execute: (command, args, settings) => { calls.push({ command, args, settings }); return { status: 0, signal: null }; } });
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].args[0], /test-hosted-container\.mjs$/u);
+  assert.match(calls[1].args[0], /test-hosted-repository-container\.mjs$/u);
+  for (const { settings } of calls) {
+    assert.equal(settings.env.GATHERTHREAD_TEST_HOSTED_IMAGE, image);
+    assert.equal(settings.env.GATHERTHREAD_HOSTED_AGENT_CPUSET, "24");
+    assert.equal(settings.env.GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB, "512");
+    assert.equal(settings.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB, "512");
+    assert.equal(settings.env.DOCKER_HOST, "unix:///var/run/docker.sock");
+    assert.equal(settings.timeout, 120_000);
+    assert.ok(!existsSync(settings.env.HOME), "private home is cleaned after fixture execution");
+    for (const name of ["DOCKER_CONTEXT", "DOCKER_TLS_VERIFY", "DOCKER_CONFIG", "HTTPS_PROXY", "GITHUB_TOKEN", "OPENAI_API_KEY", "NODE_OPTIONS", "BASH_ENV"]) {
+      assert.equal(settings.env[name], undefined);
+    }
+  }
+  assert.deepEqual(report, cpuset);
+  for (const bad of ["latest", "gt-hosted-smoke", image + "\n", `sha256:${"B".repeat(64)}`]) {
+    assert.throws(() => cpusetSmokeEnvironment(bad, "24", "/fixture"));
+  }
+});
+
+test("smoke failure stops the sequence and never returns successful delivery metadata", () => {
+  for (const result of [{ status: 1 }, { status: null, signal: "SIGTERM" }, { status: 0, error: new Error("fixture-private-value") }]) {
+    let calls = 0;
+    assert.throws(() => runCpusetSmoke({ image, platform: "linux", status: "Cpus_allowed_list:\t24\n",
+      execute: () => { calls++; return result; } }), { message: "Hosted cpuset smoke failed; image must not be delivered" });
+    assert.equal(calls, 1);
+  }
+});
+
+test("source and image identities require the exact Linux x64 runtime, source commit and nonroot immutable image", () => {
+  assert.deepEqual(validateSource(source, commit, runtime), source);
+  assert.deepEqual(validateImage(inspection, image), { image_id: image, platform: "linux", architecture: "amd64", image_uncompressed_bytes: 1234 });
+  for (const entry of [{ ...source, commit: "d".repeat(40) }, { ...source, node: "v24.15.0" }, { ...source, platform: "darwin" },
+    { ...source, arch: "arm64" }, { ...source, credential: "fixture-private-value" }]) assert.throws(() => validateSource(entry, commit, runtime), failure);
+  for (const actual of [{ ...runtime, node: "v24.15.0" }, { ...runtime, platform: "darwin" }, { ...runtime, arch: "arm64" }]) {
+    assert.throws(() => validateSource(source, commit, actual), failure);
+  }
+  for (const id of ["latest", image + "\n", `sha256:${"b".repeat(63)}`]) assert.throws(() => validateImage(inspection, id), failure);
+  for (const entry of [{ ...inspection[0], Id: `sha256:${"d".repeat(64)}` }, { ...inspection[0], Os: "windows" },
+    { ...inspection[0], Architecture: "arm64" }, { ...inspection[0], Size: 0 }, { ...inspection[0], Size: MAX_IMAGE_BYTES + 1 },
+    { ...inspection[0], Config: { ...inspection[0].Config, User: "0" } },
+    { ...inspection[0], Config: { ...inspection[0].Config, Entrypoint: ["unreviewed"] } }]) assert.throws(() => validateImage([entry], image), failure);
+  assert.throws(() => validateImage([...inspection, ...inspection], image), failure);
+});
+
+test("public provenance binds every smoke and archive to the same image; arbitrary branch and failed fixtures are refused", () => {
+  const provenance = imageProvenance(options);
+  assert.equal(provenance.source_commit, commit);
+  assert.equal(provenance.image_archive_sha256, options.archive.sha256);
+  assert.equal(provenance.reviewed_main, true);
+  assert.equal(provenance.smoke.length, 4);
+  assert.ok(provenance.smoke.every((smoke) => smoke.image_id === image && smoke.status === "passed" && smoke.memory_mib === 512));
+  assert.deepEqual(provenance.smoke.map((smoke) => `${smoke.mode}:${smoke.kind}`), ["quota:trial", "quota:repository", "cpuset:trial", "cpuset:repository"]);
+  assert.match(provenance.host_aggregate_isolation, /independent deployment acceptance/u);
+  assert.equal(JSON.stringify(provenance).includes("fixture-private-value"), false);
+  for (const changed of [undefined, { ...quota, image_id: `sha256:${"d".repeat(64)}` }, { ...quota, trial: "failed" },
+    { ...quota, repository: "skipped" }, { ...quota, memory_mib: 1024 }, { ...quota, credential: "fixture-private-value" }]) {
+    assert.throws(() => imageProvenance({ ...options, quota: changed }), failure);
+  }
+  for (const changed of [{ ...cpuset, image_id: `sha256:${"d".repeat(64)}` }, { ...cpuset, trial: "failed" },
+    { ...cpuset, repository: "skipped" }, { ...cpuset, cpu: "24-25" }, { ...cpuset, cpu: "24\n" },
+    { ...cpuset, memory_mib: 1024 }, { ...cpuset, token: "fixture-private-value" }]) assert.throws(() => imageProvenance({ ...options, cpuset: changed }), failure);
+  for (const changed of [{ ...workflow, ref: "refs/heads/other" }, { ...workflow, event: "pull_request_target" },
+    { ...workflow, repository: "other/repository" }, { ...workflow, run_attempt: "0" },
+    { ...workflow, workflow_sha: commit + "\n" }, { ...workflow, credential: "fixture-private-value" }]) assert.throws(() => validateWorkflow(changed), failure);
+  const ref = "refs/heads/codex/hosted-cpuset-katex-20261010";
+  const premerge = { ...workflow, event: "push", ref, workflow_ref: `TH060419/gatherthread/.github/workflows/test-candidate.yml@${ref}` };
+  assert.doesNotThrow(() => validateWorkflow(premerge));
+  assert.equal(imageProvenance({ ...options, workflow: premerge }).reviewed_main, false);
+  for (const archive of [{ sha256: "latest", bytes: 123 }, { sha256: "c".repeat(64), bytes: 0 },
+    { sha256: "c".repeat(64), bytes: MAX_IMAGE_ARCHIVE_BYTES + 1 }]) assert.throws(() => imageProvenance({ ...options, archive }), failure);
+});
+
+test("archive streaming hashes exact bytes, bounds disk writes and removes only new partial output", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-image-archive-test-"));
+  const input = async function* (chunks) { for (const chunk of chunks) yield chunk; };
+  try {
+    const path = join(directory, "archive.tar.gz");
+    const chunks = [Buffer.from("first"), Buffer.from("second")];
+    const metadata = await writeHostedArchive(input(chunks), path, 11);
+    assert.deepEqual(metadata, { bytes: 11, sha256: createHash("sha256").update(Buffer.concat(chunks)).digest("hex") });
+    assert.deepEqual(readFileSync(path), Buffer.concat(chunks));
+    await assert.rejects(writeHostedArchive(input(chunks), path, 11), { code: "EEXIST" });
+    assert.deepEqual(readFileSync(path), Buffer.concat(chunks), "existing archive must not be deleted or replaced");
+    for (const chunks of [[], [Buffer.from("first"), Buffer.from("exceeds")], ["not a byte buffer"]]) {
+      const rejected = join(directory, "rejected.tar.gz");
+      await assert.rejects(writeHostedArchive(input(chunks), rejected, 10), failure);
+      assert.ok(!existsSync(rejected));
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("metadata CLI invalid input exits generically with no output artifact or private path disclosure", () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-image-metadata-test-"));
+  try {
+    const path = join(directory, "source.json"), output = join(directory, "provenance.json");
+    writeFileSync(path, JSON.stringify({ ...source, credential: "fixture-private-value" }));
+    const result = spawnSync(process.execPath, ["scripts/test-environment/hosted-image-metadata.mjs", "source", commit, path, output],
+      { encoding: "utf8", env: {} });
+    assert.equal(result.status, 1); assert.equal(result.stdout, "");
+    assert.equal(result.stderr, "Hosted image delivery identity is invalid.\n");
+    assert.equal(result.stderr.includes(directory), false);
+    assert.ok(!existsSync(output)); assert.ok(readFileSync(path, "utf8").includes("fixture-private-value"));
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("local export helper preserves one-build immutable-image order and has no public upload/deploy operation", () => {
+  const script = readFileSync("scripts/test-environment/export-hosted-image.sh", "utf8");
+  assert.match(script, /set -euo pipefail/u);
+  assert.match(script, /umask 077/u);
+  assert.match(script, /mktemp -d \/tmp\/gt-image\./u);
+  assert.match(script, /env -i PATH="\$task_path" HOME="\$task_private\/home"/u);
+  assert.match(script, /DOCKER_HOST=unix:\/\/\/var\/run\/docker\.sock/u);
+  assert.equal((script.match(/docker_client build /gu) ?? []).length, 1);
+  assert.match(script, /--platform linux\/amd64 --iidfile/u);
+  const quota = script.indexOf("for task_smoke in test-hosted-container.mjs test-hosted-repository-container.mjs");
+  const cpuset = script.indexOf('"$task_build/scripts/test-hosted-cpuset.mjs"');
+  const save = script.indexOf('docker_client save "$task_image" | gzip -n');
+  const provenance = script.indexOf('"$task_metadata" provenance');
+  const deliver = script.indexOf('mv "$task_private/$task_file"');
+  assert.ok(quota > 0 && quota < cpuset && cpuset < save && save < provenance && provenance < deliver);
+  assert.doesNotMatch(script, /docker_client (?:push|login)|curl|sudo|ssh|npm publish|--build-arg|--secret|continue-on-error/u);
+  // The shell helper is Linux-only; portable static/metadata tests must not require Bash on Windows.
+  if (process.platform !== "win32") {
+    const invalid = spawnSync("bash", ["scripts/test-environment/export-hosted-image.sh", "main"], { encoding: "utf8" });
+    assert.equal(invalid.status, 2);
+    assert.match(invalid.stderr, /^Usage:/u);
+  }
+});
