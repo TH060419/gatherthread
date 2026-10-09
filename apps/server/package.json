@@ -8,7 +8,7 @@
   "types": "dist/src/index.d.ts",
   "dependencies": {
     "@gatherthread/protocol": "*",
-    "ws": "^8.18.3",
+    "ws": "^8.22.0",
     "zod": "^4.6.5"
   }
 }
