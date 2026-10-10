@@ -54,6 +54,7 @@ import { HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./
 import { HOSTED_AGENT_SCHEMA } from "./hosted-agent-schema.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
+import { hostedFailureCode, hostedFailureContent } from "./hosted-agent-errors.js";
 
 export interface Actor {
   user_id: string;
@@ -3304,7 +3305,7 @@ export class CollaborationDatabase {
     });
   }
 
-  finishHostedAgentRequest(requestId: string, outcome: { content?: string }): CanonicalEvent | undefined {
+  finishHostedAgentRequest(requestId: string, outcome: { content?: string; errorCode?: string; providerAttempts?: number }): CanonicalEvent | undefined {
     return this.transaction(() => {
       this.sqlite.prepare("DELETE FROM hosted_agent_active_runs WHERE request_event_id=?").run(requestId);
       const job = this.sqlite.prepare("SELECT * FROM hosted_agent_runs WHERE request_event_id=?")
@@ -3322,8 +3323,9 @@ export class CollaborationDatabase {
       // Private transaction-local randomness cannot be preempted by a member
       // choosing a public chat idempotency key. The job transition deduplicates.
       const terminalKey = `hosted-terminal-${randomUUID()}`;
-      const failure = (code: string) => ({ content: "Cloud Agent is unavailable. Please try a new request later.",
-        status: "failed", error: { code } });
+      const failure = (code: string) => ({ content: hostedFailureContent(code),
+        status: "failed", error: { code, ...(code !== "storage_quota_exceeded" && code !== "access_changed" && Number.isSafeInteger(outcome.providerAttempts)
+          && outcome.providerAttempts! >= 0 && outcome.providerAttempts! <= 64 ? { provider_attempts: outcome.providerAttempts! } : {}) } });
       const append = (payload: JsonValue, provenance: RuntimeProvenance | null, marker = false) =>
         this.appendInsideTransaction(job.user_id, job.session_id, {
           idempotency_key: terminalKey, type: "agent_response", visibility: "session",
@@ -3346,7 +3348,7 @@ export class CollaborationDatabase {
           event = append(failure("storage_quota_exceeded"), null, true);
         }
       } else {
-        event = append(failure(authorized ? "model_unavailable" : "access_changed"), null, true);
+        event = append(failure(authorized ? hostedFailureCode(new Error(outcome.errorCode)) : "access_changed"), null, true);
       }
       this.sqlite.prepare(`UPDATE hosted_agent_runs SET status=?,finished_at=? WHERE request_event_id=?`).run(
         success ? "completed" : "failed", this.now(), requestId,
@@ -5066,14 +5068,17 @@ export class CollaborationDatabase {
       const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
       const job = request ? this.sqlite.prepare("SELECT status FROM hosted_agent_runs WHERE request_event_id=? AND user_id=?")
         .get(request.id, actorUserId) : undefined;
-      const payload = input.payload as { error?: { code?: string } };
+      const payload = input.payload as { error?: { code?: string; provider_attempts?: number } };
       const code = typeof payload?.error?.code === "string" ? payload.error.code : "";
+      const attempts = payload?.error?.provider_attempts;
+      const safeAttempts = attempts === undefined || (Number.isSafeInteger(attempts) && attempts >= 0 && attempts <= 64
+        && code !== "storage_quota_exceeded" && code !== "access_changed");
       if (eventBytes > 1024 || provenance !== null || request?.type !== "agent_request"
         || request.actor_user_id !== actorUserId || job?.status !== "running"
         || input.type !== "agent_response" || input.visibility !== "session"
-        || !["storage_quota_exceeded", "model_unavailable", "access_changed"].includes(code ?? "")
-        || stableJson(input.payload) !== stableJson({ content: "Cloud Agent is unavailable. Please try a new request later.",
-          status: "failed", error: { code } })) throw conflict("Invalid server hosted terminal marker");
+        || !safeAttempts || !(code === "storage_quota_exceeded" || code === "access_changed" || code === hostedFailureCode(new Error(code)))
+        || stableJson(input.payload) !== stableJson({ content: hostedFailureContent(code),
+          status: "failed", error: { code, ...(attempts === undefined ? {} : { provider_attempts: attempts }) } })) throw conflict("Invalid server hosted terminal marker");
     }
     // Exactly one fixed, <=1 KiB failed terminal per accepted job. It is charged
     // normally; subsequent ordinary writes cannot use this control allowance.

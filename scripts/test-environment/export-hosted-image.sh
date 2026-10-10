@@ -41,9 +41,9 @@ docker_client version --format '{{json .}}' > "$task_private/docker.json"
 # Exact same content-addressed image, first quota paths, then guarded cpuset paths.
 for task_smoke in test-hosted-container.mjs test-hosted-repository-container.mjs; do
   clean env GATHERTHREAD_TEST_HOSTED_IMAGE="$task_image" GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB=512 \
-    GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB=512 "$task_node" "$task_build/scripts/$task_smoke"
+    GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB=768 "$task_node" "$task_build/scripts/$task_smoke"
 done
-clean "$task_node" -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({image_id:process.argv[2],memory_mib:512,trial:"passed",repository:"passed"})+"\n",{flag:"wx",mode:0o600})' \
+clean "$task_node" -e 'require("node:fs").writeFileSync(process.argv[1],JSON.stringify({image_id:process.argv[2],trial_memory_mib:512,repository_memory_mib:768,trial:"passed",repository:"passed"})+"\n",{flag:"wx",mode:0o600})' \
   "$task_private/quota.json" "$task_image"
 clean env GATHERTHREAD_TEST_HOSTED_IMAGE="$task_image" "$task_node" "$task_build/scripts/test-hosted-cpuset.mjs" \
   --report "$task_private/cpuset.json"

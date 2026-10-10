@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-boot-state="loading">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -14,13 +14,15 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261010-auth-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261010-workspace-1" />
   </head>
   <body>
+    <div id="boot-screen" class="boot-screen" role="status" aria-live="polite"><img src="./favicon-32x32.png" alt="" width="32" height="32"><span>GatherThread</span></div>
+    <noscript>Please enable JavaScript to use GatherThread.</noscript>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
     <a class="skip-link" href="#main-content">Skip to conversation</a>
 
-    <main id="auth-view" class="auth-shell" aria-labelledby="login-title">
+    <main id="auth-view" class="auth-shell" aria-labelledby="login-title" hidden>
       <section class="auth-story" aria-hidden="true">
         <svg class="auth-mark-motion auth-thread-field" viewBox="0 0 760 640" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
           <path id="auth-branch-1" class="auth-thread-branch auth-thread-cyan" d="M72 66 C210 62 218 190 356 194 C438 196 442 300 525 314"/>
@@ -497,7 +499,7 @@
               </div>
               <div class="composer-actions">
                 <button id="mobile-compose-tools-button" class="icon-button mobile-workspace-only" type="button" aria-label="Conversation tools" title="Conversation tools" aria-haspopup="dialog" aria-controls="mobile-tools-dialog"><span aria-hidden="true">＋</span></button>
-                <button id="mobile-agent-button" class="mobile-agent-button mobile-workspace-only" type="button" aria-label="Agent, model and reasoning" title="Agent, model and reasoning" aria-haspopup="dialog" aria-controls="mobile-agent-dialog" aria-expanded="false"><span id="mobile-agent-label" data-i18n-skip>Codex</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg></button>
+                <button id="mobile-agent-button" class="mobile-agent-button composer-agent-button" type="button" aria-label="Agent, model and reasoning" title="Agent, model and reasoning" aria-haspopup="dialog" aria-controls="mobile-agent-dialog" aria-expanded="false"><span id="mobile-agent-label" data-i18n-skip>Codex</span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"/></svg></button>
                 <div class="intent-help" id="send-chat-help">
                   <button id="send-chat-button" class="button button-secondary" type="button">
                     <span aria-hidden="true">↗</span><span class="desktop-send-label">Send chat</span><span class="mobile-send-label">Chat only</span>
@@ -622,22 +624,36 @@
           <button id="code-provider-github" type="button" class="button button-secondary" aria-pressed="false" aria-controls="code-github-panel">GitHub</button>
         </nav>
         <div id="code-github-panel" hidden>
+        <nav class="github-mode-picker" aria-label="GitHub usage">
+          <button id="github-mode-cloud" type="button" class="button button-secondary" aria-pressed="true" aria-controls="cloud-github-panel">Cloud Agent</button>
+          <button id="github-mode-local" type="button" class="button button-secondary" aria-pressed="false" aria-controls="github-code-section">Sync computer files</button>
+        </nav>
         <section id="github-code-section" class="code-section" aria-labelledby="github-code-title" hidden>
-          <h3 id="github-code-title">GitHub · larger or long-term projects</h3>
-          <p class="code-help">Use your own GitHub repository for files, branches and pull requests. These options are independent; connecting GitHub does not migrate or delete GT Cloud files.</p>
+          <h3 id="github-code-title">Sync computer files with GitHub</h3>
+          <p id="github-local-step" class="github-step" role="status"></p>
           <p id="github-code-status" role="status" aria-live="polite"></p>
           <p id="github-code-error" class="form-error" role="alert"></p>
           <form id="github-code-form" class="github-code-form">
-            <label for="github-code-repository">Existing GitHub repository</label>
-            <input id="github-code-repository" placeholder="OWNER/REPO" required maxlength="140" autocomplete="off" spellcheck="false" data-i18n-skip>
+            <a id="github-code-create" class="button button-secondary" href="https://github.com/new" target="_blank" rel="noopener noreferrer">Create a repository on GitHub</a>
+            <p class="field-help">Choose Private and add a README on GitHub, then return here.</p>
+            <label for="github-code-owner">GitHub account or organization</label>
+            <input id="github-code-owner" placeholder="e.g. your-name" required maxlength="39" autocomplete="off" spellcheck="false">
+            <label for="github-code-name">Repository name</label>
+            <input id="github-code-name" placeholder="e.g. my-project" required maxlength="100" autocomplete="off" spellcheck="false">
+            <input id="github-code-repository" type="hidden">
+            <details class="github-advanced"><summary>Advanced settings</summary>
             <label for="github-code-base">Base branch</label>
             <input id="github-code-base" value="main" required maxlength="200" autocomplete="off" spellcheck="false" data-i18n-skip>
-            <button id="github-code-save" class="button button-primary compact-button" type="submit">Connect repository</button>
+            </details>
+            <button id="github-code-save" class="button button-primary compact-button" type="submit">Next: connect my computer</button>
           </form>
           <p id="github-code-owner-note" class="code-help">Only the project owner can connect or pause GitHub sync.</p>
+          <div id="github-local-home" hidden>
           <div class="code-actions">
             <button id="github-code-pause" class="text-button" type="button" hidden>Pause GitHub sync</button>
             <button id="github-code-refresh" class="text-button" type="button">Check GitHub status</button>
+            <button id="github-code-edit" class="text-button" type="button">Change repository</button>
+            <button id="github-code-device-settings" class="text-button" type="button">Computer settings</button>
           </div>
           <nav id="github-code-links" class="code-actions" aria-label="Open GitHub" hidden>
             <a id="github-code-files" target="_blank" rel="noopener noreferrer">View files on GitHub</a>
@@ -645,8 +661,25 @@
             <a id="github-code-compare" target="_blank" rel="noopener noreferrer">Compare / open pull request</a>
           </nav>
           <p id="github-code-branch" class="code-help github-code-path" data-i18n-skip></p>
+          <label class="code-auto-upload-control"><input id="github-code-auto" type="checkbox" disabled><span>Automatically upload to GitHub while idle</span></label>
+          <div class="code-actions">
+            <button id="github-code-upload" class="button button-primary compact-button" type="button" disabled>Upload now</button>
+            <button id="github-code-download" class="button button-secondary compact-button" type="button" disabled>Download files</button>
+          </div>
+          <details class="github-advanced"><summary>More actions</summary><div class="code-actions">
+            <button id="github-code-update" class="button button-secondary compact-button" type="button" disabled>Update my GitHub branch from base</button>
+            <button id="github-code-recover" class="text-button" type="button" disabled>Restore GitHub copy to a new folder</button>
+          </div></details>
+          </div>
+          <div id="github-code-device" class="code-section" hidden>
+            <label for="github-code-runtime">Choose your connected computer</label>
+            <select id="github-code-runtime" aria-describedby="github-code-local-state"></select>
+            <button id="github-code-auth" class="button button-primary compact-button" type="button" disabled>Connect GitHub on this computer</button>
+            <p id="github-code-local-state" class="code-local-state" role="status" aria-live="polite"></p>
+            <p id="github-code-local-detail" class="code-help github-code-path" data-i18n-skip></p>
+            <button id="github-code-ready" class="button button-secondary" type="button">Open sync controls</button>
           <details id="github-code-guide" class="code-recovery">
-            <summary>Set up GitHub on your device</summary>
+            <summary>Computer setup help</summary>
             <ol class="github-code-guide">
               <li>Create a private repository on GitHub, add an initial commit, and invite collaborators there. Connect its OWNER/REPO and base branch above.</li>
               <li><span>Install Git 2.38+ and GitHub CLI on each device. Select your device below and click Connect GitHub to open browser sign-in.</span> <a href="https://cli.github.com/" target="_blank" rel="noopener noreferrer">GitHub CLI installation guide</a></li>
@@ -656,39 +689,43 @@
             <p class="code-help">GitHub access is managed on GitHub, independently of GT membership. Pausing sync or removing a GT member does not revoke GitHub access or delete GitHub files. Pushes may trigger GitHub workflows.</p>
             <p class="code-help">GitHub code does not count toward GT Cloud storage quotas. Files and reviews open on GitHub. For local safety, this preview processes up to 10,000 files, 20 MiB each and 128 MiB per checkpoint; larger or LFS repositories can use native Git.</p>
           </details>
-          <div id="github-code-device" class="code-section" hidden>
-            <label for="github-code-runtime">Local Agent device for GitHub</label>
-            <select id="github-code-runtime" aria-describedby="github-code-local-state"></select>
-            <button id="github-code-auth" class="button button-secondary compact-button" type="button" disabled>Connect GitHub on this device</button>
-            <p id="github-code-local-state" class="code-local-state" role="status" aria-live="polite"></p>
-            <p id="github-code-local-detail" class="code-help github-code-path" data-i18n-skip></p>
-            <label class="code-auto-upload-control"><input id="github-code-auto" type="checkbox" disabled><span>Automatically upload to GitHub while idle</span></label>
-            <div class="code-actions">
-              <button id="github-code-upload" class="button button-primary compact-button" type="button" disabled>Upload to my GitHub branch</button>
-              <button id="github-code-update" class="button button-secondary compact-button" type="button" disabled>Update my GitHub branch from base</button>
-              <button id="github-code-download" class="button button-secondary compact-button" type="button" disabled>Download my GitHub branch</button>
-              <button id="github-code-recover" class="text-button" type="button" disabled>Restore GitHub copy to a new folder</button>
-            </div>
           </div>
+          <button id="github-code-back" type="button" class="text-button">Back</button>
         </section>
         <section id="cloud-github-panel" class="code-section" aria-labelledby="cloud-github-title">
-          <h3 id="cloud-github-title">GitHub account and saved tasks</h3>
-          <p id="cloud-github-description">Connect your GitHub account and choose a repository. Existing task changes and draft pull requests remain available. New cloud Agent tasks will open in a later release.</p>
+          <h3 id="cloud-github-title">Use GitHub with Cloud Agent</h3>
+          <p id="github-cloud-step" class="github-step" role="status"></p>
+          <p id="cloud-github-description" class="code-help">Files stay in GitHub. Review the Agent's changes before merging.</p>
           <p id="cloud-github-status" role="status" aria-live="polite"></p><p id="cloud-github-error" class="form-error" role="alert"></p>
           <div id="cloud-github-controls" hidden>
-            <a id="cloud-github-install" target="_blank" rel="noopener noreferrer">Install GitHub App on selected repositories</a>
-            <button id="cloud-github-authorize" type="button" class="button button-secondary">Connect your GitHub account</button>
+            <div id="github-cloud-account">
+            <button id="cloud-github-authorize" type="button" class="button button-primary">Connect your GitHub account</button>
             <button id="cloud-github-disconnect" type="button" class="text-button" hidden>Disconnect cloud GitHub</button>
+            <p class="field-help">Sign in on GitHub and allow access to the repositories you choose.</p>
+            </div>
             <form id="cloud-github-repository-form" class="github-code-form" hidden>
-              <label for="cloud-github-repository">Existing GitHub repository</label><input id="cloud-github-repository" required maxlength="140" placeholder="OWNER/REPO" autocomplete="off" data-i18n-skip>
+              <a id="cloud-github-create" class="button button-secondary" href="https://github.com/new" target="_blank" rel="noopener noreferrer">Create a repository on GitHub</a>
+              <p class="field-help">Choose Private and add a README on GitHub, then return here.</p>
+              <label for="cloud-github-owner">GitHub account or organization</label><input id="cloud-github-owner" required maxlength="39" placeholder="e.g. your-name" autocomplete="off" spellcheck="false">
+              <label for="cloud-github-name">Repository name</label><input id="cloud-github-name" required maxlength="100" placeholder="e.g. my-project" autocomplete="off" spellcheck="false">
+              <input id="cloud-github-repository" type="hidden">
+              <a id="cloud-github-install" target="_blank" rel="noopener noreferrer">Allow access to this repository on GitHub</a>
+              <details class="github-advanced"><summary>Advanced settings</summary>
               <label for="cloud-github-base">Base branch</label><input id="cloud-github-base" required maxlength="200" value="main" autocomplete="off" data-i18n-skip>
-              <button type="submit" class="button button-primary">Use this repository in cloud tasks</button>
+              </details>
+              <button type="submit" class="button button-primary">Connect repository</button>
             </form>
-            <p>Requires an npm project with package.json and package-lock.json. Public npm dependencies are installed without lifecycle scripts. Each run allows up to 15 minutes; saved source expires after seven days.</p>
+            <div id="github-cloud-home" hidden>
+            <div class="code-actions"><button id="cloud-github-edit" type="button" class="text-button">Change repository</button>
+            <button id="cloud-github-account-settings" type="button" class="text-button">Account settings</button></div>
+            <details class="github-advanced"><summary>Supported projects and limits</summary><p>Requires an npm project with package.json and package-lock.json. Public npm dependencies are installed without lifecycle scripts. Each run allows up to 15 minutes; saved source expires after seven days.</p></details>
             <button id="cloud-github-refresh" type="button" class="text-button">Refresh cloud tasks</button>
             <button id="cloud-github-new" type="button" class="text-button" disabled aria-describedby="cloud-github-agent-availability">New repository task</button>
             <p id="cloud-github-agent-availability" class="field-help">Select an available cloud model.</p>
+            <details class="github-advanced"><summary>Saved tasks</summary>
             <nav id="cloud-github-task-list" aria-label="Your cloud tasks"></nav>
+            </details>
+            <div id="github-cloud-detail" hidden>
             <p id="cloud-github-task-status" role="status"></p><pre id="cloud-github-answer"></pre>
             <section id="cloud-github-changes" aria-label="Source changes"></section>
             <button id="cloud-github-continue" type="button" class="text-button" disabled aria-describedby="cloud-github-agent-availability">Continue task</button>
@@ -699,6 +736,9 @@
               <label for="cloud-github-pr-body">Pull request description</label><textarea id="cloud-github-pr-body" maxlength="6000"></textarea>
               <button type="submit" class="button button-primary">Create draft pull request</button>
             </form>
+            </div>
+            </div>
+            <button id="cloud-github-back" type="button" class="text-button" hidden>Back</button>
           </div>
         </section>
         </div>
@@ -903,7 +943,7 @@
       <div class="mobile-dialog-heading"><h2 id="mobile-sessions-title">Projects and sessions</h2><button class="icon-button" type="button" data-mobile-close aria-label="Close projects and sessions">×</button></div>
       <div id="mobile-sessions-content"></div>
     </dialog>
-    <dialog id="mobile-agent-dialog" class="mobile-workspace-dialog" aria-labelledby="mobile-agent-title" aria-describedby="mobile-agent-help">
+    <dialog id="mobile-agent-dialog" class="mobile-workspace-dialog composer-settings-dialog" aria-labelledby="mobile-agent-title" aria-describedby="mobile-agent-help">
       <div class="mobile-dialog-heading"><h2 id="mobile-agent-title">Agent, model and reasoning</h2><button class="icon-button" type="button" data-mobile-close aria-label="Close Agent options">×</button></div>
       <p id="mobile-agent-help">Choose who answers and how deeply it thinks. This does not start a request.</p>
       <p class="mobile-device-note" hidden>Use an Agent already connected on your computer. Keep that computer and its connector online.</p>
@@ -1365,6 +1405,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/main.js?v=20261006-mobile-2"></script>
+    <script type="module" src="./src/bootstrap.js?v=20261010-1"></script>
   </body>
 </html>

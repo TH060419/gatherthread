@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { translateUiText } from "../src/i18n.js";
+import { fillRepositoryFields, bindRepositoryFields } from "../src/github-setup.js";
 
-const source = await readFile(new URL("../src/cloud-github-view.js", import.meta.url), "utf8");
+// Exercise Windows checkout line endings on every platform.
+const source = (await readFile(new URL("../src/cloud-github-view.js", import.meta.url), "utf8"))
+  .replace(/\r?\n/gu, "\r\n").replace(/^import .*\r?\n/gmu, "");
 const deferred = () => {
   let resolve;
   const promise = new Promise((done) => { resolve = done; });
@@ -38,7 +41,7 @@ function fixture(overrides = {}, { agentEnabled = true, locale = "en" } = {}) {
       installation_url: "https://github.com/apps/fixture/installations/new",
       binding: { repository: "owner/private", base_branch: "main" } }),
     listHostedGithubTasks: async () => ({ tasks: [task()] }), getHostedGithubTask: async () => task(), ...overrides };
-  const sandbox = vm.createContext({ Event, URL, URLSearchParams, TextDecoder, Uint8Array, atob,
+  const sandbox = vm.createContext({ Event, URL, URLSearchParams, TextDecoder, Uint8Array, atob, fillRepositoryFields, bindRepositoryFields,
     document: { getElementById: el, createElement: element, createTextNode: (textContent) => ({ textContent }) },
     window: { addEventListener() {} }, setInterval: () => 1, clearInterval() {} });
   vm.runInContext(source.replace("export function mountCloudGithub", "function mountCloudGithub"), sandbox);
@@ -61,6 +64,44 @@ test("raw answers, source and paths are excluded from automatic UI translation",
   assert.equal(before.getAttribute("data-i18n-skip"), ""); assert.equal(before.textContent, "Settings");
   assert.equal(after.getAttribute("data-i18n-skip"), ""); assert.equal(after.textContent, "Ready");
   assert.equal(beforeLabel.textContent, "更改前"); assert.equal(afterLabel.textContent, "更改后");
+});
+
+test("setup shows one page at a time and splits the GitHub account from repository name", async () => {
+  let status = { enabled: true, connected: false, installation_url: "https://github.com/apps/fixture/installations/new" };
+  const ui = fixture({ getHostedGithubStatus: async () => status, listHostedGithubTasks: async () => ({ tasks: [] }) });
+  await ui.view.refresh();
+  assert.equal(ui.el("github-cloud-account").hidden, false);
+  assert.equal(ui.el("cloud-github-repository-form").hidden, true);
+  assert.equal(ui.el("github-cloud-home").hidden, true);
+  status = { ...status, connected: true, login: "owner" }; await ui.view.refresh();
+  assert.equal(ui.el("github-cloud-account").hidden, true);
+  assert.equal(ui.el("cloud-github-repository-form").hidden, false);
+  assert.equal(ui.el("cloud-github-owner").value, "owner");
+  status = { ...status, binding: { repository: "owner/project", base_branch: "main" } }; await ui.view.refresh();
+  assert.equal(ui.el("github-cloud-home").hidden, false);
+  assert.equal(ui.el("cloud-github-repository-form").hidden, true);
+  ui.el("cloud-github-edit").dispatchEvent({ type: "click" });
+  assert.equal(ui.el("cloud-github-owner").value, "owner");
+  assert.equal(ui.el("cloud-github-name").value, "project");
+  assert.equal(ui.el("github-cloud-home").hidden, true);
+});
+
+test("background task refresh keeps the selected settings page and unsaved repository fields", async () => {
+  const running = { ...task(), state: "running" };
+  const ui = fixture({ listHostedGithubTasks: async () => ({ tasks: [running] }), getHostedGithubTask: async () => running });
+  await ui.view.openTask(running.id);
+  ui.el("cloud-github-edit").dispatchEvent({ type: "click" });
+  ui.el("cloud-github-name").value = "unsaved-project";
+  await ui.view.refresh();
+  assert.equal(ui.el("cloud-github-repository-form").hidden, false);
+  assert.equal(ui.el("github-cloud-home").hidden, true);
+  assert.equal(ui.el("cloud-github-name").value, "unsaved-project");
+  ui.el("cloud-github-account-settings").dispatchEvent({ type: "click" });
+  await ui.view.refresh();
+  assert.equal(ui.el("github-cloud-account").hidden, false);
+  assert.equal(ui.el("github-cloud-home").hidden, true);
+  await ui.view.openTask(running.id);
+  assert.equal(ui.el("github-cloud-home").hidden, false, "explicit task navigation still opens the task page");
 });
 
 test("public GitHub failures are localized immediately without translating user content", async () => {
@@ -135,11 +176,14 @@ test("closed cloud Agent entry preserves GitHub binding and review but refuses n
   await ui.view.openTask("private-task");
   assert.equal(ui.el("project-code-dialog").open, true);
   assert.equal(ui.el("cloud-github-controls").hidden, false);
+  assert.equal(ui.el("cloud-github-repository-form").hidden, true);
+  ui.el("cloud-github-edit").dispatchEvent({ type: "click" });
   assert.equal(ui.el("cloud-github-repository-form").hidden, false);
   assert.equal(ui.el("cloud-github-pr-form").hidden, false);
   assert.equal(ui.el("cloud-github-new").disabled, true);
   assert.equal(ui.el("cloud-github-continue").disabled, true);
-  ui.el("cloud-github-repository").value = "owner/another";
+  ui.el("cloud-github-owner").value = "owner";
+  ui.el("cloud-github-name").value = "another";
   ui.el("cloud-github-base").value = "main";
   ui.el("cloud-github-repository-form").dispatchEvent({ type: "submit", preventDefault() {} });
   await settle();

@@ -27,12 +27,23 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
         ? 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'
         : 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1' } : {}) });
   const page = await context.newPage();
+  await context.addInitScript(() => {
+    window.exampleLoginFlashed = false;
+    new MutationObserver(() => {
+      const auth = document.getElementById('auth-view');
+      if (document.documentElement?.dataset.example === 'true' && auth?.getClientRects().length
+        && getComputedStyle(auth).display !== 'none') window.exampleLoginFlashed = true;
+    }).observe(document, { subtree: true, attributes: true, childList: true });
+  });
   page.on('pageerror', (error) => errors.push(error.message));
   await page.goto(`${origin}/app/?mock=1`);
+  await page.locator('#auth-view').waitFor({ state: 'visible' });
   await page.evaluate(async ({ locale, empty, viewer, deniedStorage }) => {
     if (locale === 'zh-CN') document.querySelector('#auth-language-button').click();
     window.realWrites = [];
-    const mainUrl = document.querySelector('script[type="module"][src*="/main.js"]').src;
+    const entryUrl = document.querySelector('script[type="module"]').src;
+    const entry = await (await fetch(entryUrl)).text();
+    const mainUrl = new URL(entry.match(/import\("([^\"]*main\.js[^\"]*)"\)/)[1], entryUrl).href;
     const source = await (await fetch(mainUrl)).text();
     const specifier = source.match(/from\s+["'](\.\/api\.js(?:\?[^"']*)?)["']/)?.[1];
     if (!specifier) throw new Error("Fixture could not resolve the application's API module");
@@ -63,6 +74,7 @@ async function launchPage({ locale = 'en', width = 1440, height = 900, empty = f
   assert.equal(await page.locator('iframe').count(), 0, 'required notice precedes guide');
   await page.locator('#code-notice-continue').click();
   const frame = await example(page); await frame.locator(popup).waitFor();
+  assert.equal(await frame.evaluate(() => window.exampleLoginFlashed), false, 'entering the example never flashes login');
   assert.equal(await frame.evaluate(() => document.documentElement.dataset.mobileWorkspace === 'true'), mobile,
     `${width}px ${mobile ? 'mobile/tablet' : 'desktop'} example uses the matching controls`);
   await page.waitForTimeout(500); await page.evaluate(() => { window.realWrites = []; });

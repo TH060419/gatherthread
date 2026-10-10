@@ -45,11 +45,13 @@ export function imageProvenance({ source, commit, inspection, image, quota, cpus
   validateSource(source, commit, runtime);
   const identity = validateImage(inspection, image);
   validateWorkflow(workflow);
-  if (!quota || Object.keys(quota).sort().join(",") !== "image_id,memory_mib,repository,trial"
-    || quota.image_id !== image || quota.memory_mib !== 512 || quota.trial !== "passed" || quota.repository !== "passed"
-    || !cpuset || Object.keys(cpuset).sort().join(",") !== "cpu,image_id,memory_mib,repository,trial"
+  if (!quota || Object.keys(quota).sort().join(",") !== "image_id,repository,repository_memory_mib,trial,trial_memory_mib"
+    || quota.image_id !== image || quota.trial_memory_mib !== 512 || quota.repository_memory_mib !== 768
+    || quota.trial !== "passed" || quota.repository !== "passed"
+    || !cpuset || Object.keys(cpuset).sort().join(",") !== "cpu,image_id,repository,repository_memory_mib,trial,trial_memory_mib"
     || cpuset.image_id !== image || !fullMatch(/^(0|[1-9][0-9]{0,3})$/u, cpuset.cpu) || Number(cpuset.cpu) > 4095
-    || cpuset.memory_mib !== 512 || cpuset.trial !== "passed" || cpuset.repository !== "passed"
+    || cpuset.trial_memory_mib !== 512 || cpuset.repository_memory_mib !== 768
+    || cpuset.trial !== "passed" || cpuset.repository !== "passed"
     || !fullMatch(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/u, docker?.Client?.Version)
     || !fullMatch(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/u, docker?.Server?.Version)
     || !fullMatch(/^[a-f0-9]{64}$/u, archive?.sha256) || !Number.isSafeInteger(archive?.bytes)
@@ -59,9 +61,9 @@ export function imageProvenance({ source, commit, inspection, image, quota, cpus
     image_archive_bytes: archive.bytes, docker_client_version: docker.Client.Version, docker_server_version: docker.Server.Version,
     smoke: [
       { mode: "quota", kind: "trial", image_id: image, memory_mib: 512, cpus: 1, status: "passed" },
-      { mode: "quota", kind: "repository", image_id: image, memory_mib: 512, cpus: 2, status: "passed" },
+      { mode: "quota", kind: "repository", image_id: image, memory_mib: 768, cpus: 2, status: "passed" },
       { mode: "cpuset", kind: "trial", image_id: image, memory_mib: 512, cpu: cpuset.cpu, status: "passed" },
-      { mode: "cpuset", kind: "repository", image_id: image, memory_mib: 512, cpu: cpuset.cpu, status: "passed" },
+      { mode: "cpuset", kind: "repository", image_id: image, memory_mib: 768, cpu: cpuset.cpu, status: "passed" },
     ], provider_calls: "local fixtures only", host_aggregate_isolation: "requires independent deployment acceptance",
     reviewed_main: workflow.event === "workflow_dispatch" && workflow.ref === "refs/heads/main", ...workflow };
 }

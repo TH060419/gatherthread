@@ -123,6 +123,10 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       }
       if (view === "code-github") {
         if (el("code-github-panel").hidden) el("code-provider-github").click();
+        el("github-mode-local").click();
+        if (["github-sync", "github-auth"].includes(item.id)) el("github-code-device-settings").click();
+        if (["github-auto", "github-upload", "github-recover"].includes(item.id)) el("github-code-ready").click();
+        if (item.id === "github-recover") el("github-code-recover").closest("details").open = true;
       } else if (el("code-gt-cloud-panel").hidden) el("code-provider-gt-cloud").click();
       const viewButton = { "code-overview": "code-back-device-view", "code-device": "code-open-device-view", "code-branches": "code-open-branches-view" }[view];
       const viewPanel = { "code-overview": "code-enabled-home", "code-device": "code-device-view", "code-branches": "code-branches-view" }[view];

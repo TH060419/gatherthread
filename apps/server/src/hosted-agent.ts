@@ -24,7 +24,7 @@ const MAX_OUTPUT_TOKENS = 1_024;
 const MAX_CONTEXT_BYTES = 12_000;
 const MAX_WORKSPACE_FILES = 100;
 const MAX_WORKSPACE_BYTES = 512_000;
-const RUN_TIMEOUT_MS = 120_000;
+const RUN_TIMEOUT_MS = 300_000;
 
 export interface HostedAgentOptions extends HostedRunLimits {
   endpoints: HostedEndpoint[];
@@ -100,6 +100,8 @@ export function runDocker(args: string[], timeoutMs: number, outputLimit = 1_000
 /** Only model egress: short-lived Unix socket with per-run request and Neuron caps. */
 export class HostedModelProxy {
   private calls = 0;
+  private failure: string | undefined;
+  diagnostics() { return { providerAttempts: this.calls, errorCode: this.failure }; }
   private spent = 0;
   readonly server = createServer((request, response) => void this.forward(request, response));
   constructor(private readonly options: { endpoint: HostedEndpoint; fetch?: typeof globalThis.fetch;
@@ -157,7 +159,12 @@ export class HostedModelProxy {
         const seconds = retry && /^\d+$/u.test(retry) ? Number(retry) : 60;
         this.options.onUnavailable?.(Math.max(30_000, Math.min(300_000, seconds * 1000)));
       }
-      if (!upstream.ok) return fail(upstream.status);
+      if (!upstream.ok) {
+        this.failure = upstream.status === 401 || upstream.status === 403 ? "provider_auth_failed"
+          : upstream.status === 429 ? "provider_rate_limited" : upstream.status >= 500 ? "provider_unavailable" : "provider_request_failed";
+        return fail(upstream.status);
+      }
+      this.failure = undefined;
       response.writeHead(upstream.status, { "content-type": upstream.headers.get("content-type") ?? "application/json" });
       if (!upstream.body) { response.end(); return; }
       let sent = 0;
@@ -167,7 +174,13 @@ export class HostedModelProxy {
         response.write(chunk);
       }
       response.end();
-    } catch { if (upstreamAttempted) this.options.onUnavailable?.(30_000); fail(502); }
+    } catch (error) {
+      if (upstreamAttempted) {
+        this.failure = error instanceof Error && error.name === "TimeoutError" ? "provider_timeout" : "provider_unavailable";
+        this.options.onUnavailable?.(30_000);
+      }
+      fail(502);
+    }
   }
 }
 
@@ -303,6 +316,7 @@ export class HostedAgent {
     if (!reserved.created) return { request_event: reserved.event, replayed: true };
     const endpoint = endpoints.find((e) => e.id === reserved.endpointId)!;
     let content = "";
+    let errorCode: string | undefined;
     let root: string;
     try { root = mkdtempSync(join(tmpdir(), "gt-hosted-")); }
     catch {
@@ -338,6 +352,7 @@ export class HostedAgent {
         provider: { hosted: { npm: "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
           options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "local" },
           models: { [endpoint.model]: { name: endpoint.label, limit: { context: 32_000, output: MAX_OUTPUT_TOKENS } } } } },
+        agent: { title: { disable: true } }, enabled_providers: ["hosted"],
         permission: { read: "allow", edit: "allow", bash: "allow", task: "deny", external_directory: "allow",
           webfetch: "deny", websearch: "deny" },
       };
@@ -358,6 +373,7 @@ export class HostedAgent {
         "--tmpfs", "/workspace:rw,nosuid,size=32m,mode=1777",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=128m", "--tmpfs", "/home/agent:rw,nosuid,size=64m",
         "-e", "HOME=/home/agent", "-e", "OPENCODE_CONFIG=/run/gatherthread/opencode.json",
+        "-e", "OPENCODE_DISABLE_MODELS_FETCH=true", "-e", "OPENCODE_DISABLE_DEFAULT_PLUGINS=true",
         "-e", "NO_COLOR=1", "-e", "CI=1", this.options.image];
       const output = await (this.options.runContainer ?? runDocker)(args, RUN_TIMEOUT_MS);
       const run = JSON.parse(output) as { answer?: unknown; files?: unknown; save_error?: unknown };
@@ -379,13 +395,18 @@ export class HostedAgent {
           }
         }
       }
-    } catch { content = ""; }
+    } catch (error) {
+      content = "";
+      errorCode = proxy.diagnostics().errorCode ?? (error instanceof Error ? error.message : undefined);
+    }
     finally {
       await cleanupHostedExecution(() => { if (!this.options.runContainer) stopHostedContainer(name); }, [
         () => proxy.close().catch(() => undefined), () => rmSync(root, { recursive: true, force: true }),
       ]);
     }
-    const result = this.service.finishHostedAgentRequest(reserved.event.id, { content });
+    const result = this.service.finishHostedAgentRequest(reserved.event.id, {
+      content, ...(errorCode ? { errorCode } : {}), providerAttempts: proxy.diagnostics().providerAttempts,
+    });
     return { request_event: reserved.event, response_event: result, replayed: false };
   }
 }

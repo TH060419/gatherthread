@@ -27,9 +27,11 @@ jobs:
       - run: node scripts/test-hosted-container.mjs
         env:
           GATHERTHREAD_TEST_HOSTED_IMAGE: gt-hosted-smoke
+          GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB: 512
       - run: node scripts/test-hosted-repository-container.mjs
         env:
           GATHERTHREAD_TEST_HOSTED_IMAGE: gt-hosted-smoke
+          GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB: 768
       - name: Guarded single-CPU trial and repository smoke
         run: |
           set -euo pipefail

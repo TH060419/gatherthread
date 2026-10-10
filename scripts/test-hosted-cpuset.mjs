@@ -34,7 +34,7 @@ export function cpusetSmokeEnvironment(image, cpu, home, environment = process.e
   return { PATH: environment.PATH ?? "/usr/bin:/bin", HOME: home, TMPDIR: home, CI: "true",
     DOCKER_HOST: "unix:///var/run/docker.sock", GATHERTHREAD_TEST_HOSTED_IMAGE: image,
     GATHERTHREAD_HOSTED_AGENT_CPUSET: cpu, GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB: "512",
-    GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB: "512" };
+    GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB: "768" };
 }
 
 export function runCpusetSmoke({ image, status, platform = process.platform, environment = process.env,
@@ -52,7 +52,7 @@ export function runCpusetSmoke({ image, status, platform = process.platform, env
       });
       if (result.error || result.status !== 0 || result.signal) throw new Error("Hosted cpuset smoke failed; image must not be delivered");
     }
-    return { image_id: image, cpu, memory_mib: 512, trial: "passed", repository: "passed" };
+    return { image_id: image, cpu, trial_memory_mib: 512, repository_memory_mib: 768, trial: "passed", repository: "passed" };
   } finally { rmSync(privateDirectory, { recursive: true, force: true }); }
 }
 

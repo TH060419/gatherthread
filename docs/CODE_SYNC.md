@@ -6,6 +6,10 @@ Choose where your project files are stored, authorize the local device, then sav
 
 ## Choose source storage / 选择代码存储
 
+In **Project file collaboration → GitHub**, choose **Cloud Agent** or **Sync computer files**. Cloud setup guides account authorization, repository selection and reviewed tasks separately. Computer setup guides repository selection, exact-device authorization and synchronization. Enter GitHub account/organization and repository name in separate fields. **Create a repository on GitHub** opens the official creation page; choose its visibility and add a README there, then return to continue. Cloud repository tasks currently require an existing npm project; for a new small project, start with GT Cloud. Advanced branch settings, recovery and account/device reconfiguration remain available without crowding the first page.
+
+在“项目文件协作 → GitHub”中，选择“云端 Agent”或“电脑文件同步”。云端依次连接账号、选择仓库、开始任务并审核改动；电脑同步依次选择仓库、授权自己的电脑、上传或下载。GitHub 账号/组织名与仓库名分开填写。“在 GitHub 创建仓库”会打开官方创建页面，在那里确认可见性并添加 README 后回来继续。云端仓库任务目前需要已有的 npm 项目；新建轻量项目可先使用 GT Cloud。高级分支设置、恢复和账号/电脑设置仍可单独展开。
+
 The two services are independent. Choosing GitHub does not move or delete GT Cloud files, grant repository permissions, or authorize local file uploads. Keep server, Web client, connector and DSH plugin compatible.
 
 两种服务分别管理。选择 GitHub 不会迁移或删除 GT Cloud 文件，不会自动授予仓库权限或授权本地文件上传。服务端、网页、连接器与 DSH 插件需保持兼容。

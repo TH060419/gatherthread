@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -134,7 +134,13 @@ unixSocketTest("hosted run uses isolated Docker arguments, persists an event, an
       idempotency_key: "create-hosted-session", mode: "solo", title: "Hosted" }).session;
     const argsSeen: string[][] = [];
     const agent = new HostedAgent(service, new CodeRepository(database, join(directory, "code")), {
-      ...options, runContainer: async (args) => { argsSeen.push(args);
+      ...options, runContainer: async (args, timeoutMs) => { argsSeen.push(args);
+        assert.equal(timeoutMs, 300_000, "trial tasks have the authorized five-minute total deadline");
+        const mount = args.find(value => value.endsWith("dst=/run/gatherthread,readonly"))!;
+        const control = mount.split("src=")[1]!.split(",dst=")[0]!;
+        const config = JSON.parse(readFileSync(join(control, "opencode.json"), "utf8"));
+        assert.deepEqual(config.agent.title, { disable: true });
+        assert.deepEqual(config.enabled_providers, ["hosted"]);
         return JSON.stringify({ answer: "Created a starter file plan.", files: [], save_error: null }); },
     });
     const input = { profile_id: "default", content: "Create a small project", include_code: false,
@@ -150,6 +156,7 @@ unixSocketTest("hosted run uses isolated Docker arguments, persists an event, an
       assert.ok(args.includes(required), `missing ${required}`);
     }
     assert.ok(args.some((argument) => argument.includes("dst=/input,readonly")));
+    for (const flag of ["OPENCODE_DISABLE_MODELS_FETCH=true", "OPENCODE_DISABLE_DEFAULT_PLUGINS=true"]) assert.ok(args.includes(flag));
     assert.equal(args[args.indexOf("--memory-swap") + 1], "768m");
     assert.equal(args.includes(options.endpoints[0]!.apiToken), false);
     assert.equal(args.some((argument) => argument.includes(input.content)), false);

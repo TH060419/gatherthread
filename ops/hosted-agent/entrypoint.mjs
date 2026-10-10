@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { chmodSync, copyFileSync, lstatSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { publicAnswer } from "./public-answer.mjs";
+import { runOpencodeSession } from "./opencode-session.mjs";
 import { prepareNpm } from "./npm-setup.mjs";
 
 const INPUT = "/input";
@@ -93,11 +93,8 @@ async function main() {
       await run("git", ["-c", "user.name=GatherThread", "-c", "user.email=cloud@localhost",
         "commit", "--quiet", "-m", "Cloud task starting snapshot"], 64000);
     }
-    const output = await run("opencode", [
-      "run", "--format", "json", "--agent", "build",
-      "Complete the attached task in this workspace.", "--file", "/run/gatherthread/prompt.txt",
-    ], repository ? 1024 * 1024 : 64_000);
-    const answer = publicAnswer(output);
+    const prompt = readFileSync("/run/gatherthread/prompt.txt", "utf8");
+    const answer = await runOpencodeSession(WORKSPACE, prompt, repository ? 1024 * 1024 : 64_000);
     let files = null;
     let save_error = null;
     try { files = outputFiles(); } catch { save_error = "workspace_limit_or_unsafe_file"; }
