@@ -3324,7 +3324,9 @@ export class CollaborationDatabase {
       const payload = event.payload as { github_task_id?: unknown };
       const job = this.sqlite.prepare("SELECT status FROM hosted_agent_runs WHERE request_event_id=? AND session_id=? AND user_id=?")
         .get(requestId, sessionId, actor.user_id) as { status: string } | undefined;
-      if (!job || event.type !== "agent_request" || payload.github_task_id) throw conflict("This request is not a cloud trial request");
+      if (!job || event.type !== "agent_request" || payload.github_task_id || isHistorySummaryRequest(event)) {
+        throw conflict("This request does not support ordinary cloud pause");
+      }
       if (this.isHostedAgentPaused(requestId)) return undefined;
       if (job.status !== "running") throw agentRequestAlreadyCompleted();
       this.sqlite.prepare("INSERT INTO hosted_agent_pauses(request_event_id,created_at) VALUES(?,?)").run(requestId, this.now());

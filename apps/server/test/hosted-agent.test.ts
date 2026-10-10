@@ -99,6 +99,8 @@ unixSocketTest("cloud summaries validate sources, isolate selected history and d
     assert.equal(db.hostedAgentUsage(owner, 1, 4).user_used_runs, 0);
     const receipt = await agent.startSummary(owner, session.id, input);
     assert.deepEqual((receipt.request_event.payload as {history_summary: {source_event_ids: string[]}}).history_summary.source_event_ids, [source.id]);
+    assert.throws(() => agent.pause(owner, session.id, receipt.request_event.id), /does not support ordinary cloud pause/);
+    assert.equal(db.isHostedAgentPaused(receipt.request_event.id), false, "summary cannot be left pending by an ordinary pause fence");
     for (let count = 0; db.hostedActiveRuns() && count < 100; count++) await new Promise(resolve => setTimeout(resolve, 5));
     assert.equal(db.hostedActiveRuns(), 0);
     const terminal = service.replay(owner, session.id, 0, 100).events.find(event => event.type === "agent_response");
