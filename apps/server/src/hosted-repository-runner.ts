@@ -54,6 +54,7 @@ export class HostedRepositoryRunner {
         provider: { hosted: { npm: "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
           options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "local" },
           models: { [endpoint.model]: { name: endpoint.label, limit: { context: 32000, output: 2048 } } } } },
+        agent: { title: { disable: true } }, enabled_providers: ["hosted"],
         permission: { read: "allow", edit: "allow", bash: "allow", task: "deny", external_directory: "allow", webfetch: "deny", websearch: "deny" },
       }), { mode: 0o644 });
       chmodSync(join(control, "opencode.json"), 0o644);
@@ -71,6 +72,7 @@ export class HostedRepositoryRunner {
         "--tmpfs", "/workspace:rw,nosuid,size=1536m,mode=1777",
         "--tmpfs", "/tmp:rw,noexec,nosuid,size=256m", "--tmpfs", "/home/agent:rw,nosuid,size=128m",
         "-e", "HOME=/home/agent", "-e", "OPENCODE_CONFIG=/run/gatherthread/opencode.json",
+        "-e", "OPENCODE_DISABLE_MODELS_FETCH=true", "-e", "OPENCODE_DISABLE_DEFAULT_PLUGINS=true",
         "-e", "GT_HOSTED_REPOSITORY=1", "-e", "NO_COLOR=1", "-e", "CI=1", this.options.image];
       const output = await (this.options.runContainer ?? ((a, t) => runDocker(a, t, 12 * 1024 * 1024, controlOptions?.signal)))(args, 900_000);
       const result = JSON.parse(output);

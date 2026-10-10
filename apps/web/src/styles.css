@@ -6149,3 +6149,52 @@ html[lang="zh-CN"] .composer .agent-request-profile select {
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
   .mobile-workspace-dialog { background: var(--paper-raised); backdrop-filter: none; -webkit-backdrop-filter: none; }
 }
+
+/* A neutral restore state, never a guessed logged-in or logged-out identity. */
+.boot-screen { display: none; }
+html[data-boot-state] #auth-view, html[data-boot-state] #workspace { display: none !important; }
+html[data-boot-state] .boot-screen { display: flex; min-height: 100dvh; align-items: center; justify-content: center; gap: 12px; color: var(--ink); font-size: 1.1rem; }
+
+/* Keep the message and both explicit send intents reachable at every height. */
+.workspace { min-height: 0; height: calc(100dvh - var(--test-environment-height, 0px)); }
+.workspace[data-mobile-ui="true"] { height: calc(var(--mobile-viewport-height, 100dvh) - var(--test-environment-height, 0px)); }
+.session-view.has-composer { grid-template-rows: auto auto auto auto auto minmax(0, 1fr) 11px minmax(180px, var(--composer-height)); }
+.workspace[data-mobile-ui="true"] .session-view.has-composer { grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto; }
+.composer { grid-template-rows: auto minmax(44px, 1fr) auto auto auto auto; }
+.composer .composer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.composer .composer-agent-button { display: inline-flex; align-items: center; gap: 6px; margin-inline-end: auto; min-width: 44px; min-height: 40px; max-width: 160px; padding: 8px 12px; border: 1px solid var(--glass-hairline); border-radius: 14px; background: var(--paper-raised); font-size: .82rem; }
+.composer-agent-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.composer-agent-button svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; flex-shrink: 0; }
+.composer .intent-help { min-width: 0; flex: 0 1 auto; }
+.composer .intent-help > span { max-width: 220px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.composer-settings-dialog { width: min(520px, calc(100vw - 24px)); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+.composer-settings-dialog .agent-request-profile { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; border: 0; padding: 0; margin: 16px 0; }
+.composer-settings-dialog .agent-request-profile legend { display: none; }
+.composer-settings-dialog .agent-profile-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.composer-settings-dialog label { font-size: .86rem; margin: 8px 0 0; }
+.composer-settings-dialog select { width: 100%; min-width: 0; min-height: 44px; }
+.composer-settings-dialog [hidden] { display: none !important; }
+.composer-settings-dialog .cloud-code-consent { display: grid; gap: 8px; border-top: 1px solid var(--glass-hairline); padding-top: 12px; }
+.composer-settings-dialog .cloud-code-consent label[for="cloud-agent-include-code"] { display: flex; align-items: flex-start; gap: 8px; }
+.composer-settings-dialog .cloud-code-consent input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; flex: 0 0 auto; }
+@media (max-height: 650px) and (min-width: 761px) {
+  .workspace:not([data-mobile-ui="true"]) .composer { padding-block: 8px; }
+  .workspace:not([data-mobile-ui="true"]) .composer > label, .workspace:not([data-mobile-ui="true"]) .intent-help > span { display: none; }
+}
+.github-mode-picker { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.github-mode-picker [aria-pressed="true"] { border-color: var(--teal); color: var(--teal); }
+#code-github-panel[data-github-mode="cloud"] #github-code-section,
+#code-github-panel[data-github-mode="local"] #cloud-github-panel { display: none; }
+.github-step { color: var(--teal); font-size: .85rem; margin: 12px 0; }
+#code-github-panel .github-code-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 16px 0; padding: 0; }
+#code-github-panel .github-code-form label { margin: 8px 0 0; }
+#code-github-panel .github-code-form .button { justify-self: start; }
+#code-github-panel .github-code-form .field-help { margin: 0 0 4px; }
+#code-github-panel a.button { color: var(--ink); text-decoration: none; }
+#code-github-panel .github-code-form [hidden] { display: none; }
+.github-advanced { margin-block: 12px; font-size: .85rem; }
+.github-advanced summary { cursor: pointer; color: var(--ink-soft); }
+.github-advanced label, .github-advanced input { display: block; width: 100%; }
+.github-code-path { overflow-wrap: anywhere; }
+#github-cloud-account, #github-code-device { display: grid; gap: 12px; }
+#github-cloud-account[hidden], #github-code-device[hidden], #github-local-home[hidden], #github-cloud-home[hidden], #github-cloud-detail[hidden], .github-code-form[hidden] { display: none !important; }

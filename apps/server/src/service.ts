@@ -345,7 +345,7 @@ export class CollaborationService {
     return result;
   }
 
-  finishHostedAgentRequest(requestId: string, outcome: { content?: string }) {
+  finishHostedAgentRequest(requestId: string, outcome: { content?: string; errorCode?: string; providerAttempts?: number }) {
     const event = this.database.finishHostedAgentRequest(requestId, outcome);
     if (event) this.publish(event);
     return event;

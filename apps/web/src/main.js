@@ -518,6 +518,7 @@ window.addEventListener("pagehide", () => {
 });
 window.addEventListener("pageshow", (event) => {
   if (!event.persisted) return;
+  document.documentElement.dataset.bootState = "loading";
   resetWorkspaceToAuth();
   void restoreBrowserSession();
 });
@@ -1250,7 +1251,8 @@ window.addEventListener("resize", () => positionSessionContextPanel(document));
 document.addEventListener("scroll", () => { if (sessionContextDetails.open) positionSessionContextPanel(document); }, true);
 
 async function restoreBrowserSession() {
-  if (authRequestInProgress || (mockEnabled && !exampleMode)) return;
+  if (authRequestInProgress) return;
+  if (mockEnabled && !exampleMode) { authView.hidden = false; delete document.documentElement.dataset.bootState; return; }
   const generation = ++authenticationGeneration;
   try {
     const actor = await api.restoreSession();
@@ -1264,6 +1266,12 @@ async function restoreBrowserSession() {
     if (generation !== authenticationGeneration) return;
     resetWorkspaceToAuth();
     loginError.textContent = error.message ?? "Unable to restore this browser session.";
+    delete document.documentElement.dataset.bootState;
+  } finally {
+    if (generation === authenticationGeneration) {
+      if (!state.currentUser) authView.hidden = false;
+      delete document.documentElement.dataset.bootState;
+    }
   }
 }
 
@@ -2182,7 +2190,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     if (content) {
       let body;
       if (event.type === "agent_response") {
-        body = renderMarkdown(content);
+        body = renderMarkdown(failedResponse ? localizer.t(content) : content);
       } else {
         body = document.createElement("p");
         body.textContent = content;
@@ -2326,7 +2334,8 @@ function renderProgressDisclosure(progressEvents, live) {
 
 function renderAgentPendingStatus(request) {
   const member = state.session?.members.find((candidate) => candidate.userId === request.actor.id);
-  const online = isExecutionRuntime(member?.runtime);
+  const cloud = request.payload?.execution_profile?.harness === "opencode";
+  const online = cloud || isExecutionRuntime(member?.runtime);
   const status = document.createElement("div");
   const dots = document.createElement("span");
   const label = document.createElement("span");
@@ -2340,7 +2349,7 @@ function renderAgentPendingStatus(request) {
   for (let index = 0; index < 3; index += 1) dots.append(document.createElement("i"));
   const runtime = member?.runtime;
   const agentName = runtime?.harness || "Agent";
-  label.textContent = online
+  label.textContent = cloud ? localizer.t("Cloud Agent is working…") : online
     ? `${agentName} is responding…`
     : `${agentName} request is queued until the local runtime reconnects.`;
   status.append(dots, label);
@@ -2765,7 +2774,7 @@ function renderCloudModelOptions(select, stored) {
   for (const profile of profiles) {
     const option = document.createElement("option");
     option.value = profile.id;
-    option.textContent = `${profile.label} · ${profile.model}`;
+    option.textContent = profile.label || profile.model;
     option.selected = profile.id === selected;
     select.append(option);
   }

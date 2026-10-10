@@ -39,7 +39,8 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     placements.push({ node, marker, target });
   };
   remember(rail, el("mobile-sessions-content"));
-  remember(profile, el("mobile-agent-content"));
+  // One settings dialog on every screen, preserving IDs and event handlers.
+  el("mobile-agent-content").append(profile, el("send-cloud-agent-help"));
   remember(el("member-panel"), el("mobile-members-content"));
   for (const id of ["project-code-button", "settings-button", "mobile-members-button", "logout-button",
     "rename-session-button", "delete-session-button", "session-context-details",
@@ -53,7 +54,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     for (const dialog of dialogs) if (dialog.open) dialog.close();
   }
   function open(dialog, trigger) {
-    if (!active || workspace.hidden) return;
+    if ((!active && dialog !== dialogs[1]) || workspace.hidden) return;
     closeAll();
     returnFocus = trigger?.getClientRects().length ? trigger : el("mobile-tools-button");
     dialog.showModal();
@@ -66,7 +67,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     dialog.addEventListener("close", () => {
       if (index === 2) el("session-context-details").open = false;
       // A resize can restore desktop disclosure state before this async event fires.
-      if (active) {
+      if (active || index === 1) {
         triggers[index].setAttribute("aria-expanded", "false");
         if (index === 2) el("mobile-compose-tools-button").setAttribute("aria-expanded", "false");
       }

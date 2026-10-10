@@ -1,6 +1,7 @@
 import { codeErrorText, codeRuntimeChoices, createCodeSyncController } from "./code-sync.js";
 import { codeNoticeStorage, hasSeenCodeNotice, markCodeNoticeSeen } from "./code-notice.js";
 import { mountGithubCodeSync } from "./github-code-sync-view.js";
+import { mountGithubMode } from "./github-setup.js";
 
 const ACTIVE_JOBS = new Set(["queued", "claimed", "importing", "compacting"]);
 const shortCommit = (value) => typeof value === "string" ? value.slice(0, 9) : "—";
@@ -43,6 +44,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, onGit
   let provider = "gt-cloud";
   const controller = createCodeSyncController({ api, onChange: render, pollMs: mockEnabled ? 120 : 1800 });
   const github = mountGithubCodeSync({ document: doc, api, localizer, confirm, mockEnabled });
+  mountGithubMode({ document: doc });
   const routeKey = (state) => JSON.stringify([state.context?.project?.id, state.context?.sessionId, state.context?.userId, state.runtimeId]);
 
   function showProvider(next, { refreshCloud = true } = {}) {

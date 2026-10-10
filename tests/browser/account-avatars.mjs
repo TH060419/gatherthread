@@ -37,8 +37,11 @@ for (const [name, engine] of [["chromium", chromium], ["webkit", webkit]]) {
       }, item.locale);
       try {
         await page.goto(`${origin}/app/?mock=1`);
+        await page.locator('#auth-view').waitFor({ state: 'visible' });
         await page.evaluate(async () => {
-          const main = document.querySelector('script[type="module"][src*="/main.js"]').src;
+          const entryUrl = document.querySelector('script[type="module"]').src;
+          const entry = await (await fetch(entryUrl)).text();
+          const main = new URL(entry.match(/import\("([^\"]*main\.js[^\"]*)"\)/)[1], entryUrl).href;
           const source = await (await fetch(main)).text();
           const specifier = source.match(/from\s+["'](\.\/api\.js(?:\?[^"']*)?)["']/)[1];
           const { MockCollaborationApi } = await import(new URL(specifier, main).href);

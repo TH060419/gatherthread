@@ -79,7 +79,7 @@ The container runs without general network access, host credentials, or writable
 
 ## Current limits
 
-The preview accepts at most 100 project files and 500 KiB of code, at most 12 KiB of shared conversation context, and a two-minute run. Package downloads and arbitrary web access are unavailable from the container. Commands using dependencies already present in the image or source workspace can run; a project that needs external packages must use a separately approved dependency strategy. New files that exceed the cloud code rules are not checkpointed. These limits keep the trial service bounded; they are not a claim that every project can build inside this runner.
+The preview accepts at most 100 project files and 500 KiB of code, at most 12 KiB of shared conversation context, and a five-minute run. Each model request still has a 30-second deadline, with the existing eight-call and output caps. GitHub repository tasks retain their separately documented fifteen-minute limit. Package downloads and arbitrary web access are unavailable from the trial container. Commands using dependencies already present in the image or source workspace can run; a project that needs external packages must use a separately approved dependency strategy. New files that exceed the cloud code rules are not checkpointed. These limits keep the trial service bounded; they are not a claim that every project can build inside this runner.
 
 The operator must validate the container path on its deployment host before enabling the flag. Unit tests use a mocked Docker runner and model response; they do not prove that OpenCode can complete a real provider-backed project task. No billable provider request is made by the test suite.
 

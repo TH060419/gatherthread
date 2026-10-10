@@ -22,6 +22,8 @@ export function composerAgentAction(events, userId) {
   if (!request) return { action: "request" };
   const linked = history.filter((event) => targetId(event) === request.id);
   if (linked.some((event) => event.type === "agent_response")) return { action: "request" };
+  // Hosted requests do not use connector claims or the local pause/resume API.
+  if (request.payload?.execution_profile?.harness === "opencode") return { action: "wait", request, cloud: true };
   if (linked.some((event) => event.type === "agent_progress" && event.payload?.status === "paused")) {
     // Legacy requests without a recorded target can be asked anew, but cannot
     // honestly promise to resume the original Agent/model.
@@ -73,7 +75,7 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
       button.disabled = busy || current.sending || !current.writable || current.action === "wait";
       targetLabel.textContent = t(current.action === "resume"
         ? "Starts a new request with latest history, using the original Agent and model."
-        : current.action === "wait" ? "Waiting for your Agent to start this request."
+        : current.action === "wait" ? current.cloud ? "Cloud Agent is working…" : "Waiting for your Agent to start this request."
           : "Pauses your current request; your draft stays here.");
     } else if (busy) button.disabled = true;
   }

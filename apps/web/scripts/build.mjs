@@ -11,7 +11,7 @@ const applicationDist = resolve(dist, "app");
 const index = await readFile(resolve(root, "index.html"), "utf8");
 const productIndex = await readFile(resolve(productRoot, "index.html"), "utf8");
 
-for (const required of ["src/main.js", "src/styles.css"]) {
+for (const required of ["src/bootstrap.js", "src/styles.css"]) {
   if (!index.includes(`./${required}`)) throw new Error(`index.html must reference ${required}`);
 }
 for (const required of ["boot.js", "app.js", "styles.css", "./app/"]) {
@@ -64,11 +64,11 @@ const policy = "default-src 'none'; script-src 'nonce-gatherthread-example-v1'; 
 let exampleHtml = index.replace('<head>', `<head><meta http-equiv="Content-Security-Policy" content="${policy}">`)
   .replace(/<link[^>]+rel="(?:icon|apple-touch-icon|manifest)"[^>]*>/gu, '')
   .replace(/<link[^>]+rel="stylesheet"[^>]*>/u, () => `<style>${exampleStyle.outputFiles[0].text}</style>`)
-  .replace(/<script type="module" src="\.\/src\/main\.js[^" ]*"><\/script>/u,
+  .replace(/<script type="module" src="\.\/src\/bootstrap\.js[^" ]*"><\/script>/u,
     () => `<script nonce="gatherthread-example-v1">${exampleScript.outputFiles[0].text.replace(/<\/script/giu, '<\\/script')}</script>`);
-for (const path of new Set([...exampleHtml.matchAll(/src="(\.\/brand\/[^" ]+)"/gu)].map((match) => match[1]))) {
+for (const path of new Set([...exampleHtml.matchAll(/src="(\.\/(?:brand\/[^" ]+|favicon-32x32\.png))"/gu)].map((match) => match[1]))) {
   const svg = await readFile(resolve(root, path.slice(2)));
-  exampleHtml = exampleHtml.replaceAll(path, `data:image/svg+xml;base64,${svg.toString('base64')}`);
+  exampleHtml = exampleHtml.replaceAll(path, `data:${path.endsWith('.png') ? 'image/png' : 'image/svg+xml'};base64,${svg.toString('base64')}`);
 }
 await writeFile(resolve(applicationDist, "example.html"), exampleHtml);
 await mkdir(resolve(applicationDist, "licenses"), { recursive: true });

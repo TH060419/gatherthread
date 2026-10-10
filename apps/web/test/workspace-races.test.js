@@ -656,12 +656,32 @@ test("starting email authentication fences restoration before email completion",
   const pending = deferred(); let entries = 0;
   const app = harness(["restoreBrowserSession", "beginEmailAuthentication"], {
     mockEnabled: false, authRequestInProgress: false, loginError: element(),
+    document: { documentElement: { dataset: { bootState: "loading" } } },
     api: { restoreSession: () => pending.promise }, enterWorkspace: async () => { entries += 1; },
   });
   app.state.currentUser = null;
   const restoring = app.restoreBrowserSession();
   app.beginEmailAuthentication(); pending.resolve({ id: "old-user" }); await restoring;
   assert.equal(app.state.currentUser, null); assert.equal(entries, 0);
+  assert.equal(app.document.documentElement.dataset.bootState, "loading", "a stale restore cannot reveal the login view");
+});
+
+test("anonymous session restoration reveals login only after the session lookup settles", async () => {
+  const pending = deferred();
+  const authView = { hidden: true };
+  const document = { documentElement: { dataset: { bootState: "loading" } } };
+  const app = harness(["restoreBrowserSession"], {
+    mockEnabled: false, authRequestInProgress: false, loginError: element(), authView, document,
+    api: { restoreSession: () => pending.promise },
+  });
+  app.state.currentUser = null;
+  const restoring = app.restoreBrowserSession();
+  assert.equal(authView.hidden, true);
+  assert.equal(document.documentElement.dataset.bootState, "loading");
+  pending.resolve(null); await restoring;
+  assert.equal(authView.hidden, false);
+  assert.equal(document.documentElement.dataset.bootState, undefined);
+  assert.equal(app.state.currentUser, null);
 });
 
 test("switching registration and login invalidates a former email completion", async () => {

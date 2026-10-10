@@ -34,6 +34,16 @@ The script uses only `/app/?mock=1`, disposable browser profiles and mock API fi
 
 ## Client contract
 
+### Compact composer and guided GitHub settings
+
+Desktop, phone and tablet use the same small Agent-settings button. It opens the existing Agent/model/reasoning and cloud-workspace controls in a scrollable dialog, never extending the message composer. Chat and Agent sends remain distinct. The test banner's height is excluded from the workspace viewport.
+
+Under Project file collaboration → GitHub, choose Cloud Agent or computer file synchronization. Cloud setup connects the account first, then asks for account/organization and repository name; computer sync keeps its separately authorized device workflow. Each shows one page at a time, with advanced settings and saved task details collapsed. Create a repository opens GitHub's own form; creation and visibility are confirmed there, not silently by GatherThread. These flows do not migrate GT Cloud files or replace GitHub permissions.
+
+Startup displays a neutral restore screen while checking the HttpOnly browser session. It never shows a login form before a restored workspace, caches no identity, and offers reload if the application module fails to load. Cloud pending requests use cloud status, not local connector presence.
+
+Run `tests/browser/workspace-guided-settings.mjs` after a build for isolated Chromium/WebKit pointer tests of short desktop windows, phones, tablets, test-banner sizing, cloud replies and delayed session restoration. Providers and GitHub writes are synthetic.
+
 ### Mobile workspace
 
 On phones and tablets up to 1366 CSS pixels wide, projects/sessions, members and conversation tools open in modal sheets. The small Agent pill opens the **existing** Agent/model/reasoning controls; **Chat only** and **Ask AI** remain separate actions, and the same Ask button becomes Pause/Resume during a request. Quotes, mentions, summary generation/original-view switching, project files and Settings remain available. Tablet portrait and landscape use the same controls, with a centered reading area. Beyond that width, the original controls return without changing drafts or runtime selection.

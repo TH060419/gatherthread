@@ -1,11 +1,14 @@
 import { codeRuntimeChoices } from "./code-sync.js";
 import { createGithubCodeSyncController, githubLinks } from "./github-code-sync.js";
+import { fillRepositoryFields, bindRepositoryFields } from "./github-setup.js";
 
 export function mountGithubCodeSync({ document: doc, api, localizer, confirm, mockEnabled = false }) {
   const el = (id) => doc.getElementById(id);
   const t = (text) => localizer.t(text);
   const controller = createGithubCodeSyncController({ api, onChange: render, pollMs: mockEnabled ? 120 : 1800 });
   let formBinding;
+  let stage = "repository";
+  const updateRepository = bindRepositoryFields(el, "github-code");
   const route = () => {
     const state = controller.getState();
     return JSON.stringify([state.context?.project?.id, state.context?.sessionId, state.context?.userId,
@@ -20,18 +23,24 @@ export function mountGithubCodeSync({ document: doc, api, localizer, confirm, mo
     const { context, github, local, permissions } = state;
     el("github-code-section").hidden = !context?.project;
     const connection = github?.connection;
-    el("github-code-status").textContent = t(state.loading ? "Reading GitHub status…" : !github ? "GitHub status unavailable" : !connection ? "GitHub is not connected" : connection.enabled ? "GitHub sync enabled" : "GitHub sync paused");
+    el("github-code-status").textContent = t(state.loading ? "Reading GitHub status…" : !github ? "GitHub status unavailable" : !connection ? "GitHub is not connected" : !connection.enabled ? "GitHub sync paused" : local?.enabled ? "GitHub sync enabled" : "Repository saved. Connect your computer to start syncing.");
     el("github-code-error").textContent = t(state.error);
     el("github-code-form").hidden = github?.can_configure !== true;
     el("github-code-owner-note").hidden = github?.can_configure === true;
     const binding = JSON.stringify([context?.project?.id, connection?.revision]);
     if (formBinding !== binding) {
       formBinding = binding;
-      el("github-code-repository").value = connection?.repository ?? "";
+      stage = connection ? local?.enabled ? "overview" : "device" : "repository";
+      fillRepositoryFields(el, "github-code", connection?.repository ?? "");
       el("github-code-base").value = connection?.base_branch ?? "main";
     }
-    for (const id of ["github-code-repository", "github-code-base", "github-code-save"]) el(id).disabled = !permissions.configure;
-    el("github-code-save").textContent = t(connection ? "Save GitHub connection" : "Connect repository");
+    el("github-code-form").hidden = github?.can_configure !== true || stage !== "repository";
+    for (const id of ["github-code-owner", "github-code-name", "github-code-base", "github-code-save"]) el(id).disabled = !permissions.configure;
+    el("github-code-save").textContent = t("Next: connect my computer");
+    el("github-local-home").hidden = stage !== "overview" || !connection;
+    el("github-local-step").textContent = t(stage === "repository" ? "1 / 3 · Choose a repository" : stage === "device" ? "2 / 3 · Connect your computer" : "3 / 3 · Sync files");
+    el("github-code-back").hidden = stage === "overview" || !connection;
+    el("github-code-edit").hidden = !permissions.configure;
     el("github-code-pause").hidden = !connection || github?.can_configure !== true;
     el("github-code-pause").disabled = !permissions.configure;
     el("github-code-pause").textContent = t(connection?.enabled ? "Pause GitHub sync" : "Resume GitHub sync");
@@ -40,7 +49,7 @@ export function mountGithubCodeSync({ document: doc, api, localizer, confirm, mo
     el("github-code-links").hidden = !links;
     for (const key of ["files", "branches", "compare"]) el(`github-code-${key}`).href = links?.[key] ?? "";
     el("github-code-branch").textContent = connection ? `${connection.repository} · ${connection.base_branch} → ${github.branch}` : "";
-    el("github-code-device").hidden = !connection;
+    el("github-code-device").hidden = !connection || stage !== "device";
     const runtimes = codeRuntimeChoices(context);
     const options = [{ value: "", label: t("Choose a local Agent device") }, ...runtimes.map((runtime) => ({
       value: runtime.id, label: `${runtime.harness === "codex" ? "Codex" : "DeepSeek Harness"} · ${context.devices?.find((device) => device.id === runtime.deviceId)?.name ?? runtime.deviceId ?? t("Unnamed device")}`,
@@ -85,9 +94,16 @@ export function mountGithubCodeSync({ document: doc, api, localizer, confirm, mo
 
   el("github-code-form").addEventListener("submit", async (event) => {
     event.preventDefault();
+    updateRepository();
     const input = { repository: el("github-code-repository").value.trim(), base_branch: el("github-code-base").value.trim(), enabled: controller.getState().github?.connection?.enabled ?? true };
     await confirmed("Connect this GitHub repository? Check its visibility and collaborators on GitHub. This does not upload files or change GT Cloud storage.", () => controller.configure(input));
+    if (controller.getState().github?.connection?.repository === input.repository) { stage = "device"; render(controller.getState()); }
   });
+  const show = value => { stage = value; render(controller.getState()); };
+  el("github-code-edit").addEventListener("click", () => show("repository"));
+  el("github-code-device-settings").addEventListener("click", () => show("device"));
+  el("github-code-ready").addEventListener("click", () => show("overview"));
+  el("github-code-back").addEventListener("click", () => show("overview"));
   el("github-code-pause").addEventListener("click", async () => {
     const connection = controller.getState().github?.connection;
     if (!connection) return;

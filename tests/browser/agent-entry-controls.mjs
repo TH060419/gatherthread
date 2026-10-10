@@ -42,8 +42,11 @@ async function contextFor(locale, width) {
 
 async function login(page, empty = false) {
   await page.goto(`${origin}/app/?mock=1`);
+  await page.locator('#auth-view').waitFor({ state: 'visible' });
   await page.evaluate(async empty => {
-    const mainUrl = document.querySelector('script[type="module"][src*="/main.js"]').src;
+    const entryUrl = document.querySelector('script[type="module"]').src;
+    const entry = await (await fetch(entryUrl)).text();
+    const mainUrl = new URL(entry.match(/import\("([^\"]*main\.js[^\"]*)"\)/)[1], entryUrl).href;
     const source = await (await fetch(mainUrl)).text();
     const specifier = source.match(/from\s+["'](\.\/api\.js(?:\?[^"']*)?)["']/)?.[1];
     if (!specifier) throw new Error("Fixture could not resolve the application's API module");
@@ -165,16 +168,13 @@ try {
       const prefix = `${browserName}-${locale}-${width}`;
       const { page, context } = await contextFor(locale, width);
       await page.goto(origin);
-      const github = page.locator(".hero-ctas .btn-repository");
+      const github = page.locator(".header-tools .github");
       await github.waitFor();
       assert.equal(await github.getAttribute("href"), "https://github.com/TH060419/gatherthread");
-      assert.match(await github.innerText(), locale === "zh-CN" ? /GitHub 项目/ : /GitHub repository/);
+      assert.match(await github.innerText(), /GitHub/);
       assert.match(await github.getAttribute("rel"), /noopener/);
-      assert.equal(await github.evaluate(node => node.classList.contains("btn-pill")), true, "repository uses the existing product button style");
-      assert.equal(await github.evaluate(node => getComputedStyle(node).backgroundImage),
-        await page.locator('.hero-ctas [data-i18n="hero.cta1"]').evaluate(node => getComputedStyle(node).backgroundImage));
-      assert.match(await page.locator('[data-i18n="setup.codex.2"]').innerText(), locale === "zh-CN" ? /打开启动器/ : /Open Launcher/);
-      assert.equal(await page.locator('[data-i18n="setup.codex.link"]').getAttribute("href"), "https://github.com/TH060419/gatherthread/tree/main/prototypes/codex-launcher");
+      assert.equal(await page.locator('.start-steps [data-codex]').getAttribute("href"),
+        `https://github.com/TH060419/gatherthread/blob/main/docs/CODEX_CONNECT${locale === "zh-CN" ? ".zh-CN" : ""}.md`);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "home has no horizontal overflow");
       await page.screenshot({ path: `${artifacts}/${prefix}-home.png` });
       await login(page);
