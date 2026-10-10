@@ -103,6 +103,74 @@ test('completed final waits for the same session to become idle before stopping'
   assert.equal(statusCalls, 2);
 });
 
+test('a slow read-only idle check retries without submitting the prompt again', async () => {
+  let statusCalls = 0;
+  const f = fixture({ fetch: async (path, init) => {
+    if (path === '/global/health') return json({ healthy: true, version: '1.18.32' });
+    if (path === '/session') return json({ id: 'ses_fixture' });
+    if (path.endsWith('/message')) return json(finalReply());
+    if (++statusCalls === 1) {
+      try { await delay(1500, undefined, { signal: init.signal }); }
+      catch (error) { throw init.signal.aborted ? init.signal.reason : error; }
+    }
+    return json({});
+  } });
+  assert.equal(await runOpencodeSession(workspace, 'The task', 64_000, f.options), 'Done');
+  assert.equal(statusCalls, 2);
+  assert.equal(f.requests.filter(r => r.path.endsWith('/message')).length, 1);
+  assert.deepEqual(f.child.kills, ['SIGTERM']);
+});
+
+test('an idle response arriving past the total window cannot publish success', async t => {
+  let now = 100_000;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture({ fetch: async path => {
+    if (path === '/global/health') return json({ healthy: true, version: '1.18.32' });
+    if (path === '/session') return json({ id: 'ses_fixture' });
+    if (path.endsWith('/message')) return json(finalReply());
+    now += 5001;
+    return json({});
+  } });
+  await assert.rejects(runOpencodeSession(workspace, 'The task', 64_000, f.options), { message: 'agent_failed' });
+  assert.equal(f.child.closed, true);
+});
+
+test('repeated idle timeouts have a finite total window and never repeat the model request', async t => {
+  let now = 100_000, statusCalls = 0;
+  t.mock.method(Date, 'now', () => now);
+  const f = fixture({ fetch: async path => {
+    if (path === '/global/health') return json({ healthy: true, version: '1.18.32' });
+    if (path === '/session') return json({ id: 'ses_fixture' });
+    if (path.endsWith('/message')) return json(finalReply());
+    statusCalls++; now += 1001;
+    throw new DOMException('private timeout fixture', 'TimeoutError');
+  } });
+  await assert.rejects(runOpencodeSession(workspace, 'The task', 64_000, f.options), { message: 'agent_failed' });
+  assert.equal(statusCalls, 5);
+  assert.equal(f.requests.filter(r => r.path.endsWith('/message')).length, 1);
+  assert.equal(f.child.closed, true);
+});
+
+test('idle protocol failures and executor exit fail immediately without polling again', async () => {
+  for (const variant of ['http', 'type', 'size', 'exit']) {
+    let statusCalls = 0;
+    const f = fixture({ fetch: async (path, init, child) => {
+      if (path === '/global/health') return json({ healthy: true, version: '1.18.32' });
+      if (path === '/session') return json({ id: 'ses_fixture' });
+      if (path.endsWith('/message')) return json(finalReply());
+      statusCalls++;
+      if (variant === 'http') return json({ error: 'private status fixture' }, 503);
+      if (variant === 'type') return new Response('private status fixture', { headers: { 'content-type': 'text/plain' } });
+      if (variant === 'size') return json({ private: 'X'.repeat(65_000) });
+      child.closed = true; child.emit('exit', 1, null); child.emit('close', 1, null);
+      throw init.signal.reason;
+    } });
+    await assert.rejects(runOpencodeSession(workspace, 'The task', 64_000, f.options), { message: 'agent_failed' });
+    assert.equal(statusCalls, 1);
+    assert.equal(f.child.closed, true);
+  }
+});
+
 test('partial or provider-error prompt results fail without publishing raw error or private data', async () => {
   for (const variant of ['partial', 'error', 'wrongSession']) {
     const f = fixture({ fetch: async (path) => {

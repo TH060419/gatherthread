@@ -29,6 +29,8 @@ A real guarded 512-MiB repository smoke was OOM-killed. After reading host usage
 
 Only allowlisted failure codes and bounded provider-attempt counts can enter a failed canonical terminal. Keep exact ≤1 KiB internal control markers, one terminal per accepted job and atomic quota/slot accounting. Never store or publish raw exception/provider output.
 
+An isolated host run observed the read-only idle-state request taking 3869 ms under the existing trial memory limit. A one-second post-response window can reject an otherwise completed answer. Allow at most five seconds to confirm idle, with one-second attempts and retries only for timeout of this read-only request. Never resubmit the prompt. Invalid replies, HTTP/protocol failures, executor exit and cancellation still fail; graceful-shutdown validation and the outer job deadline remain unchanged. This bounds a known slow-state-query condition but does not prove the cause of an earlier uninstrumented failure.
+
 ## Consequences
 
 No account migration, npm publication or connector permission change is required. The matching immutable runner image must be rebuilt and validated with the application; updating Web assets alone does not update this execution path. A real provider/host result is needed before claiming the specific timeout solved; synthetic tests prove state, privacy, accounting and browser behavior, not live model speed.

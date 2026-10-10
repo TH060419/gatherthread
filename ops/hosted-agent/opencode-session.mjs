@@ -69,10 +69,20 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
     // This HTTP request awaits the final message, not the first text chunk.
     const reply = await request(`/session/${session.id}/message`, { agent: "build", parts: [{ type: "text", text: prompt }] });
     const answer = publicSessionAnswer(reply, session.id);
-    const idleDeadline = Date.now() + 1000;
-    while (!sessionIsIdle(await request("/session/status", undefined, 1000), session.id)) {
+    // A constrained runtime may pause for GC or I/O after finishing its reply.
+    // Retry only this read; never resubmit the prompt or accept an unconfirmed idle.
+    const idleDeadline = Date.now() + 5000;
+    let idle = false;
+    while (!idle) {
+      const remaining = idleDeadline - Date.now();
+      if (remaining <= 0) throw new Error("agent_failed");
+      try {
+        idle = sessionIsIdle(await request("/session/status", undefined, Math.min(1000, remaining)), session.id);
+      } catch (error) {
+        if (error.name !== "TimeoutError" || controller.signal.aborted) throw error;
+      }
       if (Date.now() >= idleDeadline) throw new Error("agent_failed");
-      await delay(50, undefined, { signal: controller.signal });
+      if (!idle) await delay(50, undefined, { signal: controller.signal });
     }
     if (exited) throw new Error("agent_failed");
     return answer;
