@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
+import { retryAgentRequestPermission } from "../src/agent-request-control.js";
 
 // Git checkouts may use CRLF on Windows; source extraction below uses LF sentinels.
 const source = (await readFile(new URL("../src/main.js", import.meta.url), "utf8")).replace(/\r\n?/gu, "\n");
@@ -625,12 +626,15 @@ test("local conversation uploads keep an offline selected device and fail closed
 test("retrying a cloud GitHub request opens its saved task and cannot execute the trial or a local harness", async () => {
   const opened = [], calls = [];
   const app = harness(["retryAgentRequest"], {
-    retryingAgentRequestIds: new Set(), sendError: element(), captureWorkspaceScope: () => () => true,
+    retryingAgentRequestIds: new Set(), retryAgentRequestKeys: new Map(), retryAgentRequestPermission,
+    createIdempotencyKey: () => "retry-fixture", sendError: element(), captureWorkspaceScope: () => () => true,
+    document: { createElement: () => ({ setAttribute: noop }) },
     cloudGithubUi: { openTask: async (id) => opened.push(id) },
     api: { appendHostedAgentRequest: async () => calls.push("trial"), appendAgentRequest: async () => calls.push("local") },
   });
-  app.state.sync = { events: [{ id: "request", type: "agent_request", payload: { github_task_id: "gh-task-fixture", execution_profile: { harness: "opencode" } } }] };
-  await app.retryAgentRequest("request", { disabled: false, isConnected: true });
+  app.state.session.members = [{ userId: "u1", role: "owner" }]; app.state.session.mode = "multi";
+  app.state.sync = { phase: "live", events: [{ id: "request", type: "agent_request", actor: { id: "u1" }, payload: { github_task_id: "gh-task-fixture", execution_profile: { harness: "opencode" } } }] };
+  await app.retryAgentRequest("request", { disabled: false, isConnected: true, after: noop, parentElement: { querySelector: () => null } });
   assert.deepEqual(opened, ["gh-task-fixture"]); assert.deepEqual(calls, []);
 });
 

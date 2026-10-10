@@ -1,6 +1,6 @@
 import { avatarImage } from "./avatars.js";
 import { HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
-  HostedGithubTaskSchema, HostedGithubTaskListSchema } from "@gatherthread/protocol";
+  HostedGithubTaskSchema, HostedGithubTaskListSchema, HostedAgentAcceptedSchema, HostedAgentPausedSchema } from "@gatherthread/protocol";
 import {
   createIdempotencyKey,
   isExecutionRuntime,
@@ -10,9 +10,11 @@ import {
 
 const TITLE_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
 
-async function hostedGithubResponse(schema, request) {
+const HOSTED_AGENT_RESPONSE_ERROR = "Cloud Agent response is invalid. Refresh and try again.";
+
+async function hostedResponse(schema, request, errorMessage = "Cloud GitHub response is invalid. Refresh and try again.") {
   const parsed = schema.safeParse(await request);
-  if (!parsed.success) throw new Error("Cloud GitHub response is invalid. Refresh and try again.");
+  if (!parsed.success) throw new Error(errorMessage);
   return parsed.data;
 }
 
@@ -544,27 +546,27 @@ export class HttpCollaborationApi {
     return this.#append(sessionId, "agent_request", input);
   }
 
-  getHostedGithubStatus(projectId) { return hostedGithubResponse(HostedGithubStatusSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github`)); }
-  authorizeHostedGithub() { return hostedGithubResponse(HostedGithubAuthorizationSchema, this.request("/v1/hosted-github/authorize", { method: "POST", body: "{}" })); }
-  completeHostedGithub(input) { return hostedGithubResponse(HostedGithubConnectionSchema, this.request("/v1/hosted-github/complete", { method: "POST", body: JSON.stringify(input) })); }
-  disconnectHostedGithub() { return hostedGithubResponse(HostedGithubDisconnectionSchema, this.request("/v1/hosted-github/account", { method: "DELETE" })); }
-  bindHostedGithub(projectId, input) { return hostedGithubResponse(HostedGithubStatusSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github/repository`, { method: "POST", body: JSON.stringify(input) })); }
-  listHostedGithubTasks(projectId) { return hostedGithubResponse(HostedGithubTaskListSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github/tasks`)); }
-  startHostedGithubTask(sessionId, input) { return hostedGithubResponse(HostedGithubTaskSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-github-tasks`, { method: "POST", body: JSON.stringify(input) })); }
-  getHostedGithubTask(id) { return hostedGithubResponse(HostedGithubTaskSchema, this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}`)); }
-  publishHostedGithub(id, input) { return hostedGithubResponse(HostedGithubTaskSchema, this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}/pull-request`, { method: "POST", body: JSON.stringify(input) })); }
+  getHostedGithubStatus(projectId) { return hostedResponse(HostedGithubStatusSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github`)); }
+  authorizeHostedGithub() { return hostedResponse(HostedGithubAuthorizationSchema, this.request("/v1/hosted-github/authorize", { method: "POST", body: "{}" })); }
+  completeHostedGithub(input) { return hostedResponse(HostedGithubConnectionSchema, this.request("/v1/hosted-github/complete", { method: "POST", body: JSON.stringify(input) })); }
+  disconnectHostedGithub() { return hostedResponse(HostedGithubDisconnectionSchema, this.request("/v1/hosted-github/account", { method: "DELETE" })); }
+  bindHostedGithub(projectId, input) { return hostedResponse(HostedGithubStatusSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github/repository`, { method: "POST", body: JSON.stringify(input) })); }
+  listHostedGithubTasks(projectId) { return hostedResponse(HostedGithubTaskListSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github/tasks`)); }
+  startHostedGithubTask(sessionId, input) { return hostedResponse(HostedGithubTaskSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-github-tasks`, { method: "POST", body: JSON.stringify(input) })); }
+  getHostedGithubTask(id) { return hostedResponse(HostedGithubTaskSchema, this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}`)); }
+  publishHostedGithub(id, input) { return hostedResponse(HostedGithubTaskSchema, this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}/pull-request`, { method: "POST", body: JSON.stringify(input) })); }
   deleteHostedGithubTask(id) { return this.request(`/v1/hosted-github/tasks/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 
   getHostedAgentStatus() {
     return this.request("/v1/hosted-agent");
   }
 
-  appendHostedAgentRequest(sessionId, input) {
-    return this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-agent-requests`, {
+  async appendHostedAgentRequest(sessionId, input) {
+    return hostedResponse(HostedAgentAcceptedSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-agent-requests`, {
       method: "POST",
       body: JSON.stringify({ profile_id: input.profileId ?? "default", content: input.content, include_code: input.includeCode === true,
         idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null }),
-    });
+    }), HOSTED_AGENT_RESPONSE_ERROR);
   }
 
   pauseAgentRequest(sessionId, requestId) {
@@ -573,7 +575,21 @@ export class HttpCollaborationApi {
     });
   }
 
+  async pauseHostedAgentRequest(sessionId, requestId) {
+    return hostedResponse(HostedAgentPausedSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-agent-requests/${encodeURIComponent(requestId)}/pause`, {
+      method: "POST", body: "{}",
+    }), HOSTED_AGENT_RESPONSE_ERROR);
+  }
+
   async createHistorySummary(sessionId, input) {
+    if (input.executionProfile?.harness === "opencode") {
+      const receipt = await hostedResponse(HostedAgentAcceptedSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/hosted-history-summaries`, {
+        method: "POST", body: JSON.stringify({ profile_id: input.executionProfile.cloudProfileId,
+          source_event_ids: input.sourceEventIds, idempotency_key: input.idempotencyKey,
+          ...(input.instructions === undefined ? {} : { instructions: input.instructions }) }),
+      }), HOSTED_AGENT_RESPONSE_ERROR);
+      return this.#event(receipt.request_event);
+    }
     const { historySummaryExecutionWire } = await import("./history-summaries.js");
     const { event } = await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/history-summaries`, {
       method: "POST",

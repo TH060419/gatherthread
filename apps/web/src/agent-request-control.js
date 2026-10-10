@@ -1,4 +1,21 @@
-import { retryAgentRequestInput } from "./domain.js";
+import { canAppend, retryAgentRequestInput } from "./domain.js";
+
+export const isCloudTrialRequest = (request) => request?.payload?.execution_profile?.harness === "opencode"
+  && !request.payload.github_task_id;
+
+export function retryAgentRequestPermission(request, context) {
+  return canAppend({ ...context, kind: isCloudTrialRequest(request) || request?.payload?.github_task_id ? "human_chat" : "agent_request" });
+}
+
+export function cloudRequestInput(request, idempotencyKey, profiles) {
+  const recorded = request.payload?.execution_profile;
+  const profile = profiles?.find((candidate) => candidate.id === request.payload?.profile_id);
+  if (!isCloudTrialRequest(request) || !profile || profile.provider !== recorded?.provider || profile.model !== recorded?.model) {
+    throw new Error("The original cloud model is no longer available.");
+  }
+  return { content: retryAgentRequestInput(request, idempotencyKey).content, profileId: profile.id,
+    includeCode: request.payload.include_code === true, idempotencyKey, replyTo: request.replyTo };
+}
 
 const targetId = (event) => event.replyTo ?? event.reply_to_event_id ?? event.payload?.reply_to_event_id;
 const hasRecordedTarget = (request) => {
@@ -22,14 +39,15 @@ export function composerAgentAction(events, userId) {
   if (!request) return { action: "request" };
   const linked = history.filter((event) => targetId(event) === request.id);
   if (linked.some((event) => event.type === "agent_response")) return { action: "request" };
-  // Hosted requests do not use connector claims or the local pause/resume API.
-  if (request.payload?.execution_profile?.harness === "opencode") return { action: "wait", request, cloud: true };
+  if (request.payload?.github_task_id) return { action: "wait", request, cloud: true };
+  const cloud = isCloudTrialRequest(request);
   if (linked.some((event) => event.type === "agent_progress" && event.payload?.status === "paused")) {
     // Legacy requests without a recorded target can be asked anew, but cannot
     // honestly promise to resume the original Agent/model.
-    if (!hasRecordedTarget(request)) return { action: "request" };
-    return { action: "resume", request };
+    if (!cloud && !hasRecordedTarget(request)) return { action: "request" };
+    return { action: "resume", request, cloud };
   }
+  if (cloud) return { action: "pause", request, cloud: true };
   // The server can pause a claimed request only. A queued/unclaimed request is
   // not advertised as stoppable; generic work markers establish that claim.
   return { action: linked.some((event) => event.type === "agent_progress") ? "pause" : "wait", request };
@@ -97,8 +115,12 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
     const key = resumeIntent?.key;
     void (async () => {
       try {
-        if (current.action === "pause") await api.pauseAgentRequest(current.sessionId, current.request.id);
-        else await api.appendAgentRequest(current.sessionId, resumeAgentRequestInput(current.request, key));
+        if (current.action === "pause") {
+          if (current.cloud) await api.pauseHostedAgentRequest(current.sessionId, current.request.id);
+          else await api.pauseAgentRequest(current.sessionId, current.request.id);
+        } else if (current.cloud) {
+          await api.appendHostedAgentRequest(current.sessionId, cloudRequestInput(current.request, key, current.cloudProfiles));
+        } else await api.appendAgentRequest(current.sessionId, resumeAgentRequestInput(current.request, key));
       } catch (error) {
         if (getContext().scope === current.scope) errorNode.textContent = t(error.message ?? "Unable to control this Agent request. Try again.");
       } finally {

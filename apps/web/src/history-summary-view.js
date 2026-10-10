@@ -84,7 +84,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     const versions = historySummaryTimeline(events()).versions;
     pendingOwnSummary = versions.some((version) => version.status === "pending" && version.request.actor?.id === context().userId);
     el("history-summary-select-button").hidden = !context().writable;
-    el("history-summary-select-button").disabled = !canGenerate() || busy() || !eligible.size;
+    el("history-summary-select-button").disabled = busy();
     el("history-summary-select-button").setAttribute("aria-pressed", String(selecting));
     el("history-summary-view-button").hidden = versions.length === 0;
     el("history-summary-versions-button").hidden = versions.length === 0;
@@ -101,14 +101,17 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     el("history-summary-cancel-button").disabled = Boolean(attempt);
     el("history-summary-resend-button").hidden = !attempt || attempt.sending;
     el("history-summary-resend-button").disabled = !canGenerate() || fingerprint(context().executionProfile) !== fingerprint(attempt?.executionProfile);
-    el("history-summary-status").textContent = t(error || (selected.size ? selectionError : ""));
+    el("history-summary-status").textContent = t(error || (selecting && !eligible.size
+      ? "No completed messages to summarize yet. Send chat or wait for an Agent answer."
+      : selecting && !canGenerate() ? "Choose an online Agent to generate this summary."
+        : selected.size ? selectionError : "Select the messages you want to summarize."));
     el("history-summary-confirm-button").disabled = !confirmationAttempt || Boolean(attempt?.sending)
       || !canGenerate() || !sameScope(confirmationAttempt)
       || fingerprint(context().executionProfile) !== fingerprint(confirmationAttempt.executionProfile);
     if (versionsDialog.open) renderVersions();
   }
   function changeSelection(ids = []) {
-    if (!canGenerate() || busy()) return;
+    if (!context().writable || busy()) return;
     selected.clear();
     ids.forEach((id) => selected.add(id));
     selecting = true;
@@ -131,6 +134,9 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
   }
   function showConfirmation() {
     const profile = confirmationAttempt.executionProfile;
+    el("history-summary-confirm-warning").textContent = t(profile.harness === "opencode"
+      ? "Selected messages and summary instructions will be sent to the cloud model. No project files are included. The summary is shared and originals are preserved."
+      : "This uses your selected local Agent and may consume model quota. Only the selected records are supplied as this request's shared-history context; this does not guarantee sandbox isolation from local tools or files. Instructions and the result are shared with session readers.");
     el("history-summary-confirm-target").textContent = [profile.harness, profile.provider, profile.model, profile.reasoningEffort,
       profile.runtimeId].filter(Boolean).join(" · ");
     el("history-summary-confirm-count").textContent = `${confirmationAttempt.sourceEventIds.length} · ${t("messages selected")}`;
@@ -217,7 +223,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
     }
     if (context().writable && version.status !== "pending") {
       const regenerate = icon("Select sources to regenerate with my Agent", "↻", () => changeSelection(version.metadata.source_event_ids));
-      regenerate.disabled = !version.available || !canGenerate() || busy();
+      regenerate.disabled = !version.available || busy();
       controls.append(regenerate);
     }
     if (version.response && renderEventAvatar) {
@@ -261,7 +267,7 @@ export function mountHistorySummaries({ document, api, localizer, getContext, on
       const status = document.createElement("p");
       status.setAttribute("role", "status");
       status.textContent = t(version.status === "pending"
-        ? "Waiting for the selected local Agent. A new generation is unavailable until this request finishes."
+        ? "Waiting for the selected Agent. A new generation is unavailable until this request finishes."
         : "Summary generation failed. Originals are unchanged. Select them to retry with your current Agent.");
       article.append(status);
     }

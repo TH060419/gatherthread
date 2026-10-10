@@ -20,11 +20,12 @@ The limits below describe temporary-workspace and GT Cloud code tasks. GitHub re
 
 - Your request and a short selection of shared session context go to the selected model provider for inference. If you opt in to project cloud code, selected source can also enter model requests. Avoid submitting content you do not want this provider to process.
 - Each run starts in a fresh temporary environment. Files created without the cloud code option are discarded after the run.
-- The container has no general Internet access and cannot download dependencies online. A run accepts about 100 files, 500 KiB of code, and 12 KiB of session context, with a two-minute time limit. Use your local Agent for larger projects or builds needing downloads.
+- The container has no general Internet access and cannot download dependencies online. A run accepts about 100 files, 500 KiB of code, and 12 KiB of session context, with a five-minute time limit. Use your local Agent for larger projects or builds needing downloads.
 - Ordinary chat does not call an Agent. Local Agent requests still run on your own device; the cloud trial uses the same Agent selector and send action.
 - By default, each user may run one task at a time, with at least 30 seconds between accepted starts across projects, models and devices. Wait for the current task or short cooldown; the status field shows the reason. Any configured daily allowance and provider/server capacity limits also apply.
 - Settings and the composer show the selected provider/model; remaining daily runs appear only if an administrator configured a daily allowance. Busy models and temporarily unavailable providers never switch silently to a different model. API keys are managed by the operator, so you do not need to enter one. If the runner is unavailable, contact the server operator.
-- Shared history summaries and the composer's Pause/Resume controls currently use connected local Codex/DSH Agents, not this cloud trial runner. Cloud answers can still be read, quoted and discussed in the shared conversation.
+- The same request button becomes **Pause Agent** while a cloud trial runs, then **Resume Agent** after you pause it. Resume starts a new request with newer shared history and the original model, not the exact point where the old run stopped. Your unsent draft stays in place. A failed answer offers **Retry Agent request** using the same model; capacity limits may require waiting briefly.
+- Use the summary button to select completed messages and generate a shared summary with your selected cloud or local Agent. Cloud summaries send only those messages and your summary instructions to the selected provider, not project files. Original messages remain available. No local Agent installation is required for a cloud summary.
 
 For container build, quotas, and credentials, see the [operator guide](HOSTED_AGENT.md).
 

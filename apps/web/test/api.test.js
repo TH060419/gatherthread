@@ -185,21 +185,67 @@ test("cloud Agent uses a separate endpoint and sends code opt-in explicitly", as
   const requests = [];
   globalThis.fetch = async (url, options = {}) => {
     requests.push({ url: String(url), options });
-    return Response.json({ data: { enabled: true } });
+    return Response.json({ data: options.method === "POST" ? { replayed: false, request_event: {
+      id: "cloud-request", session_id: "s:1", sequence: 1, idempotency_key: "hosted-request-0001", type: "agent_request",
+      actor_user_id: "fixture", created_at: "2026-10-10T00:00:00Z", visibility: "session", reply_to_event_id: "e1",
+      payload: { content: "Implement a test" }, runtime_provenance: null,
+    } } : { enabled: true } });
   };
   try {
     const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
     await api.getHostedAgentStatus();
-    await api.appendHostedAgentRequest("s/1", { content: "Implement a test",
+    await api.appendHostedAgentRequest("s:1", { content: "Implement a test",
       includeCode: true, idempotencyKey: "hosted-request-0001", replyTo: "e1" });
     assert.deepEqual(requests.map((request) => [request.url, request.options.method ?? "GET"]), [
       ["https://gatherthread.example/v1/hosted-agent", "GET"],
-      ["https://gatherthread.example/v1/sessions/s%2F1/hosted-agent-requests", "POST"],
+      ["https://gatherthread.example/v1/sessions/s%3A1/hosted-agent-requests", "POST"],
     ]);
     assert.deepEqual(JSON.parse(requests[1].options.body), {
       profile_id: "default", content: "Implement a test", include_code: true,
       idempotency_key: "hosted-request-0001", reply_to_event_id: "e1",
     });
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("cloud pause and selected summary use strict cloud routes without local runtime fields", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  const event = { id: "cloud-summary", session_id: "session", sequence: 1, idempotency_key: "summary-key",
+    type: "agent_request", actor_user_id: "fixture", created_at: "2026-10-10T00:00:00Z", visibility: "session",
+    reply_to_event_id: null, payload: { content: "Selected source" }, runtime_provenance: null };
+  globalThis.fetch = async (url, options) => {
+    requests.push({ url: String(url), body: JSON.parse(options.body) });
+    return Response.json({ data: String(url).endsWith("/pause")
+      ? { request_event_id: "request", status: "paused" } : { request_event: event, replayed: false } });
+  };
+  try {
+    const api = new HttpCollaborationApi();
+    assert.equal((await api.pauseHostedAgentRequest("session", "request")).status, "paused");
+    assert.equal((await api.createHistorySummary("session", { sourceEventIds: ["source"], instructions: "Keep decisions",
+      idempotencyKey: "summary-key", executionProfile: { harness: "opencode", cloudProfileId: "exact-profile" } })).id, event.id);
+    assert.deepEqual(requests, [
+      { url: "/v1/sessions/session/hosted-agent-requests/request/pause", body: {} },
+      { url: "/v1/sessions/session/hosted-history-summaries", body: { profile_id: "exact-profile",
+        source_event_ids: ["source"], instructions: "Keep decisions", idempotency_key: "summary-key" } },
+    ]);
+  } finally { globalThis.fetch = originalFetch; }
+});
+
+test("cloud control errors are bilingual and never echo invalid private response fields", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => Response.json({ data: { status: "running", private_source: "private-fixture" } });
+  try {
+    const api = new HttpCollaborationApi();
+    for (const call of [() => api.appendHostedAgentRequest("session", { content: "Question", idempotencyKey: "retry-key" }),
+      () => api.pauseHostedAgentRequest("session", "request"),
+      () => api.createHistorySummary("session", { sourceEventIds: ["source"], idempotencyKey: "summary-key",
+        executionProfile: { harness: "opencode", cloudProfileId: "exact-profile" } })]) {
+      await assert.rejects(call(), error => {
+        assert.equal(translateUiText(error.message, "en"), "Cloud Agent response is invalid. Refresh and try again.");
+        assert.equal(translateUiText(error.message, "zh-CN"), "云端 Agent 响应无效，请刷新后重试。");
+        return !error.message.includes("private-fixture");
+      });
+    }
   } finally { globalThis.fetch = originalFetch; }
 });
 

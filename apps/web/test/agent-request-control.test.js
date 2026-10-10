@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { composerAgentAction, mountAgentRequestControl, resumeAgentRequestInput } from "../src/agent-request-control.js";
+import { cloudRequestInput, composerAgentAction, mountAgentRequestControl, resumeAgentRequestInput, retryAgentRequestPermission } from "../src/agent-request-control.js";
 import { MockCollaborationApi } from "../src/api.js";
 
 const request = (id = "r1", userId = "me", harness = "codex") => ({ id, type: "agent_request", actor: { id: userId }, replyTo: "quote-1",
@@ -13,6 +13,27 @@ const response = (id) => ({ type: "agent_response", replyTo: id, payload: { stat
 test("completed seed example does not leave the composer waiting for an Agent", () => {
   const api = new MockCollaborationApi({ latency: 0 });
   assert.equal(composerAgentAction(api.events.get("session-orbit"), api.currentUser.id).action, "request");
+});
+
+test("an accepted cloud request can be paused without a local runtime or a work marker", () => {
+  const cloud = request("cloud", "me", "opencode");
+  delete cloud.payload.execution_profile.runtime_id;
+  cloud.payload.profile_id = "cloud-free";
+  assert.equal(composerAgentAction([cloud], "me").action, "pause");
+  assert.equal(composerAgentAction([cloud, progress(cloud.id, "paused")], "me").action, "resume");
+  assert.equal(composerAgentAction([cloud, response(cloud.id)], "me").action, "request");
+});
+
+test("cloud retry uses writer permission rather than local runtime presence, and preserves its exact model", () => {
+  const cloud = request("cloud", "me", "opencode");
+  cloud.payload.profile_id = "cloud-free";
+  const context = { session: { mode: "multi", members: [{ userId: "me", role: "owner", runtime: null }] },
+    currentUser: { id: "me" }, connectionPhase: "live" };
+  assert.equal(retryAgentRequestPermission(cloud, context).allowed, true);
+  context.session.members[0].role = "viewer";
+  assert.equal(retryAgentRequestPermission(cloud, context).allowed, false);
+  assert.throws(() => cloudRequestInput(cloud, "k", [{ id: "cloud-free", provider: "other", model: "original-model" }]), /original cloud model/);
+  assert.equal(cloudRequestInput(cloud, "k", [{ id: "cloud-free", provider: "deepseek-official", model: "original-model" }]).profileId, "cloud-free");
 });
 
 test("composer control is author-scoped, claim-aware, and resets after terminal completion", () => {

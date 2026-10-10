@@ -205,6 +205,17 @@ export const HostedAgentRequestInputSchema = z.object({
 }).strict();
 export type HostedAgentRequestInput = z.infer<typeof HostedAgentRequestInputSchema>;
 
+/** Summaries use server-validated selected history, never client-supplied text or code. */
+export const HostedHistorySummaryInputSchema = CreateHistorySummaryInputSchema.omit({ execution_profile: true })
+  .extend({ profile_id: HostedAgentRequestInputSchema.shape.profile_id.unwrap() }).strict();
+export type HostedHistorySummaryInput = z.infer<typeof HostedHistorySummaryInputSchema>;
+export const HostedAgentAcceptedSchema = z.object({
+  request_event: CanonicalEventSchema, replayed: z.boolean(),
+}).strict();
+export const HostedAgentPausedSchema = z.object({
+  request_event_id: IdSchema, status: z.literal("paused"),
+}).strict();
+
 export const HostedAgentStatusSchema = z.discriminatedUnion("enabled", [
   z.object({ enabled: z.literal(false) }).strict(),
   z.object({

@@ -19,8 +19,10 @@ test("cloud pending messages never wait for a local connector", () => {
   assert.doesNotMatch(pending.children[1].textContent, /local runtime/);
 });
 
-test("cloud progress cannot expose the local-only pause/resume API", () => {
+test("cloud progress uses cloud controls without exposing the local claim route", () => {
   const progress = { type: "agent_progress", replyTo: cloudRequest.id, payload: { status: "working" } };
-  assert.equal(composerAgentAction([cloudRequest, progress], "me").action, "wait");
+  assert.equal(composerAgentAction([cloudRequest, progress], "me").action, "pause");
+  assert.equal(composerAgentAction([cloudRequest, progress], "me").cloud, true);
+  assert.equal(composerAgentAction([{ ...cloudRequest, payload: { ...cloudRequest.payload, github_task_id: "fixture" } }, progress], "me").action, "wait");
   assert.equal(composerAgentAction([cloudRequest, { type: "agent_response", replyTo: cloudRequest.id }], "me").action, "request");
 });
