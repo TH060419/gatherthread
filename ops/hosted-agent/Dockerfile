@@ -13,6 +13,7 @@ COPY --chmod=0644 ops/hosted-agent/entrypoint.mjs /usr/local/lib/gatherthread-ho
 COPY --chmod=0555 ops/hosted-agent/cpuset-entrypoint.mjs /usr/local/lib/gatherthread-hosted-cpuset-entrypoint.mjs
 COPY --chmod=0644 ops/hosted-agent/resource-check.mjs /usr/local/lib/resource-check.mjs
 COPY --chmod=0644 ops/hosted-agent/public-answer.mjs /usr/local/lib/public-answer.mjs
+COPY --chmod=0644 ops/hosted-agent/opencode-session.mjs /usr/local/lib/opencode-session.mjs
 COPY --chmod=0644 ops/hosted-agent/npm-setup.mjs /usr/local/lib/npm-setup.mjs
 RUN groupadd --gid 10001 agent && useradd --uid 10001 --gid 10001 --home-dir /home/agent agent
 USER 10001:10001
