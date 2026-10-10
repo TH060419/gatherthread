@@ -5,7 +5,9 @@ import vm from "node:vm";
 import { translateUiText } from "../src/i18n.js";
 import { fillRepositoryFields, bindRepositoryFields } from "../src/github-setup.js";
 
-const source = (await readFile(new URL("../src/cloud-github-view.js", import.meta.url), "utf8")).replace(/^import .*\n/gmu, "");
+// Exercise Windows checkout line endings on every platform.
+const source = (await readFile(new URL("../src/cloud-github-view.js", import.meta.url), "utf8"))
+  .replace(/\r?\n/gu, "\r\n").replace(/^import .*\r?\n/gmu, "");
 const deferred = () => {
   let resolve;
   const promise = new Promise((done) => { resolve = done; });
@@ -82,6 +84,24 @@ test("setup shows one page at a time and splits the GitHub account from reposito
   assert.equal(ui.el("cloud-github-owner").value, "owner");
   assert.equal(ui.el("cloud-github-name").value, "project");
   assert.equal(ui.el("github-cloud-home").hidden, true);
+});
+
+test("background task refresh keeps the selected settings page and unsaved repository fields", async () => {
+  const running = { ...task(), state: "running" };
+  const ui = fixture({ listHostedGithubTasks: async () => ({ tasks: [running] }), getHostedGithubTask: async () => running });
+  await ui.view.openTask(running.id);
+  ui.el("cloud-github-edit").dispatchEvent({ type: "click" });
+  ui.el("cloud-github-name").value = "unsaved-project";
+  await ui.view.refresh();
+  assert.equal(ui.el("cloud-github-repository-form").hidden, false);
+  assert.equal(ui.el("github-cloud-home").hidden, true);
+  assert.equal(ui.el("cloud-github-name").value, "unsaved-project");
+  ui.el("cloud-github-account-settings").dispatchEvent({ type: "click" });
+  await ui.view.refresh();
+  assert.equal(ui.el("github-cloud-account").hidden, false);
+  assert.equal(ui.el("github-cloud-home").hidden, true);
+  await ui.view.openTask(running.id);
+  assert.equal(ui.el("github-cloud-home").hidden, false, "explicit task navigation still opens the task page");
 });
 
 test("public GitHub failures are localized immediately without translating user content", async () => {

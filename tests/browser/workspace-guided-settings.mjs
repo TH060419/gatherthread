@@ -62,8 +62,13 @@ try {
     });
     await page.route("**/v1/me", async route => { await new Promise(r => setTimeout(r, 250)); await route.continue(); });
     let github = { enabled: true, connected: false, login: null, binding: null, installation_url: "https://github.com/apps/fixture/installations/new" };
+    let task = null;
     await page.route("**/hosted-github", route => route.fulfill({ json: { data: github } }));
-    await page.route("**/hosted-github/tasks", route => route.fulfill({ json: { data: { tasks: [] } } }));
+    await page.route("**/hosted-github/tasks", route => {
+      const { answer, changes, ...summary } = task ?? {};
+      return route.fulfill({ json: { data: { tasks: task ? [summary] : [] } } });
+    });
+    await page.route("**/v1/hosted-github/tasks/*", route => route.fulfill({ json: { data: task } }));
     await page.route("**/hosted-github/repository", async route => {
       const input = route.request().postDataJSON();
       assert.deepEqual(input, { repository: "fixture/my-project", base_branch: "main" });
@@ -106,6 +111,23 @@ try {
       await page.locator("#cloud-github-repository-form button[type=submit]").click();
       await page.locator("#github-cloud-home").waitFor({ state: "visible" });
       assert.equal(await page.locator("#cloud-github-repository-form").isVisible(), false);
+      if (width === 1440) {
+        task = { id: `gh-task-${"a".repeat(32)}`, session_id: session.id, profile_id: "free", resumable: false,
+          state: "running", repository: "fixture/my-project", base_branch: "main", base_sha: "b".repeat(40),
+          revision: "c".repeat(64), error_code: null, pull_request_url: null, expires_at: Date.now() + 3600_000,
+          answer: "", changes: [] };
+        await page.locator("#cloud-github-refresh").click();
+        await page.locator("#cloud-github-task-list").locator("..").locator("summary").click();
+        await page.locator("#cloud-github-task-list button").click();
+        await page.locator("#cloud-github-edit").click();
+        await page.locator("#cloud-github-name").fill("unsaved-repository");
+        await page.waitForResponse(response => new URL(response.url()).pathname.endsWith(`/hosted-github/tasks/${task.id}`));
+        assert.equal(await page.locator("#cloud-github-repository-form").isVisible(), true, "background polling keeps repository editing open");
+        assert.equal(await page.locator("#cloud-github-name").inputValue(), "unsaved-repository");
+        await page.locator("#cloud-github-name").fill("my-project");
+        await page.locator("#cloud-github-back").click();
+        task = { ...task, state: "completed" };
+      }
       await page.locator("#cloud-github-edit").click();
       assert.equal(await page.locator("#cloud-github-name").inputValue(), "my-project");
       await page.locator("#cloud-github-back").click();

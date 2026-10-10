@@ -60,7 +60,7 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     } catch { setText(pre, "Binary file changed"); }
   }
   function renderTask(task) {
-    showStage("tasks"); el("github-cloud-detail").hidden = false;
+    el("github-cloud-detail").hidden = false;
     const sameRevision = selected?.id === task.id && selected?.revision === task.revision;
     selected = task;
     const status = el("cloud-github-task-status"); status.replaceChildren();
@@ -140,7 +140,7 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
       appendLabel(button, task.repository, true); button.append(doc.createTextNode(" · "));
       appendLabel(button, task.state); button.append(doc.createTextNode(" · "));
       appendLabel(button, task.id.slice(-8), true);
-      button.addEventListener("click", () => void action(async () => { const detail = await getApi().getHostedGithubTask(task.id); if (gen === generation) renderTask(detail); })); el("cloud-github-task-list").append(button);
+      button.addEventListener("click", () => void action(async () => { const detail = await getApi().getHostedGithubTask(task.id); if (gen === generation) { showStage("tasks"); renderTask(detail); } })); el("cloud-github-task-list").append(button);
     }
     if (selected) { const detail = await getApi().getHostedGithubTask(selected.id); if (gen === generation) renderTask(detail); }
   }
@@ -223,7 +223,7 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
       if (!context().sessionId) return;
       openSurface();
       await action(async () => { await refresh(); const task = await getApi().getHostedGithubTask(id);
-        if (gen === generation) renderTask(task); });
+        if (gen === generation) { showStage("tasks"); renderTask(task); } });
     },
     async start(sessionId, input) {
       if (!agentEnabled) throw new Error("Cloud Agent · coming later");

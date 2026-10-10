@@ -7,8 +7,9 @@ import { codeRuntimeChoices } from "../src/code-sync.js";
 import { fillRepositoryFields, bindRepositoryFields } from "../src/github-setup.js";
 import { translateUiText } from "../src/i18n.js";
 
+// Exercise Windows checkout line endings on every platform.
 const source = (await readFile(new URL("../src/github-code-sync-view.js", import.meta.url), "utf8"))
-  .replace(/^import .*\n/gmu, "").replace("export function", "function");
+  .replace(/\r?\n/gu, "\r\n").replace(/^import .*\r?\n/gmu, "").replace("export function", "function");
 function node() {
   const listeners = new Map();
   return { value: "", textContent: "", hidden: false, disabled: false, dataset: {},
