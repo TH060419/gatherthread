@@ -10,7 +10,13 @@ export function expectedHostedResources(environment) {
   const cpu = environment.GT_HOSTED_CPUSET;
   const memory = environment.GT_HOSTED_MEMORY_BYTES;
   const pids = environment.GT_HOSTED_PIDS;
-  if (!canonicalCpu(cpu) || !positiveInteger(memory) || !["128", "256"].includes(pids)) throw failure();
+  if (!canonicalCpu(cpu) || !["128", "256"].includes(pids)) throw failure();
+  const policy = environment.GT_HOSTED_MEMORY_POLICY;
+  if (policy === "shared-host") {
+    if (memory !== undefined) throw failure();
+    return { cpu, memoryPolicy: policy, pids: Number(pids) };
+  }
+  if ((policy !== undefined && policy !== "limited") || !positiveInteger(memory)) throw failure();
   const memoryBytes = Number(memory);
   const maximum = pids === "128" ? 768 : 2048;
   if (memoryBytes < 256 * 1024 * 1024 || memoryBytes > maximum * 1024 * 1024
@@ -48,9 +54,13 @@ export function hostedCgroupDirectory(cgroup, mountinfo) {
 
 export function verifyHostedResources(actual, expected) {
   const memory = actual.memory?.trim(), swap = actual.swap?.trim(), pids = actual.pids?.trim();
-  // A wider range/list, an inherited 'max', or a missing controller is not accepted.
-  if (actual.cpus?.trim() !== expected.cpu || !positiveInteger(memory) || Number(memory) > expected.memoryBytes
-    || swap !== "0" || !positiveInteger(pids) || Number(pids) > expected.pids) throw failure();
+  if (actual.cpus?.trim() !== expected.cpu || !positiveInteger(pids) || Number(pids) > expected.pids) throw failure();
+  // Only an explicit host-owned policy accepts unbounded RAM/swap, not missing controllers.
+  if (expected.memoryPolicy === "shared-host") {
+    if (memory !== "max" || actual.high?.trim() !== "max" || swap !== "max") throw failure();
+    return;
+  }
+  if (!positiveInteger(memory) || Number(memory) > expected.memoryBytes || swap !== "0") throw failure();
 }
 
 function boundedRead(path, maximum) {
@@ -76,6 +86,7 @@ export function checkHostedResources(environment = process.env, read = boundedRe
     const directory = hostedCgroupDirectory(membership, read("/proc/self/mountinfo", 262_144));
     verifyHostedResources({ cpus: read(`${directory}/cpuset.cpus.effective`, 4096),
       memory: read(`${directory}/memory.max`, 4096), swap: read(`${directory}/memory.swap.max`, 4096),
+      ...(expected.memoryPolicy === "shared-host" ? { high: read(`${directory}/memory.high`, 4096) } : {}),
       pids: read(`${directory}/pids.max`, 4096) }, expected);
     if (read("/proc/self/cgroup", 16_384) !== membership) throw failure();
   } catch { throw failure(); }

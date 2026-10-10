@@ -102,6 +102,33 @@ test("hosted memory caps are strict independent reductions of existing defaults"
     "/srv/gatherthread").hostedAgent);
 });
 
+test("shared-host memory is administrator-only explicit configuration with unchanged defaults and singleton capacity", { skip: process.platform === "win32" }, () => {
+  const enabled = {
+    GATHERTHREAD_HOSTED_AGENT_ENABLED: "true", GATHERTHREAD_HOSTED_AGENT_PRESET: "siliconflow-free",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: `sha256:${"b".repeat(64)}`,
+    GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true", GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-only-key",
+    GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT: "1",
+  };
+  assert.equal(loadServerConfig(enabled, "/srv/gatherthread").hostedAgent?.memoryPolicy, "limited");
+  assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: "shared-host" },
+    "/srv/gatherthread"), /guarded CPU set/);
+  const shared = { ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: "shared-host",
+    GATHERTHREAD_HOSTED_AGENT_CPUSET: "1" };
+  if (process.platform === "linux") {
+    assert.equal(loadServerConfig(shared, "/srv/gatherthread").hostedAgent?.memoryPolicy, "shared-host");
+  } else {
+    assert.throws(() => loadServerConfig(shared, "/srv/gatherthread"), /Linux deployment host/);
+  }
+  assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: "shared-host",
+    GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT: "2" }, "/srv/gatherthread"), /concurrency one/);
+  for (const value of ["", "shared", "unlimited", "SHARED-HOST", "shared-host\n", " shared-host"]) {
+    assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: value },
+      "/srv/gatherthread"), ConfigurationError);
+  }
+  assert.equal(loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_ENABLED: "false",
+    GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: "invalid" }, "/srv/gatherthread").hostedAgent, undefined);
+});
+
 test("owner-host credentials require a stable pepper even outside production", () => {
   const config = loadServerConfig({
     GATHERTHREAD_AUTH_TOKEN_PEPPER: "development-pepper-0123456789abc",

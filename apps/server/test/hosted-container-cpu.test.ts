@@ -22,3 +22,12 @@ test("default CFS arguments are unchanged and explicit affinity always forces th
     assert.throws(() => hostedContainerCpuArguments("trial", "1", value), /memory/);
   }
 });
+
+test("shared-host memory cannot select the unguarded CFS entrypoint", () => {
+  for (const [kind, memory] of [["trial", 512], ["repository", 768]] as const) {
+    assert.throws(() => hostedContainerCpuArguments(kind, undefined, memory, "shared-host"), /guarded CPU set/);
+    const args = hostedContainerCpuArguments(kind, "1", memory, "shared-host");
+    assert.ok(args.includes(HOSTED_CPUSET_ENTRYPOINT));
+    assert.ok(args.includes("GT_HOSTED_MEMORY_POLICY=shared-host"));
+  }
+});

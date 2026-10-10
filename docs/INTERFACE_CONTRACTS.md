@@ -251,6 +251,8 @@ The pinned container runner obtains its result from one loopback OpenCode sessio
 
 ## Cloud GitHub task preview
 
+Hosted trial and repository RAM/swap policy is an administrator-only setting, not an HTTP input field. `limited` remains the default; explicit `shared-host` requires host concurrency one, an explicitly configured single-CPU cpuset and a matching guarded image. An absent cpuset refuses shared mode rather than using an unchecked CFS entrypoint. Request identity, model routing, authorization, timeouts and confirmed-exit capacity settlement are unchanged. See [the operator memory policy](HOSTED_AGENT.md#shared-host-memory).
+
 Strict input and response schemas with inferred types are owned by `packages/protocol/src/hosted-github.ts`; server routing is in `apps/server/src/server.ts` and private persistence in `hosted-github-schema.ts`. Both server responses and the Web HTTP client validate these schemas. Additive routes are:
 
 - `POST /v1/hosted-github/authorize`, `GET /v1/hosted-github/callback`, `POST /v1/hosted-github/complete`, `DELETE /v1/hosted-github/account`.

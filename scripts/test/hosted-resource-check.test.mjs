@@ -25,6 +25,28 @@ test("guard expectations are bounded canonical trusted values with no flexible C
   assert.equal(expectedHostedResources({ ...environment, GT_HOSTED_MEMORY_BYTES: "2147483648", GT_HOSTED_PIDS: "256" }).pids, 256);
 });
 
+test("shared-host memory requires an explicit policy and retains CPU and PID enforcement", () => {
+  const sharedEnvironment = { GT_HOSTED_CPUSET: "1", GT_HOSTED_PIDS: "128",
+    GT_HOSTED_MEMORY_POLICY: "shared-host" };
+  const shared = expectedHostedResources(sharedEnvironment);
+  assert.deepEqual(shared, { cpu: "1", memoryPolicy: "shared-host", pids: 128 });
+  const sharedActual = { cpus: "1\n", memory: "max\n", high: "max\n", swap: "max\n", pids: "128\n" };
+  assert.doesNotThrow(() => verifyHostedResources(sharedActual, shared));
+  assert.throws(() => verifyHostedResources(sharedActual, expected), error);
+  for (const policy of ["", "shared", "unlimited", "shared-host\n", "SHARED-HOST"]) {
+    assert.throws(() => expectedHostedResources({ ...sharedEnvironment, GT_HOSTED_MEMORY_POLICY: policy }), error);
+  }
+  assert.throws(() => expectedHostedResources({ ...sharedEnvironment, GT_HOSTED_MEMORY_BYTES: "536870912" }), error);
+  for (const change of [{ cpus: "0-1" }, { pids: "max" }, { pids: "129" }, { memory: undefined },
+    { swap: undefined }, { high: undefined }, { high: "536870912" }, { memory: "536870912" }, { swap: "0" }]) {
+    assert.throws(() => verifyHostedResources({ ...sharedActual, ...change }, shared), error);
+  }
+  const fixture = fixtureRead({ "/sys/fs/cgroup/container.scope/memory.max": "max\n",
+    "/sys/fs/cgroup/container.scope/memory.high": "max\n",
+    "/sys/fs/cgroup/container.scope/memory.swap.max": "max\n" });
+  assert.doesNotThrow(() => checkHostedResources(sharedEnvironment, fixture.read));
+});
+
 test("guard reads exactly the process's unified cgroup, including a namespaced container root", () => {
   assert.equal(hostedCgroupDirectory("0::/\n", mount()), "/sys/fs/cgroup");
   assert.equal(hostedCgroupDirectory("0::/user.slice/user-108.slice/container.scope\n", mount()),

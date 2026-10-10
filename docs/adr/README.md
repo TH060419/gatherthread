@@ -48,3 +48,4 @@ Current account guidance (2026-10-08): `main` uses verified-email registration a
 | [0040](0040-explicit-single-cpu-hosted-compatibility.md) | Explicit single-CPU hosted compatibility | accepted for implementation; deployment-host activation gated | 2026-10-09 |
 | [0041](0041-guided-settings-and-ephemeral-hosted-startup.md) | Guided settings and bounded ephemeral hosted startup | accepted | 2026-10-10 |
 | [0042](0042-cloud-request-lifecycle-and-selected-summaries.md) | Cloud request lifecycle and selected-history summaries | proposed / implementation review | 2026-10-10 |
+| [0043](0043-explicit-shared-host-memory.md) | Explicit shared-host memory | proposed / implementation review | 2026-10-11 |

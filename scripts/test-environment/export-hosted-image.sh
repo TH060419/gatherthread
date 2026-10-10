@@ -47,6 +47,8 @@ clean "$task_node" -e 'require("node:fs").writeFileSync(process.argv[1],JSON.str
   "$task_private/quota.json" "$task_image"
 clean env GATHERTHREAD_TEST_HOSTED_IMAGE="$task_image" "$task_node" "$task_build/scripts/test-hosted-cpuset.mjs" \
   --report "$task_private/cpuset.json"
+clean env GATHERTHREAD_TEST_HOSTED_IMAGE="$task_image" "$task_node" "$task_build/scripts/test-hosted-cpuset.mjs" \
+  --shared-host --report "$task_private/shared-host.json"
 # Save the tested immutable ID, never rebuild or resolve a mutable tag for delivery.
 docker_client save "$task_image" | gzip -n | clean "$task_node" "$task_metadata" archive \
   "$task_private/hosted-image.tar.gz" "$task_private/archive.json"
@@ -54,7 +56,7 @@ gzip -t "$task_private/hosted-image.tar.gz"
 docker_client image inspect "$task_image" > "$task_private/exported-inspection.json"
 clean "$task_node" "$task_metadata" image "$task_commit" "$task_build/candidate.json" "$task_private/exported-inspection.json" "$task_image"
 clean "$task_node" "$task_metadata" provenance "$task_commit" "$task_build/candidate.json" \
-  "$task_private/exported-inspection.json" "$task_image" "$task_private/quota.json" "$task_private/cpuset.json" "$task_private/docker.json" \
+  "$task_private/exported-inspection.json" "$task_image" "$task_private/quota.json" "$task_private/cpuset.json" "$task_private/shared-host.json" "$task_private/docker.json" \
   "$task_private/archive.json" "$task_workflow" "$task_private/hosted-image-provenance.json"
 task_hash="$(clean "$task_node" -e 'process.stdout.write(JSON.parse(require("node:fs").readFileSync(process.argv[1],"utf8")).sha256)' "$task_private/archive.json")"
 printf '%s  hosted-image.tar.gz\n' "$task_hash" > "$task_private/hosted-image.tar.gz.sha256"

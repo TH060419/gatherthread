@@ -10,6 +10,7 @@ import { HostedAgent, hostedContainerMemoryMiB, runDocker, type HostedAgentOptio
 import { hostedDockerEnvironment, stopInterruptedHostedContainers } from "../src/hosted-agent-recovery.js";
 import { HostedRepositoryRunner } from "../src/hosted-repository-runner.js";
 import { HOSTED_CPUSET_ENTRYPOINT } from "../src/hosted-container-cpu.js";
+import { parseHostedMemoryPolicy } from "../src/hosted-container-memory.js";
 import type { CodeFile } from "@gatherthread/protocol";
 
 const unixTest = process.platform === "win32" ? test.skip : test;
@@ -54,6 +55,60 @@ test("direct runner options reject invalid memory and preserve original default 
     }
     assert.doesNotThrow(() => new HostedAgent(f.service, f.code, { ...options, maxConcurrent: 2 }));
     assert.doesNotThrow(() => new HostedRepositoryRunner({ ...options, maxConcurrent: 2 }));
+  } finally { f.close(); }
+});
+
+test("shared-host memory is explicit and accepts only host concurrency one", () => {
+  const f = fixture();
+  try {
+    assert.equal(parseHostedMemoryPolicy(undefined), "limited");
+    assert.equal(parseHostedMemoryPolicy("limited"), "limited");
+    assert.equal(parseHostedMemoryPolicy("shared-host"), "shared-host");
+    for (const policy of ["", "shared", "unlimited", "shared-host\n", "SHARED-HOST", null, false]) {
+      assert.throws(() => parseHostedMemoryPolicy(policy as string), /memory policy/);
+      const invalid = { ...options, memoryPolicy: policy as "shared-host" };
+      assert.throws(() => new HostedAgent(f.service, f.code, invalid), /memory policy/);
+      assert.throws(() => new HostedRepositoryRunner(invalid), /memory policy/);
+    }
+    for (const maxConcurrent of [0, 2, 8, NaN, Infinity, 1.5]) {
+      const invalid = { ...options, memoryPolicy: "shared-host" as const, maxConcurrent };
+      assert.throws(() => new HostedAgent(f.service, f.code, invalid), /maxConcurrent/);
+      assert.throws(() => new HostedRepositoryRunner(invalid), /maxConcurrent/);
+    }
+    const unguarded = { ...options, memoryPolicy: "shared-host" as const };
+    assert.throws(() => new HostedAgent(f.service, f.code, unguarded), /guarded CPU set/);
+    assert.throws(() => new HostedRepositoryRunner(unguarded), /guarded CPU set/);
+    const guarded = { ...unguarded, cpuSet: "1" };
+    assert.doesNotThrow(() => new HostedAgent(f.service, f.code, guarded));
+    assert.doesNotThrow(() => new HostedRepositoryRunner(guarded));
+  } finally { f.close(); }
+});
+
+unixTest("shared-host trial and repository omit RAM/swap caps without changing any other sandbox control", async () => {
+  const f = fixture();
+  const check = (args: string[], pids: "128" | "256") => {
+    assert.ok(!args.includes("--memory") && !args.includes("--memory-swap"));
+    assert.ok(args.includes("GT_HOSTED_MEMORY_POLICY=shared-host"));
+    assert.ok(!args.some((value) => value.startsWith("GT_HOSTED_MEMORY_BYTES=")));
+    assert.equal(args[args.indexOf("--cpuset-cpus") + 1], "1");
+    assert.equal(args[args.indexOf("--entrypoint") + 1], HOSTED_CPUSET_ENTRYPOINT);
+    assert.equal(args[args.indexOf("--pids-limit") + 1], pids);
+    for (const value of ["--read-only", "none", "ALL", "no-new-privileges", "10001:10001",
+      "GT_HOSTED_CPUSET=1", `GT_HOSTED_PIDS=${pids}`]) assert.ok(args.includes(value));
+    assert.ok(args.some((value) => value.endsWith("dst=/input,readonly")));
+    assert.ok(!args.join(" ").includes(options.endpoints[0]!.apiToken));
+  };
+  try {
+    const shared = { ...options, memoryPolicy: "shared-host" as const, cpuSet: "1" };
+    const agent = new HostedAgent(f.service, f.code, { ...shared,
+      runContainer: async (args) => { check(args, "128"); return JSON.stringify({ answer: "READY", files: [], save_error: null }); } });
+    const result = await agent.request(f.actor, f.session.id, { profile_id: "fixture", content: "Fixture",
+      include_code: false, idempotency_key: "shared-host-trial" });
+    assert.equal((result.response_event?.payload as { status: string }).status, "completed");
+    assert.equal(f.db.hostedActiveRuns(), 0);
+    const runner = new HostedRepositoryRunner({ ...shared,
+      runContainer: async (args) => { check(args, "256"); return JSON.stringify({ answer: "READY", files, save_error: null }); } });
+    assert.deepEqual((await runner.run(files, "Fixture", options.endpoints[0]!, () => undefined)).files, files);
   } finally { f.close(); }
 });
 
