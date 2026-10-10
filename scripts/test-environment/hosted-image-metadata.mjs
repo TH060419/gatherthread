@@ -41,10 +41,13 @@ export function validateWorkflow(workflow) {
   return workflow;
 }
 
-export function imageProvenance({ source, commit, inspection, image, quota, cpuset, docker, archive, workflow, runtime }) {
+export function imageProvenance({ source, commit, inspection, image, quota, cpuset, shared, docker, archive, workflow, runtime }) {
   validateSource(source, commit, runtime);
   const identity = validateImage(inspection, image);
   validateWorkflow(workflow);
+  if (shared !== undefined && (!shared || Object.keys(shared).sort().join(",") !== "cpu,image_id,memory_policy,repository,trial"
+    || shared.image_id !== image || shared.cpu !== cpuset?.cpu || shared.memory_policy !== "shared-host"
+    || shared.trial !== "passed" || shared.repository !== "passed")) throw invalid();
   if (!quota || Object.keys(quota).sort().join(",") !== "image_id,repository,repository_memory_mib,trial,trial_memory_mib"
     || quota.image_id !== image || quota.trial_memory_mib !== 512 || quota.repository_memory_mib !== 768
     || quota.trial !== "passed" || quota.repository !== "passed"
@@ -64,6 +67,10 @@ export function imageProvenance({ source, commit, inspection, image, quota, cpus
       { mode: "quota", kind: "repository", image_id: image, memory_mib: 768, cpus: 2, status: "passed" },
       { mode: "cpuset", kind: "trial", image_id: image, memory_mib: 512, cpu: cpuset.cpu, status: "passed" },
       { mode: "cpuset", kind: "repository", image_id: image, memory_mib: 768, cpu: cpuset.cpu, status: "passed" },
+      ...(shared === undefined ? [] : [
+        { mode: "cpuset-shared-host", kind: "trial", image_id: image, memory_policy: "shared-host", cpu: shared.cpu, status: "passed" },
+        { mode: "cpuset-shared-host", kind: "repository", image_id: image, memory_policy: "shared-host", cpu: shared.cpu, status: "passed" },
+      ]),
     ], provider_calls: "local fixtures only", host_aggregate_isolation: "requires independent deployment acceptance",
     reviewed_main: workflow.event === "workflow_dispatch" && workflow.ref === "refs/heads/main", ...workflow };
 }
@@ -117,10 +124,14 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     }
     else if (action === "image" && args.length === 2) {
       validateSource(readJson(sourcePath), commit); validateImage(readJson(args[0]), args[1]);
-    } else if (action === "provenance" && args.length === 8) {
-      const [inspectionPath, image, quotaPath, cpusetPath, dockerPath, archivePath, workflowPath, output] = args;
+    } else if (action === "provenance" && (args.length === 8 || args.length === 9)) {
+      const [inspectionPath, image, quotaPath, cpusetPath] = args;
+      const sharedPath = args.length === 9 ? args[4] : undefined;
+      const [dockerPath, archivePath, workflowPath, output] = args.slice(sharedPath === undefined ? 4 : 5);
       const provenance = imageProvenance({ source: readJson(sourcePath), commit, inspection: readJson(inspectionPath),
-        image, quota: readJson(quotaPath), cpuset: readJson(cpusetPath), docker: readJson(dockerPath), archive: readJson(archivePath), workflow: readJson(workflowPath) });
+        image, quota: readJson(quotaPath), cpuset: readJson(cpusetPath),
+        ...(sharedPath === undefined ? {} : { shared: readJson(sharedPath) }),
+        docker: readJson(dockerPath), archive: readJson(archivePath), workflow: readJson(workflowPath) });
       writeFileSync(output, JSON.stringify(provenance, null, 2) + "\n", { flag: "wx", mode: 0o600 });
     } else throw invalid();
   } catch { process.stderr.write("Hosted image delivery identity is invalid.\n"); process.exitCode = 1; }

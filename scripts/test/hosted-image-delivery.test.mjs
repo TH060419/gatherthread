@@ -19,6 +19,7 @@ const workflow = { repository: "TH060419/gatherthread", workflow_sha: commit,
   run_id: "123", run_attempt: "1", event: "workflow_dispatch", ref: "refs/heads/main" };
 const cpuset = { image_id: image, cpu: "24", trial_memory_mib: 512, repository_memory_mib: 768, trial: "passed", repository: "passed" };
 const quota = { image_id: image, trial_memory_mib: 512, repository_memory_mib: 768, trial: "passed", repository: "passed" };
+const shared = { image_id: image, cpu: "24", memory_policy: "shared-host", trial: "passed", repository: "passed" };
 const options = { source, commit, inspection, image, runtime, quota, cpuset, workflow,
   docker: { Client: { Version: "29.0.1" }, Server: { Version: "29.0.1" } },
   archive: { sha256: "c".repeat(64), bytes: 1234 } };
@@ -84,6 +85,33 @@ test("smoke failure stops the sequence and never returns successful delivery met
     assert.throws(() => runCpusetSmoke({ image, platform: "linux", status: "Cpus_allowed_list:\t24\n",
       execute: () => { calls++; return result; } }), { message: "Hosted cpuset smoke failed; image must not be delivered" });
     assert.equal(calls, 1);
+  }
+});
+
+test("shared-host smoke is explicit and preserves credential-free children and exact image proof", () => {
+  const calls = [];
+  const report = runCpusetSmoke({ image, platform: "linux", status: "Cpus_allowed_list:\t24\n", memoryPolicy: "shared-host",
+    environment: { PATH: process.env.PATH, GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-private-value" },
+    execute: (command, args, settings) => { calls.push(settings); return { status: 0, signal: null }; } });
+  assert.deepEqual(report, shared);
+  assert.equal(calls.length, 2);
+  for (const { env } of calls) {
+    assert.equal(env.GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY, "shared-host");
+    assert.equal(env.GATHERTHREAD_TEST_HOSTED_IMAGE, image);
+    assert.equal(env.GATHERTHREAD_SILICONFLOW_API_KEY, undefined);
+  }
+  for (const memoryPolicy of ["", "shared", "unlimited", "shared-host\n"]) {
+    assert.throws(() => runCpusetSmoke({ image, platform: "linux", status: "Cpus_allowed_list:\t24\n",
+      memoryPolicy, execute: () => { throw new Error("should not start"); } }));
+  }
+  const provenance = imageProvenance({ ...options, shared });
+  assert.equal(provenance.smoke.length, 6);
+  assert.ok(provenance.smoke.slice(4).every((item) => item.mode === "cpuset-shared-host"
+    && item.memory_policy === "shared-host" && item.memory_mib === undefined && item.image_id === image));
+  for (const changed of [null, { ...shared, cpu: "25" }, { ...shared, image_id: `sha256:${"d".repeat(64)}` },
+    { ...shared, memory_policy: "limited" }, { ...shared, trial: "failed" }, { ...shared, repository: "skipped" },
+    { ...shared, credential: "fixture-private-value" }]) {
+    assert.throws(() => imageProvenance({ ...options, shared: changed }), failure);
   }
 });
 
@@ -184,6 +212,8 @@ test("local export helper preserves one-build immutable-image order and has no p
   const provenance = script.indexOf('"$task_metadata" provenance');
   const deliver = script.indexOf('mv "$task_private/$task_file"');
   assert.ok(quota > 0 && quota < cpuset && cpuset < save && save < provenance && provenance < deliver);
+  const sharedSmoke = script.indexOf('--shared-host --report "$task_private/shared-host.json"');
+  assert.ok(sharedSmoke > cpuset && sharedSmoke < save);
   assert.doesNotMatch(script, /docker_client (?:push|login)|curl|sudo|ssh|npm publish|--build-arg|--secret|continue-on-error/u);
   // The shell helper is Linux-only; portable static/metadata tests must not require Bash on Windows.
   if (process.platform !== "win32") {

@@ -37,6 +37,7 @@ jobs:
           set -euo pipefail
           task_image="$(docker image inspect --format '{{.Id}}' gt-hosted-smoke)"
           GATHERTHREAD_TEST_HOSTED_IMAGE="$task_image" node scripts/test-hosted-cpuset.mjs
+          GATHERTHREAD_TEST_HOSTED_IMAGE="$task_image" node scripts/test-hosted-cpuset.mjs --shared-host
   verify:
     strategy:
       fail-fast: false

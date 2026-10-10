@@ -28,22 +28,24 @@ export function firstAllowedCpu(status, platform = process.platform) {
   return String(first);
 }
 
-export function cpusetSmokeEnvironment(image, cpu, home, environment = process.env) {
+export function cpusetSmokeEnvironment(image, cpu, home, environment = process.env, memoryPolicy = "limited") {
   if (typeof image !== "string" || !/^sha256:[a-f0-9]{64}$/u.test(image) || image.length !== 71
-    || !/^(0|[1-9][0-9]{0,3})$/u.test(cpu) || String(Number(cpu)) !== cpu || Number(cpu) > 4095) throw refusal();
+    || !/^(0|[1-9][0-9]{0,3})$/u.test(cpu) || String(Number(cpu)) !== cpu || Number(cpu) > 4095
+    || !["limited", "shared-host"].includes(memoryPolicy)) throw refusal();
   return { PATH: environment.PATH ?? "/usr/bin:/bin", HOME: home, TMPDIR: home, CI: "true",
     DOCKER_HOST: "unix:///var/run/docker.sock", GATHERTHREAD_TEST_HOSTED_IMAGE: image,
     GATHERTHREAD_HOSTED_AGENT_CPUSET: cpu, GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB: "512",
-    GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB: "768" };
+    GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB: "768",
+    ...(memoryPolicy === "shared-host" ? { GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: memoryPolicy } : {}) };
 }
 
 export function runCpusetSmoke({ image, status, platform = process.platform, environment = process.env,
-  execute = spawnSync, directory = root }) {
+  execute = spawnSync, directory = root, memoryPolicy = "limited" }) {
   const cpu = firstAllowedCpu(status, platform);
   const privateDirectory = mkdtempSync(join(tmpdir(), "gt-cpuset-ci-"));
   try {
     const home = join(privateDirectory, "home"); mkdirSync(home, { mode: 0o700 });
-    const env = cpusetSmokeEnvironment(image, cpu, home, environment);
+    const env = cpusetSmokeEnvironment(image, cpu, home, environment, memoryPolicy);
     for (const script of ["test-hosted-container.mjs", "test-hosted-repository-container.mjs"]) {
       const result = execute(process.execPath, [join(directory, "scripts", script)], {
         // Allow setup, the unchanged 90s fixture run, bounded diagnostics and
@@ -52,17 +54,21 @@ export function runCpusetSmoke({ image, status, platform = process.platform, env
       });
       if (result.error || result.status !== 0 || result.signal) throw new Error("Hosted cpuset smoke failed; image must not be delivered");
     }
-    return { image_id: image, cpu, trial_memory_mib: 512, repository_memory_mib: 768, trial: "passed", repository: "passed" };
+    return memoryPolicy === "shared-host" ? { image_id: image, cpu, memory_policy: memoryPolicy, trial: "passed", repository: "passed" }
+      : { image_id: image, cpu, trial_memory_mib: 512, repository_memory_mib: 768, trial: "passed", repository: "passed" };
   } finally { rmSync(privateDirectory, { recursive: true, force: true }); }
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   try {
-    if (process.argv.length !== 2 && (process.argv.length !== 4 || process.argv[2] !== "--report")) throw refusal();
+    const shared = process.argv[2] === "--shared-host";
+    const args = process.argv.slice(shared ? 3 : 2);
+    if (args.length !== 0 && (args.length !== 2 || args[0] !== "--report")) throw refusal();
     const report = runCpusetSmoke({ image: process.env.GATHERTHREAD_TEST_HOSTED_IMAGE,
+      memoryPolicy: shared ? "shared-host" : "limited",
       status: process.platform === "linux" ? readFileSync("/proc/self/status", "utf8") : "" });
-    if (process.argv.length === 4) writeFileSync(process.argv[3], JSON.stringify(report) + "\n", { flag: "wx", mode: 0o600 });
-    process.stdout.write(`Guarded cpuset trial/repository smoke passed on allowed CPU ${report.cpu}; no real provider calls.\n`);
+    if (args.length === 2) writeFileSync(args[1], JSON.stringify(report) + "\n", { flag: "wx", mode: 0o600 });
+    process.stdout.write(`Guarded ${shared ? "shared-host memory " : ""}cpuset trial/repository smoke passed on allowed CPU ${report.cpu}; no real provider calls.\n`);
   } catch {
     process.stderr.write("Hosted cpuset smoke refused or failed; no delivery authorized.\n");
     process.exitCode = 1;

@@ -7,6 +7,7 @@ import type { HostedGithubOptions } from "./hosted-github.js";
 import { hostedContainerMemoryMiB, type HostedAgentOptions } from "./hosted-agent.js";
 import { hostedDockerEnvironment } from "./hosted-agent-recovery.js";
 import { parseHostedCpuSet } from "./hosted-container-cpu.js";
+import { parseHostedMemoryPolicy, type HostedMemoryPolicy } from "./hosted-container-memory.js";
 import { registrationFromEnvironment } from "./registration-providers.js";
 import type { RegistrationOptions } from "./registration.js";
 import type { TestGateOptions } from "./test-gate.js";
@@ -210,6 +211,12 @@ export function loadServerConfig(
       env.GATHERTHREAD_HOSTED_AGENT_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MIN_INTERVAL_SECONDS);
     const userMaxConcurrent = parseCountLimit("GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT",
       env.GATHERTHREAD_HOSTED_AGENT_USER_MAX_CONCURRENT, HOSTED_USER_MAX_CONCURRENT);
+    let memoryPolicy: HostedMemoryPolicy;
+    try { memoryPolicy = parseHostedMemoryPolicy(env.GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY); }
+    catch { throw new ConfigurationError("Cloud Agent memory policy must be limited or shared-host"); }
+    if (memoryPolicy === "shared-host" && maxConcurrent !== 1) {
+      throw new ConfigurationError("Cloud Agent shared-host memory requires host concurrency one");
+    }
     let memoryMiB: number, repositoryMemoryMiB: number;
     try {
       memoryMiB = hostedContainerMemoryMiB("trial", parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB",
@@ -238,7 +245,7 @@ export function loadServerConfig(
         throw new Error("unlimited user or global runs require only confirmed zero-price endpoints");
       }
       hostedAgent = { image, endpoints, userDailyRuns, globalDailyRuns, maxConcurrent, userMinIntervalSeconds, userMaxConcurrent,
-        memoryMiB, repositoryMemoryMiB, ...(cpuSet !== undefined ? { cpuSet } : {}) };
+        memoryMiB, repositoryMemoryMiB, memoryPolicy, ...(cpuSet !== undefined ? { cpuSet } : {}) };
     } catch {
       // Validation errors can contain the private JSON input; never print them.
       throw new ConfigurationError("Invalid Cloud Agent endpoints, account quotas, or credential environment variables");

@@ -12,6 +12,7 @@ import { redactJson } from "./redaction.js";
 import type { CollaborationService } from "./service.js";
 import type { CodeRepository } from "./code-repository.js";
 import { hostedContainerCpuArguments, parseHostedCpuSet } from "./hosted-container-cpu.js";
+import { hostedContainerMemoryArguments, validateHostedMemoryPolicy, type HostedMemoryPolicy } from "./hosted-container-memory.js";
 
 import { HOSTED_MODEL, validateHostedEndpoints, HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT,
   isSiliconFlowFreeEndpoint,
@@ -32,6 +33,7 @@ export interface HostedAgentOptions extends HostedRunLimits {
   image: string;
   memoryMiB?: number;
   repositoryMemoryMiB?: number;
+  memoryPolicy?: HostedMemoryPolicy;
   cpuSet?: string;
   fetch?: typeof globalThis.fetch;
   runContainer?: (args: string[], timeoutMs: number, signal?: AbortSignal) => Promise<string>;
@@ -230,6 +232,7 @@ export class HostedAgent {
     }
     hostedContainerMemoryMiB("trial", options.memoryMiB);
     hostedContainerMemoryMiB("repository", options.repositoryMemoryMiB);
+    validateHostedMemoryPolicy(options.memoryPolicy, options.maxConcurrent);
     if (parseHostedCpuSet(options.cpuSet) !== undefined && options.maxConcurrent !== 1) {
       throw new Error("Cloud Agent CPU set mode requires maxConcurrent to be 1");
     }
@@ -404,10 +407,10 @@ export class HostedAgent {
       writeFileSync(join(control, "prompt.txt"), prompt, { mode: 0o644 });
       chmodSync(join(control, "prompt.txt"), 0o644);
       const memoryMiB = hostedContainerMemoryMiB("trial", this.options.memoryMiB);
-      const memory = `${memoryMiB}m`;
       const args = ["run", "--rm", "--name", name, "--network", "none", "--read-only", "--cap-drop", "ALL",
-        "--security-opt", "no-new-privileges", "--pids-limit", "128", "--memory", memory,
-        "--memory-swap", memory, ...hostedContainerCpuArguments("trial", this.options.cpuSet, memoryMiB),
+        "--security-opt", "no-new-privileges", "--pids-limit", "128",
+        ...hostedContainerMemoryArguments(memoryMiB, this.options.memoryPolicy),
+        ...hostedContainerCpuArguments("trial", this.options.cpuSet, memoryMiB, this.options.memoryPolicy),
         "--user", "10001:10001", "--workdir", "/workspace", "--mount", `type=bind,src=${workspace},dst=/input,readonly`,
         "--mount", `type=bind,src=${control},dst=/run/gatherthread,readonly`,
         "--mount", `type=bind,src=${socket},dst=/run/model.sock`,
