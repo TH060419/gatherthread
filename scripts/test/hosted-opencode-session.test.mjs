@@ -19,8 +19,13 @@ function fixture(overrides = {}) {
   child.kills = []; child.closed = false;
   child.kill = (signal) => {
     child.kills.push(signal);
-    if (!overrides.holdClose && !child.closed) setImmediate(() => {
-      child.closed = true; child.emit('exit', null, signal); child.emit('close', null, signal);
+    if (overrides.shutdownOverflow && !child.overflowInjected) {
+      child.overflowInjected = true; child.stderr.write('X'.repeat(65_000));
+    }
+    if (!overrides.holdClose && !(overrides.holdTermClose && signal === 'SIGTERM') && !child.closed) setImmediate(() => {
+      const code = overrides.closeCode ?? null;
+      const closeSignal = overrides.closeCode === undefined ? signal : null;
+      child.closed = true; child.emit('exit', code, closeSignal); child.emit('close', code, closeSignal);
     });
     return true;
   };
@@ -155,4 +160,18 @@ test('a server that never closes is killed and cannot publish a successful answe
   const f = fixture({ holdClose: true });
   await assert.rejects(runOpencodeSession(workspace, 'The task', 64_000, f.options), { message: 'agent_failed' });
   assert.deepEqual(f.child.kills, ['SIGTERM', 'SIGKILL']);
+});
+
+test('nonzero shutdown, shutdown output overflow and forced kill cannot publish success', async () => {
+  for (const overrides of [{ closeCode: 1 }, { shutdownOverflow: true }, { holdTermClose: true }]) {
+    const f = fixture(overrides);
+    await assert.rejects(runOpencodeSession(workspace, 'The task', 64_000, f.options), { message: 'agent_failed' });
+    assert.equal(f.child.closed, true);
+  }
+});
+
+test('the requested graceful shutdown may close with code zero', async () => {
+  const f = fixture({ closeCode: 0 });
+  assert.equal(await runOpencodeSession(workspace, 'The task', 64_000, f.options), 'Done');
+  assert.equal(f.child.closed, true);
 });

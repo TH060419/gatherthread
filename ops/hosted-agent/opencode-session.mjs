@@ -25,14 +25,20 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
   const child = spawnProcess("opencode", ["serve", "--hostname", "127.0.0.1", "--port", "8790", "--no-mdns"],
     { cwd: workspace, env: { ...process.env, PWD: workspace }, stdio: ["ignore", "pipe", "pipe"] });
   let stopping = false, exited = false, closed = false, outputBytes = 0;
-  const fail = () => { if (!stopping) controller.abort(new Error("agent_failed")); };
+  let failed = false, forcedKill = false, shutdownRequested = false, closeCode, closeSignal;
+  const fail = () => {
+    failed = true;
+    if (!stopping) controller.abort(new Error("agent_failed"));
+  };
   child.once("error", fail);
-  child.once("exit", () => { exited = true; fail(); });
-  const closure = new Promise(resolve => child.once("close", () => { closed = true; resolve(); }));
+  child.once("exit", () => { exited = true; if (!stopping) fail(); });
+  const closure = new Promise(resolve => child.once("close", (code, signal) => {
+    closed = true; closeCode = code; closeSignal = signal; resolve();
+  }));
   // Drain both pipes, but never share server logs or exception details.
   for (const stream of [child.stdout, child.stderr]) stream.on("data", bytes => {
     outputBytes += bytes.length;
-    if (outputBytes > outputLimit) { fail(); child.kill("SIGKILL"); }
+    if (outputBytes > outputLimit) { fail(); forcedKill = true; child.kill("SIGKILL"); }
   });
   const request = async (path, body, timeoutMs) => readJson(await fetchResponse(`${ORIGIN}${path}`, {
     method: body === undefined ? "GET" : "POST", redirect: "error",
@@ -74,9 +80,11 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
     // or failure, and wait for process closure before snapshotting any files.
     stopping = true;
     controller.abort();
-    if (!exited) child.kill("SIGTERM");
+    if (!exited) { shutdownRequested = true; child.kill("SIGTERM"); }
     await Promise.race([closure, delay(1000)]);
-    if (!closed) { child.kill("SIGKILL"); await Promise.race([closure, delay(1000)]); }
-    if (!closed) throw new Error("agent_failed");
+    if (!closed) { forcedKill = true; child.kill("SIGKILL"); await Promise.race([closure, delay(1000)]); }
+    const expectedClose = closeCode === 0 && closeSignal === null
+      || shutdownRequested && closeCode === null && closeSignal === "SIGTERM";
+    if (!closed || failed || forcedKill || !expectedClose) throw new Error("agent_failed");
   }
 }
