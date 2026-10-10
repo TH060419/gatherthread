@@ -57,8 +57,14 @@ test('one loopback server waits for completed HTTP reply and idle, then closes b
   assert.deepEqual(f.spawns[0][1], ['serve', '--hostname', '127.0.0.1', '--port', '8790', '--no-mdns']);
   assert.equal(f.spawns[0][2].cwd, workspace);
   assert.equal(f.spawns[0][2].env.PWD, workspace);
+  assert.equal(f.spawns[0][2].env.BUN_OPTIONS, '--smol');
   assert.deepEqual(f.spawns[0][2].stdio, ['ignore', 'pipe', 'pipe']);
   assert.deepEqual(f.requests.map(r => r.path), ['/global/health', '/session', '/session/ses_fixture/message', '/session/status']);
+  assert.deepEqual(JSON.parse(f.requests[1].init.body), { title: 'GatherThread cloud task', permission: [
+    { permission: 'question', action: 'deny', pattern: '*' },
+    { permission: 'plan_enter', action: 'deny', pattern: '*' },
+    { permission: 'plan_exit', action: 'deny', pattern: '*' },
+  ] });
   assert.deepEqual(JSON.parse(f.requests[2].init.body), { agent: 'build', parts: [{ type: 'text', text: 'The task' }] });
   assert.deepEqual(f.child.kills, ['SIGTERM']);
   assert.equal(f.child.closed, true);

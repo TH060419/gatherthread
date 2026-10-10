@@ -17,12 +17,24 @@ const inspection = [{ Id: image, Os: "linux", Architecture: "amd64", Size: 1234,
 const workflow = { repository: "TH060419/gatherthread", workflow_sha: commit,
   workflow_ref: "TH060419/gatherthread/.github/workflows/test-candidate.yml@refs/heads/main",
   run_id: "123", run_attempt: "1", event: "workflow_dispatch", ref: "refs/heads/main" };
-const cpuset = { image_id: image, cpu: "24", memory_mib: 512, trial: "passed", repository: "passed" };
-const quota = { image_id: image, memory_mib: 512, trial: "passed", repository: "passed" };
+const cpuset = { image_id: image, cpu: "24", trial_memory_mib: 512, repository_memory_mib: 768, trial: "passed", repository: "passed" };
+const quota = { image_id: image, trial_memory_mib: 512, repository_memory_mib: 768, trial: "passed", repository: "passed" };
 const options = { source, commit, inspection, image, runtime, quota, cpuset, workflow,
   docker: { Client: { Version: "29.0.1" }, Server: { Version: "29.0.1" } },
   archive: { sha256: "c".repeat(64), bytes: 1234 } };
 const failure = { message: "Hosted image delivery identity is invalid" };
+
+test("quality quota checks use the same exact trial/repository memory targets as delivery", () => {
+  const quality = readFileSync(new URL('../../.github/workflows/quality.yml', import.meta.url), 'utf8').replace(/\r\n/gu, '\n');
+  for (const [script, key, memory] of [
+    ['test-hosted-container.mjs', 'GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB', 512],
+    ['test-hosted-repository-container.mjs', 'GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB', 768],
+  ]) {
+    const step = quality.split(`- run: node scripts/${script}\n`)[1]?.split('\n      - ')[0];
+    assert.ok(step, `Missing quota step: ${script}`);
+    assert.ok(step.split('\n').some(line => line.trim() === `${key}: ${memory}`), `Wrong quota target: ${script}`);
+  }
+});
 
 test("CI selects the first actual allowed canonical CPU, never assumes zero", () => {
   assert.equal(firstAllowedCpu("Name:\tnode\nCpus_allowed_list:\t24-27,30,40-63\n", "linux"), "24");
@@ -52,7 +64,7 @@ test("smoke children share one immutable image with bounded memory and no inheri
     assert.equal(settings.env.GATHERTHREAD_TEST_HOSTED_IMAGE, image);
     assert.equal(settings.env.GATHERTHREAD_HOSTED_AGENT_CPUSET, "24");
     assert.equal(settings.env.GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB, "512");
-    assert.equal(settings.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB, "512");
+    assert.equal(settings.env.GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB, "768");
     assert.equal(settings.env.DOCKER_HOST, "unix:///var/run/docker.sock");
     assert.equal(settings.timeout, 180_000);
     assert.ok(!existsSync(settings.env.HOME), "private home is cleaned after fixture execution");
@@ -97,17 +109,22 @@ test("public provenance binds every smoke and archive to the same image; arbitra
   assert.equal(provenance.image_archive_sha256, options.archive.sha256);
   assert.equal(provenance.reviewed_main, true);
   assert.equal(provenance.smoke.length, 4);
-  assert.ok(provenance.smoke.every((smoke) => smoke.image_id === image && smoke.status === "passed" && smoke.memory_mib === 512));
+  assert.ok(provenance.smoke.every((smoke) => smoke.image_id === image && smoke.status === "passed"));
+  assert.deepEqual(provenance.smoke.map(smoke => smoke.memory_mib), [512, 768, 512, 768]);
   assert.deepEqual(provenance.smoke.map((smoke) => `${smoke.mode}:${smoke.kind}`), ["quota:trial", "quota:repository", "cpuset:trial", "cpuset:repository"]);
   assert.match(provenance.host_aggregate_isolation, /independent deployment acceptance/u);
   assert.equal(JSON.stringify(provenance).includes("fixture-private-value"), false);
   for (const changed of [undefined, { ...quota, image_id: `sha256:${"d".repeat(64)}` }, { ...quota, trial: "failed" },
-    { ...quota, repository: "skipped" }, { ...quota, memory_mib: 1024 }, { ...quota, credential: "fixture-private-value" }]) {
+    { ...quota, repository: "skipped" }, { ...quota, trial_memory_mib: 768 }, { ...quota, repository_memory_mib: 512 },
+    { ...quota, repository_memory_mib: 2048 }, { ...quota, memory_mib: 512 }, { ...quota, credential: "fixture-private-value" }]) {
     assert.throws(() => imageProvenance({ ...options, quota: changed }), failure);
   }
   for (const changed of [{ ...cpuset, image_id: `sha256:${"d".repeat(64)}` }, { ...cpuset, trial: "failed" },
     { ...cpuset, repository: "skipped" }, { ...cpuset, cpu: "24-25" }, { ...cpuset, cpu: "24\n" },
-    { ...cpuset, memory_mib: 1024 }, { ...cpuset, token: "fixture-private-value" }]) assert.throws(() => imageProvenance({ ...options, cpuset: changed }), failure);
+    { ...cpuset, trial_memory_mib: 768 }, { ...cpuset, repository_memory_mib: 512 },
+    { ...cpuset, repository_memory_mib: 2048 }, { ...cpuset, memory_mib: 512 }, { ...cpuset, token: "fixture-private-value" }]) {
+    assert.throws(() => imageProvenance({ ...options, cpuset: changed }), failure);
+  }
   for (const changed of [{ ...workflow, ref: "refs/heads/other" }, { ...workflow, event: "pull_request_target" },
     { ...workflow, repository: "other/repository" }, { ...workflow, run_attempt: "0" },
     { ...workflow, workflow_sha: commit + "\n" }, { ...workflow, credential: "fixture-private-value" }]) assert.throws(() => validateWorkflow(changed), failure);

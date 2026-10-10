@@ -23,7 +23,7 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
   { spawnProcess = spawn, fetchResponse = globalThis.fetch } = {}) {
   const controller = new AbortController();
   const child = spawnProcess("opencode", ["serve", "--hostname", "127.0.0.1", "--port", "8790", "--no-mdns"],
-    { cwd: workspace, env: { ...process.env, PWD: workspace }, stdio: ["ignore", "pipe", "pipe"] });
+    { cwd: workspace, env: { ...process.env, PWD: workspace, BUN_OPTIONS: "--smol" }, stdio: ["ignore", "pipe", "pipe"] });
   let stopping = false, exited = false, closed = false, outputBytes = 0;
   let failed = false, forcedKill = false, shutdownRequested = false, closeCode, closeSignal;
   const fail = () => {
@@ -61,7 +61,10 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
       if (!healthy) await delay(75, undefined, { signal: controller.signal });
     }
     if (!healthy || exited) throw new Error("agent_failed");
-    const session = await request("/session", { title: "GatherThread cloud task" }, 5000);
+    const session = await request("/session", { title: "GatherThread cloud task",
+      // Headless jobs have no question/plan-confirmation UI; never wait for it.
+      permission: ["question", "plan_enter", "plan_exit"].map(permission => ({ permission, action: "deny", pattern: "*" })),
+    }, 5000);
     if (!/^ses_[A-Za-z0-9]+$/u.test(session.id ?? "")) throw new Error("agent_failed");
     // This HTTP request awaits the final message, not the first text chunk.
     const reply = await request(`/session/${session.id}/message`, { agent: "build", parts: [{ type: "text", text: prompt }] });
