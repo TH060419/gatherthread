@@ -6160,7 +6160,7 @@ html[data-boot-state] .boot-screen { display: flex; min-height: 100dvh; align-it
 .workspace[data-mobile-ui="true"] { height: calc(var(--mobile-viewport-height, 100dvh) - var(--test-environment-height, 0px)); }
 .session-view.has-composer { grid-template-rows: auto auto auto auto auto minmax(0, 1fr) 11px minmax(180px, var(--composer-height)); }
 .workspace[data-mobile-ui="true"] .session-view.has-composer { grid-template-rows: auto auto auto auto auto minmax(0, 1fr) auto; }
-.composer { grid-template-rows: auto minmax(44px, 1fr) auto auto auto auto; }
+.composer { grid-template-rows: minmax(44px, 1fr) auto auto auto auto; overflow-y: auto; }
 .composer .composer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
 .composer .composer-agent-button { display: inline-flex; align-items: center; gap: 6px; margin-inline-end: auto; min-width: 44px; min-height: 40px; max-width: 160px; padding: 8px 12px; border: 1px solid var(--glass-hairline); border-radius: 14px; background: var(--paper-raised); font-size: .82rem; }
 .composer-agent-button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -6177,6 +6177,9 @@ html[data-boot-state] .boot-screen { display: flex; min-height: 100dvh; align-it
 .composer-settings-dialog .cloud-code-consent { display: grid; gap: 8px; border-top: 1px solid var(--glass-hairline); padding-top: 12px; }
 .composer-settings-dialog .cloud-code-consent label[for="cloud-agent-include-code"] { display: flex; align-items: flex-start; gap: 8px; }
 .composer-settings-dialog .cloud-code-consent input[type="checkbox"] { width: 18px; height: 18px; min-height: 0; margin: 2px 0 0; flex: 0 0 auto; }
+@media (max-width: 760px) {
+  .session-view.has-composer { grid-template-rows: auto auto auto auto auto minmax(0, 1fr) minmax(180px, var(--composer-height)); }
+}
 @media (max-height: 650px) and (min-width: 761px) {
   .workspace:not([data-mobile-ui="true"]) .composer { padding-block: 8px; }
   .workspace:not([data-mobile-ui="true"]) .composer > label, .workspace:not([data-mobile-ui="true"]) .intent-help > span { display: none; }

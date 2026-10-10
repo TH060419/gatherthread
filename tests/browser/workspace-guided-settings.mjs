@@ -33,7 +33,7 @@ try {
  for (const [engineName, engine] of [["chromium", chromium], ["webkit", webkit]]) {
   const browser = await engine.launch({ headless: true, ...(engineName === "chromium" ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? engine.executablePath() } : {}) });
   try {
-   for (const [locale, width, height, mobile] of [["zh-CN", 1440, 900, false], ["en", 1280, 600, false], ["zh-CN", 390, 844, true], ["en", 820, 1180, true]]) {
+   for (const [locale, width, height, mobile] of [["zh-CN", 1440, 900, false], ["en", 1280, 600, false], ["en", 390, 844, false], ["zh-CN", 390, 844, true], ["en", 820, 1180, true]]) {
     const marker = randomUUID(), email = `${randomUUID()}@example.invalid`;
     const pending = await server.database.registration.send({ email, locale, challenge_token: randomUUID(), idempotency_key: randomUUID() }, marker, randomUUID(), registration);
     const identity = await server.database.verifyPublicRegistration({ registration_id: pending.registration_id, code: mails.at(-1).code,
