@@ -12,7 +12,7 @@ export const SendRegistrationInputSchema = z.object({
   idempotency_key: z.string().uuid(),
   locale: z.enum(["en", "zh-CN"]),
 }).strict();
-export const AccountPasswordSchema = z.string().min(12).max(128)
+export const AccountPasswordSchema = z.string().min(8).max(128)
   .refine((value) => new TextEncoder().encode(value).byteLength <= 512);
 export const EmailLoginInputSchema = z.object({
   email: RegistrationEmailSchema, password: AccountPasswordSchema, device_name: Label,

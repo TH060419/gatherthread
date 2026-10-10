@@ -12,7 +12,7 @@ import type { RegistrationOptions } from "../src/registration.js";
 import { startCollaborationServer } from "../src/server.js";
 
 const pepper = "isolated-registration-test-pepper-more-than-32-bytes";
-const password = "isolated test password 47";
+const password = "fixture8"; // The new minimum must work through hashing, registration and login.
 const rejectCode = (code: string) => (error: unknown) => error instanceof ApiError && error.code === code;
 function fixture() {
   let now = Date.UTC(2026, 8, 30, 8);
@@ -261,12 +261,15 @@ test("HTTP registration/login fail closed, enforce Origin/cookie, and never retu
     assert.equal((await post("/v1/registration/send", input, "https://evil.invalid")).status, 403);
     const sent = await post("/v1/registration/send", input); assert.equal(sent.status, 202);
     const { data } = await sent.json() as { data: { registration_id: string } };
+    assert.equal((await post("/v1/registration/verify", { registration_id: data.registration_id, code: mails[0]!.code,
+      display_name: "New", device_name: "Web", password: "short12", privacy_acknowledged: true })).status, 400);
     const verified = await post("/v1/registration/verify", { registration_id: data.registration_id, code: mails[0]!.code, display_name: "New", device_name: "Web", password, privacy_acknowledged: true, remember_device: true });
     assert.equal(verified.status, 201);
     const content = await verified.text(); assert.equal(content.includes(password), false); assert.equal(content.includes("gta_"), false); assert.equal(content.includes("gtb_"), false);
     const session = verified.headers.getSetCookie()[0]!; assert.match(session, /Secure/); assert.match(session, /Max-Age=2592000/);
     server.database.registration.pause(true);
     assert.equal((await post("/v1/registration/send", input)).status, 503);
+    assert.equal((await post("/v1/email-login", { email: input.email, password: "short12", device_name: "Web" })).status, 400);
     const login = await post("/v1/email-login", { email: input.email, password, device_name: "Web", remember_device: false });
     assert.equal(login.status, 201); assert.equal((await login.text()).includes("token"), false);
     assert.equal(login.headers.getSetCookie()[0]!.includes("Max-Age"), false);
@@ -491,7 +494,8 @@ test("HTTP recovery is origin/JSON/browser fenced and invalidates old cookies/na
     assert.equal((await post("/v1/password-reset/send", sendInput, { cookie: "" })).status, 400);
     const reset = await post("/v1/password-reset/send", sendInput); assert.equal(reset.status, 202);
     const resetId = (await reset.json() as { data: { reset_id: string } }).data.reset_id;
-    const input = { reset_id: resetId, email: sendInput.email, code: mails.at(-1)!.code, password: "isolated HTTP replacement password", password_confirmation: "isolated HTTP replacement password", locale: "en" };
+    const input = { reset_id: resetId, email: sendInput.email, code: mails.at(-1)!.code, password: "reset123", password_confirmation: "reset123", locale: "en" };
+    assert.equal((await post("/v1/password-reset/verify", { ...input, password: "short12", password_confirmation: "short12" })).status, 400);
     const done = await post("/v1/password-reset/verify", input); assert.equal(done.status, 200); assert.deepEqual(await done.json(), { data: { reset: true } }); assert.equal(done.headers.getSetCookie().length, 0);
     assert.equal((await fetch(server.origin + "/v1/me", { headers: { cookie: `gatherthread_session=${account.browser_session.token}` } })).status, 401);
     assert.equal((await fetch(server.origin + "/v1/me", { headers: { authorization: `Bearer ${native.token}` } })).status, 401);

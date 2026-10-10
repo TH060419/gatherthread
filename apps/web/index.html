@@ -14,7 +14,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261006-mobile-2" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261010-auth-1" />
   </head>
   <body>
     <canvas id="ambient-canvas" class="ambient-canvas" aria-hidden="true" hidden></canvas>
@@ -112,21 +112,21 @@
             <label for="registration-email">Email address</label>
             <input id="registration-email" type="email" autocomplete="email" maxlength="254" required aria-describedby="registration-help registration-error" />
             <p id="registration-help" class="field-help">Verify your email, then choose a password. Sign in with email and password.</p>
-            <label class="auth-remember" for="registration-privacy">
+            <label class="auth-remember auth-consent" for="registration-privacy">
               <input id="registration-privacy" type="checkbox" required />
               <span>I have read the privacy notice and agree to email delivery and the Cloudflare security check.</span>
             </label>
-            <a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy notice</a>
+            <a class="auth-notice-link" href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy notice</a>
             <div id="registration-challenge"></div>
             <button id="registration-challenge-retry" class="text-button" type="button">Retry security check</button>
             <p id="registration-status" class="field-help" role="status" aria-live="polite"></p>
             <button id="registration-send" class="button button-secondary button-wide" type="button" disabled>Send / resend email code</button>
             <div id="registration-code-step" hidden>
               <label for="registration-password">Choose a password</label>
-              <input id="registration-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="registration-password-help registration-error" />
-              <p id="registration-password-help" class="field-help">Use 12–128 characters. A long, unique password is best. Keep it in your password manager.</p>
+              <input id="registration-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" aria-describedby="registration-password-help registration-error" />
+              <p id="registration-password-help" class="field-help">Use 8–128 characters. A long, unique password is best. Keep it in your password manager.</p>
               <label for="registration-password-confirm">Confirm password</label>
-              <input id="registration-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" />
+              <input id="registration-password-confirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" />
               <label for="registration-code">Eight-digit email code</label>
               <input id="registration-code" inputmode="numeric" type="password" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{8}" aria-describedby="registration-status registration-error" />
               <label class="auth-remember" for="registration-remember">
@@ -145,21 +145,21 @@
             <label for="password-reset-email">Email address</label>
             <input id="password-reset-email" type="email" autocomplete="email" maxlength="254" required aria-describedby="password-reset-help password-reset-error" />
             <p id="password-reset-help" class="field-help">Enter your account email and verify the code to choose a new password. This signs out every device and revokes Agent access. Your projects stay in your account.</p>
-            <label class="auth-remember" for="password-reset-privacy">
+            <label class="auth-remember auth-consent" for="password-reset-privacy">
               <input id="password-reset-privacy" type="checkbox" required />
               <span>I have read the privacy notice and agree to email delivery and the Cloudflare security check.</span>
             </label>
-            <a href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy notice</a>
+            <a class="auth-notice-link" href="../privacy/" target="_blank" rel="noopener noreferrer">Privacy notice</a>
             <div id="password-reset-challenge"></div>
             <button id="password-reset-challenge-retry" class="text-button" type="button">Retry security check</button>
             <p id="password-reset-status" class="field-help" role="status" aria-live="polite"></p>
             <button id="password-reset-send" class="button button-secondary button-wide" type="button" disabled>Send / resend email code</button>
             <div id="password-reset-code-step" hidden>
               <label for="password-reset-password">Choose a new password</label>
-              <input id="password-reset-password" type="password" autocomplete="new-password" minlength="12" maxlength="128" aria-describedby="password-reset-password-help password-reset-error" />
-              <p id="password-reset-password-help" class="field-help">Use 12–128 characters. A long, unique password is best. Keep it in your password manager.</p>
+              <input id="password-reset-password" type="password" autocomplete="new-password" minlength="8" maxlength="128" aria-describedby="password-reset-password-help password-reset-error" />
+              <p id="password-reset-password-help" class="field-help">Use 8–128 characters. A long, unique password is best. Keep it in your password manager.</p>
               <label for="password-reset-password-confirm">Confirm password</label>
-              <input id="password-reset-password-confirm" type="password" autocomplete="new-password" minlength="12" maxlength="128" />
+              <input id="password-reset-password-confirm" type="password" autocomplete="new-password" minlength="8" maxlength="128" />
               <label for="password-reset-code">Eight-digit email code</label>
               <input id="password-reset-code" inputmode="numeric" type="password" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{8}" aria-describedby="password-reset-status password-reset-error" />
               <button id="password-reset-verify" class="button button-primary button-wide" type="submit" disabled>Reset password</button>

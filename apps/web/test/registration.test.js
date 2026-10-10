@@ -101,3 +101,42 @@ test("password recovery stays disabled when unavailable and invalidates its rece
   f.get("password-reset-email").listeners.input();
   assert.equal(f.get("password-reset-code").value, ""); assert.equal(f.get("password-reset-code-step").hidden, true);
 });
+
+for (const passwordReset of [false, true]) {
+  test(`${passwordReset ? "recovery" : "registration"} accepts eight characters and rejects seven before calling the API`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const original = Object.getOwnPropertyDescriptor(globalThis, "turnstile");
+    globalThis.turnstile = { render: (_node, options) => { options.callback("isolated-challenge"); return "widget"; }, reset() {}, remove() {} };
+    t.after(() => { if (original) Object.defineProperty(globalThis, "turnstile", original); else delete globalThis.turnstile; });
+    const calls = [];
+    const f = fixture({ registrationStatus: async () => ({ enabled: true }), passwordResetStatus: async () => ({ enabled: true }),
+      sendRegistration: async () => ({ registration_id: "isolated-pending", resend_after_seconds: 60 }),
+      sendPasswordReset: async () => ({ reset_id: "isolated-reset", resend_after_seconds: 60 }),
+      verifyRegistration: async (input) => { calls.push(input); return { actor: { id: "fixture" } }; },
+      verifyPasswordReset: async (input) => { calls.push(input); return { reset: true }; } }, passwordReset);
+    const prefix = passwordReset ? "password-reset" : "registration";
+    await f.ui.enter(); f.get(`${prefix}-privacy`).checked = true;
+    f.get(`${prefix}-privacy`).listeners.change(); await Promise.resolve();
+    f.get(`${prefix}-email`).value = "fixture@example.invalid";
+    await f.get(`${prefix}-send`).listeners.click();
+    f.get(`${prefix}-code`).value = "12345678";
+    f.get(`${prefix}-password`).value = f.get(`${prefix}-password-confirm`).value = "short12";
+    await f.get(`${prefix}-form`).listeners.submit({ preventDefault() {} });
+    assert.equal(calls.length, 0); assert.match(f.get(`${prefix}-error`).textContent, /8–128/);
+    f.get(`${prefix}-password`).value = f.get(`${prefix}-password-confirm`).value = "fixture8";
+    await f.get(`${prefix}-form`).listeners.submit({ preventDefault() {} });
+    assert.equal(calls.length, 1); assert.equal(calls[0].password, "fixture8");
+  });
+}
+
+test("email login accepts eight characters and rejects seven before preparing login", async () => {
+  const calls = [];
+  const f = fixture({ prepareEmailLogin: async () => calls.push("prepare"),
+    loginWithEmail: async (input) => { calls.push(input); return { actor: { id: "fixture" } }; } });
+  f.get("email-login-email").value = "fixture@example.invalid";
+  f.get("email-login-password").value = "short12";
+  await f.get("email-login-form").listeners.submit({ preventDefault() {} }); assert.equal(calls.length, 0);
+  f.get("email-login-password").value = "fixture8";
+  await f.get("email-login-form").listeners.submit({ preventDefault() {} });
+  assert.equal(calls.length, 2); assert.equal(calls[1].password, "fixture8");
+});

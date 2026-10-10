@@ -4093,7 +4093,11 @@ html[lang="zh-CN"] .project-select {
 .auth-shell {
   position: relative;
   z-index: 1;
+  height: auto;
+  min-height: calc(100dvh - var(--test-environment-height, 0px));
   grid-template-columns: minmax(0, 1fr) minmax(500px, 0.78fr);
+  /* Long forms scroll with the page. Clip decorative threads, not form content. */
+  overflow: clip;
   background:
     radial-gradient(ellipse at 16% 92%, rgba(246, 109, 185, 0.1), transparent 31%),
     radial-gradient(ellipse at 78% 5%, rgba(32, 193, 220, 0.11), transparent 35%),
@@ -4107,6 +4111,15 @@ html[lang="zh-CN"] .project-select {
   color: #15171b;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
+}
+
+@media (min-width: 901px) {
+  .auth-story {
+    position: sticky;
+    top: var(--test-environment-height, 0px);
+    align-self: start;
+    height: calc(100dvh - var(--test-environment-height, 0px));
+  }
 }
 
 .auth-story::before {
@@ -4202,7 +4215,9 @@ html[lang="zh-CN"] .project-select {
   align-self: center;
   justify-self: center;
   width: min(520px, calc(100% - 34px));
-  max-height: calc(100dvh - 28px);
+  max-height: none;
+  margin: 32px 0 46px;
+  justify-content: flex-start;
   padding: clamp(24px, 3.2vh, 32px);
   border-radius: 31px;
   background: transparent;
@@ -4282,6 +4297,36 @@ html[lang="zh-CN"] .project-select {
 
 .login-panel .auth-remember {
   margin: 0 0 12px;
+}
+
+.login-panel .auth-remember input {
+  min-height: 18px;
+  padding: 0;
+}
+
+.login-panel .auth-consent > span {
+  font-size: 0.78rem;
+  font-weight: 450;
+  line-height: 1.5;
+}
+
+.auth-notice-link {
+  display: block;
+  width: fit-content;
+  margin: -4px 0 14px 28px;
+  color: var(--teal);
+  font-size: 0.76rem;
+}
+
+#registration-challenge,
+#password-reset-challenge {
+  display: flex;
+  justify-content: center;
+}
+
+#registration-code-step:not([hidden]),
+#password-reset-code-step:not([hidden]) {
+  margin-top: 20px;
 }
 
 .login-panel .auth-divider {
@@ -4719,9 +4764,8 @@ html[lang="zh-CN"] .project-select {
 @media (max-width: 900px) {
   .auth-shell {
     height: auto;
-    min-height: 100dvh;
+    min-height: calc(100dvh - var(--test-environment-height, 0px));
     grid-template-columns: 1fr;
-    overflow-y: auto;
   }
 
   .auth-story {
@@ -4767,7 +4811,6 @@ html[lang="zh-CN"] .project-select {
   }
 
   .login-panel {
-    max-height: calc(100dvh - 22px);
     padding: 22px 26px;
   }
 
@@ -4828,14 +4871,6 @@ html[lang="zh-CN"] .project-select {
 
   .login-panel .field-help {
     margin-bottom: 5px;
-  }
-}
-
-@media (min-width: 901px) and (max-height: 820px) {
-  .login-panel {
-    overflow-x: hidden;
-    overflow-y: auto;
-    overscroll-behavior: contain;
   }
 }
 
