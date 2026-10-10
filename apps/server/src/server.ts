@@ -31,6 +31,9 @@ import {
   CreateInvitationInputSchema,
   CreateHistorySummaryInputSchema,
   HostedAgentRequestInputSchema,
+  HostedHistorySummaryInputSchema,
+  HostedAgentAcceptedSchema,
+  HostedAgentPausedSchema,
   HostedAgentStatusSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
@@ -1200,9 +1203,23 @@ export async function startCollaborationServer(
       if (sessionId && parts[3] === "hosted-agent-requests" && parts.length === 4 && request.method === "POST") {
         if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
         const input = HostedAgentRequestInputSchema.parse(await readAuthenticatedJson());
-        const result = await hostedAgent.request(actor, sessionId, input);
+        const result = await hostedAgent.start(actor, sessionId, input);
         assertRequestCurrent();
-        sendJson(response, 201, { data: result });
+        sendJson(response, 202, { data: HostedAgentAcceptedSchema.parse(result) });
+        return;
+      }
+      if (sessionId && parts[3] === "hosted-history-summaries" && parts.length === 4 && request.method === "POST") {
+        if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
+        const input = HostedHistorySummaryInputSchema.parse(await readAuthenticatedJson());
+        const result = await hostedAgent.startSummary(actor, sessionId, input);
+        assertRequestCurrent();
+        sendJson(response, 202, { data: HostedAgentAcceptedSchema.parse(result) });
+        return;
+      }
+      if (sessionId && parts[3] === "hosted-agent-requests" && parts[4] && parts[5] === "pause" && parts.length === 6 && request.method === "POST") {
+        if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
+        PauseAgentRequestInputSchema.parse(await readAuthenticatedJson());
+        sendJson(response, 200, { data: HostedAgentPausedSchema.parse(hostedAgent.pause(actor, sessionId, parts[4])) });
         return;
       }
       if (sessionId && request.method === "GET" && parts.length === 3) {

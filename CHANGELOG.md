@@ -6,6 +6,9 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Fixed
 
+- Accept cloud trial requests immediately and deliver terminal replies through canonical replay. Restore author-only Pause/Resume on the existing composer button, exact-model retries without a local runtime, and shared selected-history summaries through the chosen cloud model. Allow settings to be saved before connecting a local Agent; empty selections explain missing sources instead of leaving an inert summary button. Keep local-file transfer authorization and Codex/DSH routing unchanged.
+- Disable hidden thinking for the reviewed interactive SiliconFlow Qwen3.5-4B/Qwen3-8B profiles without switching models. Preserve final-answer, idle and process-exit validation, and report only fixed runner failure phases, never raw provider/tool/exception text. Live provider latency still requires deployment-host verification.
+
 - Guide GitHub setup one page at a time with separate account/repository inputs, an explicit official repository-creation entry and concise post-setup controls. Preserve independent local-device and cloud-account consent.
 - Collapse Agent/model/reasoning/cloud-workspace settings into one dialog on desktop and mobile. Keep both send actions reachable in short windows and below the test banner. Avoid login flashes while restoring the server-confirmed browser session; keep the isolated example self-contained.
 - Distinguish cloud pending work from local connector queues. Remove unnecessary title/model-catalog/auth-plugin startup in ephemeral hosted runs and preserve bounded safe failure diagnostics instead of masking every timeout as model unavailability. Allow five minutes for trial tasks while retaining the thirty-second model-call deadline, existing GitHub task deadline and all resource/permission limits.

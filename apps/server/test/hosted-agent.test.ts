@@ -32,6 +32,106 @@ function unixPost(socketPath: string, path: string, body: unknown): Promise<numb
   });
 }
 
+unixSocketTest("cloud acceptance is immediate; author pause aborts work and fences late answers", { timeout: 5000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-cloud-control-"));
+  const db = new CollaborationDatabase(join(directory, "db"), { authTokenPepper: "cloud-controls-fixture-pepper" });
+  const service = new CollaborationService(db);
+  const owner = db.bootstrapIdentity({ display_name: "Owner", device_name: "Browser" }).actor;
+  const { session } = service.createSession(owner, { title: "Fixture", mode: "multi", idempotency_key: "cloud-control-session" });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<string>();
+  let signal: AbortSignal | undefined;
+  const agent = new HostedAgent(service, new CodeRepository(db, join(directory, "code")), {
+    ...options, runContainer: async (_args, _timeout, cancellation) => {
+      signal = cancellation; entered.resolve(); return release.promise;
+    },
+  });
+  try {
+    const receipt = await agent.start(owner, session.id, { profile_id: "default", content: "Who are you?", include_code: false, idempotency_key: "cloud-control-request" });
+    await entered.promise;
+    const id = receipt.request_event.id;
+    assert.equal(db.hostedActiveRuns(), 1);
+    const other = db.createIdentity({ display_name: "Other", device_name: "Fixture" }).actor;
+    service.setMembership(owner, session.id, other.user_id, "participant", "other-control-member");
+    assert.throws(() => agent.pause(other, session.id, id), /Only the author/);
+    assert.equal(signal?.aborted, false);
+    agent.pause(owner, session.id, id); agent.pause(owner, session.id, id);
+    assert.equal(signal?.aborted, true);
+    assert.equal(db.hostedActiveRuns(), 1, "pause cannot free an executor before exit");
+    const events = service.replay(owner, session.id, 0, 100).events;
+    assert.equal(events.filter(event => event.payload && (event.payload as {status?: string}).status === "paused").length, 1);
+    release.resolve(JSON.stringify({ answer: "Late answer", files: [] }));
+    for (let tries = 0; db.hostedActiveRuns() && tries < 100; tries++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(db.hostedActiveRuns(), 0);
+    assert.equal(service.replay(owner, session.id, 0, 100).events.some(event => event.type === "agent_response"), false);
+    assert.equal((await agent.start(owner, session.id, { profile_id: "default", content: "Who are you?", include_code: false, idempotency_key: "cloud-control-request" })).replayed, true);
+  } finally { release.resolve(JSON.stringify({ answer: "Late answer", files: [] })); db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+unixSocketTest("cloud summaries validate sources, isolate selected history and deduplicate quota", { timeout: 5000 }, async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-cloud-summary-"));
+  const db = new CollaborationDatabase(join(directory, "db"), { authTokenPepper: "cloud-summary-fixture-pepper" });
+  const service = new CollaborationService(db);
+  const owner = db.bootstrapIdentity({ display_name: "Owner", device_name: "Fixture" }).actor;
+  const session = service.createSession(owner, { title: "Fixture", mode: "multi", idempotency_key: "summary-session" }).session;
+  const source = service.appendEvent(owner, session.id, { type: "human_chat", visibility: "session",
+    idempotency_key: "summary-source", payload: { content: "Selected source only." } });
+  service.appendEvent(owner, session.id, { type: "human_chat", visibility: "session",
+    idempotency_key: "other-source", payload: { content: "Unselected content must not reach this job." } });
+  const outsider = db.createIdentity({ display_name: "Other", device_name: "Fixture" }).actor;
+  service.setMembership(owner, session.id, outsider.user_id, "viewer", "summary-viewer");
+  let executions = 0;
+  const agent = new HostedAgent(service, new CodeRepository(db, join(directory, "code")), {
+    ...options, runContainer: async args => {
+      executions++;
+      const control = args.find(value => value.endsWith("dst=/run/gatherthread,readonly"))!.split("src=")[1]!.split(",dst=")[0]!;
+      const prompt = readFileSync(join(control, "prompt.txt"), "utf8");
+      assert.ok(prompt.includes("Selected source only."));
+      assert.ok(!prompt.includes("Unselected content"));
+      const config = JSON.parse(readFileSync(join(control, "opencode.json"), "utf8"));
+      assert.equal(config.permission.read, "deny"); assert.equal(config.permission.edit, "deny"); assert.equal(config.permission.bash, "deny");
+      return JSON.stringify({ answer: "A shared history summary.", files: [] });
+    },
+  });
+  const input = { profile_id: "default", source_event_ids: [source.id], idempotency_key: "cloud-summary" };
+  try {
+    await assert.rejects(agent.startSummary(outsider, session.id, input));
+    await assert.rejects(agent.startSummary(owner, session.id, { ...input, source_event_ids: ["foreign-or-missing"] }));
+    assert.equal(db.hostedAgentUsage(owner, 1, 4).user_used_runs, 0);
+    const receipt = await agent.startSummary(owner, session.id, input);
+    assert.deepEqual((receipt.request_event.payload as {history_summary: {source_event_ids: string[]}}).history_summary.source_event_ids, [source.id]);
+    for (let count = 0; db.hostedActiveRuns() && count < 100; count++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(db.hostedActiveRuns(), 0);
+    const terminal = service.replay(owner, session.id, 0, 100).events.find(event => event.type === "agent_response");
+    assert.equal(terminal?.reply_to_event_id, receipt.request_event.id);
+    assert.equal((await agent.startSummary(owner, session.id, input)).replayed, true);
+    assert.equal(executions, 1);
+    assert.equal(db.hostedAgentUsage(owner, 1, 4).user_used_runs, 1);
+    await assert.rejects(agent.startSummary(owner, session.id, { ...input, instructions: "A different request" }));
+  } finally { db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+unixSocketTest("interactive SiliconFlow Qwen requests disable thinking without rerouting other models", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-qwen-thinking-"));
+  const body = { messages: [{ role: "user", content: "Who are you?" }], enable_thinking: true, thinking_budget: 32768 };
+  try {
+    for (const model of ["Qwen/Qwen3.5-4B", "Qwen/Qwen3-8B", "THUDM/GLM-4-9B-0414"]) {
+      let forwarded: Record<string, unknown> = {};
+      const proxy = new HostedModelProxy({ endpoint: { ...options.endpoints[0]!, provider: "openai-compatible",
+        model, baseUrl: "https://api.siliconflow.cn/v1" }, fetch: async (_url, init) => {
+        forwarded = JSON.parse(String(init?.body)); return Response.json({ choices: [] });
+      } });
+      try {
+        const socket = join(directory, `model-${model.includes("3.5") ? "35" : model.includes("Qwen3-") ? "3" : "glm"}.sock`); await proxy.listen(socket);
+        assert.equal(await unixPost(socket, "/v1/chat/completions", { ...body, model }), 200);
+        assert.equal(forwarded.model, model);
+        assert.equal(forwarded.enable_thinking, model.startsWith("Qwen/") ? false : true);
+        assert.equal(forwarded.max_tokens, 1024);
+        if (model.startsWith("Qwen/")) assert.equal(forwarded.thinking_budget, undefined);
+      } finally { await proxy.close(); }
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
 unixSocketTest("model proxy slow body cannot dispatch after revocation or charge provider cooldown", async () => {
  const directory = mkdtempSync(join(tmpdir(), "gt-slow-model-")), entered = Promise.withResolvers<void>();
  const socket = join(directory, "model.sock"); let authorized = true, calls = 0, cooldowns = 0;

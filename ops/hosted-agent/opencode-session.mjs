@@ -26,6 +26,9 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
     { cwd: workspace, env: { ...process.env, PWD: workspace, BUN_OPTIONS: "--smol" }, stdio: ["ignore", "pipe", "pipe"] });
   let stopping = false, exited = false, closed = false, outputBytes = 0;
   let failed = false, forcedKill = false, shutdownRequested = false, closeCode, closeSignal;
+  let phase = "startup";
+  let runFailure;
+  const diagnostic = () => Object.assign(new Error("agent_failed"), { diagnosticCode: `agent_${phase}_failed` });
   const fail = () => {
     failed = true;
     if (!stopping) controller.abort(new Error("agent_failed"));
@@ -61,14 +64,17 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
       if (!healthy) await delay(75, undefined, { signal: controller.signal });
     }
     if (!healthy || exited) throw new Error("agent_failed");
+    phase = "session";
     const session = await request("/session", { title: "GatherThread cloud task",
       // Headless jobs have no question/plan-confirmation UI; never wait for it.
       permission: ["question", "plan_enter", "plan_exit"].map(permission => ({ permission, action: "deny", pattern: "*" })),
     }, 5000);
     if (!/^ses_[A-Za-z0-9]+$/u.test(session.id ?? "")) throw new Error("agent_failed");
     // This HTTP request awaits the final message, not the first text chunk.
+    phase = "answer";
     const reply = await request(`/session/${session.id}/message`, { agent: "build", parts: [{ type: "text", text: prompt }] });
     const answer = publicSessionAnswer(reply, session.id);
+    phase = "idle";
     // A constrained runtime may pause for GC or I/O after finishing its reply.
     // Retry only this read; never resubmit the prompt or accept an unconfirmed idle.
     const idleDeadline = Date.now() + 5000;
@@ -87,7 +93,8 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
     if (exited) throw new Error("agent_failed");
     return answer;
   } catch {
-    throw new Error("agent_failed");
+    runFailure = diagnostic();
+    throw runFailure;
   } finally {
     // serve is intentionally persistent. Stop it only after final validation,
     // or failure, and wait for process closure before snapshotting any files.
@@ -98,6 +105,9 @@ export async function runOpencodeSession(workspace, prompt, outputLimit,
     if (!closed) { forcedKill = true; child.kill("SIGKILL"); await Promise.race([closure, delay(1000)]); }
     const expectedClose = closeCode === 0 && closeSignal === null
       || shutdownRequested && closeCode === null && closeSignal === "SIGTERM";
-    if (!closed || failed || forcedKill || !expectedClose) throw new Error("agent_failed");
+    if (!closed || failed || forcedKill || !expectedClose) {
+      phase = "shutdown";
+      throw runFailure ?? diagnostic();
+    }
   }
 }

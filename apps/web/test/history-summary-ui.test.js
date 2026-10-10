@@ -41,6 +41,34 @@ const receipt = { id: "summary", type: "agent_request", sequence: 2, visibility:
 const answer = { id: "answer", sequence: 3, type: "agent_response", visibility: "session", actor: { id: "u1" },
   replyTo: "summary", payload: { content: "summary text" } };
 
+test("summary selection stays actionable without a local runtime and explains the missing Agent", () => {
+  const app = setup(); app.update({ executionProfile: null });
+  assert.equal(app.el("history-summary-select-button").disabled, false);
+  app.el("history-summary-select-button").dispatch("click");
+  assert.equal(app.el("history-summary-toolbar").hidden, false);
+  assert.notEqual(app.el("history-summary-status").textContent, "");
+});
+
+test("empty history explains missing sources instead of leaving an inert button", () => {
+  const app = setup(); app.update({ executionProfile: null, events: [] });
+  assert.equal(app.el("history-summary-select-button").disabled, false);
+  app.el("history-summary-select-button").dispatch("click");
+  assert.equal(app.el("history-summary-toolbar").hidden, false);
+  assert.match(app.el("history-summary-status").textContent, /No completed messages/);
+  assert.equal(app.el("history-summary-generate-button").disabled, true);
+});
+
+test("cloud summary keeps its provider and model without a local runtime", async () => {
+  const app = setup();
+  app.update({ executionProfile: { harness: "opencode", provider: "openai-compatible", model: "Qwen/Qwen3.5-4B", cloudProfileId: "sf-qwen35-4b" } });
+  app.choose(); const pending = app.confirm();
+  assert.equal(app.calls.length, 1);
+  assert.equal(app.calls[0][1].executionProfile.cloudProfileId, "sf-qwen35-4b");
+  assert.equal(app.calls[0][1].executionProfile.runtimeId, undefined);
+  app.finish(receipt); await pending;
+  assert.equal(app.ui.timeline().before.get("summary")[0].status, "pending");
+});
+
 test("section arrows show originals with an explicit return control, not a collapsed summary", () => {
   const app = setup(); app.update({ events: [source, receipt, answer] });
   const version = app.ui.timeline().active[0];

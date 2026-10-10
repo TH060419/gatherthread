@@ -11,6 +11,7 @@ import type {
   CommitLocalTurnResult,
   CreateHistorySummaryInput,
   HostedAgentRequestInput,
+  HostedHistorySummaryInput,
   DeviceAuthorizationRecord,
   EventType,
   EventVisibility,
@@ -3003,69 +3004,72 @@ export class CollaborationDatabase {
     return mapEvent(row);
   }
 
+  private historySummaryPayload(sessionId: string, input: Pick<CreateHistorySummaryInput, "source_event_ids" | "instructions">) {
+    // Fetch the bounded selection and its canonical relationships, not a replay
+    // page. A missing or foreign-session ID must never produce a partial summary.
+    if (input.source_event_ids.length < 1 || input.source_event_ids.length > 100) {
+      throw new HistorySummaryError("invalid_selection", "Select between 1 and 100 history messages");
+    }
+    const selectedIds = new Set(input.source_event_ids);
+    const related = new Map<string, CanonicalEvent>();
+    const queue: CanonicalEvent[] = [];
+    let dependencyBytes = 0;
+    const include = (event: CanonicalEvent) => {
+      if (related.has(event.id)) return;
+      dependencyBytes += Buffer.byteLength(JSON.stringify(event));
+      if (related.size >= MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS || dependencyBytes > MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES) {
+        throw new HistorySummaryError("too_large", "Summary source ancestry exceeds the validation limit; select fewer sources");
+      }
+      related.set(event.id, event);
+      queue.push(event);
+    };
+    for (const id of input.source_event_ids) include(this.getEvent(sessionId, id));
+    for (let index = 0; index < queue.length; index += 1) {
+      const event = queue[index]!;
+      if (event.reply_to_event_id !== null) {
+        include(this.getEvent(sessionId, event.reply_to_event_id));
+      }
+      if (event.type !== "agent_request") continue;
+      const marker = historySummaryMarker(event);
+      for (const id of marker?.source_event_ids ?? []) include(this.getEvent(sessionId, id));
+      const responses = this.sqlite.prepare(`
+        SELECT * FROM events WHERE session_id = ? AND reply_to_event_id = ? AND type = 'agent_response'
+        ORDER BY sequence ASC LIMIT 2
+      `).all(sessionId, event.id) as unknown as EventRow[];
+      if (selectedIds.has(event.id) && responses.length === 0 && event.visibility === "session"
+        && !isHistorySummaryRequest(event) && historySummaryText(event.payload).trim()) {
+        throw conflict("Unfinished Agent requests cannot be selected for a history summary");
+      }
+      for (const row of responses) include(mapEvent(row));
+    }
+    const sources = selectHistorySummarySources(
+      [...related.values()].map((event) => ({ ...event, payload: redactJson(event.payload) })), input.source_event_ids,
+    );
+    const instructions = input.instructions === undefined ? undefined : redactJson(input.instructions) as string;
+    const content = buildHistorySummaryPrompt(sources, instructions);
+    if (Buffer.byteLength(JSON.stringify(content)) >= 32 * 1024) {
+      throw new HistorySummaryError("too_large", "Serialized summary prompt exceeds the 32 KiB transport boundary; no text was shortened");
+    }
+    return { content, history_summary: {
+      version: 1,
+      source_event_ids: sources.map((event) => event.id),
+      source_digest: createHash("sha256").update(historySummarySourceJson(sources)).digest("hex"),
+    } };
+  }
+
   createHistorySummary(actor: Actor, sessionId: string, input: CreateHistorySummaryInput): CanonicalEvent {
     return historySummaryOperation(() => this.transaction(() => {
       this.assertActiveDevice(actor);
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       if (session.state !== "active") throw conflict("Archived sessions do not accept summary requests");
-      // Fetch the bounded selection and its canonical relationships, not a replay
-      // page. A missing or foreign-session ID must never produce a partial summary.
-      if (input.source_event_ids.length < 1 || input.source_event_ids.length > 100) {
-        throw new HistorySummaryError("invalid_selection", "Select between 1 and 100 history messages");
-      }
-      const selectedIds = new Set(input.source_event_ids);
-      const related = new Map<string, CanonicalEvent>();
-      const queue: CanonicalEvent[] = [];
-      let dependencyBytes = 0;
-      const include = (event: CanonicalEvent) => {
-        if (related.has(event.id)) return;
-        dependencyBytes += Buffer.byteLength(JSON.stringify(event));
-        if (related.size >= MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS || dependencyBytes > MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES) {
-          throw new HistorySummaryError("too_large", "Summary source ancestry exceeds the validation limit; select fewer sources");
-        }
-        related.set(event.id, event);
-        queue.push(event);
-      };
-      for (const id of input.source_event_ids) include(this.getEvent(sessionId, id));
-      for (let index = 0; index < queue.length; index += 1) {
-        const event = queue[index]!;
-        if (event.reply_to_event_id !== null) {
-          include(this.getEvent(sessionId, event.reply_to_event_id));
-        }
-        if (event.type !== "agent_request") continue;
-        const marker = historySummaryMarker(event);
-        for (const id of marker?.source_event_ids ?? []) include(this.getEvent(sessionId, id));
-        const responses = this.sqlite.prepare(`
-          SELECT * FROM events WHERE session_id = ? AND reply_to_event_id = ? AND type = 'agent_response'
-          ORDER BY sequence ASC LIMIT 2
-        `).all(sessionId, event.id) as unknown as EventRow[];
-        if (selectedIds.has(event.id) && responses.length === 0 && event.visibility === "session"
-          && !isHistorySummaryRequest(event) && historySummaryText(event.payload).trim()) {
-          throw conflict("Unfinished Agent requests cannot be selected for a history summary");
-        }
-        for (const row of responses) include(mapEvent(row));
-      }
-      const sources = selectHistorySummarySources(
-        [...related.values()].map((event) => ({ ...event, payload: redactJson(event.payload) })), input.source_event_ids,
-      );
-      const instructions = input.instructions === undefined ? undefined : redactJson(input.instructions) as string;
-      const content = buildHistorySummaryPrompt(sources, instructions);
-      if (Buffer.byteLength(JSON.stringify(content)) >= 32 * 1024) {
-        throw new HistorySummaryError("too_large", "Serialized summary prompt exceeds the 32 KiB transport boundary; no text was shortened");
-      }
       const payload: JsonValue = {
-        content,
+        ...this.historySummaryPayload(sessionId, input),
         execution_profile: {
           harness: input.execution_profile.harness,
           model: input.execution_profile.model,
           runtime_id: input.execution_profile.runtime_id,
           ...(input.execution_profile.provider === undefined ? {} : { provider: input.execution_profile.provider }),
           ...(input.execution_profile.reasoning_effort === undefined ? {} : { reasoning_effort: input.execution_profile.reasoning_effort }),
-        },
-        history_summary: {
-          version: 1,
-          source_event_ids: sources.map((event) => event.id),
-          source_digest: createHash("sha256").update(historySummarySourceJson(sources)).digest("hex"),
         },
       };
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
@@ -3231,17 +3235,22 @@ export class CollaborationDatabase {
   reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
     endpoints: HostedAllocation[], limits: HostedRunLimits,
     onReserved?: (event: CanonicalEvent) => void,
+    summary?: HostedHistorySummaryInput,
   ): { event: CanonicalEvent; created: boolean; endpointId?: string } {
     this.assertActiveDevice(actor);
     if (!endpoints.length || endpoints.some((e) => e.profileId !== input.profile_id
       || e.provider !== endpoints[0]!.provider || e.model !== endpoints[0]!.model)) {
       throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
     }
-    return this.transaction(() => {
+    return historySummaryOperation(() => this.transaction(() => {
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       if (session.state !== "active") throw conflict("Archived sessions do not accept Agent requests");
+      if (summary && (input.include_code || input.github_task_id || input.reply_to_event_id
+        || summary.profile_id !== input.profile_id || summary.idempotency_key !== input.idempotency_key)) {
+        throw conflict("Cloud summaries cannot include code or another execution target");
+      }
       const payload: JsonValue = redactJson({
-        content: input.content,
+        ...(summary ? this.historySummaryPayload(sessionId, summary) : { content: input.content }),
         include_code: input.include_code,
         profile_id: input.profile_id,
         ...(input.github_task_id ? { github_task_id: input.github_task_id } : {}),
@@ -3302,7 +3311,33 @@ export class CollaborationDatabase {
         .run(event.id, actor.user_id, selected.quotaGroup, this.now());
       onReserved?.(event);
       return { event, created: true, endpointId: selected.id };
+    }));
+  }
+
+  pauseHostedAgentRequest(actor: Actor, sessionId: string, requestId: string): CanonicalEvent | undefined {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (session.state !== "active") throw conflict("Archived sessions do not accept Agent request control");
+      const event = this.getEvent(sessionId, requestId);
+      if (event.actor_user_id !== actor.user_id) throw forbidden("Only the author of an Agent request may pause it");
+      const payload = event.payload as { github_task_id?: unknown };
+      const job = this.sqlite.prepare("SELECT status FROM hosted_agent_runs WHERE request_event_id=? AND session_id=? AND user_id=?")
+        .get(requestId, sessionId, actor.user_id) as { status: string } | undefined;
+      if (!job || event.type !== "agent_request" || payload.github_task_id) throw conflict("This request is not a cloud trial request");
+      if (this.isHostedAgentPaused(requestId)) return undefined;
+      if (job.status !== "running") throw agentRequestAlreadyCompleted();
+      this.sqlite.prepare("INSERT INTO hosted_agent_pauses(request_event_id,created_at) VALUES(?,?)").run(requestId, this.now());
+      return this.appendInsideTransaction(actor.user_id, sessionId, {
+        idempotency_key: `server:cloud-request-paused:${randomUUID()}`,
+        type: "agent_progress", visibility: "session", reply_to_event_id: requestId,
+        payload: { content: "The author paused this Agent request.", phase: "lifecycle", status: "paused" },
+      }, null, "pause");
     });
+  }
+
+  isHostedAgentPaused(requestId: string): boolean {
+    return Boolean(this.sqlite.prepare("SELECT 1 FROM hosted_agent_pauses WHERE request_event_id=?").get(requestId));
   }
 
   finishHostedAgentRequest(requestId: string, outcome: { content?: string; errorCode?: string; providerAttempts?: number }): CanonicalEvent | undefined {
@@ -3312,6 +3347,11 @@ export class CollaborationDatabase {
         .get(requestId) as { request_event_id: string; session_id: string; user_id: string; device_id: string;
           provider: string; model: string; status: string } | undefined;
       if (!job || job.status !== "running") return undefined;
+      if (this.isHostedAgentPaused(requestId)) {
+        this.sqlite.prepare("UPDATE hosted_agent_runs SET status='failed',finished_at=? WHERE request_event_id=?")
+          .run(this.now(), requestId);
+        return undefined;
+      }
       const session = this.requireSession(job.session_id);
       const device = this.sqlite.prepare(`SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked_at IS NULL
         AND (expires_at IS NULL OR expires_at > ?)`).get(job.device_id, job.user_id, this.now());
@@ -5058,7 +5098,7 @@ export class CollaborationDatabase {
       const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
       const claim = request === undefined ? undefined : this.requireClaimRow(request.id);
       if (eventBytes > 1024 || provenance !== null || request?.type !== "agent_request"
-        || request.actor_user_id !== actorUserId || claim?.status !== "paused"
+        || request.actor_user_id !== actorUserId || !(claim?.status === "paused" || request && this.isHostedAgentPaused(request.id))
         || input.type !== "agent_progress" || input.visibility !== "session"
         || stableJson(input.payload) !== stableJson({
           content: "The author paused this Agent request.", phase: "lifecycle", status: "paused",

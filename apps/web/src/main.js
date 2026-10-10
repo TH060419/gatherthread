@@ -3,7 +3,7 @@ import { mountAvatarSettings } from "./avatar-settings.js";
 import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-3";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { mountAccountDevices } from "./account-devices.js";
-import { mountAgentRequestControl } from "./agent-request-control.js";
+import { cloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js";
 import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261006-mobile-2";
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261004-avatars";
@@ -171,6 +171,7 @@ const expandedWorklogs = new Set();
 const localSyncStatusRequestsInFlight = new Set();
 const localSyncActionsInFlight = new Set();
 const retryingAgentRequestIds = new Set();
+const retryAgentRequestKeys = new Map();
 const LOCAL_SYNC_REQUEST_KINDS = new Set([
   "local_sync_status",
   "local_auto_upload_enable",
@@ -309,6 +310,7 @@ const agentRequestControl = mountAgentRequestControl({
     scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.project?.id}:${state.session?.id}`,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
     sending: Boolean(pendingMessageSend?.()),
+    cloudProfiles: hostedAgentStatus.profiles,
   }),
   confirmResume: () => !state.settings.composer.confirmAgentRequest
     || window.confirm(localizer.t("Resume with the original Agent and latest history? This starts a new request and may consume model quota.")),
@@ -2217,11 +2219,10 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
         retry.setAttribute("data-request-id", request.id);
         // Mirror the composer's rule rather than letting a viewer press a button
         // the server is guaranteed to refuse.
-        retry.disabled = !canAppend({
+        retry.disabled = !retryAgentRequestPermission(request, {
           session: state.session,
           currentUser: state.currentUser,
           connectionPhase: state.sync.phase,
-          kind: "agent_request",
         }).allowed || retryingAgentRequestIds.has(request.id);
         article.append(retry);
       }
@@ -2832,7 +2833,12 @@ function renderComposerPermissions() {
 }
 
 function historySummaryExecutionProfile() {
-  if (!state.session || !state.project || currentProjectHarness() === "cloud") return null;
+  if (!state.session || !state.project) return null;
+  if (currentProjectHarness() === "cloud") {
+    const profile = currentCloudProfile();
+    return CLOUD_AGENT_ENTRY_ENABLED && hostedAgentStatus.enabled && profile
+      ? { harness: "opencode", provider: profile.provider, model: profile.model, cloudProfileId: profile.id } : null;
+  }
   const harness = currentProjectHarness();
   const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
   const runtime = resolution.runtime;
@@ -2940,10 +2946,20 @@ async function retryAgentRequest(requestId, button) {
   const request = state.session
     ? state.sync.events.find((event) => event.type === "agent_request" && event.id === requestId)
     : undefined;
-  if (!request || !state.session) return;
+  if (!request || !state.session || request.actor?.id !== state.currentUser?.id
+    || !retryAgentRequestPermission(request, { session: state.session, currentUser: state.currentUser,
+      connectionPhase: state.sync.phase }).allowed) return;
   const isCurrent = captureWorkspaceScope();
+  const retryScope = `${state.currentUser.id}:${state.session.id}:${requestId}`;
+  const retryKey = retryAgentRequestKeys.get(retryScope) ?? createIdempotencyKey("agent-retry");
   retryingAgentRequestIds.add(requestId);
   button.disabled = true;
+  const status = document.createElement("p");
+  status.className = "agent-retry-status form-error";
+  status.setAttribute("role", "alert");
+  button.parentElement.querySelector(".agent-retry-status")?.remove();
+  button.after(status);
+  button.textContent = localizer.t("Retrying…");
   sendError.textContent = "";
   try {
     if (request.payload?.github_task_id) {
@@ -2952,24 +2968,32 @@ async function retryAgentRequest(requestId, button) {
     }
     if (request.payload?.execution_profile?.harness === "opencode") {
       if (!CLOUD_AGENT_ENTRY_ENABLED) throw new Error(localizer.t("Cloud Agent · coming later"));
-      const profile = hostedAgentStatus.profiles?.find((p) => p.id === request.payload.profile_id);
-      const previous = request.payload.execution_profile;
-      if (!profile || profile.provider !== previous.provider || profile.model !== previous.model) {
-        throw new Error(localizer.t("The original cloud model is no longer available."));
-      }
+      const input = cloudRequestInput(request, retryKey, hostedAgentStatus.profiles);
       if (request.payload.include_code && !window.confirm(localizer.t("Retry with current GT Cloud code and save changes to your branch?"))) return;
-      await api.appendHostedAgentRequest(state.session.id, { content: eventContent(request),
-        profileId: profile.id, includeCode: request.payload.include_code === true,
-        idempotencyKey: createIdempotencyKey("hosted_agent"), replyTo: request.replyTo });
+      retryAgentRequestKeys.set(retryScope, retryKey);
+      await api.appendHostedAgentRequest(state.session.id, input);
       void refreshHostedAgentStatus();
     } else {
-      await api.appendAgentRequest(state.session.id, retryAgentRequestInput(request, createIdempotencyKey("agent_request")));
+      retryAgentRequestKeys.set(retryScope, retryKey);
+      await api.appendAgentRequest(state.session.id, retryAgentRequestInput(request, retryKey));
     }
+    retryAgentRequestKeys.delete(retryScope);
   } catch (error) {
-    if (isCurrent()) sendError.textContent = error.message ?? "The event was not accepted.";
+    if (error.status > 0 && error.status < 500) retryAgentRequestKeys.delete(retryScope);
+    if (isCurrent()) {
+      const message = localizer.t(error.code === "hosted_user_busy" || error.code === "hosted_agent_busy"
+        ? "Your cloud request is still running. Pause it first or wait for it to finish."
+        : error.message ?? "The event was not accepted.");
+      sendError.textContent = message;
+      if (status.isConnected) status.textContent = message;
+    }
   } finally {
     retryingAgentRequestIds.delete(requestId);
-    if (button.isConnected) button.disabled = false;
+    if (button.isConnected && isCurrent()) {
+      button.disabled = !retryAgentRequestPermission(request, { session: state.session,
+        currentUser: state.currentUser, connectionPhase: state.sync.phase }).allowed;
+      button.textContent = localizer.t("Retry Agent request");
+    }
   }
 }
 
@@ -4079,13 +4103,8 @@ async function saveSettings(event) {
     return;
   }
   element("settings-dsh-runtime-error").textContent = "";
-  if (state.project
-    && element("settings-agent-harness").value === DSH_HARNESS
-    && !element("settings-dsh-runtime").value) {
-    element("settings-dsh-runtime-error").textContent = "Connect and choose an online DeepSeek Harness runtime first.";
-    element("settings-dsh-runtime").focus();
-    return;
-  }
+  // Preferences can be saved before connecting a local Agent. Exact online
+  // runtime checks remain on execution and local-file transfer actions.
   const deviceInput = element("settings-device-name");
   const deviceStatus = element("settings-device-status");
   const nextDeviceName = deviceInput.value.trim();

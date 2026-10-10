@@ -249,3 +249,21 @@ test('the requested graceful shutdown may close with code zero', async () => {
   assert.equal(await runOpencodeSession(workspace, 'The task', 64_000, f.options), 'Done');
   assert.equal(f.child.closed, true);
 });
+
+test('failure diagnostics contain only the failing phase, not provider or tool details', async () => {
+  for (const [phase, route] of [['session', '/session'], ['answer', '/session/ses_fixture/message'], ['idle', '/session/status']]) {
+    const f = fixture({ fetch: async path => {
+      if (path === route) throw new Error('private-provider-token and tool data');
+      if (path === '/global/health') return json({ healthy: true, version: '1.18.32' });
+      if (path === '/session') return json({ id: 'ses_fixture' });
+      if (path.endsWith('/message')) return json(finalReply());
+      return json({});
+    } });
+    await assert.rejects(runOpencodeSession(workspace, 'The task', 64_000, f.options), error => {
+      assert.equal(error.message, 'agent_failed');
+      assert.equal(error.diagnosticCode, `agent_${phase}_failed`);
+      assert.equal(JSON.stringify(error).includes('private'), false);
+      return true;
+    });
+  }
+});

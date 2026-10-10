@@ -45,6 +45,12 @@ CREATE TABLE IF NOT EXISTS hosted_agent_runs (
 CREATE INDEX IF NOT EXISTS hosted_agent_runs_day_idx ON hosted_agent_runs(utc_day,status);
 CREATE INDEX IF NOT EXISTS hosted_agent_runs_user_day_idx ON hosted_agent_runs(user_id,utc_day);
 CREATE INDEX IF NOT EXISTS hosted_agent_runs_group_day_idx ON hosted_agent_runs(quota_group,utc_day,status);
+-- Additive cancellation fence. Executor capacity is retained until cleanup,
+-- and paused requests never publish a late answer or save a late checkpoint.
+CREATE TABLE IF NOT EXISTS hosted_agent_pauses (
+  request_event_id TEXT PRIMARY KEY REFERENCES hosted_agent_runs(request_event_id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL
+) STRICT;
 INSERT OR IGNORE INTO hosted_agent_run_limits SELECT user_id, daily_neurons / 2000 FROM hosted_agent_limits;
 INSERT OR IGNORE INTO hosted_agent_runs
   SELECT request_event_id,session_id,user_id,device_id,utc_day,'default','legacy','legacy',

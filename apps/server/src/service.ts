@@ -7,6 +7,7 @@ import type {
   CreateHistorySummaryInput,
   HistoryContext,
   HostedAgentRequestInput,
+  HostedHistorySummaryInput,
   JsonValue,
   MembershipRole,
   ReplayResponse,
@@ -339,8 +340,9 @@ export class CollaborationService {
   }
 
   reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
-    endpoints: HostedAllocation[], limits: HostedRunLimits, onReserved?: (event: CanonicalEvent) => void) {
-    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input, endpoints, limits, onReserved);
+    endpoints: HostedAllocation[], limits: HostedRunLimits, onReserved?: (event: CanonicalEvent) => void,
+    summary?: HostedHistorySummaryInput) {
+    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input, endpoints, limits, onReserved, summary);
     if (result.created) this.publish(result.event);
     return result;
   }
@@ -349,6 +351,12 @@ export class CollaborationService {
     const event = this.database.finishHostedAgentRequest(requestId, outcome);
     if (event) this.publish(event);
     return event;
+  }
+
+  pauseHostedAgentRequest(actor: Actor, sessionId: string, requestId: string) {
+    const event = this.database.pauseHostedAgentRequest(actor, sessionId, requestId);
+    if (event) this.publish(event);
+    return { request_event_id: requestId, status: "paused" as const };
   }
 
   replay(actor: Actor, sessionId: string, afterSequence: number, limit: number, maxBytes?: number): ReplayResponse {

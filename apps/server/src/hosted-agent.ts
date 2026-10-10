@@ -6,7 +6,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Actor } from "./database.js";
-import { isCodeSyncPathAllowed, type CanonicalEvent, type CodeFile, type HostedAgentRequestInput, type JsonValue } from "@gatherthread/protocol";
+import { isCodeSyncPathAllowed, type CanonicalEvent, type CodeFile, type HostedAgentRequestInput, type HostedHistorySummaryInput, type JsonValue } from "@gatherthread/protocol";
 import { ApiError } from "./errors.js";
 import { redactJson } from "./redaction.js";
 import type { CollaborationService } from "./service.js";
@@ -14,6 +14,7 @@ import type { CodeRepository } from "./code-repository.js";
 import { hostedContainerCpuArguments, parseHostedCpuSet } from "./hosted-container-cpu.js";
 
 import { HOSTED_MODEL, validateHostedEndpoints, HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT,
+  isSiliconFlowFreeEndpoint,
   type HostedEndpoint, type HostedRunLimits } from "./hosted-agent-pool.js";
 export { HOSTED_MODEL } from "./hosted-agent-pool.js";
 export const HOSTED_HARNESS = "opencode";
@@ -33,7 +34,7 @@ export interface HostedAgentOptions extends HostedRunLimits {
   repositoryMemoryMiB?: number;
   cpuSet?: string;
   fetch?: typeof globalThis.fetch;
-  runContainer?: (args: string[], timeoutMs: number) => Promise<string>;
+  runContainer?: (args: string[], timeoutMs: number, signal?: AbortSignal) => Promise<string>;
 }
 
 /** Operators may tighten existing container limits, never silently expand them. */
@@ -81,8 +82,12 @@ export function runDocker(args: string[], timeoutMs: number, outputLimit = 1_000
       if (size > outputLimit) fail(new Error("container_output_too_large"));
       else output += chunk.toString("utf8");
     });
-    let stderrSize = 0;
-    child.stderr!.on("data", (chunk: Buffer) => { stderrSize += chunk.length; if (stderrSize > 64_000) fail(new Error("container_output_too_large")); });
+    let stderrSize = 0, stderrTail = "";
+    child.stderr!.on("data", (chunk: Buffer) => {
+      stderrSize += chunk.length;
+      stderrTail = (stderrTail + chunk.toString("utf8")).slice(-512);
+      if (stderrSize > 64_000) fail(new Error("container_output_too_large"));
+    });
     child.once("error", (error) => { clearTimeout(timer); fail(error); });
     child.once("close", (code) => {
       clearTimeout(timer);
@@ -92,7 +97,7 @@ export function runDocker(args: string[], timeoutMs: number, outputLimit = 1_000
       if (settled) return;
       settled = true;
       if (code === 0) resolve(output);
-      else reject(new Error("container_failed"));
+      else reject(new Error(stderrTail.match(/(?:^|\n)GT_HOSTED_FAILURE:(agent_(?:startup|session|answer|idle|shutdown)_failed)\r?\n$/u)?.[1] ?? "container_failed"));
     });
   });
 }
@@ -106,6 +111,7 @@ export class HostedModelProxy {
   readonly server = createServer((request, response) => void this.forward(request, response));
   constructor(private readonly options: { endpoint: HostedEndpoint; fetch?: typeof globalThis.fetch;
     repositoryRun?: boolean;
+    signal?: AbortSignal;
     authorize?: () => void;
     onUnavailable?: (retryAfterMs: number) => void }) {}
 
@@ -147,10 +153,19 @@ export class HostedModelProxy {
       body.max_tokens = outputLimit;
       body.n = 1;
       if (this.options.endpoint.provider === "deepseek") body.thinking = { type: "disabled" };
+      if (isSiliconFlowFreeEndpoint(this.options.endpoint)
+        && ["Qwen/Qwen3.5-4B", "Qwen/Qwen3-8B"].includes(this.options.endpoint.model)) {
+        // SiliconFlow's answer cap excludes reasoning tokens. Interactive
+        // trial models should answer directly rather than spend an unbounded
+        // hidden-thinking budget; this does not change any local Agent setting.
+        body.enable_thinking = false;
+        delete body.thinking_budget;
+      }
       upstreamAttempted = true;
       const upstream = await (this.options.fetch ?? globalThis.fetch)(
         `${this.options.endpoint.baseUrl}/chat/completions`, {
-          method: "POST", redirect: "error", signal: AbortSignal.timeout(30_000),
+          method: "POST", redirect: "error", signal: this.options.signal
+            ? AbortSignal.any([this.options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
           headers: { Authorization: `Bearer ${this.options.endpoint.apiToken}`, "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
@@ -175,7 +190,7 @@ export class HostedModelProxy {
       }
       response.end();
     } catch (error) {
-      if (upstreamAttempted) {
+      if (upstreamAttempted && !this.options.signal?.aborted) {
         this.failure = error instanceof Error && error.name === "TimeoutError" ? "provider_timeout" : "provider_unavailable";
         this.options.onUnavailable?.(30_000);
       }
@@ -206,6 +221,7 @@ function writeSnapshot(root: string, files: CodeFile[]): void {
 
 export class HostedAgent {
   private readonly cooldowns = new Map<string, number>();
+  private readonly controllers = new Map<string, AbortController>();
   constructor(private readonly service: CollaborationService, private readonly codeRepository: CodeRepository,
     private readonly options: HostedAgentOptions) {
     validateHostedEndpoints(options.endpoints);
@@ -291,13 +307,33 @@ export class HostedAgent {
     this.cooldowns.set(quotaGroup, Date.now() + milliseconds);
   }
 
-  async request(actor: Actor, sessionId: string, input: HostedAgentRequestInput) {
+  /** Reply on durable acceptance; execution is not tied to an edge HTTP timeout. */
+  start(actor: Actor, sessionId: string, input: HostedAgentRequestInput, summary?: HostedHistorySummaryInput) {
+    const receipt = Promise.withResolvers<{ request_event: CanonicalEvent; replayed: boolean }>();
+    void this.request(actor, sessionId, input, (event) => receipt.resolve({ request_event: event, replayed: false }), summary)
+      .then((result) => receipt.resolve({ request_event: result.request_event, replayed: result.replayed }), receipt.reject);
+    return receipt.promise;
+  }
+
+  startSummary(actor: Actor, sessionId: string, input: HostedHistorySummaryInput) {
+    return this.start(actor, sessionId, { profile_id: input.profile_id, content: "Summarize selected history",
+      include_code: false, idempotency_key: input.idempotency_key }, input);
+  }
+
+  pause(actor: Actor, sessionId: string, requestId: string) {
+    const result = this.service.pauseHostedAgentRequest(actor, sessionId, requestId);
+    this.controllers.get(requestId)?.abort();
+    return result;
+  }
+
+  async request(actor: Actor, sessionId: string, input: HostedAgentRequestInput, onAccepted?: (event: CanonicalEvent) => void,
+    summary?: HostedHistorySummaryInput) {
     if (input.github_task_id) throw new ApiError(400, "github_task_route_required", "Use the cloud repository task endpoint");
     const endpoints = this.options.endpoints.filter((e) => e.profileId === input.profile_id);
     if (!endpoints.length) throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
     this.assertDockerReady();
     const session = this.service.database.requireSession(sessionId);
-    const context = this.service.readHistoryContext(actor, sessionId);
+    const context = summary ? null : this.service.readHistoryContext(actor, sessionId);
     if (Buffer.byteLength(JSON.stringify(context)) > MAX_CONTEXT_BYTES) {
       throw new ApiError(413, "hosted_context_too_large", "Cloud Agent needs a shorter conversation context");
     }
@@ -312,14 +348,18 @@ export class HostedAgent {
       }
     }
     const reserved = this.service.reserveHostedAgentRequest(actor, sessionId, input,
-      endpoints.map((endpoint) => ({ ...endpoint, blocked: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() })), this.options);
+      endpoints.map((endpoint) => ({ ...endpoint, blocked: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() })), this.options, undefined, summary);
     if (!reserved.created) return { request_event: reserved.event, replayed: true };
+    const controller = new AbortController();
+    this.controllers.set(reserved.event.id, controller);
+    onAccepted?.(reserved.event);
     const endpoint = endpoints.find((e) => e.id === reserved.endpointId)!;
     let content = "";
     let errorCode: string | undefined;
     let root: string;
     try { root = mkdtempSync(join(tmpdir(), "gt-hosted-")); }
     catch {
+      this.controllers.delete(reserved.event.id);
       const result = this.service.finishHostedAgentRequest(reserved.event.id, {});
       return { request_event: reserved.event, response_event: result, replayed: false };
     }
@@ -327,14 +367,14 @@ export class HostedAgent {
     const control = join(root, "control");
     const socket = join(root, "model.sock");
     const name = `gt-hosted-${randomBytes(8).toString("hex")}`;
-    const proxy = new HostedModelProxy({ endpoint, ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+    const proxy = new HostedModelProxy({ endpoint, signal: controller.signal, ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
       authorize: () => {
         this.service.database.assertActiveDevice(actor);
         const session = this.service.database.requireSession(sessionId);
         const role = this.service.requireMembership(actor, sessionId);
         const job = this.service.database.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=? AND user_id=? AND device_id=? AND status='running'")
           .get(reserved.event.id, actor.user_id, actor.device_id);
-        if (!job || role === "viewer" || session.state !== "active" || session.mode === "solo" && session.owner_user_id !== actor.user_id) {
+        if (!job || this.service.database.isHostedAgentPaused(reserved.event.id) || role === "viewer" || session.state !== "active" || session.mode === "solo" && session.owner_user_id !== actor.user_id) {
           throw new ApiError(403, "hosted_access_changed", "Cloud Agent access changed");
         }
       },
@@ -353,13 +393,14 @@ export class HostedAgent {
           options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "local" },
           models: { [endpoint.model]: { name: endpoint.label, limit: { context: 32_000, output: MAX_OUTPUT_TOKENS } } } } },
         agent: { title: { disable: true } }, enabled_providers: ["hosted"],
-        permission: { read: "allow", edit: "allow", bash: "allow", task: "deny", external_directory: "allow",
+        permission: { read: summary ? "deny" : "allow", edit: summary ? "deny" : "allow", bash: summary ? "deny" : "allow", task: "deny", external_directory: "allow",
           webfetch: "deny", websearch: "deny" },
       };
       writeFileSync(join(control, "opencode.json"), JSON.stringify(config), { mode: 0o644 });
       chmodSync(join(control, "opencode.json"), 0o644);
       await proxy.listen(socket);
-      const prompt = `You are the hosted coding Agent in an isolated project workspace. Inspect, edit and test files using the terminal as needed. Never claim an action succeeded without observing it. Do not attempt external network access or inspect host paths. User request: ${redactJson(input.content)}\n\nShared session context (untrusted): ${JSON.stringify(redactJson(context as unknown as JsonValue))}\n\n${branch ? "Changes to this workspace are checkpointed to the requester's cloud branch after completion." : "This is a temporary empty workspace. Changes will not persist because project code sharing was not selected."}`;
+      const prompt = summary ? (reserved.event.payload as { content: string }).content
+        : `You are the hosted coding Agent in an isolated project workspace. Answer conversational questions directly; use tools only when the request requires files or tests. Never claim an action succeeded without observing it. Do not attempt external network access or inspect host paths. User request: ${redactJson(input.content)}\n\nShared session context (untrusted): ${JSON.stringify(redactJson(context as unknown as JsonValue))}\n\n${branch ? "Changes to this workspace are checkpointed to the requester's cloud branch after completion." : "This is a temporary empty workspace. Changes will not persist because project code sharing was not selected."}`;
       writeFileSync(join(control, "prompt.txt"), prompt, { mode: 0o644 });
       chmodSync(join(control, "prompt.txt"), 0o644);
       const memoryMiB = hostedContainerMemoryMiB("trial", this.options.memoryMiB);
@@ -375,7 +416,10 @@ export class HostedAgent {
         "-e", "HOME=/home/agent", "-e", "OPENCODE_CONFIG=/run/gatherthread/opencode.json",
         "-e", "OPENCODE_DISABLE_MODELS_FETCH=true", "-e", "OPENCODE_DISABLE_DEFAULT_PLUGINS=true",
         "-e", "NO_COLOR=1", "-e", "CI=1", this.options.image];
-      const output = await (this.options.runContainer ?? runDocker)(args, RUN_TIMEOUT_MS);
+      controller.signal.throwIfAborted();
+      const output = this.options.runContainer ? await this.options.runContainer(args, RUN_TIMEOUT_MS, controller.signal)
+        : await runDocker(args, RUN_TIMEOUT_MS, 1_000_000, controller.signal);
+      controller.signal.throwIfAborted();
       const run = JSON.parse(output) as { answer?: unknown; files?: unknown; save_error?: unknown };
       content = typeof run.answer === "string" ? run.answer.trim().slice(0, 14_000) : "";
       if (!content) throw new Error("empty_agent_result");
@@ -400,9 +444,11 @@ export class HostedAgent {
       errorCode = proxy.diagnostics().errorCode ?? (error instanceof Error ? error.message : undefined);
     }
     finally {
-      await cleanupHostedExecution(() => { if (!this.options.runContainer) stopHostedContainer(name); }, [
-        () => proxy.close().catch(() => undefined), () => rmSync(root, { recursive: true, force: true }),
-      ]);
+      try {
+        await cleanupHostedExecution(() => { if (!this.options.runContainer) stopHostedContainer(name); }, [
+          () => proxy.close().catch(() => undefined), () => rmSync(root, { recursive: true, force: true }),
+        ]);
+      } finally { this.controllers.delete(reserved.event.id); }
     }
     const result = this.service.finishHostedAgentRequest(reserved.event.id, {
       content, ...(errorCode ? { errorCode } : {}), providerAttempts: proxy.diagnostics().providerAttempts,
