@@ -25,3 +25,19 @@ test("password recovery rejects mismatched passwords, wrong-purpose IDs and call
   for (const extra of [{ password_confirmation: "another password 82" }, { user_id: "owner" }, { token: "credential" }, { registration_id: randomUUID() }, { code: "short" }]) assert.equal(VerifyPasswordResetInputSchema.safeParse({ ...input, ...extra }).success, false);
   assert.equal(SendPasswordResetInputSchema.safeParse({ email: input.email, challenge_token: "challenge", idempotency_key: randomUUID(), locale: "en", purpose: "registration" }).success, false);
 });
+
+test("registration, sign-in and recovery share the 8–128-character password policy", () => {
+  for (const [password, accepted] of [["x".repeat(7), false], ["x".repeat(8), true],
+    ["x".repeat(128), true], ["x".repeat(129), false]] as const) {
+    assert.equal(AccountPasswordSchema.safeParse(password).success, accepted);
+    assert.equal(VerifyRegistrationInputSchema.safeParse({ registration_id: randomUUID(), code: "12345678",
+      display_name: "Fixture", device_name: "Fixture", privacy_acknowledged: true, password }).success, accepted);
+    assert.equal(EmailLoginInputSchema.safeParse({ email: "fixture@example.invalid", device_name: "Fixture", password }).success, accepted);
+    assert.equal(VerifyPasswordResetInputSchema.safeParse({ reset_id: randomUUID(), email: "fixture@example.invalid",
+      code: "12345678", password, password_confirmation: password, locale: "en" }).success, accepted);
+  }
+  // Existing no-truncation/no-normalization and Unicode bounds remain unchanged.
+  assert.equal(AccountPasswordSchema.parse("  abcd  "), "  abcd  ");
+  assert.equal(AccountPasswordSchema.parse("界".repeat(128)), "界".repeat(128));
+  assert.equal(AccountPasswordSchema.safeParse("😀".repeat(129)).success, false);
+});

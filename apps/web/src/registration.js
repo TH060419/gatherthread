@@ -148,8 +148,8 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
     const code = get("registration-code");
     if (!/^\d{8}$/.test(code.value)) { tell(error, "Enter the eight-digit email code."); code.focus(); return; }
     const password = get("registration-password");
-    if (password.value.length < 12 || password.value.length > 128 || password.value !== get("registration-password-confirm").value) {
-      tell(error, "Use 12–128 characters and make sure both passwords match."); password.focus(); return;
+    if (password.value.length < 8 || password.value.length > 128 || password.value !== get("registration-password-confirm").value) {
+      tell(error, "Use 8–128 characters and make sure both passwords match."); password.focus(); return;
     }
     const run = generation;
     const currentAuthentication = beginAuthentication();
@@ -179,7 +179,7 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
     const email = get("email-login-email");
     const password = get("email-login-password");
     const errorNode = get("email-login-error");
-    if (!email.checkValidity() || !email.value.trim() || password.value.length < 12) {
+    if (!email.checkValidity() || !email.value.trim() || password.value.length < 8 || password.value.length > 128) {
       tell(errorNode, "Check your email and password."); return;
     }
     const run = generation;
