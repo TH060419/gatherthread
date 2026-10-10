@@ -75,6 +75,12 @@ test("shared-host memory is explicit and accepts only host concurrency one", () 
       assert.throws(() => new HostedAgent(f.service, f.code, invalid), /maxConcurrent/);
       assert.throws(() => new HostedRepositoryRunner(invalid), /maxConcurrent/);
     }
+    const unguarded = { ...options, memoryPolicy: "shared-host" as const };
+    assert.throws(() => new HostedAgent(f.service, f.code, unguarded), /guarded CPU set/);
+    assert.throws(() => new HostedRepositoryRunner(unguarded), /guarded CPU set/);
+    const guarded = { ...unguarded, cpuSet: "1" };
+    assert.doesNotThrow(() => new HostedAgent(f.service, f.code, guarded));
+    assert.doesNotThrow(() => new HostedRepositoryRunner(guarded));
   } finally { f.close(); }
 });
 

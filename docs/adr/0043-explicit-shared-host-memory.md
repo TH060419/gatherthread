@@ -10,7 +10,7 @@ A small test host's nested application, rootless-daemon and task memory limits c
 
 ## Decision
 
-Add the opt-in `shared-host` memory policy documented in [Hosted Agent](../HOSTED_AGENT.md#shared-host-memory). Omission keeps the existing `limited` defaults and all their validations. Shared-host requires host concurrency one and removes only Docker task RAM/swap caps. The guarded cpuset entrypoint verifies actual unbounded RAM, high-water and swap controls only when the exact trusted policy marker is supplied. Absent or malformed controllers still fail closed; ordinary limited jobs still refuse unbounded values.
+Add the opt-in `shared-host` memory policy documented in [Hosted Agent](../HOSTED_AGENT.md#shared-host-memory). Omission keeps the existing `limited` defaults and all their validations. Shared-host requires host concurrency one and an explicit single-CPU cpuset, and removes only Docker task RAM/swap caps. It refuses an absent cpuset rather than launching through the unchecked CFS entrypoint. The guarded cpuset entrypoint verifies actual unbounded RAM, high-water and swap controls only when the exact trusted policy marker is supplied. Absent or malformed controllers still fail closed; ordinary limited jobs still refuse unbounded values.
 
 The operator must review and update the real root-owned application/manager/daemon/container ancestry and persistent/runtime controls together. CPU affinity, PID/time bounds, filesystem/network/credential isolation and task authorization do not change. Existing source/image/helper provenance must be honest; no flag-stripping Docker wrapper, unchecked replacement guard or automatic policy fallback is permitted.
 

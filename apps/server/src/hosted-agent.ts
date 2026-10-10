@@ -232,7 +232,7 @@ export class HostedAgent {
     }
     hostedContainerMemoryMiB("trial", options.memoryMiB);
     hostedContainerMemoryMiB("repository", options.repositoryMemoryMiB);
-    validateHostedMemoryPolicy(options.memoryPolicy, options.maxConcurrent);
+    validateHostedMemoryPolicy(options.memoryPolicy, options.maxConcurrent, options.cpuSet);
     if (parseHostedCpuSet(options.cpuSet) !== undefined && options.maxConcurrent !== 1) {
       throw new Error("Cloud Agent CPU set mode requires maxConcurrent to be 1");
     }

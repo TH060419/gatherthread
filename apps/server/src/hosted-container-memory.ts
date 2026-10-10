@@ -7,9 +7,11 @@ export function parseHostedMemoryPolicy(value: string | undefined): HostedMemory
   throw new Error("Cloud Agent memory policy must be limited or shared-host");
 }
 
-export function validateHostedMemoryPolicy(value: HostedMemoryPolicy | undefined, maxConcurrent: number): void {
-  if (parseHostedMemoryPolicy(value) === "shared-host" && maxConcurrent !== 1) {
-    throw new Error("Cloud Agent shared-host memory requires maxConcurrent to be 1");
+export function validateHostedMemoryPolicy(value: HostedMemoryPolicy | undefined, maxConcurrent: number,
+  cpuSet?: string): void {
+  if (parseHostedMemoryPolicy(value) === "shared-host") {
+    if (maxConcurrent !== 1) throw new Error("Cloud Agent shared-host memory requires maxConcurrent to be 1");
+    if (cpuSet === undefined) throw new Error("Cloud Agent shared-host memory requires a guarded CPU set");
   }
 }
 

@@ -16,7 +16,10 @@ export function hostedContainerCpuArguments(kind: "trial" | "repository", cpuSet
   memoryMiB: number, memoryPolicy?: HostedMemoryPolicy): string[] {
   const policy = parseHostedMemoryPolicy(memoryPolicy);
   const selected = parseHostedCpuSet(cpuSet);
-  if (selected === undefined) return ["--cpus", kind === "trial" ? "1" : "2"];
+  if (selected === undefined) {
+    if (policy === "shared-host") throw new Error("Cloud Agent shared-host memory requires a guarded CPU set");
+    return ["--cpus", kind === "trial" ? "1" : "2"];
+  }
   const maximum = kind === "trial" ? 768 : 2048;
   if (!Number.isSafeInteger(memoryMiB) || memoryMiB < 256 || memoryMiB > maximum) {
     throw new Error("Cloud Agent guarded container memory is invalid");

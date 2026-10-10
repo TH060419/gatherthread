@@ -110,8 +110,15 @@ test("shared-host memory is administrator-only explicit configuration with uncha
     GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT: "1",
   };
   assert.equal(loadServerConfig(enabled, "/srv/gatherthread").hostedAgent?.memoryPolicy, "limited");
-  assert.equal(loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: "shared-host" },
-    "/srv/gatherthread").hostedAgent?.memoryPolicy, "shared-host");
+  assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: "shared-host" },
+    "/srv/gatherthread"), /guarded CPU set/);
+  const shared = { ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: "shared-host",
+    GATHERTHREAD_HOSTED_AGENT_CPUSET: "1" };
+  if (process.platform === "linux") {
+    assert.equal(loadServerConfig(shared, "/srv/gatherthread").hostedAgent?.memoryPolicy, "shared-host");
+  } else {
+    assert.throws(() => loadServerConfig(shared, "/srv/gatherthread"), /Linux deployment host/);
+  }
   assert.throws(() => loadServerConfig({ ...enabled, GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: "shared-host",
     GATHERTHREAD_HOSTED_AGENT_MAX_CONCURRENT: "2" }, "/srv/gatherthread"), /concurrency one/);
   for (const value of ["", "shared", "unlimited", "SHARED-HOST", "shared-host\n", " shared-host"]) {

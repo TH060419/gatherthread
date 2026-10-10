@@ -217,6 +217,9 @@ export function loadServerConfig(
     if (memoryPolicy === "shared-host" && maxConcurrent !== 1) {
       throw new ConfigurationError("Cloud Agent shared-host memory requires host concurrency one");
     }
+    if (memoryPolicy === "shared-host" && cpuSet === undefined) {
+      throw new ConfigurationError("Cloud Agent shared-host memory requires a guarded CPU set");
+    }
     let memoryMiB: number, repositoryMemoryMiB: number;
     try {
       memoryMiB = hostedContainerMemoryMiB("trial", parseCountLimit("GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB",
