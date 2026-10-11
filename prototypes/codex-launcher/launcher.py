@@ -9,6 +9,7 @@ import math
 import queue
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -35,6 +36,7 @@ DEVICE_TOKEN_RE = re.compile(r"^gta_[A-Za-z0-9_-]{43}$")
 AUTHORIZATION_RESPONSE_LIMIT = 16 * 1024
 AUTHORIZATION_DEADLINE_SECONDS = 15
 AUTHORIZATION_FAILURE = "账号授权未完成。请检查密码，并从网页重新打开启动器；不要自动重试。 / Authorization failed. Check the password and reopen the Launcher from the website."
+AUTHORIZATION_CANCELLED = "已取消本次授权。需要连接时，请从网页重新打开启动器。 / Authorization cancelled. Reopen the Launcher from the website to connect."
 WINDOWS_APP_ID = "GatherThread.CodexLauncher"
 
 
@@ -115,6 +117,10 @@ class NoAuthorizationRedirect(HTTPRedirectHandler):
         return None
 
 
+class AuthorizationCancelled(Exception):
+    """Local cancellation is not a server error or a server-side rollback."""
+
+
 def validated_claim_token(payload: bytes, authorization_id: str) -> str:
     """Only a coherent native-device result may reach the connector environment."""
     try:
@@ -161,8 +167,12 @@ def valid_timestamp(value) -> bool:
 
 
 def claim_email_authorization(origin: str, authorization_id: str, project: str,
-                              email: str, password: str, device_name: str) -> str:
+                              email: str, password: str, device_name: str,
+                              *, cancelled: threading.Event | None = None) -> str:
     """One explicit claim; no cookies, redirects, persistent password or implicit retry."""
+    cancelled = cancelled if cancelled is not None else threading.Event()
+    if cancelled.is_set():
+        raise AuthorizationCancelled()
     if origin not in OFFICIAL_ORIGINS or not UUID_RE.fullmatch(authorization_id) or not PROJECT_RE.fullmatch(project):
         raise ValueError(AUTHORIZATION_FAILURE)
     email = valid_email(email)
@@ -178,18 +188,62 @@ def claim_email_authorization(origin: str, authorization_id: str, project: str,
         raise ValueError(AUTHORIZATION_FAILURE)
     request = Request(origin + "/v1/codex-launcher-authorizations/claim", data=body,
                       headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+    del body
     result: queue.Queue[tuple[bool, str]] = queue.Queue(maxsize=1)
-    cancelled = threading.Event()
+    abandoned = threading.Event()
+    response_lock = threading.Lock()
+    active_response = [None]
     deadline = time.monotonic() + AUTHORIZATION_DEADLINE_SECONDS
 
+    def stopped() -> bool:
+        return cancelled.is_set() or abandoned.is_set()
+
+    def abandon_transport() -> None:
+        abandoned.set()
+        request.data = None
+        with response_lock:
+            response = active_response[0]
+        if response is None:
+            return
+
+        def close_response() -> None:
+            # shutdown wakes a CPython socket-backed read where available.
+            # close is best effort and can block in a third-party handler, so
+            # the foreground authorization worker never waits for it.
+            stream = getattr(response, "fp", None)
+            raw = getattr(stream, "raw", None)
+            transport = getattr(raw, "_sock", None)
+            try:
+                if transport is not None:
+                    transport.shutdown(socket.SHUT_RDWR)
+            except (OSError, ValueError, AttributeError):
+                pass
+            try:
+                response.close()
+            except (OSError, ValueError, AttributeError):
+                pass
+
+        threading.Thread(target=close_response, daemon=True).start()
+
     def exchange() -> None:
+        response = None
         try:
-            with build_opener(NoAuthorizationRedirect()).open(request, timeout=AUTHORIZATION_DEADLINE_SECONDS) as response:
+            if stopped():
+                return
+            opener = build_opener(NoAuthorizationRedirect())
+            if stopped():
+                return
+            response = opener.open(request, timeout=AUTHORIZATION_DEADLINE_SECONDS)
+            with response_lock:
+                active_response[0] = response
+            with response:
+                if stopped():
+                    return
                 if response.status != 201 or response.headers.get("Content-Type", "").split(";", 1)[0].lower() != "application/json":
                     raise ValueError()
                 chunks = bytearray()
                 while len(chunks) <= AUTHORIZATION_RESPONSE_LIMIT:
-                    if cancelled.is_set() or time.monotonic() >= deadline:
+                    if stopped() or time.monotonic() >= deadline:
                         raise ValueError()
                     chunk = response.read1(min(4096, AUTHORIZATION_RESPONSE_LIMIT + 1 - len(chunks)))
                     if not chunk:
@@ -198,25 +252,38 @@ def claim_email_authorization(origin: str, authorization_id: str, project: str,
                 if len(chunks) > AUTHORIZATION_RESPONSE_LIMIT:
                     raise ValueError()
                 token = validated_claim_token(bytes(chunks), authorization_id)
-                if cancelled.is_set() or time.monotonic() >= deadline:
+                if stopped() or time.monotonic() >= deadline:
                     return
                 request.data = None
                 result.put_nowait((True, token))
         except (OSError, HTTPError, URLError, ValueError, AttributeError):
-            if not cancelled.is_set():
+            if not stopped():
                 result.put_nowait((False, ""))
         finally:
             request.data = None
+            with response_lock:
+                if active_response[0] is response:
+                    active_response[0] = None
 
     threading.Thread(target=exchange, daemon=True).start()
-    try:
-        success, token = result.get(timeout=AUTHORIZATION_DEADLINE_SECONDS)
+    while True:
+        if cancelled.is_set():
+            abandon_transport()
+            raise AuthorizationCancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            abandon_transport()
+            raise ValueError(AUTHORIZATION_FAILURE) from None
+        try:
+            success, token = result.get(timeout=min(0.05, remaining))
+        except queue.Empty:
+            continue
+        if cancelled.is_set():
+            abandon_transport()
+            raise AuthorizationCancelled()
         if not success:
             raise ValueError(AUTHORIZATION_FAILURE)
         return token
-    except queue.Empty:
-        cancelled.set()
-        raise ValueError(AUTHORIZATION_FAILURE) from None
 
 
 def valid_model(value: str) -> str:
@@ -685,22 +752,28 @@ class Launcher(tk.Tk):
             credential = token
             try:
                 try:
+                    if cancelled.is_set():
+                        raise AuthorizationCancelled()
                     if password_buffer:
                         credential = claim_email_authorization(origin, authorization_id, project, email,
-                                                               password_buffer.decode("utf-8"), "Windows Codex Launcher")
+                                                               password_buffer.decode("utf-8"), "Windows Codex Launcher",
+                                                               cancelled=cancelled)
                 finally:
                     password_buffer[:] = b"\0" * len(password_buffer)
                     password_buffer.clear()
                 with self.connector_lock:
                     if cancelled.is_set():
-                        return
+                        raise AuthorizationCancelled()
                     self.connector = subprocess.Popen(args, env=self._env(credential), stdin=subprocess.DEVNULL,
                                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                                       text=True, encoding="utf-8", errors="replace", shell=False, creationflags=self._flags())
                 self.events.put(("status", "连接器正在启动。安装或更新插件后请重启 Codex，并审查 Hooks。"))
                 threading.Thread(target=self._read_connector, args=(self.connector, credential), daemon=True).start()
+            except AuthorizationCancelled:
+                self.events.put(("status", AUTHORIZATION_CANCELLED))
             except (OSError, ValueError):
-                self.events.put(("error", AUTHORIZATION_FAILURE))
+                self.events.put(("status", AUTHORIZATION_CANCELLED) if cancelled.is_set()
+                                else ("error", AUTHORIZATION_FAILURE))
             finally:
                 self.events.put(("idle", ""))
 
@@ -717,10 +790,13 @@ class Launcher(tk.Tk):
 
     def _stop(self) -> None:
         self.connection_cancelled.set()
+        self._clear_secrets()
         with self.connector_lock:
             if self.connector and self.connector.poll() is None:
                 self.connector.terminate()
                 self.status.set("正在停止连接器…")
+            elif self.busy:
+                self.status.set(AUTHORIZATION_CANCELLED)
 
     def _background(self) -> None:
         self._clear_secrets()

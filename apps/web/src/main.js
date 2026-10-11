@@ -3068,7 +3068,7 @@ function openDeleteCloudDialog(type) {
 function openConnectCodexDialog() {
   if (!mobileWorkspace.canConnectLocally()) return;
   codexDeviceAuthorization.clear();
-  codexLauncher.clear();
+  codexLauncher.close();
   if (!state.project) return;
   const launcherAvailable = canOpenCodexLauncher({
     origin: location.origin,

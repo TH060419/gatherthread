@@ -16,8 +16,10 @@ Desktop connection prioritizes the Launcher and folds terminal fallback. The Web
 | Launcher-first entry | Primary download flow and folded fallback absent | Static UI checks and built Web real-pointer flows pass |
 | Brand icons | ICO missing and macOS bundle icon undeclared | Multi-resolution ICO, PNG, ICNS, plist/resource and native image decode pass |
 | Pending confirmation | Close/reopen left Confirm disabled | Delayed callback unit test and actual close/reopen clicks pass |
+| Same-project reopen | Reopening revoked an already-launched native password request | Distinct-grant unit and built-app pointer regressions preserve launched grants; project/account clearing still revokes them |
 | Rejected URL | Issued but untracked grant not revoked | Invalid-origin handoff cleanup test passes |
 | macOS Stop | Cancellation/generation fence absent | Delayed fake claim cancellation and stale-result/AppKit form self-tests pass |
+| Windows Stop | Stop before dispatch still sent a claim; pending reads/opens held the worker | Shared cancellation, prompt local wait release, best-effort transport close and no delayed connector launch pass |
 | Windows claim response | 25 incomplete/revoked/invalid metadata variants accepted | Complete record validation rejects all variants |
 | Project scope | Switching projects retained unconsumed handoff | Actual source-function regression verifies clear before loading |
 | Email hint lifetime/correction | Tab hint lasted 30 days; corrected email kept the old prefill | One-day tab/30-day explicit Remember validity, expiry removal and correction tests pass |
@@ -29,8 +31,8 @@ No checkpoint commit was made before the maintainer granted Gate 2 approval. Tes
 ## Verification
 
 - Browser: Chrome and WebKit each exercise four real built-app desktop pointer flows (both supported platform identities, both exact official origins), two Linux/self-hosted terminal fallback flows, plus phone and tablet existing-computer-Agent selection. All Web requests are intercepted to local build/fake API. Only the native-navigation sink is replaced with a gesture record; no force clicks, real credentials or OS app opening.
-- Web Launcher unit coverage: 9 tests; 96.97% lines, 88.41% branches, 81.82% functions.
-- Python: Windows helper/icon suite 28 tests, 22 pass and 6 pre-existing Windows-native skips on Mac; macOS packaging suite 4/4.
+- Web Launcher unit coverage: 10 tests; 96.97% lines, 88.73% branches, 81.82% functions.
+- Python: Windows helper/icon suite 32 tests, 26 pass and 6 pre-existing Windows-native skips on Mac; macOS packaging suite 4/4.
 - macOS arm64: native Swift compilation, shared URI vectors 4 accepted/18 rejected, separate account vectors 2 accepted/5 rejected, bounded fake-network claims and cancellation, AppKit form, high-resolution ICNS decode, plist and ad-hoc signature verification. Full ZIP built successfully.
 - TypeScript, connector/DSH/Web builds, scripts, Web/output, integration and E2E checks completed; reference/license/branding/secret audits pass, npm audit reports zero vulnerabilities.
 - Full unit regression rerun with `--test-concurrency=1`: 951 tests, 946 pass, zero failures, 5 platform-dependent skips. A default parallel rerun under local contention produced hash-capacity/socket timing failures in unrelated existing suites. No test cases, security limits or production password work were reduced; the complete serial rerun and the remaining verification stages passed.

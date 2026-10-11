@@ -60,7 +60,7 @@ async function fixture(origin, locale, platform, width = 1440, touch = 0) {
     MockCollaborationApi.prototype.createCodexLauncherAuthorization = async input => {
       window.launcherRequests.push(input);
       if (window.launcherDelayed) await new Promise(done => { window.finishLauncher = done; });
-      return { email: input.email, authorization: { id: "12345678-1234-4234-8234-123456789abc",
+      return { email: input.email, authorization: { id: crypto.randomUUID(),
         expires_at: new Date(Date.now() + 600000).toISOString() } };
     };
     MockCollaborationApi.prototype.revokeDeviceAuthorization = async id => window.launcherRevoked.push(id);
@@ -93,6 +93,8 @@ try {
       const opened = await page.evaluate(() => window.launcherOpened);
       assert.equal(opened.length, 1); assert.equal(opened[0].active, true, "native opening keeps the actual user gesture");
       const link = new URL(opened[0].uri);
+      const originalGrant = link.searchParams.get("authorization_id");
+      assert.match(originalGrant, /^[0-9a-f-]{36}$/i);
       assert.equal(link.searchParams.get("origin"), origin);
       assert.equal(link.searchParams.get("email"), "demo@example.invalid");
       assert.equal(link.searchParams.get("v"), "2");
@@ -101,6 +103,7 @@ try {
       assert.deepEqual(await page.evaluate(() => window.launcherRevoked), []);
       await page.locator("#connect-codex-button").click();
       await page.locator("#open-codex-launcher-button:not([disabled])").waitFor();
+      assert.ok(!(await page.evaluate(() => window.launcherRevoked)).includes(originalGrant), "reopening preserves native password entry");
       await page.locator("#connect-codex-manual > summary").click();
       await page.locator("#connect-codex-posix-command").waitFor({ state: "visible" });
       assert.match(await page.locator("#connect-codex-posix-command").innerText(), /codex-connect/);
@@ -111,7 +114,8 @@ try {
       await page.waitForFunction(() => typeof window.finishLauncher === "function");
       await page.locator("#close-connect-codex-button").click();
       await page.evaluate(() => window.finishLauncher());
-      await page.waitForFunction(() => window.launcherRevoked.length >= 3);
+      await page.waitForFunction(() => window.launcherRevoked.length >= 2);
+      assert.ok(!(await page.evaluate(() => window.launcherRevoked)).includes(originalGrant), "closing a later pending request does not revoke the launched grant");
       assert.equal(await page.locator("#open-codex-launcher-button").isDisabled(), true);
       assert.equal(await page.locator("#prepare-codex-launcher-button").isDisabled(), false);
       await page.evaluate(() => { window.launcherDelayed = false; });

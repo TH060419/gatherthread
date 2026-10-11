@@ -21,6 +21,33 @@ verify_dist = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(verify_dist)
 
 AUTHORIZATION_ID = "11111111-2222-4333-8444-555555555555"
+REAL_THREAD = threading.Thread
+
+
+class FixtureValue:
+    def __init__(self, value=""):
+        self.value = value
+
+    def get(self):
+        return self.value
+
+    def set(self, value):
+        self.value = value
+
+
+def email_launcher_fixture():
+    fake = types.SimpleNamespace(busy=False, connector=None, origin=FixtureValue("https://test.gatherthread.cn"),
+                                 project=FixtureValue("project-example"), email=FixtureValue("tester@example.com"),
+                                 password=FixtureValue("private-fixture-password"), token=FixtureValue(), model=FixtureValue("gpt-6-sol"),
+                                 context_tokens=FixtureValue("128000"), history_sync=FixtureValue("first-connect"), workspace=FixtureValue(),
+                                 status=FixtureValue(), link_version="2", authorization_id=AUTHORIZATION_ID,
+                                 handoff_project="project-example", authorization_used=False, events=launcher.queue.Queue(),
+                                 _paths=lambda: (Path("node.exe"), "codex.exe"), _flags=lambda: 0, _read_connector=MagicMock(),
+                                 connector_lock=threading.Lock())
+    fake._clear_secrets = lambda: (fake.password.set(""), fake.token.set(""))
+    fake._env = lambda token: {"GATHERTHREAD_TOKEN": token}
+    fake._set_busy = lambda value: setattr(fake, "busy", value)
+    return fake
 
 
 def email_link(origin="https://test.gatherthread.cn", **changes):
@@ -186,6 +213,129 @@ class EmailAuthorizationTests(unittest.TestCase):
             self.assertLess(time.monotonic() - started, 0.3)
         finally:
             release.set()
+
+    def test_stop_before_dispatch_sends_no_authorization_and_clears_password(self):
+        fake = email_launcher_fixture()
+        pending = []
+
+        def queued_thread(target, args=(), **_kwargs):
+            pending.append((target, args))
+            return types.SimpleNamespace(start=lambda: None)
+
+        with patch.object(launcher, "bundled_connector", return_value=Path(__file__)), \
+                patch.object(launcher, "claim_email_authorization", return_value="gta_" + "x" * 43) as claim, \
+                patch.object(launcher.threading, "Thread", side_effect=queued_thread), \
+                patch.object(launcher.subprocess, "Popen") as process:
+            launcher.Launcher._connect(fake)
+            launcher.Launcher._stop(fake)
+            work, args = pending[0]
+            work(*args)
+        claim.assert_not_called()
+        process.assert_not_called()
+        self.assertEqual(fake.password.get(), "")
+        retained = dict(zip(work.__code__.co_freevars, (cell.cell_contents for cell in work.__closure__)))
+        self.assertEqual(retained["password_buffer"], bytearray())
+        self.assertNotIn("error", [kind for kind, _value in list(fake.events.queue)])
+
+    def test_claim_helper_checks_shared_cancellation_before_opening_transport(self):
+        cancelled = threading.Event()
+        cancelled.set()
+        with patch.object(launcher, "build_opener") as opener:
+            with self.assertRaises(launcher.AuthorizationCancelled):
+                launcher.claim_email_authorization("https://test.gatherthread.cn", AUTHORIZATION_ID,
+                                                   "project-example", "tester@example.com", "eightchars", "Windows",
+                                                   cancelled=cancelled)
+        opener.assert_not_called()
+
+    def test_stop_cancels_blocked_read_closes_response_and_fences_late_result(self):
+        fake = email_launcher_fixture()
+        reading, released, closed = threading.Event(), threading.Event(), threading.Event()
+        workers = []
+
+        class BlockedResponse(ClaimResponse):
+            def read1(self, size):
+                reading.set()
+                released.wait(2)
+                return super().read1(size)
+
+            def close(self):
+                closed.set()
+                released.set()
+                super().close()
+
+        def capture_thread(target, args=(), **kwargs):
+            worker = REAL_THREAD(target=target, args=args, **kwargs)
+            if getattr(target, "__name__", "") == "work":
+                workers.append(worker)
+            return worker
+
+        opener = MagicMock()
+        opener.open.return_value = BlockedResponse(claim_response())
+        try:
+            with patch.object(launcher, "bundled_connector", return_value=Path(__file__)), \
+                    patch.object(launcher, "build_opener", return_value=opener), \
+                    patch.object(launcher.threading, "Thread", side_effect=capture_thread), \
+                    patch.object(launcher.subprocess, "Popen") as process:
+                launcher.Launcher._connect(fake)
+                self.assertTrue(reading.wait(1), "the authorization read must have started")
+                launcher.Launcher._stop(fake)
+                workers[0].join(0.4)
+                self.assertFalse(workers[0].is_alive(), "Stop must promptly release the foreground authorization worker")
+                self.assertTrue(closed.wait(0.4), "Stop must best-effort close the active response")
+                released.set()
+                workers[0].join(0.4)
+                process.assert_not_called()
+                opener.open.assert_called_once()
+                self.assertNotIn("error", [kind for kind, _value in list(fake.events.queue)])
+                self.assertEqual(fake.password.get(), "")
+                self.assertTrue(any(value == launcher.AUTHORIZATION_CANCELLED
+                                    for kind, value in list(fake.events.queue) if kind == "status"))
+        finally:
+            released.set()
+            for worker in workers:
+                worker.join(1)
+
+    def test_stop_during_open_releases_worker_and_ignores_response_delivered_later(self):
+        fake = email_launcher_fixture()
+        opening, release, completed = threading.Event(), threading.Event(), threading.Event()
+        workers = []
+
+        def open_later(*_args, **_kwargs):
+            opening.set()
+            release.wait(2)
+            completed.set()
+            return ClaimResponse(claim_response())
+
+        def capture_thread(target, args=(), **kwargs):
+            worker = REAL_THREAD(target=target, args=args, **kwargs)
+            if getattr(target, "__name__", "") == "work":
+                workers.append(worker)
+            return worker
+
+        opener = MagicMock()
+        opener.open.side_effect = open_later
+        try:
+            with patch.object(launcher, "bundled_connector", return_value=Path(__file__)), \
+                    patch.object(launcher, "build_opener", return_value=opener), \
+                    patch.object(launcher.threading, "Thread", side_effect=capture_thread), \
+                    patch.object(launcher.subprocess, "Popen") as process:
+                launcher.Launcher._connect(fake)
+                self.assertTrue(opening.wait(1), "the authorization request must have started")
+                launcher.Launcher._stop(fake)
+                workers[0].join(0.4)
+                self.assertFalse(workers[0].is_alive(), "Stop must release the worker even before a response handle exists")
+                release.set()
+                self.assertTrue(completed.wait(1))
+                process.assert_not_called()
+                opener.open.assert_called_once()
+                self.assertNotIn("error", [kind for kind, _value in list(fake.events.queue)])
+                self.assertEqual(fake.password.get(), "")
+                self.assertTrue(any(value == launcher.AUTHORIZATION_CANCELLED
+                                    for kind, value in list(fake.events.queue) if kind == "status"))
+        finally:
+            release.set()
+            for worker in workers:
+                worker.join(1)
 
     def test_password_validation_matches_utf16_length_without_trimming(self):
         for password in ("1234567", "😀" * 65, "x" * 129):

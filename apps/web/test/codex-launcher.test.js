@@ -75,6 +75,21 @@ test("Launcher prepares a password handoff then opens synchronously on the actua
   f.ui.clear();
   assert.deepEqual(f.revoked, [id], "account/scope change revokes even handed-off requests");
 });
+test("same-project reopens preserve launched grants but scope clearing still revokes them", async () => {
+  const issued = [id, "22345678-1234-4234-8234-123456789abc", "32345678-1234-4234-8234-123456789abc"];
+  let count = 0;
+  const f = fixture(async () => ({ email: "user@example.invalid", authorization: {
+    id: issued[count++], expires_at: new Date(Date.now() + 600_000).toISOString(),
+  } }));
+  await f.ui.open(); f.get("open-codex-launcher-button").listeners.click(); f.ui.close();
+  for (let index = 0; index < 2; index++) {
+    await f.ui.open(); f.ui.close();
+    assert.ok(!f.revoked.includes(id), "reopening must not interrupt native password entry");
+    assert.ok(f.revoked.includes(issued[index + 1]), "unopened replacement must be revoked on close");
+  }
+  f.change(); f.ui.clear();
+  assert.ok(f.revoked.includes(id), "a real project change still revokes the launched grant");
+});
 test("an unopened handoff is revoked on close and cannot launch after a project change", async () => {
   const f = fixture(); await f.ui.open(); f.change();
   f.get("open-codex-launcher-button").listeners.click();

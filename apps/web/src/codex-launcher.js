@@ -60,7 +60,7 @@ export function mountCodexLauncher({ document, api, localizer, emailHint, contex
   const invalidate = ({ keepOpened = false } = {}) => {
     generation++; prepared = null; button.disabled = true; prepareButton.disabled = false;
     for (const [id, grant] of grants) {
-      if (keepOpened && grant.opened) continue;
+      if (keepOpened && grant.opened && grant.scope === context()?.scope) continue;
       clearTimeout(grant.timer); grants.delete(id); revoke(id);
     }
   };
@@ -90,7 +90,7 @@ export function mountCodexLauncher({ document, api, localizer, emailHint, contex
       }
       const uri = projectCodexLauncherUrl({ ...current, email: result.email, authorizationId: result.authorization.id });
       prepared = { uri, scope: current.scope, id: result.authorization.id };
-      const grant = { opened: false, timer: null };
+      const grant = { opened: false, scope: current.scope, timer: null };
       grant.timer = setTimeout(() => {
         grants.delete(result.authorization.id); revoke(result.authorization.id);
         if (prepared?.id === result.authorization.id) {
@@ -122,7 +122,7 @@ export function mountCodexLauncher({ document, api, localizer, emailHint, contex
   prepareButton.addEventListener("click", () => void prepare());
   email.addEventListener("input", () => invalidate({ keepOpened: true }));
   return { clear, close, async open() {
-    clear(); const current = context(); if (!current) return;
+    close(); const current = context(); if (!current) return;
     email.value = emailHint.read(current.userId);
     get("codex-launcher-email-row").hidden = Boolean(email.value);
     get("codex-launcher-account").textContent = email.value;
