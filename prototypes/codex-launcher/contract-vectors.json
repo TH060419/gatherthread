@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "accepted": [
     {
       "name": "default model and first import",
@@ -22,6 +22,24 @@
       },
       "uri": "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-abc%3A123&model=gpt-5.6-sol+preview&context_window_tokens=128000&visible_history_sync=never",
       "parsed": ["https://gatherthread.cn", "project-abc:123", "gpt-5.6-sol preview", 128000, "never"]
+    },
+    {
+      "name": "email password handoff on production",
+      "input": {
+        "baseUrl": "https://gatherthread.cn", "projectId": "project-example", "contextWindowTokens": 65536,
+        "email": "user@example.invalid", "authorizationId": "12345678-1234-4234-8234-123456789abc"
+      },
+      "uri": "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=first-connect&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc",
+      "parsed": ["https://gatherthread.cn", "project-example", "gpt-5.6-sol", 65536, "first-connect", "user@example.invalid", "12345678-1234-4234-8234-123456789abc"]
+    },
+    {
+      "name": "email password handoff stays on test environment",
+      "input": {
+        "baseUrl": "https://test.gatherthread.cn", "projectId": "project-test", "model": "gpt-6-sol", "contextWindowTokens": 128000,
+        "visibleHistorySync": "never", "email": "USER@example.invalid", "authorizationId": "12345678-1234-4234-8234-123456789abc"
+      },
+      "uri": "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-test&model=gpt-6-sol&context_window_tokens=128000&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc",
+      "parsed": ["https://test.gatherthread.cn", "project-test", "gpt-6-sol", 128000, "never", "user@example.invalid", "12345678-1234-4234-8234-123456789abc"]
     }
   ],
   "rejected_uris": [
@@ -35,7 +53,14 @@
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&project=",
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&token=secret",
     "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&token=",
-    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example#fragment"
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Fgatherthread.cn&project=project-example#fragment",
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=never",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc&password=do-not-include",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn.evil.invalid&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn%3A443&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=never&email=user%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=never&email=not-mail&authorization_id=12345678-1234-4234-8234-123456789abc",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=never&email=user%40example.invalid&authorization_id=gtd_not-a-public-id",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-5.6-sol&context_window_tokens=65536&visible_history_sync=never&email=user%40example.invalid&email=another%40example.invalid&authorization_id=12345678-1234-4234-8234-123456789abc"
   ],
   "rejected_inputs": [
     {"baseUrl": "https://other.example", "projectId": "project-example"},

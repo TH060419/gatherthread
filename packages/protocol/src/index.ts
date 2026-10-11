@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { codeSyncRequestKinds } from "./code-sync.js";
 import { githubCodeSyncRequestKinds } from "./github-sync.js";
+import { RegistrationEmailSchema } from "./registration.js";
 export * from "./code-sync.js";
 export * from "./github-sync.js";
 export * from "./history-summary.js";
@@ -505,6 +506,12 @@ export const DeviceAuthorizationRecordSchema = z.object({
 });
 
 export type DeviceAuthorizationRecord = z.infer<typeof DeviceAuthorizationRecordSchema>;
+
+export const CodexLauncherAuthorizationSchema = z.object({
+  authorization: DeviceAuthorizationRecordSchema.strict(),
+  email: RegistrationEmailSchema,
+}).strict();
+export type CodexLauncherAuthorization = z.infer<typeof CodexLauncherAuthorizationSchema>;
 
 export const RotateDeviceTokenInputSchema = z.object({
   expires_at: z.string().datetime().nullable().optional(),

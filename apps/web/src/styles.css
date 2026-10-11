@@ -3120,6 +3120,19 @@ time,
   box-shadow: inset 0 1px var(--surface-highlight);
 }
 
+.codex-launcher-flow[hidden],
+.launcher-email-row[hidden] { display: none; }
+
+.codex-launcher-flow .button { margin-top: 12px; }
+.codex-launcher-flow a.button { display: inline-flex; align-items: center; justify-content: center; color: var(--ink); text-decoration: none; }
+.codex-launcher-flow .field-help { margin: 8px 0 0; overflow-wrap: anywhere; }
+.codex-launcher-flow .connection-step-heading > div { min-width: 0; flex: 1; }
+.codex-launcher-flow .step-number { flex-shrink: 0; }
+#connect-codex-project-name { margin: 12px 0 0; }
+.launcher-email-row { display: grid; gap: 8px; margin: 10px 0; }
+.launcher-email-row input { width: 100%; min-width: 0; }
+.launcher-email-row .button { justify-self: start; margin-top: 0; }
+
 .connection-step-heading {
   display: flex;
   align-items: flex-start;

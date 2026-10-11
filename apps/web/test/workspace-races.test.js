@@ -49,6 +49,7 @@ function harness(names, overrides = {}) {
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },
     onboarding: { cancel: noop, offer: noop, refreshLanguage: noop },
     sessionContextDetails: { open: false }, updateSessionContextDisclosure: noop,
+    codexLauncher: { clear: noop }, codexDeviceAuthorization: { clear: noop },
     location: { hash: "" }, URLSearchParams, initials: () => "U", localizer: { t: (value) => value },
     renderProjectSelect: noop, renderSessionList: noop, maybeOpenPendingDshPairing: noop,
     renderCurrentAvatar: noop, applyAvatarProfiles: noop,
@@ -63,6 +64,19 @@ function harness(names, overrides = {}) {
     .map(functionSource).join("\n"), context);
   return context;
 }
+
+test("switching projects clears unconsumed Launcher and manual authorizations before loading", async () => {
+  let launcherCleared = 0, manualCleared = 0;
+  const app = harness(["selectProject"], {
+    mobileWorkspace: { close: noop }, codeSyncUi: { close: noop }, historySummaryUi: { reset: noop },
+    codexLauncher: { clear: () => { launcherCleared++; } },
+    codexDeviceAuthorization: { clear: () => { manualCleared++; } },
+    projectSelectionGuard: { begin: () => { throw new Error("fixture-stop-before-API"); } },
+  });
+  await assert.rejects(app.selectProject("p2"), /fixture-stop-before-API/);
+  assert.equal(launcherCleared, 1);
+  assert.equal(manualCleared, 1);
+});
 
 test("closed Cloud Agent never counts as the last available Agent or becomes the Settings default", () => {
  const nodes = Object.fromEntries(["settings-enabled-codex", "settings-enabled-dsh", "settings-enabled-cloud",

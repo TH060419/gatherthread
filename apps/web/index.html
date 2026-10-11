@@ -972,16 +972,33 @@
           </div>
           <button id="close-connect-codex-button" class="icon-button" type="button" aria-label="Close Connect Codex dialog">×</button>
         </div>
-        <p id="connect-codex-summary" class="connection-lead">A local connector keeps this project connected to Codex Desktop. Follow the manual terminal steps, or use the optional Windows/macOS Launcher.</p>
-        <div id="codex-launcher-option" class="connection-preview-banner" role="note" hidden>
-          <span class="connection-preview-badge">Codex launcher</span>
-          <span>After installing the local Launcher, open it for this project. Enter the one-time device authorization in its window.</span>
-          <button id="open-codex-launcher-button" class="button button-secondary" type="button" disabled>Open Launcher</button>
-        </div>
-        <div class="connection-preview-banner" role="note">
-          <span class="connection-preview-badge">Beta 1</span>
-          <span>Current server only</span>
-        </div>
+        <p id="connect-codex-summary" class="connection-lead">Use the Launcher to connect this project to Codex Desktop. Your other signed-in devices stay connected.</p>
+        <strong id="connect-codex-project-name" class="connection-project-name"></strong>
+        <section id="codex-launcher-option" class="codex-launcher-flow" aria-labelledby="codex-launcher-title" hidden>
+          <p id="codex-launcher-environment" class="field-help"></p>
+          <ol class="connection-guide">
+            <li>
+              <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3 id="codex-launcher-title">Install the Launcher</h3><p>Download the current Windows or macOS Launcher once. Keep Codex Desktop signed in.</p></div></div>
+              <a id="download-codex-launcher-button" class="button button-secondary" href="https://github.com/TH060419/gatherthread/releases" target="_blank" rel="noopener noreferrer">Download Launcher</a>
+            </li>
+            <li>
+              <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Open and sign in</h3><p>Your email is filled in. Enter your password only in the Launcher, then connect.</p></div></div>
+              <p id="codex-launcher-account" class="field-help" data-i18n-skip></p>
+              <div id="codex-launcher-email-row" class="launcher-email-row" hidden>
+                <label for="codex-launcher-email">Account email</label>
+                <input id="codex-launcher-email" type="email" maxlength="254" autocomplete="email" aria-describedby="codex-launcher-status" />
+                <button id="prepare-codex-launcher-button" class="button button-secondary" type="button">Confirm email</button>
+              </div>
+              <button id="open-codex-launcher-button" class="button button-primary" type="button" disabled>Open Launcher</button>
+              <p id="codex-launcher-status" class="field-help" role="status" aria-live="polite"></p>
+            </li>
+            <li>
+              <div class="connection-step-heading"><span class="step-number" aria-hidden="true">3</span><div><h3>Confirm in Codex</h3><p>If prompted, install the plugin from the Launcher. Restart Codex Desktop, review and enable GatherThread Hooks, then keep the Launcher running.</p></div></div>
+            </li>
+          </ol>
+        </section>
+        <details id="connect-codex-manual" class="connection-details">
+          <summary>Terminal connection · Linux and advanced setup</summary>
         <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
           <li>
             <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>The manual terminal path requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.</p></div></div>
@@ -1005,8 +1022,7 @@ codex plugin add gatherthread@gatherthread</code>
           <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
           </li>
           <li>
-            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Connect this project</h3><p>Create an authorization below, then paste it into the hidden CLI prompt or Launcher.</p></div></div>
-            <strong id="connect-codex-project-name" class="connection-project-name"></strong>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Connect this project</h3><p>For the terminal fallback, create an authorization below and paste it into the hidden CLI prompt.</p></div></div>
             <section class="command-card command-card-compact" aria-labelledby="connect-codex-posix-title">
               <div class="command-heading">
                 <span id="connect-codex-posix-title" class="command-label">macOS / Linux</span>
@@ -1031,13 +1047,6 @@ codex plugin add gatherthread@gatherthread</code>
             <div class="connection-step-heading"><span class="step-number" aria-hidden="true">3</span><div><h3>Confirm in Codex</h3><p>Restart Codex Desktop. Review and enable the GatherThread Hooks, then keep the terminal open.</p></div></div>
           </li>
         </ol>
-        <details id="connect-codex-activation" class="connection-details">
-          <summary id="connect-codex-activation-title">What gets synchronized?</summary>
-          <p>Editable sessions appear as Codex tasks. Web requests run separately; approved Hooks return direct Desktop turns to the same shared history.</p>
-          <p>A new local task creates a personal Solo only after its first completed turn. Viewer tasks stay local.</p>
-        </details>
-        <p id="connect-codex-security" class="codex-connect-notice">On supported Windows and macOS, this page can open the installed Launcher. Manual commands remain available.</p>
-
         <section aria-labelledby="codex-authorization-heading">
           <h3 id="codex-authorization-heading">Authorize a Codex device</h3>
           <p>This authorizes one new device to act under your account. Revoke it later in Settings. The authorization expires in 10 minutes.</p>
@@ -1049,6 +1058,13 @@ codex plugin add gatherthread@gatherthread</code>
           </div>
           <p id="codex-authorization-status" class="field-help" role="status" aria-live="polite"></p>
         </section>
+        </details>
+        <details id="connect-codex-activation" class="connection-details">
+          <summary id="connect-codex-activation-title">What gets synchronized?</summary>
+          <p>Editable sessions appear as Codex tasks. Web requests run separately; approved Hooks return direct Desktop turns to the same shared history.</p>
+          <p>A new local task creates a personal Solo only after its first completed turn. Viewer tasks stay local.</p>
+        </details>
+        <p id="connect-codex-security" class="codex-connect-notice">The Launcher connects one independent device. Your password is not saved. You can revoke this device in Settings.</p>
 
         <p id="connect-codex-error" class="form-error" role="alert"></p>
         <div class="dialog-actions">

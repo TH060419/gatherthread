@@ -1,0 +1,21 @@
+{
+  "accepted": [
+    {
+      "name": "email account on production",
+      "uri": "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=first-connect&email=Person%40example.com&authorization_id=abcd1234-1234-4234-8234-123456789abc",
+      "parsed": ["https://gatherthread.cn", "project-example", "gpt-6-sol", 65536, "first-connect", "person@example.com", "abcd1234-1234-4234-8234-123456789abc"]
+    },
+    {
+      "name": "email account on independent test environment",
+      "uri": "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never&email=person%40example.com&authorization_id=abcd1234-1234-4234-8234-123456789abc",
+      "parsed": ["https://test.gatherthread.cn", "project-example", "gpt-6-sol", 65536, "never", "person@example.com", "abcd1234-1234-4234-8234-123456789abc"]
+    }
+  ],
+  "rejected_uris": [
+    "gatherthread-connect://connect?v=1&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn.evil.example&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never&email=person%40example.com&authorization_id=abcd1234-1234-4234-8234-123456789abc",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never&email=person%40example.com&authorization_id=abcd1234-1234-4234-8234-123456789abc&password=not-permitted",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never&email=person%40example.com&authorization_id=abcd1234-1234-4234-8234-123456789abc&email=other%40example.com",
+    "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Fgatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never&email=person%40example.com&authorization_id=not-a-uuid"
+  ]
+}

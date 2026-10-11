@@ -465,6 +465,9 @@ export class HttpCollaborationApi {
   }
 
   createDeviceAuthorization() { return this.request("/v1/device-authorizations", { method: "POST" }); }
+  createCodexLauncherAuthorization(input) {
+    return this.request("/v1/codex-launcher-authorizations", { method: "POST", body: JSON.stringify(input) });
+  }
   revokeDeviceAuthorization(id) { return this.request(`/v1/device-authorizations/${encodeURIComponent(id)}`, { method: "DELETE" }); }
 
   registrationStatus() { return this.request("/v1/registration"); }
@@ -885,6 +888,7 @@ export class MockCollaborationApi {
   }
 
   async createDeviceAuthorization() { throw new ApiError("Device authorization unavailable in the isolated example", { status: 403 }); }
+  async createCodexLauncherAuthorization() { throw new ApiError("Launcher authorization unavailable in the isolated example", { status: 403 }); }
   async revokeDeviceAuthorization() {}
 
   async registrationStatus() { return { enabled: false, site_key: null, challenge_binding: null }; }

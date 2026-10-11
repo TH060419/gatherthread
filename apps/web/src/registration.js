@@ -157,6 +157,8 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
     working = true; busy(true); error.textContent = ""; update();
     try {
       const profile = passwordReset ? null : identity();
+      const emailHint = passwordReset ? null : { email: get("registration-email").value,
+        rememberDevice: get("registration-remember").checked };
       const result = await (passwordReset
         ? api.verifyPasswordReset({ reset_id: registrationId, email: get("registration-email").value, code: code.value,
           password: password.value, password_confirmation: get("registration-password-confirm").value,
@@ -167,7 +169,7 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
       if (!isCurrent()) return;
       code.value = ""; password.value = ""; get("registration-password-confirm").value = ""; get("registration-email").value = ""; registrationId = null;
       if (passwordReset) { working = false; busy(false); onReset(); }
-      else await complete(result, isCurrent);
+      else await complete(result, isCurrent, emailHint);
     } catch (reason) { if (isCurrent()) tell(error, registrationError(reason)); }
     finally { if (isCurrent()) { working = false; busy(false); code.value = ""; password.value = ""; get("registration-password-confirm").value = ""; update(); } }
   });
@@ -191,10 +193,11 @@ export function mountRegistration({ document, api, localizer, identity, beginAut
       await api.prepareEmailLogin();
       if (!isCurrent()) return;
       const profile = identity();
+      const emailHint = { email: email.value, rememberDevice: get("email-login-remember").checked };
       const result = await api.loginWithEmail({ email: email.value, password: password.value,
         device_name: profile.deviceName, remember_device: get("email-login-remember").checked });
       if (!isCurrent()) return;
-      loginForm.reset(); await complete(result, isCurrent);
+      loginForm.reset(); await complete(result, isCurrent, emailHint);
     } catch (reason) { if (isCurrent()) tell(errorNode, registrationError(reason)); }
     finally { if (isCurrent()) { password.value = ""; working = false; busy(false); submit.disabled = false; } }
   });

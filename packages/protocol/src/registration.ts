@@ -19,6 +19,23 @@ export const EmailLoginInputSchema = z.object({
   remember_device: z.boolean().default(false),
 }).strict();
 export type EmailLoginInput = z.infer<typeof EmailLoginInputSchema>;
+const LauncherProjectId = z.string().min(1).max(128)
+  .refine((value) => /^[A-Za-z0-9]/u.test(value) && !/[^A-Za-z0-9._:-]/u.test(value));
+// A public, short-lived request ID is not a credential. Claim still requires
+// this verified account's password; neither a password nor token belongs in a URI.
+export const CreateCodexLauncherAuthorizationInputSchema = z.object({
+  project_id: LauncherProjectId,
+  email: RegistrationEmailSchema,
+}).strict();
+export const ClaimCodexLauncherAuthorizationInputSchema = z.object({
+  authorization_id: z.string().uuid().toLowerCase(),
+  project_id: LauncherProjectId,
+  email: RegistrationEmailSchema,
+  password: AccountPasswordSchema,
+  device_name: Label,
+}).strict();
+export type CreateCodexLauncherAuthorizationInput = z.infer<typeof CreateCodexLauncherAuthorizationInputSchema>;
+export type ClaimCodexLauncherAuthorizationInput = z.infer<typeof ClaimCodexLauncherAuthorizationInputSchema>;
 export const VerifyRegistrationInputSchema = z.object({
   registration_id: z.string().uuid(),
   code: z.string().regex(/^\d{8}$/),

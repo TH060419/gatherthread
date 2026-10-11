@@ -257,6 +257,14 @@ export class CollaborationService {
     return this.database.createDeviceAuthorization(actor);
   }
 
+  createCodexLauncherAuthorization(actor: Actor, input: Parameters<CollaborationDatabase["createCodexLauncherAuthorization"]>[1]) {
+    return this.database.createCodexLauncherAuthorization(actor, input);
+  }
+
+  claimCodexLauncherAuthorization(input: Parameters<CollaborationDatabase["claimCodexLauncherAuthorization"]>[0], ip: string) {
+    return this.database.claimCodexLauncherAuthorization(input, ip);
+  }
+
   claimDeviceAuthorization(input: Parameters<CollaborationDatabase["claimDeviceAuthorization"]>[0]) {
     return this.database.claimDeviceAuthorization(input);
   }

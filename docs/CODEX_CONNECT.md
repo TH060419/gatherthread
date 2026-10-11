@@ -4,15 +4,15 @@ GatherThread keeps one selected cloud project connected to Codex Desktop through
 
 For optional **project code** upload/download/recovery, use the `0.1.0-beta.1` connector with the separate `--code-sync` opt-in; follow [Project code collaboration](CODE_SYNC.md). This is independent of conversation/history synchronization.
 
-Sign in at `https://gatherthread.cn/app/` with email and password, then authorize the connector device separately. Use the command shown in the workspace for the matching connector and plugin version. If a corresponding package or tag is unavailable, use the source-checkout fallback below.
+Sign in at `https://gatherthread.cn/app/` with email and password, then use **Connect Codex → Open Launcher** on a supported desktop to authorize the computer separately. The folded terminal fallback uses the matching connector/plugin version shown by the workspace. If a corresponding package or tag is unavailable, use the source-checkout fallback below.
 
-**Beta 1 test service:** sign in at `https://test.gatherthread.cn/app/` after test admission and use that page's generated terminal command. Authorize a separate test device and workspace; production credentials do not cross over. Launcher v1 is limited to the official production origin and is not offered for test.
+**Test service:** sign in at `https://test.gatherthread.cn/app/` after test admission. The email-account Launcher supports both official environments and connects to the exact one shown by the page. Use your separate test account and workspace; production credentials do not cross over. Older v1 Launchers require an update for this flow.
 
 ## Launcher setup · official site, Windows/macOS
 
-Install the matching [Windows Launcher](../prototypes/codex-launcher/README.md) or [macOS Launcher](../prototypes/codex-launcher/macos/README.md) and open a signed-in Codex Desktop. In the official site's **Connect Codex** dialog, create a one-time device authorization and choose **Open Launcher**. Enter the authorization in the Launcher and start the connection. You can install its bundled plugin there; restart Codex and review/enable its Hooks before using local automatic upload. Keep the Launcher running. This path needs no terminal commands.
+Install the current [Windows Launcher](../prototypes/codex-launcher/README.md) or [macOS Launcher](../prototypes/codex-launcher/macos/README.md) and open a signed-in Codex Desktop. In **Connect Codex**, choose **Open Launcher**. Your account email and environment are filled in; enter your password in the Launcher and start the connection. No Token copying or terminal command is needed. An already signed-in browser without a saved email hint asks you to confirm your email once first. You can install its bundled plugin there; restart Codex and review/enable its Hooks before using local automatic upload. Keep the Launcher running.
 
-The current Launcher is an unsigned test build, pins `https://gatherthread.cn`, and requires separate local installation; the browser cannot assume it is installed. Linux, other server origins and unavailable Launchers use the manual setup below. The workspace **＋** below the connection buttons opens **Settings → Agents** to choose which connections to show.
+The Launcher requires a separate local installation; the browser cannot assume it is installed. It accepts only `https://gatherthread.cn` and `https://test.gatherthread.cn`, never an arbitrary link target. Passwords are not saved or passed to Codex. Each authorized computer receives independent device access, leaving your phone and browser signed in; revoke a computer in Settings when needed. The current build is not Developer ID signed/notarized. Linux, self-hosted origins and unavailable Launchers use the collapsed terminal fallback. The workspace **＋** opens **Settings → Agents** to choose which connections to show.
 
 ## Manual three-step setup · fallback
 
@@ -60,7 +60,7 @@ npx --yes @gatherthread/codex-connect@0.1.0-beta.1 \
   --plugin-hooks
 ```
 
-In Connect Codex, create a ten-minute one-use device authorization. Paste it into the hidden connector prompt or Launcher; do not save or share it. The connector claims its own device credential. Keep the terminal open. Run one connector per GatherThread project you want online.
+Expand **Terminal connection** in Connect Codex, create a ten-minute one-use device authorization, and paste it into the hidden connector prompt; do not save or share it. This legacy-compatible CLI fallback is separate from the Launcher's email/password flow. Keep the terminal open. Run one connector per GatherThread project you want online.
 
 ### 3. Confirm the connection
 

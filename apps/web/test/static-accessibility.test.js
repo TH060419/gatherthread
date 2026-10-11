@@ -313,6 +313,17 @@ test("official light and dark lockups include the approved mark and outlined wor
   assert.match(dark, /color="#FFFFFF"/);
 });
 
+test("Codex desktop connection puts email Launcher first and collapses terminal fallback", async () => {
+  const html = await readFile(htmlPath, "utf8");
+  const primary = html.slice(html.indexOf('id="codex-launcher-option"'), html.indexOf('id="connect-codex-manual"'));
+  assert.match(primary, /Download Launcher/);
+  assert.match(primary, /id="codex-launcher-email"[^>]*type="email"/);
+  assert.match(primary, /id="open-codex-launcher-button"/);
+  assert.doesNotMatch(primary, /gtd_|gta_|data-copy-command|device token/i);
+  assert.match(html, /<details id="connect-codex-manual"[^>]*>/);
+  assert.doesNotMatch(html, /<details id="connect-codex-manual"[^>]*\bopen\b/);
+});
+
 test("project Codex connector presents a concise Beta install-connect-confirm flow", async () => {
   const [html, main, domain, styles, i18n] = await Promise.all([
     readFile(htmlPath, "utf8"),
@@ -324,12 +335,12 @@ test("project Codex connector presents a concise Beta install-connect-confirm fl
   assert.match(html, /Beta 1/);
   assert.doesNotMatch(html, /Official service is not open yet/i);
   assert.match(html, />1<\/span>[\s\S]*<h3>Install once<\/h3>[\s\S]*>2<\/span>[\s\S]*<h3>Connect this project<\/h3>[\s\S]*>3<\/span>[\s\S]*<h3>Confirm in Codex<\/h3>/);
-  assert.match(html, /A local connector keeps this project connected/i);
+  assert.match(html, /Use the Launcher to connect this project to Codex Desktop/i);
   assert.match(html, /Review and enable the GatherThread Hooks/i);
   assert.match(html, /Keep the terminal open/i);
   assert.doesNotMatch(html, /Move to project|manual Desktop step/i);
-  assert.match(html, /paste it into the hidden CLI prompt or Launcher/i);
-  assert.match(html, /Manual commands remain available/i);
+  assert.match(html, /For the terminal fallback, create an authorization below/i);
+  assert.match(html, /Terminal connection · Linux and advanced setup/i);
   assert.match(html, /id="codex-launcher-option"[^>]*hidden/);
   assert.match(main, /canOpenCodexLauncher/);
   assert.match(html, /command not found: codex/);

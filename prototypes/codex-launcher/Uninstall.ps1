@@ -23,7 +23,7 @@ if ($live) {
 }
 
 if ($DryRun) {
-    Write-Host "Would remove any Launcher-owned plugin and marketplace, URL Scheme, and $installRoot"
+    Write-Host "Would remove any Launcher-owned plugin and marketplace, URL Scheme, owned Start menu shortcut, and $installRoot"
     Write-Host 'Project workspaces, Codex tasks, and GatherThread connector state would be retained.'
     exit 0
 }
@@ -67,6 +67,16 @@ if (Test-Path -LiteralPath $schemeCommand) {
     $registered = (Get-Item -LiteralPath $schemeCommand).GetValue('')
     if ($registered -and $registered.IndexOf($installRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
         Remove-Item -LiteralPath $schemeRoot -Recurse -Force
+    }
+}
+$shortcutPath = Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs\GatherThread Launcher.lnk'
+if (Test-Path -LiteralPath $shortcutPath -PathType Leaf) {
+    $shell = New-Object -ComObject WScript.Shell
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $expectedTarget = Join-Path $installRoot 'runtime\pythonw.exe'
+    $expectedArguments = '"' + (Join-Path $installRoot 'launcher.py') + '"'
+    if ($shortcut.TargetPath -eq $expectedTarget -and $shortcut.Arguments -eq $expectedArguments) {
+        Remove-Item -LiteralPath $shortcutPath -Force
     }
 }
 Remove-Item -LiteralPath $installRoot -Recurse -Force

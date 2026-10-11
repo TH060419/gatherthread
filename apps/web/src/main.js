@@ -2,6 +2,7 @@ import { renderAvatar, isAgentReply, eventAuthorLabel } from "./avatars.js";
 import { mountAvatarSettings } from "./avatar-settings.js";
 import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-3";
 import { mountDeviceAuthorization } from "./device-authorization.js";
+import { createAccountEmailHint, mountCodexLauncher } from "./codex-launcher.js";
 import { mountAccountDevices } from "./account-devices.js";
 import { cloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js";
 import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261006-mobile-2";
@@ -32,7 +33,6 @@ import {
   normalizeConnectorState,
   pendingAgentRequests,
   projectCodexConnectionCommands,
-  projectCodexLauncherUrl,
   provenanceSummary,
   invitationStatusLabel,
   invitationRolePolicy,
@@ -366,6 +366,14 @@ const cloudGithubUi = mountCloudGithub({ api: () => api, t: (value) => localizer
 element("cloud-agent-source").addEventListener("change", renderComposerPermissions);
 const codexDeviceAuthorization = mountDeviceAuthorization({ document, api, localizer,
   scope: () => `${authenticationGeneration}:${state.currentUser?.id}:${state.project?.id}` });
+const accountEmailHint = createAccountEmailHint();
+const codexLauncher = mountCodexLauncher({ document, api, localizer, emailHint: accountEmailHint,
+  context: () => state.currentUser && state.project ? {
+    scope: `${authenticationGeneration}:${state.currentUser.id}:${state.project.id}`,
+    userId: state.currentUser.id, baseUrl: location.origin, projectId: state.project.id,
+    model: currentProjectProfile().model, contextWindowTokens: contextBudgetToTokenCeiling(state.settings),
+    visibleHistorySync: state.settings.sync.visibleHistorySync,
+  } : null });
 const registrationUi = mountRegistration({ document, api, localizer,
   identity: () => authenticationIdentity({ required: activeAuthEntry === "register" }),
   busy: (value) => { authRequestInProgress = value; },
@@ -574,9 +582,10 @@ function beginEmailAuthentication() {
   return () => generation === authenticationGeneration;
 }
 
-async function completeEmailAuthentication(result, isCurrent) {
+async function completeEmailAuthentication(result, isCurrent, emailHint) {
   if (!isCurrent()) return;
   state.currentUser = result.actor;
+  if (emailHint) accountEmailHint.remember(result.actor.id, emailHint.email, emailHint.rememberDevice);
   element("claim-display-name").value = "";
   setAutomaticClaimDeviceName({ force: true });
   await enterWorkspace();
@@ -837,6 +846,7 @@ leaveProjectForm.addEventListener("submit", async (event) => {
       return;
     }
     codeSyncUi.close();
+    codexLauncher.clear();
     sync.disconnect();
     stopMemberRefresh();
     stopSnapshotPolling();
@@ -866,29 +876,11 @@ deleteCloudDialog.addEventListener("close", () => {
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
 });
 connectCodexButton.addEventListener("click", openConnectCodexDialog);
-element("open-codex-launcher-button").addEventListener("click", () => {
-  if (!state.project || !canOpenCodexLauncher({
-    origin: location.origin,
-    platform: navigator.userAgentData?.platform ?? navigator.platform,
-    maxTouchPoints: navigator.maxTouchPoints,
-  })) return;
-  try {
-    const deepLink = projectCodexLauncherUrl({
-      baseUrl: location.origin,
-      projectId: state.project.id,
-      model: currentProjectProfile().model,
-      contextWindowTokens: contextBudgetToTokenCeiling(state.settings),
-      visibleHistorySync: state.settings.sync.visibleHistorySync,
-    });
-    window.location.href = deepLink;
-  } catch (error) {
-    element("connect-codex-error").textContent = error.message ?? "Unable to open the Codex launcher.";
-  }
-});
 element("close-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 element("done-connect-codex-button").addEventListener("click", () => connectCodexDialog.close());
 connectCodexDialog.addEventListener("close", () => {
   codexDeviceAuthorization.clear();
+  codexLauncher.close();
   const returnFocus = connectCodexReturnFocus;
   connectCodexReturnFocus = null;
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
@@ -1072,6 +1064,7 @@ deleteCloudForm.addEventListener("submit", async (event) => {
     } else {
       await api.deleteProject(target.id);
       if (!isCurrent()) return;
+      codexLauncher.clear();
       sync.disconnect();
       stopMemberRefresh();
       stopSnapshotPolling();
@@ -1280,6 +1273,8 @@ async function restoreBrowserSession() {
 function resetWorkspaceToAuth() {
   mobileWorkspace.close();
   codexDeviceAuthorization.clear();
+  codexLauncher.clear();
+  accountEmailHint.clear(state.currentUser?.id);
   onboarding.cancel();
   sessionContextDetails.open = false;
   updateSessionContextDisclosure();
@@ -1413,6 +1408,8 @@ async function enterWorkspace(preferredProjectId) {
 
 async function selectProject(projectId) {
   if (!state.currentUser) return;
+  codexLauncher.clear();
+  codexDeviceAuthorization.clear();
   mobileWorkspace.close();
   onboarding.cancel();
   sessionContextDetails.open = false;
@@ -3071,6 +3068,7 @@ function openDeleteCloudDialog(type) {
 function openConnectCodexDialog() {
   if (!mobileWorkspace.canConnectLocally()) return;
   codexDeviceAuthorization.clear();
+  codexLauncher.close();
   if (!state.project) return;
   const launcherAvailable = canOpenCodexLauncher({
     origin: location.origin,
@@ -3078,7 +3076,16 @@ function openConnectCodexDialog() {
     maxTouchPoints: navigator.maxTouchPoints,
   });
   element("codex-launcher-option").hidden = !launcherAvailable;
-  element("open-codex-launcher-button").disabled = !launcherAvailable;
+  element("open-codex-launcher-button").disabled = true;
+  element("connect-codex-manual").open = !launcherAvailable;
+  localizer.setText(element("connect-codex-summary"), launcherAvailable
+    ? "Use the Launcher to connect this project to Codex Desktop. Your other signed-in devices stay connected."
+    : "A local connector keeps this project connected to Codex Desktop. Use the terminal instructions below.");
+  localizer.setText(element("connect-codex-security"), launcherAvailable
+    ? "The Launcher connects one independent device. Your password is not saved. You can revoke this device in Settings."
+    : "Authorize one independent connector device. You can revoke it in Settings.");
+  localizer.setText(element("codex-launcher-environment"), location.origin === "https://test.gatherthread.cn"
+    ? "Test environment · separate account" : "Production environment");
   const errorNode = element("connect-codex-error");
   errorNode.textContent = "";
   for (const status of connectCodexDialog.querySelectorAll("[data-copy-status]")) status.textContent = "";
@@ -3101,6 +3108,7 @@ function openConnectCodexDialog() {
   }
   connectCodexReturnFocus = document.activeElement;
   connectCodexDialog.showModal();
+  if (launcherAvailable) void codexLauncher.open();
   requestAnimationFrame(() => element("close-connect-codex-button").focus());
 }
 

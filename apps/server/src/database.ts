@@ -45,10 +45,11 @@ import {
   HISTORY_SUMMARY_MAX_CONTEXT_BYTES, HistorySummaryError, buildHistoryContext,
   buildHistorySummaryPrompt, historySummaryMarker, historySummarySourceJson, historySummaryText,
   isHistorySummaryRequest, selectHistorySummarySources,
+  CreateCodexLauncherAuthorizationInputSchema, ClaimCodexLauncherAuthorizationInputSchema,
 } from "@gatherthread/protocol";
 import { RegistrationStore, REGISTRATION_SCHEMA, type RegistrationOptions } from "./registration.js";
 import { hashPassword, checkPassword, PasswordCapacityError } from "./password.js";
-import type { EmailLoginInput, VerifyRegistrationInput, VerifyPasswordResetInput } from "@gatherthread/protocol";
+import type { EmailLoginInput, VerifyRegistrationInput, VerifyPasswordResetInput, CreateCodexLauncherAuthorizationInput, ClaimCodexLauncherAuthorizationInput, CodexLauncherAuthorization } from "@gatherthread/protocol";
 import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
 import type { HostedAllocation, HostedRunLimits } from "./hosted-agent-pool.js";
 import { HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./hosted-agent-pool.js";
@@ -626,6 +627,10 @@ CREATE TABLE IF NOT EXISTS device_authorizations (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS device_authorizations_user_idx
   ON device_authorizations(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS codex_launcher_authorizations (
+  authorization_id TEXT PRIMARY KEY REFERENCES device_authorizations(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE
+) STRICT;
 CREATE TABLE IF NOT EXISTS browser_sessions (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -1565,6 +1570,71 @@ export class CollaborationDatabase {
       ) VALUES (?, ?, ?, ?, ?, ?)
     `).run(id, actor.user_id, actor.device_id, this.tokenDigest(token), timestamp, expiresAt);
     return { authorization: this.requireDeviceAuthorization(id), authorization_token: token };
+  }
+
+  createCodexLauncherAuthorization(actor: Actor, input: CreateCodexLauncherAuthorizationInput): CodexLauncherAuthorization {
+    const parsed = CreateCodexLauncherAuthorizationInputSchema.parse(input);
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      // Preserve digest-only account storage. The browser provides its email
+      // hint; it is accepted only when it identifies the signed-in account.
+      const account = this.sqlite.prepare("SELECT 1 FROM public_registration_accounts WHERE user_id=? AND email_digest=?")
+        .get(actor.user_id, this.tokenDigest(`registration-email:${parsed.email}`));
+      if (!account) throw this.invalidLauncherAuthorization();
+      if (this.projectMembershipRole(parsed.project_id, actor.user_id) === null) throw notFound("Project");
+      if (this.requireProject(parsed.project_id).state !== "active") throw conflict("Project is archived");
+      const { authorization } = this.createDeviceAuthorization(actor);
+      this.sqlite.prepare("INSERT INTO codex_launcher_authorizations(authorization_id,project_id) VALUES(?,?)")
+        .run(authorization.id, parsed.project_id);
+      // The unused legacy gtd secret is deliberately discarded, never delivered to Web.
+      return { authorization, email: parsed.email };
+    });
+  }
+
+  async claimCodexLauncherAuthorization(input: ClaimCodexLauncherAuthorizationInput, ip: string): Promise<ClaimDeviceAuthorizationResult> {
+    const parsed = ClaimCodexLauncherAuthorizationInputSchema.parse(input);
+    // Reuse durable email/IP/global login budgets and the process-wide hash
+    // capacity bound, including equivalent work for unknown mailboxes.
+    const account = this.registration.passwordLoginAttempt(parsed.email, `codex-launcher:${parsed.authorization_id}`, ip);
+    let valid: boolean;
+    try { valid = await checkPassword(parsed.password, account?.password_hash); }
+    catch (error) {
+      if (error instanceof PasswordCapacityError) throw new ApiError(503, "password_busy", "Sign-in is busy. Please try again.");
+      throw error;
+    }
+    if (!valid || !account) throw this.invalidLauncherAuthorization();
+    return this.transaction(() => {
+      const timestamp = this.now();
+      const row = this.sqlite.prepare(`
+        SELECT a.* FROM device_authorizations a
+        JOIN codex_launcher_authorizations c ON c.authorization_id=a.id
+        JOIN devices d ON d.id=a.authorizer_device_id AND d.user_id=a.user_id
+        JOIN public_registration_accounts e ON e.user_id=a.user_id
+        JOIN projects p ON p.id=c.project_id
+        JOIN project_memberships m ON m.project_id=p.id AND m.user_id=a.user_id
+        WHERE a.id=? AND c.project_id=? AND a.user_id=? AND e.password_hash=?
+          AND e.email_digest=? AND a.claimed_at IS NULL AND a.revoked_at IS NULL
+          AND a.expired_at IS NULL AND a.expires_at>?
+          AND d.revoked_at IS NULL AND (d.expires_at IS NULL OR d.expires_at>?) AND p.state='active'
+      `).get(parsed.authorization_id, parsed.project_id, account.user_id, account.password_hash,
+        this.tokenDigest(`registration-email:${parsed.email}`), timestamp, timestamp) as unknown as DeviceAuthorizationRow | undefined;
+      if (!row) throw this.invalidLauncherAuthorization();
+      // No transaction spans password work. Every grant, account, authorizer
+      // and project condition is checked again under this one-use write lock.
+      const device = this.createDevice(row.user_id, parsed.device_name);
+      const claimed = this.sqlite.prepare(`
+        UPDATE device_authorizations SET claimed_at=?, claimed_by_device_id=?
+        WHERE id=? AND claimed_at IS NULL AND revoked_at IS NULL AND expired_at IS NULL AND expires_at>?
+      `).run(timestamp, device.device_id, row.id, timestamp);
+      if (Number(claimed.changes) !== 1) throw this.invalidLauncherAuthorization();
+      const user = this.sqlite.prepare("SELECT display_name FROM users WHERE id=?").get(row.user_id) as { display_name: string };
+      return { actor: { user_id: row.user_id, display_name: user.display_name, device_id: device.device_id },
+        device: device.device, token: device.token, authorization: this.requireDeviceAuthorization(row.id) };
+    });
+  }
+
+  private invalidLauncherAuthorization(): ApiError {
+    return new ApiError(401, "launcher_authorization_invalid", "The sign-in or connection request is incorrect or unavailable. Reopen Connect Codex and try again.");
   }
 
   claimDeviceAuthorization(input: {
