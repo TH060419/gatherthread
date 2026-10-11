@@ -45,5 +45,6 @@ These are point-in-time records. A source commit, Git tag, npm package and serve
 - [Changelog](../CHANGELOG.md): Beta 1 changes and preserved Alpha history.
 - [Release record index](releases/README.md): which version records have tags or GitHub Releases.
 - [Contributing guide](../CONTRIBUTING.md): review, verification, and ownership rules.
+- [Approved logo assets](../logo/README.md): canonical masters, correct background variants, shared package, integrity checks, and developer adoption rules.
 - [Repository security policy](../SECURITY.md): private reporting entry point shown by GitHub.
 - [References](REFERENCES.md), [design references](DESIGN_REFERENCES.md), and [design QA](design-qa.md).

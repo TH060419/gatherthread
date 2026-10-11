@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 590 380" width="590" height="380" role="img" aria-label="GatherThread logo">
+<defs>
+  <linearGradient id="cyan" x1="20" y1="40" x2="560" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#20C1DC"/><stop offset=".43" stop-color="#2AC9E5"/><stop offset=".57" stop-color="#60C0EC"/><stop offset=".68" stop-color="#9A96F5"/><stop offset=".80" stop-color="#C986E9"/><stop offset="1" stop-color="#F47BBC"/></linearGradient>
+  <linearGradient id="blue" x1="20" y1="135" x2="330" y2="241" gradientUnits="userSpaceOnUse"><stop stop-color="#2E96F5"/><stop offset=".48" stop-color="#4A8EF6"/><stop offset=".72" stop-color="#7689F3"/><stop offset="1" stop-color="#A789F0"/></linearGradient>
+  <linearGradient id="violet" x1="20" y1="228" x2="330" y2="129" gradientUnits="userSpaceOnUse"><stop stop-color="#A766F0"/><stop offset=".46" stop-color="#B273ED"/><stop offset=".72" stop-color="#B789F2"/><stop offset="1" stop-color="#A39CF8"/></linearGradient>
+  <linearGradient id="pink" x1="20" y1="322" x2="420" y2="186" gradientUnits="userSpaceOnUse"><stop stop-color="#F66DB9"/><stop offset=".48" stop-color="#F378BD"/><stop offset=".68" stop-color="#EA82CB"/><stop offset=".84" stop-color="#D28FE5"/><stop offset="1" stop-color="#BB99F1"/></linearGradient>
+</defs>
+<g fill="none" stroke-width="40" stroke-linejoin="round">
+  <path d="M50 135 H158 C210 135 245 215 298 240" stroke="url(#blue)" stroke-linecap="butt"/>
+  <path d="M50 228 H162 C214 228 247 143 298 130" stroke="url(#violet)" stroke-linecap="butt"/>
+  <path d="M50 322 H174 C248 322 322 184 404 184 H540" stroke="url(#pink)" stroke-linecap="round"/>
+  <path d="M50 42 H167 C241 42 320 184 404 184 H540" stroke="url(#cyan)" stroke-linecap="round"/>
+</g>
+<g><circle cx="50" cy="42" r="28" fill="#20C1DC"/><circle cx="50" cy="135" r="28" fill="#2E96F5"/><circle cx="50" cy="228" r="28" fill="#A766F0"/><circle cx="50" cy="322" r="28" fill="#F66DB9"/></g>
+</svg>

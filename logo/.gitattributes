@@ -1,0 +1,3 @@
+# Keep approved assets and checksum inputs byte-identical on every platform.
+* -text
+*.eps -diff

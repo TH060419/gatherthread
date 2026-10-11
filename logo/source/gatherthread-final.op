@@ -1,0 +1,867 @@
+{
+  "version": "0.8.2",
+  "name": "OpenPencil CLI Session",
+  "children": [
+    {
+      "type": "group",
+      "id": "n25",
+      "name": "Imported SVG",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "n1",
+          "name": "Rect",
+          "x": 0.0,
+          "y": 0.0,
+          "width": 400.0,
+          "height": 65.0,
+          "fill": [
+            {
+              "type": "solid",
+              "color": "#fbfaf7"
+            }
+          ]
+        },
+        {
+          "type": "group",
+          "id": "n12",
+          "name": "Group",
+          "children": [
+            {
+              "type": "group",
+              "id": "n6",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "path",
+                  "id": "n2",
+                  "name": "Path",
+                  "x": 22.0,
+                  "y": 60.0,
+                  "d": "M 0.47191 0.674157 H 49.011236 C 72.382022 0.674157 88.11236 36.629213 111.932584 47.865169",
+                  "closed": false,
+                  "width": 112.0,
+                  "height": 48.0
+                },
+                {
+                  "type": "path",
+                  "id": "n3",
+                  "name": "Path",
+                  "x": 22.0,
+                  "y": 58.0,
+                  "d": "M 0.47191 44.47191 H 50.808989 C 74.179775 44.47191 89.011236 6.269663 111.932584 0.426966",
+                  "closed": false,
+                  "width": 112.0,
+                  "height": 45.0
+                },
+                {
+                  "type": "path",
+                  "id": "n4",
+                  "name": "Path",
+                  "x": 22.0,
+                  "y": 82.0,
+                  "d": "M 0.47191 62.719101 H 56.202247 C 89.460674 62.719101 122.719101 0.696629 159.573034 0.696629 H 220.696629",
+                  "closed": false,
+                  "width": 221.0,
+                  "height": 63.0
+                },
+                {
+                  "type": "path",
+                  "id": "n5",
+                  "name": "Path",
+                  "x": 22.0,
+                  "y": 18.0,
+                  "d": "M 0.47191 0.876404 H 53.05618 C 86.314607 0.876404 121.820225 64.696629 159.573034 64.696629 H 220.696629",
+                  "closed": false,
+                  "width": 221.0,
+                  "height": 65.0
+                }
+              ]
+            },
+            {
+              "type": "group",
+              "id": "n11",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "n7",
+                  "name": "Ellipse",
+                  "x": 10.0,
+                  "y": 6.0,
+                  "width": 25.0,
+                  "height": 25.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#20c1dc"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n8",
+                  "name": "Ellipse",
+                  "x": 10.0,
+                  "y": 48.0,
+                  "width": 25.0,
+                  "height": 25.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#2e96f5"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n9",
+                  "name": "Ellipse",
+                  "x": 10.0,
+                  "y": 90.0,
+                  "width": 25.0,
+                  "height": 25.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#a766f0"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n10",
+                  "name": "Ellipse",
+                  "x": 10.0,
+                  "y": 132.0,
+                  "width": 25.0,
+                  "height": 25.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#f66db9"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "id": "n50",
+      "name": "Imported SVG",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "n26",
+          "name": "Rect",
+          "x": 0.0,
+          "y": 240.0,
+          "width": 400.0,
+          "height": 65.0,
+          "fill": [
+            {
+              "type": "solid",
+              "color": "#08111f"
+            }
+          ]
+        },
+        {
+          "type": "group",
+          "id": "n37",
+          "name": "Group",
+          "children": [
+            {
+              "type": "group",
+              "id": "n31",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "path",
+                  "id": "n27",
+                  "name": "Path",
+                  "x": 22.0,
+                  "y": 300.0,
+                  "d": "M 0.47191 0.674157 H 49.011236 C 72.382022 0.674157 88.11236 36.629213 111.932584 47.865169",
+                  "closed": false,
+                  "width": 112.0,
+                  "height": 48.0
+                },
+                {
+                  "type": "path",
+                  "id": "n28",
+                  "name": "Path",
+                  "x": 22.0,
+                  "y": 298.0,
+                  "d": "M 0.47191 44.47191 H 50.808989 C 74.179775 44.47191 89.011236 6.269663 111.932584 0.426966",
+                  "closed": false,
+                  "width": 112.0,
+                  "height": 45.0
+                },
+                {
+                  "type": "path",
+                  "id": "n29",
+                  "name": "Path",
+                  "x": 22.0,
+                  "y": 322.0,
+                  "d": "M 0.47191 62.719101 H 56.202247 C 89.460674 62.719101 122.719101 0.696629 159.573034 0.696629 H 220.696629",
+                  "closed": false,
+                  "width": 221.0,
+                  "height": 63.0
+                },
+                {
+                  "type": "path",
+                  "id": "n30",
+                  "name": "Path",
+                  "x": 22.0,
+                  "y": 258.0,
+                  "d": "M 0.47191 0.876404 H 53.05618 C 86.314607 0.876404 121.820225 64.696629 159.573034 64.696629 H 220.696629",
+                  "closed": false,
+                  "width": 221.0,
+                  "height": 65.0
+                }
+              ]
+            },
+            {
+              "type": "group",
+              "id": "n36",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "n32",
+                  "name": "Ellipse",
+                  "x": 10.0,
+                  "y": 246.0,
+                  "width": 25.0,
+                  "height": 25.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#20c1dc"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n33",
+                  "name": "Ellipse",
+                  "x": 10.0,
+                  "y": 288.0,
+                  "width": 25.0,
+                  "height": 25.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#2e96f5"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n34",
+                  "name": "Ellipse",
+                  "x": 10.0,
+                  "y": 330.0,
+                  "width": 25.0,
+                  "height": 25.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#a766f0"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n35",
+                  "name": "Ellipse",
+                  "x": 10.0,
+                  "y": 372.0,
+                  "width": 25.0,
+                  "height": 25.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#f66db9"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "id": "n61",
+      "name": "Imported SVG",
+      "children": [
+        {
+          "type": "group",
+          "id": "n55",
+          "name": "Group",
+          "children": [
+            {
+              "type": "path",
+              "id": "n51",
+              "name": "Path",
+              "x": 993.0,
+              "y": 91.0,
+              "d": "M 0.898305 0.525424 H 74.118644 C 109.372881 0.525424 133.101695 54.762712 169.033898 71.711864",
+              "closed": false,
+              "width": 170.0,
+              "height": 72.0
+            },
+            {
+              "type": "path",
+              "id": "n52",
+              "name": "Path",
+              "x": 993.0,
+              "y": 88.0,
+              "d": "M 0.898305 66.576271 H 76.830508 C 112.084746 66.576271 134.457627 8.949153 169.033898 0.135593",
+              "closed": false,
+              "width": 170.0,
+              "height": 67.0
+            },
+            {
+              "type": "path",
+              "id": "n53",
+              "name": "Path",
+              "x": 993.0,
+              "y": 124.0,
+              "d": "M 0.898305 94.305085 H 84.966102 C 135.135593 94.305085 185.305085 0.745763 240.898305 0.745763 H 333.101695",
+              "closed": false,
+              "width": 334.0,
+              "height": 95.0
+            },
+            {
+              "type": "path",
+              "id": "n54",
+              "name": "Path",
+              "x": 993.0,
+              "y": 28.0,
+              "d": "M 0.898305 0.474576 H 80.220339 C 130.389831 0.474576 183.949153 96.745763 240.898305 96.745763 H 333.101695",
+              "closed": false,
+              "width": 334.0,
+              "height": 97.0
+            }
+          ]
+        },
+        {
+          "type": "group",
+          "id": "n60",
+          "name": "Group",
+          "children": [
+            {
+              "type": "ellipse",
+              "id": "n56",
+              "name": "Ellipse",
+              "x": 975.0,
+              "y": 9.0,
+              "width": 38.0,
+              "height": 38.0,
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#20c1dc"
+                }
+              ]
+            },
+            {
+              "type": "ellipse",
+              "id": "n57",
+              "name": "Ellipse",
+              "x": 975.0,
+              "y": 73.0,
+              "width": 38.0,
+              "height": 38.0,
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#2e96f5"
+                }
+              ]
+            },
+            {
+              "type": "ellipse",
+              "id": "n58",
+              "name": "Ellipse",
+              "x": 975.0,
+              "y": 136.0,
+              "width": 38.0,
+              "height": 38.0,
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#a766f0"
+                }
+              ]
+            },
+            {
+              "type": "ellipse",
+              "id": "n59",
+              "name": "Ellipse",
+              "x": 975.0,
+              "y": 199.0,
+              "width": 38.0,
+              "height": 38.0,
+              "fill": [
+                {
+                  "type": "solid",
+                  "color": "#f66db9"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "id": "n73",
+      "name": "Imported SVG",
+      "children": [
+        {
+          "type": "group",
+          "id": "n72",
+          "name": "Group",
+          "children": [
+            {
+              "type": "group",
+              "id": "n66",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "path",
+                  "id": "n62",
+                  "name": "Path",
+                  "x": 993.0,
+                  "y": 561.0,
+                  "d": "M 0.898305 0.525424 H 74.118644 C 109.372881 0.525424 133.101695 54.762712 169.033898 71.711864",
+                  "closed": false,
+                  "width": 170.0,
+                  "height": 72.0,
+                  "stroke": {
+                    "thickness": 27.118645,
+                    "fill": [
+                      {
+                        "type": "solid",
+                        "color": "#000000"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "path",
+                  "id": "n63",
+                  "name": "Path",
+                  "x": 993.0,
+                  "y": 558.0,
+                  "d": "M 0.898305 66.576271 H 76.830508 C 112.084746 66.576271 134.457627 8.949153 169.033898 0.135593",
+                  "closed": false,
+                  "width": 170.0,
+                  "height": 67.0,
+                  "stroke": {
+                    "thickness": 27.118645,
+                    "fill": [
+                      {
+                        "type": "solid",
+                        "color": "#000000"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "path",
+                  "id": "n64",
+                  "name": "Path",
+                  "x": 993.0,
+                  "y": 594.0,
+                  "d": "M 0.898305 94.305085 H 84.966102 C 135.135593 94.305085 185.305085 0.745763 240.898305 0.745763 H 333.101695",
+                  "closed": false,
+                  "width": 334.0,
+                  "height": 95.0,
+                  "stroke": {
+                    "thickness": 27.118645,
+                    "fill": [
+                      {
+                        "type": "solid",
+                        "color": "#000000"
+                      }
+                    ]
+                  }
+                },
+                {
+                  "type": "path",
+                  "id": "n65",
+                  "name": "Path",
+                  "x": 993.0,
+                  "y": 498.0,
+                  "d": "M 0.898305 0.474576 H 80.220339 C 130.389831 0.474576 183.949153 96.745763 240.898305 96.745763 H 333.101695",
+                  "closed": false,
+                  "width": 334.0,
+                  "height": 97.0,
+                  "stroke": {
+                    "thickness": 27.118645,
+                    "fill": [
+                      {
+                        "type": "solid",
+                        "color": "#000000"
+                      }
+                    ]
+                  }
+                }
+              ]
+            },
+            {
+              "type": "group",
+              "id": "n71",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "n67",
+                  "name": "Ellipse",
+                  "x": 975.0,
+                  "y": 479.0,
+                  "width": 38.0,
+                  "height": 38.0
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n68",
+                  "name": "Ellipse",
+                  "x": 975.0,
+                  "y": 543.0,
+                  "width": 38.0,
+                  "height": 38.0
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n69",
+                  "name": "Ellipse",
+                  "x": 975.0,
+                  "y": 606.0,
+                  "width": 38.0,
+                  "height": 38.0
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n70",
+                  "name": "Ellipse",
+                  "x": 975.0,
+                  "y": 669.0,
+                  "width": 38.0,
+                  "height": 38.0
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "id": "n86",
+      "name": "Imported SVG",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "n74",
+          "name": "Rect",
+          "x": 1586.0,
+          "y": 6.0,
+          "width": 388.0,
+          "height": 388.0,
+          "fill": [
+            {
+              "type": "solid",
+              "color": "#fbfaf7"
+            }
+          ]
+        },
+        {
+          "type": "group",
+          "id": "n85",
+          "name": "Group",
+          "children": [
+            {
+              "type": "group",
+              "id": "n79",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "path",
+                  "id": "n75",
+                  "name": "Path",
+                  "x": 1619.0,
+                  "y": 105.0,
+                  "d": "M 0.0625 0.46875 H 84.4375 C 125.0625 0.46875 152.40625 62.96875 193.8125 82.5",
+                  "closed": false,
+                  "width": 194.0,
+                  "height": 83.0
+                },
+                {
+                  "type": "path",
+                  "id": "n76",
+                  "name": "Path",
+                  "x": 1619.0,
+                  "y": 101.0,
+                  "d": "M 0.0625 77.125 H 87.5625 C 128.1875 77.125 153.96875 10.71875 193.8125 0.5625",
+                  "closed": false,
+                  "width": 194.0,
+                  "height": 78.0
+                },
+                {
+                  "type": "path",
+                  "id": "n77",
+                  "name": "Path",
+                  "x": 1619.0,
+                  "y": 143.0,
+                  "d": "M 0.0625 108.5625 H 96.9375 C 154.75 108.5625 212.5625 0.75 276.625 0.75 H 382.875",
+                  "closed": false,
+                  "width": 383.0,
+                  "height": 109.0
+                },
+                {
+                  "type": "path",
+                  "id": "n78",
+                  "name": "Path",
+                  "x": 1619.0,
+                  "y": 32.0,
+                  "d": "M 0.0625 0.8125 H 91.46875 C 149.28125 0.8125 211 111.75 276.625 111.75 H 382.875",
+                  "closed": false,
+                  "width": 383.0,
+                  "height": 112.0
+                }
+              ]
+            },
+            {
+              "type": "group",
+              "id": "n84",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "n80",
+                  "name": "Ellipse",
+                  "x": 1597.0,
+                  "y": 11.0,
+                  "width": 44.0,
+                  "height": 44.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#20c1dc"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n81",
+                  "name": "Ellipse",
+                  "x": 1597.0,
+                  "y": 84.0,
+                  "width": 44.0,
+                  "height": 44.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#2e96f5"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n82",
+                  "name": "Ellipse",
+                  "x": 1597.0,
+                  "y": 156.0,
+                  "width": 44.0,
+                  "height": 44.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#a766f0"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n83",
+                  "name": "Ellipse",
+                  "x": 1597.0,
+                  "y": 230.0,
+                  "width": 44.0,
+                  "height": 44.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#f66db9"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "group",
+      "id": "n99",
+      "name": "Imported SVG",
+      "children": [
+        {
+          "type": "rectangle",
+          "id": "n87",
+          "name": "Rect",
+          "x": 1586.0,
+          "y": 566.0,
+          "width": 388.0,
+          "height": 388.0,
+          "fill": [
+            {
+              "type": "solid",
+              "color": "#08111f"
+            }
+          ]
+        },
+        {
+          "type": "group",
+          "id": "n98",
+          "name": "Group",
+          "children": [
+            {
+              "type": "group",
+              "id": "n92",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "path",
+                  "id": "n88",
+                  "name": "Path",
+                  "x": 1619.0,
+                  "y": 665.0,
+                  "d": "M 0.0625 0.46875 H 84.4375 C 125.0625 0.46875 152.40625 62.96875 193.8125 82.5",
+                  "closed": false,
+                  "width": 194.0,
+                  "height": 83.0
+                },
+                {
+                  "type": "path",
+                  "id": "n89",
+                  "name": "Path",
+                  "x": 1619.0,
+                  "y": 661.0,
+                  "d": "M 0.0625 77.125 H 87.5625 C 128.1875 77.125 153.96875 10.71875 193.8125 0.5625",
+                  "closed": false,
+                  "width": 194.0,
+                  "height": 78.0
+                },
+                {
+                  "type": "path",
+                  "id": "n90",
+                  "name": "Path",
+                  "x": 1619.0,
+                  "y": 703.0,
+                  "d": "M 0.0625 108.5625 H 96.9375 C 154.75 108.5625 212.5625 0.75 276.625 0.75 H 382.875",
+                  "closed": false,
+                  "width": 383.0,
+                  "height": 109.0
+                },
+                {
+                  "type": "path",
+                  "id": "n91",
+                  "name": "Path",
+                  "x": 1619.0,
+                  "y": 592.0,
+                  "d": "M 0.0625 0.8125 H 91.46875 C 149.28125 0.8125 211 111.75 276.625 111.75 H 382.875",
+                  "closed": false,
+                  "width": 383.0,
+                  "height": 112.0
+                }
+              ]
+            },
+            {
+              "type": "group",
+              "id": "n97",
+              "name": "Group",
+              "children": [
+                {
+                  "type": "ellipse",
+                  "id": "n93",
+                  "name": "Ellipse",
+                  "x": 1597.0,
+                  "y": 571.0,
+                  "width": 44.0,
+                  "height": 44.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#20c1dc"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n94",
+                  "name": "Ellipse",
+                  "x": 1597.0,
+                  "y": 644.0,
+                  "width": 44.0,
+                  "height": 44.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#2e96f5"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n95",
+                  "name": "Ellipse",
+                  "x": 1597.0,
+                  "y": 716.0,
+                  "width": 44.0,
+                  "height": 44.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#a766f0"
+                    }
+                  ]
+                },
+                {
+                  "type": "ellipse",
+                  "id": "n96",
+                  "name": "Ellipse",
+                  "x": 1597.0,
+                  "y": 790.0,
+                  "width": 44.0,
+                  "height": 44.0,
+                  "fill": [
+                    {
+                      "type": "solid",
+                      "color": "#f66db9"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "editorMeta": {
+    "activePageIndex": 0,
+    "preserveAuthoredGeometry": false
+  }
+}

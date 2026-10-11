@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "product": "GatherThread",
+  "asset_revision": "final-f",
+  "publication_date": "2026-10-12",
+  "canonical_masters": {
+    "mark": {
+      "path": "source/mark-master.svg",
+      "sha256": "1bb2d249a21e7f77cc847075fe0751cef2aa52034334192dcbf53d3b12c31409"
+    },
+    "wordmark": {
+      "path": "source/wordmark-regular-outline.svg",
+      "sha256": "1ad609672b1212a6da0480199332425e44566af380bb2c5ce4b027451cb7dd44",
+      "outlined": true
+    }
+  },
+  "export_counts": { "svg": 15, "png": 38, "pdf": 15, "eps": 15 },
+  "recommended_assets": {
+    "light_surface_lockup": "svg/lockup-color-transparent-light.svg",
+    "dark_surface_lockup": "svg/lockup-color-transparent-dark.svg",
+    "color_mark": "svg/mark-color-transparent-light.svg",
+    "black_mark": "svg/mark-monochrome-black-transparent.svg",
+    "white_mark": "svg/mark-monochrome-white-transparent.svg",
+    "light_app_icon": "svg/app-icon-color-on-white.svg",
+    "dark_app_icon": "svg/app-icon-color-on-dark.svg"
+  },
+  "checksums": "SHA256SUMS",
+  "checksums_exclude": ["SHA256SUMS", "GatherThread-logo-package.zip"],
+  "share_archive": "GatherThread-logo-package.zip",
+  "archive_excludes": ["GatherThread-logo-package.zip"],
+  "reference_only": ["source/reference-final.png"],
+  "usage_guide": "README.md"
+}

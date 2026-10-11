@@ -47,6 +47,12 @@ Use a focused branch for review. Agent-created branch names should use the `code
 - Add negative tests for unauthorized roles, revoked devices, wrong runtime purpose, malformed input, and retry collisions when the change touches those paths.
 - Do not mix feature behavior, broad refactoring, generated output, dependency upgrades, and release publication in one PR without a documented reason.
 
+## Brand assets
+
+Use the approved [logo package and usage guide](logo/README.md) for all new GatherThread branding. That guide owns the asset revision, canonical mark and outlined wordmark, background selection, integrity checks, and update procedure. Reference or copy the delivered files rather than redrawing paths, substituting fonts, or reusing older candidates. Product and installer integrations must record which approved asset they use and verify it on the target surface.
+
+The versioned files in `logo/`, including the SVG/PNG/PDF/EPS exports and shared ZIP, are intentional design deliverables and belong in source control. Ordinary build output remains uncommitted.
+
 ## Interface changes
 
 Read [`docs/INTERFACE_CONTRACTS.md`](docs/INTERFACE_CONTRACTS.md) before changing a route, schema, event, WebSocket message, MCP tool/resource, connector interface, DSH RPC, Hook payload, persistent sidecar, or stable DOM control.
