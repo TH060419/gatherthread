@@ -72,3 +72,12 @@ jobs:
           python3 -m unittest discover -s prototypes/codex-launcher/macos -p 'test_*.py' -v
           python3 prototypes/codex-launcher/macos/build_dist.py
           codesign --verify --deep --strict 'prototypes/codex-launcher/.build-macos/GatherThread Launcher.app'
+      - if: matrix.os == 'windows-latest' || matrix.os == 'macos-latest'
+        name: Preserve verified public Launcher packages
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: codex-launcher-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          path: prototypes/codex-launcher/dist/GatherThreadLauncher-*.zip
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
