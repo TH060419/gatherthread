@@ -15,6 +15,7 @@ Desktop connection prioritizes the Launcher and folds terminal fallback. The Web
 | Web v2 handoff | v1 generated instead of v2; incomplete account inputs accepted | Shared formal/test vectors and domain tests pass |
 | Launcher-first entry | Primary download flow and folded fallback absent | Static UI checks and built Web real-pointer flows pass |
 | Brand icons | ICO missing and macOS bundle icon undeclared | Multi-resolution ICO, PNG, ICNS, plist/resource and native image decode pass |
+| macOS compatibility floor | A local build declared 13.0 but contained a Launcher targeting 26.0 and Node targeting 13.5 | Explicit 13.5 compiler target, matching bundle metadata and both executable minimum checks |
 | Pending confirmation | Close/reopen left Confirm disabled | Delayed callback unit test and actual close/reopen clicks pass |
 | Same-project reopen | Reopening revoked an already-launched native password request | Distinct-grant unit and built-app pointer regressions preserve launched grants; project/account clearing still revokes them |
 | Rejected URL | Issued but untracked grant not revoked | Invalid-origin handoff cleanup test passes |
@@ -32,14 +33,14 @@ No checkpoint commit was made before the maintainer granted Gate 2 approval. Tes
 
 - Browser: Chrome and WebKit each exercise four real built-app desktop pointer flows (both supported platform identities, both exact official origins), two Linux/self-hosted terminal fallback flows, plus phone and tablet existing-computer-Agent selection. All Web requests are intercepted to local build/fake API. Only the native-navigation sink is replaced with a gesture record; no force clicks, real credentials or OS app opening.
 - Web Launcher unit coverage: 10 tests; 96.97% lines, 88.73% branches, 81.82% functions.
-- Python: Windows helper/icon suite 32 tests, 26 pass and 6 pre-existing Windows-native skips on Mac; macOS packaging suite 4/4.
+- Python: Windows helper/icon suite 32 tests, 26 pass and 6 pre-existing Windows-native skips on Mac; macOS packaging suite 7/7.
 - macOS arm64: native Swift compilation, shared URI vectors 4 accepted/18 rejected, separate account vectors 2 accepted/5 rejected, bounded fake-network claims and cancellation, AppKit form, high-resolution ICNS decode, plist and ad-hoc signature verification. Full ZIP built successfully.
 - TypeScript, connector/DSH/Web builds, scripts, Web/output, integration and E2E checks completed; reference/license/branding/secret audits pass, npm audit reports zero vulnerabilities.
 - Full unit regression rerun with `--test-concurrency=1`: 951 tests, 946 pass, zero failures, 5 platform-dependent skips. A default parallel rerun under local contention produced hash-capacity/socket timing failures in unrelated existing suites. No test cases, security limits or production password work were reduced; the complete serial rerun and the remaining verification stages passed.
 - `git diff --check` passes; independent review confirmed the corrected authorization, cancellation, lifecycle and privacy boundaries.
 
 Built macOS archive: `prototypes/codex-launcher/dist/GatherThreadLauncher-macOS-arm64.zip`.
-SHA-256: `a00b13abd33409a7121ae0c99649388e95d47b2da14ae69987a55412307fda1a`.
+Local 13.5-target rebuild SHA-256: `ada29e55b8f0dfbb658a365498b3d9c6ac5b77a289580c8174419d7c06b5df59`. Published CI archives will have their own recorded hashes.
 
 ## Remaining publication gates
 

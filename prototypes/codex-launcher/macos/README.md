@@ -4,6 +4,8 @@ This optional arm64/x86_64 prototype uses a native AppKit `.app` and bundles
 Node 24, the fixed-version connector, and a copy of the reviewed Codex plugin.
 End users do not need Python or npm. Codex Desktop / CLI must already be
 installed and signed in. The manual terminal connection remains an advanced fallback.
+The packaged Launcher and Node require macOS 13.5 or later; the build explicitly
+targets that minimum rather than the build machine's OS version.
 
 ## Install and connect
 
@@ -68,7 +70,7 @@ updater. These are release gates, not features of this prototype.
 
 ## 中文：安装与连接
 
-1. 解压对应架构的安装包，将 `GatherThread Launcher.app` 移到“应用程序”，首次打开并按系统提示确认来源。当前为临时签名，尚未经过 Apple 公证；不要绕过不可信安装包的安全警告。
+1. macOS 需为 13.5 或更新版本。解压对应架构的安装包，将 `GatherThread Launcher.app` 移到“应用程序”，首次打开并按系统提示确认来源。当前为临时签名，尚未经过 Apple 公证；不要绕过不可信安装包的安全警告。
 2. 先确保本机 Codex 已安装并登录。网页登录 GatherThread，进入项目，点击“连接 Codex” → “打开启动器”。邮箱、项目和环境会自动填入；核对“正式环境 / 测试环境”，只输入账号密码，再点击“授权并连接”。其他设备的登录不受影响。
 3. 本地目录可留空使用默认项目目录。只有需要安装随包插件时才点击安装，并在 Codex 的 `/hooks` 中自行审查。保持启动器运行；关闭窗口后可从 GatherThread Dock 图标恢复，退出前可点击“停止连接”。
 

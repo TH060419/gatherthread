@@ -22,6 +22,28 @@ BUILD = LAUNCHER / ".build-macos"
 DIST = LAUNCHER / "dist"
 APP = BUILD / "GatherThread Launcher.app"
 RESOURCES = APP / "Contents" / "Resources"
+MINIMUM_MACOS_VERSION = "13.5"
+
+
+def swift_compile_command(binary: Path, architecture: str) -> list[str]:
+    return ["swiftc", "-O", "-target", f"{architecture}-apple-macosx{MINIMUM_MACOS_VERSION}",
+            "-framework", "AppKit", "-o", str(binary), str(HERE / "Launcher.swift")]
+
+
+def validate_binary_minimum(binary: Path) -> None:
+    """Do not claim compatibility below either bundled executable's real floor."""
+    try:
+        output = subprocess.check_output(["vtool", "-show-build", str(binary)], text=True)
+        minimums = re.findall(r"^\s*minos\s+(\d+(?:\.\d+){1,2})\s*$", output, re.MULTILINE)
+        declared = tuple(map(int, MINIMUM_MACOS_VERSION.split("."))) + (0,)
+        for minimum in minimums:
+            parts = tuple(map(int, minimum.split(".")))
+            if parts + (0,) * (3 - len(parts)) > declared:
+                raise ValueError()
+        if not minimums:
+            raise ValueError()
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        raise SystemExit("Bundled macOS executable exceeds the declared system minimum") from None
 
 
 def matching_node_license(version: str) -> bytes:
@@ -97,13 +119,15 @@ def main() -> None:
     (APP / "Contents/MacOS").mkdir(parents=True)
     RESOURCES.mkdir(parents=True)
     copy(HERE / "Info.plist", APP / "Contents/Info.plist")
+    with (APP / "Contents/Info.plist").open("rb") as handle:
+        if plistlib.load(handle).get("LSMinimumSystemVersion") != MINIMUM_MACOS_VERSION:
+            raise SystemExit("macOS system minimum must match the compilation target")
     copy(LAUNCHER / "assets/GatherThread.icns", RESOURCES / "GatherThread.icns")
     validate_bundle_icon(APP)
     environment = os.environ.copy()
     environment["SWIFT_MODULE_CACHE_PATH"] = str(BUILD / "swift-cache")
     environment["CLANG_MODULE_CACHE_PATH"] = str(BUILD / "clang-cache")
-    subprocess.run(["swiftc", "-O", "-framework", "AppKit", "-o",
-                    str(APP / "Contents/MacOS/GatherThreadLauncher"), str(HERE / "Launcher.swift")],
+    subprocess.run(swift_compile_command(APP / "Contents/MacOS/GatherThreadLauncher", platform.machine()),
                    check=True, env=environment)
     copy(node, RESOURCES / "runtime/node")
     (RESOURCES / "runtime/Node-LICENSE.txt").write_bytes(license_text)
@@ -114,6 +138,8 @@ def main() -> None:
     shutil.copytree(ROOT / "plugins/gatherthread", RESOURCES / "plugins/gatherthread")
     copy(ROOT / ".agents/plugins/marketplace.json", RESOURCES / "marketplace.json")
     binary = APP / "Contents/MacOS/GatherThreadLauncher"
+    validate_binary_minimum(binary)
+    validate_binary_minimum(RESOURCES / "runtime/node")
     subprocess.run([str(binary), "--self-test", str(LAUNCHER / "contract-vectors.json")], check=True)
     subprocess.run([str(binary), "--self-test", str(HERE / "account-contract-vectors.json")], check=True)
     subprocess.run([str(binary), "--icon-self-test", str(RESOURCES / "GatherThread.icns")], check=True)
