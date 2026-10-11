@@ -13,6 +13,7 @@ import {
   SetAccountAvatarInputSchema,
   EmailLoginInputSchema, EmailAccountSessionSchema, RegistrationStatusSchema, RegistrationSentSchema, SendRegistrationInputSchema, VerifyRegistrationInputSchema,
   SendPasswordResetInputSchema, VerifyPasswordResetInputSchema, PasswordResetSentSchema,
+  CreateCodexLauncherAuthorizationInputSchema, ClaimCodexLauncherAuthorizationInputSchema, CodexLauncherAuthorizationSchema,
   TestGateExchangeInputSchema,
   TestGateStatusSchema,
   AppendEventInputSchema,
@@ -96,6 +97,7 @@ const SENSITIVE_UNAUTHENTICATED_PATHS = new Set([
   "/v1/invitations/claim",
   "/v1/test-access/claim",
   "/v1/device-authorizations/claim",
+  "/v1/codex-launcher-authorizations/claim",
 ]);
 
 function isSensitiveUnauthenticatedPath(pathname: string): boolean {
@@ -554,6 +556,8 @@ export async function startCollaborationServer(
         }
       }
       const requestOrigin = request.headers.origin;
+      const launcherBrowserMetadata = request.headers.cookie !== undefined || request.headers.authorization !== undefined
+        || Object.keys(request.headers).some(key => key.startsWith("sec-fetch-"));
       if (requestOrigin) {
         if (!options.allowedOrigins?.includes(requestOrigin)) {
           throw new ApiError(403, "origin_forbidden", "The browser origin is not allowed");
@@ -598,7 +602,7 @@ export async function startCollaborationServer(
         if (admissionPath.startsWith("/v1/")) {
           assertAdmissionCurrent = () => {
             if (testGate.admitted(admission)) return;
-            if (nativeAdmissionCapability(url.pathname, request.method ?? "GET", requestOrigin !== undefined)) return;
+            if (nativeAdmissionCapability(url.pathname, request.method ?? "GET", requestOrigin !== undefined, launcherBrowserMetadata)) return;
             if (request.headers.authorization && nativeAdmissionDeviceRoute(url.pathname, requestOrigin !== undefined)) {
               database.authenticate(bearerToken(request)); return;
             }
@@ -800,6 +804,21 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (request.method === "POST" && url.pathname === "/v1/codex-launcher-authorizations/claim") {
+        if (requestOrigin !== undefined || launcherBrowserMetadata) {
+          throw new ApiError(403, "launcher_native_required", "Authorize this connection in the local Launcher.");
+        }
+        if (!options.authTokenPepper || Buffer.byteLength(options.authTokenPepper) < 32) throw new ApiError(503, "registration_unavailable", "Email sign-in is temporarily unavailable.");
+        if (url.search) throw new ApiError(400, "launcher_authorization_invalid", "Sign-in details belong in the request body.");
+        if (request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") {
+          throw new ApiError(415, "invalid_content_type", "Launcher sign-in requires JSON.");
+        }
+        const input = ClaimCodexLauncherAuthorizationInputSchema.parse(await readAdmittedJson(8192));
+        const ip = registrationClientIp(remoteAddress, request.headers["x-gatherthread-client-ip"], registration?.trustedProxy);
+        sendJson(response, 201, { data: await service.claimCodexLauncherAuthorization(input, ip) });
+        return;
+      }
+
       if (options.staticDirectory && sendStaticFile(request, response, options.staticDirectory, url.pathname, !!testGate)) return;
 
       if (request.method === "GET" && url.pathname === "/v1/hosted-github/callback") {
@@ -977,6 +996,15 @@ export async function startCollaborationServer(
 
       if (request.method === "POST" && url.pathname === "/v1/device-authorizations") {
         sendJson(response, 201, { data: service.createDeviceAuthorization(actor) });
+        return;
+      }
+
+      if (request.method === "POST" && url.pathname === "/v1/codex-launcher-authorizations") {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Open Connect Codex in the signed-in browser.");
+        if (url.search) throw new ApiError(400, "launcher_authorization_invalid", "Account details belong in the request body.");
+        if (request.headers["content-type"]?.split(";", 1)[0]?.trim().toLowerCase() !== "application/json") throw new ApiError(415, "invalid_content_type", "Launcher authorization requires JSON.");
+        const input = CreateCodexLauncherAuthorizationInputSchema.parse(await readAuthenticatedJson(8192));
+        sendJson(response, 201, { data: CodexLauncherAuthorizationSchema.parse(service.createCodexLauncherAuthorization(actor, input)) });
         return;
       }
 

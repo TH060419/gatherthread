@@ -92,6 +92,8 @@ def main() -> None:
     marketplace["name"] = "gatherthread-launcher"
     marketplace_path.write_text(json.dumps(marketplace, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     copy(HERE / "launcher.py", APP / "launcher.py")
+    for name in ("gatherthread.ico", "gatherthread.png"):
+        copy(HERE / "assets" / name, APP / "assets" / name)
     copy(HERE / "Uninstall.ps1", APP / "Uninstall.ps1")
     copy(HERE / "README.md", APP / "README.md")
     (APP / "Install.cmd").write_text(

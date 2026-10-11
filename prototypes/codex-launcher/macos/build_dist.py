@@ -6,9 +6,11 @@ import hashlib
 import json
 import os
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
+import struct
 from pathlib import Path
 from urllib.request import urlopen
 
@@ -35,6 +37,35 @@ def matching_node_license(version: str) -> bytes:
 def copy(source: Path, destination: Path) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, destination)
+
+
+def validate_bundle_icon(app: Path) -> None:
+    """Fail packaging instead of silently shipping the generic macOS app icon."""
+    try:
+        with (app / "Contents/Info.plist").open("rb") as handle:
+            info = plistlib.load(handle)
+        if info.get("CFBundleIconFile") != "GatherThread.icns":
+            raise ValueError("The app must declare GatherThread.icns")
+        path = app / "Contents/Resources/GatherThread.icns"
+        if path.is_symlink() or not path.is_file() or not (8 < path.stat().st_size <= 5_000_000):
+            raise ValueError("The packaged application icon is missing")
+        data = path.read_bytes()
+        if data[:4] != b"icns" or struct.unpack(">I", data[4:8])[0] != len(data):
+            raise ValueError("The packaged application icon is invalid")
+        offset = 8
+        sizes = set()
+        while offset < len(data):
+            if offset + 8 > len(data):
+                raise ValueError("The application icon has a truncated element")
+            kind, length = struct.unpack(">4sI", data[offset:offset + 8])
+            if length < 8 or offset + length > len(data):
+                raise ValueError("The application icon has an invalid element")
+            sizes.add(kind)
+            offset += length
+        if not sizes.intersection({b"ic09", b"ic10"}):
+            raise ValueError("The application icon must include a high-resolution image")
+    except (OSError, ValueError, plistlib.InvalidFileException) as error:
+        raise SystemExit("macOS bundle icon validation failed: " + str(error)) from error
 
 
 def main() -> None:
@@ -66,6 +97,8 @@ def main() -> None:
     (APP / "Contents/MacOS").mkdir(parents=True)
     RESOURCES.mkdir(parents=True)
     copy(HERE / "Info.plist", APP / "Contents/Info.plist")
+    copy(LAUNCHER / "assets/GatherThread.icns", RESOURCES / "GatherThread.icns")
+    validate_bundle_icon(APP)
     environment = os.environ.copy()
     environment["SWIFT_MODULE_CACHE_PATH"] = str(BUILD / "swift-cache")
     environment["CLANG_MODULE_CACHE_PATH"] = str(BUILD / "clang-cache")
@@ -82,6 +115,8 @@ def main() -> None:
     copy(ROOT / ".agents/plugins/marketplace.json", RESOURCES / "marketplace.json")
     binary = APP / "Contents/MacOS/GatherThreadLauncher"
     subprocess.run([str(binary), "--self-test", str(LAUNCHER / "contract-vectors.json")], check=True)
+    subprocess.run([str(binary), "--self-test", str(HERE / "account-contract-vectors.json")], check=True)
+    subprocess.run([str(binary), "--icon-self-test", str(RESOURCES / "GatherThread.icns")], check=True)
     subprocess.run(["plutil", "-lint", str(APP / "Contents/Info.plist")], check=True)
     subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(APP)], check=True)
     DIST.mkdir(exist_ok=True)

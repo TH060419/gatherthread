@@ -53,10 +53,11 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run verify
-      - if: matrix.os == 'windows-latest'
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: '3.13'
+      - name: Verify native Launcher brand icons
+        run: python -m unittest discover -s prototypes/codex-launcher -p test_icons.py -v
       - if: matrix.os == 'windows-latest'
         name: Test Windows Codex Launcher
         run: python -m unittest discover -s prototypes/codex-launcher -p test_launcher.py -v
@@ -68,5 +69,6 @@ jobs:
       - if: matrix.os == 'macos-latest'
         name: Test and build macOS Codex Launcher
         run: |
+          python3 -m unittest discover -s prototypes/codex-launcher/macos -p 'test_*.py' -v
           python3 prototypes/codex-launcher/macos/build_dist.py
           codesign --verify --deep --strict 'prototypes/codex-launcher/.build-macos/GatherThread Launcher.app'

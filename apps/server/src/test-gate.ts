@@ -115,9 +115,10 @@ export function testGateCookie(token: string, expires: number, secure: boolean):
   return `${secure ? TEST_GATE_COOKIE : "gatherthread_test_gate"}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.max(0, Math.floor((expires - Date.now()) / 1000))}${secure ? "; Secure" : ""}`;
 }
 /** These native capability routes still run their existing scope/expiry/one-use checks. */
-export function nativeAdmissionCapability(path: string, method: string, hasOrigin: boolean): boolean {
+export function nativeAdmissionCapability(path: string, method: string, hasOrigin: boolean, hasBrowserMetadata = false): boolean {
   return !hasOrigin && method === "POST" && (path === "/v1/dsh-pairings"
-    || /^\/v1\/dsh-pairings\/[^/]+\/poll$/.test(path) || path === "/v1/device-authorizations/claim");
+    || /^\/v1\/dsh-pairings\/[^/]+\/poll$/.test(path) || path === "/v1/device-authorizations/claim"
+    || (path === "/v1/codex-launcher-authorizations/claim" && !hasBrowserMetadata));
 }
 export function nativeAdmissionDeviceRoute(path: string, hasOrigin: boolean): boolean {
   return !hasOrigin && /^\/v1\/(?:me|projects(?:\/.*)?|sessions(?:\/.*)?|runtimes(?:\/.*)?|snapshot-requests(?:\/.*)?|code-storage(?:\/.*)?|realtime-ticket)$/.test(path);

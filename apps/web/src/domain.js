@@ -7,9 +7,20 @@ export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconcili
 export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-beta.1";
 export const CODEX_LAUNCHER_ORIGIN = "https://gatherthread.cn";
 export const CODEX_LAUNCHER_LINK_VERSION = "1";
+export const CODEX_LAUNCHER_ORIGINS = Object.freeze([CODEX_LAUNCHER_ORIGIN, "https://test.gatherthread.cn"]);
+
+export function normalizeLauncherEmail(value) {
+  if (typeof value !== "string" || value.length > 254) throw new Error("Check your account email.");
+  const email = value.trim().toLowerCase();
+  const valid = /^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/u.test(email);
+  if (!valid || email.split("@")[0].length > 64 || email.split("@")[1].split(".").some(part => part.length > 63)) {
+    throw new Error("Check your account email.");
+  }
+  return email;
+}
 
 export function canOpenCodexLauncher({ origin, platform, maxTouchPoints = 0 }) {
-  if (origin !== CODEX_LAUNCHER_ORIGIN || typeof platform !== "string") return false;
+  if (!CODEX_LAUNCHER_ORIGINS.includes(origin) || typeof platform !== "string") return false;
   if (/^(?:windows|win32|win64)$/i.test(platform)) return true;
   return /^(?:macos|macintel|macintosh|macppc|mac68k)$/i.test(platform) && maxTouchPoints <= 1;
 }
@@ -106,22 +117,35 @@ export function projectCodexLauncherUrl({
   model = DEFAULT_CODEX_MODEL,
   contextWindowTokens = DEFAULT_CODEX_CONTEXT_WINDOW_TOKENS,
   visibleHistorySync = DEFAULT_VISIBLE_HISTORY_SYNC,
+  email,
+  authorizationId,
 }) {
   // Reuse the connector command's origin and ID validation before crossing into
   // an OS protocol handler. Never put an auth token or browser cookie here.
   projectCodexConnectionCommands({ baseUrl, projectId, model, contextWindowTokens, visibleHistorySync });
-  if (baseUrl !== CODEX_LAUNCHER_ORIGIN) {
-    throw new Error("The Launcher supports only https://gatherthread.cn.");
+  const accountLink = email !== undefined || authorizationId !== undefined;
+  if (!CODEX_LAUNCHER_ORIGINS.includes(baseUrl) || !accountLink && baseUrl !== CODEX_LAUNCHER_ORIGIN) {
+    throw new Error("The Launcher supports the official production and test sites only.");
+  }
+  if (accountLink && (typeof authorizationId !== "string"
+    || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(authorizationId))) {
+    throw new Error("Open a new Launcher connection from the website.");
   }
   const parameters = new URLSearchParams({
-    v: CODEX_LAUNCHER_LINK_VERSION,
+    v: accountLink ? "2" : CODEX_LAUNCHER_LINK_VERSION,
     origin: baseUrl.replace(/\/$/, ""),
     project: projectId,
     model,
     context_window_tokens: String(contextWindowTokens),
     visible_history_sync: visibleHistorySync,
   });
-  return `gatherthread-connect://connect?${parameters.toString()}`;
+  if (accountLink) {
+    parameters.set("email", normalizeLauncherEmail(email));
+    parameters.set("authorization_id", authorizationId.toLowerCase());
+  }
+  const link = `gatherthread-connect://connect?${parameters.toString()}`;
+  if (new TextEncoder().encode(link).byteLength > 2048) throw new Error("Launcher connection is too long.");
+  return link;
 }
 
 export function createSelectionGuard() {

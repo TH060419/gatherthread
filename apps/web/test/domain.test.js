@@ -184,9 +184,33 @@ test("Launcher appears only on the supported HTTPS origin and Windows or macOS",
   assert.equal(canOpenCodexLauncher({ origin: "https://self-hosted.example", platform: "Windows" }), false);
 });
 
+test("email account Launcher links carry a public handoff, not credentials, on both environments", () => {
+  for (const baseUrl of ["https://gatherthread.cn", "https://test.gatherthread.cn"]) {
+    assert.equal(canOpenCodexLauncher({ origin: baseUrl, platform: "MacIntel" }), true);
+    const parsed = new URL(projectCodexLauncherUrl({ baseUrl, projectId: "project-fixture",
+      email: "User@example.invalid", authorizationId: "12345678-1234-4234-8234-123456789abc" }));
+    assert.equal(parsed.searchParams.get("v"), "2");
+    assert.equal(parsed.searchParams.get("origin"), baseUrl);
+    assert.equal(parsed.searchParams.get("email"), "user@example.invalid");
+    assert.equal(parsed.searchParams.get("authorization_id"), "12345678-1234-4234-8234-123456789abc");
+    assert.equal(parsed.searchParams.size, 8);
+    assert.doesNotMatch(parsed.href, /gta_|gtd_|password|cookie|token=/i);
+  }
+});
+
+test("email Launcher input rejects incomplete handoffs and non-official server targets", () => {
+  const input = { baseUrl: "https://gatherthread.cn", projectId: "project-fixture",
+    email: "user@example.invalid", authorizationId: "12345678-1234-4234-8234-123456789abc" };
+  for (const update of [{ email: "" }, { email: "not-mail" }, { authorizationId: "" },
+    { authorizationId: "gtd_not_a_public_id" }, { baseUrl: "https://test.gatherthread.cn.evil.invalid" },
+    { baseUrl: "https://test.gatherthread.cn:443" }, { baseUrl: "https://test.gatherthread.cn/" }]) {
+    assert.throws(() => projectCodexLauncherUrl({ ...input, ...update }));
+  }
+});
+
 test("browser and Python Launcher agree on versioned URI contract vectors", () => {
   const vectors = JSON.parse(readFileSync(new URL("../../../prototypes/codex-launcher/contract-vectors.json", import.meta.url), "utf8"));
-  assert.equal(vectors.version, 1);
+  assert.equal(vectors.version, 2);
   for (const vector of vectors.accepted) {
     assert.equal(projectCodexLauncherUrl(vector.input), vector.uri, vector.name);
   }

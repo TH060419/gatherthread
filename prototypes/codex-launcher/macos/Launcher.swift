@@ -2,13 +2,18 @@ import AppKit
 import Foundation
 
 private let serverOrigin = "https://gatherthread.cn"
+private let testOrigin = "https://test.gatherthread.cn"
 private let scheme = "gatherthread-connect"
 
 private struct ConnectionLink: Equatable {
+    let version: String
+    let origin: String
     let project: String
     let model: String
     let contextTokens: Int
     let historySync: String
+    let email: String?
+    let authorizationID: String?
 
     static func parse(_ raw: String) throws -> ConnectionLink {
         guard raw.utf8.count <= 2048,
@@ -20,7 +25,9 @@ private struct ConnectionLink: Equatable {
               let query = url.percentEncodedQuery else {
             throw LinkError.invalid("无效的 GatherThread 连接链接")
         }
-        let allowed: Set<String> = ["v", "origin", "project", "model", "context_window_tokens", "visible_history_sync"]
+        let baseFields: Set<String> = ["v", "origin", "project", "model", "context_window_tokens", "visible_history_sync"]
+        let accountFields: Set<String> = ["email", "authorization_id"]
+        let allowed = baseFields.union(accountFields)
         var values: [String: String] = [:]
         for part in query.split(separator: "&", omittingEmptySubsequences: false) {
             guard let separator = part.firstIndex(of: "="),
@@ -31,7 +38,10 @@ private struct ConnectionLink: Equatable {
             }
             values[name] = value
         }
-        guard Set(values.keys) == allowed, values["v"] == "1", values["origin"] == serverOrigin,
+        guard let version = values["v"], ["1", "2"].contains(version),
+              Set(values.keys) == (version == "1" ? baseFields : allowed),
+              let origin = values["origin"],
+              (version == "1" ? origin == serverOrigin : [serverOrigin, testOrigin].contains(origin)),
               let project = values["project"], validProject(project),
               let model = values["model"], validModel(model),
               let tokenText = values["context_window_tokens"],
@@ -40,7 +50,22 @@ private struct ConnectionLink: Equatable {
               let mode = values["visible_history_sync"], ["first-connect", "never"].contains(mode) else {
             throw LinkError.invalid("连接链接的版本、服务地址或连接设置无效")
         }
-        return ConnectionLink(project: project, model: model, contextTokens: tokens, historySync: mode)
+        let email: String?
+        let authorizationID: String?
+        if version == "2" {
+            guard let mailbox = values["email"], let normalized = normalizedEmail(mailbox),
+                  let rawID = values["authorization_id"],
+                  matches(rawID, "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$") else {
+                throw LinkError.invalid("邮箱账号或授权编号无效；请从网页重新打开启动器")
+            }
+            email = normalized
+            authorizationID = rawID.lowercased()
+        } else {
+            email = nil
+            authorizationID = nil
+        }
+        return ConnectionLink(version: version, origin: origin, project: project, model: model,
+                              contextTokens: tokens, historySync: mode, email: email, authorizationID: authorizationID)
     }
 }
 
@@ -49,6 +74,196 @@ private enum LinkError: LocalizedError {
     var errorDescription: String? {
         if case .invalid(let message) = self { return message }
         return nil
+    }
+}
+
+private func matches(_ value: String, _ pattern: String) -> Bool {
+    let range = NSRange(location: 0, length: value.utf16.count)
+    return (try? NSRegularExpression(pattern: pattern).rangeOfFirstMatch(in: value, range: range)) == range
+}
+
+private func normalizedEmail(_ value: String) -> String? {
+    guard value.utf16.count <= 254 else { return nil }
+    let email = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    guard email.utf8.allSatisfy({ $0 < 128 }),
+          matches(email, "^[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*@[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$") else { return nil }
+    let pieces = email.split(separator: "@")
+    guard pieces.count == 2, pieces[0].count <= 64,
+          pieces[1].split(separator: ".").allSatisfy({ $0.count <= 63 }) else { return nil }
+    return email
+}
+
+private func makeClaimRequest(link: ConnectionLink, password: String, deviceName: String) throws -> URLRequest {
+    guard link.version == "2", [serverOrigin, testOrigin].contains(link.origin),
+          let email = link.email, let authorizationID = link.authorizationID,
+          (8...128).contains(password.utf16.count), password.utf8.count <= 512,
+          (1...120).contains(deviceName.utf16.count),
+          !deviceName.unicodeScalars.contains(where: { $0.value < 32 || (127...159).contains($0.value) }) else {
+        throw LinkError.invalid("请检查邮箱和密码（8 至 128 个字符），并从网页重新打开启动器")
+    }
+    var request = URLRequest(url: URL(string: link.origin + "/v1/codex-launcher-authorizations/claim")!,
+                             cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 15)
+    request.httpMethod = "POST"
+    request.httpShouldHandleCookies = false
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.setValue("application/json", forHTTPHeaderField: "Accept")
+    request.httpBody = try JSONSerialization.data(withJSONObject: [
+        "authorization_id": authorizationID, "project_id": link.project, "email": email,
+        "password": password, "device_name": deviceName,
+    ])
+    return request
+}
+
+private func parseClaimResponse(_ bytes: Data, expected link: ConnectionLink) throws -> String {
+    guard bytes.count <= 16_384,
+          let envelope = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
+          let data = envelope["data"] as? [String: Any],
+          let actor = data["actor"] as? [String: Any],
+          let device = data["device"] as? [String: Any],
+          let authorization = data["authorization"] as? [String: Any],
+          let userID = actor["user_id"] as? String, !userID.isEmpty, userID.utf8.count <= 128,
+          let deviceID = actor["device_id"] as? String, !deviceID.isEmpty, deviceID.utf8.count <= 128,
+          device["id"] as? String == deviceID, device["user_id"] as? String == userID,
+          let displayName = actor["display_name"] as? String, (1...120).contains(displayName.utf16.count),
+          let deviceName = device["name"] as? String, (1...120).contains(deviceName.utf16.count),
+          validTimestamp(device["created_at"]), validTimestamp(device["token_created_at"]),
+          ["last_used_at", "expires_at", "revoked_at", "rotated_at"].allSatisfy({ validTimestamp(device[$0], nullable: true) }),
+          let tokenVersion = device["token_version"] as? NSNumber,
+          CFGetTypeID(tokenVersion) != CFBooleanGetTypeID(), tokenVersion.doubleValue.isFinite,
+          tokenVersion.doubleValue.rounded() == tokenVersion.doubleValue, tokenVersion.intValue > 0,
+          authorization["id"] as? String == link.authorizationID,
+          authorization["user_id"] as? String == userID,
+          let authorizerID = authorization["authorizer_device_id"] as? String,
+          !authorizerID.isEmpty, authorizerID.utf8.count <= 128,
+          validTimestamp(authorization["created_at"]), validTimestamp(authorization["expires_at"]),
+          validTimestamp(authorization["claimed_at"]),
+          authorization["revoked_at"] is NSNull, authorization["expired_at"] is NSNull,
+          device["revoked_at"] is NSNull,
+          authorization["claimed_by_device_id"] as? String == deviceID,
+          let token = data["token"] as? String, matches(token, "^gta_[A-Za-z0-9_-]{43}$") else {
+        throw LinkError.invalid("授权响应无效；请返回网页重新打开启动器，不要重复提交本次授权")
+    }
+    return token
+}
+
+private func validTimestamp(_ value: Any?, nullable: Bool = false) -> Bool {
+    if nullable && value is NSNull { return true }
+    guard let text = value as? String, text.utf8.count <= 40,
+          matches(text, "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?Z$") else { return false }
+    let formatter = ISO8601DateFormatter()
+    formatter.formatOptions = text.contains(".") ? [.withInternetDateTime, .withFractionalSeconds] : [.withInternetDateTime]
+    return formatter.date(from: text) != nil
+}
+
+// Uses a private, cookie-free session; redirects and oversized responses fail closed.
+private final class LauncherClaimClient: NSObject, URLSessionDataDelegate {
+    private var bytes = Data()
+    private var response: HTTPURLResponse?
+    private var failed = false
+    private var transportError = false
+    private let done = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var runningTask: URLSessionDataTask?
+    private var cancelled = false
+    private var used = false
+
+    func cancel() {
+        let task = lock.withLock { cancelled = true; return runningTask }
+        task?.cancel()
+    }
+
+    func claim(link: ConnectionLink, password: String, deviceName: String,
+               configuration: URLSessionConfiguration = .ephemeral) throws -> String {
+        guard lock.withLock({
+            guard !used, !cancelled else { return false }
+            used = true
+            return true
+        }) else { throw LinkError.invalid("授权已停止；请返回网页重新打开启动器") }
+        var request = try makeClaimRequest(link: link, password: password, deviceName: deviceName)
+        let config = configuration.copy() as! URLSessionConfiguration
+        config.httpCookieStorage = nil
+        config.httpShouldSetCookies = false
+        config.urlCredentialStorage = nil
+        config.urlCache = nil
+        config.timeoutIntervalForRequest = 15
+        config.timeoutIntervalForResource = 15
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: queue)
+        let task = session.dataTask(with: request)
+        let wasCancelled = lock.withLock { runningTask = task; return cancelled }
+        request.httpBody = nil
+        defer {
+            session.invalidateAndCancel()
+            lock.withLock { runningTask = nil; bytes.removeAll(keepingCapacity: false) }
+        }
+        if wasCancelled { task.cancel(); throw LinkError.invalid("授权已停止；请返回网页重新打开启动器") }
+        task.resume()
+        guard done.wait(timeout: .now() + 15) == .success else {
+            task.cancel()
+            throw LinkError.invalid("授权超时，状态未确认；请返回网页重新打开启动器，不要重试本次授权")
+        }
+        let (receivedBytes, receivedResponse, responseFailed, networkFailed, wasStopped) = lock.withLock { (bytes, response, failed, transportError, cancelled) }
+        guard !wasStopped, !responseFailed, !networkFailed, let receivedResponse,
+              receivedResponse.url?.absoluteString == link.origin + "/v1/codex-launcher-authorizations/claim" else {
+            throw LinkError.invalid("无法确认授权结果；请返回网页重新打开启动器，不要重试本次授权")
+        }
+        guard receivedResponse.statusCode == 201 else {
+            // Never display raw server messages, which could contain sensitive input.
+            if receivedResponse.statusCode == 401 {
+                throw LinkError.invalid("邮箱或密码验证失败；请检查后返回网页重新打开启动器")
+            }
+            if receivedResponse.statusCode == 429 {
+                throw LinkError.invalid("尝试过于频繁，请稍后返回网页重新打开启动器")
+            }
+            if receivedResponse.statusCode == 503 {
+                throw LinkError.invalid("账号验证服务暂时忙碌，请稍后返回网页重新打开启动器")
+            }
+            throw LinkError.invalid("本次授权已失效或不可用；请返回网页重新打开启动器")
+        }
+        return try parseClaimResponse(receivedBytes, expected: link)
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        lock.withLock { failed = true }
+        completionHandler(nil)
+    }
+
+    func urlSession(_ session: URLSession, didReceive challenge: URLAuthenticationChallenge,
+                    completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void) {
+        if challenge.protectionSpace.authenticationMethod == NSURLAuthenticationMethodServerTrust {
+            completionHandler(.performDefaultHandling, nil)
+        } else {
+            // Do not look up stored credentials or answer HTTP authentication prompts.
+            completionHandler(.cancelAuthenticationChallenge, nil)
+        }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let http = response as? HTTPURLResponse,
+              http.expectedContentLength <= 16_384 else {
+            lock.withLock { failed = true }
+            completionHandler(.cancel)
+            return
+        }
+        lock.withLock { self.response = http }
+        completionHandler(.allow)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+        let accepted = lock.withLock {
+            guard data.count <= 16_384 - bytes.count else { failed = true; return false }
+            bytes.append(data)
+            return true
+        }
+        if !accepted { dataTask.cancel() }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        lock.withLock { transportError = error != nil }
+        done.signal()
     }
 }
 
@@ -104,14 +319,27 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     private let model = NSTextField()
     private let tokens = NSTextField()
     private let history = NSPopUpButton()
-    private let token = NSSecureTextField()
-    private let status = NSTextField(labelWithString: "填写连接信息后启动连接。")
+    private let email = NSTextField()
+    private let password = NSSecureTextField()
+    private let passwordLabel = NSTextField(labelWithString: "密码")
+    private let environmentLabel = NSTextField(labelWithString: "正式环境 · https://gatherthread.cn")
+    private let advancedSettings = NSStackView()
+    private let formScroll = NSScrollView()
+    private let startButton = NSButton()
+    private let installButton = NSButton()
+    private let status = NSTextField(labelWithString: "请登录 GatherThread 网页，选择项目后点击‘打开启动器’。")
     private let log = NSTextView()
     private var connector: Process?
     private var pendingLink: URL?
+    private var activeLink: ConnectionLink?
+    private var connectionOrigin = serverOrigin
+    private var busy = false
+    private var connectionAttempt: UUID?
+    private var authorizationClient: LauncherClaimClient?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
+        if let icon = NSImage(contentsOf: bundled("GatherThread.icns")) { NSApp.applicationIconImage = icon }
         let menu = NSMenu()
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "退出 GatherThread Launcher", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -120,61 +348,95 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         menu.addItem(appItem)
         NSApp.mainMenu = menu
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 670),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 700),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "GatherThread · Connect Codex"
-        window.minSize = NSSize(width: 600, height: 620)
+        window.minSize = NSSize(width: 600, height: 650)
         window.center()
         window.delegate = self
+        let outer = NSStackView()
+        outer.orientation = .vertical
+        outer.alignment = .leading
+        outer.spacing = 8
+        outer.translatesAutoresizingMaskIntoConstraints = false
         let stack = NSStackView()
         stack.orientation = .vertical
         stack.alignment = .leading
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView?.addSubview(stack)
+        window.contentView?.addSubview(outer)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 20),
-            stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -20),
-            stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 20),
-            stack.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -20),
+            outer.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 20),
+            outer.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -20),
+            outer.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 20),
+            outer.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -20),
         ])
+        formScroll.hasVerticalScroller = true
+        formScroll.autohidesScrollers = true
+        formScroll.drawsBackground = false
+        formScroll.documentView = stack
+        outer.addArrangedSubview(formScroll)
+        formScroll.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
+        formScroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 250).isActive = true
+        stack.widthAnchor.constraint(equalTo: formScroll.contentView.widthAnchor).isActive = true
         let heading = NSTextField(labelWithString: "连接本机 Codex")
         heading.font = .boldSystemFont(ofSize: 21)
         stack.addArrangedSubview(heading)
-        addNote("网页负责项目与会话，此窗口启动并保持本机连接。仅连接 \(serverOrigin)。", to: stack)
+        addNote("网页带入邮箱和项目，只需输入账号密码，授权此 Mac 独立连接。", to: stack)
+        stack.addArrangedSubview(environmentLabel)
+        stack.addArrangedSubview(NSButton(title: "打开 GatherThread 网页", target: self, action: #selector(openWebsite)))
         codex.stringValue = executableCodex()
         model.stringValue = "gpt-5.6-sol"
         tokens.stringValue = "128000"
-        addField("项目 ID（网页打开时自动填入；project-***）", project, to: stack)
-        addField("Codex CLI 完整路径", codex, to: stack)
-        stack.addArrangedSubview(NSTextField(labelWithString: "本地工作目录（可选；留空使用默认项目目录）"))
+        addField("邮箱账号（由网页填入）", email, to: stack)
+        email.isEditable = false
+        email.isSelectable = true
+        stack.addArrangedSubview(passwordLabel)
+        stack.addArrangedSubview(password)
+        password.isEnabled = false
+        password.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        stack.addArrangedSubview(NSButton(title: "更多连接设置", target: self, action: #selector(toggleSettings)))
+        advancedSettings.orientation = .vertical
+        advancedSettings.alignment = .leading
+        advancedSettings.spacing = 6
+        stack.addArrangedSubview(advancedSettings)
+        advancedSettings.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        advancedSettings.isHidden = true
+        addField("项目 ID（由网页填入）", project, to: advancedSettings)
+        addField("Codex CLI 完整路径", codex, to: advancedSettings)
+        advancedSettings.addArrangedSubview(NSTextField(labelWithString: "本地工作目录（可选；留空使用默认项目目录）"))
         let workspaceRow = NSStackView()
         workspaceRow.orientation = .horizontal
         workspaceRow.spacing = 8
         workspaceRow.addArrangedSubview(workspace)
         workspaceRow.addArrangedSubview(NSButton(title: "浏览…", target: self, action: #selector(chooseWorkspace)))
         workspaceRow.addArrangedSubview(NSButton(title: "默认目录", target: self, action: #selector(clearWorkspace)))
-        stack.addArrangedSubview(workspaceRow)
-        workspaceRow.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
-        addField("模型", model, to: stack)
-        addField("上下文 Token 上限", tokens, to: stack)
-        stack.addArrangedSubview(NSTextField(labelWithString: "首次历史导入"))
+        advancedSettings.addArrangedSubview(workspaceRow)
+        workspaceRow.widthAnchor.constraint(equalTo: advancedSettings.widthAnchor).isActive = true
+        addField("模型", model, to: advancedSettings)
+        addField("上下文 Token 上限", tokens, to: advancedSettings)
+        advancedSettings.addArrangedSubview(NSTextField(labelWithString: "首次历史导入"))
         history.addItems(withTitles: ["first-connect", "never"])
-        stack.addArrangedSubview(history)
-        addField("一次性设备授权（仅传给本机连接器）", token, to: stack)
+        advancedSettings.addArrangedSubview(history)
         let actions = NSStackView()
         actions.orientation = .horizontal
         actions.spacing = 10
-        for (title, action) in [("可选：安装随包插件", #selector(installPlugin)),
-                                ("启动连接", #selector(startConnection)), ("停止连接", #selector(stopConnection))] {
-            let button = NSButton(title: title, target: self, action: action)
-            actions.addArrangedSubview(button)
-        }
-        stack.addArrangedSubview(actions)
+        installButton.title = "可选：安装随包插件"
+        installButton.target = self
+        installButton.action = #selector(installPlugin)
+        actions.addArrangedSubview(installButton)
+        startButton.title = "授权并连接"
+        startButton.target = self
+        startButton.action = #selector(startConnection)
+        startButton.isEnabled = false
+        actions.addArrangedSubview(startButton)
+        actions.addArrangedSubview(NSButton(title: "停止连接", target: self, action: #selector(stopConnection)))
+        outer.addArrangedSubview(actions)
         status.lineBreakMode = .byWordWrapping
         status.maximumNumberOfLines = 2
-        stack.addArrangedSubview(status)
+        outer.addArrangedSubview(status)
+        status.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
         let scroll = NSScrollView()
         scroll.hasVerticalScroller = true
         scroll.borderType = .bezelBorder
@@ -182,10 +444,10 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         log.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
         scroll.documentView = log
         scroll.translatesAutoresizingMaskIntoConstraints = false
-        stack.addArrangedSubview(scroll)
-        scroll.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        outer.addArrangedSubview(scroll)
+        scroll.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
-        addNote("关闭窗口会保留正在运行的连接；从 Dock 恢复后可停止连接。插件需在 Codex 中单独安装与审查 Hooks。", to: stack)
+        addNote("关闭窗口会保留正在运行的连接；从 Dock 恢复后可停止连接。插件需在 Codex 中单独安装与审查 Hooks。", to: outer)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         if let pendingLink { self.pendingLink = nil; application(NSApp, open: [pendingLink]) }
@@ -207,15 +469,48 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     func application(_ application: NSApplication, open urls: [URL]) {
         guard urls.count == 1 else { showError("只接受一个连接链接"); return }
         if window == nil { pendingLink = urls[0]; return }
+        password.stringValue = ""
+        guard !busy, connector?.isRunning != true else {
+            showError("请先停止当前连接或等待操作结束，再从网页打开新连接。")
+            return
+        }
+        activeLink = nil
+        startButton.isEnabled = false
         do {
             let link = try ConnectionLink.parse(urls[0].absoluteString)
+            activeLink = link
+            connectionOrigin = link.origin
             project.stringValue = link.project
+            project.isEditable = false
             model.stringValue = link.model
             tokens.stringValue = String(link.contextTokens)
             history.selectItem(withTitle: link.historySync)
+            email.stringValue = link.email ?? "旧版连接链接"
+            passwordLabel.stringValue = link.version == "2" ? "账号密码（仅在本机输入，不保存）" : "旧版一次性设备授权（建议返回网页使用新版连接）"
+            startButton.title = link.version == "2" ? "授权并连接" : "启动旧版连接"
+            startButton.isEnabled = true
+            password.isEnabled = true
+            environmentLabel.stringValue = (link.origin == testOrigin ? "测试环境 · " : "正式环境 · ") + link.origin
+            status.stringValue = link.version == "2" ? "输入密码后连接；其他已登录设备不受影响。" : "旧链接兼容模式。新版网页仅需输入邮箱账号密码。"
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
         } catch { showError(error.localizedDescription) }
+    }
+
+    @objc private func openWebsite() {
+        NSWorkspace.shared.open(URL(string: connectionOrigin + "/app/")!)
+    }
+
+    @objc private func toggleSettings() {
+        advancedSettings.isHidden.toggle()
+        window.contentView?.layoutSubtreeIfNeeded()
+    }
+
+    private func setBusy(_ value: Bool) {
+        busy = value
+        installButton.isEnabled = !value && connector?.isRunning != true
+        startButton.isEnabled = !value && connector?.isRunning != true && activeLink != nil
+        password.isEnabled = !value && connector?.isRunning != true && activeLink != nil
     }
 
     private func showError(_ value: String) {
@@ -238,7 +533,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     @objc private func clearWorkspace() { workspace.stringValue = "" }
 
     @objc private func installPlugin() {
-        if connector?.isRunning == true { showError("请先停止连接，再安装插件。"); return }
+        if busy || connector?.isRunning == true { showError("请先等待操作完成并停止连接，再安装插件。"); return }
         let codexPath = codex.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard FileManager.default.isExecutableFile(atPath: codexPath),
               FileManager.default.isExecutableFile(atPath: bundled("runtime/node").path) else {
@@ -251,15 +546,22 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         alert.addButton(withTitle: "安装")
         alert.addButton(withTitle: "取消")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        setBusy(true)
         status.stringValue = "正在安装插件…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 let root = try Self.preparePlugin()
                 try Self.runCodex(codexPath, ["plugin", "marketplace", "add", root.path])
                 try Self.runCodex(codexPath, ["plugin", "add", "gatherthread@gatherthread-launcher"])
-                DispatchQueue.main.async { self?.status.stringValue = "插件已安装。请重启 Codex 并在 /hooks 审查 Hooks。" }
+                DispatchQueue.main.async {
+                    self?.setBusy(false)
+                    self?.status.stringValue = "插件已安装。请重启 Codex 并在 /hooks 审查 Hooks。"
+                }
             } catch {
-                DispatchQueue.main.async { self?.status.stringValue = "插件安装失败：\(error.localizedDescription)" }
+                DispatchQueue.main.async {
+                    self?.setBusy(false)
+                    self?.status.stringValue = "插件安装失败：\(error.localizedDescription)"
+                }
             }
         }
     }
@@ -360,37 +662,84 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     }
 
     @objc private func startConnection() {
-        if connector?.isRunning == true { status.stringValue = "连接器已在运行。"; return }
+        if busy || connector?.isRunning == true { status.stringValue = "连接或授权正在进行。"; return }
+        guard let link = activeLink else { showError("请先登录网页，再选择项目并打开启动器。"); return }
         let node = bundled("runtime/node")
         let connectorFile = bundled("connector/codex-connect.js")
         let codexPath = codex.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        let enteredToken = token.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let enteredPassword = password.stringValue
         let projectId = project.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelName = model.stringValue
         let tokenCount = tokens.stringValue
         guard FileManager.default.isExecutableFile(atPath: node.path),
               FileManager.default.fileExists(atPath: connectorFile.path),
               FileManager.default.isExecutableFile(atPath: codexPath),
-              validProject(projectId), validModel(modelName),
+              validProject(projectId), projectId == link.project, validModel(modelName),
               !tokenCount.isEmpty, tokenCount.utf8.allSatisfy({ (48...57).contains($0) }),
               let count = Int(tokenCount), (4096...2_000_000).contains(count),
-              !enteredToken.isEmpty, !enteredToken.contains("\n"), !enteredToken.contains("\r"),
               let mode = history.selectedItem?.title, ["first-connect", "never"].contains(mode) else {
-            showError("请检查包内 Node/连接器、Codex CLI 路径、项目 ID、Token 和连接设置。")
+            showError("请检查包内 Node/连接器、Codex CLI 路径、项目和连接设置。")
             return
+        }
+        if link.version == "2" {
+            guard (8...128).contains(enteredPassword.utf16.count), enteredPassword.utf8.count <= 512 else {
+                showError("请输入 8 至 128 个字符的账号密码。"); return
+            }
+        } else if !matches(enteredPassword, "^gtd_[A-Za-z0-9_-]{43}$") {
+            showError("旧版链接需要有效的一次性设备授权；建议返回网页使用新版邮箱连接。"); return
         }
         let workspaceArgs: [String]
         do { workspaceArgs = try workspaceArguments(workspace.stringValue) }
         catch { showError(error.localizedDescription); return }
         let process = Process()
         process.executableURL = node
-        process.arguments = [connectorFile.path, "--url", serverOrigin, "--project", projectId]
+        process.arguments = [connectorFile.path, "--url", link.origin, "--project", projectId]
             + workspaceArgs + ["--plugin-hooks", "--visible-history-sync", mode,
                              "--model", modelName, "--context-window-tokens", String(count),
                              "--codex-command", codexPath]
+        password.stringValue = ""
+        // A submitted handoff cannot be reused after an uncertain network result.
+        activeLink = nil
+        let attempt = UUID()
+        let client = LauncherClaimClient()
+        connectionAttempt = attempt
+        authorizationClient = client
+        setBusy(true)
+        status.stringValue = link.version == "2" ? "正在验证账号并授权此 Mac…" : "正在启动旧版连接…"
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let credential: String
+                if link.version == "2" {
+                    credential = try client.claim(link: link, password: enteredPassword,
+                                                  deviceName: "macOS · GatherThread Launcher")
+                } else { credential = enteredPassword }
+                DispatchQueue.main.async {
+                    self?.completeAuthorization(attempt: attempt, process: process, node: node, credential: credential)
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard self?.connectionAttempt == attempt else { return }
+                    self?.connectionAttempt = nil
+                    self?.authorizationClient = nil
+                    self?.setBusy(false)
+                    self?.status.stringValue = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func completeAuthorization(attempt: UUID, process: Process, node: URL, credential: String) {
+        guard connectionAttempt == attempt, busy else { return }
+        connectionAttempt = nil
+        authorizationClient = nil
+        launchConnector(process, node: node, credential: credential)
+    }
+
+    private func launchConnector(_ process: Process, node: URL, credential: String) {
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = node.deletingLastPathComponent().path + ":" + (environment["PATH"] ?? "")
-        environment["GATHERTHREAD_TOKEN"] = enteredToken
+        environment.removeValue(forKey: "GATHERTHREAD_TOKEN")
+        environment["GATHERTHREAD_TOKEN"] = credential
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
         let output = Pipe()
@@ -400,13 +749,14 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
             DispatchQueue.main.async {
                 guard self?.connector === finished else { return }
                 self?.connector = nil
+                self?.setBusy(false)
                 self?.status.stringValue = "连接器已退出（代码 \(finished.terminationStatus)）。可检查日志后重试。"
             }
         }
         do {
             try process.run()
             connector = process
-            token.stringValue = ""
+            setBusy(false)
             status.stringValue = "连接器正在启动；请在 Codex 中审查并启用已安装的 Hooks。"
             DispatchQueue.global(qos: .utility).async { [weak self] in
                 var pending = Data()
@@ -418,7 +768,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
                         if byte == 10 {
                             if !discardingLongLine {
                                 let line = String(decoding: pending, as: UTF8.self)
-                                    .replacingOccurrences(of: enteredToken, with: "[REDACTED]")
+                                    .replacingOccurrences(of: credential, with: "[REDACTED]")
                                 DispatchQueue.main.async { self?.appendLog(line + "\n") }
                             }
                             pending.removeAll(keepingCapacity: true)
@@ -435,11 +785,14 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
                 }
                 if !pending.isEmpty && !discardingLongLine {
                     let line = String(decoding: pending, as: UTF8.self)
-                        .replacingOccurrences(of: enteredToken, with: "[REDACTED]")
+                        .replacingOccurrences(of: credential, with: "[REDACTED]")
                     DispatchQueue.main.async { self?.appendLog(line + "\n") }
                 }
             }
-        } catch { status.stringValue = "启动失败：\(error.localizedDescription)" }
+        } catch {
+            setBusy(false)
+            status.stringValue = "连接器启动失败；请检查本机安装，并从网页重新授权。"
+        }
     }
 
     private func appendLog(_ value: String) {
@@ -451,11 +804,20 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     }
 
     @objc private func stopConnection() {
+        if connectionAttempt != nil {
+            connectionAttempt = nil
+            authorizationClient?.cancel()
+            authorizationClient = nil
+            password.stringValue = ""
+            setBusy(false)
+            status.stringValue = "授权已停止。请返回网页重新打开启动器，之前的结果不会启动连接。"
+        }
         if connector?.isRunning == true { connector?.terminate(); status.stringValue = "正在停止连接器…" }
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if connector?.isRunning == true { sender.orderOut(nil); return false }
+        password.stringValue = ""
+        if busy || connector?.isRunning == true { sender.orderOut(nil); return false }
         return true
     }
 
@@ -465,11 +827,57 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        authorizationClient?.cancel()
+        authorizationClient = nil
+        connectionAttempt = nil
         if connector?.isRunning == true { connector?.terminate() }
+    }
+
+    func verifyPasswordForm() throws {
+        let uri = "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never&email=person%40example.com&authorization_id=abcd1234-1234-4234-8234-123456789abc"
+        application(NSApp, open: [URL(string: uri)!])
+        window.contentView!.layoutSubtreeIfNeeded()
+        let content = window.contentView!
+        guard advancedSettings.isHidden, email.stringValue == "person@example.com", !email.isEditable,
+              password.stringValue.isEmpty, password.isEnabled, startButton.isEnabled,
+              connectionOrigin == testOrigin,
+              content.bounds.contains(password.convert(password.bounds, to: content)),
+              content.bounds.contains(startButton.convert(startButton.bounds, to: content)) else {
+            throw LinkError.invalid("邮箱密码表单布局不完整或按钮不可见")
+        }
+        window.orderOut(nil)
+        print("macOS Launcher form: prefilled email, masked password, compact settings, reachable connect button")
+    }
+
+    func verifyCancelledAuthorization() throws {
+        let uri = "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never&email=person%40example.com&authorization_id=abcd1234-1234-4234-8234-123456789abc"
+        let link = try ConnectionLink.parse(uri)
+        let attempt = UUID()
+        connectionAttempt = attempt
+        let client = LauncherClaimClient()
+        authorizationClient = client
+        setBusy(true)
+        // Simulate a result already accepted by the server but delivered after Stop.
+        stopConnection()
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/false")
+        completeAuthorization(attempt: attempt, process: process,
+                              node: URL(fileURLWithPath: "/usr/bin/false"),
+                              credential: "gta_" + String(repeating: "x", count: 43))
+        guard connector == nil, !busy, connectionAttempt == nil else {
+            throw LinkError.invalid("停止后仍启动了连接器")
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [ClaimFixtureProtocol.self]
+        guard (try? client.claim(link: link, password: "fixture-password-only", deviceName: "Fixture Mac", configuration: config)) == nil else {
+            throw LinkError.invalid("停止后仍进行了邮箱授权")
+        }
+        print("macOS Launcher cancellation: Stop prevents stale authorization from starting a connector")
     }
 }
 
 private func runContractTests(at path: String) throws {
+    try runAccountAuthorizationTests()
     let defaultWorkspaceArgs = try workspaceArguments("")
     let selectedWorkspaceArgs = try workspaceArguments(FileManager.default.temporaryDirectory.path)
     guard defaultWorkspaceArgs == ["--create-workspace"],
@@ -497,12 +905,16 @@ private func runContractTests(at path: String) throws {
     for item in accepted {
         guard let uri = item["uri"] as? String, let expected = item["parsed"] as? [Any] else { throw LinkError.invalid("测试向量缺失") }
         let actual = try ConnectionLink.parse(uri)
-        guard expected.count == 5,
-              expected[0] as? String == serverOrigin,
+        guard [5, 7].contains(expected.count),
+              expected[0] as? String == actual.origin,
               expected[1] as? String == actual.project,
               expected[2] as? String == actual.model,
               expected[3] as? Int == actual.contextTokens,
               expected[4] as? String == actual.historySync else { throw LinkError.invalid("测试向量不匹配") }
+        if expected.count == 7 {
+            guard expected[5] as? String == actual.email,
+                  expected[6] as? String == actual.authorizationID else { throw LinkError.invalid("邮箱授权链接测试向量不匹配") }
+        } else if actual.version != "1" { throw LinkError.invalid("新版链接缺少邮箱测试字段") }
     }
     for uri in rejected {
         if (try? ConnectionLink.parse(uri)) != nil { throw LinkError.invalid("不安全的链接被接受") }
@@ -510,7 +922,173 @@ private func runContractTests(at path: String) throws {
     print("macOS Launcher URI contract: \(accepted.count) accepted, \(rejected.count) rejected")
 }
 
-if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--self-test" {
+private func runAccountAuthorizationTests() throws {
+    let raw = "gatherthread-connect://connect?v=2&origin=https%3A%2F%2Ftest.gatherthread.cn&project=project-example&model=gpt-6-sol&context_window_tokens=65536&visible_history_sync=never&email=person%40example.com&authorization_id=abcd1234-1234-4234-8234-123456789abc"
+    let link = try ConnectionLink.parse(raw)
+    let request = try makeClaimRequest(link: link, password: "fixture-password-only", deviceName: "Fixture Mac")
+    guard request.url?.absoluteString == "https://test.gatherthread.cn/v1/codex-launcher-authorizations/claim",
+          request.httpMethod == "POST", request.timeoutInterval == 15,
+          request.value(forHTTPHeaderField: "Cookie") == nil,
+          request.value(forHTTPHeaderField: "Origin") == nil,
+          request.value(forHTTPHeaderField: "Authorization") == nil,
+          request.httpShouldHandleCookies == false,
+          let body = request.httpBody,
+          let json = try JSONSerialization.jsonObject(with: body) as? [String: String],
+          Set(json.keys) == Set(["authorization_id", "project_id", "email", "password", "device_name"]),
+          json["email"] == "person@example.com", json["password"] == "fixture-password-only" else {
+        throw LinkError.invalid("邮箱授权请求的环境或私密数据隔离验证失败")
+    }
+    guard (try? makeClaimRequest(link: link, password: "short", deviceName: "Fixture Mac")) == nil,
+          (try? makeClaimRequest(link: link, password: String(repeating: "a", count: 129), deviceName: "Fixture Mac")) == nil else {
+        throw LinkError.invalid("密码长度验证失败")
+    }
+    let credential = "gta_" + String(repeating: "x", count: 43)
+    let fixture: [String: Any] = ["data": [
+        "actor": ["user_id": "user-fixture", "display_name": "Fixture", "device_id": "device-fixture"],
+        "device": ["id": "device-fixture", "user_id": "user-fixture", "name": "Fixture Mac",
+                   "created_at": "2026-10-12T01:00:00.000Z", "token_created_at": "2026-10-12T01:00:00.000Z",
+                   "last_used_at": NSNull(), "expires_at": NSNull(), "revoked_at": NSNull(),
+                   "rotated_at": NSNull(), "token_version": 1],
+        "token": credential,
+        "authorization": ["id": "abcd1234-1234-4234-8234-123456789abc", "user_id": "user-fixture", "claimed_by_device_id": "device-fixture",
+                          "authorizer_device_id": "browser-fixture", "created_at": "2026-10-12T01:00:00.000Z",
+                          "expires_at": "2026-10-12T01:10:00.000Z", "claimed_at": "2026-10-12T01:00:01.000Z",
+                          "revoked_at": NSNull(), "expired_at": NSNull()]
+    ]]
+    let data = try JSONSerialization.data(withJSONObject: fixture)
+    guard try parseClaimResponse(data, expected: link) == credential,
+          (try? parseClaimResponse(Data(repeating: 32, count: 16_385), expected: link)) == nil,
+          (try? parseClaimResponse(Data("{}".utf8), expected: link)) == nil else {
+        throw LinkError.invalid("邮箱授权响应结构或大小验证失败")
+    }
+    var invalid = fixture["data"] as! [String: Any]
+    invalid["actor"] = ["user_id": "user-other", "display_name": "Fixture", "device_id": "device-fixture"]
+    let crossed = try JSONSerialization.data(withJSONObject: ["data": invalid])
+    guard (try? parseClaimResponse(crossed, expected: link)) == nil else {
+        throw LinkError.invalid("跨账号的设备授权被接受")
+    }
+    invalid = fixture["data"] as! [String: Any]
+    invalid["device"] = ["id": "device-fixture", "user_id": "user-fixture", "name": "Fixture Mac"]
+    let incomplete = try JSONSerialization.data(withJSONObject: ["data": invalid])
+    guard (try? parseClaimResponse(incomplete, expected: link)) == nil else {
+        throw LinkError.invalid("不完整的设备授权响应被接受")
+    }
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [ClaimFixtureProtocol.self]
+    ClaimFixtureProtocol.responseBody = data
+    ClaimFixtureProtocol.statusCode = 201
+    ClaimFixtureProtocol.requestCount = 0
+    let received = try LauncherClaimClient().claim(link: link, password: "fixture-password-only", deviceName: "Fixture Mac", configuration: config)
+    guard received == credential, ClaimFixtureProtocol.requestCount == 1 else {
+        throw LinkError.invalid("邮箱授权发生了不安全的自动重试")
+    }
+    let delayedConfig = URLSessionConfiguration.ephemeral
+    delayedConfig.protocolClasses = [DelayedClaimFixtureProtocol.self]
+    DelayedClaimFixtureProtocol.body = data
+    DelayedClaimFixtureProtocol.started = DispatchSemaphore(value: 0)
+    let delayedClient = LauncherClaimClient()
+    let cancellationObserved = DispatchSemaphore(value: 0)
+    DispatchQueue.global(qos: .userInitiated).async {
+        if (try? delayedClient.claim(link: link, password: "fixture-password-only", deviceName: "Fixture Mac", configuration: delayedConfig)) == nil {
+            cancellationObserved.signal()
+        }
+    }
+    guard DelayedClaimFixtureProtocol.started.wait(timeout: .now() + 2) == .success else {
+        throw LinkError.invalid("延迟授权测试未启动")
+    }
+    delayedClient.cancel()
+    guard cancellationObserved.wait(timeout: .now() + 2) == .success else {
+        throw LinkError.invalid("停止未取消正在执行的邮箱授权")
+    }
+    ClaimFixtureProtocol.responseBody = Data(repeating: 32, count: 16_385)
+    guard (try? LauncherClaimClient().claim(link: link, password: "fixture-password-only", deviceName: "Fixture Mac", configuration: config)) == nil else {
+        throw LinkError.invalid("过大的网络授权响应被接受")
+    }
+    ClaimFixtureProtocol.statusCode = 401
+    ClaimFixtureProtocol.responseBody = Data("upstream should never echo fixture-password-only".utf8)
+    var passwordRejected = false
+    do {
+        _ = try LauncherClaimClient().claim(link: link, password: "fixture-password-only", deviceName: "Fixture Mac", configuration: config)
+    } catch {
+        passwordRejected = true
+        guard !error.localizedDescription.contains("fixture-password-only") else {
+            throw LinkError.invalid("原始服务错误泄露了私密输入")
+        }
+    }
+    guard passwordRejected else { throw LinkError.invalid("错误的密码响应被接受") }
+    let client = LauncherClaimClient()
+    let session = URLSession(configuration: config)
+    let task = session.dataTask(with: request)
+    let redirect = HTTPURLResponse(url: request.url!, statusCode: 307, httpVersion: "HTTP/1.1", headerFields: nil)!
+    var redirectRejected = false
+    client.urlSession(session, task: task, willPerformHTTPRedirection: redirect, newRequest: request) { redirectRejected = $0 == nil }
+    session.invalidateAndCancel()
+    guard redirectRejected else { throw LinkError.invalid("邮箱密码授权允许了 HTTP 重定向") }
+    print("macOS Launcher email authorization: request isolation and bounded response passed")
+}
+
+private final class ClaimFixtureProtocol: URLProtocol {
+    static var responseBody = Data()
+    static var statusCode = 201
+    static var requestCount = 0
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.requestCount += 1
+        guard request.httpMethod == "POST", request.value(forHTTPHeaderField: "Cookie") == nil,
+              request.value(forHTTPHeaderField: "Origin") == nil,
+              request.value(forHTTPHeaderField: "Authorization") == nil else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse)); return
+        }
+        let response = HTTPURLResponse(url: request.url!, statusCode: Self.statusCode, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Content-Type": "application/json"])!
+        client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: Self.responseBody)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
+}
+
+private final class DelayedClaimFixtureProtocol: URLProtocol {
+    static var body = Data()
+    static var started = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var stopped = false
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        Self.started.signal()
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.1) { [self] in
+            guard !lock.withLock({ stopped }) else { return }
+            let response = HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: "HTTP/1.1",
+                                           headerFields: ["Content-Type": "application/json"])!
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Self.body)
+            client?.urlProtocolDidFinishLoading(self)
+        }
+    }
+    override func stopLoading() { lock.withLock { stopped = true } }
+}
+
+private func runIconTests(at path: String) throws {
+    guard let icon = NSImage(contentsOfFile: path), icon.isValid,
+          icon.representations.contains(where: { $0.pixelsWide >= 512 && $0.pixelsHigh >= 512 }) else {
+        throw LinkError.invalid("GatherThread 应用图标无法读取或缺少高清尺寸")
+    }
+    print("macOS Launcher icon: native AppKit decoded the high-resolution ICNS")
+}
+
+if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--icon-self-test" {
+    do { try runIconTests(at: CommandLine.arguments[2]) }
+    catch { fputs("\(error.localizedDescription)\n", stderr); exit(1) }
+} else if CommandLine.arguments.count == 2 && CommandLine.arguments[1] == "--form-self-test" {
+    let app = NSApplication.shared
+    let delegate = Launcher()
+    app.delegate = delegate
+    delegate.applicationDidFinishLaunching(Notification(name: NSApplication.didFinishLaunchingNotification))
+    do { try delegate.verifyPasswordForm(); try delegate.verifyCancelledAuthorization() }
+    catch { fputs("\(error.localizedDescription)\n", stderr); exit(1) }
+} else if CommandLine.arguments.count == 3 && CommandLine.arguments[1] == "--self-test" {
     do { try runContractTests(at: CommandLine.arguments[2]) }
     catch { fputs("\(error.localizedDescription)\n", stderr); exit(1) }
 } else {
