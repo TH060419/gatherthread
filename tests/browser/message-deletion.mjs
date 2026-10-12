@@ -129,14 +129,14 @@ async function tools(page, mobile) {
 async function closeTools(page, mobile) {
   if (mobile && await page.locator("#mobile-tools-dialog[open]").isVisible()) await click(page.locator("#mobile-tools-dialog [data-mobile-close]"), mobile);
 }
-async function remove(page, event, mobile, accept = true) {
+async function remove(page, event, mobile, accept = true, settled = true) {
   let warning = "";
   const dialogHandled = new Promise(resolve => page.once("dialog", async dialog => {
     warning = dialog.message(); await (accept ? dialog.accept() : dialog.dismiss()); resolve();
   }));
   await click(eventNode(page, event).locator(".message-delete-action"), mobile);
   await bounded(dialogHandled, "Deletion confirmation");
-  if (accept) await eventNode(page, event).locator(".event-content").getByText(/Message deleted|消息已删除/, { exact: true }).waitFor();
+  if (accept && settled) await eventNode(page, event).locator(".event-content").getByText(/Message deleted|消息已删除/, { exact: true }).waitFor();
   return warning;
 }
 
@@ -167,6 +167,18 @@ try {
       assert.match(canceled, locale === "zh-CN" ? /不会被抹除/ : /not erased/);
       assert.equal(running.database.getEvent(f.session.id, f.own.id).deleted, undefined);
       assert.equal(await eventNode(page, f.own).locator(".message-delete-action").count(), 1);
+      const deleteUrl = `${origin}/v1/sessions/${f.session.id}/events/${f.own.id}/delete`, deleteKeys = [];
+      const uncertain = async route => {
+        deleteKeys.push(route.request().postDataJSON().idempotency_key);
+        return route.fulfill({ status: 503, contentType: "application/json",
+          body: JSON.stringify({ error: { code: "fixture_uncertain", message: "Isolated acknowledgement failure" } }) });
+      };
+      await page.route(deleteUrl, uncertain);
+      const firstUncertain = page.waitForResponse(response => response.url() === deleteUrl && response.status() === 503);
+      await remove(page, f.own, mobile, true, false); await firstUncertain;
+      await page.waitForFunction(id => !document.querySelector(`[data-message-delete-id="${id}"]`).disabled, f.own.id);
+      await page.unroute(deleteUrl, uncertain);
+      assert.equal(running.database.getEvent(f.session.id, f.own.id).deleted, undefined);
       await tools(page, mobile);
       await click(page.locator("#mentions-button"), mobile);
       await page.locator(`#mentions-list [data-mention-event-id="${f.own.id}"]`).waitFor();
@@ -191,7 +203,8 @@ try {
       });
       let releaseDelete, enterDelete;
       const deleteEntered = new Promise(resolve => { enterDelete = resolve; });
-      await page.route(`${origin}/v1/sessions/${f.session.id}/events/${f.own.id}/delete`, async route => {
+      await page.route(deleteUrl, async route => {
+        deleteKeys.push(route.request().postDataJSON().idempotency_key);
         await new Promise(resolve => { releaseDelete = resolve; enterDelete(); });
         return route.continue();
       });
@@ -206,7 +219,16 @@ try {
       await bounded(oldEntered, "Old replay fixture");
       releaseDelete();
       const warning = await deleting;
+      const oldFinished = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname === `/v1/sessions/${f.session.id}/events`
+          && Number(url.searchParams.get("after_sequence")) === oldHead && response.status() === 200;
+      });
       releaseOld();
+      await oldFinished;
+      assert.equal(deleteKeys.length, 2); assert.equal(new Set(deleteKeys).size, 1, "uncertain deletion retry reuses the one key");
+      assert.equal(running.database.sqlite.prepare("SELECT COUNT(*) AS count FROM message_deletions WHERE session_id=? AND target_event_id=?")
+        .get(f.session.id, f.own.id).count, 1);
       assert.match(warning, locale === "zh-CN" ? /GatherThread|之后/ : /future GatherThread/);
       await page.waitForFunction(() => document.querySelector("#send-agent-button").dataset.agentAction === "request");
       await page.evaluate(event => window.fixtureSockets.at(-1).dispatchEvent(new MessageEvent("message", {
