@@ -44,6 +44,19 @@ test("Web README describes the real delete transport and bilingual future-histor
   assert.match(source, /仅本地.*不会再上传/);
 });
 
+test("public product READMEs expose deletion without implying loss of other members' work", async () => {
+  const en = await readFile(new URL("../../../README.md", import.meta.url), "utf8");
+  const zh = await readFile(new URL("../../../README.zh-CN.md", import.meta.url), "utf8");
+  assert.match(en, /\| Delete your own messages \|/);
+  assert.match(zh, /删除自己的消息/);
+  assert.match(en, /future Agent history.*exclude/);
+  assert.match(zh, /后续.*Agent.*历史.*不再/);
+  assert.match(en, /does not roll back file changes/);
+  assert.match(zh, /不回滚文件改动/);
+  assert.match(en, /independent messages or manual reposts/);
+  assert.match(zh, /独立消息或手工重发的副本/);
+});
+
 test("desktop and compact beginner guides point to the author's trash icon without adding steps", () => {
   for (const layout of ["desktop", "mobile"]) {
     const basics = guideSteps("basics", { layout });
