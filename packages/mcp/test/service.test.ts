@@ -265,6 +265,34 @@ test("chat and agent request tools append distinct canonical events and redact s
   assert.ok(api.appended.every((item) => (item.payload as any).text === "token=[REDACTED]"));
 });
 
+test("MCP Agent requests preserve captured history pins without fetching a newer revision", async () => {
+  const api = new FakeApi(), service = new CollaborationMcpService({ api });
+  for (const revision of [0, 4, Number.MAX_SAFE_INTEGER]) {
+    const response = await service.handle({ jsonrpc: "2.0", id: revision, method: "tools/call", params: {
+      name: "collaboration_request_agent", arguments: { session_id: "s1", content: "Explicit request", idempotency_key: `pin-${revision}-request`,
+        content_revision: revision },
+    } });
+    assert.ok(response && "result" in response);
+    assert.equal(api.appended.at(-1)?.contentRevision, revision);
+  }
+  const tools = await service.handle({ jsonrpc: "2.0", id: "schema", method: "tools/list" });
+  const request = (tools as any).result.tools.find((item: any) => item.name === "collaboration_request_agent");
+  assert.deepEqual(request.inputSchema.properties.content_revision, { type: "integer", minimum: 0,
+    description: "Captured content_revision from the context/history used to prepare this request; do not refresh it when retrying" });
+  assert.match(request.description, /after.*deletion/iu);
+});
+
+test("MCP Agent requests reject malformed history pins before any canonical write", async () => {
+  const api = new FakeApi(), service = new CollaborationMcpService({ api });
+  for (const revision of [-1, 0.5, "1", null, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    const response = await service.handle({ jsonrpc: "2.0", id: "bad-pin", method: "tools/call", params: {
+      name: "collaboration_request_agent", arguments: { session_id: "s1", content: "Must not append", idempotency_key: "bad-pin-request",
+        content_revision: revision },
+    } });
+    assert.ok(response && "error" in response); assert.equal(api.appended.length, 0);
+  }
+});
+
 test("user MCP exposes explicit per-conversation automatic and manual local upload controls", async () => {
   const calls: string[] = [];
   const localSync = {

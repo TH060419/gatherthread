@@ -223,6 +223,72 @@ test("deleting any source fences already claimed turns even when another account
   } finally { await f.close(); }
 });
 
+for (const native of [false, true]) for (const captured of [0, undefined]) {
+  test(`${native ? "native" : "browser"} requests with ${captured === undefined ? "missing" : "stale"} history pins cannot reintroduce erased instructions`, async () => {
+    const f = await fixture();
+    try {
+      const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "pin-aware-native", session_id: f.session.id,
+        device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "pin-aware-native",
+        capture_fidelity: "harness_transcript", context_deletion_version: 1 });
+      const input = { type: "agent_request" as const, visibility: "session" as const, idempotency_key: randomUUID(),
+        payload: { content: "NATIVE_REQUEST_ERASED_BODY", execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } };
+      const original = f.service.appendEvent(f.owner.actor, f.session.id, input);
+      assert.equal(original.content_revision, 0, "pristine legacy omission must remain compatible");
+      assert.equal((await f.remove(original)).status, 200);
+      const exactRetry = f.service.appendEvent(f.owner.actor, f.session.id, { ...input, content_revision: 0 });
+      assert.ok(exactRetry.deleted); assert.doesNotMatch(JSON.stringify(exactRetry), /NATIVE_REQUEST_ERASED_BODY/);
+      const before = f.service.replay(f.owner.actor, f.session.id, 0, 100).events;
+      const beforeClaims = f.database.sqlite.prepare("SELECT count(*) AS n FROM agent_request_claims").get()?.n;
+      const retryKey = randomUUID();
+      const reply = await f.request(`/v1/sessions/${f.session.id}/events`, "POST", { ...input,
+        idempotency_key: retryKey, ...(captured === undefined ? {} : { content_revision: captured }) }, f.owner, { native });
+      assert.equal(reply.status, 409); assert.equal(reply.body.error?.code, "context_changed");
+      assert.deepEqual(f.service.replay(f.owner.actor, f.session.id, 0, 100).events, before);
+      assert.equal(f.database.sqlite.prepare("SELECT count(*) AS n FROM events WHERE idempotency_key=?").get(retryKey)?.n, 0);
+      assert.equal(f.database.sqlite.prepare("SELECT count(*) AS n FROM agent_request_claims").get()?.n, beforeClaims);
+      const human = f.chat("Independently authored human chat needs no execution pin");
+      assert.equal(human.type, "human_chat"); assert.equal(human.content_revision, 1);
+      const current = await f.request(`/v1/sessions/${f.session.id}/events`, "POST", { ...input, idempotency_key: randomUUID(),
+        content_revision: 1, payload: { ...input.payload, content: "New native question at current revision" } }, f.owner, { native });
+      assert.equal(current.status, 201);
+      const accepted = current.body.data?.event as CanonicalEvent;
+      assert.equal(accepted.content_revision, 1);
+      assert.equal(f.service.claimAgentRequest(f.owner.actor, f.session.id, accepted.id, runtime.id).status, "claimed");
+      assert.doesNotMatch(JSON.stringify(f.service.readHistoryContext(f.owner.actor, f.session.id)), /NATIVE_REQUEST_ERASED_BODY/);
+    } finally { await f.close(); }
+  });
+}
+
+test("MCP requests preserve the context pin through real HTTP acceptance and cannot restamp erased instructions", async () => {
+  const f = await fixture();
+  try {
+    const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "mcp-pin-runtime", session_id: f.session.id,
+      device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "mcp-pin-native",
+      capture_fidelity: "harness_transcript", context_deletion_version: 1 });
+    const api = new HttpCollaborationClient({ baseUrl: `${f.origin}/v1`, bearerToken: f.owner.token });
+    const mcp = new CollaborationMcpService({ api });
+    const original = await api.appendEvent(f.session.id, { type: "agent_request", idempotencyKey: randomUUID(),
+      contentRevision: 0, payload: { text: "MCP_NATIVE_ERASED_REQUEST" } });
+    assert.equal((await f.remove(f.database.getEvent(f.session.id, original.id))).status, 200);
+    const before = f.service.replay(f.owner.actor, f.session.id, 0, 100).events.length;
+    const call = (content: string, revision?: number) => mcp.handle({ jsonrpc: "2.0", id: randomUUID(), method: "tools/call", params: {
+      name: "collaboration_request_agent", arguments: { session_id: f.session.id, content, idempotency_key: randomUUID(),
+        ...(revision === undefined ? {} : { content_revision: revision }) },
+    } });
+    for (const captured of [0, undefined]) {
+      const refused = await call("MCP_NATIVE_ERASED_REQUEST", captured);
+      assert.ok(refused && "error" in refused);
+      assert.equal(f.service.replay(f.owner.actor, f.session.id, 0, 100).events.length, before);
+    }
+    const fresh = await call("New explicit MCP request", 1);
+    assert.ok(fresh && "result" in fresh);
+    const request = f.service.replay(f.owner.actor, f.session.id, 0, 100).events.at(-1)!;
+    assert.equal(request.content_revision, 1); assert.match(JSON.stringify(request.payload), /New explicit MCP request/);
+    assert.equal(f.service.claimAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id).status, "claimed");
+    assert.doesNotMatch(JSON.stringify(await api.readEvents(f.session.id, 0, 100)), /MCP_NATIVE_ERASED_REQUEST/);
+  } finally { await f.close(); }
+});
+
 test("stale native outboxes and old connectors cannot accept, publish or execute after deletion", async () => {
   const f = await fixture();
   try {
