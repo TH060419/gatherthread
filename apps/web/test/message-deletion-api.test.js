@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
+import { ApiError, HttpCollaborationApi, MockCollaborationApi } from "../src/api.js";
+import { translateUiText } from "../src/i18n.js";
+import { normalizeExecutionRuntime } from "../src/dsh.js";
 const wire = { id: "event-delete", session_id: "s1", sequence: 2, type: "message_deleted", visibility: "session",
   idempotency_key: "delete-key-0001", actor_user_id: "me", actor_display_name: "Me", created_at: "2026-10-12T00:00:00.000Z",
   reply_to_event_id: null, runtime_provenance: null, content_revision: 1,
@@ -98,4 +100,19 @@ test("mock source deletion invalidates later generated work without deleting ind
   assert.equal(replay.events.find(item => item.id === "later-response").deleted?.reason, "request");
   assert.equal(replay.events.find(item => item.id === "pending-work").deleted?.reason, "request");
   assert.ok(replay.events.some(item => item.replyTo === "pending-request" && item.payload?.error?.code === "context_changed"));
+});
+
+test("context-change errors give a bilingual reconnect action and runtime capability survives normalization", async () => {
+  const api = new HttpCollaborationApi();
+  api.request = async () => ({ runtimes: [{ id: "r1", device_id: "d1", harness: "codex", provider: "fixture",
+    model: "fixture", status: "online", last_seen_at: wire.created_at, context_deletion_version: 1 }] });
+  const [runtime] = await api.listSessionRuntimes("s1");
+  assert.equal(runtime.contextDeletionVersion, 1);
+  assert.equal(normalizeExecutionRuntime(runtime).contextDeletionVersion, 1);
+  assert.equal(normalizeExecutionRuntime({ ...runtime, contextDeletionVersion: undefined }).contextDeletionVersion, 0);
+  for (const code of ["connector_update_required", "context_changed"]) {
+    const error = new ApiError("Runtime-specific internal diagnostic", { status: 409, code });
+    assert.doesNotMatch(error.message, /internal diagnostic/);
+    assert.notEqual(translateUiText(error.message, "zh-CN"), error.message);
+  }
 });
