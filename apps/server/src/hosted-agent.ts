@@ -231,6 +231,7 @@ function writeSnapshot(root: string, files: CodeFile[]): void {
 export class HostedAgent {
   private readonly cooldowns = new Map<string, number>();
   private readonly controllers = new Map<string, AbortController>();
+  private readonly unsubscribeDeletion: () => void;
   constructor(private readonly service: CollaborationService, private readonly codeRepository: CodeRepository,
     private readonly options: HostedAgentOptions) {
     validateHostedEndpoints(options.endpoints);
@@ -257,7 +258,16 @@ export class HostedAgent {
       || !Number.isSafeInteger(userConcurrency) || userConcurrency < 1 || userConcurrency > options.maxConcurrent) {
       throw new Error("Cloud Agent user rate limits are out of range");
     }
+    this.unsubscribeDeletion = service.onEvent((event) => {
+      if (event.type !== "message_deleted") return;
+      for (const [requestId, controller] of this.controllers) {
+        const job = service.database.sqlite.prepare("SELECT session_id FROM hosted_agent_runs WHERE request_event_id=?").get(requestId);
+        if (job?.session_id === event.session_id) controller.abort();
+      }
+    });
   }
+
+  close(): void { this.unsubscribeDeletion(); for (const controller of this.controllers.values()) controller.abort(); }
 
   status(actor: Actor) {
     const usage = this.service.database.hostedAgentUsage(actor, this.options.userDailyRuns, this.options.globalDailyRuns);
@@ -362,6 +372,10 @@ export class HostedAgent {
     if (!reserved.created) return { request_event: reserved.event, replayed: true };
     const controller = new AbortController();
     this.controllers.set(reserved.event.id, controller);
+    const contextWatch = setInterval(() => {
+      if (!this.service.database.isRequestContextCurrent(sessionId, reserved.event.id)) controller.abort();
+    }, 1000);
+    contextWatch.unref();
     onAccepted?.(reserved.event);
     const endpoint = endpoints.find((e) => e.id === reserved.endpointId)!;
     let content = "";
@@ -370,6 +384,7 @@ export class HostedAgent {
     try { root = mkdtempSync(join(tmpdir(), "gt-hosted-")); }
     catch {
       this.controllers.delete(reserved.event.id);
+      clearInterval(contextWatch);
       const result = this.service.finishHostedAgentRequest(reserved.event.id, {});
       return { request_event: reserved.event, response_event: result, replayed: false };
     }
@@ -381,6 +396,7 @@ export class HostedAgent {
       : this.service.appendHostedAgentProgress(reserved.event.id, update));
     const proxy = new HostedModelProxy({ endpoint, signal: controller.signal, ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
       authorize: () => {
+        this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id);
         this.service.database.assertActiveDevice(actor);
         const session = this.service.database.requireSession(sessionId);
         const role = this.service.requireMembership(actor, sessionId);
@@ -429,9 +445,11 @@ export class HostedAgent {
         "-e", "OPENCODE_DISABLE_MODELS_FETCH=true", "-e", "OPENCODE_DISABLE_DEFAULT_PLUGINS=true",
         "-e", "NO_COLOR=1", "-e", "CI=1", this.options.image];
       controller.signal.throwIfAborted();
+      this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id);
       const output = this.options.runContainer ? await this.options.runContainer(args, RUN_TIMEOUT_MS, controller.signal, live.accept)
         : await runDocker(args, RUN_TIMEOUT_MS, 1_000_000, controller.signal, live.accept);
       controller.signal.throwIfAborted();
+      this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id);
       const run = JSON.parse(hostedContainerResult(output, live.accept)) as { answer?: unknown; files?: unknown; save_error?: unknown };
       content = typeof run.answer === "string" ? run.answer.trim().slice(0, 14_000) : "";
       if (!content) throw new Error("empty_agent_result");
@@ -461,7 +479,7 @@ export class HostedAgent {
           () => proxy.close().catch(() => undefined), () => rmSync(root, { recursive: true, force: true }),
         ]);
         await live.finish(Boolean(content));
-      } finally { await live.finish(false); this.controllers.delete(reserved.event.id); }
+      } finally { await live.finish(false); this.controllers.delete(reserved.event.id); clearInterval(contextWatch); }
     }
     const result = this.service.finishHostedAgentRequest(reserved.event.id, {
       content, ...(errorCode ? { errorCode } : {}), providerAttempts: proxy.diagnostics().providerAttempts,

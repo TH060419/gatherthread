@@ -331,6 +331,7 @@ export class HostedGithub {
    if (!row || row.expires_at < Date.now()) throw safeError("github_task_access", 404);
    const role = this.service.requireMembership(actor, row.session_id);
    const session = this.service.database.requireSession(row.session_id);
+   this.service.database.assertRequestContextCurrent(row.session_id, row.request_event_id);
    if (role === "viewer" || session.state !== "active" || session.mode === "solo" && session.owner_user_id !== actor.user_id) throw safeError("github_task_access", 403);
    return row;
  }

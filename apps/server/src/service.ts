@@ -553,7 +553,7 @@ export class CollaborationService {
 
   presentEvent(actor: Actor, event: CanonicalEvent): CanonicalEvent {
     const role = this.requireMembership(actor, event.session_id);
-    return this.minimizeEventForActor(actor, role, event);
+    return this.minimizeEventForActor(actor, role, this.database.getEvent(event.session_id, event.id));
   }
 
   requireMembership(actor: Actor, sessionId: string): MembershipRole {

@@ -1636,6 +1636,7 @@ export async function startCollaborationServer(
       wsServer.close();
       await new Promise<void>((resolve, reject) => httpServer.close((error) => error ? reject(error) : resolve()));
       await hostedGithub?.close();
+      hostedAgent?.close();
       testGate?.close();
       database.close();
       if (ephemeralCodeDirectory) rmSync(ephemeralCodeDirectory, { recursive: true, force: true });

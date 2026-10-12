@@ -76,7 +76,7 @@ test("request deletion removes linked work and replies; response deletion keeps 
   const f = await fixture();
   try {
     const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "delete-runtime", session_id: f.session.id,
-      device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "delete-native", capture_fidelity: "harness_transcript" });
+      device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "delete-native", capture_fidelity: "harness_transcript", context_deletion_version: 1 });
     const make = (body: string) => f.service.appendEvent(f.owner.actor, f.session.id, { type: "agent_request", visibility: "session",
       idempotency_key: randomUUID(), payload: { content: body, execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } });
     const request = make("DELETED_REQUEST"); f.service.claimAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id);
