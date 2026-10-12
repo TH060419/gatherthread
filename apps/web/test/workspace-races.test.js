@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import vm from "node:vm";
 import { retryAgentRequestPermission } from "../src/agent-request-control.js";
+import { agentContextUpdateReason } from "../src/domain.js";
 
 // Git checkouts may use CRLF on Windows; source extraction below uses LF sentinels.
 const source = (await readFile(new URL("../src/main.js", import.meta.url), "utf8")).replace(/\r\n?/gu, "\n");
@@ -39,9 +40,10 @@ function harness(names, overrides = {}) {
   const nodes = new Map();
   const context = vm.createContext({
     exampleMode: false,
+    agentContextUpdateReason,
     authenticationGeneration: 1, selectedSessionGeneration: 1, workspaceLoadGeneration: 0,
     state: { currentUser: { id: "u1", username: "User", device_id: "d1" }, avatarProfiles: new Map(), avatarProfileRevision: 0, project: { id: "p1" },
-      projects: [], session: { id: "s1" }, settings: { composer: {} }, invitations: [], snapshotRequests: [] },
+      projects: [], session: { id: "s1" }, sync: { contentRevision: 0 }, settings: { composer: {} }, invitations: [], snapshotRequests: [] },
     element: (id) => { if (!nodes.has(id)) nodes.set(id, element()); return nodes.get(id); },
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
     hostedAgentStatus: { enabled: false },

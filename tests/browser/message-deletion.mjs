@@ -34,6 +34,12 @@ const key = () => randomUUID();
 const eventNode = (page, event) => page.locator(`#message-${event.id}`);
 const deletedText = locale => locale === "zh-CN" ? "消息已删除" : "Message deleted";
 const click = (locator, mobile) => mobile ? locator.tap() : locator.click();
+async function bounded(work, label) {
+  let timer;
+  try { return await Promise.race([work, new Promise((_resolve, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} exceeded 10 seconds`)), 10_000);
+  })]); } finally { clearTimeout(timer); }
+}
 let passed = 0;
 
 function makeFixture() {
@@ -111,7 +117,7 @@ async function pageFor(browser, f, identity, locale, width, height, mobile, erro
   await page.goto(`${origin}/app/#project=${f.project.id}&session=${f.session.id}`);
   await page.locator("#session-view:not([hidden])").waitFor();
   if (await page.locator("#code-notice-dialog[open]").isVisible()) await click(page.locator("#code-notice-continue"), mobile);
-  await page.locator("#timeline .event-card").first().waitFor();
+  await page.locator("#event-timeline .event-card").first().waitFor();
   await page.waitForFunction(() => window.fixtureSockets.some(socket => socket.readyState === 1));
   assert.equal((await context.request.get(origin + "/v1/me")).status(), 200);
   return { context, page };
@@ -121,7 +127,7 @@ async function tools(page, mobile) {
   if (mobile && !await page.locator("#history-summary-select-button").isVisible()) await click(page.locator("#mobile-tools-button"), mobile);
 }
 async function closeTools(page, mobile) {
-  if (mobile && await page.locator("#mobile-tools-dialog[open]").isVisible()) await click(page.locator("#mobile-tools-close"), mobile);
+  if (mobile && await page.locator("#mobile-tools-dialog[open]").isVisible()) await click(page.locator("#mobile-tools-dialog [data-mobile-close]"), mobile);
 }
 async function remove(page, event, mobile, accept = true) {
   let warning = "";
@@ -129,7 +135,7 @@ async function remove(page, event, mobile, accept = true) {
     warning = dialog.message(); await (accept ? dialog.accept() : dialog.dismiss()); resolve();
   }));
   await click(eventNode(page, event).locator(".message-delete-action"), mobile);
-  await dialogHandled;
+  await bounded(dialogHandled, "Deletion confirmation");
   if (accept) await eventNode(page, event).locator(".event-content").getByText(/Message deleted|消息已删除/, { exact: true }).waitFor();
   return warning;
 }
@@ -172,7 +178,7 @@ try {
       let releaseOld, enterOld;
       const oldEntered = new Promise(resolve => { enterOld = resolve; });
       let held = false;
-      const oldHead = running.database.requireSession(f.session.id).next_sequence - 1;
+      const oldHead = running.database.requireSession(f.session.id).next_sequence;
       const stale = { ...f.own, id: "delayed-old-copy", sequence: oldHead + 1, content_revision: 0 };
       await page.route(`${origin}/v1/sessions/${f.session.id}/events?*`, async route => {
         const after = Number(new URL(route.request().url()).searchParams.get("after_sequence"));
@@ -183,12 +189,23 @@ try {
           events: [stale], cursor: stale.sequence, has_more: false, content_revision: 0,
         } }) });
       });
-      await page.evaluate(event => window.fixtureSockets.at(-1).dispatchEvent(new MessageEvent("message", {
-        data: JSON.stringify({ type: "event", event }) })), { ...stale, sequence: oldHead + 2 });
-      await oldEntered;
+      let releaseDelete, enterDelete;
+      const deleteEntered = new Promise(resolve => { enterDelete = resolve; });
+      await page.route(`${origin}/v1/sessions/${f.session.id}/events/${f.own.id}/delete`, async route => {
+        await new Promise(resolve => { releaseDelete = resolve; enterDelete(); });
+        return route.continue();
+      });
       await eventNode(page, f.own).scrollIntoViewIfNeeded();
       const before = await eventNode(page, f.own).evaluate(node => node.getBoundingClientRect().top);
-      const warning = await remove(page, f.own, mobile);
+      // Begin the genuine user click while history is live. An unrelated gap
+      // then starts an older replay before the deletion acknowledgement arrives.
+      const deleting = remove(page, f.own, mobile);
+      await bounded(deleteEntered, "Deletion transport fixture");
+      await page.evaluate(event => window.fixtureSockets.at(-1).dispatchEvent(new MessageEvent("message", {
+        data: JSON.stringify({ type: "event", event }) })), { ...stale, sequence: oldHead + 2 });
+      await bounded(oldEntered, "Old replay fixture");
+      releaseDelete();
+      const warning = await deleting;
       releaseOld();
       assert.match(warning, locale === "zh-CN" ? /GatherThread|之后/ : /future GatherThread/);
       await page.waitForFunction(() => document.querySelector("#send-agent-button").dataset.agentAction === "request");
@@ -202,7 +219,7 @@ try {
       assert.equal(await eventNode(page, f.quote).locator(".quoted-message").isDisabled(), true);
       assert.match(await eventNode(page, f.quote).locator(".quoted-message").textContent(), locale === "zh-CN" ? /已删除/ : /deleted/);
       assert.equal(await eventNode(page, f.own).evaluate(node => node === document.activeElement), true, "focus follows the retained tombstone");
-      const text = await page.locator("#timeline").textContent();
+      const text = await page.locator("#event-timeline").textContent();
       assert.doesNotMatch(text, /REMOVE_SOURCE_|FIRST_DERIVED_REMOVE|NESTED_DERIVED_REMOVE|OLD_GENERATED_REMOVE|OLD_PLAN_REMOVE/);
       assert.match(text, /A member's independent message/);
       assert.match(text, /An independently authored quote remains/);
@@ -223,7 +240,7 @@ try {
       await click(page.locator("#mentions-close"), mobile); await closeTools(page, mobile);
       await tools(page, mobile); await click(page.locator("#history-summary-select-button"), mobile); await closeTools(page, mobile);
       assert.equal(await eventNode(page, f.own).locator(".history-source-checkbox").count(), 0);
-      await tools(page, mobile); await click(page.locator("#history-summary-cancel-button"), mobile); await closeTools(page, mobile);
+      await closeTools(page, mobile); await click(page.locator("#history-summary-cancel-button"), mobile);
 
       const active = f.request("A new deletable active request");
       running.service.claimAgentRequest(f.owner.actor, f.session.id, active.id, f.runtime.id);
@@ -233,7 +250,7 @@ try {
       const requestWarning = await remove(page, active, mobile);
       assert.match(requestWarning, locale === "zh-CN" ? /相关回复、工作过程/ : /linked replies and work/);
       await page.waitForFunction(() => document.querySelector("#send-agent-button").dataset.agentAction === "request");
-      assert.doesNotMatch(await page.locator("#timeline").textContent(), /ACTIVE_LINKED_REMOVE/);
+      assert.doesNotMatch(await page.locator("#event-timeline").textContent(), /ACTIVE_LINKED_REMOVE/);
       assert.equal(await page.locator("#message-input").inputValue(), "Keep this unfinished draft");
       const keptRequest = f.request("Keep this request when only its reply is deleted");
       const reply = f.answer(keptRequest, "DELETE_REPLY_ONLY fixture");

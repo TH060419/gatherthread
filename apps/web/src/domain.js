@@ -176,6 +176,11 @@ export function isExecutionRuntime(runtime) {
   return runtime?.status === "online" && (runtime.purpose == null || runtime.purpose === "execution");
 }
 
+export function agentContextUpdateReason(runtime, contentRevision) {
+  return runtime && contentRevision > 0 && runtime.contextDeletionVersion !== 1
+    ? "Update and reconnect your Agent connector before continuing." : "";
+}
+
 export function hasOnlineSnapshotConnector(members = []) {
   return members.some((member) => member.runtime?.status === "online" && member.runtime?.purpose === "snapshot_connector");
 }

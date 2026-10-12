@@ -32,7 +32,8 @@ function normalizeMockTitle(value, label) {
 
 export class ApiError extends Error {
   constructor(message, { status = 0, code = "unknown" } = {}) {
-    super(message);
+    super(code === "connector_update_required" ? "Update and reconnect your Agent connector before continuing."
+      : code === "context_changed" ? "Shared history changed. Start a new Agent request with the current history." : message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
@@ -395,6 +396,7 @@ export class HttpCollaborationApi {
       model: runtime.model,
       status: runtime.status,
       lastSeenAt: runtime.last_seen_at,
+      ...(runtime.context_deletion_version === undefined ? {} : { contextDeletionVersion: runtime.context_deletion_version }),
       ...(Array.isArray(runtime.execution_profiles) ? {
         executionProfiles: runtime.execution_profiles.map((profile) => ({
           provider: profile.provider,
@@ -1614,9 +1616,13 @@ export class MockCollaborationApi {
     if (target.deleted) throw new ApiError("This message was already deleted.", { status: 409, code: "message_deleted" });
     const reasons = new Map([[eventId, "author"]]);
     const includeLinked = (requestId, reason) => {
-      for (const event of events) if (event.replyTo === requestId && ["agent_response", "agent_progress", "tool_call", "tool_result"].includes(event.type)) reasons.set(event.id, reason);
+      for (const event of events) if (event.id !== eventId && event.replyTo === requestId
+        && ["agent_response", "agent_progress", "tool_call", "tool_result"].includes(event.type)) reasons.set(event.id, reason);
     };
     if (target.type === "agent_request") includeLinked(eventId, "request");
+    // Match the real service's conservative invalidation of old generated work.
+    // An independently authored request/chat is retained, never impersonated.
+    for (const event of events) if (event.type === "agent_request" && event.sequence > target.sequence) includeLinked(event.id, "request");
     let expanded = true;
     while (expanded) {
       expanded = false;
@@ -1631,6 +1637,15 @@ export class MockCollaborationApi {
       event.payload = { content: "[Message deleted]" }; event.provenance = null;
       event.contentRevision = session.contentRevision;
       event.deleted = { deleted_at: deletedAt, reason: reasons.get(event.id) };
+    }
+    for (const request of [...events]) {
+      if (request.type !== "agent_request" || request.deleted
+        || events.some(event => event.replyTo === request.id && event.type === "agent_response" && !event.deleted)) continue;
+      const terminal = this.#makeEvent(sessionId, "agent_response", { actor: request.actor, replyTo: request.id,
+        idempotencyKey: createIdempotencyKey("mock-context-changed") });
+      terminal.payload = { content: "Shared history changed. Start a new Agent request with the current history.",
+        status: "failed", error: { code: "context_changed" } };
+      this.#publish(sessionId, terminal);
     }
     const marker = this.#makeEvent(sessionId, "message_deleted", { actor: this.currentUser, idempotencyKey: input.idempotencyKey });
     marker.payload = { target_event_id: eventId, content_revision: session.contentRevision };

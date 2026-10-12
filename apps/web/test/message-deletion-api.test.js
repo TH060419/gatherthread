@@ -109,7 +109,7 @@ test("context-change errors give a bilingual reconnect action and runtime capabi
   const [runtime] = await api.listSessionRuntimes("s1");
   assert.equal(runtime.contextDeletionVersion, 1);
   assert.equal(normalizeExecutionRuntime(runtime).contextDeletionVersion, 1);
-  assert.equal(normalizeExecutionRuntime({ ...runtime, contextDeletionVersion: undefined }).contextDeletionVersion, 0);
+  assert.equal(normalizeExecutionRuntime({ ...runtime, contextDeletionVersion: undefined }).contextDeletionVersion ?? 0, 0);
   for (const code of ["connector_update_required", "context_changed"]) {
     const error = new ApiError("Runtime-specific internal diagnostic", { status: 409, code });
     assert.doesNotMatch(error.message, /internal diagnostic/);

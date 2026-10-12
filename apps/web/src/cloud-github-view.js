@@ -42,7 +42,7 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     el("cloud-github-controls").hidden = true;
   }
   function updateContext() {
-    const c = context(), next = `${c.userId ?? ""}:${c.projectId ?? ""}:${c.sessionId ?? ""}`;
+    const c = context(), next = `${c.userId ?? ""}:${c.projectId ?? ""}:${c.sessionId ?? ""}:${c.contentRevision ?? 0}`;
     if (next !== key) { key = next; clear(); if (dialog.open) dialog.close(); }
     const available = Boolean(c.userId && c.projectId && c.sessionId);
     el("cloud-github-new").disabled = !agentEnabled || !available;

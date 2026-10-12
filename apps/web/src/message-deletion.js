@@ -31,7 +31,12 @@ export function mountMessageDeletion({ document, api, localizer, getContext, onD
       const receipt = await api.deleteMessage(context.sessionId, event.id, { idempotencyKey: intent.idempotencyKey });
       if (!sameScope(context.scope, stamp)) return;
       intents.delete(identity);
+      const restoreFocus = document.activeElement === button || document.activeElement === document.body;
       await onDeleted(receipt);
+      if (restoreFocus && sameScope(context.scope, stamp)
+        && (document.activeElement === button || document.activeElement === document.body)) {
+        document.getElementById?.(`message-${event.id}`)?.focus({ preventScroll: true });
+      }
       if (sameScope(context.scope, stamp)) announce(t("Message deleted. Future Agent context will exclude it."));
     } catch (error) {
       if (!sameScope(context.scope, stamp)) return;

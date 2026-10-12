@@ -1,6 +1,8 @@
 const ZH_CN = Object.freeze({
   "Delete my message": "删除我的消息",
   "Message deleted": "消息已删除",
+  "Update and reconnect your Agent connector before continuing.": "请更新并重新连接 Agent 连接器后继续。",
+  "Shared history changed. Start a new Agent request with the current history.": "共享历史已更改，请重新发起 Agent 请求。",
   "Unavailable because its source was deleted": "因来源已删除而失效",
   "Original message deleted": "引用的消息已删除",
   "Refreshing history…": "正在更新历史…",

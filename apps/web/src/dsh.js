@@ -30,6 +30,9 @@ export function normalizeExecutionRuntime(value) {
     model,
     status,
     lastSeenAt,
+    ...((value.contextDeletionVersion ?? value.context_deletion_version) === undefined ? {} : {
+      contextDeletionVersion: (value.contextDeletionVersion ?? value.context_deletion_version) === 1 ? 1 : 0,
+    }),
     ...(executionProfiles.length > 0 ? { executionProfiles } : {}),
   };
 }

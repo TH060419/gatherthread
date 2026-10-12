@@ -17,6 +17,7 @@ import { projectInvitationShareText } from "./invitation-share.js?v=20261012-inv
 import { mountInvitationLink } from "./invitation-link.js?v=20261012-invite-1";
 import {
   canAppend,
+  agentContextUpdateReason,
   canRetryFailedAgentRequest,
   canOpenCodexLauncher,
   createIdempotencyKey,
@@ -370,7 +371,8 @@ const cloudGithubUi = mountCloudGithub({ api: () => api, t: (value) => localizer
   setText: (node, source) => localizer.setText(node, source),
   agentEnabled: CLOUD_AGENT_ENTRY_ENABLED,
   openSurface: () => codeSyncUi.openGithub({ refreshCloud: false }),
-  context: () => ({ userId: state.currentUser?.id, projectId: state.project?.id, sessionId: state.session?.id }) });
+  context: () => ({ userId: state.currentUser?.id, projectId: state.project?.id, sessionId: state.session?.id,
+    contentRevision: state.sync.contentRevision ?? 0 }) });
 element("cloud-agent-source").addEventListener("change", renderComposerPermissions);
 const codexDeviceAuthorization = mountDeviceAuthorization({ document, api, localizer,
   scope: () => `${authenticationGeneration}:${state.currentUser?.id}:${state.project?.id}` });
@@ -3006,15 +3008,16 @@ function renderComposerPermissions() {
   const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
   const cloud = harness === "cloud";
   const cloudProfile = currentCloudProfile();
-  const agentAllowed = chat.allowed && (cloud ? CLOUD_AGENT_ENTRY_ENABLED && cloudProfile?.available === true : resolution.runtime !== null);
-  const agentReason = chat.allowed ? (cloud ? cloudStatusText(cloudProfile) : resolution.reason) : chat.reason;
+  const contextNotice = cloud ? "" : agentContextUpdateReason(resolution.runtime, state.sync.contentRevision ?? 0);
+  const agentAllowed = chat.allowed && !contextNotice && (cloud ? CLOUD_AGENT_ENTRY_ENABLED && cloudProfile?.available === true : resolution.runtime !== null);
+  const agentReason = chat.allowed ? (contextNotice || (cloud ? cloudStatusText(cloudProfile) : resolution.reason)) : chat.reason;
   const sending = Boolean(pendingMessageSend?.());
   sendChatButton.disabled = sending || !chat.allowed;
   sendAgentButton.disabled = sending || !agentAllowed;
   element("send-cloud-agent-help").hidden = !cloud || !CLOUD_AGENT_ENTRY_ENABLED;
   element("cloud-agent-include-code").closest("label").hidden = element("cloud-agent-source").value === "github";
   messageInput.disabled = !chat.allowed && !agentAllowed;
-  element("composer-permission").textContent = chat.allowed ? "" : chat.reason;
+  element("composer-permission").textContent = localizer.t(chat.allowed ? contextNotice : chat.reason);
   const dshSelection = harness === DSH_HARNESS && resolution.runtime
     ? dshExecutionSelection(
       resolution.runtime,
