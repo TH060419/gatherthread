@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isMobileDevice, usesMobileWorkspace, MOBILE_WORKSPACE_MAX_WIDTH, mobileAgentLabel, mobileControlLabel } from "../src/mobile-workspace.js";
+import { isMobileDevice, usesMobileWorkspace, MOBILE_WORKSPACE_MAX_WIDTH, mobileAgentLabel, mobileControlLabel, isDialogBackdropPointer } from "../src/mobile-workspace.js";
 
 test("local connection availability follows the platform, not a narrow desktop window", () => {
   assert.equal(isMobileDevice({ userAgent: "Macintosh Safari", platform: "MacIntel", maxTouchPoints: 0 }), false);
@@ -34,4 +34,17 @@ test("small mobile labels preserve harness identity and request/pause/resume dis
   assert.equal(mobileControlLabel("Resume Agent"), "Resume");
   assert.equal(mobileControlLabel("Pausing…"), "Pausing…");
   assert.equal(mobileControlLabel("Pauses your current request; your draft stays here."), "Pauses your current request; your draft stays here.");
+});
+
+test("dialog backdrop hit testing excludes the sheet's border, padding and child controls", () => {
+  const dialog = { getBoundingClientRect: () => ({ left: 100, right: 620, top: 120, bottom: 700 }) };
+  const pointer = (x, y, target = dialog) => ({ target, clientX: x, clientY: y });
+  for (const [x, y] of [[100, 120], [112, 200], [620, 700], [360, 420]]) {
+    assert.equal(isDialogBackdropPointer(dialog, pointer(x, y)), false);
+  }
+  for (const [x, y] of [[99, 200], [621, 200], [360, 119], [360, 701]]) {
+    assert.equal(isDialogBackdropPointer(dialog, pointer(x, y)), true);
+  }
+  assert.equal(isDialogBackdropPointer(dialog, pointer(4, 4, {})), false);
+  assert.equal(isDialogBackdropPointer(dialog, { target: dialog }), false);
 });

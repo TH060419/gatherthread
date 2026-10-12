@@ -66,6 +66,22 @@ test("illustrated beginner guides identify the author's trash button and retain 
   assert.match(zh, /未删除的原文和有效的旧摘要/);
 });
 
+test("illustrated guides use the current desktop Launcher and compact Agent controls", async () => {
+  const en = await readFile(new URL("../../../docs/PRODUCT_GUIDE.md", import.meta.url), "utf8");
+  const zh = await readFile(new URL("../../../docs/PRODUCT_GUIDE.zh-CN.md", import.meta.url), "utf8");
+  assert.match(en, /Launcher v2/);
+  assert.match(zh, /启动器 v2/);
+  assert.match(en, /DMG.*Applications/);
+  assert.match(zh, /DMG.*应用程序/);
+  assert.match(en, /email.*password.*Launcher/);
+  assert.match(zh, /邮箱.*启动器.*密码/);
+  assert.match(en, /production and test.*independent.*device/);
+  assert.match(zh, /正式.*测试.*独立.*设备/);
+  assert.match(en, /On computers, phones and tablets.*Agent button/);
+  assert.match(zh, /电脑、手机和平板.*Agent 按钮/);
+  for (const source of [en, zh]) assert.doesNotMatch(source, /Launcher v1|启动器 v1|production-origin-only|云端任务暂不支持/);
+});
+
 test("desktop and compact beginner guides point to the author's trash icon without adding steps", () => {
   for (const layout of ["desktop", "mobile"]) {
     const basics = guideSteps("basics", { layout });

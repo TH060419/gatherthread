@@ -162,6 +162,21 @@ try {
     await page.locator("#mobile-agent-button").click();
     await page.locator("#agent-harness-select").waitFor({ state: "visible" });
     assert.ok(await page.locator('#agent-harness-select option[value="codex"]').count(), "existing computer Agent stays selectable");
+    await page.locator("#mobile-agent-dialog").click({ position: { x: 12, y: 80 } });
+    assert.equal(await page.locator("#mobile-agent-dialog").evaluate(node => node.open), true,
+      "clicking the settings sheet padding is not a backdrop dismissal");
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await page.locator("#mobile-agent-dialog [data-mobile-close]").click();
+      await page.locator("#mobile-agent-dialog").waitFor({ state: "hidden" });
+      assert.equal(await page.locator("#mobile-agent-button").getAttribute("aria-expanded"), "false");
+      await page.locator("#mobile-agent-button").click();
+      await page.locator("#agent-harness-select").waitFor({ state: "visible" });
+      assert.equal(await page.locator("#mobile-agent-button").getAttribute("aria-expanded"), "true");
+    }
+    await page.mouse.click(4, 4);
+    await page.locator("#mobile-agent-dialog").waitFor({ state: "hidden" });
+    await page.locator("#mobile-agent-button").click();
+    await page.locator("#agent-harness-select").waitFor({ state: "visible" });
     await page.screenshot({ path: `${artifacts}/${name}-${width}-existing-agent.png` });
     console.log(`${name}: ${width}px ${platform} existing-Agent regression passed`);
     await context.close();
