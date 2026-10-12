@@ -132,7 +132,7 @@ export class LocalBridge {
       if (event.sessionId !== runtime.sessionId) {
         throw new Error("Collaboration API returned an event for a different session");
       }
-      if (event.type === "agent_request") {
+      if (event.type === "agent_request" && !event.deleted) {
         const shouldExecute = event.actorId === runtime.userId
           && (executor.shouldExecute === undefined || await executor.shouldExecute(event, runtime));
         if (shouldExecute) {
@@ -319,6 +319,9 @@ export class LocalBridge {
     const claimAttempt = claim.attemptCount ?? 1;
 
     const canonicalHistory = await this.#readCanonicalHistory(request.sessionId, request.sequence);
+    const authoritativeRequest = canonicalHistory.find((event) => event.id === request.id);
+    if (request.deleted || authoritativeRequest?.deleted) throw new CollaborationHttpError(409, "Shared history changed; the request was deleted", "context_changed");
+    request = authoritativeRequest ?? request;
     // Freeze derived context before the current request. Summary generation is
     // still an explicitly claimed normal local-Agent turn; no other member's
     // runtime is ever borrowed. Older servers without summary records retain
@@ -328,14 +331,19 @@ export class LocalBridge {
       && "history_summary" in request.payload;
     const hasSummaryHistory = canonicalHistory.some((event) => event.type === "agent_request"
       && event.payload !== null && typeof event.payload === "object" && "history_summary" in event.payload);
-    if (hasSummaryHistory && !this.#api.readContext) {
+    const deletionAware = (claim.contentRevision ?? request.contentRevision ?? 0) > 0
+      || canonicalHistory.some((event) => event.deleted || event.type === "message_deleted");
+    if ((hasSummaryHistory || deletionAware) && !this.#api.readContext) {
       throw new Error("This connector cannot read GatherThread's summarized context; update the connector before continuing.");
     }
+    const readContext = this.#api.readContext
+      ? await this.#api.readContext(request.sessionId, undefined, request.sequence - 1) : undefined;
+    const revision = claim.contentRevision ?? request.contentRevision ?? 0;
+    if (readContext && (readContext.content_revision ?? 0) !== revision) throw new CollaborationHttpError(409,
+      "Shared history changed after this request was claimed; start a new request", "context_changed");
     const historyContext = summaryGeneration
-      ? { view: "summary" as const, through_sequence: request.sequence - 1, items: [] }
-      : this.#api.readContext && hasSummaryHistory
-        ? await this.#api.readContext(request.sessionId, undefined, request.sequence - 1)
-        : undefined;
+      ? { view: "summary" as const, through_sequence: request.sequence - 1, items: [], content_revision: readContext?.content_revision ?? revision }
+      : readContext;
     await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
       idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:${claimAttempt}:progress:start`,
       payload: {
@@ -445,7 +453,8 @@ export class LocalBridge {
         payload: input.payload,
       });
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof CollaborationHttpError && (error.code === "context_changed" || error.code === "connector_update_required")) throw error;
       // Progress is supplementary. A transient progress upload failure must not
       // strand an already-claimed request before its canonical final response.
       return false;

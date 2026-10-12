@@ -3952,6 +3952,7 @@ function renderProjectionEvent(
     context_snapshot: "Context Snapshot",
     membership_change: "Membership Change",
     session_state_change: "Session State Change",
+    message_deleted: "Message Deleted",
   };
   return { role: projectionRole(event), text: `${username} · ${eventLabel[event.type]}：${content}` };
 }

@@ -19,7 +19,8 @@ export type CanonicalEventType =
   | "attachment"
   | "context_snapshot"
   | "membership_change"
-  | "session_state_change";
+  | "session_state_change"
+  | "message_deleted";
 
 export interface RuntimeProvenance {
   userId: string;
@@ -44,12 +45,15 @@ export interface CanonicalEvent {
   timestamp: string;
   payload: unknown;
   runtime?: RuntimeProvenance;
+  contentRevision?: number;
+  deleted?: { deletedAt: string; reason: "author" | "request" | "summary_invalidated" };
 }
 
 export interface CommitLocalTurnInput {
   localTurnId: string;
   runtimeId: string;
   basedOnSequence: number;
+  contentRevision?: number;
   occurredAt: string;
   observedModel?: string;
   observedReasoningEffort?: string;
@@ -81,6 +85,7 @@ export interface SnapshotRequestSummary {
   sessionId: string;
   kind: SnapshotRequestKind;
   throughSequence: number;
+  contentRevision?: number;
   status: SnapshotRequestStatus;
   targetRuntimeId?: string;
   createdAt?: string;
@@ -101,6 +106,7 @@ export interface SessionSummary {
   state?: "active" | "archived";
   role?: "owner" | "participant" | "viewer";
   latestSequence?: number;
+  contentRevision?: number;
 }
 
 export interface ProjectSummary {
@@ -129,6 +135,7 @@ export interface ReadEventsResult {
   events: CanonicalEvent[];
   nextSequence: number;
   hasMore: boolean;
+  contentRevision?: number;
 }
 
 export interface AppendEventInput {
@@ -156,6 +163,7 @@ export interface RuntimeRegistration {
   captureFidelity: CaptureFidelity;
   capabilities?: readonly string[];
   purpose?: "execution" | "snapshot_connector";
+  contextDeletionVersion?: 1;
 }
 
 export interface RuntimeExecutionProfile {
@@ -184,6 +192,7 @@ export interface AgentRequestClaim {
   requestId: string;
   runtimeId: string;
   attemptCount?: number;
+  contentRevision?: number;
 }
 
 export interface CompleteAgentRequestInput {

@@ -148,6 +148,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       events,
       nextSequence: requiredNumber(body.cursor, "cursor"),
       hasMore: body.has_more === true,
+      ...(body.content_revision === undefined ? {} : { contentRevision: requiredRevision(body.content_revision, "events.content_revision") }),
     };
   }
 
@@ -215,6 +216,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       requestId: requiredString(body.request_event_id, "claim.request_event_id"),
       runtimeId: requiredString(body.runtime_id, "claim.runtime_id"),
       attemptCount,
+      ...(body.content_revision === undefined ? {} : { contentRevision: requiredRevision(body.content_revision, "claim.content_revision") }),
     };
   }
 
@@ -264,6 +266,7 @@ export class HttpCollaborationClient implements CollaborationApi {
         local_turn_id: input.localTurnId,
         runtime_id: input.runtimeId,
         based_on_sequence: input.basedOnSequence,
+        ...(input.contentRevision === undefined ? {} : { content_revision: input.contentRevision }),
         occurred_at: input.occurredAt,
         ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
         ...(input.observedReasoningEffort === undefined ? {} : { observed_reasoning_effort: input.observedReasoningEffort }),
@@ -434,6 +437,7 @@ function toWireRuntimeRegistration(runtime: RuntimeRegistration): Record<string,
     capture_fidelity: runtime.captureFidelity,
     ...(runtime.capabilities === undefined ? {} : { capabilities: [...runtime.capabilities] }),
     ...(runtime.purpose === undefined ? {} : { purpose: runtime.purpose }),
+    ...(runtime.contextDeletionVersion === undefined ? {} : { context_deletion_version: runtime.contextDeletionVersion }),
   };
 }
 
@@ -501,7 +505,13 @@ export function parseHistoryContext(value: unknown, expectedView?: HistoryContex
   if (items.some((item) => sourceIds.has(item.event_id))) {
     throw new Error("Collaboration API context repeats summarized sources");
   }
-  return { view: value.view, through_sequence: Number(value.through_sequence), items };
+  return { view: value.view, through_sequence: Number(value.through_sequence), items,
+    ...(value.content_revision === undefined ? {} : { content_revision: requiredRevision(value.content_revision, "context.content_revision") }) };
+}
+
+function requiredRevision(value: unknown, label: string): number {
+  if (!Number.isSafeInteger(value) || Number(value) < 0) throw new Error(`Collaboration API returned invalid ${label}`);
+  return Number(value);
 }
 
 function isContextId(value: unknown): value is string {
@@ -524,8 +534,16 @@ function fromWireEvent(value: unknown): CanonicalEvent {
     ...(typeof input.reply_to_event_id === "string" ? { replyTo: input.reply_to_event_id } : {}),
     timestamp: requiredString(input.created_at, "event.created_at"),
     payload: input.payload,
+    ...(input.content_revision === undefined ? {} : { contentRevision: requiredRevision(input.content_revision, "event.content_revision") }),
+    ...(input.deleted === undefined ? {} : { deleted: fromWireDeletion(input.deleted) }),
     ...(runtime === undefined ? {} : { runtime }),
   };
+}
+
+function fromWireDeletion(value: unknown): NonNullable<CanonicalEvent["deleted"]> {
+  const input = requiredObject(value);
+  if (input.reason !== "author" && input.reason !== "request" && input.reason !== "summary_invalidated") throw new Error("Collaboration API returned invalid event.deleted reason");
+  return { deletedAt: requiredString(input.deleted_at, "event.deleted.deleted_at"), reason: input.reason };
 }
 
 function fromWireSnapshotRequest(value: unknown): SnapshotRequestSummary {
@@ -554,6 +572,7 @@ function fromWireSnapshotRequest(value: unknown): SnapshotRequestSummary {
     kind,
     ...(typeof input.target_runtime_id === "string" ? { targetRuntimeId: input.target_runtime_id } : {}),
     throughSequence: requiredNumber(input.through_sequence, "snapshot_request.through_sequence"),
+    ...(input.content_revision === undefined ? {} : { contentRevision: requiredRevision(input.content_revision, "snapshot_request.content_revision") }),
     status,
     ...(createdAt === undefined ? {} : { createdAt }),
     ...("result" in input ? { result: input.result } : {}),
@@ -579,6 +598,7 @@ function fromWireSession(value: unknown): SessionSummary {
     ...(name === undefined ? {} : { name }),
     ...(role === undefined ? {} : { role }),
     ...(latestSequence === undefined ? {} : { latestSequence }),
+    ...(input.content_revision === undefined ? {} : { contentRevision: requiredRevision(input.content_revision, "session.content_revision") }),
   };
 }
 
@@ -631,6 +651,7 @@ function fromWireRuntime(value: unknown): RegisteredRuntime {
     localSessionId: requiredString(input.local_session_id, "runtime.local_session_id"),
     captureFidelity: requiredString(input.capture_fidelity, "runtime.capture_fidelity") as RegisteredRuntime["captureFidelity"],
     purpose,
+    ...(input.context_deletion_version === 1 ? { contextDeletionVersion: 1 } : {}),
   };
 }
 
