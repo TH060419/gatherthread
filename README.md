@@ -36,7 +36,7 @@ Maya wants a club signup page. Alex confirms the time, place, and button behavio
 
 ### 2. Turn decisions into work
 
-Choose or connect your Agent, then explicitly ask it to build. Everyone can follow the public progress and answer. If the discussion is long, first summarize the selected requirements; the original messages remain available.
+Choose or connect your Agent, then explicitly ask it to build. Everyone can follow the public progress and answer. If the discussion is long, first summarize the selected requirements; undeleted original messages remain available.
 
 ![Full interface with annotations: Alex's Agent answer and model](docs/assets/product/en/annotated/04-agent-work.jpg)
 
@@ -79,7 +79,8 @@ Want to practice first? Open the [free example](https://gatherthread.cn/app/exam
 |---|---|
 | Multi and Solo | Collaborate in Multi; write your own Solo while project members can still read it. Solo is not a private conversation. |
 | Quotes and mentions | Reply to a specific chat or Agent answer; open the mentions inbox to find messages addressed to you. |
-| Shared summaries | Ask your own connected computer Agent (Codex/DSH) to summarize selected messages, keep the originals and older versions, and summarize again. |
+| Shared summaries | Ask your own connected computer Agent (Codex/DSH) to summarize selected messages, keep undeleted originals and valid older versions, and summarize again. |
+| Delete your own messages | Use the trash icon on your chat, Agent request or Agent reply. Related generated work and summaries may also become unavailable; other members' messages are not yours to delete. |
 | Conversation synchronization | Send shared history to connected Agents; switch local-to-cloud automatic uploads on or off per conversation, or manually upload completed turns. |
 | Codex history import | Create a new visible local task from shared history. Review it and archive the old task yourself; live history delivery remains independent. |
 | Models and request controls | Choose supported models and reasoning levels. During a computer Agent request, the request button becomes Pause or Resume. |
@@ -94,6 +95,8 @@ Want to practice first? Open the [free example](https://gatherthread.cn/app/exam
 Summaries may omit details and use your Agent's quota. Later Agent requests default to the summarized history; Settings can select original history instead. Reading-view toggles are separate. Pause/Resume controls a GatherThread request, not an identical freeze and restart of a native Agent's internal reasoning.
 
 **Choose what you share.** Shared discussion goes to GatherThread; files you authorize go to the selected file service. Sharing a conversation does not give teammates your local tool approvals or model credentials. Check files for secrets before uploading. Cloud deletion does not delete local Agent conversations or files. See [privacy](https://gatherthread.cn/privacy/) and [security](docs/SECURITY.md).
+
+After message deletion, all future Agent history prepared by GatherThread will exclude the erased content and invalidated results. Deletion does not roll back file changes, erase other members' independent messages or manual reposts, or recall copies already held locally or by model providers. The live conversation retains a placeholder with its order, author and time; [privacy](https://gatherthread.cn/privacy/) explains retention.
 
 ## Next: Agents working more directly together
 

@@ -26,6 +26,8 @@ You could try: “Make one signup page with the time, place, and a signup button
 
 Quote a chat message or Agent answer instead of explaining which one you meant. The quote preview stays with your draft; cancel it if you change your mind. After sending, clicking the quote takes readers to the original message.
 
+To delete something you sent, use the trash icon beside your own message or Agent reply and confirm.
+
 Type `@` and select a member from the list. Simply typing someone's name is not the same as choosing them.
 
 ![Full interface with annotations: quote preview and selected mention](assets/product/en/annotated/05-quote-and-mention.jpg)
@@ -42,7 +44,7 @@ Choose your own connected computer Agent (Codex/DSH), select completed messages,
 
 ![Full interface with annotations: the signup-page summary and original view](assets/product/en/annotated/03-summary.jpg)
 
-Original messages and older summary versions stay available. Switch a paragraph back to its sources, switch the whole view, or select an existing summary with other messages for a new summary. Members who can write in that conversation can generate summaries; viewers can read them.
+Undeleted original messages and valid older summary versions stay available. Switch a paragraph back to its sources, switch the whole view, or select an existing summary with other messages for a new summary. Members who can write in that conversation can generate summaries; viewers can read them.
 
 Future GatherThread Agent requests default to the summarized history. In **Settings → Summaries**, choose original history when precise wording or complete details matter, and customize the summary instructions. The reading-view toggle does not change this preference or remove history already loaded into a native Agent conversation.
 
@@ -120,7 +122,7 @@ Connected Agents receive shared conversation history without every chat message 
 - **Manual upload:** upload eligible completed local turns, including recovery when a Codex Hook did not capture one. Manual upload does not turn automatic upload back on.
 - **Codex visible history:** initial import is on by default when each shared conversation is first established locally; Settings can turn it off. A manual import creates a new verified local task. Check it and archive the old task yourself. Continuing the old task remains local, and realtime history delivery is independent of the import setting.
 
-An import may need the Agent's native compaction for long history. Shared original records remain available; a compacted local task is not a lossless archive. See [Codex setup and history](CODEX_CONNECT.md) and [DSH setup](DSH_CONNECT.md) for supported installation and recovery paths.
+An import may need the Agent's native compaction for long history. Undeleted shared original records remain available; a compacted local task is not a lossless archive. See [Codex setup and history](CODEX_CONNECT.md) and [DSH setup](DSH_CONNECT.md) for supported installation and recovery paths.
 
 ## Know who can do what
 

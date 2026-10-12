@@ -74,6 +74,7 @@ The fixture covers bilingual phone controls, remote same-account Codex/DSH selec
 - `acceptInvitation(...)` after account sign-in
 - `replayEvents(sessionId, { afterSequence, limit })`
 - distinct `appendHumanChat(...)` and `appendAgentRequest(...)` methods
+- `deleteMessage(sessionId, eventId, { idempotencyKey })` for explicit author-only deletion
 - `createHistorySummary(...)` for explicit, selected-history Agent requests, plus per-user/project `getProjectContextPolicy(...)` and `setProjectContextPolicy(...)`
 - `createSnapshotRequest(sessionId)` and `getSnapshotRequest(requestId)` for one-way Codex downloads
 - `openRealtime({ sessionId, afterSequence, onEvent, onState })`
@@ -100,6 +101,7 @@ PATCH /v1/sessions/:id
 GET  /v1/sessions/:id/members
 GET  /v1/sessions/:id/events?after_sequence=N&limit=100
 POST /v1/sessions/:id/events
+POST /v1/sessions/:id/events/:event_id/delete
 POST /v1/sessions/:id/history-summaries
 GET  /v1/projects/:id/context-policy
 PUT  /v1/projects/:id/context-policy
@@ -116,6 +118,7 @@ Replay pages accept either camelCase mock fields or the proposed wire fields:
 {
   "events": [],
   "head_sequence": 42,
+  "content_revision": 0,
   "next_after_sequence": 42,
   "has_more": false
 }
@@ -145,13 +148,29 @@ New projects start with no sessions. Owners may create `solo` or `multi`; partic
 
 Session writers can select 1–100 loaded public messages or completed summaries, then explicitly confirm generation with their own currently selected online Agent, exact runtime, model, and effort. Pending/failed messages and generated summary prompts cannot be selected. The serialized source limit is 20 KiB with no truncation; an uncertain transport retry preserves the same idempotency key. A new retry or regeneration is offered only after a definitive rejection or terminal response, never automatically.
 
-Summaries are shared, lossy derived Markdown. The default display folds the newest whole non-overlapping versions at their first original source; every original and older version remains available. Selected earlier summaries expand to their original ancestry for overlap handling. Per-card/global display switches do not change Agent context injection or delete history. Readers may inspect all versions; only session writers may regenerate, using their own Agent.
+Summaries are shared, lossy derived Markdown. The default display folds the newest whole non-overlapping versions at their first original source; undeleted originals and valid older versions remain available. Selected earlier summaries expand to their original ancestry for overlap handling. Per-card/global display switches do not change Agent context injection or delete history. Readers may inspect valid versions; only session writers may regenerate, using their own Agent.
 
 Settings expose summary instructions (browser preference, shared on generation; never enter secrets) and a separate server-backed context policy scoped to the current user/project. Summary mode reduces context but may lose details; original mode includes the original public messages and uses more context. This applies to future Agent requests started from the GatherThread Web app and explicit MCP context reads. It does not rewrite a running turn, remove existing Codex Desktop task history, or replace history already injected into ordinary DSH sessions. Already-loaded history remains managed by native automatic compaction. Generation still uses the writer's selected local Agent and may consume model quota. Only selected records are supplied as its shared-history context; this is not a guarantee of sandbox isolation from local tools or files.
 
+### Delete your own messages / 删除自己发出的消息
+
+With write access, use the trash icon beside your own chat, Agent request or Agent reply, then confirm. Owners cannot delete other members' messages. Deleting a request also removes its linked replies and work; dependent summaries and later generated work that may have used it become unavailable. The body becomes a placeholder; message identity, sequence, type, author, time and reply references remain.
+
+All future GatherThread-prepared Agent history will exclude deleted content and invalidated results, including original-history mode and downloads of older history. Start a new request after history changes; update and reconnect an older connector if prompted. For the affected conversation, older GatherThread-created local tasks remain local-only and are not uploaded again.
+
+Deletion does not roll back already executed file changes or erase other members' independent messages, manual reposts, existing local files/conversations, provider requests or independent copies. Physical erasure is not instantaneous. Backup, unreachable GT Cloud Git and log retention remain subject to the [privacy notice](../../site/privacy/index.html); see [ADR-0050](../../docs/adr/0050-author-message-erasure-and-context-revisions.md) for the canonical erasure/rebuild contract.
+
+有发言权限时，点击自己的聊天消息、Agent 请求或 Agent 回复旁的垃圾桶，再确认删除。创建者也不能删除其他成员的消息。删除请求会同时删除关联回复和工作过程；依赖它的摘要及可能使用过它的后续生成内容会失效。正文变为占位提示，消息标识、顺序、类型、作者、时间和引用关系仍保留。
+
+后续由 GatherThread 整理给 Agent 的历史不再包含已删除内容和失效结果，包括选择原文或下载较早的历史。历史变化后请重新请求；如提示连接器需要更新，请先更新并重新连接。受影响的旧共序本地会话仍保留为仅本地副本，不会再上传。
+
+删除不回滚已经执行的文件改动，也不删除其他成员的独立消息、手工重发的副本、原有本地文件或会话，无法撤回已发给模型的内容或独立副本。物理清除不是瞬间完成；备份、不可达 GT Cloud Git 对象和日志保留规则见[隐私说明](../../site/privacy/index.html)，具体删除与重建规则见 [ADR-0050](../../docs/adr/0050-author-message-erasure-and-context-revisions.md)。
+
+After a build, run `tests/browser/message-deletion.mjs` with `PLAYWRIGHT_MODULE_PATH` set to an existing Playwright installation. Its disposable loopback fixture uses real HTTP, HttpOnly cookies, SQLite and WebSocket delivery without external providers. Ordinary click/tap cases cover bilingual desktop, phone and tablet layouts in Chrome and Playwright WebKit, author/read-only/other-member controls, uncertain retries, derived summaries/quotes/mentions, drafts, focus, scroll position and stale deliveries. WebKit emulation is not native Safari or physical-device verification.
+
 ## Server integration notes
 
-`HttpCollaborationApi` normalizes the server's snake_case `{data: ...}` envelope into the UI model. Server-calculated roles remain the security boundary. `SessionSync` ignores duplicate delivery, buffers out-of-order live events, recovers gaps by HTTP replay, accepts authoritative cursor jumps across visibility-filtered events, and invalidates callbacks from a previously selected session.
+`HttpCollaborationApi` normalizes the server's snake_case `{data: ...}` envelope into the UI model. Server-calculated roles remain the security boundary. `SessionSync` ignores duplicate delivery, buffers out-of-order live events, recovers gaps by HTTP replay, accepts authoritative cursor jumps across visibility-filtered events, and invalidates callbacks from a previously selected session. A `message_deleted` control invalidates cached content and reloads authoritative history from zero; the separate `content_revision` fence rejects stale replay and WebSocket bodies. Quotes, mentions, summary sources and private task previews are refreshed rather than restored from older cached text.
 
 ## First-release limits
 
