@@ -56,8 +56,11 @@ function fixture(options: { preset?: boolean; workspacePath?: string; projection
           event = { type, seq: events.length, time: 1, data, ...options };
           if (options?.surfaceOp === "append") nodes.push(event.seq);
           else if (options?.surfaceOp?.op === "replace") {
-            const start = nodes.indexOf(options.surfaceOp.start);
-            const end = nodes.indexOf(options.surfaceOp.end);
+            // Mirrors the pinned DSH validator, which demands exactly the
+            // `op`/`startSeq`/`endSeq` triple and rejects the older spelling.
+            assert.deepEqual(Object.keys(options.surfaceOp).sort(), ["endSeq", "op", "startSeq"]);
+            const start = nodes.indexOf(options.surfaceOp.startSeq);
+            const end = nodes.indexOf(options.surfaceOp.endSeq);
             assert.ok(start >= 0 && end >= start);
             assert.deepEqual(options.sourceEventSeqs, nodes.slice(start, end + 1));
             nodes.splice(start, end - start + 1, event.seq);

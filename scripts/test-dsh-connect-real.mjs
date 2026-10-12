@@ -42,7 +42,7 @@ const DEVICE_ID = "dsh-connect-real-device";
 const PROJECT_NAME = "DSH Connect Gate";
 const SESSION_NAME = "DSH UI Gate";
 const PROVIDER = "deepseek-official";
-const MODEL = "deepseek-v4-flash";
+const MODEL = "deepseek-flash";
 
 if (!DSH_SOURCE_VALUE || !path.isAbsolute(DSH_SOURCE_VALUE)) {
   throw new Error(

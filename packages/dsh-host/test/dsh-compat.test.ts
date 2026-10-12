@@ -411,27 +411,27 @@ function facadeFixture(
 
 test("compatibility boundary pins the Host surface verified by the PoC", () => {
   assert.deepEqual(DSH_COMPATIBILITY, {
-    tag: "dsh-v0.1.3-alpha.1",
-    version: "0.1.3-alpha.1",
-    commit: "d347e703908d0406b7a7ef80e3a0e594d86b2215",
+    tag: "dsh-v0.1.7-rc.2",
+    version: "0.1.7-rc.2",
+    commit: "477b4f420553e8a52c2fbccc464d7561b239c443",
     profile: "headless",
   });
   assert.deepEqual(DSH_NPM_COMPATIBILITY, {
     package: "@deepseek-ai/dsh",
-    version: "0.1.2-rc.1",
+    version: "0.1.7-rc.2",
     profile: "web",
     persistenceProbe: "list",
   });
   assert.deepEqual(DSH_COMPATIBILITY_MATRIX.map((entry) => ({ ...entry })), [
     {
       distribution: "npm",
-      version: "0.1.2-rc.1",
+      version: "0.1.7-rc.2",
       profile: "web",
       persistenceProbe: "list",
     },
     {
       distribution: "source",
-      version: "0.1.3-alpha.1",
+      version: "0.1.7-rc.2",
       profile: "headless",
       persistenceProbe: "stat",
     },

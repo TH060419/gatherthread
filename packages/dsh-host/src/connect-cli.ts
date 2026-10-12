@@ -35,7 +35,7 @@ import {
 import { secureDirectoryChain } from "./path-security.js";
 
 const DEFAULT_PROVIDER = "deepseek-official";
-const DEFAULT_MODEL = "deepseek-v4-flash";
+const DEFAULT_MODEL = "deepseek-flash";
 const HELP = `GatherThread DeepSeek Harness connector
 
 Usage:
@@ -46,14 +46,14 @@ Usage:
   npm run dsh:connect -- status|remove|restore [--connection <id>] [options]
 
 Options:
-  --dsh-source <path>       Clean checkout at dsh-v0.1.3-alpha.1 (or GATHERTHREAD_DSH_SOURCE)
+  --dsh-source <path>       Clean checkout at dsh-v0.1.7-rc.2 (or GATHERTHREAD_DSH_SOURCE)
   --dsh-home <path>         Explicit DSH_HOME (or DSH_HOME; default ~/.dsh)
   --profile <name>          web or headless (default web)
   --url <url>               GatherThread origin or /v1 API URL
   --project <id>            Project id; otherwise choose an active project with writable Sessions
   --workspace <path>        Read-only DSH workspace (default current directory)
   --provider <name>         DSH provider (default deepseek-official)
-  --model <name>            DSH model, spelling preserved (default deepseek-v4-flash)
+  --model <name>            DSH model, spelling preserved (default deepseek-flash)
   --share-tool-events       Publish the already-redacted public tool projection
   --connection <id>        Installed connection id (optional only when exactly one exists)
   --port <number>           Web listen port; 0 lets the OS choose

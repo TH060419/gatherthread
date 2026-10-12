@@ -636,7 +636,7 @@ async function main() {
     assert.equal(rpcPayload.result?.value?.authorization, "unpaired");
     assert.deepEqual(rpcPayload.result?.value?.compatibility, {
       package: "@deepseek-ai/dsh",
-      version: "0.1.2-rc.1",
+      version: "0.1.7-rc.2",
       profile: "web",
     });
     process.stderr.write("DSH gate: authenticated RPC verified; starting browser\n");
@@ -691,7 +691,7 @@ async function main() {
     await panel.getByRole("button", { name: "选择 DSH 模型", exact: true }).waitFor({ timeout: 30_000 });
     await panel.getByRole("button", { name: "选择 DSH 模型", exact: true }).click();
     await panel.getByLabel("DSH Provider").selectOption("deepseek-official");
-    await panel.getByLabel("DSH Model").selectOption("deepseek-v4-flash");
+    await panel.getByLabel("DSH Model").selectOption("deepseek-flash");
     await panel.getByRole("button", { name: "连接全部可访问项目", exact: true }).click();
     await panel.getByText("2 个可访问项目", { exact: true }).waitFor({ timeout: 30_000 });
     await panel.getByText(
@@ -707,7 +707,7 @@ async function main() {
       );
       return result.data.runtimes.find((runtime) => runtime.harness === "deepseek-harness"
         && runtime.provider === "deepseek-official"
-        && runtime.model === "deepseek-v4-flash"
+        && runtime.model === "deepseek-flash"
         && runtime.status === "online");
     });
     await waitUntil("second Project DSH runtime registration", async () => {
@@ -718,7 +718,7 @@ async function main() {
       );
       return result.data.runtimes.find((runtime) => runtime.harness === "deepseek-harness"
         && runtime.provider === "deepseek-official"
-        && runtime.model === "deepseek-v4-flash"
+        && runtime.model === "deepseek-flash"
         && runtime.status === "online");
     });
 
@@ -840,7 +840,7 @@ async function main() {
     assert.deepEqual(completed.request.payload.execution_profile, {
       harness: "deepseek-harness",
       provider: "deepseek-official",
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       reasoning_effort: "high",
       runtime_id: selectedRuntime.id,
     });
@@ -1041,7 +1041,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify({
       passed: true,
       distribution: `${DSH_NPM_COMPATIBILITY.package}@${DSH_NPM_COMPATIBILITY.version}`,
-      command: "npx @deepseek-ai/dsh@0.1.2-rc.1 web",
+      command: "npx @deepseek-ai/dsh@0.1.7-rc.2 web",
       pluginMechanism: "dsh plugin --profile web add <package>",
       profile: "web",
       patchReloadFixture: startupFixture ? "startup" : "default",

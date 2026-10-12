@@ -56,5 +56,6 @@ Current account guidance (2026-10-08): `main` uses verified-email registration a
 | [0048](0048-storage-first-github-setup.md) | Storage-first GitHub setup and same-project authorization return | proposed / implementation review | 2026-10-12 |
 | [0049](0049-account-owned-cloud-api-configuration.md) | Private account-owned Cloud Agent API configuration | proposed / implementation review | 2026-10-12 |
 | [0050](0050-author-message-erasure-and-context-revisions.md) | Author message erasure and deletion-aware execution revisions | proposed / implementation review | 2026-10-12 |
+| [0051](0051-abandon-a-dsh-route-the-harness-dropped.md) | Abandon a DSH route whose model the harness no longer offers | proposed | 2026-10-12 |
 | [0052](0052-cloud-timeouts-and-explicit-continuation.md) | Distinguish cloud timeouts and continue with bounded fresh rounds | proposed / implementation review | 2026-10-12 |
 | [0053](0053-persistent-project-cloud-code-choice.md) | Remember the project's Cloud Agent code choice | accepted implementation decision | 2026-10-13 |

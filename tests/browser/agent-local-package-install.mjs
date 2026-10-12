@@ -9,7 +9,7 @@ assert.ok(process.env.GATHERTHREAD_DSH_NPM_ROOT, "Provide an already-installed, 
 const dshRoot = await realpath(process.env.GATHERTHREAD_DSH_NPM_ROOT);
 const dsh = JSON.parse(await readFile(join(dshRoot, "package.json"), "utf8"));
 assert.equal(dsh.name, "@deepseek-ai/dsh");
-assert.equal(dsh.version, "0.1.2-rc.1");
+assert.equal(dsh.version, "0.1.7-rc.2");
 assert.equal(dsh.bin.dsh, "lib/bin.js");
 const directory = await realpath(await mkdtemp(join(tmpdir(), "gt-local-install-")));
 const environment = { ...Object.fromEntries(Object.entries(process.env).filter(([name]) => !/KEY|TOKEN|PASSWORD|SECRET|COOKIE/i.test(name))),
@@ -41,7 +41,7 @@ try {
   const profile = JSON.parse(await readFile(join(environment.DSH_HOME, "profiles/web/package.json"), "utf8"));
   assert.match(profile.dependencies["@gatherthread/dsh-host"], /^file:/);
   assert.equal(profile.dsh.profile.bundles.filter(name => name === "@gatherthread/dsh-host").length, 1);
-  console.log("PASS: cached DSH 0.1.2-rc.1 public CLI accepts local TGZ twice, one profile layer, no model calls");
+  console.log("PASS: cached DSH 0.1.7-rc.2 public CLI accepts local TGZ twice, one profile layer, no model calls");
   const codexTarball = await pack("@gatherthread/codex-connect");
   const help = await run(npm, npmArguments(["exec", "--offline", "--yes", "--package", codexTarball, "--", "gatherthread-codex-connect", "--help"]));
   assert.match(help, /--project/); assert.match(help, /--plugin-hooks/);

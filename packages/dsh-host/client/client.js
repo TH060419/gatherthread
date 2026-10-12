@@ -445,7 +445,12 @@ function renderNativeControls(input) {
       // is registered, so a bare stopped connection is indistinguishable from a
       // fresh install. State the remaining step explicitly.
       React.createElement("p", { key: "select-model-notice", style: styles.notice },
-        "配对完成后，尚未选择 DSH Provider 与 Model。完成选择并点击下方按钮后，本机 DSH 运行时才会注册到 GatherThread；在此之前，GatherThread 网页无法发现这台 DSH。"),
+        // A dropped route is not the same situation as a fresh pairing, and saying
+        // so is the whole point of not repointing the model silently: the reader has
+        // to know their previous choice no longer exists before picking another.
+        state.recoverableError === "route_unavailable"
+          ? "DSH 当前已不再提供此前为该连接选择的模型，因此该连接已停止并取消注册。请重新选择 Provider 与 Model；在此之前的旧模型不会被自动替换。"
+          : "配对完成后，尚未选择 DSH Provider 与 Model。完成选择并点击下方按钮后，本机 DSH 运行时才会注册到 GatherThread；在此之前，GatherThread 网页无法发现这台 DSH。"),
       input.catalog === undefined
         ? React.createElement("button", {
           key: "load-catalog",
@@ -563,7 +568,7 @@ function parseNativeState(value) {
   if (!AUTHORIZATION_STATES.has(value.authorization)) throw new Error("invalid native authorization state");
   exactObject(value.compatibility, ["package", "version", "profile"]);
   if (value.compatibility.package !== "@deepseek-ai/dsh"
-    || value.compatibility.version !== "0.1.2-rc.1"
+    || value.compatibility.version !== "0.1.7-rc.2"
     || value.compatibility.profile !== "web") throw new Error("incompatible native DSH Host");
   const runtime = parseSnapshot(value.runtime);
   const optionalUrl = (url) => {
@@ -697,7 +702,8 @@ function parseNativeState(value) {
   }
   if (value.recoverableError !== undefined
     && value.recoverableError !== "pairing_failed"
-    && value.recoverableError !== "connection_failed") throw new Error("invalid native recovery state");
+    && value.recoverableError !== "connection_failed"
+    && value.recoverableError !== "route_unavailable") throw new Error("invalid native recovery state");
   return {
     schemaVersion: 2,
     integration: "gatherthread",

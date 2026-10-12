@@ -170,7 +170,7 @@ test("Client renders the model-selection notice for a paired but unrouted connec
             authorization: "paired",
             serverUrl: "http://127.0.0.1:8787",
             deviceName: "DeepSeek Harness",
-            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
             runtime: {
               schemaVersion: 1,
               integration: "gatherthread",
@@ -209,6 +209,67 @@ test("Client renders the model-selection notice for a paired but unrouted connec
   );
 });
 
+test("Client asks for a new selection after DSH drops the model the connection ran", async () => {
+  // A dropped route lands in the same route-less branch as a fresh pairing, so the
+  // copy has to tell them apart: an operator whose model was retired must not be
+  // told they never chose one, and must be able to pick a replacement.
+  const loaded = await loadClient({
+    fetch: (async () => { throw new Error("native Client must not use the legacy Fetch route"); }) as typeof fetch,
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: {
+      rpc: {
+        async call() {
+          return { ok: true, value: {
+            schemaVersion: 2,
+            integration: "gatherthread",
+            authorization: "paired",
+            serverUrl: "http://127.0.0.1:8787",
+            deviceName: "DeepSeek Harness",
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
+            runtime: {
+              schemaVersion: 1,
+              integration: "gatherthread",
+              connection: "stopped",
+              bindingMode: "project",
+              projectName: "GatherThread / 共序",
+              activeSessionCount: 0,
+              sessions: [],
+              updatedAt: "2026-09-06T00:00:00.000Z",
+            },
+            // No `route`: DSH stopped offering the model this connection ran.
+            recoverableError: "route_unavailable",
+          } };
+        },
+      },
+    },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  assert.equal(typeof component, "function");
+  loaded.render(component as () => unknown);
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const rendered = collectedText(loaded.render(component as () => unknown));
+  cleanup?.();
+  assert.match(
+    rendered,
+    /DSH 当前已不再提供此前为该连接选择的模型/u,
+    `a dropped route must say the previous model is gone; rendered: ${rendered}`,
+  );
+  assert.doesNotMatch(
+    rendered,
+    /尚未选择 DSH Provider 与 Model/u,
+    "a dropped route must not be reported as a connection that never chose a model",
+  );
+  assert.match(rendered, /选择 DSH 模型/u, "the replacement selection must stay reachable");
+});
+
 test("Client primary actions keep a visible system foreground in light, dark, and Safari themes", async () => {
   const loaded = await loadClient();
   assert.match(
@@ -233,7 +294,7 @@ test("Client renders separate project code consent, manual actions and disabled-
     connection: { rpc: { async call(_channel: string, endpoint: string, payload: unknown) { calls.push({ endpoint, payload }); return { ok: true, value: {
       schemaVersion: 2, integration: "gatherthread", authorization: "paired",
       serverUrl: "http://127.0.0.1:18787", deviceName: "DSH",
-      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
       runtime: { schemaVersion: 1, integration: "gatherthread", connection: "connected", bindingMode: "project",
         projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
       route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
@@ -298,7 +359,7 @@ test("Client renders GitHub sync actions in English when DSH uses an English loc
     connection: { rpc: { async call() { return { ok: true, value: {
       schemaVersion: 2, integration: "gatherthread", authorization: "paired",
       serverUrl: "http://127.0.0.1:18787", deviceName: "DSH",
-      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
       runtime: { schemaVersion: 1, integration: "gatherthread", connection: "connected", bindingMode: "project",
         projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
       route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
@@ -346,7 +407,7 @@ test("Client prefers the authenticated DSH RPC channel and accepts only the pinn
             schemaVersion: 2,
             integration: "gatherthread",
             authorization: "unpaired",
-            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
             runtime: {
               schemaVersion: 1,
               integration: "gatherthread",
