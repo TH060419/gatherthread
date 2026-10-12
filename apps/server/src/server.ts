@@ -1613,8 +1613,14 @@ export async function startCollaborationServer(
   heartbeat.unref();
   const registrationCleanup = setInterval(() => {
     try { database.registration.cleanup(); } catch { console.warn("Registration retention cleanup failed"); }
+    try {
+      if (database.purgeDeletedMessageStorage().overdue) console.warn("Message deletion storage cleanup is overdue; operator action required");
+    } catch { console.warn("Message deletion storage cleanup deferred"); }
   }, 60_000);
   registrationCleanup.unref();
+  try {
+    if (database.purgeDeletedMessageStorage().overdue) console.warn("Message deletion storage cleanup is overdue; operator action required");
+  } catch { console.warn("Message deletion storage cleanup deferred"); }
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);

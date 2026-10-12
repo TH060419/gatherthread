@@ -57,12 +57,12 @@ const USER_TOOL_DEFINITIONS = [
     project_id: stringSchema("Project identifier"),
   }, ["project_id"]),
   tool("collaboration_list_sessions", "List collaboration sessions visible to the authenticated user", {}),
-  tool("collaboration_read_history", "Read exact canonical session events after a durable server sequence; use collaboration_read_context for a summary-aware public context view", {
+  tool("collaboration_read_history", "Read current canonical session envelopes after a durable server sequence, including safe deletion placeholders and content revision; erased bodies cannot be recovered. Use collaboration_read_context for a summary-aware public context view", {
     session_id: stringSchema("Session identifier"),
     after_sequence: integerSchema("Return events after this sequence", 0),
     limit: integerSchema("Maximum events to return", 1),
   }, ["session_id"]),
-  tool("collaboration_read_context", "Read public session context using this user's project context policy (default summary), or explicitly choose summary or original. Summary replaces covered messages with existing completed summaries and source_event_ids; no Agent run is triggered. This read does not remove already-injected native context. Use collaboration_read_history for exact canonical events and pagination", {
+  tool("collaboration_read_context", "Read public session context using this user's project context policy (default summary), or explicitly choose summary or original. Both exclude deleted messages and invalidated summaries and include content_revision. Summary replaces covered messages with valid completed summaries and source_event_ids; no Agent run is triggered. This read alone does not remove already-injected native context. Use collaboration_read_history for current canonical envelopes and pagination", {
     session_id: { ...stringSchema("Session identifier"), minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
     view: { ...enumSchema(["summary", "original"]), description: "Optional override; omit to follow your project context policy" },
   }, ["session_id"]),

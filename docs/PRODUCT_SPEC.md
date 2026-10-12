@@ -59,8 +59,15 @@ On identified phones and tablets up to 1366 CSS pixels wide, the workspace keeps
 - `context_snapshot`
 - `membership_change`
 - `session_state_change`
+- `message_deleted` (server-only)
 
 Every event has a server-assigned monotonic sequence, stable event ID, idempotency key, actor identity, frozen actor display name, timestamp, visibility, reply target, and optional runtime provenance.
+
+## Delete my shared messages
+
+A current session writer may delete their own chat, Agent request or Agent answer. The project owner cannot delete another person's message. A deleted row keeps its position and a localized placeholder; its body is no longer available from shared history or future GatherThread Agent context. Deleting a request also removes its linked work and answer, while deleting an answer leaves the request. Related summaries and generated content may become invalid; surviving original human messages remain available. Quotes show the placeholder instead of keeping a separate source copy.
+
+Active work using earlier history is stopped and cannot publish a late answer or code change. The user starts a new request explicitly; GatherThread does not rerun it or silently change the selected Agent/model. Local Codex/DSH context is rebuilt into a verified clean GT-owned conversation rather than reusing old compacted memory. Old local tasks and files remain intact and local-only. Older connectors must be updated/reconnected before further execution in that session. This does not undo a provider request already sent, erase manual copies or delete published GitHub files. Live-service erasure and retained physical/backup copies are distinct; see [ADR-0050](adr/0050-author-message-erasure-and-context-revisions.md) and the [privacy notice](../site/privacy/).
 
 The Web conversation timeline groups displayed messages by the reader's local calendar day, including the position of a shared history summary. Date dividers use Today, Yesterday, a weekday within the preceding week, or a month/day with the year when needed; they follow the selected Chinese or English language. Each message retains its local hour and minute, with the full local date and time available from the time control. Switching between summary and original history recalculates the dividers without changing canonical events.
 
@@ -76,7 +83,7 @@ Internal runtime provenance binds `user_id`, `device_id`, runtime identity, `har
 
 The product distinguishes three claims:
 
-1. `canonical_history`: all accepted shared events through a server sequence.
+1. `canonical_history`: current ordered shared event envelopes through a server sequence, with safe tombstones instead of erased bodies.
 2. `harness_transcript`: all events captured from a supported local harness transcript.
 3. `provider_request`: the exact request context submitted to an LLM provider, available only when a harness hook or authorized proxy can observe it.
 
@@ -157,6 +164,7 @@ One creator runs the only active authoritative server for a deployment. The serv
 - Server assigns total order per session.
 - Clients resume from a cursor after reconnect.
 - Repeated writes with the same idempotency key return the original event.
+- Exact retries of erased writes return their current safe tombstone, never the original body; content revisions prevent late replay/stream results from reviving deleted content.
 - A completed local native turn commits its request, bounded tool events, and response in one server transaction; an exact retry returns the original event set.
 - WebSocket delivery is advisory; the durable event log is authoritative.
 - Slow or disconnected clients recover through paginated replay.

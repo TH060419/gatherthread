@@ -988,7 +988,7 @@ export class CollaborationDatabase {
       throw new RangeError("Session count limits are inconsistent");
     }
     this.sqlite = new DatabaseSync(path);
-    this.sqlite.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_size_limit = 67108864;");
+    this.sqlite.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_size_limit = 67108864; PRAGMA secure_delete = ON;");
     const journalMode = (this.sqlite.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode;
     if (journalMode !== "wal") this.sqlite.exec("PRAGMA journal_mode = WAL;");
     this.sqlite.exec(SCHEMA);
@@ -3169,6 +3169,9 @@ export class CollaborationDatabase {
           .run('{"content":"[Message deleted]"}', now, reason, revision, row.id);
       }
       this.sqlite.prepare("UPDATE sessions SET content_revision=? WHERE id=?").run(revision, sessionId);
+      this.sqlite.prepare(`INSERT INTO message_deletion_storage(id,generation,cleaned_generation,pending_since) VALUES(1,1,0,?)
+        ON CONFLICT(id) DO UPDATE SET generation=generation+1,pending_since=COALESCE(pending_since,excluded.pending_since)`)
+        .run(this.clock().getTime());
       this.invalidateContextExecutions(sessionId, revision, now);
       this.sqlite.prepare(`UPDATE snapshot_requests SET status='failed',failed_at=?,result_json=NULL,
         failure_json=? WHERE session_id=? AND content_revision<?
@@ -3198,6 +3201,30 @@ export class CollaborationDatabase {
     // no original payload or unbounded ancestry list.
     return { event: this.getEvent(sessionId, deletionEventId), target_event_id: targetEventId, content_revision: revision,
       affected_event_ids: [targetEventId], affected_truncated: true };
+  }
+
+  /** Physical live-file maintenance is separate from immediate API erasure.
+   * Never wait on another connection's reader or claim a blocked checkpoint
+   * succeeded. This does not erase backups, filesystem snapshots or SSD copies. */
+  purgeDeletedMessageStorage(): { pending: boolean; overdue: boolean } {
+    const row = this.sqlite.prepare("SELECT generation,cleaned_generation,pending_since FROM message_deletion_storage WHERE id=1")
+      .get() as { generation: number; cleaned_generation: number; pending_since: number | null } | undefined;
+    if (!row || row.generation === row.cleaned_generation) return { pending: false, overdue: false };
+    const deferred = { pending: true, overdue: row.pending_since !== null && this.clock().getTime() - row.pending_since >= 14 * 86400000 };
+    if (this.sqlite.isTransaction) return deferred;
+    const timeout = Number(this.sqlite.prepare("PRAGMA busy_timeout").get()?.timeout ?? 5000);
+    try {
+      this.sqlite.exec("PRAGMA busy_timeout=0");
+      const checkpoint = this.sqlite.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+      if (checkpoint?.busy !== 0) return deferred;
+      // A newer deletion between checkpoint and acknowledgement remains pending.
+      // Keep the acknowledgement non-waiting as well as the checkpoint.
+      this.sqlite.prepare("UPDATE message_deletion_storage SET cleaned_generation=?,pending_since=NULL WHERE id=1 AND generation=?")
+        .run(row.generation, row.generation);
+      const current = this.sqlite.prepare("SELECT generation,cleaned_generation,pending_since FROM message_deletion_storage WHERE id=1").get()!;
+      const pending = current.generation !== current.cleaned_generation;
+      return { pending, overdue: pending && current.pending_since !== null && this.clock().getTime() - Number(current.pending_since) >= 14 * 86400000 };
+    } finally { this.sqlite.exec(`PRAGMA busy_timeout=${timeout}`); }
   }
 
   private eventReceiptDigest(event: Pick<CanonicalEvent, "actor_user_id" | "type" | "payload" | "reply_to_event_id" | "visibility" | "runtime_provenance">): string {
@@ -5115,7 +5142,9 @@ export class CollaborationDatabase {
       deletion_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
       content_revision INTEGER NOT NULL CHECK(content_revision>0), PRIMARY KEY(session_id,idempotency_key), UNIQUE(session_id,target_event_id)
     ) STRICT;
-    CREATE TABLE IF NOT EXISTS deleted_event_receipts (event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,input_digest TEXT NOT NULL) STRICT;`);
+    CREATE TABLE IF NOT EXISTS deleted_event_receipts (event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,input_digest TEXT NOT NULL) STRICT;
+    CREATE TABLE IF NOT EXISTS message_deletion_storage (id INTEGER PRIMARY KEY CHECK(id=1),generation INTEGER NOT NULL,
+      cleaned_generation INTEGER NOT NULL,pending_since INTEGER) STRICT;`);
   }
 
   /**

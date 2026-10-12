@@ -302,8 +302,9 @@ test("DSH device pairing is Host-initiated, browser-approved, single-use, and CS
     assert.equal(runtimes.status, 200);
     assert.equal(runtimes.body.data.runtimes.length, 1);
     assert.deepEqual(Object.keys(runtimes.body.data.runtimes[0] ?? {}).sort(), [
-      "device_id", "execution_profiles", "harness", "id", "last_seen_at", "model", "provider", "status",
+      "context_deletion_version", "device_id", "execution_profiles", "harness", "id", "last_seen_at", "model", "provider", "status",
     ]);
+    assert.equal(runtimes.body.data.runtimes[0]?.context_deletion_version, 0, "legacy runtimes cannot claim deletion adaptation");
     assert.deepEqual(runtimes.body.data.runtimes[0]?.execution_profiles, [{
       provider: "deepseek-official",
       model: "DeepSeek-CustomCase",

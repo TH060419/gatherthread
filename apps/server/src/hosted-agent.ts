@@ -468,7 +468,8 @@ export class HostedAgent {
           if (JSON.stringify(files) !== JSON.stringify(branch.files)) {
             try {
               this.codeRepository.checkpoint(actor, session.project_id, { base_commit: branch.commit, files,
-                message: "Cloud Agent changes", idempotency_key: `hosted-code-${reserved.event.id}` });
+                message: "Cloud Agent changes", idempotency_key: `hosted-code-${reserved.event.id}` },
+              () => this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id));
               content += "\n\nChanges were saved to your cloud code branch for review.";
             } catch {
               content += "\n\nThe Agent ran, but its changed files could not be saved to cloud code.";

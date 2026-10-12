@@ -190,6 +190,14 @@ test("canonical snapshots, quoted deleted bodies and mentions cannot bypass dele
       assert.match(JSON.stringify(result), /INDEPENDENT_REPLY_SURVIVES/);
       assert.match(JSON.stringify(result), /content_revision|contentRevision/);
     }
+    const resource = await mcp.handle({ jsonrpc: "2.0", id: 2, method: "resources/read", params: {
+      uri: `collaboration://sessions/${f.session.id}/events?after_sequence=0&limit=100`,
+    } });
+    assert.ok(resource && "result" in resource);
+    assert.doesNotMatch(JSON.stringify(resource), /DELETED_MCP_SOURCE/);
+    assert.match(JSON.stringify(resource), /INDEPENDENT_REPLY_SURVIVES/);
+    const contents = (resource as { result: { contents: Array<{ text: string }> } }).result.contents;
+    assert.equal(JSON.parse(contents[0]!.text).contentRevision, 1);
     const delayed = f.service.presentEvent(f.member.actor, source);
     assert.equal(delayed.content_revision, 1); assert.ok(delayed.deleted);
     assert.doesNotMatch(JSON.stringify(delayed), /DELETED_MCP_SOURCE/);
