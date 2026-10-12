@@ -668,7 +668,9 @@ test("a failed Git batch leaves authoritative heads and retry receipts unchanged
   } finally { f.close(); }
 });
 
-test("the maximum 1000-file snapshot uses batch Git processes rather than per-file subprocesses", () => {
+test("the maximum 1000-file snapshot uses batch Git processes rather than per-file subprocesses", {
+  skip: process.platform === "win32" ? "Heavy real-Git snapshot coverage runs on Linux and macOS" : false,
+}, () => {
   const f = fixture();
   try {
     const repo = new CountingCodeRepository(f.database, join(f.directory, "code"));

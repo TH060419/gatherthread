@@ -12,6 +12,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Fixed
 
+- Run the heavyweight 1000-file real-Git snapshot regression on Linux and macOS, not Windows, where runner contention can repeatedly exhaust the bounded Git deadline. Keep Windows timeout-policy, failed-batch retry, permission and file-safety coverage unchanged; this changes test selection only, not file synchronization or production limits.
+
 - Accept cloud trial requests immediately and deliver terminal replies through canonical replay. Restore author-only Pause/Resume on the existing composer button, exact-model retries without a local runtime, and shared selected-history summaries through the chosen cloud model. Allow settings to be saved before connecting a local Agent; empty selections explain missing sources instead of leaving an inert summary button. Keep local-file transfer authorization and Codex/DSH routing unchanged.
 - Disable hidden thinking for the reviewed interactive SiliconFlow Qwen3.5-4B/Qwen3-8B profiles without switching models. Preserve final-answer, idle and process-exit validation, and report only fixed runner failure phases, never raw provider/tool/exception text. Live provider latency still requires deployment-host verification.
 
