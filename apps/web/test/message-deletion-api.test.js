@@ -114,6 +114,22 @@ test("mock local retry rejects an old captured revision before appending or repl
   assert.equal(accepted.payload.content, "Explicit fresh retry");
 });
 
+test("mock final-answer deletion also removes its earlier stream without deleting the human request", async () => {
+  const api = new MockCollaborationApi({ latency: 0 }), sessionId = "session-orbit";
+  const events = api.events.get(sessionId), actor = api.currentUser;
+  const add = (id, type, content, replyTo = null) => events.push({ id, type, sessionId, sequence: events.at(-1).sequence + 1,
+    createdAt: wire.created_at, actor, visibility: "session", replyTo, payload: { content } });
+  add("answer-request", "agent_request", "Human instruction remains");
+  add("answer-stream", "agent_progress", "The same answer copy must disappear", "answer-request");
+  add("answer-final", "agent_response", "The same answer copy must disappear", "answer-request");
+  await api.deleteMessage(sessionId, "answer-final", { idempotencyKey: "answer-delete" });
+  const page = await api.replayEvents(sessionId, { afterSequence: 0 });
+  assert.equal(page.events.find(item => item.id === "answer-request").deleted, undefined);
+  assert.equal(page.events.find(item => item.id === "answer-stream").deleted?.reason, "request");
+  assert.equal(page.events.find(item => item.id === "answer-final").deleted?.reason, "author");
+  assert.doesNotMatch(JSON.stringify(page), /same answer copy/);
+});
+
 test("context-change errors give a bilingual reconnect action and runtime capability survives normalization", async () => {
   const api = new HttpCollaborationApi();
   api.request = async () => ({ runtimes: [{ id: "r1", device_id: "d1", harness: "codex", provider: "fixture",
