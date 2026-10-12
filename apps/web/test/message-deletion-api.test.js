@@ -130,6 +130,18 @@ test("mock final-answer deletion also removes its earlier stream without deletin
   assert.doesNotMatch(JSON.stringify(page), /same answer copy/);
 });
 
+test("mock revised native requests require a pin while accepted retries return a tombstone and fresh human chats remain writable", async () => {
+  const api = new MockCollaborationApi({ latency: 0 }), sessionId = "session-orbit";
+  const old = { content: "Accepted old native instructions", idempotencyKey: "accepted-native", contentRevision: 0 };
+  const request = await api.appendAgentRequest(sessionId, old);
+  await api.deleteMessage(sessionId, request.id, { idempotencyKey: "delete-native" });
+  assert.equal((await api.appendAgentRequest(sessionId, old)).deleted?.reason, "author");
+  await assert.rejects(api.appendAgentRequest(sessionId, { content: "Missing pin", idempotencyKey: "native-missing" }),
+    error => error.status === 409 && error.code === "context_changed");
+  const chat = await api.appendHumanChat(sessionId, { content: "A fresh independent human message", idempotencyKey: "chat-current" });
+  assert.equal(chat.payload.content, "A fresh independent human message");
+});
+
 test("context-change errors give a bilingual reconnect action and runtime capability survives normalization", async () => {
   const api = new HttpCollaborationApi();
   api.request = async () => ({ runtimes: [{ id: "r1", device_id: "d1", harness: "codex", provider: "fixture",
