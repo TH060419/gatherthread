@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -286,6 +286,35 @@ test("migration from a pre-deletion database preserves canonical IDs, foreign ke
     assert.doesNotMatch(JSON.stringify(database.readHistoryContext(actor, session.id, "original", source.sequence)), /MIGRATION_DELETED_SOURCE/);
     assert.deepEqual(database.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
   } finally { if (open) database.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("deleted live SQL content is zeroed and WAL truncation defers safely for a reader without claiming physical purge", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gt-deletion-storage-")), file = join(dir, "fixture.sqlite");
+  let now = Date.parse("2026-10-12T00:00:00Z");
+  const database = new CollaborationDatabase(file, { authTokenPepper: "deletion-storage-fixture", clock: () => new Date(now) });
+  const reader = new DatabaseSync(file);
+  try {
+    assert.equal(database.sqlite.prepare("PRAGMA secure_delete").get()?.secure_delete, 1);
+    const actor = database.bootstrapIdentity({ display_name: "Author", device_name: "Browser" }).actor;
+    const session = database.createSession(actor, { title: "Storage", mode: "multi", idempotency_key: "storage-session" }).session;
+    const source = database.appendEvent(actor, session.id, { type: "human_chat", visibility: "session", idempotency_key: "storage-source",
+      payload: { content: "PHYSICAL_DELETED_SENTINEL_123".repeat(500) } }, null);
+    const surviving = database.appendEvent(actor, session.id, { type: "human_chat", visibility: "session", idempotency_key: "storage-surviving", payload: { content: "STORAGE_SURVIVING" } }, null);
+    database.sqlite.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+    reader.exec("BEGIN"); reader.prepare("SELECT payload_json FROM events WHERE id=?").get(source.id);
+    database.deleteMessage(actor, session.id, source.id, "storage-delete");
+    const started = Date.now();
+    assert.deepEqual((database as any).purgeDeletedMessageStorage(), { pending: true, overdue: false });
+    assert.ok(Date.now() - started < 1000, "a long reader cannot turn maintenance into a blocking lock wait");
+    assert.equal(database.sqlite.prepare("PRAGMA busy_timeout").get()?.timeout, 5000);
+    now += 14 * 86400000;
+    assert.deepEqual((database as any).purgeDeletedMessageStorage(), { pending: true, overdue: true });
+    reader.exec("COMMIT");
+    assert.deepEqual((database as any).purgeDeletedMessageStorage(), { pending: false, overdue: false });
+    for (const path of [file, `${file}-wal`]) if (existsSync(path)) assert.equal(readFileSync(path).includes(Buffer.from("PHYSICAL_DELETED_SENTINEL_123")), false);
+    assert.equal((database.getEvent(session.id, surviving.id).payload as { content: string }).content, "STORAGE_SURVIVING");
+    assert.equal(database.sqlite.prepare("PRAGMA integrity_check").get()?.integrity_check, "ok");
+  } finally { if (reader.isTransaction) reader.exec("ROLLBACK"); reader.close(); database.close(); rmSync(dir, { recursive: true, force: true }); }
 });
 
 test("deletion rechecks revoked device, viewer demotion, Solo and foreign-session authority", async () => {
