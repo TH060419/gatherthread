@@ -275,10 +275,20 @@ try {
       assert.doesNotMatch(await page.locator("#event-timeline").textContent(), /ACTIVE_LINKED_REMOVE/);
       assert.equal(await page.locator("#message-input").inputValue(), "Keep this unfinished draft");
       const keptRequest = f.request("Keep this request when only its reply is deleted");
-      const reply = f.answer(keptRequest, "DELETE_REPLY_ONLY fixture");
+      running.service.claimAgentRequest(f.owner.actor, f.session.id, keptRequest.id, f.runtime.id);
+      const streamedReply = running.service.appendAgentProgress(f.owner.actor, f.session.id, keptRequest.id, f.runtime.id, key(), {
+        phase: "stream", stream_id: key(), stream_kind: "answer", stream_mode: "snapshot",
+        stream_revision: 1, stream_state: "running", content: "DELETE_REPLY_ONLY fixture" }, undefined, undefined, 1);
+      await page.waitForFunction(() => document.getElementById("event-timeline").textContent.includes("DELETE_REPLY_ONLY fixture"));
+      const reply = running.service.completeAgentRequest(f.owner.actor, f.session.id, keptRequest.id, f.runtime.id, key(),
+        { content: "DELETE_REPLY_ONLY fixture" }, undefined, undefined, 1);
       await eventNode(page, reply).waitFor();
       await remove(page, reply, mobile);
       assert.equal(running.database.getEvent(f.session.id, keptRequest.id).deleted, undefined);
+      assert.ok(running.database.getEvent(f.session.id, streamedReply.id).deleted,
+        "deleting the final answer also scrubs its previously streamed copy");
+      assert.doesNotMatch(JSON.stringify(running.database.getEvent(f.session.id, streamedReply.id)), /DELETE_REPLY_ONLY/);
+      assert.doesNotMatch(await page.locator("#event-timeline").textContent(), /DELETE_REPLY_ONLY/);
       assert.equal(await eventNode(page, keptRequest).locator(".event-content").textContent(), keptRequest.payload.content);
       assert.equal(await eventNode(page, reply).locator(".event-content").textContent(), deletedText(locale));
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), "no horizontal overflow");
