@@ -1,4 +1,5 @@
 export function messageText(event) {
+  if (event?.deleted || event?.contentUnavailable) return "";
   const payload = event?.payload;
   return typeof payload?.content === "string" ? payload.content
     : typeof payload?.text === "string" ? payload.text : "";
@@ -8,7 +9,9 @@ export function agentWorkStatus(events, runtimeId) {
   if (!runtimeId) return null;
   const completed = new Set(events.filter((event) => event.type === "agent_response"
     || (event.type === "agent_progress" && event.payload?.status === "paused")).map((event) => event.replyTo));
+  for (const event of events) if (event.type === "agent_request" && (event.deleted || event.contentUnavailable)) completed.add(event.id);
   const work = events.filter((event) => event.type === "agent_progress" && !completed.has(event.replyTo)
+    && !event.deleted && !event.contentUnavailable
     && event.provenance?.runtimeId === runtimeId).at(-1);
   return work ? work.payload?.status === "thinking" ? "Agent thinking" : "Agent busy" : null;
 }
@@ -43,7 +46,7 @@ export function reconcileMentions(before, after, mentions) {
   });
 }
 
-export function mountMessageActions({ document, api, localizer, getContext, selectSession, revealEvent, announce }) {
+export function mountMessageActions({ document, api, localizer, getContext, selectSession, revealEvent, announce, deletionAction }) {
   const el = (id) => document.getElementById(id);
   const input = el("message-input"), picker = el("mention-picker"), dialog = el("mentions-dialog");
   document.body.append(picker); // Escapes the fixed composer's overflow and glass containing block.
@@ -67,6 +70,19 @@ export function mountMessageActions({ document, api, localizer, getContext, sele
     el("composer-quote").hidden = true; latest = []; inboxEntries = []; paginated = false; pageLoading = false; nextBeforeId = null;
     el("mentions-count").textContent = ""; el("mentions-list").replaceChildren();
     if (dialog.open) dialog.close();
+  }
+  function invalidateContent() {
+    generation++; refreshSequence++;
+    latest = []; inboxEntries = []; paginated = false; pageLoading = false; nextBeforeId = null; initialized = false;
+    el("mentions-count").textContent = ""; el("mentions-list").replaceChildren();
+    el("mentions-more").hidden = true; el("mentions-empty").hidden = false;
+    if (quote) el("composer-quote-text").textContent = t("Refreshing history…");
+  }
+  function reconcileContent() {
+    if (!quote) return;
+    const source = getContext().events?.find(event => event.id === quote.id);
+    if (!source || source.deleted) { quote = null; el("composer-quote").hidden = true; }
+    else if (!source.contentUnavailable) el("composer-quote-text").textContent = `${source.actor.username}: ${messageExcerpt(source) || t("Message")}`;
   }
   function choose(member) {
     const range = mentionQuery(input.value, input.selectionStart);
@@ -178,30 +194,41 @@ export function mountMessageActions({ document, api, localizer, getContext, sele
   dialog.addEventListener("close", () => el("mentions-button").focus({ preventScroll: true }));
   function actions(event) {
     const row = document.createElement("div"); row.className = "message-actions";
+    if (event.deleted || event.contentUnavailable) return row;
+    const currentEvent = () => getContext().events ? getContext().events.find(item => item.id === event.id) : event;
     row.append(icon("Copy message", "M8 8h12v12H8zM4 16V4h12", async () => {
       try {
-        const text = messageText(event);
+        const source = currentEvent();
+        if (!source || source.deleted || source.contentUnavailable) return;
+        const text = messageText(source);
         if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
         await navigator.clipboard.writeText(text); announce(t("Copied to clipboard."));
       } catch { announce(t("Copy failed. Select the message text to copy it.")); }
     }));
     if (getContext().writable && event.visibility !== "owner_only") row.append(icon("Quote message", "M9 6 3 12l6 6M3 12h10a7 7 0 0 1 7 7", () => {
-      quote = { id: event.id, sessionId: getContext().sessionId };
-      el("composer-quote-text").textContent = `${event.actor.username}: ${messageExcerpt(event) || t("Message")}`;
+      const source = currentEvent();
+      if (!getContext().writable || !source || source.deleted || source.contentUnavailable) return;
+      quote = { id: source.id, sessionId: getContext().sessionId };
+      el("composer-quote-text").textContent = `${source.actor.username}: ${messageExcerpt(source) || t("Message")}`;
       el("composer-quote").hidden = false; input.focus();
     }));
+    const deletion = deletionAction?.(event);
+    if (deletion) row.append(deletion);
     return row;
   }
   function quoted(event, events) {
     if (!["human_chat", "agent_request"].includes(event.type) || !event.replyTo) return null;
     const target = events.find((item) => item.id === event.replyTo);
     const button = document.createElement("button"); button.type = "button"; button.className = "quoted-message";
-    button.textContent = target ? `${target.actor.username}: ${messageExcerpt(target) || t("Message")}` : t("Original message unavailable");
-    button.disabled = !target; button.addEventListener("click", () => revealEvent(target.id, target.sequence));
+    button.textContent = target?.deleted ? t("Original message deleted") : target?.contentUnavailable ? t("Refreshing history…")
+      : target ? `${target.actor.username}: ${messageExcerpt(target) || t("Message")}` : t("Original message unavailable");
+    button.disabled = !target || Boolean(target.deleted || target.contentUnavailable);
+    button.addEventListener("click", () => { if (!button.disabled) revealEvent(target.id, target.sequence); });
     return button;
   }
-  return { reset, refresh, actions, quoted,
-    metadata: () => ({ replyTo: quote?.sessionId === getContext().sessionId ? quote.id : null,
+  return { reset, refresh, actions, quoted, invalidateContent, reconcileContent,
+    metadata: () => ({ replyTo: quote?.sessionId === getContext().sessionId
+      && (!getContext().events || getContext().events.some(event => event.id === quote.id && !event.deleted && !event.contentUnavailable)) ? quote.id : null,
       mentions: reconcileMentions(previous, input.value, mentions).slice(0, 32) }),
     sent: () => { quote = null; mentions = []; previous = input.value; el("composer-quote").hidden = true; picker.hidden = true; },
   };

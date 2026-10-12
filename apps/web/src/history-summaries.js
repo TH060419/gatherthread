@@ -15,7 +15,8 @@ const sourceTypes = new Set(["human_chat", "agent_request", "agent_response"]);
 export function historyWireEvents(events) {
   return events.map((event) => ({
     id: event.id, sequence: event.sequence, type: event.type, actor_user_id: event.actor?.id ?? event.actor_user_id,
-    payload: event.payload, reply_to_event_id: replyTo(event), visibility: publicEvent(event) ? "session" : "owner_only",
+    payload: event.deleted || event.contentUnavailable ? { content: "" } : event.payload,
+    reply_to_event_id: replyTo(event), visibility: publicEvent(event) ? "session" : "owner_only",
     ...(event.deleted ? { deleted: event.deleted } : {}),
   }));
 }
