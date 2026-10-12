@@ -1,7 +1,7 @@
-# ADR-0051: Abandon a DSH route whose model the harness no longer offers
+# ADR-0052: Abandon a DSH route whose model the harness no longer offers
 
-**Date**: 2026-10-12  
-**Status**: proposed  
+**Date**: 2026-10-12
+**Status**: proposed
 **Deciders**: T.H.
 
 ## Context

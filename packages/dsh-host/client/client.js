@@ -35,6 +35,8 @@ function GatherThreadStatusPanel({ connection, sessions }) {
   const [provider, setProvider] = React.useState("");
   const [model, setModel] = React.useState("");
   const visibleSessionSignature = React.useRef("");
+  /** Last recovery state the poll observed, so a revoked route is edge-triggered. */
+  const lastRecoverableError = React.useRef(undefined);
 
   React.useEffect(() => {
     let disposed = false;
@@ -60,6 +62,20 @@ function GatherThreadStatusPanel({ connection, sessions }) {
           }
           setSnapshot(result.snapshot);
           setNativeState(result.nativeState);
+          // A revoked route is a transition, not a steady state. The catalog and
+          // the provider/model selection are both held from the route the harness
+          // has since dropped, so they are discarded once, on the edge: the panel
+          // must read the harness's current catalog and be chosen from again
+          // rather than re-offering a model that is gone. Clearing on every poll
+          // would instead wipe the selection an operator is making right now,
+          // because the state stays revoked until a new route is confirmed.
+          const recovery = result.nativeState?.recoverableError;
+          if (recovery === "route_unavailable" && lastRecoverableError.current !== "route_unavailable") {
+            setCatalog(undefined);
+            setProvider("");
+            setModel("");
+          }
+          lastRecoverableError.current = recovery;
           setUnavailable(false);
           timer = setTimeout(refresh, POLL_INTERVAL_MS);
         }
@@ -184,6 +200,7 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       setDeviceName,
       setProvider,
       setModel,
+      setCatalog,
       runAction,
     }),
   nativeState === undefined || unavailable ? null : renderCodeSyncControls(nativeState, busy, runAction, true),

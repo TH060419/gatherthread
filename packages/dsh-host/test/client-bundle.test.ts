@@ -101,6 +101,24 @@ function collectedText(node: unknown): string {
   return collectedText((node as { children?: unknown }).children);
 }
 
+/** Find the first rendered element whose props satisfy a predicate, depth-first. */
+function findElement(
+  node: unknown,
+  predicate: (element: { readonly type: unknown; readonly props: Record<string, any> }) => boolean,
+): { readonly type: unknown; readonly props: Record<string, any> } | undefined {
+  if (node === null || typeof node !== "object") return undefined;
+  const element = node as { type?: unknown; props?: Record<string, any>; children?: unknown };
+  if (element.type !== undefined && element.props !== null && typeof element.props === "object"
+    && predicate({ type: element.type, props: element.props })) {
+    return { type: element.type, props: element.props };
+  }
+  for (const child of Array.isArray(element.children) ? element.children : []) {
+    const found = findElement(child, predicate);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
 test("dsh.client bundle registers the official settings Slot without credential material", async () => {
   const loaded = await loadClient();
   assert.equal(loaded.handoff.id, "@gatherthread/dsh-host");
@@ -268,6 +286,118 @@ test("Client asks for a new selection after DSH drops the model the connection r
     "a dropped route must not be reported as a connection that never chose a model",
   );
   assert.match(rendered, /选择 DSH 模型/u, "the replacement selection must stay reachable");
+});
+
+test("Client drops the catalog and the stale selection when the harness revokes the route", async () => {
+  // The transition, not the fresh panel: a connection that already configured a
+  // model must not keep offering it, or keep it selected, after the harness drops
+  // it. Both halves matter — a cleared catalog alone leaves the previous
+  // provider/model in state, and the next submission would re-send the retired
+  // model, which DSH accepts because it resolves any identifier.
+  const RETIRED_MODEL = "deepseek-v4-flash-vision-exp";
+  const currentCatalog = {
+    schemaVersion: 1,
+    projects: [{ id: "project-a", name: "Project A", role: "owner", state: "active", sessionCount: 1 }],
+    providers: [{ id: "deepseek-official", name: "DeepSeek", models: [{ id: "deepseek-flash", name: "Flash" }] }],
+  };
+  const staleCatalog = {
+    ...currentCatalog,
+    providers: [{ id: "deepseek-official", name: "DeepSeek", models: [{ id: RETIRED_MODEL, name: "Retired" }] }],
+  };
+  const configuredPayloads: Array<{ provider: string; model: string }> = [];
+  let configured = false;
+  let catalogReads = 0;
+  const nativeState = () => ({
+    schemaVersion: 2,
+    integration: "gatherthread",
+    authorization: "paired",
+    serverUrl: "http://127.0.0.1:8787",
+    deviceName: "DeepSeek Harness",
+    compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
+    runtime: {
+      schemaVersion: 1, integration: "gatherthread", connection: "stopped", bindingMode: "project",
+      projectName: "GatherThread / 共序", activeSessionCount: 0, sessions: [],
+      updatedAt: "2026-09-06T00:00:00.000Z",
+    },
+    ...(configured ? { recoverableError: "route_unavailable" } : {}),
+  });
+  const timers: Array<() => void> = [];
+  const loaded = await loadClient({
+    setTimeout: ((callback: () => void) => { timers.push(callback); return timers.length; }) as unknown as typeof setTimeout,
+    clearTimeout: (() => undefined) as unknown as typeof clearTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: {
+      rpc: {
+        async call(_channel: string, endpoint: string, payload: { provider: string; model: string }) {
+          if (endpoint === "catalog/get") {
+            catalogReads += 1;
+            return { ok: true, value: catalogReads === 1 ? staleCatalog : currentCatalog };
+          }
+          if (endpoint === "connection/configure") {
+            configuredPayloads.push({ provider: payload.provider, model: payload.model });
+            configured = true;
+            return { ok: true, value: nativeState() };
+          }
+          return { ok: true, value: nativeState() };
+        },
+      },
+    },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  assert.equal(typeof component, "function");
+  const settle = async () => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
+  const render = () => loaded.render(component as () => unknown);
+  const clickLoadCatalog = async () => {
+    findElement(render(), (element) => element.props.key === "load-catalog")?.props.onClick();
+    await settle();
+  };
+  const submitBinding = async () => {
+    findElement(render(), (element) => element.props.key === "binding-form")
+      ?.props.onSubmit({ preventDefault() {} });
+    await settle();
+  };
+  render();
+  const cleanup = loaded.getEffect()?.();
+  await settle();
+
+  // Paired with no route, then configured against the catalog that names the
+  // model the harness is about to drop.
+  assert.match(collectedText(render()), /选择 DSH 模型/u);
+  await clickLoadCatalog();
+  await submitBinding();
+  assert.deepEqual(configuredPayloads, [{ provider: "deepseek-official", model: RETIRED_MODEL }]);
+
+  // The harness revokes the route. The next poll must discard both the catalog
+  // and the selection made from it, not merely re-render the notice.
+  const poll = timers.pop();
+  assert.equal(typeof poll, "function", "the panel must have scheduled its status poll");
+  poll?.();
+  await settle();
+  const revoked = collectedText(render());
+  assert.doesNotMatch(revoked, new RegExp(RETIRED_MODEL, "u"),
+    `a revoked route must stop offering the model it named; rendered: ${revoked}`);
+  assert.doesNotMatch(revoked, /连接全部可访问项目/u,
+    "the stale catalog's form must not stay submittable");
+  assert.match(revoked, /DSH 当前已不再提供/u, "the panel must explain why the selection was dropped");
+
+  // Re-selecting reads the harness's current catalog, and the submission must
+  // name a model from it rather than the retired one still held in state.
+  await clickLoadCatalog();
+  await submitBinding();
+  assert.equal(configuredPayloads.length, 2);
+  assert.deepEqual(configuredPayloads[1], { provider: "deepseek-official", model: "deepseek-flash" },
+    "the replacement selection must come from the current catalog, never the revoked one");
+  cleanup?.();
 });
 
 test("Client primary actions keep a visible system foreground in light, dark, and Safari themes", async () => {
