@@ -41,6 +41,40 @@ function reserve(f: ReturnType<typeof fixture>, input: HostedAgentRequestInput =
     { userDailyRuns: 100, globalDailyRuns: 1000, maxConcurrent: 1, billingSource: "personal" });
 }
 
+for (const payer of ["service", "personal"] as const) {
+  test(`an in-flight ${payer} retry cannot reserve or charge an old body after independent deletion`, () => {
+    const f = fixture(async () => JSON.stringify({ answer: "No execution expected", files: [] }));
+    const other = new CollaborationDatabase(join(f.root, "identity.db"), { authTokenPepper: "personal-routing-fixture-pepper" });
+    try {
+      const input = payer === "personal" ? f.input : { profile_id: "free", content: "Deleted question", include_code: false,
+        idempotency_key: "service-old-request" };
+      const endpoint = payer === "personal" ? f.store.resolve(f.actor, f.saved.profile_id, f.saved.revision) : {
+        id: "free", profileId: "free", provider: "deepseek", model: "deepseek-chat", quotaGroup: "operator", dailyRuns: 4, maxConcurrent: 1 };
+      const limits = { userDailyRuns: 100, globalDailyRuns: 1000, maxConcurrent: 1, billingSource: payer };
+      const original = f.database.reserveHostedAgentRequest(f.actor, f.session.id, input, [endpoint], limits);
+      f.database.finishHostedAgentRequest(original.event.id, { content: "Old answer" });
+      assert.ok(f.agent.selection(f.actor, f.session.id, original.event.id));
+      const capturedRevision = original.event.content_revision ?? 0;
+      other.deleteMessage(f.actor, f.session.id, original.event.id, "delete-during-selection-wait");
+      f.advance();
+      const before = f.service.replay(f.actor, f.session.id, 0, 100).events.length;
+      const oldActivity = f.database.sqlite.prepare("SELECT last_started_at FROM hosted_agent_user_activity WHERE user_id=?").get(f.actor.user_id)?.last_started_at;
+      const retry = { ...input, content_revision: capturedRevision, idempotency_key: "in-flight-old-body-retry" };
+      assert.throws(() => f.database.reserveHostedAgentRequest(f.actor, f.session.id, retry, [endpoint], limits),
+        e => e instanceof ApiError && e.code === "context_changed");
+      assert.equal(f.service.replay(f.actor, f.session.id, 0, 100).events.length, before);
+      assert.equal(f.database.hostedAgentUsage(f.actor, 100, 1000, payer).user_used_runs, 1);
+      assert.equal(f.database.hostedAgentUsage(f.actor, 100, 1000, payer === "service" ? "personal" : "service").user_used_runs, 0);
+      assert.equal(f.database.hostedActiveRuns(), 0);
+      assert.equal(f.database.sqlite.prepare("SELECT last_started_at FROM hosted_agent_user_activity WHERE user_id=?").get(f.actor.user_id)?.last_started_at, oldActivity);
+      assert.equal(f.database.sqlite.prepare("SELECT count(*) AS n FROM events WHERE idempotency_key=?").get(retry.idempotency_key)?.n, 0);
+      const current = { ...input, content: "New explicit question", content_revision: 1, idempotency_key: "explicit-current-revision" };
+      const accepted = f.database.reserveHostedAgentRequest(f.actor, f.session.id, current, [endpoint], limits);
+      assert.equal(accepted.event.content_revision, 1); f.database.finishHostedAgentRequest(accepted.event.id, {});
+    } finally { other.close(); f.close(); }
+  });
+}
+
 test("personal retry selection cannot revive a request whose shared history revision changed", () => {
   const f = fixture(async () => JSON.stringify({ answer: "Fixture", files: [] }));
   try {

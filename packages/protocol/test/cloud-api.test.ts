@@ -25,3 +25,18 @@ test("personal API wire contract rejects URLs, headers, key whitespace and unpin
     assert.equal(CloudApiPutInputSchema.safeParse({ ...config, ...field }).success, false);
   }
 });
+
+test("automatic hosted retries pin an optional exact content revision independently of the personal API revision", () => {
+  const base = { profile_id: "default", content: "Explicit request", idempotency_key: "history-retry-contract" };
+  for (const schema of [HostedAgentRequestInputSchema, HostedGithubTaskInputSchema]) {
+    assert.equal(schema.safeParse(base).success, true, "ordinary older clients remain compatible");
+    for (const content_revision of [0, 1, Number.MAX_SAFE_INTEGER]) {
+      assert.equal((schema.parse({ ...base, content_revision }) as { content_revision?: number }).content_revision, content_revision);
+      assert.equal(schema.safeParse({ ...base, profile_id: `api-${randomUUID()}`, api_config_revision: randomUUID(), content_revision }).success, true);
+    }
+    for (const content_revision of [-1, 0.5, "0", null, Infinity]) {
+      assert.equal(schema.safeParse({ ...base, content_revision }).success, false);
+    }
+    assert.equal(schema.safeParse({ ...base, profile_id: `api-${randomUUID()}`, content_revision: 0 }).success, false);
+  }
+});

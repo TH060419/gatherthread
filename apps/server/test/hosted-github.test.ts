@@ -113,6 +113,33 @@ async function settled(f: ReturnType<typeof fixture>, id: string) {
  throw new Error("Cloud task did not settle");
 }
 
+for (const payer of ["service", "personal"] as const) {
+ unixTest(`GitHub ${payer} automatic retry preserves its captured history revision before reserving or dispatching`, async () => {
+  const f = fixture(), other = deletionPeer(f);
+  try {
+   await connect(f);
+   const saved = payer === "personal" ? f.agent.putPersonalApi(f.actor, randomUUID(), { expected_revision: null,
+    provider_id: "anthropic", model: "claude-fixture", label: "Own retry API", api_key: "synthetic-retry-provider-key", enabled: true }) : undefined;
+   const input = { content: "Original GitHub request", profile_id: saved?.profile_id ?? "coding",
+    ...(saved ? { api_config_revision: saved.revision } : {}), idempotency_key: "github-in-flight-original" };
+   const receipt = f.github.start(f.actor, f.session.id, input), completed = await settled(f, receipt.id);
+   assert.equal(completed.state, "completed");
+   const original = f.db.sqlite.prepare("SELECT request_event_id FROM hosted_github_tasks WHERE id=?").get(receipt.id)!;
+   assert.ok(f.agent.selection(f.actor, f.session.id, String(original.request_event_id)));
+   other.deleteMessage(f.actor, f.session.id, String(original.request_event_id), "github-in-flight-delete");
+   f.advance();
+   const before = f.service.replay(f.actor, f.session.id, 0, 100).events.length, calls = f.calls.length;
+   assert.throws(() => f.github.start(f.actor, f.session.id, { ...input, content_revision: 0,
+    idempotency_key: "github-in-flight-automatic-retry" } as typeof input), e => e instanceof ApiError && e.code === "context_changed");
+   assert.equal(f.calls.length, calls); assert.equal(f.runs(), 1); assert.equal(f.db.hostedActiveRuns(), 0);
+   assert.equal(f.service.replay(f.actor, f.session.id, 0, 100).events.length, before);
+   assert.equal(f.db.hostedAgentUsage(f.actor, 100, 1000, payer).user_used_runs, 1);
+   assert.equal(f.db.hostedAgentUsage(f.actor, 100, 1000, payer === "service" ? "personal" : "service").user_used_runs, 0);
+   assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM events WHERE idempotency_key=?").get("github-in-flight-automatic-retry")?.n, 0);
+  } finally { await f.close(); other.close(); }
+ });
+}
+
 async function inactive(f: ReturnType<typeof fixture>) {
  for (let n = 0; n < 500 && f.db.hostedActiveRuns(); n++) await setTimeout(5);
  assert.equal(f.db.hostedActiveRuns(), 0);
