@@ -1,9 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { Worker } from "node:worker_threads";
 import type { CanonicalEvent } from "@gatherthread/protocol";
 import { startCollaborationServer } from "../src/server.js";
 import { browserSessionFixture } from "./auth-fixtures.js";
+import { CollaborationDatabase } from "../src/database.js";
+import { CollaborationService } from "../src/service.js";
+import { HttpCollaborationClient } from "@gatherthread/bridge";
+import { CollaborationMcpService } from "@gatherthread/mcp";
 
 async function fixture() {
   const running = await startCollaborationServer({ databasePath: ":memory:",
@@ -134,20 +143,56 @@ test("deleting any source fences already claimed turns even when another account
   } finally { await f.close(); }
 });
 
-test("stale native outboxes and old connectors cannot publish or execute after deletion", async () => {
+test("stale native outboxes and old connectors cannot accept, publish or execute after deletion", async () => {
   const f = await fixture();
   try {
     const source = f.chat("NATIVE_OLD_SOURCE");
     const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "legacy-runtime", session_id: f.session.id,
       device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "legacy-native", capture_fidelity: "harness_transcript" });
     await f.remove(source);
-    const request = f.service.appendEvent(f.owner.actor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: randomUUID(),
-      payload: { content: "New prompt", execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } });
+    const newInput = { type: "agent_request" as const, visibility: "session" as const, idempotency_key: randomUUID(),
+      payload: { content: "New prompt", execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } };
+    assert.throws(() => f.service.appendEvent(f.owner.actor, f.session.id, newInput),
+      (error: unknown) => (error as { code?: string }).code === "connector_update_required");
+    const upgraded = f.service.registerRuntime(f.owner.actor, { ...runtime, runtime_id: runtime.id, context_deletion_version: 1 });
+    const request = f.service.appendEvent(f.owner.actor, f.session.id, newInput);
+    f.service.registerRuntime(f.owner.actor, { ...runtime, runtime_id: upgraded.id, context_deletion_version: undefined });
     assert.throws(() => f.service.claimAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id),
       (error: unknown) => (error as { code?: string }).code === "connector_update_required");
     assert.throws(() => f.service.commitLocalTurn(f.owner.actor, f.session.id, { local_turn_id: "old-native-turn", runtime_id: runtime.id,
       based_on_sequence: source.sequence, occurred_at: new Date().toISOString(), request_payload: { content: "stale" }, response_payload: { content: "NATIVE_OLD_SOURCE" } }),
       (error: unknown) => ["connector_update_required", "context_changed"].includes((error as { code?: string }).code ?? ""));
+  } finally { await f.close(); }
+});
+
+test("canonical snapshots, quoted deleted bodies and mentions cannot bypass deletion-aware model reads", async () => {
+  const f = await fixture();
+  try {
+    const source = f.service.appendEvent(f.owner.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "mention-source",
+      payload: { content: "@Member DELETED_MCP_SOURCE", mentions: [{ user_id: f.member.actor.user_id, start: 0, end: 7 }] } });
+    const quote = f.service.appendEvent(f.member.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "quote-survives",
+      reply_to_event_id: source.id, payload: { content: "INDEPENDENT_REPLY_SURVIVES" } });
+    const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "delete-snapshot-runtime", session_id: f.session.id,
+      device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "snapshot-native", capture_fidelity: "canonical_history" });
+    const snapshot = f.service.appendEvent(f.owner.actor, f.session.id, { type: "context_snapshot", visibility: "session", idempotency_key: "derived-snapshot",
+      runtime_id: runtime.id, payload: { content: "DELETED_MCP_SOURCE", capture_fidelity: "canonical_history", covers_through_sequence: source.sequence } });
+    await f.remove(source);
+    assert.ok(f.database.getEvent(f.session.id, snapshot.id).deleted);
+    assert.throws(() => f.service.appendEvent(f.member.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "late-quote",
+      reply_to_event_id: source.id, payload: { content: "New quote" } }), (error: unknown) => (error as { code?: string }).code === "message_deleted");
+    assert.equal(f.service.listProjectMentions(f.member.actor, f.session.project_id).mentions.length, 0);
+    assert.equal(f.database.getEvent(f.session.id, quote.id).payload && JSON.stringify(f.database.getEvent(f.session.id, quote.id).payload), '{"content":"INDEPENDENT_REPLY_SURVIVES"}');
+    const api = new HttpCollaborationClient({ baseUrl: `${f.origin}/v1`, bearerToken: f.member.token });
+    const mcp = new CollaborationMcpService({ api });
+    for (const name of ["collaboration_read_context", "collaboration_read_history"]) {
+      const result = await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { session_id: f.session.id } } });
+      assert.doesNotMatch(JSON.stringify(result), /DELETED_MCP_SOURCE/);
+      assert.match(JSON.stringify(result), /INDEPENDENT_REPLY_SURVIVES/);
+      assert.match(JSON.stringify(result), /content_revision|contentRevision/);
+    }
+    const delayed = f.service.presentEvent(f.member.actor, source);
+    assert.equal(delayed.content_revision, 1); assert.ok(delayed.deleted);
+    assert.doesNotMatch(JSON.stringify(delayed), /DELETED_MCP_SOURCE/);
   } finally { await f.close(); }
 });
 
