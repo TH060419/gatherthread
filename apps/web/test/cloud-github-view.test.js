@@ -131,6 +131,22 @@ test("switching accounts clears private task previews and ignores an old PR resp
   assert.equal(ui.el("project-code-dialog").open, false);
 });
 
+test("a content deletion clears private task/PR previews and fences their old HTTP completion", async () => {
+  const late = deferred(); let reads = 0;
+  const ui = fixture({ getHostedGithubTask: async () => ++reads === 1 ? task() : late.promise });
+  await ui.view.openTask("private-task");
+  assert.equal(ui.el("cloud-github-answer").textContent, "Private answer");
+  ui.el("cloud-github-parent").value = "private-task";
+  const loading = ui.view.refresh(); await settle();
+  ui.setContext({ userId: "u1", projectId: "p1", sessionId: "s1", contentRevision: 1 });
+  late.resolve({ ...task(), answer: "Late deleted derived answer" }); await loading;
+  assert.equal(ui.el("cloud-github-answer").textContent, "");
+  assert.equal(ui.el("cloud-github-pr-body").value, "");
+  assert.equal(ui.el("cloud-github-changes").children.length, 0);
+  assert.equal(ui.el("cloud-github-parent").value, "");
+  assert.equal(ui.el("project-code-dialog").open, false);
+});
+
 test("a request finishing in an old session cannot replace a newer continuation draft", async () => {
   const response = deferred();
   const ui = fixture({ startHostedGithubTask: () => response.promise });
