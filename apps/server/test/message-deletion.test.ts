@@ -114,3 +114,39 @@ test("recursive summaries containing deleted sources are invalidated and survivi
       execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } }));
   } finally { await f.close(); }
 });
+
+test("deleting any source fences already claimed turns even when another account asked", async () => {
+  const f = await fixture();
+  try {
+    const source = f.chat("DELETE_WHILE_OTHER_MEMBER_WORKS");
+    const runtime = f.service.registerRuntime(f.member.actor, { runtime_id: "other-active-runtime", session_id: f.session.id,
+      device_id: f.member.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "other-native", capture_fidelity: "harness_transcript" });
+    const request = f.service.appendEvent(f.member.actor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: randomUUID(),
+      payload: { content: "Read shared context", execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } });
+    f.service.claimAgentRequest(f.member.actor, f.session.id, request.id, runtime.id);
+    await f.remove(source);
+    assert.throws(() => f.service.completeAgentRequest(f.member.actor, f.session.id, request.id, runtime.id, randomUUID(), { content: "LATE_OLD_CONTEXT_ANSWER" }, undefined, undefined, 1),
+      (error: unknown) => (error as { code?: string }).code === "context_changed");
+    assert.throws(() => f.service.claimAgentRequest(f.member.actor, f.session.id, request.id, runtime.id),
+      (error: unknown) => (error as { code?: string }).code === "context_changed");
+    const replay = await f.request(`/v1/sessions/${f.session.id}/events`);
+    assert.match(JSON.stringify(replay), /context_changed/); assert.doesNotMatch(JSON.stringify(replay), /LATE_OLD_CONTEXT_ANSWER/);
+  } finally { await f.close(); }
+});
+
+test("stale native outboxes and old connectors cannot publish or execute after deletion", async () => {
+  const f = await fixture();
+  try {
+    const source = f.chat("NATIVE_OLD_SOURCE");
+    const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "legacy-runtime", session_id: f.session.id,
+      device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "legacy-native", capture_fidelity: "harness_transcript" });
+    await f.remove(source);
+    const request = f.service.appendEvent(f.owner.actor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: randomUUID(),
+      payload: { content: "New prompt", execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } });
+    assert.throws(() => f.service.claimAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id),
+      (error: unknown) => (error as { code?: string }).code === "connector_update_required");
+    assert.throws(() => f.service.commitLocalTurn(f.owner.actor, f.session.id, { local_turn_id: "old-native-turn", runtime_id: runtime.id,
+      based_on_sequence: source.sequence, occurred_at: new Date().toISOString(), request_payload: { content: "stale" }, response_payload: { content: "NATIVE_OLD_SOURCE" } }),
+      (error: unknown) => ["connector_update_required", "context_changed"].includes((error as { code?: string }).code ?? ""));
+  } finally { await f.close(); }
+});
