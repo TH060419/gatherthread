@@ -11,6 +11,16 @@ const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const pluginRoot = path.join(root, "plugins", "gatherthread");
 const PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-beta.1";
 
+test("current connector help uses the local package and password-based Launcher path", () => {
+  const result = spawnSync(process.execPath, [path.join(root, "packages/codex-connect/dist/codex-connect.js"), "--help"], { encoding: "utf8", timeout: 10_000 });
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /--package.*LOCAL_CODEX_CONNECTOR\.tgz/);
+  assert.doesNotMatch(result.stdout, /npx --yes @gatherthread\/codex-connect@0\.1\.0-beta\.1/);
+  assert.match(result.stdout, /Launcher[\s\S]*password/);
+  assert.doesNotMatch(result.stdout, /Paste[^\n]*Launcher/);
+  assert.match(result.stdout, /hidden terminal prompt/);
+});
+
 async function json(relativePath) {
   return JSON.parse(await readFile(path.join(pluginRoot, relativePath), "utf8"));
 }
