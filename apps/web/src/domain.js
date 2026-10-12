@@ -350,6 +350,7 @@ export function eventLabel(type) {
 }
 
 export function eventContent(event) {
+  if (event?.deleted || event?.contentUnavailable) return "";
   const content = event?.payload?.content;
   if (typeof content === "string") return content;
   const importedText = event?.payload?.text;
@@ -494,6 +495,7 @@ export function pendingAgentRequests(events) {
   );
   return (events ?? []).filter((event) =>
     event?.type === "agent_request"
+    && !event.deleted && !event.contentUnavailable
     && typeof event.id === "string"
     && !settledRequestIds.has(event.id),
   );
@@ -520,7 +522,7 @@ export function failedRequestFor(events, responseEvent) {
 
 /** A retry is a new request by the original author, never an impersonation. */
 export function canRetryFailedAgentRequest(request, currentUser) {
-  return typeof request?.actor?.id === "string"
+  return !request?.deleted && !request?.contentUnavailable && typeof request?.actor?.id === "string"
     && typeof currentUser?.id === "string"
     && request.actor.id === currentUser.id;
 }
@@ -532,6 +534,7 @@ export function canRetryFailedAgentRequest(request, currentUser) {
  * device, provider, or model than the user chose.
  */
 export function retryAgentRequestInput(request, idempotencyKey) {
+  if (request?.deleted || request?.contentUnavailable) throw new Error("This message was deleted or its history is being refreshed.");
   const content = eventContent(request);
   const profile = request?.payload?.execution_profile;
   if (profile === null || typeof profile !== "object") return { content, idempotencyKey };
@@ -549,6 +552,7 @@ export function retryAgentRequestInput(request, idempotencyKey) {
 }
 
 export function isTimelineEventVisible(event) {
+  if (event?.type === "message_deleted") return false;
   const isControlEvent = event?.type === "membership_change" || event?.type === "session_state_change";
   const content = event?.payload?.content;
   return !isControlEvent || (typeof content === "string" && content.trim().length > 0);
@@ -594,6 +598,8 @@ export function provenanceSummary(provenance, formatReasoning = (effort) => effo
 
 export function normalizeReplayPage(page) {
   const events = [...(page.events ?? [])].sort((a, b) => a.sequence - b.sequence);
+  const contentRevision = page.contentRevision ?? page.content_revision ?? 0;
+  if (!Number.isSafeInteger(contentRevision) || contentRevision < 0) throw new Error("History revision is invalid.");
   return {
     events,
     headSequence: Number(page.headSequence ?? page.head_sequence ?? 0),
@@ -601,5 +607,6 @@ export function normalizeReplayPage(page) {
       page.nextAfterSequence ?? page.next_after_sequence ?? page.cursor ?? events.at(-1)?.sequence ?? 0,
     ),
     hasMore: Boolean(page.hasMore ?? page.has_more),
+    contentRevision,
   };
 }

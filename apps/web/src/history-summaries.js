@@ -16,6 +16,7 @@ export function historyWireEvents(events) {
   return events.map((event) => ({
     id: event.id, sequence: event.sequence, type: event.type, actor_user_id: event.actor?.id ?? event.actor_user_id,
     payload: event.payload, reply_to_event_id: replyTo(event), visibility: publicEvent(event) ? "session" : "owner_only",
+    ...(event.deleted ? { deleted: event.deleted } : {}),
   }));
 }
 
@@ -33,6 +34,7 @@ function historySummaryIndex(events) {
   const requests = [];
   for (let index = 0; index < wire.length; index += 1) {
     const item = wire[index];
+    if (events[index].deleted || events[index].contentUnavailable) continue;
     if (isHistorySummaryRequest(item)) summaryIds.add(item.id);
     if (item.visibility !== "session") continue;
     if (historySummaryText(item.payload).trim()) nonemptyIds.add(item.id);
@@ -51,7 +53,7 @@ function historySummaryIndex(events) {
   }
   const validated = validatedHistorySummaryVersions(wire);
   const summaries = new Set(validated.map((version) => version.response.id));
-  const eligible = events.filter((event) => publicEvent(event) && (summaryIds.has(replyTo(event))
+  const eligible = events.filter((event) => !event.deleted && !event.contentUnavailable && publicEvent(event) && (summaryIds.has(replyTo(event))
     ? summaries.has(event.id)
     : sourceTypes.has(event.type) && nonemptyIds.has(event.id) && !summaryIds.has(event.id)
       && (event.type === "human_chat" || successfulResponseIds.has(event.id)

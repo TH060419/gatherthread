@@ -25,6 +25,10 @@ export class SessionSync {
     this.phase = "idle";
     this.cursor = 0;
     this.events = [];
+    this.contentRevision = 0;
+    this.contentRefreshing = false;
+    this.revisionEpoch = (this.revisionEpoch ?? 0) + 1;
+    this.contentRefreshPromise = null;
     this.eventIds = new Set();
     this.buffer = new Map();
     this.socket?.close?.();
@@ -46,6 +50,8 @@ export class SessionSync {
       detail: PHASE_DETAIL[this.phase],
       cursor: this.cursor,
       events: [...this.events],
+      contentRevision: this.contentRevision,
+      contentRefreshing: this.contentRefreshing,
       bufferedCount: this.buffer.size,
     };
   }
@@ -85,6 +91,31 @@ export class SessionSync {
     this.#emit();
   }
 
+  /** Deletion receipts and socket controls invalidate every older read/cache. */
+  async invalidateContent(receipt) {
+    const revision = Number(receipt.contentRevision ?? receipt.content_revision ?? receipt.event?.payload?.content_revision);
+    if (!this.sessionId || receipt.event?.sessionId !== this.sessionId || !Number.isSafeInteger(revision)
+      || revision < this.contentRevision) return;
+    if (revision === this.contentRevision && this.contentRefreshing) return this.contentRefreshPromise;
+    if (revision === this.contentRevision && this.eventIds.has(receipt.event.id)) return;
+    this.contentRevision = revision;
+    this.revisionEpoch++;
+    // The receipt's affected IDs are deliberately bounded. Until authoritative
+    // replay finishes, no cached body, quote, tool or summary may be trusted.
+    this.events = this.events.map(event => ({ ...event, payload: { content: "" }, provenance: null, contentUnavailable: true }));
+    this.eventIds.clear();
+    this.buffer.clear();
+    this.cursor = 0;
+    this.contentRefreshing = true;
+    const generation = this.generation;
+    const refresh = this.#recover(generation, "recovering").catch(error => {
+      if (this.#isCurrent(generation)) this.#setPhase("blocked", error);
+    });
+    this.contentRefreshPromise = refresh;
+    await refresh;
+    if (this.contentRefreshPromise === refresh) this.contentRefreshPromise = null;
+  }
+
   async #openSocket(generation) {
     const socket = await this.api.openRealtime({
       sessionId: this.sessionId,
@@ -116,6 +147,13 @@ export class SessionSync {
 
   #onSocketEvent(event, generation) {
     if (!this.#isCurrent(generation) || event.sessionId !== this.sessionId) return;
+    const revision = Number(event.contentRevision ?? event.content_revision ?? event.payload?.content_revision ?? 0);
+    if (!Number.isSafeInteger(revision) || revision < this.contentRevision) return;
+    if (revision > this.contentRevision || (event.type === "message_deleted" && !this.eventIds.has(event.id))) {
+      void this.invalidateContent({ contentRevision: revision, event });
+      return;
+    }
+    if (this.contentRefreshing) return;
     if (event.sequence <= this.cursor || this.eventIds.has(event.id)) return;
     if (event.sequence === this.cursor + 1) {
       this.#apply(event);
@@ -134,37 +172,58 @@ export class SessionSync {
   }
 
   #onSocketCursor(cursor, generation) {
-    if (!this.#isCurrent(generation) || !Number.isInteger(cursor) || cursor <= this.cursor) return;
+    if (!this.#isCurrent(generation) || this.contentRefreshing || !Number.isInteger(cursor) || cursor <= this.cursor) return;
     this.cursor = cursor;
     this.#drainBuffer();
   }
 
   async #recover(generation, phase) {
+    const epoch = this.revisionEpoch;
+    const replacing = this.contentRefreshing;
+    const replacement = [];
+    const replacementIds = new Set();
+    let replayCursor = this.cursor;
     this.#setPhase(phase);
     let hasMore = true;
     while (hasMore && this.#isCurrent(generation)) {
-      const cursorBeforePage = this.cursor;
+      const cursorBeforePage = replacing ? replayCursor : this.cursor;
       const page = normalizeReplayPage(
         await this.api.replayEvents(this.sessionId, {
-          afterSequence: this.cursor,
+          afterSequence: cursorBeforePage,
           limit: this.pageSize,
         }),
       );
-      if (!this.#isCurrent(generation)) return;
-      let previousSequence = this.cursor;
+      if (!this.#isCurrent(generation) || epoch !== this.revisionEpoch) return;
+      if (page.contentRevision < this.contentRevision) throw new Error("History changed. Retry to refresh the current messages.");
+      if (page.contentRevision > this.contentRevision) {
+        await this.invalidateContent({ contentRevision: page.contentRevision,
+          event: { id: `revision-${page.contentRevision}`, sessionId: this.sessionId } });
+        return;
+      }
+      let previousSequence = cursorBeforePage;
       for (const event of page.events) {
-        if (event.sequence <= this.cursor || this.eventIds.has(event.id)) continue;
+        if (event.sequence <= cursorBeforePage || (replacing ? replacementIds : this.eventIds).has(event.id)) continue;
         if (event.sequence <= previousSequence) {
           throw new Error("Replay events were not strictly ordered.");
         }
-        this.#apply(event, false);
+        const currentEvent = { ...event, contentRevision: page.contentRevision };
+        if (replacing) { replacement.push(currentEvent); replacementIds.add(event.id); }
+        else this.#apply(currentEvent, false);
         previousSequence = event.sequence;
       }
-      this.cursor = Math.max(this.cursor, page.nextAfterSequence);
+      if (replacing) replayCursor = Math.max(replayCursor, page.nextAfterSequence);
+      else this.cursor = Math.max(this.cursor, page.nextAfterSequence);
       hasMore = page.hasMore;
-      if (hasMore && this.cursor <= cursorBeforePage) {
+      if (hasMore && (replacing ? replayCursor : this.cursor) <= cursorBeforePage) {
         throw new Error("Replay cursor did not advance.");
       }
+    }
+    if (!this.#isCurrent(generation) || epoch !== this.revisionEpoch) return;
+    if (replacing) {
+      this.events = replacement;
+      this.eventIds = replacementIds;
+      this.cursor = replayCursor;
+      this.contentRefreshing = false;
     }
     this.#drainBuffer(false);
     if (this.#isCurrent(generation)) this.#setPhase(this.buffer.size ? "blocked" : "live");

@@ -37,6 +37,7 @@ export function composerAgentAction(events, userId) {
     }
   }
   if (!request) return { action: "request" };
+  if (request.deleted || request.contentUnavailable) return { action: "request" };
   const linked = history.filter((event) => targetId(event) === request.id);
   if (linked.some((event) => event.type === "agent_response")) return { action: "request" };
   if (request.payload?.github_task_id) return { action: "wait", request, cloud: true };
