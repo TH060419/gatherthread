@@ -57,6 +57,15 @@ test("public product READMEs expose deletion without implying loss of other memb
   assert.match(zh, /独立消息或手工重发的副本/);
 });
 
+test("illustrated beginner guides identify the author's trash button and retain only valid summary sources", async () => {
+  const en = await readFile(new URL("../../../docs/PRODUCT_GUIDE.md", import.meta.url), "utf8");
+  const zh = await readFile(new URL("../../../docs/PRODUCT_GUIDE.zh-CN.md", import.meta.url), "utf8");
+  assert.match(en, /trash icon beside your own message or Agent reply/);
+  assert.match(zh, /自己的消息或 Agent 回复旁的垃圾桶/);
+  assert.match(en, /Undeleted original messages and valid older summary versions/);
+  assert.match(zh, /未删除的原文和有效的旧摘要/);
+});
+
 test("desktop and compact beginner guides point to the author's trash icon without adding steps", () => {
   for (const layout of ["desktop", "mobile"]) {
     const basics = guideSteps("basics", { layout });
