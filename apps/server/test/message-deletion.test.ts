@@ -196,6 +196,118 @@ test("canonical snapshots, quoted deleted bodies and mentions cannot bypass dele
   } finally { await f.close(); }
 });
 
+test("concurrent database handles commit one deletion receipt and preserve it across restart and paginated replay", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "gt-deletion-race-"));
+  const file = join(dir, "fixture.sqlite"); const pepper = "deletion-race-fixture-not-a-secret";
+  let database = new CollaborationDatabase(file, { authTokenPepper: pepper });
+  const workers: Worker[] = [];
+  try {
+    const actor = database.bootstrapIdentity({ display_name: "Author", device_name: "Browser" }).actor;
+    const service = new CollaborationService(database);
+    const session = service.createSession(actor, { title: "Race", mode: "multi", idempotency_key: "race-session" }).session;
+    const original = { type: "human_chat" as const, visibility: "session" as const, idempotency_key: "original-receipt", payload: { content: "RACE_DELETED_SOURCE" } };
+    const source = service.appendEvent(actor, session.id, original);
+    service.appendEvent(actor, session.id, { type: "human_chat", visibility: "session", idempotency_key: "race-kept", payload: { content: "RACE_SURVIVING_SOURCE" } });
+    const key = randomUUID();
+    const script = `const { parentPort, workerData } = require("node:worker_threads");
+      (async () => {
+        const { CollaborationDatabase } = await import(workerData.moduleUrl);
+        const db = new CollaborationDatabase(workerData.file, { authTokenPepper: workerData.pepper });
+        parentPort.once("message", () => {
+          try { const result = db.deleteMessage(workerData.actor,workerData.sessionId,workerData.eventId,workerData.key);
+            parentPort.postMessage({ revision:result.content_revision, eventId:result.event.id });
+          } catch(error) { parentPort.postMessage({ failure:error.code ?? error.message }); }
+          finally { db.close(); }
+        });
+        parentPort.postMessage({ready:true});
+      })().catch(error => { throw error; });`;
+    for (let n = 0; n < 2; n++) workers.push(new Worker(script, { eval: true, workerData: {
+      moduleUrl: new URL("../src/database.js", import.meta.url).href, file, pepper, actor, sessionId: session.id, eventId: source.id, key,
+    } }));
+    const next = (worker: Worker) => new Promise<any>((resolve, reject) => { worker.once("message", resolve); worker.once("error", reject); });
+    await Promise.all(workers.map(next));
+    const results = workers.map(next); for (const worker of workers) worker.postMessage("go");
+    const receipts = await Promise.all(results);
+    assert.equal(receipts[0].revision, 1); assert.deepEqual(receipts[1], receipts[0]);
+    assert.equal(database.sqlite.prepare("SELECT count(*) AS n FROM message_deletions").get()?.n, 1);
+    assert.equal(database.sqlite.prepare("SELECT count(*) AS n FROM events WHERE type='message_deleted'").get()?.n, 1);
+    database.close(); database = new CollaborationDatabase(file, { authTokenPepper: pepper });
+    const reopened = new CollaborationService(database);
+    assert.equal(database.deleteMessage(actor, session.id, source.id, key).event.id, receipts[0].eventId);
+    const exact = reopened.appendEvent(actor, session.id, original);
+    assert.ok(exact.deleted); assert.doesNotMatch(JSON.stringify(exact), /RACE_DELETED_SOURCE/);
+    assert.throws(() => reopened.appendEvent(actor, session.id, { ...original, payload: { content: "changed retry" } }),
+      (error: unknown) => (error as { code?: string }).code === "idempotency_conflict");
+    const sequences: number[] = []; let cursor = 0;
+    for (;;) {
+      const page = reopened.replay(actor, session.id, cursor, 1);
+      assert.equal(page.content_revision, 1); assert.doesNotMatch(JSON.stringify(page), /RACE_DELETED_SOURCE/);
+      sequences.push(...page.events.map((event) => event.sequence)); cursor = page.cursor;
+      if (!page.has_more) break;
+    }
+    assert.deepEqual(sequences, Array.from({ length: cursor }, (_, n) => n + 1));
+    const context = reopened.readHistoryContext(actor, session.id, "original", source.sequence);
+    assert.equal(context.content_revision, 1); assert.deepEqual(context.items, []);
+    assert.deepEqual(database.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally {
+    await Promise.all(workers.map((worker) => worker.terminate())); database.close(); rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("migration from a pre-deletion database preserves canonical IDs, foreign keys and frozen-head erasure", () => {
+  const dir = mkdtempSync(join(tmpdir(), "gt-deletion-migrate-")); const file = join(dir, "fixture.sqlite");
+  const options = { authTokenPepper: "deletion-migration-fixture" };
+  let database = new CollaborationDatabase(file, options);
+  let open = true;
+  try {
+    const actor = database.bootstrapIdentity({ display_name: "Author", device_name: "Browser" }).actor;
+    const service = new CollaborationService(database);
+    const session = service.createSession(actor, { title: "Migration", mode: "multi", idempotency_key: "migration-session" }).session;
+    const source = service.appendEvent(actor, session.id, { type: "human_chat", visibility: "session", idempotency_key: "migration-source", payload: { content: "MIGRATION_DELETED_SOURCE" } });
+    database.close();
+    open = false;
+    const legacy = new DatabaseSync(file);
+    try {
+      for (const [table, column] of [["events", "deleted_at"], ["events", "deleted_reason"], ["events", "content_revision"],
+        ["sessions", "content_revision"], ["runtimes", "context_deletion_version"], ["snapshot_requests", "content_revision"]]) {
+        legacy.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+      }
+      legacy.exec("DROP TABLE message_deletions; DROP TABLE deleted_event_receipts; PRAGMA foreign_keys=OFF");
+      const sql = String(legacy.prepare("SELECT sql FROM sqlite_master WHERE name='events'").get()?.sql);
+      const oldSql = sql.replace(/CREATE TABLE (?:"events"|events)/u, "CREATE TABLE events_legacy").replace(",'message_deleted'", "");
+      legacy.exec(`BEGIN IMMEDIATE; ${oldSql}; INSERT INTO events_legacy SELECT * FROM events;
+        DROP TABLE events; ALTER TABLE events_legacy RENAME TO events; COMMIT; PRAGMA foreign_keys=ON`);
+    } finally { legacy.close(); }
+    database = new CollaborationDatabase(file, options);
+    open = true;
+    assert.equal(database.getEvent(session.id, source.id).sequence, source.sequence);
+    database.deleteMessage(actor, session.id, source.id, "migration-delete");
+    assert.equal(database.requireSession(session.id).content_revision, 1);
+    assert.doesNotMatch(JSON.stringify(database.readHistoryContext(actor, session.id, "original", source.sequence)), /MIGRATION_DELETED_SOURCE/);
+    assert.deepEqual(database.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+  } finally { if (open) database.close(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("deletion rechecks revoked device, viewer demotion, Solo and foreign-session authority", async () => {
+  const f = await fixture();
+  try {
+    const own = f.chat("ROLE_RECHECK_SOURCE", f.member);
+    f.service.setProjectMembership(f.owner.actor, f.session.project_id, f.member.actor.user_id, "viewer");
+    assert.equal((await f.remove(own, f.member)).status, 403);
+    f.service.setProjectMembership(f.owner.actor, f.session.project_id, f.member.actor.user_id, "participant");
+    const foreign = f.service.createSession(f.owner.actor, { title: "Foreign", mode: "solo", idempotency_key: "foreign-session" }).session;
+    assert.equal((await f.request(`/v1/sessions/${foreign.id}/events/${own.id}/delete`, "POST", { idempotency_key: randomUUID() })).status, 404);
+    const solo = f.service.createSession(f.member.actor, { project_id: f.session.project_id, title: "Member Solo", mode: "solo", idempotency_key: "member-solo" }).session;
+    const soloSource = f.service.appendEvent(f.member.actor, solo.id, { type: "human_chat", visibility: "session", idempotency_key: "solo-source", payload: { content: "SOLO_PRIVATE_SOURCE" } });
+    assert.equal((await f.request(`/v1/sessions/${solo.id}/events/${soloSource.id}/delete`, "POST", { idempotency_key: randomUUID() }, f.owner)).status, 403);
+    assert.equal((await f.request(`/v1/sessions/${solo.id}/events/${soloSource.id}/delete`, "POST", { idempotency_key: randomUUID() }, f.member)).status, 200);
+    f.database.sqlite.prepare("UPDATE devices SET revoked_at=? WHERE id=?").run(new Date().toISOString(), f.member.actor.device_id);
+    assert.equal((await f.remove(own, f.member)).status, 401);
+    assert.throws(() => f.database.deleteMessage(f.member.actor, f.session.id, own.id, randomUUID()));
+    assert.doesNotMatch(JSON.stringify(await f.request(`/v1/sessions/${f.session.id}/events`, "GET", undefined, f.member)), /ROLE_RECHECK_SOURCE/);
+  } finally { await f.close(); }
+});
+
 test("a deletion erases in-flight work derived from old context and invalidates frozen native imports", async () => {
   const f = await fixture();
   try {

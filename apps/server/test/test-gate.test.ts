@@ -107,7 +107,7 @@ test("HTTP gate protects account/restoration APIs; native credentials and WS kee
     method: body === undefined ? "GET" : "POST", headers: { host, ...(requestOrigin ? { origin: requestOrigin } : {}), ...(cookie ? { cookie } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   });
   try {
-    for (const path of ["/v1/registration", "/v1/registration/send", "/v1/registration/verify", "/v1/password-reset", "/v1/password-reset/send", "/v1/password-reset/verify", "/v1/email-login", "/v1/browser-sessions", "/v1/me", "/v1/projects", "/%76%31/projects", "/v1/dsh-pairings/approve", "/v1/device-authorizations"]) {
+    for (const path of ["/v1/registration", "/v1/registration/send", "/v1/registration/verify", "/v1/password-reset", "/v1/password-reset/send", "/v1/password-reset/verify", "/v1/email-login", "/v1/browser-sessions", "/v1/me", "/v1/projects", "/%76%31/projects", "/v1/dsh-pairings/approve", "/v1/device-authorizations", "/v1/sessions/unknown/events/unknown/delete"]) {
       const response = await request(path, path.endsWith("/me") || path.endsWith("/registration") || path.endsWith("/password-reset") ? undefined : {});
       assert.equal(response.status, 403, path); assert.equal(((await response.json()) as {error: {code: string}}).error.code, "test_admission_required");
     }

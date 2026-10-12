@@ -414,6 +414,7 @@ export class LocalBridge {
       const failure = await this.#api.completeAgentRequest(request.sessionId, request.id, {
         runtimeId: runtime.id,
         claimAttempt,
+        contentRevision: revision,
         idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:complete`,
         payload: {
           text: `Agent execution failed: ${error.publicMessage}`,
@@ -440,7 +441,7 @@ export class LocalBridge {
       return toAppendEvent(redactTranscriptEvent(event, this.#redaction), {
         ...runtime,
         localSessionId: execution.localSessionId ?? runtime.localSessionId,
-      }, request.id, execution, { requestId: request.id, claimAttempt });
+      }, request.id, execution, { requestId: request.id, claimAttempt, contentRevision: revision });
     });
     const responseEvents = events.filter((event) => event.type === "agent_response");
     if (responseEvents.length === 0) throw new Error("Harness execution did not produce an assistant response");
@@ -454,6 +455,7 @@ export class LocalBridge {
     completed.push(await this.#api.completeAgentRequest(request.sessionId, request.id, {
       runtimeId: runtime.id,
       claimAttempt,
+      contentRevision: revision,
       idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:complete`,
       payload: responsePayload,
       ...(execution.observedModel === undefined ? {} : { observedModel: execution.observedModel }),
@@ -474,6 +476,7 @@ export class LocalBridge {
       await this.#api.appendAgentProgress(request.sessionId, request.id, {
         runtimeId: runtime.id,
         claimAttempt,
+        contentRevision: request.contentRevision ?? 0,
         idempotencyKey: input.idempotencyKey,
         payload: input.payload,
       });
@@ -542,7 +545,7 @@ function toAppendEvent(
   runtime: RegisteredRuntime,
   source: string,
   execution?: Pick<HarnessExecutionResult, "observedModel" | "observedReasoningEffort">,
-  claim?: { requestId: string; claimAttempt: number },
+  claim?: { requestId: string; claimAttempt: number; contentRevision: number },
 ): AppendEventInput {
   const eventType = {
     user: "human_chat",
@@ -570,6 +573,7 @@ function toAppendEvent(
     ...(claim === undefined ? {} : {
       replyTo: claim.requestId,
       claimAttempt: claim.claimAttempt,
+      contentRevision: claim.contentRevision,
     }),
     ...(execution?.observedModel === undefined ? {} : { observedModel: execution.observedModel }),
     ...(execution?.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: execution.observedReasoningEffort }),
