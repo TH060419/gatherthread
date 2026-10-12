@@ -187,13 +187,18 @@ export class SessionSync {
     let hasMore = true;
     while (hasMore && this.#isCurrent(generation)) {
       const cursorBeforePage = replacing ? replayCursor : this.cursor;
-      const page = normalizeReplayPage(
-        await this.api.replayEvents(this.sessionId, {
+      let rawPage;
+      try {
+        rawPage = await this.api.replayEvents(this.sessionId, {
           afterSequence: cursorBeforePage,
           limit: this.pageSize,
-        }),
-      );
+        });
+      } catch (error) {
+        if (!this.#isCurrent(generation) || epoch !== this.revisionEpoch) return;
+        throw error;
+      }
       if (!this.#isCurrent(generation) || epoch !== this.revisionEpoch) return;
+      const page = normalizeReplayPage(rawPage);
       if (page.contentRevision < this.contentRevision) throw new Error("History changed. Retry to refresh the current messages.");
       if (page.contentRevision > this.contentRevision) {
         await this.invalidateContent({ contentRevision: page.contentRevision,

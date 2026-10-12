@@ -1,7 +1,7 @@
 import { avatarImage } from "./avatars.js";
 import { HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
   HostedGithubTaskSchema, HostedGithubTaskListSchema, HostedAgentAcceptedSchema, HostedAgentPausedSchema,
-  ProjectInvitationPreviewSchema } from "@gatherthread/protocol";
+  ProjectInvitationPreviewSchema, DeleteMessageResultSchema } from "@gatherthread/protocol";
 import {
   createIdempotencyKey,
   isExecutionRuntime,
@@ -158,6 +158,7 @@ export class HttpCollaborationApi {
         memberCount: Number(session.member_count ?? 0),
         role: session.role,
         currentSequence: session.current_sequence,
+        contentRevision: session.content_revision ?? 0,
       };
     });
   }
@@ -304,6 +305,7 @@ export class HttpCollaborationApi {
         memberCount: Number(session.member_count ?? 0),
         role: session.role,
         currentSequence: session.current_sequence,
+        contentRevision: session.content_revision ?? 0,
       };
     });
   }
@@ -549,7 +551,21 @@ export class HttpCollaborationApi {
       head_sequence: this.sessionHeads.get(sessionId) ?? page.cursor,
       next_after_sequence: page.cursor,
       has_more: page.has_more,
+      content_revision: page.content_revision ?? 0,
     };
+  }
+
+  async deleteMessage(sessionId, eventId, input) {
+    const result = await hostedResponse(DeleteMessageResultSchema,
+      this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/events/${encodeURIComponent(eventId)}/delete`, {
+        method: "POST", body: JSON.stringify({ idempotency_key: input.idempotencyKey }),
+      }), "Deletion response is invalid. Refresh the history and try again.");
+    if (result.target_event_id !== eventId || result.event.session_id !== sessionId || result.event.type !== "message_deleted"
+      || result.event.payload?.target_event_id !== eventId || result.event.payload?.content_revision !== result.content_revision) {
+      throw new Error("Deletion response is invalid. Refresh the history and try again.");
+    }
+    return { event: this.#event(result.event), targetEventId: result.target_event_id, contentRevision: result.content_revision,
+      affectedEventIds: result.affected_event_ids, affectedTruncated: result.affected_truncated };
   }
 
   appendHumanChat(sessionId, input) {
@@ -700,6 +716,7 @@ export class HttpCollaborationApi {
       role,
       updatedAt: session.updated_at,
       connectorState: session.connector_state ?? session.connectorState ?? null,
+      contentRevision: session.content_revision ?? 0,
     };
   }
 
@@ -720,6 +737,8 @@ export class HttpCollaborationApi {
       createdAt: event.created_at,
       replyTo: event.reply_to_event_id ?? null,
       payload: event.payload,
+      ...(event.content_revision === undefined ? {} : { contentRevision: event.content_revision }),
+      ...(event.deleted ? { deleted: event.deleted } : {}),
       provenance: provenance ? {
         username,
         runtimeId: provenance.runtime_id,
@@ -1570,7 +1589,56 @@ export class MockCollaborationApi {
       headSequence,
       nextAfterSequence,
       hasMore: nextAfterSequence < headSequence,
+      contentRevision: this.#findSession(sessionId).contentRevision ?? 0,
     };
+  }
+
+  async deleteMessage(sessionId, eventId, input) {
+    await this.#wait();
+    const session = this.#findSession(sessionId);
+    const member = session.members.find(item => item.userId === this.currentUser.id);
+    const events = this.events.get(sessionId) ?? [];
+    const target = events.find(event => event.id === eventId);
+    if (!member || member.role === "viewer" || target?.actor?.id !== this.currentUser.id
+      || !["human_chat", "agent_request", "agent_response"].includes(target?.type)
+      || (session.mode === "solo" && session.ownerUserId !== this.currentUser.id)) {
+      throw new ApiError("Only the author may delete a writable message.", { status: 403, code: "forbidden" });
+    }
+    this.deletionReceipts ??= new Map();
+    const key = `${sessionId}:${this.currentUser.id}:${input.idempotencyKey}`;
+    const previous = this.deletionReceipts.get(key);
+    if (previous) {
+      if (previous.targetEventId !== eventId) throw new ApiError("Deletion retry conflicts.", { status: 409, code: "idempotency_conflict" });
+      return structuredClone(previous);
+    }
+    if (target.deleted) throw new ApiError("This message was already deleted.", { status: 409, code: "message_deleted" });
+    const reasons = new Map([[eventId, "author"]]);
+    const includeLinked = (requestId, reason) => {
+      for (const event of events) if (event.replyTo === requestId && ["agent_response", "agent_progress", "tool_call", "tool_result"].includes(event.type)) reasons.set(event.id, reason);
+    };
+    if (target.type === "agent_request") includeLinked(eventId, "request");
+    let expanded = true;
+    while (expanded) {
+      expanded = false;
+      for (const event of events) {
+        if (reasons.has(event.id) || !event.payload?.history_summary?.source_event_ids?.some(id => reasons.has(id))) continue;
+        reasons.set(event.id, "summary_invalidated"); includeLinked(event.id, "summary_invalidated"); expanded = true;
+      }
+    }
+    session.contentRevision = (session.contentRevision ?? 0) + 1;
+    const deletedAt = new Date().toISOString();
+    for (const event of events) if (reasons.has(event.id)) {
+      event.payload = { content: "[Message deleted]" }; event.provenance = null;
+      event.contentRevision = session.contentRevision;
+      event.deleted = { deleted_at: deletedAt, reason: reasons.get(event.id) };
+    }
+    const marker = this.#makeEvent(sessionId, "message_deleted", { actor: this.currentUser, idempotencyKey: input.idempotencyKey });
+    marker.payload = { target_event_id: eventId, content_revision: session.contentRevision };
+    const receipt = { event: marker, targetEventId: eventId, contentRevision: session.contentRevision,
+      affectedEventIds: [...reasons.keys()].slice(0, 256), affectedTruncated: reasons.size > 256 };
+    this.deletionReceipts.set(key, receipt);
+    this.#publish(sessionId, marker);
+    return structuredClone(receipt);
   }
 
   appendHumanChat(sessionId, input) {
@@ -1583,6 +1651,7 @@ export class MockCollaborationApi {
     if (existing) return request;
     const actor = structuredClone(this.currentUser);
     const settled = () => !this.sessions.some((session) => session.id === sessionId)
+      || (this.events.get(sessionId) ?? []).some(event => event.id === request.id && event.deleted)
       || (this.events.get(sessionId) ?? []).some((event) => event.replyTo === request.id
         && (event.type === "agent_response" || event.payload?.status === "paused"));
     for (const [delay, content] of [
@@ -1660,6 +1729,9 @@ export class MockCollaborationApi {
   async createHistorySummary(sessionId, input) {
     const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
     if (existing) return structuredClone(existing);
+    if (input.replyTo && (this.events.get(sessionId) ?? []).find(event => event.id === input.replyTo)?.deleted) {
+      throw new ApiError("The quoted message was deleted.", { status: 409, code: "message_deleted" });
+    }
     const { historyWireEvents, historySummaryExecutionWire } = await import("./history-summaries.js");
     const { selectHistorySummarySources, historySummarySourceJson, buildHistorySummaryPrompt } = await import("./history-summary-policy.js");
     historySummaryExecutionWire(input.executionProfile);
@@ -1749,6 +1821,7 @@ export class MockCollaborationApi {
       sequence: (bucket.at(-1)?.sequence ?? 0) + 1,
       idempotencyKey,
       type,
+      contentRevision: this.#findSession(sessionId).contentRevision ?? 0,
       actor: structuredClone(actor),
       createdAt: new Date().toISOString(),
       visibility: "session",
@@ -1814,6 +1887,7 @@ export class MockCollaborationApi {
       memberCount: session.members.length,
       role: membership?.role ?? "viewer",
       latestSequence: this.events.get(session.id)?.at(-1)?.sequence ?? 0,
+      contentRevision: session.contentRevision ?? 0,
     };
   }
 
