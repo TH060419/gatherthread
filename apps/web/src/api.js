@@ -1729,9 +1729,6 @@ export class MockCollaborationApi {
   async createHistorySummary(sessionId, input) {
     const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
     if (existing) return structuredClone(existing);
-    if (input.replyTo && (this.events.get(sessionId) ?? []).find(event => event.id === input.replyTo)?.deleted) {
-      throw new ApiError("The quoted message was deleted.", { status: 409, code: "message_deleted" });
-    }
     const { historyWireEvents, historySummaryExecutionWire } = await import("./history-summaries.js");
     const { selectHistorySummarySources, historySummarySourceJson, buildHistorySummaryPrompt } = await import("./history-summary-policy.js");
     historySummaryExecutionWire(input.executionProfile);
@@ -1787,6 +1784,9 @@ export class MockCollaborationApi {
     }
     const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
     if (existing) return structuredClone(existing);
+    if (input.replyTo && (this.events.get(sessionId) ?? []).find(event => event.id === input.replyTo)?.deleted) {
+      throw new ApiError("The quoted message was deleted.", { status: 409, code: "message_deleted" });
+    }
     const event = this.#makeEvent(sessionId, type, {
       content: input.content,
       actor: this.currentUser,

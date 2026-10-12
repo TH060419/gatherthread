@@ -9,10 +9,11 @@ test("workspace wires deletion into message actions and history revision cache i
   assert.match(source, /messageActions\.invalidateContent\(/);
   assert.match(source, /messageActions\.reconcileContent\(/);
   assert.match(source, /contentRevision:\s*state\.sync\.contentRevision/);
-  assert.match(source, /localizer\.t\("Message deleted"\)/);
+  assert.match(source, /event\.deleted\.reason === "author"[\s\S]*?"Message deleted" : "Unavailable because its source was deleted"/);
+  assert.match(source, /async function selectSession[\s\S]*?messageDeletion\.reset\(\)/);
 });
 test("deletion labels and privacy confirmation are bilingual", () => {
-  for (const text of ["Delete my message", "Message deleted", "Original message deleted", "Refreshing history…",
+  for (const text of ["Delete my message", "Message deleted", "Unavailable because its source was deleted", "Original message deleted", "Refreshing history…",
     "Delete this message? It will be excluded from future GatherThread Agent context. Existing independent local or provider copies are not erased.",
     "Delete this request, its linked replies and work? It will be excluded from future GatherThread Agent context. Existing independent local or provider copies are not erased."]) {
     assert.notEqual(translateUiText(text, "zh-CN"), text);

@@ -9,6 +9,7 @@ import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261012-invite-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
+import { mountMessageDeletion } from "./message-deletion.js";
 import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
 import { ExampleCollaborationApi } from "./example-api.js";
 import { mountOnboarding } from "./onboarding.js?v=20260927-1";
@@ -314,7 +315,7 @@ const agentRequestControl = mountAgentRequestControl({
   button: sendAgentButton, targetLabel: element("agent-target-label"), errorNode: sendError, api,
   getContext: () => ({
     events: state.sync.events, userId: state.currentUser?.id, sessionId: state.session?.id,
-    scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.project?.id}:${state.session?.id}`,
+    scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.project?.id}:${state.session?.id}:${state.sync.contentRevision ?? 0}`,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
     sending: Boolean(pendingMessageSend?.()),
     cloudProfiles: hostedAgentStatus.profiles,
@@ -439,6 +440,7 @@ const historySummaryUi = mountHistorySummaries({
     sessionId: state.session?.id,
     userId: state.currentUser?.id,
     events: state.sync.events,
+    contentRevision: state.sync.contentRevision,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
     executionProfile: historySummaryExecutionProfile(),
     instructions: state.settings.historySummaries.instructions,
@@ -477,9 +479,19 @@ function prepareExampleScenario(item) {
 }
 let connectCodexReturnFocus = null;
 let pendingHistoryTarget = null;
+let contentRefreshScroll = null;
+const messageDeletion = mountMessageDeletion({ document, api, localizer, announce, makeKey: createIdempotencyKey,
+  getContext: () => ({
+    scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.currentUser?.id}:${state.session?.id}`,
+    sessionId: state.session?.id, userId: state.currentUser?.id, events: state.sync.events,
+    writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+  }),
+  onDeleted: receipt => sync.invalidateContent(receipt),
+});
 const messageActions = mountMessageActions({ document, api, localizer, announce, selectSession,
+  deletionAction: messageDeletion.action,
   getContext: () => ({ projectId: state.project?.id, sessionId: state.session?.id,
-    userId: state.currentUser?.id, members: state.session?.members ?? [],
+    userId: state.currentUser?.id, members: state.session?.members ?? [], events: state.sync.events,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed }),
   revealEvent: (id, sequence) => {
     pendingHistoryTarget = { id, sequence, sessionId: state.session?.id };
@@ -606,6 +618,14 @@ void restoreBrowserSession();
 
 sync.subscribe((snapshot) => {
   const previousCount = state.sync.events.length;
+  const contentChanged = snapshot.contentRevision > (state.sync.contentRevision ?? 0);
+  if (contentChanged) {
+    contentRefreshScroll = captureTimelineScroll(timelineRegion, { automatic: false, followNewEvents: false, preserveAnchor: true });
+    messageActions.invalidateContent();
+    expandedWorklogs.clear(); collapsedWorklogs.clear(); progressSectionState.clear(); revealedProgressEvents.clear();
+    retryAgentRequestKeys.clear(); retryingAgentRequestIds.clear();
+    pendingHistoryTarget = null;
+  }
   const connectionTransition = advanceConnectionNotice(
     connectionNoticeState,
     snapshot,
@@ -614,8 +634,9 @@ sync.subscribe((snapshot) => {
   connectionNoticeState = connectionTransition.state;
   applySessionMetadataEvents(snapshot.events.slice(previousCount));
   state.sync = snapshot;
+  if (!snapshot.contentRefreshing) messageActions.reconcileContent();
   renderSyncState();
-  renderTimeline({ followNewEvents: snapshot.events.length > previousCount });
+  renderTimeline({ followNewEvents: !contentChanged && !contentRefreshScroll && snapshot.events.length > previousCount });
   renderComposerPermissions();
   renderSessionDeliveryControls();
   renderMembers();
@@ -1343,6 +1364,7 @@ function resetWorkspaceToAuth() {
   sessionContextDetails.open = false;
   updateSessionContextDisclosure();
   messageActions.reset();
+  messageDeletion.reset(); contentRefreshScroll = null;
   authenticationGeneration += 1;
   workspaceLoadGeneration += 1;
   pendingMessageSend?.restore?.();
@@ -1564,6 +1586,8 @@ async function selectSession(sessionId) {
   codeSyncUi.close();
   historySummaryUi.reset();
   messageActions.reset();
+  messageDeletion.reset();
+  contentRefreshScroll = null;
   pendingHistoryTarget = null;
   if (state.session?.id !== sessionId) {
     expandedWorklogs.clear();
@@ -2163,7 +2187,8 @@ function renderSyncState() {
 
 function renderTimeline({ followNewEvents = false, preserveAnchor = false, focusSummaryId = null } = {}) {
   const focusedProgressToggle = document.activeElement?.dataset.progressToggle;
-  const scrollSnapshot = captureTimelineScroll(timelineRegion, {
+  const focusedMessageId = document.activeElement?.closest?.(".message-action, .event-card")?.closest?.(".event-card")?.id;
+  const scrollSnapshot = contentRefreshScroll ?? captureTimelineScroll(timelineRegion, {
     automatic: state.settings.composer.autoScroll,
     followNewEvents,
     preserveAnchor,
@@ -2229,6 +2254,7 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     const time = document.createElement("time");
 
     article.className = `event-card event-${event.type}`;
+    if (event.deleted || event.contentUnavailable) article.classList.add("event-message-deleted");
     article.id = `message-${event.id}`;
     article.dataset.historyAnchor = event.id;
     article.tabIndex = -1;
@@ -2262,13 +2288,15 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     header.append(identity, sequence, timeButton);
     const sourceControl = historySummaryUi.sourceControl(event);
     if (sourceControl) identity.prepend(sourceControl);
-    const content = eventContent(event);
+    const content = event.deleted ? localizer.t(event.deleted.reason === "author"
+      ? "Message deleted" : "Unavailable because its source was deleted")
+      : event.contentUnavailable ? localizer.t("Refreshing history…") : eventContent(event);
     const quoted = messageActions.quoted(event, events);
     article.append(header);
     if (quoted) article.append(quoted);
     if (content) {
       let body;
-      if (event.type === "agent_response") {
+      if (event.type === "agent_response" && !event.deleted && !event.contentUnavailable) {
         body = renderMarkdown(failedResponse ? localizer.t(content) : content);
       } else {
         body = document.createElement("p");
@@ -2340,12 +2368,14 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     ...scrollSnapshot,
     follow: scrollSnapshot.follow && events.length > 0,
   });
+  if (!state.sync.contentRefreshing) contentRefreshScroll = null;
   renderTimelineBottomControl();
   if (focusedProgressToggle) {
     Array.from(timeline.querySelectorAll("[data-progress-toggle]"))
       .find((toggle) => toggle.dataset.progressToggle === focusedProgressToggle)?.focus({ preventScroll: true });
   }
   if (focusSummaryId) element(`message-${focusSummaryId}`)?.querySelector("[data-summary-view-toggle]")?.focus({ preventScroll: true });
+  if (focusedMessageId && !focusedProgressToggle) element(focusedMessageId)?.focus({ preventScroll: true });
   if (pendingHistoryTarget && state.session && pendingHistoryTarget.sessionId === state.session.id) {
     const target = element(`message-${pendingHistoryTarget.id}`);
     if (target) {

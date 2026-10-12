@@ -371,9 +371,11 @@ test("pending account avatar cannot delay loading projects", async () => {
 test("pending avatar metadata cannot delay opening a session or connecting realtime", async () => {
   const pending = deferred();
   let connections = 0;
+  let deletionResets = 0;
   const app = harness(["selectSession"], {
     mobileWorkspace: { close: noop }, codeSyncUi: { close: noop }, historySummaryUi: { reset: noop },
-    messageActions: { reset: noop, refresh: noop }, expandedWorklogs: new Set(),
+    messageActions: { reset: noop, refresh: noop }, messageDeletion: { reset: () => { deletionResets++; } },
+    contentRefreshScroll: { anchorId: "old-session-anchor" }, expandedWorklogs: new Set(),
     collapsedWorklogs: new Set(), progressSectionState: new Map(), revealedProgressEvents: new Set(),
     stopDshRuntimePolling: noop, renderProjectPermissions: noop, sendError: element(),
     clearCreatedInvitationSecret: noop, closeMembersPanelWithoutFocus: noop, renderSnapshotRequests: noop,
@@ -388,6 +390,8 @@ test("pending avatar metadata cannot delay opening a session or connecting realt
     assert.equal(app.state.session?.id, "s2");
     assert.equal(connections, 1);
     assert.equal(app.sessionView.hidden, false);
+    assert.equal(deletionResets, 1);
+    assert.equal(app.contentRefreshScroll, null);
   } finally { pending.resolve([]); await work; }
 });
 

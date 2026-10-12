@@ -5260,6 +5260,9 @@ html[lang="zh-CN"] .project-select {
 .message-actions { display: flex; justify-content: flex-end; gap: 4px; margin-top: 4px; }
 .message-action { width: 28px; height: 28px; min-height: 28px; border: 0; box-shadow: none; background: transparent; color: var(--ink-soft); }
 .message-action svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.message-delete-action:hover, .message-delete-action:focus-visible { color: var(--danger, #bc4343); }
+.event-message-deleted .event-content { color: var(--ink-soft); font-size: .88em; font-style: italic; }
+html[data-mobile-workspace="true"] .message-action { width: 36px; height: 36px; min-height: 36px; }
 .quoted-message { display: block; width: 100%; text-align: start; padding: 8px 10px; margin: 8px 0; border: 0; border-radius: 6px; background: var(--surface-muted, rgba(128,128,128,.1)); color: var(--ink-soft); font-size: .85em; white-space: normal; overflow-wrap: anywhere; }
 .message-mentions-me { outline: 1px solid var(--teal); outline-offset: -1px; }
 .message-located { outline: 2px solid var(--teal); outline-offset: -2px; }
