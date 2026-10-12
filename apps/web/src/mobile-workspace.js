@@ -20,6 +20,13 @@ export function mobileControlLabel(text) {
     "Resume Agent": "Resume" })[text] ?? text;
 }
 
+export function isDialogBackdropPointer(dialog, event) {
+  if (event.target !== dialog || !Number.isFinite(event.clientX) || !Number.isFinite(event.clientY)) return false;
+  const bounds = dialog.getBoundingClientRect();
+  return event.clientX < bounds.left || event.clientX > bounds.right
+    || event.clientY < bounds.top || event.clientY > bounds.bottom;
+}
+
 export function mountMobileWorkspace({ document: doc, window: win, t, enabled = true, onLayoutChange = () => {} }) {
   const el = id => doc.getElementById(id);
   const workspace = el("workspace");
@@ -51,7 +58,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
 
   function closeAll() {
     el("session-context-details").open = false;
-    for (const dialog of dialogs) if (dialog.open) dialog.close();
+    for (const dialog of dialogs) if (dialog.open) closeDialog(dialog);
   }
   function open(dialog, trigger) {
     if ((!active && dialog !== dialogs[1]) || workspace.hidden) return;
@@ -61,10 +68,29 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     trigger?.setAttribute("aria-expanded", "true");
   }
   const triggers = [el("toggle-session-rail-button"), el("mobile-agent-button"), el("mobile-tools-button"), el("mobile-members-button")];
+  function closeDialog(dialog) {
+    const index = dialogs.indexOf(dialog);
+    dialog.close();
+    if (active || index === 1) {
+      triggers[index].setAttribute("aria-expanded", "false");
+      if (index === 2) el("mobile-compose-tools-button").setAttribute("aria-expanded", "false");
+    }
+  }
   dialogs.forEach((dialog, index) => {
-    dialog.querySelector("[data-mobile-close]").addEventListener("click", () => dialog.close());
-    dialog.addEventListener("click", event => { if (event.target === dialog) dialog.close(); });
+    let backdropPressed = false;
+    dialog.querySelector("[data-mobile-close]").addEventListener("click", () => closeDialog(dialog));
+    dialog.addEventListener("pointerdown", event => { backdropPressed = isDialogBackdropPointer(dialog, event); });
+    dialog.addEventListener("pointercancel", () => { backdropPressed = false; });
+    dialog.addEventListener("click", event => {
+      // Padding and an opening gesture retargeted by WebKit are not backdrop clicks.
+      const dismiss = backdropPressed && isDialogBackdropPointer(dialog, event);
+      backdropPressed = false;
+      if (dismiss) closeDialog(dialog);
+    });
     dialog.addEventListener("close", () => {
+      // A prior close event must not reset a sheet already opened by the next click.
+      if (dialog.open) return;
+      backdropPressed = false;
       if (index === 2) el("session-context-details").open = false;
       // A resize can restore desktop disclosure state before this async event fires.
       if (active || index === 1) {
@@ -89,11 +115,11 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   el("mobile-compose-tools-button").addEventListener("click", () => open(dialogs[2], el("mobile-compose-tools-button")));
   // Close the navigation surface before existing handlers open another dialog.
   dialogs[0].addEventListener("click", event => {
-    if (event.target.closest("button")) dialogs[0].close();
+    if (event.target.closest("button")) closeDialog(dialogs[0]);
   }, true);
-  el("project-select").addEventListener("change", () => dialogs[0].close());
+  el("project-select").addEventListener("change", () => closeDialog(dialogs[0]));
   dialogs[2].addEventListener("click", event => {
-    if (event.target.closest("button") && !event.target.closest("#session-context-panel")) dialogs[2].close();
+    if (event.target.closest("button") && !event.target.closest("#session-context-panel")) closeDialog(dialogs[2]);
   }, true);
 
   function update() {
@@ -168,7 +194,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     canConnectLocally: () => !mobileDevice || !enabled,
     toggleRail: () => {
       if (!active) return false;
-      if (dialogs[0].open) dialogs[0].close(); else open(dialogs[0], triggers[0]);
+      if (dialogs[0].open) closeDialog(dialogs[0]); else open(dialogs[0], triggers[0]);
       return true;
     },
     toggleMembers: () => {
@@ -177,7 +203,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     },
     closeMembers: () => {
       if (!active) return false;
-      dialogs[3].close(); return true;
+      closeDialog(dialogs[3]); return true;
     },
   };
 }

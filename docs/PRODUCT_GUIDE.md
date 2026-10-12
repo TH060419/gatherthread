@@ -4,7 +4,9 @@
 
 From “shall we make a signup page?” to a button that works: follow one small project through discussion, AI work, review, and handoff. All screenshots show the full interface of the application running its disposable example, with key controls annotated. People, messages, and Agent replies are demonstration content.
 
-**Beta 1:** this release targets npm and the [isolated test service](https://test.gatherthread.cn/), not a production upgrade. Local Codex/DSH needs separate device authorization. The Cloud Agent entry is open, with model availability dependent on validated operator configuration; cloud tasks do not yet support shared-summary generation or Pause/Resume. The optional Launcher v1 is production-origin-only, so testers use the generated terminal command.
+**Beta 1:** this release targets npm and the [isolated test service](https://test.gatherthread.cn/), not a production upgrade. The Cloud Agent entry is open; available models and allowances are shown in the workspace. Local Codex/DSH needs separate device authorization.
+
+On Windows or macOS, choose **Connect Codex → Open Launcher** with [Launcher v2](CODEX_CONNECT.md). On a Mac, open the DMG and drag GatherThread Launcher into Applications before opening it. The page fills in your email; enter your password only in the Launcher. It supports production and test accounts separately, with independent access for each computer device; your phone and browser stay signed in. The folded terminal option is a fallback for Linux, self-hosted sites or an unavailable Launcher.
 
 ## Meet the workspace
 
@@ -40,7 +42,7 @@ Quoting or mentioning someone does not run their Agent. Chat and Agent requests 
 
 ## 3. Turn a long discussion into a short checklist
 
-Choose your own connected computer Agent (Codex/DSH), select completed messages, and ask it to summarize them. In this example, the summary keeps the agreed time, place, and button behavior and leaves photos out of the first version. This step is optional and uses the selected Agent's quota.
+Choose your own connected computer Agent (Codex/DSH) or a Cloud Agent, select completed messages, and ask it to summarize them. In this example, the summary keeps the agreed time, place, and button behavior and leaves photos out of the first version. This step is optional and uses the selected Agent's quota.
 
 ![Full interface with annotations: the signup-page summary and original view](assets/product/en/annotated/03-summary.jpg)
 
@@ -58,7 +60,7 @@ Alex explicitly asks: “Build the signup page from the summary above.” The an
 
 ![Full interface with annotations: Alex's Agent answer and model](assets/product/en/annotated/04-agent-work.jpg)
 
-Models and reasoning levels come from the selected Agent's supported options. For a supported DSH route, a GatherThread choice applies to that request without changing later model choices inside DSH. During a computer Agent request, the same request button offers **Pause Agent**, then **Resume Agent**; there is no extra control to hunt for.
+On computers, phones and tablets, the compact Agent button opens supported model and reasoning choices. For a supported DSH route, a GatherThread choice applies to that request without changing later model choices inside DSH. During supported computer or Cloud Agent work, the same request button offers **Pause Agent**, then **Resume Agent**; there is no extra control to hunt for.
 
 Resume asks the original selected Agent again and can include newer shared discussion. It does not promise to restore the native Agent's hidden reasoning state exactly. You can request your own authorized Agent, not a teammate's.
 

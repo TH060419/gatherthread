@@ -6,7 +6,7 @@ import { createAccountEmailHint, mountCodexLauncher } from "./codex-launcher.js?
 import { mountAccountDevices } from "./account-devices.js";
 import { mountPersonalCloudApi } from "./personal-cloud-api.js?v=20261012-content-1";
 import { cloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js?v=20261012-content-1";
-import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261006-mobile-2";
+import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261012-content-1";
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261012-content-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js?v=20261012-content-1";

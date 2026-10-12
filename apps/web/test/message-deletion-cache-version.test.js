@@ -29,7 +29,7 @@ test("all affected dependency paths use one revision, including API, deletion, n
   const affected = new Set([
     "agent-request-control.js", "api.js", "bootstrap.js", "cloud-github-view.js", "code-sync-view.js", "codex-launcher.js",
     "domain.js", "dsh.js", "github-code-sync-view.js", "github-return-context.js", "github-setup.js", "history-summaries.js",
-    "history-summary-view.js", "i18n.js", "main.js", "message-actions.js", "message-deletion.js", "onboarding-content.js",
+    "history-summary-view.js", "i18n.js", "main.js", "message-actions.js", "message-deletion.js", "mobile-workspace.js", "onboarding-content.js",
     "personal-cloud-api.js", "realtime.js",
   ]);
   let expanded = true;
@@ -45,5 +45,5 @@ test("all affected dependency paths use one revision, including API, deletion, n
       `${edge.file} must not load an older ${edge.target}`);
     checked++;
   }
-  assert.ok(checked >= 47, "the whole affected import graph must be covered");
+  assert.ok(checked >= 48, "the whole affected import graph must be covered");
 });
