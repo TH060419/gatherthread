@@ -261,6 +261,27 @@ test("a marked summary session never falls back to raw context when the connecto
   }), /cannot read GatherThread's summarized context/);
 });
 
+test("deletion-aware native requests always read context even after the final summary was invalidated", async () => {
+  const api = new FakeApi();
+  const request = { ...canonical("session-1", 2, { type: "agent_request", idempotencyKey: "current", payload: { content: "Continue safely" } }), contentRevision: 1 };
+  api.history.push({ ...canonical("session-1", 1, { type: "human_chat", idempotencyKey: "gone", payload: { content: "[Message deleted]" } }),
+    deleted: { deletedAt: "2026-10-12T00:00:00.000Z", reason: "author" } } as any, request);
+  let reads = 0;
+  (api as CollaborationApi).readContext = async () => { reads++; return { view: "original", through_sequence: 1, content_revision: 1, items: [] }; };
+  const bridge = new LocalBridge({ api, cursorStore: new MemoryCursorStore(), runtime: runtimeRegistration(), transcriptRoots: {} });
+  await bridge.connect();
+  await bridge.processAgentRequest(request, { async execute(input) {
+    assert.equal(input.historyContext?.content_revision, 1);
+    assert.deepEqual(input.historyContext?.items, []);
+    return { events: [{ localEventId: "safe-final", harness: "codex", kind: "assistant", text: "Done", captureFidelity: "harness_transcript" }] };
+  } });
+  assert.equal(reads, 1);
+  (api as CollaborationApi).readContext = async () => ({ view: "original", through_sequence: 1, content_revision: 2, items: [] });
+  await assert.rejects(bridge.processAgentRequest(request, { async execute() { throw new Error("must not execute stale context"); } }), /history changed|context.*changed/i);
+  delete (api as CollaborationApi).readContext;
+  await assert.rejects(bridge.processAgentRequest(request, { async execute() { throw new Error("must not execute stale native memory"); } }), /update.*connector|cannot read.*context/i);
+});
+
 test("pending request polling persists the server cursor only after execution completes", async () => {
   const api = new FakeApi();
   const cursorStore = new MemoryCursorStore();

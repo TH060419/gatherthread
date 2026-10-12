@@ -351,7 +351,7 @@ test("context snapshots honor an exact historical head including hidden events w
       assert.doesNotMatch(JSON.stringify(frozen.body), /HIDDEN_FROM_CONTEXT|Future summary/u);
     }
     const zero = await f.request<ContextResult>(`/v1/sessions/${f.session.id}/context?through_sequence=0`);
-    assert.deepEqual(zero.body, { data: { view: "summary", through_sequence: 0, items: [] } });
+    assert.deepEqual(zero.body, { data: { view: "summary", through_sequence: 0, items: [], content_revision: 0 } });
     for (const value of ["", "-1", "1.5", "1e0", "NaN", "9007199254740992", String(completed.body.data.event.sequence + 1), "1&through_sequence=2"]) {
       assert.equal((await f.request(`/v1/sessions/${f.session.id}/context?through_sequence=${value}`)).status, 400);
     }

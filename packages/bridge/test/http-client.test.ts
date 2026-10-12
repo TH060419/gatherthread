@@ -6,6 +6,30 @@ import {
   type RuntimeRegistration,
 } from "../src/index.js";
 
+test("HTTP native boundary preserves authoritative deletion revisions and rejects malformed revisions", async () => {
+  let response: unknown = { data: { events: [{ ...wireEvent("removed-1", 1), content_revision: 4,
+    payload: { content: "[Message deleted]" }, deleted: { deleted_at: "2026-10-12T00:00:00.000Z", reason: "author" } }],
+    cursor: 1, has_more: false, content_revision: 4 } };
+  const sent: unknown[] = [];
+  const client = new HttpCollaborationClient({ baseUrl: "https://collab.example/v1", bearerToken: "fixture",
+    fetch: async (_input, init = {}) => { if (init.body) sent.push(JSON.parse(String(init.body))); return Response.json(response); } });
+  const page = await client.readEvents("s1", 0);
+  assert.equal((page as any).contentRevision, 4);
+  assert.equal((page.events[0] as any).contentRevision, 4);
+  assert.equal((page.events[0] as any).deleted.reason, "author");
+  response = { data: { view: "original", through_sequence: 0, items: [], content_revision: 4 } };
+  assert.equal((await client.readContext("s1", undefined, 0)).content_revision, 4);
+  for (const bad of [-1, 1.5, "4", null]) {
+    response = { data: { view: "original", through_sequence: 0, items: [], content_revision: bad } };
+    await assert.rejects(client.readContext("s1", undefined, 0), /context.*revision/i);
+  }
+  response = { data: { request_event_id: "request-1", runtime_id: "runtime-1", status: "claimed", attempt_count: 1, content_revision: 4 } };
+  assert.equal((await client.claimAgentRequest("s1", "request-1", "runtime-1") as any).contentRevision, 4);
+  response = { data: { runtime: { ...wireRuntime(), context_deletion_version: 1 } } };
+  assert.equal((await client.registerRuntime({ ...runtimeRegistration(), contextDeletionVersion: 1 } as any) as any).contextDeletionVersion, 1);
+  assert.equal((sent.at(-1) as any).context_deletion_version, 1);
+});
+
 test("HTTP client matches the collaboration server v1 wire contract", async () => {
   const requests: Array<{ url: string; init: RequestInit }> = [];
   const responses: unknown[] = [
