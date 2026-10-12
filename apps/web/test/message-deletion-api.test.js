@@ -69,3 +69,15 @@ test("mock deletion refuses other authors, viewers and another creator's Solo", 
   member.role = role; session.mode = "solo"; session.ownerUserId = "other";
   await assert.rejects(api.deleteMessage("session-orbit", source.id, { idempotencyKey: "solo-0001" }), error => error.status === 403);
 });
+
+test("mock refuses a fresh quote of a deleted source without blocking an accepted append retry", async () => {
+  const api = new MockCollaborationApi({ latency: 0 });
+  const source = await api.appendHumanChat("session-orbit", { content: "source", idempotencyKey: "quote-source-0001" });
+  const accepted = await api.appendHumanChat("session-orbit", { content: "existing quote", replyTo: source.id,
+    idempotencyKey: "quote-existing-0001" });
+  await api.deleteMessage("session-orbit", source.id, { idempotencyKey: "quote-delete-0001" });
+  await assert.rejects(api.appendHumanChat("session-orbit", { content: "new quote", replyTo: source.id,
+    idempotencyKey: "quote-fresh-0001" }), error => error.status === 409 && error.code === "message_deleted");
+  assert.equal((await api.appendHumanChat("session-orbit", { content: "existing quote", replyTo: source.id,
+    idempotencyKey: "quote-existing-0001" })).id, accepted.id);
+});
