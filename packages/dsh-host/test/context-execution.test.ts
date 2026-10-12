@@ -12,7 +12,7 @@ import type { DshContextExecutionInput } from "../src/types.js";
 const nativeModule = process.env.GATHERTHREAD_TEST_DSH_SESSION_MODULE;
 const publicSession = nativeModule ? await import(nativeModule) : undefined;
 
-function fixture(options: { preset?: boolean; workspacePath?: string } = {}) {
+function fixture(options: { preset?: boolean; workspacePath?: string; projectionCreateGate?: Promise<void> } = {}) {
   const stored = new Map<string, any>();
   const live = new Map<string, any>();
   const listeners = new Map<string, Set<(...args: any[]) => void>>();
@@ -23,6 +23,8 @@ function fixture(options: { preset?: boolean; workspacePath?: string } = {}) {
   let routeDisposals = 0;
   let failFlush = false;
   let failPrompt = false;
+  let projectionAcquired!: () => void;
+  const projectionAcquireStarted = new Promise<void>((resolve) => { projectionAcquired = resolve; });
   const presetByContext = new WeakMap<object, string>();
   const presetCalls: Array<{ kind: string; id: string | undefined }> = [];
   const presets = {
@@ -91,7 +93,11 @@ function fixture(options: { preset?: boolean; workspacePath?: string } = {}) {
   const services = {
     agents: {
       get: (id: string) => live.get(id),
-      async create(input: any) { creates += 1; const handle = acquire(createSession(input.sessionId, input.meta)); await input.setup?.(handle.agent.ctx); return handle; },
+      async create(input: any) {
+        creates += 1; const handle = acquire(createSession(input.sessionId, input.meta)); await input.setup?.(handle.agent.ctx);
+        if (input.sessionId.startsWith("gatherthread-projection-")) { projectionAcquired(); await options.projectionCreateGate; }
+        return handle;
+      },
       async resume(input: any) {
         const session = stored.get(input.resumeSessionId);
         if (!session) throw new Error("missing persisted session");
@@ -121,18 +127,36 @@ function fixture(options: { preset?: boolean; workspacePath?: string } = {}) {
     context, sessionId: "native-session", workspacePath: options.workspacePath ?? "/fixture/workspace", provider: "deepseek-official", model: "deepseek-v4-flash",
     contextBinding: { apiUrl: "https://fixture.invalid/v1", projectId: "fixture-project", sessionId: cloudSessionId },
     ...(options.preset ? { agentPreset: "standard" } : {}),
-    moduleImporter: async () => ({ freezeMessage: (message: unknown) => structuredClone(message) }),
+    moduleImporter: async () => ({ freezeMessage: (message: unknown) => structuredClone(message),
+      createUserMessage: (message: any) => ({ ...message, id: `native-input-${modelInputs.length}`, role: "user" }) }),
     modelSelectionInstaller(scope, selection) {
       routes.push({ scope, selection: structuredClone(selection.current) });
       return () => { routeDisposals += 1; };
     },
   });
   return {
-    facade: newFacade(), newFacade, stored, live, modelInputs, routes, presets, presetCalls,
+    facade: newFacade(), newFacade, stored, live, modelInputs, routes, presets, presetCalls, projectionAcquireStarted,
     get creates() { return creates; }, get disposals() { return disposals; }, get routeDisposals() { return routeDisposals; },
     failNextFlush() { failFlush = true; }, failNextPrompt() { failPrompt = true; },
   };
 }
+
+test("disposing a deletion reset waits for and releases a late native DSH projection acquisition", async () => {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const f = fixture({ projectionCreateGate: gate });
+  await f.facade.open();
+  const resetting = f.facade.resetCanonicalContext!(1);
+  const rejected = assert.rejects(resetting, /disposed/);
+  await f.projectionAcquireStarted;
+  let settled = false;
+  const stopping = f.facade.dispose().then(() => { settled = true; });
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  try { assert.equal(settled, false, "teardown must remain a barrier until the late owned acquisition is released"); }
+  finally { release(); await rejected; await stopping; }
+  assert.equal(f.live.size, 0);
+  assert.equal(f.disposals, 2, "each of the old and candidate handles is released exactly once");
+});
 
 function contextInput(requestSequence = 6, view: "summary" | "original" = "summary"): DshContextExecutionInput {
   return {
@@ -147,6 +171,31 @@ function contextInput(requestSequence = 6, view: "summary" | "original" = "summa
     ] },
   };
 }
+
+test("author deletion creates a verified fresh native DSH projection and leaves old local work private", async () => {
+  const f = fixture({ preset: true });
+  await f.facade.open();
+  const native = f.stored.get("native-session");
+  native.append("user/message", { id: "old-context", role: "user", source: { kind: "user" },
+    content: [{ type: "text", text: "DELETED_SENTINEL" }] }, { surfaceOp: "append" });
+  const previous = structuredClone(native.snapshotEvents());
+  const clean = await f.facade.resetCanonicalContext!(1);
+  assert.notEqual(clean.sessionId, "native-session"); assert.equal(f.facade.sessionId, clean.sessionId);
+  assert.deepEqual(native.snapshotEvents().slice(0, previous.length), previous);
+  await f.facade.prompt("future native work");
+  assert.doesNotMatch(JSON.stringify(f.modelInputs.at(-1)), /DELETED_SENTINEL/);
+  const input = { ...contextInput(8, "original"), historyContext: { view: "original" as const,
+    content_revision: 1, through_sequence: 7, items: [] } };
+  const execution = await f.facade.prepareContextExecution!(input);
+  await f.facade.prompt("future web work", undefined, execution.sessionId);
+  assert.doesNotMatch(JSON.stringify(f.modelInputs.at(-1)), /DELETED_SENTINEL/);
+  await f.facade.dispose();
+  const next = f.newFacade(); await next.open();
+  assert.equal((await next.resetCanonicalContext!(1)).sessionId, clean.sessionId);
+  await next.prompt("after reconnect");
+  assert.doesNotMatch(JSON.stringify(f.modelInputs.at(-1)), /DELETED_SENTINEL/);
+  await next.dispose();
+});
 
 test("author deletion rotates the owned DSH execution Session and its compacted private state across reconnect", async () => {
   const f = fixture();
@@ -403,7 +452,7 @@ test("pinned public DSH file tool resolves isolated and native Agents against th
     const result = await registry.get("read").execute({ file_path: "dsh-host/package.json", limit: 4 },
       { agent: f.live.get(sessionId), signal: new AbortController().signal });
     assert.match(JSON.stringify(result), /@gatherthread\/dsh-host/);
-    assert.match(JSON.stringify(result), /gatherthread\/packages\/dsh-host\/package.json/);
+    assert.match(JSON.stringify(result), /packages\/dsh-host\/package.json/);
   }
   assert.deepEqual(f.presetCalls, [{ kind: "mount", id: "standard" }, { kind: "inherit", id: "standard" }]);
   await f.facade.dispose();

@@ -33,6 +33,107 @@ import {
  * effort list fails this contract instead of silently travelling with it. */
 const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
+test("a failed deletion replacement remains local-only after rebuilding retained Codex Hook authorization", async () => {
+  const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-deleted-desktop-failure-")));
+  const statePath = path.join(workspacePath, "binding-session.json"), hookRegistryPath = path.join(workspacePath, "registry.json");
+  await writeFile(statePath, JSON.stringify(projectionState(workspacePath)));
+  const api = { async readEvents() { return { events: [], hasMore: false, nextSequence: 0, contentRevision: 1 }; } } as unknown as CollaborationApi;
+  const executor = new CodexAppServerExecutor({ client: { async close() {} } as unknown as CodexAppServerClient,
+    workspacePath, statePath, hookRegistryPath, threadName: "privacy failure", model: "gpt-test", desktopHookOnly: true,
+    gatherThreadSessionId: "session-1", visibleHistoryImporter: async () => { throw new Error("import failed"); } });
+  await assert.rejects(executor.uploadLocalTurns(api, { ...registeredRuntime("privacy"), contextDeletionVersion: 1 }), /import failed/);
+  await assert.rejects(executor.activateLocalPublishing(), /retired|context|replacement/i);
+  const harness = new CodexProjectHarness({ workspacePath, stateRoot: workspacePath, mappingId: "privacy-retained",
+    projectName: "Project", model: "gpt-test", command: process.execPath, hookRegistryPath, localTurnsEnabled: true });
+  await harness.deactivateExecutionBindings({ retainSessionIds: ["session-1"] });
+  await harness.close();
+  const registry = JSON.parse(await readFile(hookRegistryPath, "utf8"));
+  assert.equal(registry.threads["old-thread"], "local_only", "retaining a Session cannot reauthorize a retired native task");
+  const saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(saved.contextResetRequired, 1);
+  assert.ok(saved.localOnlyThreadIds.includes("old-thread"));
+});
+
+test("author deletion permanently fences old Desktop Hooks, drafts and manual upload after verified import", async () => {
+  const workspacePath = await realpath(await mkdtemp(path.join(tmpdir(), "gt-deleted-desktop-")));
+  const statePath = path.join(workspacePath, "state.json"), hookRegistryPath = path.join(workspacePath, "registry.json");
+  const old = projectionState(workspacePath) as any;
+  old.pendingLocalTurns = [{ localTurnId: "stale-local", threadId: "old-thread", turnId: "old-turn", basedOnSequence: 0,
+    occurredAt: "2026-10-12T00:00:00.000Z", requestPayload: { text: "DELETED_SENTINEL" }, responsePayload: { text: "DELETED_SENTINEL" }, toolEvents: [] }];
+  await writeFile(statePath, JSON.stringify(old));
+  await writeFile(hookRegistryPath, JSON.stringify({ version: 1, workspacePath, threads: { "old-thread": "execution" } }));
+  const requests: string[] = [], commits: unknown[] = [];
+  const deleted = { ...canonical(1, "human_chat", {}), contentRevision: 1,
+    deleted: { deletedAt: "2026-10-12T00:00:00.000Z", reason: "author" as const } };
+  const retained = { ...canonical(2, "human_chat", { text: "KEPT_PUBLIC_TEXT" }), contentRevision: 1 };
+  const api = { async readEvents(_session: string, after: number, limit = 500) {
+    const remaining = [deleted, retained].filter((event) => event.sequence > after);
+    const events = remaining.slice(0, limit);
+    return { events, contentRevision: 1, nextSequence: remaining.length > events.length ? events.at(-1)!.sequence : 2,
+      hasMore: remaining.length > events.length };
+  }, async commitLocalTurn(_session: string, input: unknown) { commits.push(input); throw new Error("must not commit retired content"); } } as unknown as CollaborationApi;
+  const client = { async readThread(id: string) {
+    requests.push(id); assert.equal(id, "clean-desktop");
+    return { id, projectId: "project-1", status: "idle", turns: [completedTurn("import-turn", null, "KEPT_PUBLIC_TEXT", "") ] };
+  }, async setThreadName() {}, async findProjectIdForRoot() { return "project-1"; }, getThreadTokenUsage() { return undefined; },
+  async close() {}, async unsubscribeThread() {}, async archiveThread() { throw new Error("must not archive history"); } } as unknown as CodexAppServerClient;
+  const make = () => new CodexAppServerExecutor({ client, workspacePath, statePath, hookRegistryPath,
+    threadName: "privacy desktop", model: "gpt-test", desktopHookOnly: true, gatherThreadSessionId: "session-1",
+    visibleHistoryImporter: async ({ history }) => {
+      assert.doesNotMatch(JSON.stringify(history.messages), /DELETED_SENTINEL/);
+      assert.match(JSON.stringify(history.messages), /KEPT_PUBLIC_TEXT/);
+      return { threadId: "clean-desktop" };
+    } });
+  const runtime = { ...registeredRuntime("privacy"), contextDeletionVersion: 1 as const };
+  const executor = make();
+  const hook = { hook_event_name: "UserPromptSubmit" as const, session_id: "old-thread", turn_id: "old-turn-2",
+    cwd: workspacePath, model: "gpt-test", prompt: "DELETED_SENTINEL" };
+  assert.equal((await executor.handleHookEvent(api, runtime, hook)).handled, false);
+  await executor.uploadLocalTurns(api, runtime);
+  assert.equal(commits.length, 0);
+  const next = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(next.threadId, "clean-desktop"); assert.equal(next.contentRevision, 1);
+  assert.deepEqual(next.pendingLocalTurns, []);
+  assert.equal(JSON.parse(await readFile(hookRegistryPath, "utf8")).threads["old-thread"], "local_only");
+  assert.equal((await make().handleHookEvent(api, runtime, hook, true)).handled, false);
+  assert.ok(requests.every((id) => id !== "old-thread"));
+});
+
+test("author deletion abort waits for the actual Codex turn interrupt before returning terminal context_changed", async (t) => {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gt-codex-deletion-abort-")));
+  const capturePath = path.join(directory, "rpc.jsonl"), fake = path.join(directory, "fake.mjs");
+  await writeFile(fake, `
+import { appendFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
+for await (const line of createInterface({input:process.stdin})) {
+ const m=JSON.parse(line); if(m.method==='initialized')continue;
+ appendFileSync(process.env.CAPTURE,JSON.stringify(m)+'\\n');
+ if(m.method==='thread/start')send({id:m.id,result:{thread:{id:'owned-active'}}});
+ else if(m.method==='turn/start')send({id:m.id,result:{turn:{id:'active-turn'}}});
+ else if(m.method==='turn/interrupt') { send({id:m.id,result:{}}); setTimeout(()=>send({method:'turn/completed',params:{threadId:m.params.threadId,turn:{id:m.params.turnId,status:'interrupted',items:[]}}}),25); }
+ else send({id:m.id,result:{}});
+}
+`);
+  const client = new CodexAppServerClient({ command: process.execPath, commandArgs: [fake], cwd: directory,
+    env: { ...process.env, CAPTURE: capturePath }, turnTimeoutMs: 2000 }); t.after(() => client.dispose());
+  const abort = new AbortController();
+  const executor = new CodexAppServerExecutor({ client, workspacePath: directory, statePath: path.join(directory, "state.json"),
+    threadName: "privacy abort", model: "gpt-test", threadSource: "exec" });
+  const polling = setInterval(async () => {
+    const calls = await readFile(capturePath, "utf8").catch(() => "");
+    if (calls.includes('"method":"turn/start"')) abort.abort(new Error("context_changed"));
+  }, 5); t.after(() => clearInterval(polling));
+  await assert.rejects(executor.execute({ request: canonical(1, "agent_request", { text: "run" }), canonicalHistory: [],
+    historyContext: { view: "original", content_revision: 0, through_sequence: 0, items: [] }, runtime: registeredRuntime("abort"), signal: abort.signal }),
+    (error: any) => error instanceof HarnessExecutionTerminatedError && error.failureCode === "context_changed");
+  const calls = await readFile(capturePath, "utf8");
+  assert.match(calls, /turn\/interrupt/);
+  const state = JSON.parse(await readFile(path.join(directory, "state.json"), "utf8"));
+  assert.equal(state.executionJournal["event-1"].failure.code, "context_changed");
+  assert.equal(state.contextResetRequired, 0);
+});
+
 test("author deletion rebuilds compacted Codex execution before journal recovery and reconnect", async (t) => {
   const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gt-deletion-codex-")));
   const statePath = path.join(directory, "state.json");
