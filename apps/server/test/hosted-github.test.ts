@@ -286,7 +286,7 @@ unixTest("another database's deletion aborts an active GitHub run but keeps its 
   const row = f.db.sqlite.prepare("SELECT result_files,answer,revision,error_code FROM hosted_github_tasks WHERE id=?").get(task.id)!;
   assert.equal(row.result_files, null); assert.equal(row.answer, null); assert.equal(row.revision, null); assert.equal(row.error_code, "context_changed");
   f.advance();
-  const next = f.github.start(f.actor, f.session.id, { content: "New work", profile_id: "coding", idempotency_key: "github-active-fresh" });
+  const next = f.github.start(f.actor, f.session.id, { content: "New work", profile_id: "coding", content_revision: 1, idempotency_key: "github-active-fresh" });
   assert.equal((await settled(f, next.id)).state, "completed");
   assert.doesNotMatch(prompts[1]!, /GITHUB_ACTIVE_DELETED_SENTINEL/); assert.match(prompts[1]!, /GITHUB_ACTIVE_SURVIVING_SENTINEL/);
   assert.equal(runs, 2); assert.equal(f.db.hostedAgentUsage(f.actor, 20, 20).user_used_runs, 2);

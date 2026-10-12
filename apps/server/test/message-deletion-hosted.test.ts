@@ -59,7 +59,7 @@ unixTest("deletion aborts cloud work, holds its slot until exit and excludes the
     assert.doesNotMatch(JSON.stringify(f.service.replay(f.actor, f.session.id, 0, 100)), /HOSTED_DELETED_UNIQUE_SOURCE/);
     f.db.sqlite.prepare("UPDATE hosted_agent_user_activity SET last_started_at=? WHERE user_id=?")
       .run(new Date(Date.now() - 2000).toISOString(), f.actor.user_id);
-    await agent.request(f.actor, f.session.id, { profile_id: "default", content: "Continue", include_code: false, idempotency_key: "after-deletion" });
+    await agent.request(f.actor, f.session.id, { profile_id: "default", content: "Continue", include_code: false, content_revision: 1, idempotency_key: "after-deletion" });
     assert.doesNotMatch(prompts[1]!, /HOSTED_DELETED_UNIQUE_SOURCE/); assert.match(prompts[1]!, /HOSTED_SURVIVING_SOURCE/);
     assert.equal(f.db.hostedAgentUsage(f.actor, 10, 10).user_used_runs, 2, "privacy cancellation cannot silently rerun or refund accepted provider use");
   } finally { release.resolve(JSON.stringify({ answer: "late", files: [] })); await pending?.catch(() => undefined); agent.close(); f.close(); }

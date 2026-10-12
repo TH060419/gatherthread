@@ -3555,7 +3555,11 @@ export class CollaborationDatabase {
     }
     return historySummaryOperation(() => this.transaction(() => {
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
-      if (input.content_revision !== undefined && input.content_revision !== (session.content_revision ?? 0)) {
+      const contentRevision = session.content_revision ?? 0;
+      if (input.content_revision === undefined && contentRevision > 0) {
+        throw new ApiError(409, "context_changed", "Shared history changed; refresh this page before starting a new request");
+      }
+      if (input.content_revision !== undefined && input.content_revision !== contentRevision) {
         throw new ApiError(409, "context_changed", "Shared history changed; start a new request with current history");
       }
       for (const endpoint of endpoints) {

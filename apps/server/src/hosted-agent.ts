@@ -439,8 +439,9 @@ export class HostedAgent {
   }
 
   startSummary(actor: Actor, sessionId: string, input: HostedHistorySummaryInput) {
+    const contentRevision = this.service.database.requireSession(sessionId).content_revision ?? 0;
     return this.start(actor, sessionId, { profile_id: input.profile_id, content: "Summarize selected history",
-      include_code: false, idempotency_key: input.idempotency_key,
+      include_code: false, idempotency_key: input.idempotency_key, content_revision: contentRevision,
       ...(input.api_config_revision ? { api_config_revision: input.api_config_revision } : {}) }, input);
   }
 

@@ -150,7 +150,7 @@ test("a current personal API pin cannot quote a deleted source or reserve anothe
     const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session",
       idempotency_key: "personal-quote-history", payload: { content: "PERSONAL_QUOTE_DELETED_SOURCE" } });
     f.service.deleteMessage(f.actor, f.session.id, source.id, "personal-delete-quote-history");
-    assert.throws(() => reserve(f, { ...f.input, reply_to_event_id: source.id }),
+    assert.throws(() => reserve(f, { ...f.input, reply_to_event_id: source.id, content_revision: 1 }),
       e => e instanceof ApiError && e.code === "message_deleted");
     assert.equal(f.database.hostedAgentUsage(f.actor, 100, 1000, "personal").user_used_runs, 0);
     assert.equal(f.database.hostedActiveRuns(), 0);
@@ -189,7 +189,7 @@ socketTest("history erasure and personal API pins both fence active work and the
     assert.equal(f.database.hostedActiveRuns(), 0);
     assert.doesNotMatch(JSON.stringify(f.service.replay(f.actor, f.session.id, 0, 100)), /PERSONAL_CONTEXT_ERASE_UNIQUE/);
     f.advance();
-    const fresh = await f.agent.request(f.actor, f.session.id, { ...f.input, idempotency_key: "personal-current-history" });
+    const fresh = await f.agent.request(f.actor, f.session.id, { ...f.input, content_revision: 1, idempotency_key: "personal-current-history" });
     assert.equal(fresh.request_event.content_revision, 1);
     assert.equal(fresh.response_event?.runtime_provenance?.provider, "anthropic");
     assert.doesNotMatch(prompts[1]!, /PERSONAL_CONTEXT_ERASE_UNIQUE/); assert.match(prompts[1]!, /PERSONAL_CONTEXT_SURVIVING/);
