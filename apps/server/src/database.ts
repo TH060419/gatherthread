@@ -1969,6 +1969,8 @@ export class CollaborationDatabase {
         .run(deletedUserId, actor.user_id);
       this.sqlite.prepare("UPDATE project_mutations SET actor_user_id = ? WHERE actor_user_id = ?")
         .run(deletedUserId, actor.user_id);
+      this.sqlite.prepare("UPDATE message_deletions SET actor_user_id = ? WHERE actor_user_id = ?")
+        .run(deletedUserId, actor.user_id);
       this.sqlite.prepare("UPDATE project_ownership_transfers SET from_user_id = ? WHERE from_user_id = ?")
         .run(deletedUserId, actor.user_id);
       this.sqlite.prepare("UPDATE project_ownership_transfers SET to_user_id = ? WHERE to_user_id = ?")
