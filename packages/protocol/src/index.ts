@@ -200,6 +200,7 @@ export const AppendEventInputSchema = z.object({
   payload: JsonValueSchema,
   runtime_id: IdSchema.optional(),
   claim_attempt: z.number().int().positive().optional(),
+  content_revision: z.number().int().nonnegative().optional(),
   observed_model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
   observed_reasoning_effort: z.string().trim().min(1).max(80).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),
 });
@@ -700,6 +701,7 @@ export const SnapshotRequestRecordSchema = z.object({
   kind: SnapshotRequestKindSchema,
   through_sequence: z.number().int().nonnegative(),
   status: SnapshotRequestStatusSchema,
+  content_revision: z.number().int().nonnegative().optional(),
   target_runtime_id: IdSchema.nullable(),
   claimed_by_runtime_id: IdSchema.nullable(),
   created_at: z.string().datetime(),

@@ -410,6 +410,7 @@ function toWireEvent(event: AppendEventInput): Record<string, unknown> {
     visibility: event.visibility ?? "session",
     runtime_id: event.runtimeId ?? event.runtime?.runtimeId,
     claim_attempt: event.claimAttempt,
+    ...(event.contentRevision === undefined ? {} : { content_revision: event.contentRevision }),
     observed_model: event.observedModel,
     observed_reasoning_effort: event.observedReasoningEffort,
   };

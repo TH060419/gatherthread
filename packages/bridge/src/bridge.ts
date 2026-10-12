@@ -344,6 +344,23 @@ export class LocalBridge {
     const historyContext = summaryGeneration
       ? { view: "summary" as const, through_sequence: request.sequence - 1, items: [], content_revision: readContext?.content_revision ?? revision }
       : readContext;
+    const controller = new AbortController();
+    const contextChanged = () => new CollaborationHttpError(409, "Shared history changed; start a new request with current history", "context_changed");
+    let checking = false;
+    const checkRevision = async () => {
+      if (!this.#api.readContext || checking || controller.signal.aborted) return;
+      checking = true;
+      try {
+        const page = await this.#api.readEvents(request.sessionId, request.sequence, 1);
+        const current = page.contentRevision ?? (await this.#api.readContext(request.sessionId, undefined, request.sequence - 1)).content_revision ?? 0;
+        if (current !== revision) controller.abort(contextChanged());
+      } catch (error) {
+        if (error instanceof CollaborationHttpError && [401, 403, 404].includes(error.status)) controller.abort(contextChanged());
+      } finally { checking = false; }
+    };
+    const watch = this.#api.readContext ? setInterval(() => { void checkRevision(); }, 1000) : undefined;
+    watch?.unref();
+    try {
     await this.#appendProgressFailSoft(request, runtime, claimAttempt, {
       idempotencyKey: `${runtime.deviceId}:${hash(request.id)}:${claimAttempt}:progress:start`,
       payload: {
@@ -361,6 +378,7 @@ export class LocalBridge {
         canonicalHistory,
         ...(historyContext === undefined ? {} : { historyContext }),
         runtime,
+        signal: controller.signal,
         ...(this.#api.appendAgentProgress === undefined ? {} : {
           publishProgress: async (update) => {
             const redacted = redactText(update.content);
@@ -391,6 +409,7 @@ export class LocalBridge {
         }),
       });
     } catch (error) {
+      if (controller.signal.aborted) throw contextChanged();
       if (!(error instanceof HarnessExecutionTerminatedError)) throw error;
       const failure = await this.#api.completeAgentRequest(request.sessionId, request.id, {
         runtimeId: runtime.id,
@@ -406,6 +425,11 @@ export class LocalBridge {
       });
       return { claimed: true, completed: [failure] };
     }
+    if (this.#api.readContext) {
+      const finalContext = await this.#api.readContext(request.sessionId, undefined, request.sequence - 1);
+      if ((finalContext.content_revision ?? 0) !== revision) controller.abort(contextChanged());
+    }
+    if (controller.signal.aborted) throw contextChanged();
     const events = execution.events.map((event) => {
       if (event.captureFidelity !== "harness_transcript") {
         throw new Error("Harness execution output must be labelled harness_transcript");
@@ -436,6 +460,7 @@ export class LocalBridge {
       ...(execution.observedReasoningEffort === undefined ? {} : { observedReasoningEffort: execution.observedReasoningEffort }),
     }));
     return { claimed: true, completed };
+    } finally { if (watch) clearInterval(watch); }
   }
 
   async #appendProgressFailSoft(

@@ -275,7 +275,7 @@ test("deletion-aware native requests always read context even after the final su
     assert.deepEqual(input.historyContext?.items, []);
     return { events: [{ localEventId: "safe-final", harness: "codex", kind: "assistant", text: "Done", captureFidelity: "harness_transcript" }] };
   } });
-  assert.equal(reads, 1);
+  assert.equal(reads, 2, "revalidate authoritative revision before publishing the native answer");
   (api as CollaborationApi).readContext = async () => ({ view: "original", through_sequence: 1, content_revision: 2, items: [] });
   await assert.rejects(bridge.processAgentRequest(request, { async execute() { throw new Error("must not execute stale context"); } }), /history changed|context.*changed/i);
   delete (api as CollaborationApi).readContext;

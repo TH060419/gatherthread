@@ -319,7 +319,11 @@ export class HostedAgent {
     }
     const result = this.service.reserveHostedAgentRequest(actor, sessionId, input,
       endpoints.map((e) => ({ ...e, blocked: (this.cooldowns.get(e.quotaGroup) ?? 0) > Date.now() })),
-      this.options, onReserved);
+      this.options, (event) => {
+        if ((event.content_revision ?? 0) !== (context.content_revision ?? 0)) throw new ApiError(409,
+          "context_changed", "Shared history changed while preparing the task; start a new request");
+        onReserved(event);
+      });
     return { ...result, endpoint: endpoints.find((e) => e.id === result.endpointId), context };
   }
 
@@ -368,7 +372,10 @@ export class HostedAgent {
       }
     }
     const reserved = this.service.reserveHostedAgentRequest(actor, sessionId, input,
-      endpoints.map((endpoint) => ({ ...endpoint, blocked: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() })), this.options, undefined, summary);
+      endpoints.map((endpoint) => ({ ...endpoint, blocked: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() })), this.options, (event) => {
+        if (context && (event.content_revision ?? 0) !== (context.content_revision ?? 0)) throw new ApiError(409,
+          "context_changed", "Shared history changed while preparing the task; start a new request");
+      }, summary);
     if (!reserved.created) return { request_event: reserved.event, replayed: true };
     const controller = new AbortController();
     this.controllers.set(reserved.event.id, controller);

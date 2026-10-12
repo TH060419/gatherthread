@@ -166,7 +166,7 @@ test("a deletion erases in-flight work derived from old context and invalidates 
     const request = f.service.appendEvent(f.owner.actor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: randomUUID(),
       payload: { content: "Use shared history", execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } });
     f.service.claimAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id);
-    const progress = f.service.appendAgentProgress(f.owner.actor, f.session.id, request.id, runtime.id, randomUUID(), { content: "DERIVED_OLD_CONTEXT_SECRET" }, 1);
+    const progress = f.service.appendAgentProgress(f.owner.actor, f.session.id, request.id, runtime.id, randomUUID(), { content: "DERIVED_OLD_CONTEXT_SECRET" }, undefined, undefined, 1);
     await f.remove(source);
     const replay = f.service.replay(f.owner.actor, f.session.id, 0, 100);
     assert.doesNotMatch(JSON.stringify(replay), /DERIVED_OLD_CONTEXT_SECRET/);

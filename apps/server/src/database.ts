@@ -314,6 +314,7 @@ interface SnapshotRequestRow {
   requested_by_user_id: string;
   request_kind: SnapshotRequestKind;
   through_sequence: number;
+  content_revision?: number;
   status: SnapshotRequestStatus;
   target_runtime_id: string | null;
   claimed_by_runtime_id: string | null;
@@ -1034,6 +1035,9 @@ export class CollaborationDatabase {
     this.migrateCanonicalProvenancePrivacy();
     this.migrateSnapshotStorageLedger();
     this.migrateSnapshotControlRequests();
+    if (!this.sqlite.prepare("PRAGMA table_info(snapshot_requests)").all().some((row) => row.name === "content_revision")) {
+      this.sqlite.exec("ALTER TABLE snapshot_requests ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0 CHECK(content_revision>=0)");
+    }
     this.migrateAgentClaimLease();
     this.migrateAgentClaimPause();
     this.initializeEventStorageUsage();
@@ -3140,16 +3144,22 @@ export class CollaborationDatabase {
           WHERE e.session_id=? AND p.type='agent_request' AND e.type IN ('agent_progress','agent_response','tool_call','tool_result')
           UNION SELECT e.id,j.value FROM events e,json_each(e.payload_json,'$.history_summary.source_event_ids') j
           WHERE e.session_id=? AND e.type='agent_request' AND json_type(e.payload_json,'$.history_summary.source_event_ids')='array'
-        ), gone(id) AS (SELECT ? UNION SELECT d.child FROM deps d JOIN gone g ON g.id=d.parent)
+        ), gone(id) AS (SELECT ?
+          UNION SELECT work.id FROM events work JOIN events request ON request.id=work.reply_to_event_id
+            WHERE work.session_id=? AND request.type='agent_request' AND request.sequence>?
+              AND work.type IN ('agent_progress','agent_response','tool_call','tool_result')
+          UNION SELECT d.child FROM deps d JOIN gone g ON g.id=d.parent)
         SELECT e.* FROM events e JOIN gone g ON g.id=e.id WHERE e.session_id=? ORDER BY e.sequence`)
-        .all(sessionId, sessionId, eventId, sessionId) as unknown as EventRow[];
+        .all(sessionId, sessionId, eventId, sessionId, target.sequence, sessionId) as unknown as EventRow[];
       const now = this.now();
       const revision = (session.content_revision ?? 0) + 1;
+      const originals = new Map(affected.map((row) => [row.id, mapEvent(row)]));
       for (const row of affected) {
         if (row.deleted_at) continue;
         const event = mapEvent(row);
-        const reason = row.id === eventId ? "author" : row.reply_to_event_id === eventId && target.type === "agent_request"
-          && !isHistorySummaryRequest(target) ? "request" : "summary_invalidated";
+        const parent = row.reply_to_event_id ? originals.get(row.reply_to_event_id) ?? this.getEvent(sessionId, row.reply_to_event_id) : undefined;
+        const reason = row.id === eventId ? "author" : isHistorySummaryRequest(event) || parent && isHistorySummaryRequest(parent)
+          ? "summary_invalidated" : "request";
         const digest = this.eventReceiptDigest(event);
         this.sqlite.prepare("INSERT INTO deleted_event_receipts(event_id,input_digest) VALUES(?,?)").run(row.id, digest);
         this.sqlite.prepare("UPDATE events SET payload_json=?,runtime_provenance_json=NULL,deleted_at=?,deleted_reason=?,content_revision=? WHERE id=?")
@@ -3157,6 +3167,20 @@ export class CollaborationDatabase {
       }
       this.sqlite.prepare("UPDATE sessions SET content_revision=? WHERE id=?").run(revision, sessionId);
       this.invalidateContextExecutions(sessionId, revision, now);
+      this.sqlite.prepare(`UPDATE snapshot_requests SET status='failed',failed_at=?,result_json=NULL,
+        failure_json=? WHERE session_id=? AND content_revision<?
+        AND request_kind IN ('immutable','visible_history_replace','local_turn_upload')`)
+        .run(now, JSON.stringify({ code: "context_changed", message: "Shared history changed; request a fresh import" }), sessionId, revision);
+      if (this.sqlite.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='hosted_github_tasks'").get()) {
+        // Private cached inputs, generated answers and repository task snapshots
+        // must not remain a second readable copy or be continued after a deletion.
+        // Keep live task/resource state until its executor has actually stopped.
+        this.sqlite.prepare(`UPDATE hosted_github_tasks SET input_json=json_set(input_json,'$.content','[Message deleted]'),
+          answer=NULL,initial_files=NULL,starting_files=NULL,result_files=NULL,revision=NULL,error_code='context_changed',
+          state=CASE WHEN state='running' THEN state ELSE 'failed' END
+          WHERE session_id=? AND request_event_id IN (SELECT id FROM events WHERE session_id=? AND (deleted_at IS NOT NULL OR content_revision<?))`)
+          .run(sessionId, sessionId, revision);
+      }
       const control = this.appendInsideTransaction(actor.user_id, sessionId, { idempotency_key: idempotencyKey,
         type: "message_deleted", visibility: "session", payload: { target_event_id: eventId, content_revision: revision } }, null, "message-delete");
       this.sqlite.prepare("INSERT INTO message_deletions(session_id,idempotency_key,actor_user_id,target_event_id,deletion_event_id,content_revision) VALUES(?,?,?,?,?,?)")
@@ -3182,7 +3206,7 @@ export class CollaborationDatabase {
   private invalidateContextExecutions(sessionId: string, revision: number, now: string): void {
     const pending = this.sqlite.prepare(`SELECT e.* FROM events e
       WHERE e.session_id=? AND e.type='agent_request' AND e.content_revision < ? AND e.deleted_at IS NULL
-      AND NOT EXISTS(SELECT 1 FROM events r WHERE r.reply_to_event_id=e.id AND r.type='agent_response')`)
+      AND NOT EXISTS(SELECT 1 FROM events r WHERE r.reply_to_event_id=e.id AND r.type='agent_response' AND r.deleted_at IS NULL)`)
       .all(sessionId, revision) as unknown as EventRow[];
     for (const row of pending) {
       this.sqlite.prepare("UPDATE agent_request_claims SET status='paused',completed_at=? WHERE request_event_id=? AND status='claimed'").run(now, row.id);
@@ -3295,6 +3319,7 @@ export class CollaborationDatabase {
       if (!runtime || runtime.purpose !== "execution" || runtime.status !== "online" || !runtimeSupportsAgentTarget(runtime, target)) {
         throw conflict("Select your own exact online execution runtime and supported execution profile");
       }
+      this.assertContextCapability(sessionId, runtime);
       if (!this.sqlite.prepare(`
         SELECT 1 FROM devices WHERE id = ? AND user_id = ? AND revoked_at IS NULL
           AND (expires_at IS NULL OR expires_at > ?)
@@ -3388,6 +3413,7 @@ export class CollaborationDatabase {
       if ((input.type === "tool_call" || input.type === "tool_result")
         && replyTarget !== undefined) {
         if (replyTarget.type === "agent_request") {
+          this.assertRequestContextCurrent(sessionId, replyTarget.id);
           const runtimeId = provenance?.runtime_id;
           const claim = this.sqlite.prepare(
             "SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?",
@@ -3397,6 +3423,13 @@ export class CollaborationDatabase {
             throw conflict("A matching active claim is required to append request-linked tool events");
           }
         }
+      }
+      if (provenance && replyTarget?.type !== "agent_request" && (this.requireSession(sessionId).content_revision ?? 0) > 0) {
+        if (!provenance.runtime_id) throw new ApiError(409, "connector_update_required", "A deletion-aware native runtime is required");
+        const runtime = this.getRuntime(provenance.runtime_id);
+        this.assertContextCapability(sessionId, runtime);
+        if (input.content_revision !== this.requireSession(sessionId).content_revision) throw new ApiError(409,
+          "context_changed", "Native history must be rebuilt before uploading conversation content");
       }
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
     });
@@ -3835,6 +3868,7 @@ export class CollaborationDatabase {
             runtime_id: existing.runtime_id,
             status: "paused",
             attempt_count: existing.attempt_count ?? 1,
+            content_revision: event.content_revision ?? 0,
           } };
         }
         if (existing.status === "completed" || !claimLeaseLapsed(existing.lease_expires_at, now)) {
@@ -3844,6 +3878,7 @@ export class CollaborationDatabase {
             runtime_id: runtimeId,
             status: existing.status,
             attempt_count: existing.attempt_count ?? 1,
+            content_revision: event.content_revision ?? 0,
           } };
         }
         // The lease lapsed, so no accepted work is arriving. Exact-runtime
@@ -3864,6 +3899,7 @@ export class CollaborationDatabase {
           runtime_id: runtimeId,
           status: "claimed",
           attempt_count: (existing.attempt_count ?? 1) + 1,
+          content_revision: event.content_revision ?? 0,
         } };
       }
       this.assertRuntimeClaimSlotAvailable(runtimeId, requestEventId, now);
@@ -3893,6 +3929,7 @@ export class CollaborationDatabase {
     return this.transaction(() => {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be paused");
+      this.assertRequestContextCurrent(sessionId, requestEventId);
       if (event.actor_user_id !== actor.user_id) {
         throw forbidden("Only the author of an Agent request may pause it");
       }
@@ -3951,6 +3988,7 @@ export class CollaborationDatabase {
       runtime_id: claim.runtime_id,
       status: claim.status,
       attempt_count: claim.attempt_count ?? 1,
+      content_revision: Number(this.sqlite.prepare("SELECT content_revision FROM events WHERE id=?").get(requestEventId)?.content_revision ?? 0),
     };
   }
 
@@ -4139,6 +4177,7 @@ export class CollaborationDatabase {
         local_turn_id: input.local_turn_id,
         runtime_id: input.runtime_id,
         based_on_sequence: input.based_on_sequence,
+        ...(input.content_revision === undefined ? {} : { content_revision: input.content_revision }),
         occurred_at: input.occurred_at,
         ...(input.observed_model === undefined ? {} : { observed_model: input.observed_model }),
         ...(input.observed_reasoning_effort === undefined ? {} : { observed_reasoning_effort: input.observed_reasoning_effort }),
@@ -4239,9 +4278,9 @@ export class CollaborationDatabase {
       this.sqlite.prepare(`
         INSERT INTO snapshot_requests(
           id, session_id, requested_by_user_id, request_kind, through_sequence, status, target_runtime_id, created_at,
-          storage_bytes, metadata_charged
-        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, 1)
-      `).run(id, sessionId, actor.user_id, kind, session.next_sequence, targetRuntime?.id ?? null, this.now(), SNAPSHOT_REQUEST_METADATA_BYTES);
+          storage_bytes, metadata_charged, content_revision
+        ) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, 1, ?)
+      `).run(id, sessionId, actor.user_id, kind, session.next_sequence, targetRuntime?.id ?? null, this.now(), SNAPSHOT_REQUEST_METADATA_BYTES, session.content_revision ?? 0);
       this.sqlite.prepare(`
         INSERT INTO snapshot_storage_usage(session_id, user_id, bytes) VALUES (?, ?, ?)
         ON CONFLICT(session_id, user_id) DO UPDATE SET bytes = bytes + excluded.bytes
@@ -4299,6 +4338,7 @@ export class CollaborationDatabase {
       this.assertActiveDevice(actor);
       const request = this.requireSnapshotRequest(requestId);
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
+      this.assertSnapshotContextCurrent(request);
       const localControl = isLocalSyncRequestKind(request.kind);
       if (request.kind === "visible_history_replace" || localControl) {
         const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
@@ -4312,6 +4352,7 @@ export class CollaborationDatabase {
         runtimeId,
         localControl ? "execution" : "snapshot_connector",
       );
+      if (["immutable", "visible_history_replace", "local_turn_upload"].includes(request.kind)) this.assertContextCapability(request.session_id, runtime);
       if (localControl && (request.target_runtime_id !== runtime.id || !this.supportsControlHarness(request.kind, runtime.harness))) {
         throw forbidden("This local sync control targets a different execution runtime");
       }
@@ -4417,6 +4458,7 @@ export class CollaborationDatabase {
       id: row.id, session_id: row.session_id, requested_by_user_id: row.requested_by_user_id,
       kind: row.request_kind,
       through_sequence: row.through_sequence, status: row.status,
+      content_revision: row.content_revision ?? 0,
       target_runtime_id: row.target_runtime_id,
       claimed_by_runtime_id: row.claimed_by_runtime_id, created_at: row.created_at,
       claimed_at: row.claimed_at, completed_at: row.completed_at, failed_at: row.failed_at,
@@ -4442,6 +4484,7 @@ export class CollaborationDatabase {
       this.assertActiveDevice(actor);
       const request = this.requireSnapshotRequest(requestId);
       if (request.requested_by_user_id !== actor.user_id) throw notFound("Snapshot request");
+      this.assertSnapshotContextCurrent(request);
       const localControl = isLocalSyncRequestKind(request.kind);
       if (isCodeSyncRequestKind(request.kind) || isGitHubCodeSyncRequestKind(request.kind)) {
         const session = this.requireWritableSessionInsideTransaction(actor, request.session_id);
@@ -4489,6 +4532,13 @@ export class CollaborationDatabase {
       `).run(request.session_id, actor.user_id, storageBytes);
       return this.requireSnapshotRequest(requestId);
     });
+  }
+
+  private assertSnapshotContextCurrent(request: SnapshotRequestRecord): void {
+    if (["immutable", "visible_history_replace", "local_turn_upload"].includes(request.kind)
+      && (request.content_revision ?? 0) !== (this.requireSession(request.session_id).content_revision ?? 0)) {
+      throw new ApiError(409, "context_changed", "Shared history changed; request a fresh import");
+    }
   }
 
   private now(): string {

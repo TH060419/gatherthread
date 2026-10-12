@@ -146,6 +146,7 @@ export interface AppendEventInput {
   visibility?: string;
   runtimeId?: string;
   claimAttempt?: number;
+  contentRevision?: number;
   runtime?: RuntimeProvenance;
   observedModel?: string;
   observedReasoningEffort?: string;
@@ -270,6 +271,8 @@ export interface HarnessExecutionInput {
   /** Optional server-authorized derived context frozen before this request. Raw history remains available. */
   historyContext?: HistoryContext;
   runtime: RegisteredRuntime;
+  /** Privacy revocation, independent of progress uploads. Stop the owned turn before returning. */
+  signal?: AbortSignal;
   publishProgress?: (update: HarnessProgressUpdate) => Promise<boolean | void>;
 }
 
