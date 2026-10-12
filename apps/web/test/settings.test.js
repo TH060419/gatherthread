@@ -20,6 +20,7 @@ import {
   projectDshProfile,
   projectEnabledHarnesses,
   SETTINGS_STORAGE_KEY,
+  SETTINGS_VERSION,
   SHARED_LANGUAGE_STORAGE_KEY,
   withProjectAgentHarness,
   withProjectCodexProfile,
@@ -37,7 +38,7 @@ test("settings normalize invalid or stale browser data without retaining unknown
     sync: { mode: "fixed", contextBudgetBytes: 99_999_999 },
     composer: { enterBehavior: "execute_shell", autoScroll: false },
   });
-  assert.equal(normalized.version, 13);
+  assert.equal(normalized.version, SETTINGS_VERSION);
   assert.equal(normalized.general.locale, "en");
   assert.equal(normalized.appearance.theme, "system");
   assert.equal(normalized.appearance.textScalePercent, 125);
@@ -150,7 +151,7 @@ test("project harness and DSH runtime selections are exact, isolated, and creden
     token: "must-not-survive",
   });
   assert.equal(projectAgentHarness(settings, "project-alpha"), "deepseek-harness");
-  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness"]);
+  assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness", "cloud"]);
   assert.equal(projectAgentHarness(settings, "project-beta"), "deepseek-harness");
   assert.deepEqual(projectDshProfile(settings, "project-alpha"), {
     deviceId: "dsh-device-1",
@@ -196,7 +197,7 @@ test("legacy DSH project profiles migrate without inventing runtime ids or reaso
 });
 
 test("project connection shortcuts are ordered, multi-select, and always keep one default Agent", () => {
-  assert.deepEqual(projectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha"), ["codex"]);
+  assert.deepEqual(projectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha"), ["codex", "deepseek-harness", "cloud"]);
   let settings = withProjectEnabledHarnesses(DEFAULT_SETTINGS, "project-alpha", ["codex", "deepseek-harness", "codex"]);
   assert.deepEqual(projectEnabledHarnesses(settings, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.deepEqual(
@@ -223,7 +224,7 @@ test("legacy flat Codex project profiles migrate without changing their model or
       },
     },
   });
-  assert.equal(migrated.version, 13);
+  assert.equal(migrated.version, SETTINGS_VERSION);
   assert.equal(projectAgentHarness(migrated, "project-alpha"), "codex");
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex"]);
   assert.deepEqual(projectCodexProfile(migrated, "project-alpha"), { model: "Legacy/Model", effort: "high" });
@@ -249,13 +250,13 @@ test("version 6 connection shortcuts become the default for newly opened project
     setItem: () => {},
     removeItem: () => {},
   }).get();
-  assert.equal(migrated.version, 13);
+  assert.equal(migrated.version, SETTINGS_VERSION);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-alpha"), ["codex", "deepseek-harness"]);
   assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["codex", "deepseek-harness"]);
 });
 
-test("opening the cloud entry preserves local defaults and explicit cloud-only choices", () => {
- assert.deepEqual(DEFAULT_SETTINGS.agents.enabledHarnesses, ["codex"]);
+test("enabled Agent defaults preserve existing local and explicit cloud-only choices", () => {
+ assert.deepEqual(DEFAULT_SETTINGS.agents.enabledHarnesses, ["codex", "deepseek-harness", "cloud"]);
  for (const version of [0, 6, 12, 13]) {
   const migrated = createSettingsStore({ getItem: () => JSON.stringify({ version,
    agents: { activeHarness: "deepseek-harness", enabledHarnesses: ["deepseek-harness"] } }), setItem() {}, removeItem() {} }).get();
@@ -266,6 +267,84 @@ test("opening the cloud entry preserves local defaults and explicit cloud-only c
  const prior = normalizeSettings({ agents: { activeHarness: "cloud", enabledHarnesses: ["cloud"] } });
  assert.equal(prior.agents.activeHarness, "cloud");
  assert.deepEqual(prior.agents.enabledHarnesses, ["cloud"]);
+});
+
+test("fresh browser settings and newly saved project profiles enable all Agent shortcuts without selecting a runtime", () => {
+  const data = new Map();
+  const store = createSettingsStore({
+    getItem: (key) => data.get(key) ?? null,
+    setItem: (key, value) => data.set(key, value),
+    removeItem: (key) => data.delete(key),
+  });
+  const fresh = store.get();
+  assert.deepEqual(fresh.agents.enabledHarnesses, ["codex", "deepseek-harness", "cloud"]);
+  assert.equal(fresh.agents.activeHarness, "codex");
+  assert.deepEqual(projectEnabledHarnesses(fresh, "project-new"), fresh.agents.enabledHarnesses);
+  assert.equal(projectDshProfile(fresh, "project-new"), null);
+  assert.equal(projectCloudProfile(fresh, "project-new"), null);
+
+  const saved = store.set(withProjectCodexProfile(fresh, "project-new", { model: "gpt-5.6-sol", effort: "high" }));
+  assert.deepEqual(projectEnabledHarnesses(saved, "project-new"), fresh.agents.enabledHarnesses);
+  assert.equal(projectAgentHarness(saved, "project-new"), "codex");
+  assert.equal(projectDshProfile(saved, "project-new"), null);
+  assert.equal(projectCloudProfile(saved, "project-new"), null);
+  assert.deepEqual(createSettingsStore({ getItem: (key) => data.get(key) ?? null }).get(), saved);
+
+  store.set(withProjectEnabledHarnesses(saved, "project-new", ["deepseek-harness"]));
+  assert.deepEqual(store.reset().agents.enabledHarnesses, fresh.agents.enabledHarnesses,
+    "an explicit preference reset uses the current defaults");
+});
+
+test("settings upgrades preserve explicit global and per-project choices instead of enabling additional Agents", () => {
+  for (const version of [0, 6, 7, 12, 13, SETTINGS_VERSION]) {
+    const stored = {
+      version,
+      agents: {
+        activeHarness: "cloud",
+        enabledHarnesses: ["cloud"],
+        projectProfiles: {
+          "project-dsh": {
+            harness: "deepseek-harness",
+            enabledHarnesses: ["deepseek-harness"],
+            dsh: { deviceId: "device-dsh", runtimeId: "runtime-dsh", provider: "DeepSeek", model: "deepseek-chat" },
+          },
+          "project-codex": { harness: "codex", enabledHarnesses: ["codex", "deepseek-harness"] },
+        },
+      },
+    };
+    const migrated = createSettingsStore({ getItem: (key) => key === SETTINGS_STORAGE_KEY ? JSON.stringify(stored) : null }).get();
+    assert.equal(migrated.version, SETTINGS_VERSION);
+    assert.equal(migrated.agents.activeHarness, "cloud");
+    assert.deepEqual(migrated.agents.enabledHarnesses, ["cloud"], `global choice in version ${version}`);
+    assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["cloud"]);
+    assert.deepEqual(projectEnabledHarnesses(migrated, "project-dsh"), ["deepseek-harness"]);
+    assert.equal(projectAgentHarness(migrated, "project-dsh"), "deepseek-harness");
+    assert.deepEqual(projectDshProfile(migrated, "project-dsh"), stored.agents.projectProfiles["project-dsh"].dsh);
+    assert.deepEqual(projectEnabledHarnesses(migrated, "project-codex"), ["codex", "deepseek-harness"]);
+    assert.equal(projectAgentHarness(migrated, "project-codex"), "codex");
+  }
+});
+
+test("legacy settings without an enablement field retain their existing target and project-specific choices", () => {
+  for (const version of [7, 12, 13]) {
+    const migrated = createSettingsStore({ getItem: (key) => key === SETTINGS_STORAGE_KEY ? JSON.stringify({
+      version,
+      agents: { activeHarness: "deepseek-harness", projectProfiles: {
+        "project-dsh": { enabledHarnesses: ["deepseek-harness"] },
+        "project-codex": { harness: "codex" },
+      } },
+    }) : null }).get();
+    assert.deepEqual(migrated.agents.enabledHarnesses, ["deepseek-harness"]);
+    assert.deepEqual(projectEnabledHarnesses(migrated, "project-dsh"), ["deepseek-harness"],
+      "a missing per-project target inherits the saved active target without adding Codex");
+    assert.deepEqual(projectEnabledHarnesses(migrated, "project-codex"), ["codex"]);
+    assert.deepEqual(projectEnabledHarnesses(migrated, "project-new"), ["deepseek-harness"]);
+    assert.deepEqual(normalizeSettings({ version, agents: { activeHarness: "cloud" } }).agents.enabledHarnesses, ["cloud"]);
+  }
+  for (const stored of [{ version: 13, appearance: { theme: "dark" } }, { appearance: { theme: "dark" } }]) {
+    const migrated = createSettingsStore({ getItem: (key) => key === SETTINGS_STORAGE_KEY ? JSON.stringify(stored) : null }).get();
+    assert.deepEqual(migrated.agents.enabledHarnesses, ["codex"], "saved pre-default preferences retain their old Codex-only fallback");
+  }
 });
 
 test("context budget keeps a precise configured value while reporting connector limits", () => {
@@ -319,7 +398,7 @@ test("settings storage is versioned, credential-free, and fails closed to defaul
     setItem: (key, value) => legacyData.set(key, value),
     removeItem: (key) => legacyData.delete(key),
   }).get();
-  assert.equal(migrated.version, 13);
+  assert.equal(migrated.version, SETTINGS_VERSION);
   assert.equal(migrated.general.locale, "zh-CN");
   assert.equal(migrated.appearance.theme, "dark");
   assert.equal(migrated.appearance.ambientCanvas, "pronounced");

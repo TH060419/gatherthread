@@ -1,6 +1,6 @@
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 
-export const SETTINGS_VERSION = 13;
+export const SETTINGS_VERSION = 14;
 export const SETTINGS_STORAGE_KEY = "gatherthread.settings.v1";
 export const SHARED_LANGUAGE_STORAGE_KEY = "gt-lang";
 // Beta exposes cloud choices; the server separately gates trial and GitHub
@@ -102,7 +102,7 @@ export const DEFAULT_SETTINGS = deepFreeze({
   },
   agents: {
     activeHarness: "codex",
-    enabledHarnesses: ["codex"],
+    enabledHarnesses: ["codex", "deepseek-harness", "cloud"],
     customCodexModels: [],
     projectProfiles: {},
   },
@@ -125,7 +125,13 @@ export function normalizeSettings(input) {
     .filter((model) => MODEL_ID_PATTERN.test(model))
     .slice(0, 40);
   const activeHarness = oneOf(agents.activeHarness, AGENT_HARNESSES, DEFAULT_SETTINGS.agents.activeHarness);
-  const enabledHarnesses = normalizeEnabledHarnesses(agents.enabledHarnesses ?? DEFAULT_SETTINGS.agents.enabledHarnesses, activeHarness);
+  // Existing preferences must not acquire newly enabled shortcuts merely because
+  // an older version did not persist this field. Fresh settings use the new
+  // defaults; explicit lists, including cloud-only selections, stay authoritative.
+  const storedVersion = Number(source.version);
+  const enabledHarnesses = normalizeEnabledHarnesses(agents.enabledHarnesses
+    ?? (Number.isFinite(storedVersion) && storedVersion < SETTINGS_VERSION
+      ? [activeHarness] : DEFAULT_SETTINGS.agents.enabledHarnesses), activeHarness);
   const projectProfiles = {};
   if (isObject(agents.projectProfiles)) {
     for (const [projectId, profile] of Object.entries(agents.projectProfiles)) {
@@ -517,16 +523,17 @@ function writeSharedLocale(storage, locale) {
 
 function migrateStoredSettings(input) {
   if (!isObject(input) || Number(input.version) >= SETTINGS_VERSION) return input;
-  const previousVersion = Number(input.version);
+  const previousVersion = Number.isFinite(Number(input.version)) ? Number(input.version) : 0;
   const appearance = isObject(input.appearance) ? input.appearance : {};
   const layout = isObject(input.layout) ? input.layout : {};
   const sync = isObject(input.sync) ? input.sync : {};
   const agents = isObject(input.agents) ? input.agents : {};
+  const activeHarness = oneOf(agents.activeHarness, AGENT_HARNESSES, DEFAULT_SETTINGS.agents.activeHarness);
   const legacyProjectProfiles = isObject(agents.projectProfiles) ? Object.values(agents.projectProfiles) : [];
   const inheritedEnabledHarnesses = normalizeEnabledHarnesses([
     ...uniqueStrings(agents.enabledHarnesses),
     ...legacyProjectProfiles.flatMap((profile) => isObject(profile) ? uniqueStrings(profile.enabledHarnesses) : []),
-  ], oneOf(agents.activeHarness, AGENT_HARNESSES, DEFAULT_SETTINGS.agents.activeHarness));
+  ], activeHarness);
   return {
     ...input,
     appearance: {
@@ -552,9 +559,11 @@ function migrateStoredSettings(input) {
     },
     agents: {
       ...agents,
-      enabledHarnesses: previousVersion < 7 ? inheritedEnabledHarnesses : uniqueStrings(agents.enabledHarnesses),
+      enabledHarnesses: Array.isArray(agents.enabledHarnesses) ? uniqueStrings(agents.enabledHarnesses)
+        : previousVersion < 7 ? inheritedEnabledHarnesses : [],
       projectProfiles: Object.fromEntries(Object.entries(isObject(agents.projectProfiles) ? agents.projectProfiles : {}).map(([id, profile]) => [id,
-        isObject(profile) ? { ...profile, enabledHarnesses: [...new Set([...uniqueStrings(profile.enabledHarnesses), profile.harness ?? "codex"])] } : profile])),
+        isObject(profile) ? { ...profile, enabledHarnesses: normalizeEnabledHarnesses(profile.enabledHarnesses,
+          oneOf(profile.harness, AGENT_HARNESSES, activeHarness)) } : profile])),
     },
   };
 }
