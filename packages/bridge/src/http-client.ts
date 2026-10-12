@@ -230,6 +230,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       body: JSON.stringify({
         runtime_id: input.runtimeId,
         ...(input.claimAttempt === undefined ? {} : { claim_attempt: input.claimAttempt }),
+        ...(input.contentRevision === undefined ? {} : { content_revision: input.contentRevision }),
         idempotency_key: input.idempotencyKey,
         payload: truncateJsonValue(input.payload, 160 * 1024),
         ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),
@@ -249,6 +250,7 @@ export class HttpCollaborationClient implements CollaborationApi {
       body: JSON.stringify({
         runtime_id: input.runtimeId,
         ...(input.claimAttempt === undefined ? {} : { claim_attempt: input.claimAttempt }),
+        ...(input.contentRevision === undefined ? {} : { content_revision: input.contentRevision }),
         idempotency_key: input.idempotencyKey,
         payload: truncateJsonValue(input.payload, 32 * 1024),
         ...(input.observedModel === undefined ? {} : { observed_model: input.observedModel }),

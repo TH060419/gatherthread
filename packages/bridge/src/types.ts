@@ -199,6 +199,7 @@ export interface AgentRequestClaim {
 export interface CompleteAgentRequestInput {
   runtimeId: string;
   claimAttempt?: number;
+  contentRevision?: number;
   idempotencyKey: string;
   payload: unknown;
   observedModel?: string;

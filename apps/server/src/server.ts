@@ -1454,6 +1454,7 @@ export async function startCollaborationServer(
           input.observed_model,
           input.observed_reasoning_effort,
           input.claim_attempt,
+          input.content_revision,
         ) } });
         return;
       }
@@ -1470,6 +1471,7 @@ export async function startCollaborationServer(
           input.observed_model,
           input.observed_reasoning_effort,
           input.claim_attempt,
+          input.content_revision,
         ) } });
         return;
       }

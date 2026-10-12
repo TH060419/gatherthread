@@ -202,6 +202,7 @@ export class CollaborationService {
         ...(runtime.execution_profiles === undefined ? {} : { execution_profiles: runtime.execution_profiles }),
         status: runtime.status,
         last_seen_at: runtime.last_seen_at,
+        context_deletion_version: runtime.context_deletion_version ?? 0,
       }));
   }
 
@@ -459,6 +460,7 @@ export class CollaborationService {
     observedModel?: string,
     observedReasoningEffort?: string,
     claimAttempt?: number,
+    contentRevision?: number,
   ): CanonicalEvent {
     if (payload !== null && typeof payload === "object" && !Array.isArray(payload) && "stream_mode" in payload) LiveOutputPayloadSchema.parse(payload);
     const { session } = this.requireWrite(actor, sessionId);
@@ -473,6 +475,7 @@ export class CollaborationService {
       observedModel,
       observedReasoningEffort,
       claimAttempt,
+      contentRevision,
     );
     this.publish(event);
     return event;
@@ -488,6 +491,7 @@ export class CollaborationService {
     observedModel?: string,
     observedReasoningEffort?: string,
     claimAttempt?: number,
+    contentRevision?: number,
   ): CanonicalEvent {
     const { session } = this.requireWrite(actor, sessionId);
     if (session.state !== "active") throw conflict("Archived sessions do not accept agent responses");
@@ -501,6 +505,7 @@ export class CollaborationService {
       observedModel,
       observedReasoningEffort,
       claimAttempt,
+      contentRevision,
     );
     this.publish(event);
     return event;

@@ -614,6 +614,7 @@ export type AgentRequestClaim = z.infer<typeof AgentRequestClaimSchema>;
 export const CompleteAgentRequestInputSchema = z.object({
   runtime_id: IdSchema,
   claim_attempt: z.number().int().positive().optional(),
+  content_revision: z.number().int().nonnegative().optional(),
   idempotency_key: IdempotencyKeySchema,
   payload: JsonValueSchema,
   observed_model: z.string().trim().min(1).max(160).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u).optional(),

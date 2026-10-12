@@ -3148,9 +3148,10 @@ export class CollaborationDatabase {
           UNION SELECT work.id FROM events work JOIN events request ON request.id=work.reply_to_event_id
             WHERE work.session_id=? AND request.type='agent_request' AND request.sequence>?
               AND work.type IN ('agent_progress','agent_response','tool_call','tool_result')
+          UNION SELECT snapshot.id FROM events snapshot WHERE snapshot.session_id=? AND snapshot.type='context_snapshot' AND snapshot.sequence>=?
           UNION SELECT d.child FROM deps d JOIN gone g ON g.id=d.parent)
         SELECT e.* FROM events e JOIN gone g ON g.id=e.id WHERE e.session_id=? ORDER BY e.sequence`)
-        .all(sessionId, sessionId, eventId, sessionId, target.sequence, sessionId) as unknown as EventRow[];
+        .all(sessionId, sessionId, eventId, sessionId, target.sequence, sessionId, target.sequence, sessionId) as unknown as EventRow[];
       const now = this.now();
       const revision = (session.content_revision ?? 0) + 1;
       const originals = new Map(affected.map((row) => [row.id, mapEvent(row)]));
@@ -3233,8 +3234,11 @@ export class CollaborationDatabase {
     return Boolean(row && !row.deleted_at && row.content_revision === row.current_revision);
   }
 
-  assertRequestContextCurrent(sessionId: string, requestId: string): void {
+  assertRequestContextCurrent(sessionId: string, requestId: string, contentRevision?: number): void {
     if (!this.isRequestContextCurrent(sessionId, requestId)) throw new ApiError(409, "context_changed", "Shared history changed; start a new request with current history");
+    if (contentRevision !== undefined && this.getEvent(sessionId, requestId).content_revision !== contentRevision) {
+      throw new ApiError(409, "context_changed", "Shared history changed; start a new request with current history");
+    }
   }
 
   private assertContextCapability(sessionId: string, runtime: RuntimeRecord): void {
@@ -3389,6 +3393,13 @@ export class CollaborationDatabase {
         input.visibility ?? "session",
         provenance?.runtime_id ?? null,
       );
+      if (replyTarget?.deleted) throw new ApiError(409, "message_deleted", "The quoted message was deleted; select another message");
+      if (input.type === "agent_request" && (this.requireSession(sessionId).content_revision ?? 0) > 0) {
+        const target = agentRequestTarget({ payload: input.payload });
+        const candidates = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((runtime) => runtime.purpose === "execution"
+          && runtimeSupportsAgentTarget(runtime, target) && (target.runtimeId === undefined || target.runtimeId === runtime.id));
+        if (candidates.length && !candidates.some((runtime) => runtime.context_deletion_version === 1)) this.assertContextCapability(sessionId, candidates[0]!);
+      }
       if (replyTarget && ["human_chat", "agent_request"].includes(input.type)
         && replyTarget.visibility === "owner_only"
         && (this.membershipRole(sessionId, actor.user_id) !== "owner" || input.visibility !== "owner_only")) {
@@ -3413,8 +3424,9 @@ export class CollaborationDatabase {
       if ((input.type === "tool_call" || input.type === "tool_result")
         && replyTarget !== undefined) {
         if (replyTarget.type === "agent_request") {
-          this.assertRequestContextCurrent(sessionId, replyTarget.id);
+          this.assertRequestContextCurrent(sessionId, replyTarget.id, input.content_revision);
           const runtimeId = provenance?.runtime_id;
+          if (runtimeId) this.assertContextCapability(sessionId, this.getRuntime(runtimeId));
           const claim = this.sqlite.prepare(
             "SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?",
           ).get(replyTarget.id) as unknown as ClaimRow | undefined;
@@ -4047,12 +4059,14 @@ export class CollaborationDatabase {
     observedModel?: string,
     observedReasoningEffort?: string,
     claimAttempt?: number,
+    contentRevision?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
     rejectHistorySummaryMetadata(payload);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
-      this.assertRequestContextCurrent(sessionId, requestEventId);
+      this.assertRequestContextCurrent(sessionId, requestEventId, contentRevision);
+      this.assertContextCapability(sessionId, runtime);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
         || runtime.session_id !== sessionId || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("A matching active runtime on the authenticated device is required");
@@ -4101,12 +4115,14 @@ export class CollaborationDatabase {
     observedModel?: string,
     observedReasoningEffort?: string,
     claimAttempt?: number,
+    contentRevision?: number,
   ): CanonicalEvent {
     this.assertActiveDevice(actor);
     rejectHistorySummaryMetadata(payload);
     return this.transaction(() => {
       const runtime = this.getRuntime(runtimeId);
-      this.assertRequestContextCurrent(sessionId, requestEventId);
+      this.assertRequestContextCurrent(sessionId, requestEventId, contentRevision);
+      this.assertContextCapability(sessionId, runtime);
       if (runtime.user_id !== actor.user_id || runtime.device_id !== actor.device_id
         || runtime.session_id !== sessionId || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("A matching active runtime on the authenticated device is required");
