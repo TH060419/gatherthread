@@ -41,6 +41,15 @@ const receipt = { id: "summary", type: "agent_request", sequence: 2, visibility:
 const answer = { id: "answer", sequence: 3, type: "agent_response", visibility: "session", actor: { id: "u1" },
   replyTo: "summary", payload: { content: "summary text" } };
 
+test("deletion revision clears summary receipts, versions and selection before a delayed acceptance", async () => {
+  const app = setup(); app.choose(); const pending = app.confirm();
+  app.update({ contentRevision: 1, events: [{ ...source, deleted: { reason: "author" }, payload: { content: "[Message deleted]" } }] });
+  app.finish(receipt); await pending;
+  assert.equal(app.ui.events().some(event => event.id === receipt.id), false);
+  assert.deepEqual(app.ui.timeline().versions, []);
+  assert.equal(app.el("history-summary-count").textContent.startsWith("0 /"), true);
+});
+
 test("summary selection stays actionable without a local runtime and explains the missing Agent", () => {
   const app = setup(); app.update({ executionProfile: null });
   assert.equal(app.el("history-summary-select-button").disabled, false);
