@@ -35,3 +35,14 @@ test("personal revision is transmitted with trial and summary writes, never infe
   assert.equal(bodies[0].api_config_revision, revision); assert.equal(bodies[1].api_config_revision, revision);
   assert.equal(Object.hasOwn(bodies[0], "api_key"), false);
 });
+
+test("a hosted retry sends the captured history revision, including zero, without changing ordinary writes", async () => {
+  const api = new HttpCollaborationApi(), bodies = [];
+  api.request = async (_path, options) => { bodies.push(JSON.parse(options.body)); return {}; };
+  const input = { profileId: `api-${id}`, apiConfigRevision: revision, content: "fixture", idempotencyKey: "fixture-key" };
+  for (const contentRevision of [0, 7]) await assert.rejects(api.appendHostedAgentRequest("s", { ...input, contentRevision }));
+  await assert.rejects(api.appendHostedAgentRequest("s", input));
+  assert.equal(bodies[0].content_revision, 0);
+  assert.equal(bodies[1].content_revision, 7);
+  assert.equal(Object.hasOwn(bodies[2], "content_revision"), false);
+});
