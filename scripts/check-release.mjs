@@ -181,6 +181,7 @@ for (const path of ["apps/web/index.html", "docs/CODEX_CONNECT.md", "docs/CODEX_
   assert.match(surface, /node plugins\/gatherthread\/scripts\/prepare-source-plugin\.mjs/);
   assert.match(surface, /codex plugin marketplace add "PREPARED_PLUGIN_DIRECTORY"/);
   assert.match(surface, /codex plugin add gatherthread@gatherthread-source/);
+  assert.match(surface, /codex plugin marketplace remove gatherthread-source/);
   assert.match(surface, /LOCAL_CODEX_CONNECTOR\.tgz/);
   assert.doesNotMatch(surface, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-beta\.1/);
 }

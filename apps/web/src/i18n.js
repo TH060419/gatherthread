@@ -905,6 +905,7 @@ const ZH_CN = Object.freeze({
   "Current server only": "仅连接当前服务器",
   "Install once": "仅需安装一次",
   "Replace PREPARED_PLUGIN_DIRECTORY with the path printed by the preparation command. Disable older GatherThread plugin copies in Codex before enabling this prepared plugin.": "把 PREPARED_PLUGIN_DIRECTORY 换成准备命令输出的目录。在 Codex 中关闭旧的 GatherThread 插件副本后，再启用此新副本。",
+  "Updating this source copy? First run codex plugin marketplace remove gatherthread-source, then add the new prepared directory. This refreshes plugin registration, not your project files.": "更新此源码插件时，先运行 codex plugin marketplace remove gatherthread-source，再添加新准备目录。这只刷新插件注册，不会删除项目文件。",
   "Requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.": "需要 Node 24+ 和已登录的 Codex Desktop；然后添加固定版本的共序插件。",
   "If Terminal says “command not found: codex”": "如果终端提示“command not found: codex”",
   "On macOS, if ChatGPT Desktop is installed in Applications, check its bundled Codex CLI and add it to this terminal's PATH:": "如果 macOS 的“应用程序”中安装了 ChatGPT Desktop，先检查其内置 Codex CLI，并将其加入当前终端的 PATH：",

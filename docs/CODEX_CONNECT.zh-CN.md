@@ -56,6 +56,8 @@ codex plugin add gatherthread@gatherthread-source
 
 把 `PREPARED_PLUGIN_DIRECTORY` 换成准备命令输出的目录。该命令创建新的本地插件副本并绑定配套 MCP，不会回退旧 npm 包。启用新副本前，在 Codex 中关闭旧的 GatherThread 插件副本。
 
+以后更新此源码插件时，先运行 `codex plugin marketplace remove gatherthread-source`，再按上方步骤添加新准备目录并安装插件。这会刷新源码注册和插件缓存，不会删除项目文件。
+
 重启 Codex Desktop。在设置中检查 **共序 / GatherThread** 的 MCP 服务和 Hooks，确认无误后启用 Hooks。
 
 ### 2. 连接一个共序项目

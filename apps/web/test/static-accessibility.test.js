@@ -356,6 +356,8 @@ test("project Codex connector presents a concise Beta install-connect-confirm fl
     .replace(/\r\n?/gu, "\n").replaceAll("&amp;", "&");
   assert.equal(pluginCommands, "git clone https://github.com/TH060419/gatherthread.git\ncd gatherthread\ngit checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE\nnpm ci\nnpm run build:ts && npm run build:connector\nnode plugins/gatherthread/scripts/prepare-source-plugin.mjs\ncodex plugin marketplace add \"PREPARED_PLUGIN_DIRECTORY\"\ncodex plugin add gatherthread@gatherthread-source");
   assert.match(html, /Disable older GatherThread plugin copies in Codex before enabling this prepared plugin/);
+  assert.match(html, /First run codex plugin marketplace remove gatherthread-source, then add the new prepared directory/);
+  assert.match(i18n, /先运行 codex plugin marketplace remove gatherthread-source，再添加新准备目录/);
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Beta 1 测试版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);

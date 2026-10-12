@@ -88,6 +88,7 @@ test("repo marketplace and current install surfaces preserve exact source and lo
   assert.match(release, new RegExp(fixedCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
   assert.match(release, /codex plugin add gatherthread@gatherthread/);
   for (const surface of [html, english, chinese, packageReadme]) {
+    assert.match(surface, /codex plugin marketplace remove gatherthread-source/);
     assert.match(surface, /git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE/);
     assert.match(surface, /npm ci/);
     assert.match(surface, /npm run build:ts[\s\S]*npm run build:connector/);

@@ -54,6 +54,8 @@ codex plugin add gatherthread@gatherthread-source
 
 Replace `PREPARED_PLUGIN_DIRECTORY` with the path printed by the preparation command. Preparation creates a new local copy with the matching MCP code, never an old npm fallback. Disable older GatherThread plugin copies in Codex before enabling this prepared plugin.
 
+For a later source-copy update, first run `codex plugin marketplace remove gatherthread-source`, then add the new prepared directory and install the plugin as above. This refreshes the source registration and cached plugin; it does not remove your project files.
+
 Restart Codex Desktop. Open Settings, review the **共序 / GatherThread** MCP server and Hooks, then enable Hooks.
 
 ### 2. Connect one GatherThread project

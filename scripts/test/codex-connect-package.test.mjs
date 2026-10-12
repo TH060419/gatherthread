@@ -49,18 +49,23 @@ test("packed Codex connector contains only standalone runtime and documentation 
   assert.doesNotMatch(bundle, /@gatherthread\/(?:adapters|bridge)|packages[\\/]bridge/);
 });
 
-test("published entry is importable and its executable provides help without credentials", async () => {
+test("standalone entry is importable and its help uses the current local package without leaking credentials", async () => {
   const api = await import(pathToFileURL(path.join(packageRoot, "dist", "index.js")).href);
   assert.equal(typeof api.runCodexConnectCli, "function");
   assert.equal(typeof api.parseCodexConnectArgs, "function");
 
   const result = spawnSync(process.execPath, [path.join(packageRoot, "dist", "codex-connect.js"), "--help"], {
     encoding: "utf8",
-    env: { PATH: process.env.PATH },
+    env: { PATH: process.env.PATH, GATHERTHREAD_TOKEN: "gta_synthetic-help-credential",
+      GATHERTHREAD_PASSWORD: "synthetic-help-password-not-a-real-secret" },
+    timeout: 10_000,
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /npx --yes @gatherthread\/codex-connect@0\.1\.0-beta\.1/);
-  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /gta_|Bearer|cookie|password/i);
+  assert.match(result.stdout, /npx --yes --package '\/absolute\/path\/to\/LOCAL_CODEX_CONNECTOR\.tgz' gatherthread-codex-connect/);
+  assert.doesNotMatch(result.stdout, /npx --yes @gatherthread\/codex-connect@/);
+  assert.match(result.stdout, /enter your password only in the Launcher/);
+  assert.match(result.stdout, /Paste that grant into the hidden terminal prompt within ten minutes/);
+  assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /gta_|Bearer|cookie|synthetic-help-password-not-a-real-secret/i);
 });
 
 test("standalone executable completes a local preflight without a real credential", async (t) => {

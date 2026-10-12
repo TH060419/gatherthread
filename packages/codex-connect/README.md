@@ -29,6 +29,8 @@ codex plugin add gatherthread@gatherthread-source
 
 Replace `PREPARED_PLUGIN_DIRECTORY` with the preparation command's output. It creates a fresh local plugin and matching MCP code without overwriting your existing plugin or falling back to the old npm package. Disable older GatherThread plugin copies in Codex before enabling the prepared copy. Restart Codex Desktop and review its MCP server and Hooks. Neither the Web page nor the connector runs these commands or edits global Codex configuration.
 
+For a later source-copy update, first run `codex plugin marketplace remove gatherthread-source`, then add the new prepared directory and install the plugin as above. This refreshes source registration and the cached plugin without removing your project files.
+
 On Windows, use `npx.cmd` and a quoted full file path such as `C:/Users/you/Downloads/your-connector.tgz`. The registry's `@gatherthread/codex-connect@0.1.0-beta.1` and `v0.1.0-beta.1` tag are older releases, not this source-pinned build; they do not include the current safe message-deletion handling. Without server downloads, [build the matching source checkout](../../docs/CODEX_CONNECT.md#source-checkout-fallback).
 
 The connector also exposes a private local API for the **共序 / GatherThread** Codex plugin. The plugin's stdio MCP process receives no device token. Multiple running project connectors publish leased, non-secret instance/endpoint/project registrations; their separate random per-run capabilities authorize calls. MCP discovery collapses crash/restart overlap for the same endpoint to its newest lease, aggregates distinct projects, and routes unique project/session IDs, while duplicate IDs across distinct endpoints or an offline target fail closed.

@@ -1063,6 +1063,7 @@ node plugins/gatherthread/scripts/prepare-source-plugin.mjs
 codex plugin marketplace add "PREPARED_PLUGIN_DIRECTORY"
 codex plugin add gatherthread@gatherthread-source</code>
               <p>Replace PREPARED_PLUGIN_DIRECTORY with the path printed by the preparation command. Disable older GatherThread plugin copies in Codex before enabling this prepared plugin.</p>
+              <p>Updating this source copy? First run codex plugin marketplace remove gatherthread-source, then add the new prepared directory. This refreshes plugin registration, not your project files.</p>
           <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
           </li>
           <li>
