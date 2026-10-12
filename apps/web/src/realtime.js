@@ -1,4 +1,4 @@
-import { normalizeReplayPage } from "./domain.js";
+import { normalizeReplayPage } from "./domain.js?v=20261012-content-1";
 
 const PHASE_DETAIL = {
   idle: "Choose a session to begin.",

@@ -39,6 +39,8 @@ import {
   HostedAgentAcceptedSchema,
   HostedAgentPausedSchema,
   HostedAgentStatusSchema,
+  HostedAgentSelectionSchema,
+  CloudApiStatusSchema, CloudApiPutInputSchema, CloudApiDeleteInputSchema, CloudApiSavedSchema,
   CreateProjectInputSchema,
   CreateSessionInputSchema,
   CODE_SYNC_MAX_BODY_BYTES,
@@ -79,6 +81,7 @@ import type { RegistrationOptions } from "./registration.js";
 import { registrationClientIp } from "./registration-providers.js";
 import { CodeRepository } from "./code-repository.js";
 import { HostedAgent, type HostedAgentOptions } from "./hosted-agent.js";
+import { CloudApiStore } from "./cloud-api.js";
 import { TestGateStore, testGateToken, testGateCookie, nativeAdmissionCapability, nativeAdmissionDeviceRoute, type TestGateOptions } from "./test-gate.js";
 
 const MAX_BODY_BYTES = 256 * 1024;
@@ -492,6 +495,7 @@ export async function startCollaborationServer(
     ? mkdtempSync(join(tmpdir(), "gatherthread-code-")) : undefined;
   const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
   const hostedAgent = options.hostedAgent ? new HostedAgent(service, codeRepository, options.hostedAgent) : undefined;
+  const personalApi = hostedAgent?.personalApi ?? new CloudApiStore(database);
   if (options.hostedGithub && !hostedAgent) throw new Error("Cloud GitHub requires Cloud Agent");
   const hostedGithub = options.hostedGithub && options.hostedAgent && hostedAgent
     ? new HostedGithub(service, hostedAgent, options.hostedAgent, options.hostedGithub) : undefined;
@@ -898,6 +902,30 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (url.pathname === "/v1/cloud-api" || url.pathname.startsWith("/v1/cloud-api/")) {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Manage personal API configuration in the signed-in browser");
+        assertRequestCurrent();
+        if (request.method === "GET" && url.pathname === "/v1/cloud-api") {
+          sendJson(response, 200, { data: CloudApiStatusSchema.parse(personalApi.status(actor)) }); return;
+        }
+        const id = /^\/v1\/cloud-api\/([0-9a-f-]{36})$/u.exec(url.pathname)?.[1];
+        if (!id || !z.string().uuid().safeParse(id).success) throw new ApiError(400, "cloud_api_invalid", "Invalid personal API configuration");
+        if (request.method === "PUT") {
+          const input = CloudApiPutInputSchema.safeParse(await readAuthenticatedJson(8192));
+          if (!input.success) throw new ApiError(400, "cloud_api_invalid", "Invalid personal API configuration");
+          if (!hostedAgent) throw new ApiError(400, "cloud_api_unavailable", "Personal API configuration is unavailable");
+          sendJson(response, 200, { data: CloudApiSavedSchema.parse({ configuration: hostedAgent.putPersonalApi(actor, id, input.data) }) }); return;
+        }
+        if (request.method === "DELETE") {
+          const input = CloudApiDeleteInputSchema.safeParse(await readAuthenticatedJson(1024));
+          if (!input.success) throw new ApiError(400, "cloud_api_invalid", "Invalid personal API configuration");
+          if (hostedAgent) hostedAgent.removePersonalApi(actor, id, input.data.expected_revision);
+          else personalApi.remove(actor, id, input.data.expected_revision);
+          response.writeHead(204).end(); return;
+        }
+        throw new ApiError(405, "method_not_allowed", "Unsupported personal API configuration method");
+      }
+
       if (url.pathname.startsWith("/v1/hosted-github/")) {
         if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
         if (url.pathname === "/v1/hosted-github/authorize" && request.method === "POST") {
@@ -1233,6 +1261,12 @@ export async function startCollaborationServer(
       }
 
       const sessionId = parts[0] === "v1" && parts[1] === "sessions" ? parts[2] : undefined;
+      if (sessionId && parts[3] === "hosted-agent-requests" && parts[4] && parts[5] === "selection" && parts.length === 6 && request.method === "GET") {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Read your Cloud Agent selection in the signed-in browser");
+        assertRequestCurrent();
+        if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
+        sendJson(response, 200, { data: HostedAgentSelectionSchema.parse(hostedAgent.selection(actor, sessionId, parts[4])) }); return;
+      }
       if (sessionId && parts[3] === "hosted-github-tasks" && parts.length === 4 && request.method === "POST") {
         if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
         const input = HostedGithubTaskInputSchema.parse(await readAuthenticatedJson());

@@ -25,13 +25,14 @@ export function bindRepositoryFields(el, prefix) {
   for (const part of ["owner", "name"]) el(`${prefix}-${part}`).addEventListener("input", update);
   return update;
 }
-export function mountGithubMode({ document: doc }) {
+export function mountGithubMode({ document: doc, onLocal = () => {} }) {
   const el = id => doc.getElementById(id);
-  function select(mode) {
+  function select(mode, focus = false) {
     el("code-github-panel").dataset.githubMode = mode;
-    for (const value of ["cloud", "local"]) el(`github-mode-${value}`).setAttribute("aria-pressed", String(mode === value));
+    if (mode === "local") onLocal();
+    if (focus) el(mode === "local" ? "github-code-title" : "cloud-github-title").focus({ preventScroll: true });
   }
-  for (const mode of ["cloud", "local"]) el(`github-mode-${mode}`).addEventListener("click", () => select(mode));
+  for (const mode of ["cloud", "local"]) el(`github-mode-${mode}`).addEventListener("click", () => select(mode, true));
   select("cloud");
   return { select };
 }

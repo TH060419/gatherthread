@@ -30,9 +30,11 @@ const endpointSchema = z.object({
 
 export interface HostedEndpoint {
   id: string; profileId: string; label: string;
-  provider: "cloudflare-workers-ai" | "deepseek" | "openai-compatible";
+  provider: "cloudflare-workers-ai" | "deepseek" | "openai-compatible" | "anthropic";
   model: string; baseUrl: string; apiToken: string; quotaGroup: string;
   dailyRuns: number | null; maxConcurrent: number;
+  transport?: "openai-chat" | "anthropic-messages";
+  personal?: { configId: string; configRevision: string; userId: string };
 }
 
 export function isSiliconFlowFreeEndpoint(endpoint: Pick<HostedEndpoint, "provider" | "baseUrl" | "model">): boolean {
@@ -100,6 +102,7 @@ export function validateHostedEndpoints(endpoints: HostedEndpoint[]): void {
     throw new Error("invalid or duplicate endpoint IDs");
   }
   for (const endpoint of endpoints) {
+    if (endpoint.profileId.startsWith("api-")) throw new Error("Personal API profile IDs are reserved");
     if (endpoint.dailyRuns === null && !isSiliconFlowFreeEndpoint(endpoint)) {
       throw new Error("unlimited runs require a zero-price model");
     }
@@ -120,9 +123,11 @@ export interface HostedAllocation {
   blocked?: boolean;
   id: string; profileId: string; provider: string; model: string; quotaGroup: string;
   dailyRuns: number | null; maxConcurrent: number;
+  personal?: { configId: string; configRevision: string; userId: string };
 }
 
 export interface HostedRunLimits {
   userDailyRuns: number | null; globalDailyRuns: number | null; maxConcurrent: number;
   userMinIntervalSeconds?: number; userMaxConcurrent?: number;
+  billingSource?: "service" | "personal";
 }

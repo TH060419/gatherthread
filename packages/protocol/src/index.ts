@@ -3,6 +3,7 @@ export * from "./live-output.js";
 import { codeSyncRequestKinds } from "./code-sync.js";
 import { githubCodeSyncRequestKinds } from "./github-sync.js";
 import { RegistrationEmailSchema } from "./registration.js";
+import { PersonalCloudRevisionSchema, hasValidPersonalCloudRevision } from "./cloud-api.js";
 export * from "./code-sync.js";
 export * from "./github-sync.js";
 export * from "./history-summary.js";
@@ -215,12 +216,14 @@ export const HostedAgentRequestInputSchema = z.object({
   idempotency_key: IdempotencyKeySchema,
   reply_to_event_id: IdSchema.nullable().optional(),
   github_task_id: z.string().regex(/^gh-task-[a-f0-9]{32}$/u).optional(),
-}).strict();
+  api_config_revision: PersonalCloudRevisionSchema,
+}).strict().refine(hasValidPersonalCloudRevision, { message: "Personal cloud profiles require their exact configuration revision" });
 export type HostedAgentRequestInput = z.infer<typeof HostedAgentRequestInputSchema>;
 
 /** Summaries use server-validated selected history, never client-supplied text or code. */
 export const HostedHistorySummaryInputSchema = CreateHistorySummaryInputSchema.omit({ execution_profile: true })
-  .extend({ profile_id: HostedAgentRequestInputSchema.shape.profile_id.unwrap() }).strict();
+  .extend({ profile_id: HostedAgentRequestInputSchema.shape.profile_id.unwrap(), api_config_revision: PersonalCloudRevisionSchema })
+  .strict().refine(hasValidPersonalCloudRevision, { message: "Personal cloud profiles require their exact configuration revision" });
 export type HostedHistorySummaryInput = z.infer<typeof HostedHistorySummaryInputSchema>;
 export const HostedAgentAcceptedSchema = z.object({
   request_event: CanonicalEventSchema, replayed: z.boolean(),
@@ -243,6 +246,7 @@ export const HostedAgentStatusSchema = z.discriminatedUnion("enabled", [
     profiles: z.array(z.object({ id: z.string(), label: z.string(), provider: z.string(), model: z.string(),
       available: z.boolean(), capacity: z.number().int().nonnegative(),
       status: z.enum(["available", "busy", "daily_limit", "cooldown", "user_busy", "rate_limit"]),
+      source: z.enum(["service", "personal"]).optional(), api_config_revision: z.string().uuid().optional(),
     }).strict()),
     capabilities: z.array(z.string()), privacy: z.string(),
   }).strict(),
@@ -767,3 +771,4 @@ export interface ApiErrorBody {
 
 export * from "./hosted-github.js";
 export * from "./registration.js";
+export * from "./cloud-api.js";

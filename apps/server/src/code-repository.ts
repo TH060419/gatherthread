@@ -119,6 +119,7 @@ export class CodeRepository {
   checkpoint(actor: Actor, projectId: string, value: unknown, authorizeExecution?: () => void): CodeMutationResult {
     const input = CodeCheckpointInputSchema.parse(value);
     return this.mutate(actor, projectId, "checkpoint", input, "writer", () => {
+      authorizeExecution?.();
       const repo = this.requireRepo(projectId);
       const branch = this.ownBranch(projectId, actor.user_id);
       const base = branch?.head_commit ?? repo.main_commit;

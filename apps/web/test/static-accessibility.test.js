@@ -623,7 +623,7 @@ test("timeline renders both user content and harness response text", async () =>
 
 test("settings switches use a Safari-safe visual track and dark responses use semantic colors", async () => {
   const [html, styles] = await Promise.all([readFile(htmlPath, "utf8"), readFile(stylesPath, "utf8")]);
-  assert.equal((html.match(/class="settings-switch-visual"/g) ?? []).length, 5);
+  assert.equal((html.match(/class="settings-switch-visual"/g) ?? []).length, 6);
   assert.equal((html.match(/Human chat is shared without triggering a local agent\./g) ?? []).length, 0);
   assert.match(styles, /\.settings-toggle input\[type="checkbox"\]:checked \+ \.settings-switch-visual::after/);
   assert.match(styles, /\.event-agent_response \{[\s\S]*?background: var\(--response-surface\);[\s\S]*?color: var\(--ink\);/);

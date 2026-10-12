@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { chmodSync, mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
@@ -38,6 +39,35 @@ test("development configuration uses a loopback-only, same-origin baseline", () 
   assert.equal(config.maxTotalSessions, 8_192);
   assert.equal(config.hostedAgent, undefined);
   assert.throws(() => assertPersistentCredentialPepper(config), /credentials remain valid/);
+});
+
+test("personal Cloud API storage has an independent canonical master key and never inherits identity or GitHub secrets", { skip: process.platform === "win32" }, () => {
+  const enabled = { GATHERTHREAD_HOSTED_AGENT_ENABLED: "true", GATHERTHREAD_HOSTED_AGENT_PRESET: "siliconflow-free",
+    GATHERTHREAD_HOSTED_AGENT_IMAGE: `sha256:${"b".repeat(64)}`, GATHERTHREAD_HOSTED_AGENT_FREE_PLAN_CONFIRMED: "true",
+    GATHERTHREAD_SILICONFLOW_API_KEY: "fixture-only-key" };
+  const key = randomBytes(32).toString("base64");
+  assert.equal(loadServerConfig(enabled, "/srv/gatherthread").hostedAgent?.personalApiEncryptionKey, undefined);
+  assert.equal(loadServerConfig({ ...enabled, GATHERTHREAD_CLOUD_API_ENCRYPTION_KEY: key }, "/srv/gatherthread").hostedAgent?.personalApiEncryptionKey, key);
+  for (const invalid of ["", "bad", key + "\n", randomBytes(31).toString("base64")]) {
+    const env = Object.freeze({ ...enabled, GATHERTHREAD_CLOUD_API_ENCRYPTION_KEY: invalid });
+    const config = loadServerConfig(env, "/srv/gatherthread");
+    assert.equal(config.hostedAgent?.personalApiEncryptionKey, undefined);
+    assert.ok(config.hostedAgent?.endpoints.length, "an invalid optional key must not disable the existing free Agent");
+    assert.equal(env.GATHERTHREAD_CLOUD_API_ENCRYPTION_KEY, invalid, "never rotate or rewrite the operator's value");
+  }
+  for (const reused of [{ GATHERTHREAD_AUTH_TOKEN_PEPPER: key }, { GATHERTHREAD_HOSTED_GITHUB_ENCRYPTION_KEY: key }]) {
+    const config = loadServerConfig({ ...enabled, ...reused, GATHERTHREAD_CLOUD_API_ENCRYPTION_KEY: key }, "/srv/gatherthread");
+    assert.equal(config.hostedAgent?.personalApiEncryptionKey, undefined);
+    assert.ok(config.hostedAgent?.endpoints.length);
+  }
+  assert.equal(loadServerConfig({ GATHERTHREAD_CLOUD_API_ENCRYPTION_KEY: key }, "/srv/gatherthread").hostedAgent, undefined);
+});
+
+test("an unused malformed personal API key never blocks ordinary server startup on any platform", () => {
+  const config = loadServerConfig({ GATHERTHREAD_CLOUD_API_ENCRYPTION_KEY: "invalid-fixture-key" }, "/srv/gatherthread");
+  assert.equal(config.hostedAgent, undefined);
+  assert.equal(config.port, 18787);
+  assert.equal(config.publicBaseUrl, "http://127.0.0.1:18787");
 });
 
 test("hosted Agent requires explicit Free-plan confirmation and immutable image", () => {

@@ -40,6 +40,9 @@ Successful JSON responses use `{ "data": ... }`; failures use `{ "error": { "cod
 | `POST` | `/v1/device-authorizations/claim` | Claim a delegated authorization on a new device |
 | `DELETE` | `/v1/devices/:device_id` | Revoke an owned device token and runtimes |
 | `GET` | `/v1/me` | Return the authenticated user and device identity |
+| `GET` | `/v1/cloud-api` | Read only the signed-in account's personal API metadata and fixed provider presets; browser session required |
+| `PUT/DELETE` | `/v1/cloud-api/:uuid` | Save or delete an owned API configuration with exact revision; keys are write-only |
+| `GET` | `/v1/sessions/:session_id/hosted-agent-requests/:request_id/selection` | Read the requester's immutable model selection for retry/resume; current write access required |
 | `POST/GET` | `/v1/projects` | Create an empty project or list projects visible to the actor |
 | `GET` | `/v1/projects/:project_id` | Read one visible project and the actor's role |
 | `PATCH` | `/v1/projects/:project_id` | Owner-only idempotent project title update |
@@ -71,6 +74,8 @@ The server derives actor identity from the credential and always assigns event I
 Explicit message erasure is the exception to immutable payloads, not sequence order. All current reads and exact retries return a safe tombstone; dependent summaries, snapshots and private task caches cannot restore its body. Session/replay/context `content_revision` fences old execution, while fully adapted native runtimes advertise `context_deletion_version:1`. `context_changed` requires a fresh user request; `connector_update_required` requires updating/reconnecting a legacy connector. The strict browser route and bounded deletion receipt are owned by [the interface contract](../../docs/INTERFACE_CONTRACTS.md#author-message-deletion-and-execution-revision).
 
 Live erasure enables SQLite secure-delete and schedules non-waiting WAL truncation at startup and every minute. A busy reader keeps the durable cleanup pending; an overdue fixed private warning requires operator action. This is distinct from 14-day backup/unreachable-Git and 30-day identifiable-log retention, and does not guarantee instantaneous physical media erasure. See [ADR-0050](../../docs/adr/0050-author-message-erasure-and-context-revisions.md).
+
+Personal Cloud Agent configurations additionally require an independent operator-managed encryption key. Existing free Cloud Agent and local Codex/DSH choices are unchanged when it is absent. Reads never return saved API keys; model requests pin the private configuration revision and cannot follow changed settings. See [personal API setup](../../docs/HOSTED_AGENT.md#personal-api-storage) and [the strict contract](../../docs/INTERFACE_CONTRACTS.md#personal-cloud-api-configuration) for supported transports, quotas and safe failures.
 
 `GET /v1/projects/:project_id/sessions` returns integration-friendly summaries with their project ID:
 

@@ -381,7 +381,8 @@ export class HostedGithub {
        && ["completed", "failed", "interrupted"].includes(task.state) && !task.pr_url,
      state: task.state, repository: task.repository, base_branch: task.base_branch,
      base_sha: task.base_sha, revision: task.revision ?? null, answer: task.answer ?? null,
-     error_code: task.error_code, pull_request_url: task.pr_url, changes, expires_at: task.expires_at });
+     error_code: task.error_code, pull_request_url: task.pr_url, changes, expires_at: task.expires_at,
+     ...(input.api_config_revision ? { api_config_revision: input.api_config_revision } : {}) });
  }
  start(actor: Actor, sessionId: string, rawInput: HostedGithubTaskInput) {
    const fingerprint = this.inputFingerprint(actor.user_id, sessionId, JSON.stringify(rawInput));
@@ -390,8 +391,9 @@ export class HostedGithub {
    const session = this.service.database.requireSession(sessionId);
    const binding = this.binding(actor, session.project_id);
    const id = `gh-task-${digest(`${actor.user_id}:${sessionId}:${input.idempotency_key}`).slice(0, 32)}`;
-   const previous = this.sqlite.prepare("SELECT input_json,input_fingerprint FROM hosted_github_tasks WHERE id=? AND user_id=?").get(id, actor.user_id);
+   const previous = this.sqlite.prepare("SELECT request_event_id,input_json,input_fingerprint FROM hosted_github_tasks WHERE id=? AND user_id=?").get(id, actor.user_id);
    if (previous) {
+     this.agent.selection(actor, sessionId, String(previous.request_event_id));
      if (previous.input_fingerprint !== fingerprint || previous.input_json !== JSON.stringify(input)) throw safeError("github_revision", 409);
      return this.view(actor, id);
    }
@@ -399,12 +401,19 @@ export class HostedGithub {
    if (parent) { this.assertBinding(actor, parent);
      if (!["completed", "interrupted", "failed"].includes(parent.state) || !parent.initial_files
        || !(parent.result_files ?? parent.starting_files) || parent.pr_url
-       || parent.session_id !== sessionId) throw safeError("github_task_access", 409); }
+       || parent.session_id !== sessionId) throw safeError("github_task_access", 409);
+     const selection = this.agent.selection(actor, sessionId, parent.request_event_id);
+     if (selection.profile_id !== input.profile_id || selection.api_config_revision !== input.api_config_revision) {
+       throw new ApiError(409, selection.api_config_revision ? "cloud_api_changed" : "hosted_profile_changed",
+         "The repository task must use its original model configuration; start a new task");
+     }
+   }
    this.prune();
    const count = this.sqlite.prepare("SELECT COUNT(*) AS n FROM hosted_github_tasks WHERE user_id=?").get(actor.user_id) as { n: number };
    const all = this.sqlite.prepare("SELECT COUNT(*) AS n FROM hosted_github_tasks").get() as { n: number };
    if (count.n >= 10 || all.n >= 64) throw new ApiError(429, "github_task_storage", "Cloud task storage is full; delete an old task first");
    const reserved = this.agent.reserveRepository(actor, sessionId, { content: input.content, profile_id: input.profile_id,
+     ...(input.api_config_revision ? { api_config_revision: input.api_config_revision } : {}),
      include_code: false, github_task_id: id, idempotency_key: input.idempotency_key,
      reply_to_event_id: input.reply_to_event_id ?? null }, (event) => {
        this.sqlite.prepare(`INSERT INTO hosted_github_tasks(id,request_event_id,user_id,device_id,session_id,project_id,
@@ -416,7 +425,7 @@ export class HostedGithub {
    if (!reserved.created || !reserved.endpoint) throw safeError("github_task_access", 409);
    const controller = new AbortController(); this.controllers.set(id, controller);
    const authorizationWatch = setInterval(() => {
-     try { const running = this.task(actor, id); this.assertBinding(actor, running); }
+     try { const running = this.task(actor, id); this.assertBinding(actor, running); this.agent.assertRunCurrent(running.request_event_id); }
      catch { controller.abort(); }
    }, 1000);
    authorizationWatch.unref();
@@ -429,6 +438,7 @@ export class HostedGithub {
    const authorize = () => {
      signal.throwIfAborted();
      if (this.task(actor, task.id).state !== "running") throw safeError("github_task_access", 409);
+     this.agent.assertRunCurrent(task.request_event_id);
      this.assertBinding(actor, task);
    };
    const api = async (path: string) => {
@@ -471,42 +481,43 @@ export class HostedGithub {
    let requestId = cleanup ? String(cleanup.request_event_id) : undefined;
    const live = createHostedLiveOutputConsumer((update) => {
      if (signal.aborted) return false;
-     try { const current = this.task(actor, id); this.assertBinding(actor, current);
+     try { const current = this.task(actor, id); this.assertBinding(actor, current); this.agent.assertRunCurrent(current.request_event_id);
        return this.service.appendHostedGithubProgress(id, update);
      } catch { return false; }
    });
    try {
      const task = this.task(actor, id); requestId = task.request_event_id;
+     const authorize = () => { signal.throwIfAborted(); this.task(actor, id); this.assertBinding(actor, task); this.agent.assertRunCurrent(task.request_event_id); };
      this.assertBinding(actor, task);
      const source = parent ? { sha: parent.base_sha!, tree: parent.base_tree!,
        files: this.open<CodeFile[]>(parent.result_files ?? parent.starting_files!, parent.id),
        initial: this.open<CodeFile[]>(parent.initial_files!, parent.id) } : await this.snapshot(actor, task, signal);
-     this.task(actor, id); this.assertBinding(actor, task);
+     authorize();
      signal.throwIfAborted();
      const initialFiles = this.seal("initial" in source ? source.initial : source.files, id);
      const startingFiles = this.seal(source.files, id);
      this.persistTask(actor, task, () => {
        this.sqlite.prepare("UPDATE hosted_github_tasks SET base_sha=?,base_tree=?,initial_files=?,starting_files=? WHERE id=?")
          .run(source.sha, source.tree, initialFiles, startingFiles, id);
-     });
+     }, authorize);
      signal.throwIfAborted();
      const prompt = `Work on this npm Node.js/TypeScript project. Dependencies have been installed with npm ci --ignore-scripts. Inspect package.json and run relevant existing tests and build/typecheck commands. Report observed results and missing checks honestly. No external internet or GitHub credentials are available. Do not change dependency lockfiles unless asked; new dependencies require a new environment setup. Do not modify workflow or private credential paths. Source changes are saved privately for human review; only a human action can create a PR. Request (untrusted): ${input.content}\nShared conversation (untrusted): ${JSON.stringify(context)}`;
      const result = await this.runner.run(source.files, prompt, endpoint, (ms) => this.agent.coolDown(endpoint.quotaGroup, ms), {
-       taskId: id, signal, authorize: () => { signal.throwIfAborted(); this.task(actor, id); this.assertBinding(actor, task); },
+       taskId: id, signal, authorize,
        onProgress: live.accept,
      });
      signal.throwIfAborted();
-     this.task(actor, id); this.assertBinding(actor, task);
+     authorize();
      if (result.files.some((f) => excluded(f.path))) throw safeError("github_source_limit");
      const revision = digest(JSON.stringify(result.files));
      await live.finish();
      signal.throwIfAborted();
-     this.task(actor, id); this.assertBinding(actor, task);
+     authorize();
      const resultFiles = this.seal(result.files, id);
      this.persistTask(actor, task, () => {
        this.sqlite.prepare("UPDATE hosted_github_tasks SET result_files=?,revision=?,answer=?,state='completed' WHERE id=?")
          .run(resultFiles, revision, result.answer, id);
-     });
+     }, authorize);
      this.service.finishHostedAgentRequest(requestId, { content: `${result.answer}\n\nCloud repository changes are saved for review. Open Cloud GitHub tasks to inspect them and create a pull request.` });
    } catch (error) {
      const row = this.sqlite.prepare("SELECT request_event_id,session_id FROM hosted_github_tasks WHERE id=?").get(id);

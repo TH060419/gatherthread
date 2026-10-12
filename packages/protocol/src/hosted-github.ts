@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { isCodeSyncPathAllowed } from "./code-sync.js";
+import { PersonalCloudRevisionSchema, hasValidPersonalCloudRevision } from "./cloud-api.js";
 
 const Key = z.string().min(8).max(200);
 export const HostedGithubRepositoryInputSchema = z.object({
@@ -13,7 +14,8 @@ export const HostedGithubTaskInputSchema = z.object({
   idempotency_key: Key,
   continue_task_id: z.string().regex(/^gh-task-[a-f0-9]{32}$/u).optional(),
   reply_to_event_id: z.string().min(1).max(128).nullable().optional(),
-}).strict();
+  api_config_revision: PersonalCloudRevisionSchema,
+}).strict().refine(hasValidPersonalCloudRevision, { message: "Personal cloud profiles require their exact configuration revision" });
 export const HostedGithubCompleteInputSchema = z.object({
   state: z.string().regex(/^[A-Za-z0-9_-]{43}$/u), code: z.string().min(1).max(500),
 }).strict();
@@ -52,6 +54,7 @@ export const HostedGithubTaskSummarySchema = z.object({
   repository: HostedGithubRepositoryInputSchema.shape.repository, base_branch: HostedGithubRepositoryInputSchema.shape.base_branch,
   base_sha: Sha, revision: Revision, error_code: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/u).nullable(),
   pull_request_url: PullUrl, expires_at: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+  api_config_revision: z.string().uuid().optional(),
 }).strict();
 const bytes = (value: string) => value.length / 4 * 3 - (value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0);
 const Source = z.string().max(2_796_204).regex(/^[A-Za-z0-9+/]*={0,2}$/u)

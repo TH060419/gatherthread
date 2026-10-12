@@ -1,6 +1,6 @@
-import { codeRuntimeChoices } from "./code-sync.js";
-import { createGithubCodeSyncController, githubLinks } from "./github-code-sync.js";
-import { fillRepositoryFields, bindRepositoryFields } from "./github-setup.js";
+import { codeRuntimeChoices } from "./code-sync.js?v=20261012-content-1";
+import { createGithubCodeSyncController, githubLinks } from "./github-code-sync.js?v=20261012-content-1";
+import { fillRepositoryFields, bindRepositoryFields } from "./github-setup.js?v=20261012-content-1";
 
 export function mountGithubCodeSync({ document: doc, api, localizer, confirm, mockEnabled = false }) {
   const el = (id) => doc.getElementById(id);
@@ -128,5 +128,17 @@ export function mountGithubCodeSync({ document: doc, api, localizer, confirm, mo
     if (!enabled) { await controller.queue("github_code_auto_upload_disable"); return; }
     await confirmed("Automatically upload settled changes to your GitHub branch while idle? Review secrets and GitHub access first. Pushes may trigger workflows. Conversation upload remains separate.", () => controller.queue("github_code_auto_upload_enable"));
   });
-  return controller;
+  return {
+    ...controller,
+    prefillRepository(input) {
+      const state = controller.getState();
+      if (state.github?.connection || state.github?.can_configure !== true || !input.repository) return;
+      if (el("github-code-owner").value.trim() || el("github-code-name").value.trim()
+        || !["", "main"].includes(el("github-code-base").value.trim())) return;
+      fillRepositoryFields(el, "github-code", input.repository);
+      el("github-code-base").value = input.base_branch || "main";
+      stage = "repository";
+      render(state);
+    },
+  };
 }

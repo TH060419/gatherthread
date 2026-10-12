@@ -36,6 +36,17 @@ test("cloud retry uses writer permission rather than local runtime presence, and
   assert.equal(cloudRequestInput(cloud, "k", [{ id: "cloud-free", provider: "deepseek-official", model: "original-model" }]).profileId, "cloud-free");
 });
 
+test("personal cloud retry requires the immutable private revision and cannot adopt an edited connection", () => {
+  const cloud = request("cloud", "me", "opencode");
+  cloud.payload.profile_id = "api-10000000-0000-4000-8000-000000000001";
+  const profile = { id: cloud.payload.profile_id, provider: "deepseek-official", model: "original-model", api_config_revision: "old-revision" };
+  const selection = { profile_id: profile.id, api_config_revision: "old-revision" };
+  assert.throws(() => cloudRequestInput(cloud, "k", [profile]), /API connection changed/);
+  assert.equal(cloudRequestInput(cloud, "k", [profile], selection).apiConfigRevision, "old-revision");
+  assert.throws(() => cloudRequestInput(cloud, "k", [{ ...profile, api_config_revision: "new-revision" }], selection), /API connection changed/);
+  assert.throws(() => cloudRequestInput(cloud, "k", [profile], { ...selection, profile_id: "api-other" }), /API connection changed/);
+});
+
 test("composer control is author-scoped, claim-aware, and resets after terminal completion", () => {
   const own = request();
   assert.equal(composerAgentAction([], "me").action, "request");
@@ -84,6 +95,20 @@ function fixture(api = {}, options = {}) {
   return { control, button, targetLabel, errorNode, setContext: (value) => { context = { ...context, ...value }; control.update(); },
     context: () => context, changes: () => changes };
 }
+
+test("personal cloud resume waits for its private selection and cannot write after navigation", async () => {
+  let resolve, reads = 0; const writes = [];
+  const cloud = request("cloud", "me", "opencode"); cloud.payload.profile_id = "api-fixture";
+  const profile = { id: "api-fixture", provider: "deepseek-official", model: "original-model", api_config_revision: "revision-fixture" };
+  const f = fixture({ getHostedAgentSelection: (sessionId, requestId) => {
+    reads++; assert.equal(sessionId, "s1"); assert.equal(requestId, "cloud"); return new Promise(done => { resolve = done; });
+  }, appendHostedAgentRequest: async (...args) => { writes.push(args); } });
+  f.setContext({ events: [cloud, progress("cloud", "paused")], cloudProfiles: [profile] });
+  f.control.handleClick(); f.control.handleClick(); assert.equal(reads, 1);
+  f.setContext({ scope: "other", sessionId: "s2", events: [] });
+  resolve({ profile_id: profile.id, api_config_revision: profile.api_config_revision }); await flush();
+  assert.equal(writes.length, 0); assert.equal(f.errorNode.textContent, "");
+});
 
 test("control writes are single-flight; stale failures cannot overwrite another session", async () => {
   let reject, calls = 0;

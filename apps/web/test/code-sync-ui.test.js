@@ -178,9 +178,8 @@ test("GT Cloud and GitHub share one panel and switching providers does not mutat
   app.status.repository.enabled = false;
   app.el("project-code-button").click();
   await tick();
-  assert.equal(app.el("code-gt-cloud-panel").hidden, false);
-  assert.equal(app.el("code-github-panel").hidden, true);
-  app.el("code-provider-github").click();
+  assert.equal(app.el("code-gt-cloud-panel").hidden, true);
+  assert.equal(app.el("code-github-panel").hidden, false);
   assert.equal(app.el("project-code-dialog").open, true);
   assert.equal(app.el("code-github-panel").hidden, false);
   assert.equal(app.el("code-gt-cloud-panel").hidden, true);
@@ -191,5 +190,8 @@ test("GT Cloud and GitHub share one panel and switching providers does not mutat
   assert.equal(app.el("code-gt-cloud-panel").hidden, false);
   assert.deepEqual(app.mutations, []);
   assert.equal(app.status.repository.enabled, false);
+  app.el("code-provider-github").click();
+  assert.equal(githubOpens, 2);
+  assert.deepEqual(app.mutations, []);
   app.ui.close();
 });

@@ -6,6 +6,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Added
 
+- Add a Mac Launcher DMG with drag-to-Applications installation, bilingual first-open instructions, a prominent macOS security path and explicit review/trust/allow guidance for GatherThread Hooks. Validate the mounted image against its reviewed source inventory and public file-hash provenance before producing checksum sidecars; preserve the Windows ZIP, native email/password login and exact test/production binding. The Mac app remains ad-hoc signed, not Apple-notarized; publishing a matching installer is a separate release action. See [ADR-0047](docs/adr/0047-macos-launcher-dmg-installation.md).
+
 - Stream live answers, native-visible thinking summaries, tool activity and plans across Codex, DeepSeek Harness and Cloud Agent. Keep independent collapsible sections, paused partial output, exact quoted revisions and stable history position. Bounded cumulative snapshots preserve interleaving/replay, redact split credentials and retry identical updates until acknowledgement; Codex hidden reasoning and unrelated local conversations remain excluded. Matching native connector/plugin builds and a matching hosted image are required. See [ADR-0045](docs/adr/0045-streamed-public-agent-output.md).
 
 ### Fixed

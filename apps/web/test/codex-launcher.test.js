@@ -43,10 +43,11 @@ test("remembered email uses a one-day tab hint and removes expired stored hints 
   assert.equal(localStorage.getItem("gt-account-email-hint"), null, "expired local hint removed");
 });
 
-function fixture(create) {
+function fixture(create, options = {}) {
   const nodes = new Map(), revoked = [], opened = [];
   const get = key => {
     if (!nodes.has(key)) nodes.set(key, { value: "", textContent: "", hidden: false, disabled: false,
+      ...(key === "download-codex-launcher-button" ? { href: "https://github.com/TH060419/gatherthread/releases" } : {}),
       listeners: {}, addEventListener(event, fn) { this.listeners[event] = fn; } });
     return nodes.get(key);
   };
@@ -58,9 +59,58 @@ function fixture(create) {
     api: { createCodexLauncherAuthorization: create ?? (async () => ({ email: "user@example.invalid",
       authorization: { id, expires_at: new Date(Date.now() + 600_000).toISOString() } })),
       revokeDeviceAuthorization: async key => revoked.push(key) },
-    localizer: { t: value => value }, emailHint: hint, context: () => context, navigate: uri => opened.push(uri) });
+    localizer: { t: value => value }, emailHint: hint, context: () => context, navigate: uri => opened.push(uri), ...options });
   return { ui, get, hint, opened, revoked, change: () => { context = { ...context, scope: "b:project-b", projectId: "project-b" }; } };
 }
+
+test("the same Launcher download button uses a bounded exact same-source server index when deployed", async () => {
+  const source = "a".repeat(40), requests = [];
+  const f = fixture(undefined, { fetchResponse: async (url, options) => {
+    requests.push({ url, options });
+    return Response.json({ source_commit: source, index_path: `/downloads/${source}/index.html` });
+  } });
+  f.get("download-codex-launcher-button").href = "https://github.com/TH060419/gatherthread/releases";
+  await f.ui.open();
+  assert.equal(f.get("download-codex-launcher-button").href, `/downloads/${source}/index.html`);
+  assert.equal(requests[0].url, "/downloads/launcher.json");
+  assert.equal(requests[0].options.redirect, "error");
+  assert.equal(requests[0].options.cache, "no-store");
+  assert.equal(requests[0].options.credentials, "same-origin");
+  assert.ok(requests[0].options.signal instanceof AbortSignal);
+  assert.equal(f.get("open-codex-launcher-button").disabled, false);
+  f.ui.clear();
+});
+
+test("missing, oversized or unsafe download metadata preserves the Release fallback and password handoff", async () => {
+  const source = "a".repeat(40), fallback = "https://github.com/TH060419/gatherthread/releases";
+  for (const response of [new Response("test gate", { headers: { "content-type": "text/html" } }),
+    new Response("", { status: 404 }), Response.json({ source_commit: source, index_path: "https://evil.invalid/file" }),
+    Response.json({ source_commit: source, index_path: `/downloads/${"b".repeat(40)}/index.html` }),
+    Response.json({ source_commit: source, index_path: `/downloads/${source}/../index.html` }),
+    Response.json({ source_commit: `${source}\n`, index_path: `/downloads/${source}\n/index.html` }),
+    Response.json({ source_commit: source, index_path: `/downloads/${source}/index.html`, token: "never" }),
+    Response.json({ source_commit: source, index_path: `/downloads/${source}/index.html`, extra: "x".repeat(4096) })]) {
+    const f = fixture(undefined, { fetchResponse: async () => response });
+    f.get("download-codex-launcher-button").href = fallback;
+    await f.ui.open();
+    assert.equal(f.get("download-codex-launcher-button").href, fallback);
+    assert.equal(f.get("open-codex-launcher-button").disabled, false);
+    f.ui.clear();
+  }
+});
+
+test("a late download read after dialog close cannot rewrite the currently displayed link", async () => {
+  let resolve; const pending = new Promise(done => { resolve = done; });
+  const f = fixture(undefined, { fetchResponse: () => pending });
+  const fallback = "https://github.com/TH060419/gatherthread/releases";
+  f.get("download-codex-launcher-button").href = fallback;
+  const work = f.ui.open(); f.ui.close();
+  const source = "a".repeat(40);
+  resolve(Response.json({ source_commit: source, index_path: `/downloads/${source}/index.html` }));
+  await work;
+  assert.equal(f.get("download-codex-launcher-button").href, fallback);
+  f.ui.clear();
+});
 test("Launcher prepares a password handoff then opens synchronously on the actual click", async () => {
   const f = fixture(); await f.ui.open();
   assert.equal(f.get("open-codex-launcher-button").disabled, false);

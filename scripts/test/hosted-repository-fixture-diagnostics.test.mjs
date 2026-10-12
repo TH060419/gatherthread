@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { reportRepositoryFixtureFailure } from '../hosted-repository-fixture-diagnostics.mjs';
+import { reportRepositoryFixtureFailure, reportTrialFixtureFailure } from '../hosted-repository-fixture-diagnostics.mjs';
 
 const name = `gt-repository-${'a'.repeat(20)}`;
 function fixture(execute) {
@@ -105,4 +105,50 @@ test('repository smoke retains production run bounds, failure propagation and ex
   assert.match(source, /const fixtureArgs = args\.filter\(\(argument\) => argument !== '--rm'\)/u);
   assert.match(source, /await runDocker\(\[\.\.\.fixtureArgs\.slice\(0, -1\), '-e', 'GT_HOSTED_SMOKE_DEBUG=1', fixtureArgs\.at\(-1\)\],\s*90_000, 12 \* 1024 \* 1024\)/u);
   assert.match(source, /catch \(error\) \{[\s\S]*reportRepositoryFixtureFailure\(name, \{ createClient: createHostedDockerClient \}\);\s*throw error;\s*\} finally \{\s*stopHostedContainer\(name\)/u);
+});
+
+test('trial fixture diagnostics expose bounded typed container state, never raw logs or errors', () => {
+  const messages = [], commands = [];
+  let closed = 0;
+  reportTrialFixtureFailure(`gt-hosted-${'b'.repeat(16)}`, {
+    createClient: () => ({ environment: { PATH: '/fixture' }, close: () => { closed++; } }),
+    execute: (command, args, options) => {
+      commands.push({ command, args, options });
+      return { status: 0, stdout: JSON.stringify({ status: 'exited', exit_code: 137, oom_killed: true,
+        dead: false, secret: 'private-value' }), stderr: 'private stderr' };
+    }, write: message => messages.push(message),
+  });
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].args[1], 'inspect');
+  assert.equal(commands[0].args.at(-1), `gt-hosted-${'b'.repeat(16)}`);
+  assert.equal(commands[0].options.timeout, 5_000);
+  assert.match(messages.join(''), /"exit_code":137,"oom_killed":true/u);
+  assert.doesNotMatch(messages.join(''), /private|secret/u);
+  assert.equal(closed, 1);
+});
+
+test('trial diagnostics refuse other containers and fail safely for malformed state or write failure', () => {
+  for (const name of ['production', `gt-hosted-${'b'.repeat(16)}\n`, `gt-hosted-${'b'.repeat(15)}`]) {
+    reportTrialFixtureFailure(name, { createClient: () => assert.fail('must not inspect this name') });
+  }
+  for (const stdout of ['private-error', JSON.stringify({ status: 'private-value', exit_code: 1, oom_killed: false, dead: false })]) {
+    let closed = 0; const messages = [];
+    assert.doesNotThrow(() => reportTrialFixtureFailure(`gt-hosted-${'b'.repeat(16)}`, {
+      createClient: () => ({ environment: {}, close: () => { closed++; } }),
+      execute: () => ({ status: 0, stdout }), write: message => messages.push(message),
+    }));
+    assert.equal(closed, 1);
+    assert.deepEqual(messages, ['Trial fixture state: unavailable.\n']);
+  }
+  assert.doesNotThrow(() => reportTrialFixtureFailure(`gt-hosted-${'b'.repeat(16)}`, {
+    createClient: () => { throw new Error('private-error'); }, write: () => { throw new Error('closed'); },
+  }));
+});
+
+test('trial smoke retains isolation and timeout but preserves only its failed fixture for state inspection', () => {
+  const source = readFileSync(new URL('../test-hosted-container.mjs', import.meta.url), 'utf8');
+  assert.match(source, /const fixtureArgs = args\.filter\(argument => argument !== "--rm"\)/u);
+  assert.match(source, /await runDocker\(\[\.\.\.fixtureArgs\.slice\(0, -1\), "-e", "GT_HOSTED_SMOKE_DEBUG=1", fixtureArgs\.at\(-1\)\], 90_000\)/u);
+  assert.match(source, /reportTrialFixtureFailure\(name, \{ createClient: createHostedDockerClient \}\)/u);
+  assert.match(source, /finally \{\s*stopHostedContainer\(name\)/u);
 });

@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { HostedAgent, HOSTED_MODEL, hostedContainerMemoryMiB, runDocker } from "../apps/server/dist/src/hosted-agent.js";
-import { runHostedDockerCommand, stopHostedContainer } from "../apps/server/dist/src/hosted-agent-recovery.js";
+import { createHostedDockerClient, runHostedDockerCommand, stopHostedContainer } from "../apps/server/dist/src/hosted-agent-recovery.js";
+import { reportTrialFixtureFailure } from "./hosted-repository-fixture-diagnostics.mjs";
 import { CollaborationDatabase } from "../apps/server/dist/src/database.js";
 import { CollaborationService } from "../apps/server/dist/src/service.js";
 import { CodeRepository } from "../apps/server/dist/src/code-repository.js";
 import { HOSTED_CPUSET_ENTRYPOINT, parseHostedCpuSet } from "../apps/server/dist/src/hosted-container-cpu.js";
 import { parseHostedMemoryPolicy } from "../apps/server/dist/src/hosted-container-memory.js";
+import { hostedFailureCode } from "../apps/server/dist/src/hosted-agent-errors.js";
 
 // Match the hardened Linux service before production creates any mounted files.
 if (process.platform === "linux") process.umask(0o077);
@@ -23,7 +25,7 @@ const memoryMiB = hostedContainerMemoryMiB("trial", process.env.GATHERTHREAD_HOS
 const cpuSet = parseHostedCpuSet(process.env.GATHERTHREAD_HOSTED_AGENT_CPUSET);
 const memoryPolicy = parseHostedMemoryPolicy(process.env.GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY);
 const directory = mkdtempSync(join(tmpdir(), "gt-hosted-smoke-"));
-const endpoint = { id: "smoke", profileId: "default", label: "Smoke model", provider: "cloudflare-workers-ai",
+let endpoint = { id: "smoke", profileId: "default", label: "Smoke model", provider: "cloudflare-workers-ai",
   model: HOSTED_MODEL, baseUrl: `https://api.cloudflare.com/client/v4/accounts/${"a".repeat(32)}/ai/v1`,
   apiToken: "test-only-provider-token", quotaGroup: "smoke", dailyRuns: 4, maxConcurrent: 1 };
 const file = (path, content, executable = false) => ({ path,
@@ -41,16 +43,17 @@ const checks = "const assert=require('node:assert/strict'),fs=require('node:fs')
   + "assert.throws(()=>fs.writeFileSync('/input/src/deep/nested/value.cjs','tampered'),e=>e.code==='EROFS');"
   + "assert.throws(()=>fs.writeFileSync('/run/gatherthread/prompt.txt','tampered'),e=>e.code==='EROFS');"
   + "assert.equal(fs.readFileSync('/run/gatherthread/opencode.json','utf8').includes('test-only-provider-token'),false);"
+  + "assert.equal(fs.readFileSync('/run/gatherthread/opencode.json','utf8').includes('test-only-anthropic-token'),false);"
   + "assert.equal(Object.keys(process.env).some(k=>/^(GATHERTHREAD_|GITHUB_TOKEN$|GH_TOKEN$|AWS_|SILICONFLOW_API_KEY$|OPENAI_API_KEY$)/.test(k)),false);"
   + "fs.writeFileSync('src/deep/nested/value.cjs','module.exports = 2;\\n');console.log('READONLY_OK');console.log('SECRETS_ABSENT');";
 const commandMarker = `GT_SMOKE_COMMAND_OK_${randomBytes(12).toString("hex")}`;
 const command = `node -e ${JSON.stringify(checks)} && node test.cjs && printf '\\n%s\\n' ${commandMarker}`;
 
 function toolOutputLines(messages) {
-  return messages.filter((message) => message.role === "tool").flatMap((message) =>
-    typeof message.content === "string" ? [message.content]
-      : Array.isArray(message.content) ? message.content.filter((block) =>
-        block.type === "text" && typeof block.text === "string").map((block) => block.text) : [])
+  const text = content => typeof content === "string" ? [content] : Array.isArray(content)
+    ? content.flatMap(block => block.type === "text" ? [block.text] : block.type === "tool_result" ? text(block.content) : []) : [];
+  return messages.filter((message) => message.role === "tool" || Array.isArray(message.content)
+    && message.content.some(block => block.type === "tool_result")).flatMap(message => text(message.content))
     .flatMap((content) => content.split(/\r?\n/u));
 }
 let calls = 0;
@@ -58,13 +61,16 @@ let toolIssued = false;
 let observedChecks = false;
 let reportedFixtureFailure = false;
 const fetcher = async (url, init) => {
-    assert.equal(String(url), `${endpoint.baseUrl}/chat/completions`);
+    const native = endpoint.transport === "anthropic-messages";
+    assert.equal(String(url), `${endpoint.baseUrl}/${native ? "messages" : "chat/completions"}`);
+    assert.equal(new Headers(init.headers).get(native ? "x-api-key" : "authorization"), native ? endpoint.apiToken : `Bearer ${endpoint.apiToken}`);
     calls += 1;
     const body = JSON.parse(String(init?.body));
     let check = "prompt";
     try {
       assert.match(JSON.stringify(body.messages), /Update the nested source/, "Fixture user instruction missing from model request");
-      if (body.messages.some((message) => message.role === "tool")) {
+      if (body.messages.some((message) => message.role === "tool" || Array.isArray(message.content)
+        && message.content.some(block => block.type === "tool_result"))) {
         check = "tool stdout";
         const lines = toolOutputLines(body.messages);
         for (const marker of ["TEST_OK", "READONLY_OK", "SECRETS_ABSENT", commandMarker]) {
@@ -81,9 +87,27 @@ const fetcher = async (url, init) => {
       }
       throw error;
     }
-    const bash = Array.isArray(body.tools) && body.tools.some((tool) => tool?.function?.name === "bash");
+    const bash = Array.isArray(body.tools) && body.tools.some((tool) => (native ? tool?.name : tool?.function?.name) === "bash");
     const useTool = bash && !toolIssued;
     if (useTool) toolIssued = true;
+    if (native) {
+      assert.equal(body.model, endpoint.model);
+      assert.equal(new Headers(init.headers).get("anthropic-version"), "2023-06-01");
+      const content = useTool ? { type: "tool_use", id: "tool_smoke", name: "bash", input: { command,
+        description: "Verify read-only input and edit and test nested source" } } : { type: "text", text: "READY" };
+      const message = { id: `msg_fixture_${calls}`, type: "message", role: "assistant", model: endpoint.model,
+        content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 30, output_tokens: 0 } };
+      if (!body.stream) return Response.json({ ...message, content: [content], stop_reason: useTool ? "tool_use" : "end_turn",
+        usage: { input_tokens: 30, output_tokens: 20 } });
+      const frame = (type, fields) => `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
+      const data = frame("message_start", { message }) + frame("content_block_start", { index: 0,
+        content_block: useTool ? { ...content, input: {} } : { type: "text", text: "" } })
+        + frame("content_block_delta", { index: 0, delta: useTool ? { type: "input_json_delta", partial_json: JSON.stringify(content.input) }
+          : { type: "text_delta", text: "READY" } }) + frame("content_block_stop", { index: 0 })
+        + frame("message_delta", { delta: { stop_reason: useTool ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 20 } })
+        + frame("message_stop", {});
+      return new Response(data, { headers: { "content-type": "text/event-stream" } });
+    }
     const chunk = (delta, finish_reason = null) => JSON.stringify({
       id: "chatcmpl-test", object: "chat.completion.chunk", created: 1, model: HOSTED_MODEL,
       choices: [{ index: 0, delta, finish_reason }],
@@ -112,6 +136,8 @@ const fetcher = async (url, init) => {
 const database = new CollaborationDatabase(join(directory, "db.sqlite"), { authTokenPepper: "hosted-smoke-only-pepper" });
 async function runFixtureDocker(args) {
   const name = args[args.indexOf("--name") + 1];
+  assert.ok(typeof name === "string" && /^gt-hosted-[a-f0-9]{16}$/u.exec(name)?.[0] === name);
+  assert.equal(args.filter(argument => argument === "--rm").length, 1);
   assert.equal(args[args.indexOf("--user") + 1], "10001:10001");
   assert.equal(args[args.indexOf("--network") + 1], "none");
   assert.equal(args[args.indexOf("--cap-drop") + 1], "ALL");
@@ -140,8 +166,18 @@ async function runFixtureDocker(args) {
   assert.ok(controlMount);
   const control = controlMount.split("src=")[1].split(",dst=")[0];
   assert.equal(readFileSync(join(control, "opencode.json"), "utf8").includes(endpoint.apiToken), false);
+  const config = JSON.parse(readFileSync(join(control, "opencode.json"), "utf8"));
+  assert.equal(config.provider.hosted.npm, endpoint.transport === "anthropic-messages" ? "@ai-sdk/anthropic" : "@ai-sdk/openai-compatible");
+  const fixtureArgs = args.filter(argument => argument !== "--rm");
   try {
-    return await runDocker([...args.slice(0, -1), "-e", "GT_HOSTED_SMOKE_DEBUG=1", args.at(-1)], 90_000);
+    return await runDocker([...fixtureArgs.slice(0, -1), "-e", "GT_HOSTED_SMOKE_DEBUG=1", fixtureArgs.at(-1)], 90_000);
+  } catch (error) {
+    // Fixture-only allowlisted categories/booleans, never raw stderr, request,
+    // tools, headers or exception text. Keep the failure meaningful in CI.
+    process.stderr.write(`Hosted smoke runner failure: ${JSON.stringify({ code: hostedFailureCode(error),
+      provider_attempts: calls, tool_issued: toolIssued, observed_checks: observedChecks })}\n`);
+    reportTrialFixtureFailure(name, { createClient: createHostedDockerClient });
+    throw error;
   } finally { stopHostedContainer(name); }
 }
 
@@ -159,6 +195,9 @@ try {
   const result = await agent.request(actor, session.id, { profile_id: endpoint.profileId, include_code: true,
     content: "Update the nested source to export two, run its test, then reply READY.", idempotency_key: "smoke-run" });
   assert.ok(result.response_event, "the production trial must produce a terminal response");
+  if (result.response_event.payload.status === "failed") process.stderr.write(`Hosted smoke terminal failure: ${JSON.stringify({
+    code: hostedFailureCode(new Error(result.response_event.payload.error?.code)),
+    provider_attempts: calls, tool_issued: toolIssued, observed_checks: observedChecks })}\n`);
   assert.match(result.response_event.payload.content, /READY/);
   assert.ok(toolIssued, "OpenCode must advertise and invoke its bash tool");
   assert.ok(observedChecks && calls >= 2, "the harness must verify its actual tool results through the socket");
@@ -168,6 +207,33 @@ try {
     ? file(sourcePath, "module.exports = 2;\n") : entry).sort((a, b) => a.path.localeCompare(b.path)));
   const memoryDescription = memoryPolicy === "shared-host" ? "shared-host RAM/swap" : `${memoryMiB}m`;
   process.stdout.write(`Hosted OpenCode production-path smoke passed at ${memoryDescription}${cpuSet === undefined ? "" : ` with guarded CPU ${cpuSet}`} under strict Linux umask: nested source edited and tested, read-only input and credential isolation verified; ${calls} fake model call(s).\n`);
+  // Exercise the bundled native Anthropic SDK against the same immutable,
+  // network-disabled executor and its real bash/tool-result loop. No provider
+  // account/key or extra SDK download is involved in this fixture.
+  const nativeActor = database.createIdentity({ display_name: "Native smoke", device_name: "Fixture", can_create_projects: true }).actor;
+  const nativeSession = service.createSession(nativeActor, { session_id: "native-smoke-session", idempotency_key: "native-smoke-session",
+    mode: "solo", title: "Native Messages fixture" }).session;
+  repository.enable(nativeActor, nativeSession.project_id, { idempotency_key: "native-smoke-enable" });
+  repository.checkpoint(nativeActor, nativeSession.project_id, { base_commit: null, files: initialFiles,
+    message: "Fixture source", idempotency_key: "native-smoke-initial" });
+  const nativeAgent = new HostedAgent(service, repository, { endpoints: [endpoint], image: inspected.stdout.trim(),
+    personalApiEncryptionKey: randomBytes(32).toString("base64"), memoryMiB, memoryPolicy, ...(cpuSet === undefined ? {} : { cpuSet }),
+    userDailyRuns: 4, globalDailyRuns: 4, maxConcurrent: 1, fetch: fetcher, runContainer: runFixtureDocker });
+  const saved = nativeAgent.putPersonalApi(nativeActor, randomUUID(), { expected_revision: null, provider_id: "anthropic",
+    label: "Native fixture", model: "claude-fixture", enabled: true, api_key: ["test", "only", "anthropic", "token"].join("-") });
+  endpoint = nativeAgent.personalApi.resolve(nativeActor, saved.profile_id, saved.revision);
+  calls = 0; toolIssued = false; observedChecks = false; reportedFixtureFailure = false;
+  const nativeResult = await nativeAgent.request(nativeActor, nativeSession.id, { profile_id: saved.profile_id, api_config_revision: saved.revision,
+    include_code: true, content: "Update the nested source to export two, run its test, then reply READY.", idempotency_key: "native-smoke-run" });
+  if (nativeResult.response_event?.payload.status === "failed") process.stderr.write(`Native smoke terminal failure: ${JSON.stringify({
+    code: hostedFailureCode(new Error(nativeResult.response_event.payload.error?.code)),
+    provider_attempts: calls, tool_issued: toolIssued, observed_checks: observedChecks })}\n`);
+  assert.match(nativeResult.response_event?.payload?.content ?? "", /READY/);
+  assert.ok(toolIssued && observedChecks && calls >= 2, "native SDK must stream a bash call and its actual result before the answer");
+  const nativeStatus = repository.status(nativeActor, nativeSession.project_id);
+  assert.deepEqual(repository.snapshot(nativeActor, nativeSession.project_id, nativeStatus.own_branch_id).snapshot.files, snapshot.files);
+  assert.equal(database.hostedAgentUsage(nativeActor, 4, 4).user_used_runs, 0);
+  process.stdout.write(`Hosted bundled Anthropic Messages smoke passed at ${memoryDescription}: native streamed tools, tool results, final answer and private checkpoint; ${calls} synthetic call(s).\n`);
 } finally {
   database.close();
   rmSync(directory, { recursive: true, force: true });

@@ -1,4 +1,4 @@
-import { initials } from "./domain.js";
+import { initials } from "./domain.js?v=20261012-content-1";
 
 const svgImage = (content) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">${content}</svg>`)}`;
 const face = (background, fur, ears, detail = "") => svgImage(

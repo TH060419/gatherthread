@@ -1,17 +1,20 @@
-import { fillRepositoryFields, bindRepositoryFields } from "./github-setup.js";
+import { fillRepositoryFields, bindRepositoryFields } from "./github-setup.js?v=20261012-content-1";
+import { rememberGithubReturn, consumeGithubReturn } from "./github-return-context.js?v=20261012-content-1";
 /** Private cloud repository tasks. No provider or GitHub credentials enter this module. */
 export function mountCloudGithub({ api: getApi, context, t, setText = (node, source) => { node.textContent = t(source); }, agentEnabled = false, openSurface = () => {}, document: doc = document }) {
   const el = (id) => doc.getElementById(id);
   const dialog = el("project-code-dialog");
   let generation = 0, selected = null, taskRows = [], key = "", pending = false, bindingKey;
   let stage = "account", connectionStatus = null;
+  let authorizationCompletion;
+  function returnStorage() { try { return window.sessionStorage; } catch { return null; } }
   const updateRepository = bindRepositoryFields(el, "cloud-github");
   function showStage(value) {
     stage = value;
     el("github-cloud-account").hidden = stage !== "account";
     el("cloud-github-repository-form").hidden = stage !== "repository" || !connectionStatus?.connected;
     el("github-cloud-home").hidden = stage !== "tasks";
-    el("github-cloud-step").textContent = t(stage === "account" ? "1 / 3 · Connect GitHub" : stage === "repository" ? "2 / 3 · Choose a repository" : "3 / 3 · Start a task");
+    el("github-cloud-step").textContent = t(stage === "account" ? "1 / 3 · Connect GitHub" : stage === "repository" ? "2 / 3 · Choose a repository" : "3 / 3 · Ready to use");
     el("cloud-github-back").hidden = !connectionStatus?.binding || stage === "tasks";
   }
   const message = (value) => setText(el("cloud-github-error"), value);
@@ -37,6 +40,8 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     el("cloud-github-continue").disabled = true;
     for (const id of ["cloud-github-status", "cloud-github-error", "cloud-github-task-status", "cloud-github-answer"]) el(id).textContent = "";
     fillRepositoryFields(el, "cloud-github", ""); el("cloud-github-base").value = "main";
+    delete el("github-mode-local").dataset.repository;
+    delete el("github-mode-local").dataset.baseBranch;
     el("cloud-github-pr-title").value = ""; el("cloud-github-pr-body").value = "";
     el("cloud-github-pr-link").hidden = true; el("cloud-github-pr-link").removeAttribute("href");
     el("cloud-github-controls").hidden = true;
@@ -115,6 +120,8 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     }
     const newlyConnected = status.connected && !connectionStatus?.connected;
     connectionStatus = status;
+    el("github-mode-local").dataset.repository = status.binding?.repository ?? "";
+    el("github-mode-local").dataset.baseBranch = status.binding?.base_branch ?? "main";
     el("cloud-github-controls").hidden = !status.enabled;
     if (!status.enabled) return;
     const install = el("cloud-github-install");
@@ -151,6 +158,7 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     if (gen !== generation) return;
     const url = new URL(authorization_url);
     if (url.origin !== "https://github.com" || url.pathname !== "/login/oauth/authorize") throw new Error("Invalid GitHub authorization URL");
+    rememberGithubReturn(returnStorage(), context());
     window.location.assign(url.href);
   }));
   el("cloud-github-repository-form").addEventListener("submit", (event) => {
@@ -228,21 +236,54 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
     async start(sessionId, input) {
       if (!agentEnabled) throw new Error("Cloud Agent · coming later");
       updateContext(); const gen = generation;
+      const parentId = el("cloud-github-parent").value;
+      const revision = parentId && selected?.id === parentId ? selected.api_config_revision : input.apiConfigRevision;
       const task = await getApi().startHostedGithubTask(sessionId, { content: input.content, profile_id: input.profileId,
         idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null,
-        ...(el("cloud-github-parent").value ? { continue_task_id: el("cloud-github-parent").value } : {}) });
+        ...(revision === undefined ? {} : { api_config_revision: revision }),
+        ...(parentId ? { continue_task_id: parentId } : {}) });
       if (gen === generation && context().sessionId === sessionId) {
         el("cloud-github-parent").value = ""; setText(el("cloud-github-selected"), "New repository task");
         selected = task;
       }
       return task;
     },
+    async openSetup(error = "") {
+      updateContext();
+      openSurface();
+      await action(refresh);
+      if (error) message(error);
+    },
     async completeAuthorization() {
+      if (authorizationCompletion) return authorizationCompletion;
       const hash = new URLSearchParams(window.location.hash.slice(1));
-      if (!hash.has("github_code")) return;
+      if (!hash.has("github_code")) return { handled: false };
+      const actorId = context().userId;
+      if (!actorId) return { handled: false };
       const input = { code: hash.get("github_code"), state: hash.get("github_state") };
-      history.replaceState(null, "", window.location.pathname + window.location.search);
-      await action(async () => { await getApi().completeHostedGithub(input); });
+      const destination = consumeGithubReturn(returnStorage(), actorId);
+      hash.delete("github_code"); hash.delete("github_state");
+      const path = window.location.pathname + window.location.search;
+      const remaining = hash.toString();
+      history.replaceState(null, "", path + (remaining ? `#${remaining}` : ""));
+      authorizationCompletion = (async () => {
+        try {
+          await getApi().completeHostedGithub(input);
+          if (context().userId !== actorId) return { handled: false };
+          return { handled: true, error: "" };
+        } catch {
+          return context().userId === actorId
+            ? { handled: true, error: "Could not finish GitHub sign-in. Connect again." } : { handled: false };
+        } finally {
+          if (context().userId === actorId && destination) {
+            const route = new URLSearchParams({ project: destination.projectId });
+            if (destination.sessionId) route.set("session", destination.sessionId);
+            history.replaceState(null, "", `${path}#${route}`);
+          }
+        }
+      })();
+      try { return await authorizationCompletion; }
+      finally { authorizationCompletion = null; }
     },
   };
 }

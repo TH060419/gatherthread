@@ -384,6 +384,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         heading.font = .boldSystemFont(ofSize: 21)
         stack.addArrangedSubview(heading)
         addNote("网页带入邮箱和项目，只需输入账号密码，授权此 Mac 独立连接。", to: stack)
+        addNote("安装：将 DMG 中的应用拖入‘应用程序’，从那里首次打开。\nInstall: drag the app from the DMG to Applications; open it there once.", to: stack)
         stack.addArrangedSubview(environmentLabel)
         stack.addArrangedSubview(NSButton(title: "打开 GatherThread 网页", target: self, action: #selector(openWebsite)))
         codex.stringValue = executableCodex()
@@ -447,15 +448,18 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         outer.addArrangedSubview(scroll)
         scroll.widthAnchor.constraint(equalTo: outer.widthAnchor).isActive = true
         scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 120).isActive = true
-        addNote("关闭窗口会保留正在运行的连接；从 Dock 恢复后可停止连接。插件需在 Codex 中单独安装与审查 Hooks。", to: outer)
+        addNote("若 macOS 阻止打开：核对官方包后前往 系统设置 → 隐私与安全性 → 仍要打开。尚未通过 Apple 公证。\nIf blocked: verify the official package, then use System Settings → Privacy & Security → Open Anyway. Not Apple-notarized.", to: stack, emphasized: true)
+        addNote("审查、信任并允许共序 Hooks，才能同步 Codex 直接回合。\nReview, trust and allow GatherThread Hooks before syncing direct Codex turns.", to: outer, emphasized: true)
+        addNote("关闭窗口不会停止连接；从 Dock 恢复后可停止。\nClosing the window keeps the connection running; restore it from the Dock to stop.", to: outer)
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         if let pendingLink { self.pendingLink = nil; application(NSApp, open: [pendingLink]) }
     }
 
-    private func addNote(_ value: String, to stack: NSStackView) {
+    private func addNote(_ value: String, to stack: NSStackView, emphasized: Bool = false) {
         let label = NSTextField(wrappingLabelWithString: value)
-        label.textColor = .secondaryLabelColor
+        label.textColor = emphasized ? .labelColor : .secondaryLabelColor
+        if emphasized { label.font = .boldSystemFont(ofSize: 13) }
         stack.addArrangedSubview(label)
         label.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
     }
@@ -838,6 +842,17 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
         application(NSApp, open: [URL(string: uri)!])
         window.contentView!.layoutSubtreeIfNeeded()
         let content = window.contentView!
+        func labels(in view: NSView) -> [NSTextField] {
+            (view as? NSTextField).map { [$0] } ?? view.subviews.flatMap { labels(in: $0) }
+        }
+        let notices = labels(in: content)
+        let security = notices.first { $0.stringValue.contains("系统设置 → 隐私与安全性 → 仍要打开") }
+        let hooks = notices.first { $0.stringValue.contains("审查、信任并允许共序 Hooks") }
+        guard let securityFont = security?.font, let hooksFont = hooks?.font,
+              NSFontManager.shared.traits(of: securityFont).contains(.boldFontMask),
+              NSFontManager.shared.traits(of: hooksFont).contains(.boldFontMask) else {
+            throw LinkError.invalid("安装安全路径和 Hooks 信任说明未以醒目粗体显示")
+        }
         guard advancedSettings.isHidden, email.stringValue == "person@example.com", !email.isEditable,
               password.stringValue.isEmpty, password.isEnabled, startButton.isEnabled,
               connectionOrigin == testOrigin,
@@ -846,7 +861,7 @@ private final class Launcher: NSObject, NSApplicationDelegate, NSWindowDelegate 
             throw LinkError.invalid("邮箱密码表单布局不完整或按钮不可见")
         }
         window.orderOut(nil)
-        print("macOS Launcher form: prefilled email, masked password, compact settings, reachable connect button")
+        print("macOS Launcher form: prefilled email, masked password, compact settings, reachable connect button, bold installation/Hook guidance")
     }
 
     func verifyCancelledAuthorization() throws {

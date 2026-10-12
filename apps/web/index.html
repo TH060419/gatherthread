@@ -15,7 +15,7 @@
       content="GatherThread, a lightweight multi-harness collaboration client."
     />
     <title>GatherThread</title>
-    <link rel="stylesheet" href="./src/styles.css?v=20261012-invite-1" />
+    <link rel="stylesheet" href="./src/styles.css?v=20261012-content-1" />
   </head>
   <body>
     <div id="boot-screen" class="boot-screen" role="status" aria-live="polite"><img src="./favicon-32x32.png" alt="" width="32" height="32"><span>GatherThread</span></div>
@@ -651,16 +651,12 @@
           <div class="code-actions"><button id="code-confirm-accept" class="button button-primary compact-button" type="button">Continue</button><button id="code-confirm-cancel" class="button button-secondary compact-button" type="button">Cancel</button></div>
         </section>
         <nav class="code-actions" aria-label="Choose file storage">
-          <button id="code-provider-gt-cloud" type="button" class="button button-secondary" aria-pressed="true" aria-controls="code-gt-cloud-panel">GT Cloud</button>
-          <button id="code-provider-github" type="button" class="button button-secondary" aria-pressed="false" aria-controls="code-github-panel">GitHub</button>
+          <button id="code-provider-github" type="button" class="button button-secondary" aria-pressed="true" aria-controls="code-github-panel">GitHub · recommended</button>
+          <button id="code-provider-gt-cloud" type="button" class="button button-secondary" aria-pressed="false" aria-controls="code-gt-cloud-panel">GT Cloud · try it</button>
         </nav>
         <div id="code-github-panel" hidden>
-        <nav class="github-mode-picker" aria-label="GitHub usage">
-          <button id="github-mode-cloud" type="button" class="button button-secondary" aria-pressed="true" aria-controls="cloud-github-panel">Cloud Agent</button>
-          <button id="github-mode-local" type="button" class="button button-secondary" aria-pressed="false" aria-controls="github-code-section">Sync computer files</button>
-        </nav>
         <section id="github-code-section" class="code-section" aria-labelledby="github-code-title" hidden>
-          <h3 id="github-code-title">Sync computer files with GitHub</h3>
+          <h3 id="github-code-title" tabindex="-1">Sync computer files with GitHub</h3>
           <p id="github-local-step" class="github-step" role="status"></p>
           <p id="github-code-status" role="status" aria-live="polite"></p>
           <p id="github-code-error" class="form-error" role="alert"></p>
@@ -722,11 +718,12 @@
           </details>
           </div>
           <button id="github-code-back" type="button" class="text-button">Back</button>
+          <button id="github-mode-cloud" type="button" class="text-button" aria-controls="cloud-github-panel">Back to file settings</button>
         </section>
         <section id="cloud-github-panel" class="code-section" aria-labelledby="cloud-github-title">
-          <h3 id="cloud-github-title">Use GitHub with Cloud Agent</h3>
+          <h3 id="cloud-github-title" tabindex="-1">Your project files on GitHub</h3>
           <p id="github-cloud-step" class="github-step" role="status"></p>
-          <p id="cloud-github-description" class="code-help">Files stay in GitHub. Review the Agent's changes before merging.</p>
+          <p id="cloud-github-description" class="code-help">Keep files in your own GitHub repository. Choose who can access them on GitHub.</p>
           <p id="cloud-github-status" role="status" aria-live="polite"></p><p id="cloud-github-error" class="form-error" role="alert"></p>
           <div id="cloud-github-controls" hidden>
             <div id="github-cloud-account">
@@ -751,7 +748,7 @@
             <button id="cloud-github-account-settings" type="button" class="text-button">Account settings</button></div>
             <details class="github-advanced"><summary>Supported projects and limits</summary><p>Requires an npm project with package.json and package-lock.json. Public npm dependencies are installed without lifecycle scripts. Each run allows up to 15 minutes; saved source expires after seven days.</p></details>
             <button id="cloud-github-refresh" type="button" class="text-button">Refresh cloud tasks</button>
-            <button id="cloud-github-new" type="button" class="text-button" disabled aria-describedby="cloud-github-agent-availability">New repository task</button>
+            <button id="cloud-github-new" type="button" class="button button-primary" disabled aria-describedby="cloud-github-agent-availability">Ask Cloud Agent to work on these files</button>
             <p id="cloud-github-agent-availability" class="field-help">Select an available cloud model.</p>
             <details class="github-advanced"><summary>Saved tasks</summary>
             <nav id="cloud-github-task-list" aria-label="Your cloud tasks"></nav>
@@ -771,9 +768,13 @@
             </div>
             <button id="cloud-github-back" type="button" class="text-button" hidden>Back</button>
           </div>
+          <div class="github-computer-option">
+            <button id="github-mode-local" type="button" class="button button-secondary" aria-controls="github-code-section">Sync files from my computer</button>
+            <p class="field-help">Optional: connect a computer to upload changes automatically and download your files.</p>
+          </div>
         </section>
         </div>
-        <div id="code-gt-cloud-panel">
+        <div id="code-gt-cloud-panel" hidden>
         <h3 class="code-provider-heading">GT Cloud · small trials</h3>
         <div class="code-toolbar"><span id="code-repository-status" role="status"></span><button id="code-refresh-button" class="text-button" type="button">Refresh</button></div>
         <p id="code-error" class="form-error" role="alert"></p>
@@ -1011,6 +1012,11 @@
             <li>
               <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3 id="codex-launcher-title">Install the Launcher</h3><p>Download the current Windows or macOS Launcher once. Keep Codex Desktop signed in.</p></div></div>
               <a id="download-codex-launcher-button" class="button button-secondary" href="https://github.com/TH060419/gatherthread/releases" target="_blank" rel="noopener noreferrer">Download Launcher</a>
+              <div id="codex-launcher-macos-install" class="field-help" hidden>
+                <p>On Mac, open the DMG and drag GatherThread Launcher to Applications. Open it from Applications once.</p>
+                <p><span>If macOS blocks it, go to</span> <strong>System Settings → Privacy &amp; Security → Open Anyway</strong>.</p>
+                <p>Use Open Anyway only after checking the official download. This Launcher is not Apple-notarized.</p>
+              </div>
             </li>
             <li>
               <div class="connection-step-heading"><span class="step-number" aria-hidden="true">2</span><div><h3>Open and sign in</h3><p>Your email is filled in. Enter your password only in the Launcher, then connect.</p></div></div>
@@ -1024,7 +1030,7 @@
               <p id="codex-launcher-status" class="field-help" role="status" aria-live="polite"></p>
             </li>
             <li>
-              <div class="connection-step-heading"><span class="step-number" aria-hidden="true">3</span><div><h3>Confirm in Codex</h3><p>If prompted, install the plugin from the Launcher. Restart Codex Desktop, review and enable GatherThread Hooks, then keep the Launcher running.</p></div></div>
+              <div class="connection-step-heading"><span class="step-number" aria-hidden="true">3</span><div><h3>Confirm in Codex</h3><p>If prompted, install the plugin from the Launcher, then restart Codex Desktop.</p><p><strong>Review, trust and allow GatherThread Hooks in Codex before using Desktop turn sync.</strong></p><p>Keep the Launcher running while connected.</p></div></div>
             </li>
           </ol>
         </section>
@@ -1200,6 +1206,7 @@ codex plugin add gatherthread@gatherthread</code>
         <div class="settings-layout">
           <nav class="settings-navigation" aria-label="Settings sections">
             <a href="#settings-general">General</a>
+            <a href="#settings-personal-api">Personal API</a>
             <a href="#settings-profile">Profile</a>
             <a href="#settings-device">This device</a>
             <a href="#settings-account">Account &amp; privacy</a>
@@ -1236,6 +1243,34 @@ codex plugin add gatherthread@gatherthread</code>
                   <button class="button button-secondary" type="button" data-onboarding-topic="browse">Browse example project</button>
                 </div>
               </div>
+            </section>
+
+            <section id="settings-personal-api" class="settings-section" aria-labelledby="settings-personal-api-title">
+              <div class="settings-section-heading">
+                <div><p class="eyebrow">Personal API</p><h3 id="settings-personal-api-title">Use your own cloud model</h3></div>
+                <p>Your provider bills your own usage. GatherThread still applies shared-server safety limits.</p>
+              </div>
+              <p class="field-help">Only your account can use these connections. Saved keys are encrypted on the server and never shown again. Choose one under Cloud Agent when sending a request.</p>
+              <div class="avatar-settings-actions">
+                <button id="cloud-api-new" class="button button-secondary" type="button">Add API connection</button>
+                <button id="cloud-api-refresh" class="text-button" type="button">Refresh connections</button>
+              </div>
+              <ul id="cloud-api-list" class="account-device-list" aria-label="My API connections"></ul>
+              <fieldset id="cloud-api-editor" class="personal-api-editor" hidden>
+                <legend>API connection</legend>
+                <label class="settings-row" for="cloud-api-provider"><span><strong>Provider</strong><small>Choose the service that issued your key.</small></span><select id="cloud-api-provider"></select></label>
+                <p class="field-help"><code id="cloud-api-endpoint" data-i18n-skip></code> · <a id="cloud-api-docs" target="_blank" rel="noopener noreferrer">Provider instructions</a></p>
+                <label class="settings-row" for="cloud-api-label"><span><strong>Connection name</strong><small>A short name to recognize this model.</small></span><input id="cloud-api-label" type="text" autocomplete="off" maxlength="80" /></label>
+                <label class="settings-row" for="cloud-api-model"><span><strong>Model ID</strong><small>Copy the exact model ID from your provider.</small></span><input id="cloud-api-model" type="text" autocomplete="off" spellcheck="false" maxlength="160" /></label>
+                <label class="settings-row" for="cloud-api-key"><span><strong>API key</strong><small>Submitted securely once. Leave blank when editing to keep the saved key.</small></span><input id="cloud-api-key" type="password" autocomplete="off" maxlength="4096" spellcheck="false" /></label>
+                <label class="settings-row settings-toggle" for="cloud-api-enabled"><span><strong>Enable this connection</strong><small>Pausing stops new requests and any active task using it.</small></span><input id="cloud-api-enabled" type="checkbox" role="switch" checked /><span class="settings-switch-visual" aria-hidden="true"></span></label>
+                <div class="avatar-settings-actions">
+                  <button id="cloud-api-cancel" class="button button-secondary" type="button">Cancel</button>
+                  <button id="cloud-api-save" class="button button-primary" type="button">Save API connection</button>
+                  <button id="cloud-api-delete" class="text-button danger-text-button" type="button" hidden>Delete API connection</button>
+                </div>
+              </fieldset>
+              <p id="cloud-api-status" class="field-help" role="status" aria-live="polite" data-i18n-skip></p>
             </section>
 
             <section id="settings-profile" class="settings-section" aria-labelledby="settings-profile-title">
@@ -1452,6 +1487,6 @@ codex plugin add gatherthread@gatherthread</code>
       <button id="dismiss-attention-notice" class="attention-notice-dismiss" type="button" aria-label="Dismiss notification">×</button>
     </div>
     <div id="announcement" class="sr-only" aria-live="polite" aria-atomic="true"></div>
-    <script type="module" src="./src/bootstrap.js?v=20261010-1"></script>
+    <script type="module" src="./src/bootstrap.js?v=20261012-content-1"></script>
   </body>
 </html>

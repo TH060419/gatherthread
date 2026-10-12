@@ -1,4 +1,4 @@
-import { normalizeLauncherEmail, projectCodexLauncherUrl } from "./domain.js";
+import { normalizeLauncherEmail, projectCodexLauncherUrl } from "./domain.js?v=20261012-content-1";
 
 const EMAIL_HINT_KEY = "gt-account-email-hint";
 const optionalStorage = (name) => { try { return globalThis[name]; } catch { return null; } };
@@ -49,12 +49,43 @@ export function createAccountEmailHint({ sessionStorage = optionalStorage("sessi
 }
 
 export function mountCodexLauncher({ document, api, localizer, emailHint, context,
+  platform = globalThis.navigator?.userAgentData?.platform ?? globalThis.navigator?.platform ?? "",
+  fetchResponse = globalThis.fetch,
   navigate = uri => { globalThis.location.href = uri; } }) {
   const get = id => document.getElementById(id);
   const button = get("open-codex-launcher-button"), prepareButton = get("prepare-codex-launcher-button");
   const email = get("codex-launcher-email"), status = get("codex-launcher-status");
+  const macInstall = get("codex-launcher-macos-install");
+  if (macInstall) macInstall.hidden = !/^mac/i.test(platform);
   const grants = new Map();
-  let generation = 0, prepared = null;
+  let generation = 0, downloadGeneration = 0, prepared = null;
+  const download = get("download-codex-launcher-button"), releaseFallback = download?.href;
+  const readDownloads = async () => {
+    const run = downloadGeneration;
+    if (!download || typeof fetchResponse !== "function") return;
+    download.href = releaseFallback;
+    let reader;
+    try {
+      const response = await fetchResponse("/downloads/launcher.json", { cache: "no-store", redirect: "error",
+        credentials: "same-origin", signal: AbortSignal.timeout(2000) });
+      if (response.status !== 200 || response.redirected || !/^application\/json(?:;|$)/i.test(response.headers.get("content-type") ?? "")
+        || Number(response.headers.get("content-length")) > 2048 || !response.body) return;
+      reader = response.body.getReader();
+      let bytes = 0, text = ""; const decoder = new TextDecoder();
+      for (;;) {
+        const chunk = await reader.read(); if (chunk.done) break;
+        bytes += chunk.value.byteLength; if (bytes > 2048) return;
+        text += decoder.decode(chunk.value, { stream: true });
+      }
+      text += decoder.decode();
+      const manifest = JSON.parse(text);
+      if (!manifest || Array.isArray(manifest) || Object.keys(manifest).sort().join(",") !== "index_path,source_commit"
+        || typeof manifest.source_commit !== "string" || manifest.source_commit.length !== 40 || !/^[a-f0-9]{40}$/u.test(manifest.source_commit)
+        || manifest.index_path !== `/downloads/${manifest.source_commit}/index.html`) return;
+      if (run === downloadGeneration) download.href = manifest.index_path;
+    } catch { /* Unconfigured/self-hosted instances retain the official Release link. */ }
+    finally { try { await reader?.cancel(); } catch {} }
+  };
   const tell = value => { status.textContent = localizer.t(value); };
   const revoke = id => { void api.revokeDeviceAuthorization(id).catch(() => {}); };
   const invalidate = ({ keepOpened = false } = {}) => {
@@ -64,8 +95,8 @@ export function mountCodexLauncher({ document, api, localizer, emailHint, contex
       clearTimeout(grant.timer); grants.delete(id); revoke(id);
     }
   };
-  const clear = () => { invalidate(); email.value = ""; status.textContent = ""; };
-  const close = () => { invalidate({ keepOpened: true }); status.textContent = ""; };
+  const clear = () => { downloadGeneration++; invalidate(); email.value = ""; status.textContent = ""; };
+  const close = () => { downloadGeneration++; invalidate({ keepOpened: true }); status.textContent = ""; };
   const prepare = async () => {
     invalidate({ keepOpened: true });
     const run = generation, current = context();
@@ -123,10 +154,12 @@ export function mountCodexLauncher({ document, api, localizer, emailHint, contex
   email.addEventListener("input", () => invalidate({ keepOpened: true }));
   return { clear, close, async open() {
     close(); const current = context(); if (!current) return;
+    const downloads = readDownloads();
     email.value = emailHint.read(current.userId);
     get("codex-launcher-email-row").hidden = Boolean(email.value);
     get("codex-launcher-account").textContent = email.value;
     if (email.value) await prepare();
     else tell("Enter the email you use to sign in, then confirm it.");
+    await downloads;
   } };
 }

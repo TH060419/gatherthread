@@ -2,7 +2,7 @@
 
 **Beta 1 availability:** the Cloud Agent entry is open. Running a task still requires the operator's validated provider/container configuration; publishing npm or deploying the build does not supply API credentials or enable an unconfigured server. Check the workspace's current model/status before requesting a task. This release targets the isolated test service, not production activation.
 
-Choose the cloud trial Agent, describe a small task, and read its answer in the same shared conversation. You do not need to install a local Agent or provide an API key. Available models, usage allowances and service status are shown in the workspace.
+Choose the cloud Agent, describe a small task, and read its answer in the same shared conversation. No local Agent installation is needed. Platform trial models need no personal key; you can also add your own API in Settings. Available models, usage allowances and service status are shown in the workspace.
 
 [Illustrated workflow](PRODUCT_GUIDE.md) · [简体中文](HOSTED_AGENT_GUIDE.zh-CN.md)
 
@@ -28,6 +28,14 @@ The limits below describe temporary-workspace and GT Cloud code tasks. GitHub re
 - Use the summary button to select completed messages and generate a shared summary with your selected cloud or local Agent. Cloud summaries send only those messages and your summary instructions to the selected provider, not project files. Original messages remain available. No local Agent installation is required for a cloud summary.
 
 For container build, quotas, and credentials, see the [operator guide](HOSTED_AGENT.md).
+
+## Use your own API
+
+1. Open **Settings → Personal API → Add API connection**. Choose the provider, enter a name, its exact model ID and your key. Saving does not invoke a model or run a billable test.
+2. Open Agent options beside the message box, choose **Cloud Agent** and your saved model, then request a task. It also supports shared summaries and eligible authorized GitHub repository tasks.
+3. Only your account may use the connection. Keys are encrypted on the server and never shown again. Leave the key blank when editing to retain it; switching provider requires a new key. Pausing or deleting a connection stops active work using it. Retry and resume stay pinned to the original configuration; after it changes, select the current settings and start a new request. No silent model or payer fallback occurs.
+
+Fixed official APIs support OpenAI, Anthropic, DeepSeek, SiliconFlow CN/global and OpenRouter; arbitrary addresses or headers are unsupported. Your provider bills your account, so set spending limits there too. Personal APIs accept up to 100 tasks/account and 1,000 tasks/server per UTC day and retain common concurrency, resource and runtime limits. They do not consume the platform trial allowance. Check current availability in the workspace.
 
 ## GitHub cloud projects
 

@@ -1,6 +1,12 @@
 # GatherThread Codex Launcher for Windows
 
 For the corresponding native macOS app, see [macOS README](macos/README.md).
+Mac users receive a DMG with a drag-to-Applications folder and bilingual install
+instructions; the Windows ZIP/`Install.cmd` path below is unchanged. Both Web
+and native guides prominently require **reviewing, trusting and allowing Hooks**
+before syncing turns typed directly in Codex. Mac's verified-download-only
+**System Settings → Privacy & Security → Open Anyway** step is not a Windows
+installation step.
 
 This folder builds a Windows x64 ZIP containing a private Python runtime, a
 private Node 24 runtime, the repository's `@gatherthread/codex-connect@0.1.0-beta.1`

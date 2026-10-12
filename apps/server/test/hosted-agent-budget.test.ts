@@ -96,7 +96,8 @@ test("daily usage backfills legacy and current jobs once, survives recovery, and
     db.close(); db = new CollaborationDatabase(f.path, f.options);
     assert.equal(db.hostedAgentUsage(f.actor, 3, 3).global_used_runs, 3);
     assert.deepEqual(db.sqlite.prepare("PRAGMA table_info(hosted_agent_daily_usage)").all().map((r) => r.name),
-      ["request_event_id", "user_id", "utc_day", "quota_group"]);
+      ["request_event_id", "user_id", "utc_day", "quota_group", "billing_source"]);
+    assert.ok(db.sqlite.prepare("SELECT billing_source FROM hosted_agent_daily_usage").all().every(row => row.billing_source === "service"));
     assert.deepEqual(db.sqlite.prepare("PRAGMA foreign_key_list(hosted_agent_daily_usage)").all(), []);
     db.deleteProject(f.actor, session.project_id);
     db.close(); db = new CollaborationDatabase(f.path, f.options);

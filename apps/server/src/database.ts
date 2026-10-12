@@ -56,6 +56,8 @@ import { CODE_REPOSITORY_SCHEMA } from "./code-repository-schema.js";
 import type { HostedAllocation, HostedRunLimits } from "./hosted-agent-pool.js";
 import { HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT } from "./hosted-agent-pool.js";
 import { HOSTED_AGENT_SCHEMA } from "./hosted-agent-schema.js";
+import { CLOUD_API_SCHEMA } from "./cloud-api-schema.js";
+import { cloudApiRunIsCurrent } from "./cloud-api.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
 import { hostedFailureCode, hostedFailureContent } from "./hosted-agent-errors.js";
@@ -995,6 +997,12 @@ export class CollaborationDatabase {
     this.sqlite.exec(CODE_REPOSITORY_SCHEMA);
     this.transaction(() => {
       this.sqlite.exec(HOSTED_AGENT_SCHEMA);
+      this.sqlite.exec(CLOUD_API_SCHEMA);
+      if (!this.sqlite.prepare("PRAGMA table_info(hosted_agent_daily_usage)").all().some(row => row.name === "billing_source")) {
+        this.sqlite.exec("ALTER TABLE hosted_agent_daily_usage ADD COLUMN billing_source TEXT NOT NULL DEFAULT 'service' CHECK(billing_source IN ('service','personal'))");
+      }
+      this.sqlite.exec(`UPDATE hosted_agent_daily_usage SET billing_source='personal'
+        WHERE request_event_id IN (SELECT request_event_id FROM cloud_api_run_bindings)`);
       // Earlier previews cascaded executor slots on account deletion. Rebuild
       // atomically, preserving reservations while dropping only the user link.
       const activeUser = this.sqlite.prepare("PRAGMA foreign_key_list(hosted_agent_active_runs)")
@@ -3484,15 +3492,15 @@ export class CollaborationDatabase {
       ON CONFLICT(user_id) DO UPDATE SET daily_runs=excluded.daily_runs`).run(userId, dailyRuns);
   }
 
-  hostedAgentUsage(actor: Actor, defaultUserLimit: number | null, globalLimit: number | null) {
+  hostedAgentUsage(actor: Actor, defaultUserLimit: number | null, globalLimit: number | null, billingSource: "service" | "personal" = "service") {
     this.assertActiveDevice(actor);
     const day = this.now().slice(0, 10);
-    const limit = this.sqlite.prepare("SELECT daily_runs FROM hosted_agent_run_limits WHERE user_id=?")
-      .get(actor.user_id) as { daily_runs: number } | undefined;
+    const limit = billingSource === "service" ? this.sqlite.prepare("SELECT daily_runs FROM hosted_agent_run_limits WHERE user_id=?")
+      .get(actor.user_id) as { daily_runs: number } | undefined : undefined;
     const user = this.sqlite.prepare(`SELECT COUNT(*) AS runs
-      FROM hosted_agent_daily_usage WHERE user_id=? AND utc_day=?`).get(actor.user_id, day) as { runs: number };
+      FROM hosted_agent_daily_usage WHERE user_id=? AND utc_day=? AND billing_source=?`).get(actor.user_id, day, billingSource) as { runs: number };
     const global = this.sqlite.prepare(`SELECT COUNT(*) AS runs
-      FROM hosted_agent_daily_usage WHERE utc_day=?`).get(day) as { runs: number };
+      FROM hosted_agent_daily_usage WHERE utc_day=? AND billing_source=?`).get(day, billingSource) as { runs: number };
     return { utc_day: day, user_limit_runs: limit?.daily_runs ?? defaultUserLimit,
       user_used_runs: user.runs, global_limit_runs: globalLimit, global_used_runs: global.runs };
   }
@@ -3535,9 +3543,17 @@ export class CollaborationDatabase {
     }
     return historySummaryOperation(() => this.transaction(() => {
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      for (const endpoint of endpoints) {
+        if (endpoint.personal && (endpoint.personal.userId !== actor.user_id || input.api_config_revision !== endpoint.personal.configRevision
+          || !this.sqlite.prepare("SELECT 1 FROM cloud_api_configs WHERE id=? AND user_id=? AND revision=? AND enabled=1")
+            .get(endpoint.personal.configId, actor.user_id, endpoint.personal.configRevision))) {
+          throw new ApiError(409, "cloud_api_changed", "Personal API configuration changed; select its latest version");
+        }
+      }
       if (session.state !== "active") throw conflict("Archived sessions do not accept Agent requests");
       if (summary && (input.include_code || input.github_task_id || input.reply_to_event_id
-        || summary.profile_id !== input.profile_id || summary.idempotency_key !== input.idempotency_key)) {
+        || summary.profile_id !== input.profile_id || summary.api_config_revision !== input.api_config_revision
+        || summary.idempotency_key !== input.idempotency_key)) {
         throw conflict("Cloud summaries cannot include code or another execution target");
       }
       const payload: JsonValue = redactJson({
@@ -3559,12 +3575,18 @@ export class CollaborationDatabase {
         if (!this.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=?").get(event.id)) {
           throw idempotencyConflict("The key belongs to another Agent request");
         }
+        const pin = this.sqlite.prepare("SELECT user_id,config_id,config_revision FROM cloud_api_run_bindings WHERE request_event_id=?")
+          .get(event.id) as { user_id: string; config_id: string; config_revision: string } | undefined;
+        const personal = endpoints[0]!.personal;
+        if (personal ? !pin || pin.user_id !== actor.user_id || pin.config_id !== personal.configId || pin.config_revision !== personal.configRevision : pin !== undefined) {
+          throw new ApiError(409, "cloud_api_changed", "The request key belongs to a different personal API revision");
+        }
         return { event, created: false };
       }
       if (this.hostedActiveRuns() >= limits.maxConcurrent) throw new ApiError(429, "hosted_agent_busy", "Cloud Agent is busy; try again later");
       const day = this.now().slice(0, 10);
       this.sqlite.prepare("DELETE FROM hosted_agent_daily_usage WHERE utc_day < ?").run(day);
-      const usage = this.hostedAgentUsage(actor, limits.userDailyRuns, limits.globalDailyRuns);
+      const usage = this.hostedAgentUsage(actor, limits.userDailyRuns, limits.globalDailyRuns, limits.billingSource);
       if (usage.user_limit_runs !== null && usage.user_used_runs >= usage.user_limit_runs) {
         throw new ApiError(429, "hosted_user_quota", "Your Cloud Agent daily allowance is used up");
       }
@@ -3594,8 +3616,12 @@ export class CollaborationDatabase {
         profile_id,endpoint_id,quota_group,provider,model,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,'running',?)`)
         .run(event.id, sessionId, actor.user_id, actor.device_id, day, selected.profileId, selected.id,
           selected.quotaGroup, selected.provider, selected.model, this.now());
-      this.sqlite.prepare("INSERT INTO hosted_agent_daily_usage(request_event_id,user_id,utc_day,quota_group) VALUES(?,?,?,?)")
-        .run(event.id, actor.user_id, day, selected.quotaGroup);
+      this.sqlite.prepare("INSERT INTO hosted_agent_daily_usage(request_event_id,user_id,utc_day,quota_group,billing_source) VALUES(?,?,?,?,?)")
+        .run(event.id, actor.user_id, day, selected.quotaGroup, limits.billingSource ?? "service");
+      if (selected.personal) {
+        this.sqlite.prepare("INSERT INTO cloud_api_run_bindings(request_event_id,user_id,config_id,config_revision) VALUES(?,?,?,?)")
+          .run(event.id, actor.user_id, selected.personal.configId, selected.personal.configRevision);
+      }
       this.sqlite.prepare(`INSERT INTO hosted_agent_user_activity(user_id,last_started_at) VALUES(?,?)
         ON CONFLICT(user_id) DO UPDATE SET last_started_at=excluded.last_started_at`).run(actor.user_id, this.now());
       this.sqlite.prepare("INSERT INTO hosted_agent_active_runs(request_event_id,user_id,quota_group,created_at) VALUES(?,?,?,?)")
@@ -3640,7 +3666,8 @@ export class CollaborationDatabase {
     return this.transaction(() => {
       const job = this.sqlite.prepare("SELECT * FROM hosted_agent_runs WHERE request_event_id=? AND status='running'")
         .get(requestId) as { session_id: string; user_id: string; device_id: string; provider: string; model: string } | undefined;
-      if (!job || this.isHostedAgentPaused(requestId) || !this.isRequestContextCurrent(job.session_id, requestId)) return;
+      if (!job || this.isHostedAgentPaused(requestId) || !this.isRequestContextCurrent(job.session_id, requestId)
+        || !cloudApiRunIsCurrent(this, requestId)) return;
       const actor: Actor = { user_id: job.user_id, device_id: job.device_id, display_name: this.actorDisplayName(job.user_id) };
       this.assertActiveDevice(actor);
       const session = this.requireWritableSessionInsideTransaction(actor, job.session_id);
@@ -3689,7 +3716,7 @@ export class CollaborationDatabase {
       const device = this.sqlite.prepare(`SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked_at IS NULL
         AND (expires_at IS NULL OR expires_at > ?)`).get(job.device_id, job.user_id, this.now());
       const writer = this.membershipRole(job.session_id, job.user_id);
-      const authorized = Boolean(device && writer && writer !== "viewer" && session.state === "active"
+      const authorized = Boolean(device && writer && writer !== "viewer" && session.state === "active" && cloudApiRunIsCurrent(this, requestId)
         && (session.mode !== "solo" || session.owner_user_id === job.user_id));
       const content = authorized ? outcome.content : undefined;
       let success = typeof content === "string" && content.trim().length > 0;

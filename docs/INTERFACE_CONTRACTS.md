@@ -233,6 +233,8 @@ v2 pre-fills email and environment, then asks for the account password only in t
 
 Opening the new Launcher directly guides users back to the signed-in Web project; legacy v1 manual settings remain compatible. Workspace selection stays local, with mutually exclusive `--create-workspace` or `--workspace <existing absolute path>` flags, revalidated by the connector. An old v1 app intentionally rejects v2, so publication must include updated native archives rather than replacing Web alone. Windows bundles multiresolution ICO/PNG for window, taskbar, protocol and shortcut; macOS bundles an ICNS declared in Info.plist and used at runtime. Build verification refuses missing icons. Signing/notarization and actual Windows smoke remain separate release gates. See [ADR-0044](adr/0044-email-password-codex-launchers.md).
 
+Mac distribution adds `GatherThreadLauncher-macOS-<architecture>.dmg`, `*.dmg.sha256` and `*.dmg.provenance.json`; the ZIP remains compatible. The image contains only the expected app, the `/Applications` symlink, a bilingual `READ ME FIRST.html` and `BUILD_PROVENANCE.json`. Schema 1 provenance records a clean source commit, release/Node versions, architecture, minimum macOS, explicit ad-hoc/non-notarized status and app-file hashes. The publisher verifies the actual read-only-mounted bytes and signature against the pre-build record and detaches before promoting the local artifact. Only Git-reviewed plugin paths are packaged. This changes neither the v1/v2 URI nor authorization/API/connector boundaries. `codex-launcher-macos-install` is a new presentation-only, Mac-only guide; all prior control IDs remain. See [ADR-0047](adr/0047-macos-launcher-dmg-installation.md).
+
 Web HTML IDs, form names, accessible labels, dialog relationships, and the separate chat/Agent actions are integration points between static markup, JavaScript, tests, assistive technology, and browser automation.
 
 - `/` is the product home and `/app/` is the authenticated application. Root operational links containing `?api=...`, `?mock=1`, `#project`, `#session`, `#dsh-pair`, `#settings-*`, or `#main-content` must preserve their query and fragment when forwarded to `/app/`.
@@ -257,6 +259,18 @@ An interface-changing PR must answer:
 The project lead must review the PR before a version containing the contract change is merged, tagged, published, or deployed.
 
 ## Hosted Agent source-preview contract
+
+### Personal Cloud API configuration
+
+Strict schemas/types are owned by `packages/protocol/src/cloud-api.ts`. Browser-session authentication is required, with normal Origin/admission/device checks after reading writes. `GET /v1/cloud-api` returns `CloudApiStatusSchema` (enablement, fixed provider catalog, own metadata). `PUT /v1/cloud-api/:uuid` accepts `CloudApiPutInputSchema` (`expected_revision`, `provider_id`, `label`, `model`, `enabled`, optional write-only `api_key`; 8 KiB); returns `{data:{configuration}}` via `CloudApiSavedSchema`. `DELETE` accepts `CloudApiDeleteInputSchema` with exact `expected_revision` (1 KiB), returns 204. New configs and changed providers require a newly submitted key; otherwise omitted keys retain the current key. Reads never return key/digest/ciphertext/suffix. Metadata contains UUID `id`/`revision`, `profile_id: api-<uuid>`, provider/label/model/enablement, `has_key: true`, timestamp. Limit: eight own configs.
+
+Personal `HostedAgentRequestInputSchema`, `HostedHistorySummaryInputSchema` and `HostedGithubTaskInputSchema` require exact `api_config_revision` alongside `profile_id`; service profiles reject that field. It remains private control-plane input, absent from shared history. Status adds only enabled own profiles with `source: personal` and revision; existing service meanings stay compatible.
+
+`GET /v1/sessions/:sessionId/hosted-agent-requests/:requestId/selection` returns requester-private `HostedAgentSelectionSchema` `{data:{profile_id,api_config_revision?}}`. It requires browser session, active device, current session write access, original request author and exact job/config binding. Foreign/mismatched requests return 404; changed/disabled/deleted configs return 409 instead of their latest revision. Original service profile/provider/model must still match. Web retry/resume use this selection. Private GitHub task views retain original revision and continuations enforce it server-side.
+
+Safe codes are `cloud_api_invalid` (400), `cloud_api_unavailable` (400; missing/foreign/disabled/tampered key), `cloud_api_changed` (409), `cloud_api_limit` (429), `hosted_request_unavailable` (404), `hosted_access_changed` (403), `hosted_profile_changed` (409), plus normal browser/admission/CSRF and reservation errors. No error includes credential/input/provider bodies. See [ADR-0049](adr/0049-account-owned-cloud-api-configuration.md).
+
+### Existing service and hosted execution
 
 `GET /v1/hosted-agent` is authenticated and returns `{ data: { enabled: false } }` when disabled. When enabled, `HostedAgentStatusSchema` defines the exact public profile IDs, labels, providers, models, availability/capacity, UTC-day run usage/limits, capabilities and privacy copy. Daily limits may be `null` for the confirmed free-model setup. Optional `rate_limits` reports `user_min_interval_seconds`, `user_max_concurrent`, `user_active_runs` and `retry_after_seconds`; profile availability can be `user_busy` or `rate_limit`. It never returns endpoint IDs, account grouping, URLs or API credentials. Preview server and Web upgrades must be coordinated for these new status values.
 

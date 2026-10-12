@@ -1,5 +1,5 @@
-import { createIdempotencyKey, eventContent } from "./domain.js";
-import { eligibleHistorySources, historySelectionError, historySummaryTimeline, selectedHistorySourceIds } from "./history-summaries.js";
+import { createIdempotencyKey, eventContent } from "./domain.js?v=20261012-content-1";
+import { eligibleHistorySources, historySelectionError, historySummaryTimeline, selectedHistorySourceIds } from "./history-summaries.js?v=20261012-content-1";
 
 /** Derived display state is tab-local. It never edits canonical history or drafts. */
 export function mountHistorySummaries({ document, api, localizer, getContext, onChange, renderMarkdown, renderEventAvatar, eventAuthorLabel }) {

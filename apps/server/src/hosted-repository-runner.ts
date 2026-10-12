@@ -32,7 +32,7 @@ export class HostedRepositoryRunner {
     const npmSocket = join(root, "npm.sock");
     const name = `gt-repository-${controlOptions ? controlOptions.taskId.slice(8) : randomBytes(10).toString("hex")}`;
     const model = new HostedModelProxy({ endpoint, repositoryRun: true, onUnavailable,
-      ...(controlOptions ? { authorize: controlOptions.authorize } : {}),
+      ...(controlOptions ? { authorize: controlOptions.authorize, signal: controlOptions.signal } : {}),
       ...(this.options.fetch ? { fetch: this.options.fetch } : {}) });
     try {
       mkdirSync(workspace, { mode: 0o755 }); mkdirSync(control, { mode: 0o755 });
@@ -54,7 +54,7 @@ export class HostedRepositoryRunner {
       chmodSync(join(control, "prompt.txt"), 0o644);
       writeFileSync(join(control, "opencode.json"), JSON.stringify({
         model: `hosted/${endpoint.model}`, small_model: `hosted/${endpoint.model}`, share: "disabled",
-        provider: { hosted: { npm: "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
+        provider: { hosted: { npm: endpoint.transport === "anthropic-messages" ? "@ai-sdk/anthropic" : "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
           options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "local" },
           models: { [endpoint.model]: { name: endpoint.label, limit: { context: 32000, output: 2048 } } } } },
         agent: { title: { disable: true } }, enabled_providers: ["hosted"],

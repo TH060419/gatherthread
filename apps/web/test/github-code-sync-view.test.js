@@ -17,6 +17,22 @@ function node() {
     dispatchEvent(event) { return listeners.get(event.type)?.(event); },
     setAttribute() {}, replaceChildren(...children) { this.children = children; } };
 }
+test("prefilling a blank computer form never overwrites an unsaved scoped draft", async () => {
+  const nodes = new Map(), el = id => { if (!nodes.has(id)) nodes.set(id, node()); return nodes.get(id); };
+  const sandbox = vm.createContext({ createGithubCodeSyncController, githubLinks, codeRuntimeChoices, fillRepositoryFields, bindRepositoryFields });
+  vm.runInContext(source, sandbox);
+  const controller = sandbox.mountGithubCodeSync({ document: { getElementById: el, createElement: node },
+    api: { async getProjectGithub() { return { connection: null, can_configure: true, can_write: true }; } },
+    localizer: { t: value => value }, confirm: async () => true });
+  controller.setContext({ project: { id: "project", role: "owner" }, sessionId: "session", userId: "owner", sessionWritable: true, runtimes: [], devices: [] });
+  controller.open(); await new Promise(resolve => setImmediate(resolve));
+  controller.prefillRepository({ repository: "cloud-owner/cloud-repo", base_branch: "main" });
+  assert.equal(el("github-code-name").value, "cloud-repo");
+  el("github-code-owner").value = "draft-owner"; el("github-code-name").value = "draft-repo"; el("github-code-base").value = "draft-base";
+  controller.prefillRepository({ repository: "cloud-owner/cloud-repo", base_branch: "main" });
+  assert.deepEqual([el("github-code-owner").value, el("github-code-name").value, el("github-code-base").value], ["draft-owner", "draft-repo", "draft-base"]);
+  controller.close();
+});
 for (const locale of ["en", "zh-CN"]) {
   test(`${locale} saved repository still requires a computer; changing settings can return to overview`, async () => {
     const nodes = new Map();

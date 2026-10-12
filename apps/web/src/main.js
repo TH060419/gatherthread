@@ -1,18 +1,19 @@
-import { renderAvatar, isAgentReply, eventAuthorLabel } from "./avatars.js";
-import { mountAvatarSettings } from "./avatar-settings.js";
-import { mountCloudGithub } from "./cloud-github-view.js?v=20261005-3";
+import { renderAvatar, isAgentReply, eventAuthorLabel } from "./avatars.js?v=20261012-content-1";
+import { mountAvatarSettings } from "./avatar-settings.js?v=20261012-content-1";
+import { mountCloudGithub } from "./cloud-github-view.js?v=20261012-content-1";
 import { mountDeviceAuthorization } from "./device-authorization.js";
-import { createAccountEmailHint, mountCodexLauncher } from "./codex-launcher.js";
+import { createAccountEmailHint, mountCodexLauncher } from "./codex-launcher.js?v=20261012-content-1";
 import { mountAccountDevices } from "./account-devices.js";
-import { cloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js";
+import { mountPersonalCloudApi } from "./personal-cloud-api.js?v=20261012-content-1";
+import { cloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js?v=20261012-content-1";
 import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261006-mobile-2";
 import { mountRegistration } from "./registration.js";
-import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261012-invite-1";
-import { mountMessageActions, agentWorkStatus } from "./message-actions.js";
-import { mountMessageDeletion } from "./message-deletion.js";
+import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261012-content-1";
+import { mountMessageActions, agentWorkStatus } from "./message-actions.js?v=20261012-content-1";
+import { mountMessageDeletion } from "./message-deletion.js?v=20261012-content-1";
 import { positionSessionContextPanel, bindSessionContextPanel } from "./session-context-panel.js";
-import { ExampleCollaborationApi } from "./example-api.js";
-import { mountOnboarding } from "./onboarding.js?v=20260927-1";
+import { ExampleCollaborationApi } from "./example-api.js?v=20261012-content-1";
+import { mountOnboarding } from "./onboarding.js?v=20261012-content-1";
 import { projectInvitationShareText } from "./invitation-share.js?v=20261012-invite-1";
 import { mountInvitationLink } from "./invitation-link.js?v=20261012-invite-1";
 import {
@@ -48,14 +49,14 @@ import {
   sessionMetadataFromEvent,
   sessionDeliveryMode,
   snapshotStatusView,
-} from "./domain.js?v=20261012-stream-2";
-import { SessionSync } from "./realtime.js";
-import { mountCodeSync } from "./code-sync-view.js?v=20260924-1";
-import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20260924-2";
-import { mountHistorySummaries } from "./history-summary-view.js";
+} from "./domain.js?v=20261012-content-1";
+import { SessionSync } from "./realtime.js?v=20261012-content-1";
+import { mountCodeSync } from "./code-sync-view.js?v=20261012-content-1";
+import { mountCodeStorageSettings } from "./code-storage-settings.js?v=20261012-content-1";
+import { mountHistorySummaries } from "./history-summary-view.js?v=20261012-content-1";
 import { DEFAULT_HISTORY_SUMMARY_INSTRUCTIONS } from "./history-summary-policy.js";
 import { createAmbientCanvas } from "./ambient-canvas.js?v=20260829-14";
-import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261012-invite-1";
+import { createLocalizer, memberRemovalAriaLabel, memberRoleAriaLabel } from "./i18n.js?v=20261012-content-1";
 import { automaticDeviceName } from "./device-name.js?v=20260830-1";
 import {
   CODEX_HARNESS,
@@ -72,7 +73,7 @@ import {
   resolveCodexRuntime,
   resolveDshRuntime,
   withoutDshPairingHash,
-} from "./dsh.js?v=20260925-3";
+} from "./dsh.js?v=20261012-content-1";
 import { renderMarkdown } from "./markdown.js?v=20260829-1";
 import { calendarDayKey, formatFullTimestamp, formatTimelineDay } from "./timeline-dates.js?v=20260927-1";
 import {
@@ -366,6 +367,13 @@ const accountDevices = mountAccountDevices({ document, api, localizer,
   } : null,
   confirm: message => window.confirm(message),
   onRevoked: () => void refreshDshRuntimes(),
+});
+const personalCloudApi = mountPersonalCloudApi({ document, api, localizer,
+  getContext: () => settingsDialog.open && state.currentUser ? {
+    scope: `${authenticationGeneration}:${state.currentUser.id}:${state.currentUser.device_id}`,
+  } : null,
+  confirm: message => window.confirm(message),
+  onChanged: () => void refreshHostedAgentStatus(),
 });
 const cloudGithubUi = mountCloudGithub({ api: () => api, t: (value) => localizer.t(value),
   setText: (node, source) => localizer.setText(node, source),
@@ -1218,6 +1226,7 @@ element("settings-delete-account").addEventListener("click", async () => {
 });
 settingsDialog.addEventListener("close", () => {
   accountDevices.clear();
+  personalCloudApi.clear();
   const returnFocus = settingsReturnFocus;
   settingsReturnFocus = null;
   returnFocus?.focus?.();
@@ -1357,6 +1366,7 @@ async function restoreBrowserSession() {
 }
 
 function resetWorkspaceToAuth() {
+  personalCloudApi.clear();
   invitationLink.reset();
   mobileWorkspace.close();
   codexDeviceAuthorization.clear();
@@ -1451,7 +1461,10 @@ async function enterWorkspace(preferredProjectId) {
   }
   const isCurrent = () => authentication === authenticationGeneration
     && load === workspaceLoadGeneration && Boolean(state.currentUser);
-  void cloudGithubUi.completeAuthorization();
+  // Complete OAuth before project selection rewrites the URL. Restore only
+  // this account's short-lived navigation hint, then reopen setup below.
+  const githubSetup = await cloudGithubUi.completeAuthorization();
+  if (!isCurrent()) return;
   void api.getHostedAgentStatus().then((status) => {
     if (!isCurrent()) return;
     hostedAgentStatus = status;
@@ -1499,6 +1512,11 @@ async function enterWorkspace(preferredProjectId) {
   }
   if (!isCurrent()) return;
   maybeOpenPendingDshPairing();
+  if (githubSetup?.handled) {
+    codeSyncUi.closeNotice();
+    await cloudGithubUi.openSetup(githubSetup.error);
+    return;
+  }
   onboarding.offer();
 }
 
@@ -2963,7 +2981,7 @@ function cloudStatusText(profile = currentCloudProfile()) {
   const reason = { available: "Ready", busy: "Cloud Agent is busy; try again later", cooldown: "Provider is temporarily unavailable",
     daily_limit: "Cloud Agent daily limit reached", user_busy: "Your Cloud Agent task is still running; wait for it to finish",
     rate_limit: "Please wait before starting another Cloud Agent task" }[profile.status];
-  const remaining = hostedAgentStatus.user_limit_runs === null ? ""
+  const remaining = profile.id?.startsWith("api-") ? ` · ${localizer.t("Your API · provider billing")}` : hostedAgentStatus.user_limit_runs === null ? ""
     : ` · ${Math.max(0, hostedAgentStatus.user_limit_runs - hostedAgentStatus.user_used_runs)} ${localizer.t("runs left today")}`;
   return `${profile.provider} · ${profile.model} · ${localizer.t(reason ?? "Unavailable")}${remaining}`;
 }
@@ -3046,7 +3064,8 @@ function historySummaryExecutionProfile() {
   if (currentProjectHarness() === "cloud") {
     const profile = currentCloudProfile();
     return CLOUD_AGENT_ENTRY_ENABLED && hostedAgentStatus.enabled && profile
-      ? { harness: "opencode", provider: profile.provider, model: profile.model, cloudProfileId: profile.id } : null;
+      ? { harness: "opencode", provider: profile.provider, model: profile.model, cloudProfileId: profile.id,
+        ...(profile.api_config_revision === undefined ? {} : { apiConfigRevision: profile.api_config_revision }) } : null;
   }
   const harness = currentProjectHarness();
   const resolution = harness === DSH_HARNESS ? currentDshResolution() : currentCodexResolution();
@@ -3105,9 +3124,9 @@ async function sendMessage(kind) {
       const includeCode = element("cloud-agent-include-code").checked;
       element("cloud-agent-include-code").checked = false;
       if (element("cloud-agent-source").value === "github") {
-        await cloudGithubUi.start(sessionId, { ...input, profileId: cloudProfile?.id });
+        await cloudGithubUi.start(sessionId, { ...input, profileId: cloudProfile?.id, apiConfigRevision: cloudProfile?.api_config_revision });
       } else {
-        await api.appendHostedAgentRequest(sessionId, { ...input, includeCode, profileId: cloudProfile?.id });
+        await api.appendHostedAgentRequest(sessionId, { ...input, includeCode, profileId: cloudProfile?.id, apiConfigRevision: cloudProfile?.api_config_revision });
       }
       void api.getHostedAgentStatus().then((status) => {
         if (isCurrent()) { hostedAgentStatus = status; renderComposerPermissions(); }
@@ -3177,7 +3196,10 @@ async function retryAgentRequest(requestId, button) {
     }
     if (request.payload?.execution_profile?.harness === "opencode") {
       if (!CLOUD_AGENT_ENTRY_ENABLED) throw new Error(localizer.t("Cloud Agent · coming later"));
-      const input = cloudRequestInput(request, retryKey, hostedAgentStatus.profiles);
+      const selection = request.payload?.profile_id?.startsWith("api-")
+        ? await api.getHostedAgentSelection(state.session.id, request.id) : undefined;
+      if (!isCurrent()) return;
+      const input = cloudRequestInput(request, retryKey, hostedAgentStatus.profiles, selection);
       if (request.payload.include_code && !window.confirm(localizer.t("Retry with current GT Cloud code and save changes to your branch?"))) return;
       retryAgentRequestKeys.set(retryScope, retryKey);
       await api.appendHostedAgentRequest(state.session.id, input);
@@ -3578,6 +3600,7 @@ function applyVisualSettings(settings) {
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
   if (localeChanged) accountDevices.refreshLanguage();
+  if (localeChanged) personalCloudApi.refreshLanguage();
   onboarding.refreshLanguage();
   if (localeChanged) updateCreatedInvitationShareText(normalized.general.locale);
   element("auth-language-button").textContent = normalized.general.locale === "zh-CN" ? "EN" : "中";
@@ -4037,6 +4060,7 @@ function openSettingsDialog(sectionId) {
   void codeStorageSettings.load();
   void loadCurrentDeviceSettings();
   void accountDevices.load();
+  void personalCloudApi.load();
   void loadAccountDeletionPreview();
   void loadHistoryContextPolicy();
   requestAnimationFrame(() => {

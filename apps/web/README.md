@@ -42,11 +42,15 @@ The script uses only `/app/?mock=1`, disposable browser profiles and mock API fi
 
 Desktop, phone and tablet use the same small Agent-settings button. It opens the existing Agent/model/reasoning and cloud-workspace controls in a scrollable dialog, never extending the message composer. Chat and Agent sends remain distinct. The test banner's height is excluded from the workspace viewport.
 
-Under Project file collaboration → GitHub, choose Cloud Agent or computer file synchronization. Cloud setup connects the account first, then asks for account/organization and repository name; computer sync keeps its separately authorized device workflow. Each shows one page at a time, with advanced settings and saved task details collapsed. Create a repository opens GitHub's own form; creation and visibility are confirmed there, not silently by GatherThread. These flows do not migrate GT Cloud files or replace GitHub permissions.
+Project file collaboration opens GitHub first, with GT Cloud as the lightweight-trial alternative. Follow Connect account → Choose repository → Ready to use. Account/organization and repository name are separate fields. Returning from GitHub sign-in restores the original project's settings rather than selecting the first project. The short return hint is account-bound, single-use and expires after ten minutes; it contains project/session IDs, never OAuth codes, state or credentials.
+
+After setup, Cloud Agent work and optional **Sync files from my computer** are separate actions. Computer sync keeps its independently authorized device workflow; an existing repository may prefill its unsaved form but never enables uploads. Advanced settings and saved task details stay collapsed. **Create a repository** opens GitHub's own form, where creation and visibility must be confirmed. These flows do not migrate GT Cloud files or replace GitHub permissions.
 
 Startup displays a neutral restore screen while checking the HttpOnly browser session. It never shows a login form before a restored workspace, caches no identity, and offers reload if the application module fails to load. Cloud pending requests use cloud status, not local connector presence.
 
 Run `tests/browser/workspace-guided-settings.mjs` after a build for isolated Chromium/WebKit pointer tests of short desktop windows, phones, tablets, test-banner sizing, cloud replies and delayed session restoration. Providers and GitHub writes are synthetic.
+
+`tests/browser/github-storage-setup.mjs` additionally checks desktop, phone and tablet clicks through account authorization return, repository setup, optional computer-sync drafts and GT Cloud. All external traffic and GitHub writes are blocked; it does not certify a live OAuth installation or native Safari.
 
 ### Mobile workspace
 

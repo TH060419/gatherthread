@@ -1,4 +1,4 @@
-import { canAppend, retryAgentRequestInput } from "./domain.js";
+import { canAppend, retryAgentRequestInput } from "./domain.js?v=20261012-content-1";
 
 export const isCloudTrialRequest = (request) => request?.payload?.execution_profile?.harness === "opencode"
   && !request.payload.github_task_id;
@@ -7,14 +7,20 @@ export function retryAgentRequestPermission(request, context) {
   return canAppend({ ...context, kind: isCloudTrialRequest(request) || request?.payload?.github_task_id ? "human_chat" : "agent_request" });
 }
 
-export function cloudRequestInput(request, idempotencyKey, profiles) {
+export function cloudRequestInput(request, idempotencyKey, profiles, selection) {
   const recorded = request.payload?.execution_profile;
   const profile = profiles?.find((candidate) => candidate.id === request.payload?.profile_id);
   if (!isCloudTrialRequest(request) || !profile || profile.provider !== recorded?.provider || profile.model !== recorded?.model) {
     throw new Error("The original cloud model is no longer available.");
   }
+  const personal = profile.id.startsWith("api-");
+  if (personal && (!selection?.api_config_revision || selection.profile_id !== profile.id
+    || selection.api_config_revision !== profile.api_config_revision)) {
+    throw new Error("The original API connection changed. Start a new request after choosing its current settings.");
+  }
   return { content: retryAgentRequestInput(request, idempotencyKey).content, profileId: profile.id,
-    includeCode: request.payload.include_code === true, idempotencyKey, replyTo: request.replyTo };
+    includeCode: request.payload.include_code === true, idempotencyKey, replyTo: request.replyTo,
+    ...(personal ? { apiConfigRevision: selection.api_config_revision } : {}) };
 }
 
 const targetId = (event) => event.replyTo ?? event.reply_to_event_id ?? event.payload?.reply_to_event_id;
@@ -120,7 +126,10 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
           if (current.cloud) await api.pauseHostedAgentRequest(current.sessionId, current.request.id);
           else await api.pauseAgentRequest(current.sessionId, current.request.id);
         } else if (current.cloud) {
-          await api.appendHostedAgentRequest(current.sessionId, cloudRequestInput(current.request, key, current.cloudProfiles));
+          const selection = current.request.payload?.profile_id?.startsWith("api-")
+            ? await api.getHostedAgentSelection(current.sessionId, current.request.id) : undefined;
+          if (getContext().scope !== current.scope) return;
+          await api.appendHostedAgentRequest(current.sessionId, cloudRequestInput(current.request, key, current.cloudProfiles, selection));
         } else await api.appendAgentRequest(current.sessionId, resumeAgentRequestInput(current.request, key));
       } catch (error) {
         if (getContext().scope === current.scope) errorNode.textContent = t(error.message ?? "Unable to control this Agent request. Try again.");

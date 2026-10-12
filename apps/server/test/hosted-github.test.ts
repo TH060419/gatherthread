@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -58,7 +59,7 @@ function fixture() {
    if (path.endsWith("/pulls") && method === "POST") { pr = { html_url: "https://github.com/owner/project/pull/1", head: { ref: body.head, sha: commit } }; return reply(pr); }
    throw new Error(`Unexpected GitHub fixture request: ${path}`);
  };
- const runOptions: HostedAgentOptions = { ...options, runContainer: async (args, timeout) => {
+ const runOptions: HostedAgentOptions = { ...options, personalApiEncryptionKey: Buffer.alloc(32, 9).toString("base64"), runContainer: async (args, timeout) => {
    runs++;
    assert.ok(args.includes("none") && args.includes("2048m") && args.includes("GT_HOSTED_REPOSITORY=1"));
    assert.equal(args[args.indexOf("--memory-swap") + 1], "2048m");
@@ -78,6 +79,29 @@ function fixture() {
    advance: () => { now += 30_000; },
    close: async () => { await github.close(); db.close(); rmSync(directory, { recursive: true, force: true }); } };
 }
+
+unixTest("personal repository tasks pin their model across completion, idempotent retries and continuation", async () => {
+ const f = fixture();
+ try {
+  await connect(f);
+  const saved = f.agent.putPersonalApi(f.actor, randomUUID(), { expected_revision: null, provider_id: "anthropic", model: "claude-fixture",
+    label: "Own API", api_key: ["private", "personal", "repository", "fixture"].join("-"), enabled: true });
+  const input = { profile_id: saved.profile_id, api_config_revision: saved.revision, content: "Update fixture", idempotency_key: "own-repo-task" };
+  const first = f.github.start(f.actor, f.session.id, input), completed = await settled(f, first.id);
+  assert.equal(completed.state, "completed"); assert.equal(completed.api_config_revision, saved.revision);
+  assert.equal(f.db.hostedAgentUsage(f.actor, 20, 20).user_used_runs, 0);
+  const peer = { ...f.actor, device_id: f.db.createDevice(f.actor.user_id, "Phone").device_id };
+  assert.equal(f.github.start(peer, f.session.id, input).id, first.id);
+  assert.equal(f.runs(), 1); f.advance();
+  const next = f.agent.putPersonalApi(f.actor, saved.id, { expected_revision: saved.revision, provider_id: "anthropic", model: "claude-fixture",
+    label: "Changed", enabled: true });
+  assert.throws(() => f.github.start(f.actor, f.session.id, input), e => e instanceof ApiError && e.code === "cloud_api_changed");
+  assert.throws(() => f.github.start(f.actor, f.session.id, { ...input, api_config_revision: next.revision,
+    continue_task_id: first.id, idempotency_key: "own-repo-continue" }), e => e instanceof ApiError && e.code === "cloud_api_changed");
+  assert.equal(f.runs(), 1); assert.equal(f.db.hostedActiveRuns(), 0);
+  assert.doesNotMatch(JSON.stringify(f.service.replay(f.actor, f.session.id, 0, 100)), /private-personal-repository-fixture/);
+ } finally { await f.close(); }
+});
 async function connect(f: ReturnType<typeof fixture>) {
  const authorization = new URL(f.github.authorize(f.actor).authorization_url);
  assert.equal(authorization.searchParams.get("code_challenge_method"), "S256");

@@ -26,7 +26,7 @@ Do not duplicate a canonical rule into a new document. Link to its owner instead
 
 ## Non-negotiable product invariants
 
-- The server append-only canonical event log and per-session sequence are authoritative. WebSocket delivery is advisory; reconnects recover through authenticated replay.
+- The server canonical event log and append-only per-session sequence are authoritative. Author-requested content erasure is the explicit payload exception in [ADR-0050](docs/adr/0050-author-message-erasure-and-context-revisions.md); it preserves event envelopes and appends a revision control event. WebSocket delivery is advisory; reconnects recover through authenticated replay.
 - A project is the membership and invitation boundary. Every write must recheck the authenticated actor, device, project role, session mode, and resource ownership on the server.
 - `solo` and `multi` permissions must remain consistent across Web, HTTP, MCP, Codex, and DeepSeek Harness surfaces.
 - Human chat and Agent requests remain separate explicit actions. Never hide both intents behind one generic send path.

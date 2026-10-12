@@ -1,7 +1,7 @@
-import { codeErrorText, codeRuntimeChoices, createCodeSyncController } from "./code-sync.js";
+import { codeErrorText, codeRuntimeChoices, createCodeSyncController } from "./code-sync.js?v=20261012-content-1";
 import { codeNoticeStorage, hasSeenCodeNotice, markCodeNoticeSeen } from "./code-notice.js";
-import { mountGithubCodeSync } from "./github-code-sync-view.js";
-import { mountGithubMode } from "./github-setup.js";
+import { mountGithubCodeSync } from "./github-code-sync-view.js?v=20261012-content-1";
+import { mountGithubMode } from "./github-setup.js?v=20261012-content-1";
 
 const ACTIVE_JOBS = new Set(["queued", "claimed", "importing", "compacting"]);
 const shortCommit = (value) => typeof value === "string" ? value.slice(0, 9) : "—";
@@ -41,10 +41,13 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, onGit
   let viewProjectId;
   let pendingConfirmation;
   let noticeDeviceId = null;
-  let provider = "gt-cloud";
+  let provider = "github";
   const controller = createCodeSyncController({ api, onChange: render, pollMs: mockEnabled ? 120 : 1800 });
   const github = mountGithubCodeSync({ document: doc, api, localizer, confirm, mockEnabled });
-  mountGithubMode({ document: doc });
+  mountGithubMode({ document: doc, onLocal: () => github.prefillRepository({
+    repository: el("github-mode-local").dataset.repository,
+    base_branch: el("github-mode-local").dataset.baseBranch,
+  }) });
   const routeKey = (state) => JSON.stringify([state.context?.project?.id, state.context?.sessionId, state.context?.userId, state.runtimeId]);
 
   function showProvider(next, { refreshCloud = true } = {}) {
@@ -90,7 +93,7 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, onGit
       finishConfirmation(false);
       viewProjectId = context?.project?.id;
       showCodeView("overview");
-      showProvider("gt-cloud");
+      showProvider("github", { refreshCloud: false });
       previewGeneration += 1;
       reviewed = null;
       el("code-review-preview").hidden = true;
@@ -253,12 +256,13 @@ export function mountCodeSync({ document: doc, api, localizer, getContext, onGit
   trigger.addEventListener("click", () => {
     updateContext();
     showCodeView("overview");
-    showProvider("gt-cloud");
+    showProvider("github", { refreshCloud: false });
     // Safari mouse clicks do not necessarily focus the button before opening.
     returnFocus = trigger;
     dialog.showModal();
     controller.open();
     github.open();
+    onGithubOpen();
   });
   noticeDialog.addEventListener("cancel", (event) => event.preventDefault());
   el("code-notice-continue").addEventListener("click", () => {

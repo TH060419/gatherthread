@@ -64,12 +64,14 @@ CREATE TABLE IF NOT EXISTS hosted_agent_daily_usage (
   request_event_id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL,
   utc_day TEXT NOT NULL,
-  quota_group TEXT NOT NULL
+  quota_group TEXT NOT NULL,
+  billing_source TEXT NOT NULL DEFAULT 'service' CHECK(billing_source IN ('service','personal'))
 ) STRICT;
 CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_day_idx ON hosted_agent_daily_usage(utc_day);
 CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_user_day_idx ON hosted_agent_daily_usage(user_id,utc_day);
 CREATE INDEX IF NOT EXISTS hosted_agent_daily_usage_group_day_idx ON hosted_agent_daily_usage(quota_group,utc_day);
-INSERT OR IGNORE INTO hosted_agent_daily_usage SELECT request_event_id,user_id,utc_day,quota_group FROM hosted_agent_runs;
+INSERT OR IGNORE INTO hosted_agent_daily_usage(request_event_id,user_id,utc_day,quota_group)
+  SELECT request_event_id,user_id,utc_day,quota_group FROM hosted_agent_runs;
 
 -- Cooldown survives conversation/project deletion. Executor slots also survive
 -- account deletion, with the deleted user's identity immediately removed.

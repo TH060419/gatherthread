@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { cleanupHostedExecution, createHostedDockerClient, runHostedDockerCommand, stopHostedContainer } from "./hosted-agent-recovery.js";
@@ -6,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Actor } from "./database.js";
-import { isCodeSyncPathAllowed, type CanonicalEvent, type CodeFile, type HostedAgentRequestInput, type HostedHistorySummaryInput, type JsonValue } from "@gatherthread/protocol";
+import { isCodeSyncPathAllowed, HostedAgentSelectionSchema, type CanonicalEvent, type CloudApiPutInput, type CodeFile, type HostedAgentRequestInput, type HostedHistorySummaryInput, type JsonValue } from "@gatherthread/protocol";
 import { ApiError } from "./errors.js";
 import { redactJson } from "./redaction.js";
 import type { CollaborationService } from "./service.js";
@@ -14,6 +15,7 @@ import type { CodeRepository } from "./code-repository.js";
 import { hostedContainerCpuArguments, parseHostedCpuSet } from "./hosted-container-cpu.js";
 import { hostedContainerMemoryArguments, validateHostedMemoryPolicy, type HostedMemoryPolicy } from "./hosted-container-memory.js";
 import { createHostedContainerOutputDecoder, createHostedLiveOutputConsumer, hostedContainerResult, type HostedProgressCallback } from "./hosted-live-output.js";
+import { CloudApiStore, isPersonalCloudProfile, cloudApiRunIsCurrent, PERSONAL_CLOUD_DAILY_RUNS, PERSONAL_CLOUD_GLOBAL_DAILY_RUNS } from "./cloud-api.js";
 
 import { HOSTED_MODEL, validateHostedEndpoints, HOSTED_USER_MIN_INTERVAL_SECONDS, HOSTED_USER_MAX_CONCURRENT,
   isSiliconFlowFreeEndpoint,
@@ -36,6 +38,7 @@ export interface HostedAgentOptions extends HostedRunLimits {
   repositoryMemoryMiB?: number;
   memoryPolicy?: HostedMemoryPolicy;
   cpuSet?: string;
+  personalApiEncryptionKey?: string;
   fetch?: typeof globalThis.fetch;
   runContainer?: (args: string[], timeoutMs: number, signal?: AbortSignal, onProgress?: HostedProgressCallback) => Promise<string>;
 }
@@ -141,9 +144,17 @@ export class HostedModelProxy {
   private async forward(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const fail = (code: number) => { if (!response.headersSent) response.writeHead(code).end(); else response.destroy(); };
     let upstreamAttempted = false;
+    const network = new AbortController();
+    const abortNetwork = () => network.abort();
+    request.once("aborted", abortNetwork); response.once("close", abortNetwork);
+    const authorize = () => {
+      try { network.signal.throwIfAborted(); this.options.signal?.throwIfAborted(); this.options.authorize?.(); }
+      catch (error) { network.abort(); throw error; }
+    };
     try {
-      this.options.authorize?.();
-      if (request.method !== "POST" || request.url !== "/v1/chat/completions"
+      authorize();
+      const native = this.options.endpoint.transport === "anthropic-messages";
+      if (request.method !== "POST" || request.url !== (native ? "/v1/messages" : "/v1/chat/completions")
         || request.headers["content-type"]?.split(";")[0] !== "application/json") return fail(404);
       const outputLimit = this.options.repositoryRun ? 2048 : MAX_OUTPUT_TOKENS;
       const bytes = await readBody(request, this.options.repositoryRun ? 128_000 : MAX_MODEL_BODY_BYTES);
@@ -155,12 +166,16 @@ export class HostedModelProxy {
       if (this.calls >= (this.options.repositoryRun ? 64 : MAX_MODEL_CALLS) || this.options.endpoint.provider === "cloudflare-workers-ai" && this.spent + charge > RUN_NEURONS) return fail(429);
       // The untrusted body may arrive after access was revoked. Fence every
       // outbound call before charging or treating an error as provider failure.
-      this.options.authorize?.();
+      authorize();
       this.calls += 1;
       this.spent += charge;
       delete body.max_completion_tokens;
       body.max_tokens = outputLimit;
-      body.n = 1;
+      if (native) {
+        // The existing execution output budget is intentionally unchanged.
+        // Extended thinking requires a larger provider-specific token budget.
+        delete body.n; delete body.thinking;
+      } else body.n = 1;
       if (this.options.endpoint.provider === "deepseek") body.thinking = { type: "disabled" };
       if (isSiliconFlowFreeEndpoint(this.options.endpoint)
         && ["Qwen/Qwen3.5-4B", "Qwen/Qwen3-8B"].includes(this.options.endpoint.model)) {
@@ -172,12 +187,14 @@ export class HostedModelProxy {
       }
       upstreamAttempted = true;
       const upstream = await (this.options.fetch ?? globalThis.fetch)(
-        `${this.options.endpoint.baseUrl}/chat/completions`, {
-          method: "POST", redirect: "error", signal: this.options.signal
-            ? AbortSignal.any([this.options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-          headers: { Authorization: `Bearer ${this.options.endpoint.apiToken}`, "Content-Type": "application/json" },
+        `${this.options.endpoint.baseUrl}/${native ? "messages" : "chat/completions"}`, {
+          method: "POST", redirect: "error", signal: AbortSignal.any([network.signal, AbortSignal.timeout(30_000),
+            ...(this.options.signal ? [this.options.signal] : [])]),
+          headers: native ? { "x-api-key": this.options.endpoint.apiToken, "anthropic-version": "2023-06-01", "Content-Type": "application/json" }
+            : { Authorization: `Bearer ${this.options.endpoint.apiToken}`, "Content-Type": "application/json" },
           body: JSON.stringify(body),
         });
+      authorize();
       if (upstream.status === 429 || upstream.status >= 500 || upstream.status === 401 || upstream.status === 403) {
         const retry = upstream.headers.get("retry-after");
         const seconds = retry && /^\d+$/u.test(retry) ? Number(retry) : 60;
@@ -193,17 +210,22 @@ export class HostedModelProxy {
       if (!upstream.body) { response.end(); return; }
       let sent = 0;
       for await (const chunk of upstream.body) {
+        authorize();
         sent += chunk.length;
-        if (sent > 256_000) { response.destroy(); break; }
-        response.write(chunk);
+        if (sent > 256_000) { network.abort(); response.destroy(); return; }
+        if (!response.write(chunk)) await once(response, "drain", { signal: network.signal });
       }
       response.end();
     } catch (error) {
-      if (upstreamAttempted && !this.options.signal?.aborted) {
+      if (upstreamAttempted && !network.signal.aborted && !this.options.signal?.aborted) {
         this.failure = error instanceof Error && error.name === "TimeoutError" ? "provider_timeout" : "provider_unavailable";
         this.options.onUnavailable?.(30_000);
       }
+      network.abort();
       fail(502);
+    } finally {
+      request.off("aborted", abortNetwork); response.off("close", abortNetwork);
+      network.abort();
     }
   }
 }
@@ -232,9 +254,11 @@ export class HostedAgent {
   private readonly cooldowns = new Map<string, number>();
   private readonly controllers = new Map<string, AbortController>();
   private readonly unsubscribeDeletion: () => void;
+  readonly personalApi: CloudApiStore;
   constructor(private readonly service: CollaborationService, private readonly codeRepository: CodeRepository,
     private readonly options: HostedAgentOptions) {
     validateHostedEndpoints(options.endpoints);
+    this.personalApi = new CloudApiStore(service.database, options.personalApiEncryptionKey);
     if (!/^(?:[-a-z0-9./_]+@)?sha256:[a-f0-9]{64}$/u.test(options.image)) {
       throw new Error("Cloud Agent needs a digest-pinned container image");
     }
@@ -273,9 +297,15 @@ export class HostedAgent {
     const usage = this.service.database.hostedAgentUsage(actor, this.options.userDailyRuns, this.options.globalDailyRuns);
     const rateLimits = this.service.database.hostedAgentRateUsage(actor,
       this.options.userMinIntervalSeconds, this.options.userMaxConcurrent);
-    const profiles = [...new Set(this.options.endpoints.map((e) => e.profileId))].map((id) => {
-      const endpoints = this.options.endpoints.filter((e) => e.profileId === id);
+    const personalEndpoints = this.personalApi.status(actor).configurations.filter(c => c.enabled).flatMap(c => {
+      try { return [this.personalApi.resolve(actor, c.profile_id, c.revision)]; } catch { return []; }
+    });
+    const allEndpoints = [...this.options.endpoints, ...personalEndpoints];
+    const profiles = [...new Set(allEndpoints.map((e) => e.profileId))].map((id) => {
+      const endpoints = allEndpoints.filter((e) => e.profileId === id);
       const first = endpoints[0]!;
+      const profileUsage = first.personal ? this.service.database.hostedAgentUsage(actor, PERSONAL_CLOUD_DAILY_RUNS,
+        PERSONAL_CLOUD_GLOBAL_DAILY_RUNS, "personal") : usage;
       const groups = [...new Map(endpoints.map((e) => [e.quotaGroup, e])).values()];
       const capacities = groups.map((endpoint) => {
         const used = this.service.database.hostedEndpointUsage(endpoint);
@@ -285,18 +315,86 @@ export class HostedAgent {
       });
       const capacity = Math.min(Math.max(0, this.options.maxConcurrent - this.service.database.hostedActiveRuns()),
         capacities.reduce((n, c) => n + (c.cooling ? 0 : Math.min(c.remaining, c.slots)), 0));
-      const dailyAvailable = (usage.user_limit_runs === null || usage.user_used_runs < usage.user_limit_runs)
-        && (usage.global_limit_runs === null || usage.global_used_runs < usage.global_limit_runs);
+      const dailyAvailable = (profileUsage.user_limit_runs === null || profileUsage.user_used_runs < profileUsage.user_limit_runs)
+        && (profileUsage.global_limit_runs === null || profileUsage.global_used_runs < profileUsage.global_limit_runs);
       const status = !dailyAvailable || capacities.every((c) => !c.remaining) ? "daily_limit"
         : rateLimits.user_active_runs >= rateLimits.user_max_concurrent ? "user_busy"
         : rateLimits.retry_after_seconds > 0 ? "rate_limit"
         : capacity > 0 ? "available" : capacities.some((c) => c.cooling) ? "cooldown" : "busy";
       return { id, label: first.label, provider: first.provider, model: first.model,
-        available: status === "available", capacity, status };
+        available: status === "available", capacity, status,
+        ...(first.personal ? { source: "personal" as const, api_config_revision: first.personal.configRevision } : {}) };
     });
     return { enabled: true, harness: HOSTED_HARNESS, ...usage, rate_limits: rateLimits, profiles,
       capabilities: ["read_code", "edit_code", "terminal", "run_tests"],
       privacy: "Session text and opted-in GT Cloud code are sent to the selected model provider. Code runs in an isolated temporary container." };
+  }
+
+  putPersonalApi(actor: Actor, id: string, input: CloudApiPutInput) {
+    const saved = this.personalApi.put(actor, id, input);
+    this.abortChangedPersonalRuns();
+    return saved;
+  }
+
+  removePersonalApi(actor: Actor, id: string, revision: string) {
+    this.personalApi.remove(actor, id, revision);
+    this.abortChangedPersonalRuns();
+  }
+
+  private abortChangedPersonalRuns() {
+    for (const [requestId, controller] of this.controllers) {
+      if (!cloudApiRunIsCurrent(this.service.database, requestId)) controller.abort();
+    }
+  }
+
+  assertRunCurrent(requestId: string): void {
+    if (!cloudApiRunIsCurrent(this.service.database, requestId)) {
+      throw new ApiError(409, "cloud_api_changed", "Personal API configuration changed; start a new request");
+    }
+  }
+
+  selection(actor: Actor, sessionId: string, requestId: string) {
+    const database = this.service.database, session = database.requireSession(sessionId);
+    const role = this.service.requireMembership(actor, sessionId);
+    if (role === "viewer" || session.state !== "active" || session.mode === "solo" && session.owner_user_id !== actor.user_id) {
+      throw new ApiError(403, "hosted_access_changed", "Cloud Agent access changed");
+    }
+    const job = database.sqlite.prepare("SELECT profile_id,provider,model FROM hosted_agent_runs WHERE request_event_id=? AND session_id=? AND user_id=?")
+      .get(requestId, sessionId, actor.user_id) as { profile_id: string; provider: string; model: string } | undefined;
+    if (!job) throw new ApiError(404, "hosted_request_unavailable", "Cloud Agent request is unavailable");
+    const event = database.getEvent(sessionId, requestId);
+    const payload = event.payload as { profile_id?: unknown; execution_profile?: { provider?: unknown; model?: unknown } };
+    if (event.type !== "agent_request" || event.actor_user_id !== actor.user_id || payload.profile_id !== job.profile_id
+      || payload.execution_profile?.provider !== job.provider || payload.execution_profile.model !== job.model) {
+      throw new ApiError(404, "hosted_request_unavailable", "Cloud Agent request is unavailable");
+    }
+    const pin = database.sqlite.prepare("SELECT user_id,config_id,config_revision FROM cloud_api_run_bindings WHERE request_event_id=?")
+      .get(requestId) as { user_id: string; config_id: string; config_revision: string } | undefined;
+    if (isPersonalCloudProfile(job.profile_id)) {
+      if (!pin || pin.user_id !== actor.user_id || `api-${pin.config_id}` !== job.profile_id) {
+        throw new ApiError(404, "hosted_request_unavailable", "Cloud Agent request is unavailable");
+      }
+      this.assertRunCurrent(requestId);
+      const endpoint = this.personalApi.resolve(actor, job.profile_id, pin.config_revision);
+      if (endpoint.provider !== job.provider || endpoint.model !== job.model) throw new ApiError(409, "cloud_api_changed", "Personal API configuration changed; start a new request");
+      return HostedAgentSelectionSchema.parse({ profile_id: job.profile_id, api_config_revision: pin.config_revision });
+    }
+    if (pin) throw new ApiError(404, "hosted_request_unavailable", "Cloud Agent request is unavailable");
+    if (!this.options.endpoints.some(endpoint => endpoint.profileId === job.profile_id && endpoint.provider === job.provider && endpoint.model === job.model)) {
+      throw new ApiError(409, "hosted_profile_changed", "Cloud Agent model configuration changed; start a new request");
+    }
+    return HostedAgentSelectionSchema.parse({ profile_id: job.profile_id });
+  }
+
+  private endpointsFor(actor: Actor, input: HostedAgentRequestInput): HostedEndpoint[] {
+    if (isPersonalCloudProfile(input.profile_id)) return [this.personalApi.resolve(actor, input.profile_id, input.api_config_revision)];
+    if (input.api_config_revision !== undefined) throw new ApiError(400, "cloud_api_invalid", "A service model cannot use personal API configuration");
+    return this.options.endpoints.filter(e => e.profileId === input.profile_id);
+  }
+
+  private limitsFor(endpoints: HostedEndpoint[]): HostedRunLimits {
+    return endpoints[0]?.personal ? { ...this.options, userDailyRuns: PERSONAL_CLOUD_DAILY_RUNS,
+      globalDailyRuns: PERSONAL_CLOUD_GLOBAL_DAILY_RUNS, billingSource: "personal" } : this.options;
   }
 
   private assertDockerReady(): void {
@@ -313,13 +411,13 @@ export class HostedAgent {
     if (Buffer.byteLength(JSON.stringify(context)) > MAX_CONTEXT_BYTES) {
       throw new ApiError(413, "hosted_context_too_large", "Cloud Agent needs a shorter conversation context");
     }
-    const endpoints = this.options.endpoints.filter((e) => e.profileId === input.profile_id);
+    const endpoints = this.endpointsFor(actor, input);
     if (!endpoints.length || endpoints[0]!.provider === "cloudflare-workers-ai") {
       throw new ApiError(400, "github_model_unavailable", "Repository tasks require a DeepSeek or compatible API profile");
     }
     const result = this.service.reserveHostedAgentRequest(actor, sessionId, input,
       endpoints.map((e) => ({ ...e, blocked: (this.cooldowns.get(e.quotaGroup) ?? 0) > Date.now() })),
-      this.options, (event) => {
+      this.limitsFor(endpoints), (event) => {
         if ((event.content_revision ?? 0) !== (context.content_revision ?? 0)) throw new ApiError(409,
           "context_changed", "Shared history changed while preparing the task; start a new request");
         onReserved(event);
@@ -341,7 +439,8 @@ export class HostedAgent {
 
   startSummary(actor: Actor, sessionId: string, input: HostedHistorySummaryInput) {
     return this.start(actor, sessionId, { profile_id: input.profile_id, content: "Summarize selected history",
-      include_code: false, idempotency_key: input.idempotency_key }, input);
+      include_code: false, idempotency_key: input.idempotency_key,
+      ...(input.api_config_revision ? { api_config_revision: input.api_config_revision } : {}) }, input);
   }
 
   pause(actor: Actor, sessionId: string, requestId: string) {
@@ -353,7 +452,7 @@ export class HostedAgent {
   async request(actor: Actor, sessionId: string, input: HostedAgentRequestInput, onAccepted?: (event: CanonicalEvent) => void,
     summary?: HostedHistorySummaryInput) {
     if (input.github_task_id) throw new ApiError(400, "github_task_route_required", "Use the cloud repository task endpoint");
-    const endpoints = this.options.endpoints.filter((e) => e.profileId === input.profile_id);
+    const endpoints = this.endpointsFor(actor, input);
     if (!endpoints.length) throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
     this.assertDockerReady();
     const session = this.service.database.requireSession(sessionId);
@@ -372,7 +471,7 @@ export class HostedAgent {
       }
     }
     const reserved = this.service.reserveHostedAgentRequest(actor, sessionId, input,
-      endpoints.map((endpoint) => ({ ...endpoint, blocked: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() })), this.options, (event) => {
+      endpoints.map((endpoint) => ({ ...endpoint, blocked: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() })), this.limitsFor(endpoints), (event) => {
         if (context && (event.content_revision ?? 0) !== (context.content_revision ?? 0)) throw new ApiError(409,
           "context_changed", "Shared history changed while preparing the task; start a new request");
       }, summary);
@@ -385,11 +484,25 @@ export class HostedAgent {
     contextWatch.unref();
     onAccepted?.(reserved.event);
     const endpoint = endpoints.find((e) => e.id === reserved.endpointId)!;
+    const authorize = () => {
+      controller.signal.throwIfAborted();
+      this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id);
+      this.assertRunCurrent(reserved.event.id);
+      this.service.database.assertActiveDevice(actor);
+      const session = this.service.database.requireSession(sessionId), role = this.service.requireMembership(actor, sessionId);
+      const job = this.service.database.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=? AND user_id=? AND device_id=? AND status='running'")
+        .get(reserved.event.id, actor.user_id, actor.device_id);
+      if (!job || this.service.database.isHostedAgentPaused(reserved.event.id) || role === "viewer" || session.state !== "active"
+        || session.mode === "solo" && session.owner_user_id !== actor.user_id) throw new ApiError(403, "hosted_access_changed", "Cloud Agent access changed");
+    };
+    const authorizationWatch = setInterval(() => { try { authorize(); } catch { controller.abort(); } }, 2000);
+    authorizationWatch.unref();
     let content = "";
     let errorCode: string | undefined;
     let root: string;
     try { root = mkdtempSync(join(tmpdir(), "gt-hosted-")); }
     catch {
+      clearInterval(authorizationWatch);
       this.controllers.delete(reserved.event.id);
       clearInterval(contextWatch);
       const result = this.service.finishHostedAgentRequest(reserved.event.id, {});
@@ -402,17 +515,7 @@ export class HostedAgent {
     const live = createHostedLiveOutputConsumer((update) => controller.signal.aborted ? false
       : this.service.appendHostedAgentProgress(reserved.event.id, update));
     const proxy = new HostedModelProxy({ endpoint, signal: controller.signal, ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
-      authorize: () => {
-        this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id);
-        this.service.database.assertActiveDevice(actor);
-        const session = this.service.database.requireSession(sessionId);
-        const role = this.service.requireMembership(actor, sessionId);
-        const job = this.service.database.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=? AND user_id=? AND device_id=? AND status='running'")
-          .get(reserved.event.id, actor.user_id, actor.device_id);
-        if (!job || this.service.database.isHostedAgentPaused(reserved.event.id) || role === "viewer" || session.state !== "active" || session.mode === "solo" && session.owner_user_id !== actor.user_id) {
-          throw new ApiError(403, "hosted_access_changed", "Cloud Agent access changed");
-        }
-      },
+      authorize,
       onUnavailable: (ms) => this.cooldowns.set(endpoint.quotaGroup, Date.now() + ms) });
     try {
       mkdirSync(workspace, { mode: 0o755 });
@@ -424,7 +527,7 @@ export class HostedAgent {
         model: `hosted/${endpoint.model}`,
         small_model: `hosted/${endpoint.model}`,
         share: "disabled",
-        provider: { hosted: { npm: "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
+        provider: { hosted: { npm: endpoint.transport === "anthropic-messages" ? "@ai-sdk/anthropic" : "@ai-sdk/openai-compatible", name: "GatherThread Cloud Agent",
           options: { baseURL: "http://127.0.0.1:8787/v1", apiKey: "local" },
           models: { [endpoint.model]: { name: endpoint.label, limit: { context: 32_000, output: MAX_OUTPUT_TOKENS } } } } },
         agent: { title: { disable: true } }, enabled_providers: ["hosted"],
@@ -451,12 +554,10 @@ export class HostedAgent {
         "-e", "HOME=/home/agent", "-e", "OPENCODE_CONFIG=/run/gatherthread/opencode.json",
         "-e", "OPENCODE_DISABLE_MODELS_FETCH=true", "-e", "OPENCODE_DISABLE_DEFAULT_PLUGINS=true",
         "-e", "NO_COLOR=1", "-e", "CI=1", this.options.image];
-      controller.signal.throwIfAborted();
-      this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id);
+      authorize();
       const output = this.options.runContainer ? await this.options.runContainer(args, RUN_TIMEOUT_MS, controller.signal, live.accept)
         : await runDocker(args, RUN_TIMEOUT_MS, 1_000_000, controller.signal, live.accept);
-      controller.signal.throwIfAborted();
-      this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id);
+      authorize();
       const run = JSON.parse(hostedContainerResult(output, live.accept)) as { answer?: unknown; files?: unknown; save_error?: unknown };
       content = typeof run.answer === "string" ? run.answer.trim().slice(0, 14_000) : "";
       if (!content) throw new Error("empty_agent_result");
@@ -468,8 +569,7 @@ export class HostedAgent {
           if (JSON.stringify(files) !== JSON.stringify(branch.files)) {
             try {
               this.codeRepository.checkpoint(actor, session.project_id, { base_commit: branch.commit, files,
-                message: "Cloud Agent changes", idempotency_key: `hosted-code-${reserved.event.id}` },
-              () => this.service.database.assertRequestContextCurrent(sessionId, reserved.event.id));
+                message: "Cloud Agent changes", idempotency_key: `hosted-code-${reserved.event.id}` }, authorize);
               content += "\n\nChanges were saved to your cloud code branch for review.";
             } catch {
               content += "\n\nThe Agent ran, but its changed files could not be saved to cloud code.";
@@ -487,7 +587,10 @@ export class HostedAgent {
           () => proxy.close().catch(() => undefined), () => rmSync(root, { recursive: true, force: true }),
         ]);
         await live.finish(Boolean(content));
-      } finally { await live.finish(false); this.controllers.delete(reserved.event.id); clearInterval(contextWatch); }
+      } finally {
+        clearInterval(authorizationWatch); clearInterval(contextWatch);
+        await live.finish(false); this.controllers.delete(reserved.event.id);
+      }
     }
     const result = this.service.finishHostedAgentRequest(reserved.event.id, {
       content, ...(errorCode ? { errorCode } : {}), providerAttempts: proxy.diagnostics().providerAttempts,

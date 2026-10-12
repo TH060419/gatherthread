@@ -34,7 +34,7 @@ export function cpusetSmokeEnvironment(image, cpu, home, environment = process.e
     || !["limited", "shared-host"].includes(memoryPolicy)) throw refusal();
   return { PATH: environment.PATH ?? "/usr/bin:/bin", HOME: home, TMPDIR: home, CI: "true",
     DOCKER_HOST: "unix:///var/run/docker.sock", GATHERTHREAD_TEST_HOSTED_IMAGE: image,
-    GATHERTHREAD_HOSTED_AGENT_CPUSET: cpu, GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB: "512",
+    GATHERTHREAD_HOSTED_AGENT_CPUSET: cpu, GATHERTHREAD_HOSTED_AGENT_MEMORY_MIB: "768",
     GATHERTHREAD_HOSTED_GITHUB_MEMORY_MIB: "768",
     ...(memoryPolicy === "shared-host" ? { GATHERTHREAD_HOSTED_AGENT_MEMORY_POLICY: memoryPolicy } : {}) };
 }
@@ -55,7 +55,7 @@ export function runCpusetSmoke({ image, status, platform = process.platform, env
       if (result.error || result.status !== 0 || result.signal) throw new Error("Hosted cpuset smoke failed; image must not be delivered");
     }
     return memoryPolicy === "shared-host" ? { image_id: image, cpu, memory_policy: memoryPolicy, trial: "passed", repository: "passed" }
-      : { image_id: image, cpu, trial_memory_mib: 512, repository_memory_mib: 768, trial: "passed", repository: "passed" };
+      : { image_id: image, cpu, trial_memory_mib: 768, repository_memory_mib: 768, trial: "passed", repository: "passed" };
   } finally { rmSync(privateDirectory, { recursive: true, force: true }); }
 }
 

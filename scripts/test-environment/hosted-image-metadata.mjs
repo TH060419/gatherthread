@@ -49,11 +49,11 @@ export function imageProvenance({ source, commit, inspection, image, quota, cpus
     || shared.image_id !== image || shared.cpu !== cpuset?.cpu || shared.memory_policy !== "shared-host"
     || shared.trial !== "passed" || shared.repository !== "passed")) throw invalid();
   if (!quota || Object.keys(quota).sort().join(",") !== "image_id,repository,repository_memory_mib,trial,trial_memory_mib"
-    || quota.image_id !== image || quota.trial_memory_mib !== 512 || quota.repository_memory_mib !== 768
+    || quota.image_id !== image || quota.trial_memory_mib !== 768 || quota.repository_memory_mib !== 768
     || quota.trial !== "passed" || quota.repository !== "passed"
     || !cpuset || Object.keys(cpuset).sort().join(",") !== "cpu,image_id,repository,repository_memory_mib,trial,trial_memory_mib"
     || cpuset.image_id !== image || !fullMatch(/^(0|[1-9][0-9]{0,3})$/u, cpuset.cpu) || Number(cpuset.cpu) > 4095
-    || cpuset.trial_memory_mib !== 512 || cpuset.repository_memory_mib !== 768
+    || cpuset.trial_memory_mib !== 768 || cpuset.repository_memory_mib !== 768
     || cpuset.trial !== "passed" || cpuset.repository !== "passed"
     || !fullMatch(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/u, docker?.Client?.Version)
     || !fullMatch(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$/u, docker?.Server?.Version)
@@ -63,9 +63,9 @@ export function imageProvenance({ source, commit, inspection, image, quota, cpus
     ...identity, image_archive: "hosted-image.tar.gz", image_archive_sha256: archive.sha256,
     image_archive_bytes: archive.bytes, docker_client_version: docker.Client.Version, docker_server_version: docker.Server.Version,
     smoke: [
-      { mode: "quota", kind: "trial", image_id: image, memory_mib: 512, cpus: 1, status: "passed" },
+      { mode: "quota", kind: "trial", image_id: image, memory_mib: 768, cpus: 1, status: "passed" },
       { mode: "quota", kind: "repository", image_id: image, memory_mib: 768, cpus: 2, status: "passed" },
-      { mode: "cpuset", kind: "trial", image_id: image, memory_mib: 512, cpu: cpuset.cpu, status: "passed" },
+      { mode: "cpuset", kind: "trial", image_id: image, memory_mib: 768, cpu: cpuset.cpu, status: "passed" },
       { mode: "cpuset", kind: "repository", image_id: image, memory_mib: 768, cpu: cpuset.cpu, status: "passed" },
       ...(shared === undefined ? [] : [
         { mode: "cpuset-shared-host", kind: "trial", image_id: image, memory_policy: "shared-host", cpu: shared.cpu, status: "passed" },

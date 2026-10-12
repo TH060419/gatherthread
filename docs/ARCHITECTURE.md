@@ -2,6 +2,8 @@
 
 ## Cloud GitHub task plane
 
+Account-owned model credentials add a private `CloudApiStore`, independent of project settings and GitHub credentials. Metadata-only browser CRUD uses strict protocol schemas; AES-GCM ciphertext binds account/configuration/revision/routing fields under an independent key. A private binding freezes selection atomically with reservation; retry/continuation, dispatch, streamed output and checkpoints recheck it. Chat and native Anthropic Messages reuse the secret-free Unix proxy and bundled SDKs. Personal billing is separate without expanded host limits. See [ADR-0049](adr/0049-account-owned-cloud-api-configuration.md).
+
 The operator-gated task plane in `apps/server/src/hosted-github.ts` provides requester-private GitHub App authorization, repository binding and asynchronous development tasks. Beta 1 opens the Web task entry, while the corresponding server services remain disabled by default until configured and validated. `hosted-repository-runner.ts` uses the existing OpenCode image with a lockfile-restricted npm proxy; GitHub credentials never enter the container. Private encrypted source snapshots support explicit continuation, and a reviewed revision can create a draft PR via Git Data APIs. This is separate from direct local GitHub sync. See [ADR-0039](adr/0039-cloud-github-repository-tasks.md) and [operator/user guide](HOSTED_GITHUB.md).
 
 ## Code version plane
