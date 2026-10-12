@@ -443,6 +443,29 @@ class IconDistributionTests(unittest.TestCase):
 
 
 class NativeCodexCommandTests(unittest.TestCase):
+    def test_windows_install_binds_mcp_to_its_current_bundled_node_and_connector(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source, target = Path(directory) / "source", Path(directory) / "installed"
+            for name in ("runtime/node.exe", "connector/codex-connect.js", "assets/gatherthread.ico", "assets/gatherthread.png"):
+                file = source / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text("fixture", encoding="utf-8")
+            plugin = source / "plugins/gatherthread"
+            (plugin / "hooks").mkdir(parents=True)
+            (plugin / ".mcp.json").write_text(json.dumps({"mcpServers": {"gatherthread": {"command": "npx", "args": ["old-package"]}}}), encoding="utf-8")
+            (plugin / "hooks/hooks.json").write_text(json.dumps({"hooks": {
+                event: [{"hooks": [{"command": "old-hook"}]}] for event in ("UserPromptSubmit", "Stop")}}), encoding="utf-8")
+            with patch.object(launcher, "runtime_dir", return_value=source), patch.object(launcher, "installed_dir", return_value=target), \
+                    patch.object(launcher, "register_windows_scheme") as register, patch.object(launcher, "create_start_menu_shortcut") as shortcut:
+                self.assertEqual(launcher.install_bundle(), target)
+            installed = json.loads((target / "plugins/gatherthread/.mcp.json").read_text(encoding="utf-8"))
+            self.assertEqual(installed, {"mcpServers": {"gatherthread": {
+                "command": str(target / "runtime/node.exe"), "args": [str(target / "connector/codex-connect.js"), "mcp"]}}})
+            self.assertNotIn("old-package", json.dumps(installed))
+            register.assert_called_once_with(target)
+            shortcut.assert_called_once_with(target)
+            self.assertIn("old-package", (plugin / ".mcp.json").read_text(encoding="utf-8"))
+
     def test_workspace_selection_uses_existing_absolute_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             self.assertIsNone(launcher.selected_workspace(""))
