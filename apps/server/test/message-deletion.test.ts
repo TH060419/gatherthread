@@ -308,6 +308,22 @@ test("deletion rechecks revoked device, viewer demotion, Solo and foreign-sessio
   } finally { await f.close(); }
 });
 
+test("account and session deletion preserve prior message tombstones without dangling author receipts", async () => {
+  const f = await fixture();
+  try {
+    const source = f.chat("MEMBER_REMOVED_CONTENT", f.member);
+    await f.remove(source, f.member);
+    const result = f.database.deleteAccount(f.member.actor);
+    assert.ok(result.retained_shared_events >= 1);
+    assert.equal(f.database.getEvent(f.session.id, source.id).actor_user_id, "deleted-account");
+    assert.doesNotMatch(JSON.stringify(f.service.replay(f.owner.actor, f.session.id, 0, 100)), /MEMBER_REMOVED_CONTENT/);
+    assert.deepEqual(f.database.sqlite.prepare("PRAGMA foreign_key_check").all(), []);
+    f.service.deleteSession(f.owner.actor, f.session.id);
+    assert.equal(f.database.sqlite.prepare("SELECT count(*) AS n FROM message_deletions").get()?.n, 0);
+    assert.equal(f.database.sqlite.prepare("SELECT count(*) AS n FROM deleted_event_receipts").get()?.n, 0);
+  } finally { await f.close(); }
+});
+
 test("a deletion erases in-flight work derived from old context and invalidates frozen native imports", async () => {
   const f = await fixture();
   try {
