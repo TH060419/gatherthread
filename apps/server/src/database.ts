@@ -3146,8 +3146,17 @@ export class CollaborationDatabase {
       }
       if (target.deleted) throw new ApiError(409, "message_deleted", "This message was already deleted");
       if (this.findByIdempotencyKey(sessionId, idempotencyKey)) throw idempotencyConflict();
+      const linkedRequestId = target.type === "agent_response" ? target.reply_to_event_id ?? null : null;
+      const firstOutput = linkedRequestId === null ? undefined : this.sqlite.prepare(`
+        SELECT MIN(work.sequence) AS sequence FROM events work JOIN events request ON request.id=work.reply_to_event_id
+        WHERE work.session_id=? AND request.session_id=work.session_id AND request.type='agent_request' AND request.id=?
+          AND work.deleted_at IS NULL AND work.type IN ('agent_progress','agent_response','tool_call','tool_result')`)
+        .get(sessionId, linkedRequestId) as { sequence: number | null } | undefined;
+      const erasureSequence = Math.min(target.sequence, firstOutput?.sequence ?? target.sequence);
       // Only Agent work follows its request. Ordinary human quotes are references
       // and keep their independently authored body. Summary dependencies recurse.
+      // A final answer can already exist in earlier same-request streams/tools.
+      // Their first surviving output is also the boundary for derived copies.
       const affected = this.sqlite.prepare(`WITH RECURSIVE
         deps(child,parent) AS (
           SELECT e.id,e.reply_to_event_id FROM events e JOIN events p ON p.id=e.reply_to_event_id
@@ -3156,12 +3165,15 @@ export class CollaborationDatabase {
           WHERE e.session_id=? AND e.type='agent_request' AND json_type(e.payload_json,'$.history_summary.source_event_ids')='array'
         ), gone(id) AS (SELECT ?
           UNION SELECT work.id FROM events work JOIN events request ON request.id=work.reply_to_event_id
+            WHERE work.session_id=? AND request.session_id=work.session_id AND request.type='agent_request' AND request.id=?
+              AND work.type IN ('agent_progress','agent_response','tool_call','tool_result')
+          UNION SELECT work.id FROM events work JOIN events request ON request.id=work.reply_to_event_id
             WHERE work.session_id=? AND request.type='agent_request' AND request.sequence>?
               AND work.type IN ('agent_progress','agent_response','tool_call','tool_result')
           UNION SELECT snapshot.id FROM events snapshot WHERE snapshot.session_id=? AND snapshot.type='context_snapshot' AND snapshot.sequence>=?
           UNION SELECT d.child FROM deps d JOIN gone g ON g.id=d.parent)
         SELECT e.* FROM events e JOIN gone g ON g.id=e.id WHERE e.session_id=? ORDER BY e.sequence`)
-        .all(sessionId, sessionId, eventId, sessionId, target.sequence, sessionId, target.sequence, sessionId) as unknown as EventRow[];
+        .all(sessionId, sessionId, eventId, sessionId, linkedRequestId, sessionId, erasureSequence, sessionId, erasureSequence, sessionId) as unknown as EventRow[];
       const now = this.now();
       const revision = (session.content_revision ?? 0) + 1;
       const originals = new Map(affected.map((row) => [row.id, mapEvent(row)]));
