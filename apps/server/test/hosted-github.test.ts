@@ -89,6 +89,111 @@ async function settled(f: ReturnType<typeof fixture>, id: string) {
  throw new Error("Cloud task did not settle");
 }
 
+async function inactive(f: ReturnType<typeof fixture>) {
+ for (let n = 0; n < 500 && f.db.hostedActiveRuns(); n++) await setTimeout(5);
+ assert.equal(f.db.hostedActiveRuns(), 0);
+}
+
+function deletionPeer(f: ReturnType<typeof fixture>) {
+ return new CollaborationDatabase(join(f.directory, "db"), { authTokenPepper: "github-test-pepper-long",
+   clock: () => new Date("2026-10-03T00:01:00Z") });
+}
+
+unixTest("deleted history makes private GitHub answers, source snapshots, continuation and publication inaccessible", { timeout: fixtureTimeout }, async () => {
+ const f = fixture(), other = deletionPeer(f);
+ try {
+  const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "github-deleted-source",
+   payload: { content: "GITHUB_DELETED_PRIVATE_SOURCE" } });
+  await connect(f);
+  const input = { content: "Work", profile_id: "coding", idempotency_key: "github-delete-completed" };
+  const receipt = f.github.start(f.actor, f.session.id, input);
+  const task = await settled(f, receipt.id);
+  assert.equal(task.state, "completed"); assert.ok(task.revision && task.changes.length);
+  const calls = f.calls.length, runs = f.runs();
+  other.deleteMessage(f.actor, f.session.id, source.id, "github-delete-source");
+  const changed = (e: unknown) => e instanceof ApiError && e.code === "context_changed";
+  assert.throws(() => f.github.view(f.actor, task.id), changed);
+  assert.throws(() => f.github.start(f.actor, f.session.id, { ...input, idempotency_key: "github-delete-continue", continue_task_id: task.id }), changed);
+  await assert.rejects(f.github.publish(f.actor, task.id, { expected_revision: task.revision!, title: "Old result", body: "Old result" }), changed);
+  assert.deepEqual(f.github.list(f.actor, f.session.project_id), []);
+  assert.equal(f.calls.length, calls); assert.equal(f.runs(), runs);
+  const row = f.db.sqlite.prepare("SELECT input_json,initial_files,starting_files,result_files,answer,revision,error_code FROM hosted_github_tasks WHERE id=?").get(task.id)!;
+  assert.equal(JSON.parse(String(row.input_json)).content, "[Message deleted]");
+  for (const field of ["initial_files", "starting_files", "result_files", "answer", "revision"]) assert.equal(row[field], null);
+  assert.equal(row.error_code, "context_changed");
+ } finally { await f.close(); other.close(); }
+});
+
+unixTest("deletion during GitHub source lookup blocks later fetches and model dispatch", { timeout: fixtureTimeout }, async () => {
+ const f = fixture(), other = deletionPeer(f), entered = deferred(), release = deferred();
+ const original = f.githubOptions.fetch;
+ let armed = false;
+ f.githubOptions.fetch = async (url, init) => {
+  if (armed && new URL(String(url)).pathname === "/repos/owner/project") { armed = false; entered.resolve(); await release.promise; }
+  return original(url, init);
+ };
+ try {
+  const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "github-snapshot-source", payload: { content: "OLD_SOURCE_FETCH" } });
+  await connect(f); armed = true;
+  const task = f.github.start(f.actor, f.session.id, { content: "Work", profile_id: "coding", idempotency_key: "github-source-race" });
+  await entered.promise;
+  other.deleteMessage(f.actor, f.session.id, source.id, "github-delete-source-race");
+  const calls = f.calls.length;
+  release.resolve(); await inactive(f);
+  assert.equal(f.runs(), 0);
+  assert.equal(f.calls.length, calls + 1, "only the already-started lookup may settle; no next fetch may start");
+  const row = f.db.sqlite.prepare("SELECT initial_files,starting_files,result_files,answer,error_code FROM hosted_github_tasks WHERE id=?").get(task.id)!;
+  assert.equal(row.initial_files, null); assert.equal(row.starting_files, null); assert.equal(row.result_files, null); assert.equal(row.answer, null);
+  assert.equal(row.error_code, "context_changed");
+ } finally { release.resolve(); await f.close(); other.close(); }
+});
+
+unixTest("deletion at private GitHub result sealing cannot repopulate scrubbed snapshots", { timeout: fixtureTimeout }, async () => {
+ const f = fixture(), other = deletionPeer(f);
+ try {
+  const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "github-seal-source", payload: { content: "SEALED_OLD_SOURCE" } });
+  await connect(f);
+  const seal = (f.github as any).seal.bind(f.github);
+  let count = 0;
+  (f.github as any).seal = (value: unknown, owner: string) => {
+   // The first two calls prepare initial/starting files. Invalidate just before
+   // the result cache is committed, after all asynchronous model work settled.
+   if (++count === 3) other.deleteMessage(f.actor, f.session.id, source.id, "github-delete-at-seal");
+   return seal(value, owner);
+  };
+  const task = f.github.start(f.actor, f.session.id, { content: "Work", profile_id: "coding", idempotency_key: "github-seal-race" });
+  await inactive(f);
+  const row = f.db.sqlite.prepare("SELECT initial_files,starting_files,result_files,answer,revision,error_code FROM hosted_github_tasks WHERE id=?").get(task.id)!;
+  for (const field of ["initial_files", "starting_files", "result_files", "answer", "revision"]) assert.equal(row[field], null);
+  assert.equal(row.error_code, "context_changed");
+ } finally { await f.close(); other.close(); }
+});
+
+unixTest("history deletion fences GitHub publication after an already-issued remote read", { timeout: fixtureTimeout }, async () => {
+ const f = fixture(), other = deletionPeer(f), entered = deferred(), release = deferred();
+ let publication: Promise<unknown> | undefined, armed = false;
+ const original = f.githubOptions.fetch;
+ f.githubOptions.fetch = async (url, init) => {
+  if (armed && new URL(String(url)).pathname === "/repos/owner/project") { armed = false; entered.resolve(); await release.promise; }
+  return original(url, init);
+ };
+ try {
+  const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "github-publish-source", payload: { content: "PUBLISH_OLD_SOURCE" } });
+  await connect(f);
+  const task = await settled(f, f.github.start(f.actor, f.session.id, { content: "Work", profile_id: "coding", idempotency_key: "github-publish-race" }).id);
+  assert.ok(task.revision); armed = true;
+  const writes = f.calls.filter(c => c.method !== "GET").length;
+  publication = f.github.publish(f.actor, task.id, { expected_revision: task.revision!, title: "Fixture", body: "Fixture" });
+  const outcome = publication.catch((error: unknown) => error);
+  await entered.promise;
+  other.deleteMessage(f.actor, f.session.id, source.id, "github-delete-during-publish");
+  release.resolve();
+  assert.equal((await outcome as ApiError).code, "context_changed");
+  assert.equal(f.calls.filter(c => c.method !== "GET").length, writes);
+  assert.equal(f.db.sqlite.prepare("SELECT pr_url FROM hosted_github_tasks WHERE id=?").get(task.id)?.pr_url, null);
+ } finally { release.resolve(); await publication?.catch(() => undefined); await f.close(); other.close(); }
+});
+
 function deferred() {
  let resolve!: () => void;
  const promise = new Promise<void>((done) => { resolve = done; });
