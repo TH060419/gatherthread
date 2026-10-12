@@ -33,6 +33,57 @@ import {
  * effort list fails this contract instead of silently travelling with it. */
 const CODEX_EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
+test("author deletion rebuilds compacted Codex execution before journal recovery and reconnect", async (t) => {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gt-deletion-codex-")));
+  const statePath = path.join(directory, "state.json");
+  const threads = new Map<string, string[]>();
+  const prompts: Array<{ threadId: string; context: string }> = [];
+  let next = 0;
+  const client = {
+    processGeneration: 1,
+    async startThread() { const id = `owned-${++next}`; threads.set(id, []); return id; },
+    async injectItems(id: string, items: unknown[]) { threads.get(id)!.push(JSON.stringify(items)); },
+    async readThread(id: string) { return { id, status: "idle", turns: [] }; },
+    getThreadTokenUsage() { return undefined; },
+    async runTurn(input: any) {
+      prompts.push({ threadId: input.threadId, context: [...threads.get(input.threadId)!, input.prompt].join("\n") });
+      const turnId = `turn-${prompts.length}`;
+      await input.onStarted?.(turnId);
+      threads.get(input.threadId)!.push("PRIVATE_COMPACTED_MEMORY_CONTAINS_DELETED_SENTINEL");
+      return { turnId, items: [{ type: "agentMessage", text: "answer", phase: "final_answer" }] };
+    },
+    async close() {}, async dispose() {},
+  } as unknown as CodexAppServerClient;
+  const make = () => new CodexAppServerExecutor({ client, workspacePath: directory, statePath,
+    threadName: "owned privacy fixture", model: "gpt-test", threadSource: "exec" });
+  const executor = make(); t.after(() => client.dispose());
+  const raw = canonical(1, "human_chat", { text: "DELETED_SENTINEL" });
+  const runtime = registeredRuntime("privacy");
+  await executor.execute({ request: canonical(2, "agent_request", { text: "before deletion" }), canonicalHistory: [raw], runtime,
+    historyContext: { view: "original", content_revision: 0, through_sequence: 1, items: [{ kind: "original", event_id: raw.id,
+      sequence: 1, actor_user_id: raw.actorId, content: "DELETED_SENTINEL" }] } });
+  assert.match(prompts[0]!.context, /DELETED_SENTINEL/);
+  const old = JSON.parse(await readFile(statePath, "utf8"));
+  old.compactionGeneration = 4;
+  old.executionJournal["event-4"] = { requestId: "event-4", status: "completed", turnId: "old-turn",
+    events: [] };
+  await writeFile(statePath, JSON.stringify(old));
+  const deleted = { ...raw, payload: {}, contentRevision: 1, deleted: { deletedAt: raw.timestamp, reason: "author" as const } };
+  const input = { request: canonical(4, "agent_request", { text: "after deletion" }), canonicalHistory: [deleted], runtime,
+    historyContext: { view: "original" as const, content_revision: 1, through_sequence: 3, items: [] } };
+  await executor.execute(input);
+  assert.equal(prompts.length, 2, "old completed journal must never bypass deletion reconstruction");
+  assert.notEqual(prompts[1]!.threadId, old.threadId);
+  assert.doesNotMatch(prompts[1]!.context, /DELETED_SENTINEL/);
+  const saved = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(saved.contentRevision, 1);
+  assert.ok(saved.localOnlyThreadIds.includes(old.threadId));
+  const reconnected = make();
+  await reconnected.execute({ ...input, request: canonical(5, "agent_request", { text: "reconnected" }),
+    historyContext: { ...input.historyContext, through_sequence: 4 } });
+  assert.doesNotMatch(prompts.at(-1)!.context, /DELETED_SENTINEL/);
+});
+
 test("shared summaries rebuild only hidden Codex model context and original mode restores source", async (t) => {
   const directory = await realpath(await mkdtemp(path.join(tmpdir(), "gt-summary-codex-")));
   const statePath = path.join(directory, "state.json");

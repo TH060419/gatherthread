@@ -148,6 +148,32 @@ function contextInput(requestSequence = 6, view: "summary" | "original" = "summa
   };
 }
 
+test("author deletion rotates the owned DSH execution Session and its compacted private state across reconnect", async () => {
+  const f = fixture();
+  const before = { ...contextInput(6, "original"), historyContext: { ...contextInput(6, "original").historyContext, content_revision: 0 } };
+  const first = await f.facade.prepareContextExecution!(before);
+  await f.facade.prompt("prior request DELETED_SENTINEL", undefined, first.sessionId);
+  const retired = f.stored.get(first.sessionId);
+  f.live.get(first.sessionId).ctx.compactedMemory = "DELETED_SENTINEL";
+  const retiredEvents = structuredClone(retired.snapshotEvents());
+  const after = { ...contextInput(7, "original"), historyContext: { view: "original" as const,
+    content_revision: 1, through_sequence: 6, items: [] } };
+  const next = await f.facade.prepareContextExecution!(after);
+  assert.notEqual(next.sessionId, first.sessionId, "surface replacement cannot erase private compacted state");
+  assert.equal(f.live.get(next.sessionId).ctx.compactedMemory, undefined);
+  await f.facade.prompt("continue clean", undefined, next.sessionId);
+  assert.doesNotMatch(JSON.stringify(f.modelInputs.at(-1)), /DELETED_SENTINEL|OLD_PUBLIC_TEXT/);
+  assert.deepEqual(retired.snapshotEvents(), retiredEvents, "retired native history must remain unchanged");
+  await f.facade.dispose();
+  const restarted = f.newFacade();
+  const resumed = await restarted.prepareContextExecution!({ ...after, resume: true });
+  assert.equal(resumed.sessionId, next.sessionId);
+  await restarted.prompt("reconnected clean", undefined, resumed.sessionId);
+  assert.doesNotMatch(JSON.stringify(f.modelInputs.at(-1)), /DELETED_SENTINEL|OLD_PUBLIC_TEXT/);
+  await assert.rejects(restarted.prepareContextExecution!({ ...before, resume: true }), /revision|stale|retired/i);
+  await restarted.dispose();
+});
+
 test("isolated DSH context replaces noncontiguous old input across modes without changing native history", async () => {
   const f = fixture();
   await f.facade.open();
