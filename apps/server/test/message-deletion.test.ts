@@ -86,15 +86,15 @@ test("request deletion removes linked work and replies; response deletion keeps 
   try {
     const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "delete-runtime", session_id: f.session.id,
       device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "delete-native", capture_fidelity: "harness_transcript", context_deletion_version: 1 });
-    const make = (body: string) => f.service.appendEvent(f.owner.actor, f.session.id, { type: "agent_request", visibility: "session",
-      idempotency_key: randomUUID(), payload: { content: body, execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } });
+    const make = (body: string, revision = 0) => f.service.appendEvent(f.owner.actor, f.session.id, { type: "agent_request", visibility: "session",
+      idempotency_key: randomUUID(), content_revision: revision, payload: { content: body, execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } });
     const request = make("DELETED_REQUEST"); f.service.claimAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id);
     const response = f.service.completeAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id, randomUUID(), { content: "DELETED_RESPONSE" }, undefined, undefined, 1);
     assert.equal((await f.remove(request)).status, 200);
     const replay = await f.request(`/v1/sessions/${f.session.id}/events`);
     assert.doesNotMatch(JSON.stringify(replay), /DELETED_REQUEST|DELETED_RESPONSE/);
     assert.ok((replay.body.data?.events as Array<CanonicalEvent & { deleted?: unknown }>).find((event) => event.id === response.id)?.deleted);
-    const second = make("KEEP_REQUEST"); f.service.claimAgentRequest(f.owner.actor, f.session.id, second.id, runtime.id);
+    const second = make("KEEP_REQUEST", 1); f.service.claimAgentRequest(f.owner.actor, f.session.id, second.id, runtime.id);
     const secondResponse = f.service.completeAgentRequest(f.owner.actor, f.session.id, second.id, runtime.id, randomUUID(), { content: "DELETE_ONLY_REPLY" }, undefined, undefined, 1);
     assert.equal((await f.remove(secondResponse)).status, 200);
     const context = await f.request(`/v1/sessions/${f.session.id}/context`);
@@ -296,7 +296,7 @@ test("stale native outboxes and old connectors cannot accept, publish or execute
     const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "legacy-runtime", session_id: f.session.id,
       device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "legacy-native", capture_fidelity: "harness_transcript" });
     await f.remove(source);
-    const newInput = { type: "agent_request" as const, visibility: "session" as const, idempotency_key: randomUUID(),
+    const newInput = { type: "agent_request" as const, visibility: "session" as const, idempotency_key: randomUUID(), content_revision: 1,
       payload: { content: "New prompt", execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } };
     assert.throws(() => f.service.appendEvent(f.owner.actor, f.session.id, newInput),
       (error: unknown) => (error as { code?: string }).code === "connector_update_required");

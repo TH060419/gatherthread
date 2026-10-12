@@ -72,11 +72,12 @@ const USER_TOOL_DEFINITIONS = [
     idempotency_key: idempotencySchema(),
     reply_to: stringSchema("Optional event ID being replied to"),
   }, ["session_id", "content", "idempotency_key"], MUTATING_TOOL_ANNOTATIONS),
-  tool("collaboration_request_agent", "Mutating remote operation that requests an Agent run and may consume compute or other resources", {
+  tool("collaboration_request_agent", "Mutating remote operation that requests an Agent run and may consume compute or other resources. Pass the captured content_revision used to prepare the request; required after any deletion. Do not replace a stale pin to retry old text", {
     session_id: stringSchema("Session identifier"),
     content: stringSchema("Visible agent request"),
     idempotency_key: idempotencySchema(),
     reply_to: stringSchema("Optional event ID being replied to"),
+    content_revision: integerSchema("Captured content_revision from the context/history used to prepare this request; do not refresh it when retrying", 0),
   }, ["session_id", "content", "idempotency_key"], MUTATING_TOOL_ANNOTATIONS),
   tool("collaboration_get_connection_status", "Show sanitized connector presence for sessions in one visible project", {
     project_id: stringSchema("Project identifier"),
@@ -320,11 +321,16 @@ export class CollaborationMcpService {
     type: "human_chat" | "agent_request",
   ): Promise<unknown> {
     const replyTo = optionalString(args.reply_to);
+    const contentRevision = type === "agent_request" ? args.content_revision : undefined;
+    if (contentRevision !== undefined && (typeof contentRevision !== "number" || !Number.isSafeInteger(contentRevision) || contentRevision < 0)) {
+      throw new Error("content_revision must be a non-negative safe integer");
+    }
     return this.#api.appendEvent(requiredString(args, "session_id"), {
       type,
       idempotencyKey: requiredIdempotencyKey(args, "idempotency_key"),
       payload: { text: redactText(requiredString(args, "content")) },
       ...(replyTo === undefined ? {} : { replyTo }),
+      ...(contentRevision === undefined ? {} : { contentRevision }),
     });
   }
 

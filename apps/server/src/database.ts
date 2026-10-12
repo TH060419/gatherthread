@@ -3443,11 +3443,20 @@ export class CollaborationDatabase {
         provenance?.runtime_id ?? null,
       );
       if (replyTarget?.deleted) throw new ApiError(409, "message_deleted", "The quoted message was deleted; select another message");
-      if (input.type === "agent_request" && (this.requireSession(sessionId).content_revision ?? 0) > 0) {
-        const target = agentRequestTarget({ payload: input.payload });
-        const candidates = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((runtime) => runtime.purpose === "execution"
-          && runtimeSupportsAgentTarget(runtime, target) && (target.runtimeId === undefined || target.runtimeId === runtime.id));
-        if (candidates.length && !candidates.some((runtime) => runtime.context_deletion_version === 1)) this.assertContextCapability(sessionId, candidates[0]!);
+      if (input.type === "agent_request") {
+        const contentRevision = this.requireWritableSessionInsideTransaction(actor, sessionId).content_revision ?? 0;
+        if (contentRevision > 0) {
+          const target = agentRequestTarget({ payload: input.payload });
+          const candidates = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((runtime) => runtime.purpose === "execution"
+            && runtimeSupportsAgentTarget(runtime, target) && (target.runtimeId === undefined || target.runtimeId === runtime.id));
+          if (candidates.length && !candidates.some((runtime) => runtime.context_deletion_version === 1)) this.assertContextCapability(sessionId, candidates[0]!);
+        }
+        if (input.content_revision === undefined && contentRevision > 0) {
+          throw new ApiError(409, "context_changed", "Shared history changed; refresh this page before starting a new request");
+        }
+        if (input.content_revision !== undefined && input.content_revision !== contentRevision) {
+          throw new ApiError(409, "context_changed", "Shared history changed; start a new request with current history");
+        }
       }
       if (replyTarget && ["human_chat", "agent_request"].includes(input.type)
         && replyTarget.visibility === "owner_only"
