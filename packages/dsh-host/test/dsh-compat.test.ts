@@ -1204,6 +1204,9 @@ test("native workspace caches the official live Session on turn settlement befor
     title: "Cache the live Session",
   }]);
   assert.equal(f.calls.queryRead, 0);
+  f.appendEvent("user/message", { id: "gatherthread-retired:1", role: "user", source: { kind: "plugin", plugin: "gatherthread" },
+    content: [{ type: "text", text: "Continue this old task locally only." }] });
+  assert.deepEqual(await workspace.listCompletedLocalSessions(), [], "a cached local task must not be rediscovered after retirement");
   stop();
 });
 

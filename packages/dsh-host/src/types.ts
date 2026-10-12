@@ -29,6 +29,7 @@ export interface DshExecutionSelection {
 }
 
 export interface DshRuntimeRegistration {
+  contextDeletionVersion?: 1;
   sessionId: string;
   deviceId: string;
   harness: DshHarnessName;
@@ -178,14 +179,17 @@ export interface DshContextExecutionState {
 }
 
 export interface DshHostFacade {
+  readonly contextDeletionVersion?: 1;
   readonly sessionId: string;
   open(): Promise<"created" | "resumed">;
   currentSequence(executionSessionId?: string): number;
   snapshotFrom(sequence: number, executionSessionId?: string): readonly DshSessionEventRecord[];
   prepareContextExecution?(input: DshContextExecutionInput): Promise<{ sessionId: string; fromSequence: number }>;
+  /** Create/resume a clean owned projection and permanently retire its predecessor. */
+  resetCanonicalContext?(contentRevision: number): Promise<{ sessionId: string }>;
   projectCanonicalEvents(events: readonly DshCanonicalProjection[]): Promise<void>;
   flush(): Promise<void>;
-  prompt(text: string, selection?: DshExecutionSelection, executionSessionId?: string): Promise<DshPromptResult>;
+  prompt(text: string, selection?: DshExecutionSelection, executionSessionId?: string, signal?: AbortSignal): Promise<DshPromptResult>;
   onSessionEvent(listener: (event: DshSessionEventRecord) => void): () => void;
   onLiveOutput?(listener: (event: DshLiveOutputEvent) => void): () => void;
   onStatus(listener: (status: DshAgentStatus, sourceSessionId?: string) => void): () => void;
@@ -227,6 +231,7 @@ export type DshMappedEvent =
   | DshMappedToolResultEvent;
 
 export interface ConnectorActiveRequest {
+  contentRevision?: number;
   requestId: string;
   requestSequence: number;
   dshFromSequence: number;
@@ -263,6 +268,10 @@ export type ConnectorOutboxOperation =
   };
 
 export interface ConnectorState {
+  contentRevision?: number;
+  projectionSessionId?: string;
+  /** Old native bindings must not upload even if projection replacement fails. */
+  localOnlySessionIds?: string[];
   version: 3;
   binding: {
     projectId: string;

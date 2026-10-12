@@ -127,6 +127,10 @@ interface CodexAppServerState {
   contextUsageTurnId?: string;
   /** Derived shared-history view used by the hidden execution task only. */
   historyContextFingerprint?: string;
+  /** Authority for all model-visible context, including private native compaction. */
+  contentRevision?: number;
+  /** The old task is already local-only, but verified replacement is not committed. */
+  contextResetRequired?: number;
   /** A completed but unusable compaction must not be repeated by polling. */
   contextRecovery?: {
     threadId: string;
@@ -227,6 +231,7 @@ interface LocalTurnBinding {
 }
 
 interface LocalTurnOutbox {
+  contentRevision?: number;
   localTurnId: string;
   threadId: string;
   turnId: string;
@@ -240,6 +245,7 @@ interface LocalTurnOutbox {
 }
 
 interface HookLocalTurnDraft {
+  contentRevision?: number;
   localTurnId: string;
   threadId: string;
   turnId: string;
@@ -275,6 +281,7 @@ interface DesktopRelayCapsule {
 }
 
 interface ExecutionJournalEntry {
+  contentRevision?: number;
   requestId: string;
   status: "prepared" | "started" | "completed" | "failed";
   turnId?: string;
@@ -594,8 +601,11 @@ export class CodexAppServerClient {
     /** Only native public agent-message text, scoped to this thread and turn. */
     onItemDelta?: (itemId: string, delta: string) => Promise<void> | void;
     onNativeWork?: (method: string, params: Record<string, unknown>) => Promise<void> | void;
+    signal?: AbortSignal;
   }): Promise<{ turnId: string; items: unknown[]; modelContextWindow?: number; totalTokens?: number }> {
+    input.signal?.throwIfAborted();
     await this.start();
+    input.signal?.throwIfAborted();
     this.#threadTokenUsage.delete(input.threadId);
     let resolveCompletion: ((value: unknown) => void) | undefined;
     let rejectCompletion: ((error: Error) => void) | undefined;
@@ -616,6 +626,19 @@ export class CodexAppServerClient {
     let modelContextWindow: number | undefined;
     let totalTokens: number | undefined;
     let expectedTurnId: string | undefined;
+    let interruptSent = false;
+    let interruptTimeout: ReturnType<typeof setTimeout> | undefined;
+    const abortTurn = () => {
+      if (!expectedTurnId || interruptSent) return;
+      interruptSent = true;
+      // Await the native terminal notification. If its public interrupt API
+      // cannot establish termination, close this owned background process.
+      interruptTimeout = setTimeout(() => { void this.close(); }, 5_000);
+      interruptTimeout.unref();
+      void this.request("turn/interrupt", { threadId: input.threadId, turnId: expectedTurnId })
+        .catch(() => this.close());
+    };
+    input.signal?.addEventListener("abort", abortTurn, { once: true });
     let ready = false, settled = false, earlyBytes = 0;
     const early: JsonRpcNotification[] = [];
     const earlyCompletions = new Map<string, JsonRpcNotification>();
@@ -696,6 +719,7 @@ export class CodexAppServerClient {
       expectedTurnId = objectString(objectValue(started, "turn"), "id");
       if (!expectedTurnId) throw new Error("Codex App Server turn/start omitted the turn id");
       await input.onStarted?.(expectedTurnId);
+      if (input.signal?.aborted) abortTurn();
       ready = true;
       for (const notification of early) listener(notification);
       const fastCompletion = earlyCompletions.get(expectedTurnId);
@@ -703,6 +727,7 @@ export class CodexAppServerClient {
       early.length = 0; earlyCompletions.clear();
       const completed = await completion;
       await completedItems;
+      input.signal?.throwIfAborted();
       const completedTurn = objectValue(completed, "turn");
       if (objectString(completedTurn, "id") !== expectedTurnId) {
         throw new Error("Codex App Server completed an unexpected turn");
@@ -727,6 +752,8 @@ export class CodexAppServerClient {
       };
     } finally {
       clearTimeout(turnTimer);
+      clearTimeout(interruptTimeout);
+      input.signal?.removeEventListener("abort", abortTurn);
       this.#notifications.delete(listener);
       this.#failureListeners.delete(failureListener);
     }
@@ -1287,8 +1314,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       : this.#projectCanonicalEvents(events, runtime));
   }
 
-  synchronizeCanonicalHistory(api: CollaborationApi, runtime: RegisteredRuntime): Promise<void> {
-    if (!this.#desktopHookOnly || this.#desktopNativeProjectionUnavailable) return Promise.resolve();
+  async synchronizeCanonicalHistory(api: CollaborationApi, runtime: RegisteredRuntime): Promise<void> {
+    await this.#ensureDeletionRevision(api, runtime);
+    if (!this.#desktopHookOnly || this.#desktopNativeProjectionUnavailable) return;
     return this.#withStateWriter(async () => {
       try {
         const workspacePath = await validateCodexWorkspace(this.#workspacePath);
@@ -1566,7 +1594,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
   importVisibleHistorySnapshot(
     events: readonly CanonicalEvent[],
     throughSequence: number,
-    options: { onlyIfMissing?: boolean } = {},
+    options: { onlyIfMissing?: boolean; contentRevision?: number; resetAfterDeletion?: boolean } = {},
   ): Promise<VisibleHistoryImportResult> {
     const importer = this.#visibleHistoryImporter;
     const gatherThreadSessionId = this.#gatherThreadSessionId;
@@ -1580,6 +1608,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       const workspacePath = await validateCodexWorkspace(this.#workspacePath);
       const history = buildVisibleHistoryImport(events, throughSequence, this.#contextWindowTokens);
       const previous = await this.#loadStateFromDisk(workspacePath);
+      if (options.contentRevision !== undefined && (!Number.isSafeInteger(options.contentRevision)
+        || options.contentRevision < (previous?.contentRevision ?? 0))) throw new Error("Stale Codex import content revision");
       if (previous?.visibleHistorySnapshot?.replacedThreadId) {
         // Older alpha builds tried to delete or archive the previous task.
         // Current imports intentionally leave it visible for the user to
@@ -1600,7 +1630,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         delete previous.visibleHistorySnapshot.replacedThreadId;
         await this.#saveState(previous, false);
       }
-      if (options.onlyIfMissing && previous?.visibleHistorySnapshot) {
+      if (options.onlyIfMissing && previous?.visibleHistorySnapshot && previous.contextResetRequired === undefined
+        && (options.contentRevision ?? 0) === (previous.contentRevision ?? 0)) {
         return {
           status: "unchanged",
           threadId: previous.threadId,
@@ -1608,7 +1639,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           compacted: previous.visibleHistorySnapshot.compacted,
         };
       }
-      if (previous) {
+      if (previous && !options.resetAfterDeletion) {
         if (previous.pendingLocalTurns.length > 0
           || Object.values(previous.localTurnBindings).some((binding) => binding.status !== "acked")
           || Object.keys(previous.hookDrafts).length > 0) {
@@ -1658,6 +1689,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           : structuredClone(previous);
         const previousThreadId = previous?.threadId;
         next.threadId = candidateThreadId;
+        next.contentRevision = options.contentRevision ?? previous?.contentRevision ?? 0;
+        delete next.contextResetRequired;
         next.threadName = candidateThreadName;
         next.contextWindowTokens = observed?.modelContextWindow ?? candidateWindow;
         next.contextWindowSource = observed || nativeWindowObserved ? "app_server" : "configured";
@@ -1770,6 +1803,9 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       } else if (!this.#desktopHookOnly) {
         await this.#assertThreadNotActive(state.threadId);
       }
+      if (state.contextResetRequired !== undefined || state.localOnlyThreadIds?.includes(state.threadId)) {
+        throw new Error("Deleted shared history requires a verified replacement before local publication");
+      }
       if (this.#desktopHookOnly) {
         // Repair bindings created before Codex exposed explicit project
         // metadata. Do this before authorizing Hooks or reporting the session
@@ -1813,19 +1849,21 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     });
   }
 
-  handleHookEvent(
+  async handleHookEvent(
     api: CollaborationApi,
     runtime: RegisteredRuntime,
     event: CodexHookEvent,
     replay = false,
   ): Promise<(CodexHookRelayResult & { handled: boolean })> {
+    await this.#ensureDeletionRevision(api, runtime);
     return this.#withStateWriter(async () => {
       if (runtime.purpose === "snapshot_connector") return { handled: false };
       validateObservedCodexModel(event.model);
       const workspacePath = await validateCodexWorkspace(this.#workspacePath);
       if (path.resolve(event.cwd) !== workspacePath) return { handled: false };
       const state = await this.#loadState(runtime.sessionId, workspacePath);
-      if (!state || state.threadId !== event.session_id) return { handled: false };
+      if (!state || state.threadId !== event.session_id || state.contextResetRequired !== undefined
+        || state.localOnlyThreadIds?.includes(event.session_id)) return { handled: false };
       const localTurnId = `codex:${createHash("sha256").update(`${state.threadId}\0${event.turn_id}`).digest("hex")}`;
       if (event.hook_event_name === "UserPromptSubmit") {
         if (state.localTurnBindings[localTurnId] && !state.hookDrafts[event.turn_id]) {
@@ -1853,6 +1891,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           const basedOnSequence = capsule.relayAfter.deliveredThroughSequence;
           const additionalContext = capsule.additionalContext;
           state.hookDrafts[event.turn_id] = {
+            contentRevision: state.contentRevision ?? 0,
             localTurnId,
             threadId: state.threadId,
             turnId: event.turn_id,
@@ -1927,6 +1966,12 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         throw new Error("Desktop canonical projection received an event for a different session");
       }
     }
+    const revision = Math.max(state.contentRevision ?? 0, ...ordered.map((event) => event.contentRevision ?? 0));
+    if (revision > (state.contentRevision ?? 0)) {
+      await this.#retireDeletedProjection(state, revision);
+      throw new Error("Shared history changed; replace the owned Desktop projection before continuing");
+    }
+    if (state.contextResetRequired !== undefined || state.localOnlyThreadIds?.includes(state.threadId)) throw new Error("Codex projection is local only after a context change");
     const acknowledged = acknowledgedLocalEventIds(state);
     const pending = ordered.filter((event) => event.sequence > state.desktopProjectionCursor);
     if (state.desktopProjectionJournal
@@ -2037,6 +2082,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     if (runtime.purpose === "snapshot_connector") throw new Error("Snapshot connector runtimes cannot follow live canonical events");
     const workspacePath = await validateCodexWorkspace(this.#workspacePath);
     let state = await this.#loadState(runtime.sessionId, workspacePath);
+    const contentRevision = Math.max(state?.contentRevision ?? 0, ...events.map((event) => event.contentRevision ?? 0));
+    if (state && contentRevision > (state.contentRevision ?? 0)) state = await this.#replaceDeletedExecutionProjection(state, contentRevision);
     if (state) {
       if (Object.keys(state.hookDrafts).length > 0) {
         throw new Error("Codex desktop turn is active; canonical projection is queued until its Stop hook completes");
@@ -2073,6 +2120,16 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     const workspacePath = await validateCodexWorkspace(this.#workspacePath);
     let state = await this.#loadState(input.request.sessionId, workspacePath);
     let rebuildingExternallyClaimedProjection = false;
+    const contentRevision = input.historyContext?.content_revision ?? input.request.contentRevision ?? 0;
+    if (!Number.isSafeInteger(contentRevision) || contentRevision < 0
+      || (state !== undefined && contentRevision < (state.contentRevision ?? 0))) {
+      throw new HarnessExecutionTerminatedError("context_changed", "Shared history changed; start a new request.");
+    }
+    if (input.signal?.aborted) throw new HarnessExecutionTerminatedError("context_changed", "Shared history changed; start a new request.");
+    if (state && (contentRevision !== (state.contentRevision ?? 0) || state.contextResetRequired !== undefined)) {
+      state = await this.#replaceDeletedExecutionProjection(state, contentRevision);
+      rebuildingExternallyClaimedProjection = true;
+    }
     if (state) {
       if (Object.keys(state.hookDrafts).length > 0) {
         throw new Error("Codex desktop turn is active; Web agent execution is queued until its Stop hook completes");
@@ -2096,6 +2153,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     } else {
       const threadId = await this.#startManagedThread(workspacePath);
       state = this.#newState(input.request.sessionId, workspacePath, threadId);
+      state.contentRevision = contentRevision;
       await this.#saveState(state);
     }
     if (!state) throw new Error("Codex projection state initialization failed");
@@ -2196,6 +2254,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         state.connectorClientMessageIds.push(input.request.id);
       }
       state.executionJournal[input.request.id] = {
+        contentRevision,
         requestId: input.request.id,
         status: "prepared",
         observedModel: executionProfile.model,
@@ -2230,6 +2289,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       const liveMapper = outputStream === undefined ? undefined : createCodexLiveOutputMapper(outputStream, { shareTools: this.#shareToolEvents });
       try {
         turn = await this.#client.runTurn({
+          ...(input.signal === undefined ? {} : { signal: input.signal }),
           threadId: connectorState.threadId,
           prompt: chunkLabel(requestChunks.at(-1) as string, requestChunks.length - 1, requestChunks.length),
           clientUserMessageId: input.request.id,
@@ -2238,6 +2298,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           onStarted: async (turnId) => {
             if (!connectorState.connectorTurnIds.includes(turnId)) connectorState.connectorTurnIds.push(turnId);
             connectorState.executionJournal[input.request.id] = {
+              contentRevision,
               requestId: input.request.id,
               status: "started",
               turnId,
@@ -2270,6 +2331,14 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         // delta sequence. They do not introduce another execution or identity.
         for (const item of turn.items.slice(0, 128)) await liveMapper?.accept("item/completed", { item });
       } catch (error) {
+        if (input.signal?.aborted) {
+          connectorState.executionJournal[input.request.id] = { requestId: input.request.id, status: "failed",
+            turnId: connectorState.executionJournal[input.request.id]?.turnId ?? "aborted",
+            contentRevision, failure: { code: "context_changed", message: "Shared history changed; start a new request." } };
+          connectorState.contextResetRequired = contentRevision;
+          await this.#saveState(connectorState);
+          throw new HarnessExecutionTerminatedError("context_changed", "Shared history changed; start a new request.");
+        }
         if (error instanceof CodexTurnTerminatedError) {
           await this.#recordTerminalExecution(connectorState, input.request.id, error.turnId, error.status, error.message);
         }
@@ -2279,6 +2348,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
         await outputStream?.finish(turn !== undefined);
       }
       state = connectorState;
+      if (input.signal?.aborted) throw new HarnessExecutionTerminatedError("context_changed", "Shared history changed; start a new request.");
       const executionEvents = boundExecutionEvents(parseCodexAppServerItems(turn.items, {
         shareToolEvents: this.#shareToolEvents,
         maxToolOutputBytes: this.#maxToolOutputBytes,
@@ -2303,6 +2373,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       state.lastInjectedSequence = input.request.sequence;
       state.sidecar.push(sidecarEntry(input.request, requestChunks.length, renderedRequest.role, "connector_turn"));
       state.executionJournal[input.request.id] = {
+        contentRevision,
         requestId: input.request.id,
         status: "completed",
         turnId: turn.turnId,
@@ -2349,7 +2420,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     throw new HarnessExecutionTerminatedError(code, message);
   }
 
-  synchronizeLocalTurns(api: CollaborationApi, runtime: RegisteredRuntime): Promise<void> {
+  async synchronizeLocalTurns(api: CollaborationApi, runtime: RegisteredRuntime): Promise<void> {
+    await this.#ensureDeletionRevision(api, runtime);
     return this.#withStateWriter(() => this.#synchronizeLocalTurns(api, runtime));
   }
 
@@ -2386,10 +2458,11 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     });
   }
 
-  uploadLocalTurns(
+  async uploadLocalTurns(
     api: CollaborationApi,
     runtime: RegisteredRuntime,
   ): Promise<LocalConversationUploadResult> {
+    await this.#ensureDeletionRevision(api, runtime);
     return this.#withStateWriter(async () => {
       if (!this.#desktopHookOnly) {
         throw new Error("Manual local upload is available only for the Desktop-owned Codex conversation");
@@ -2409,6 +2482,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
           status: "pending",
         };
         state.pendingLocalTurns.push({
+          contentRevision: state.contentRevision ?? 0,
           ...turn,
           threadId: state.threadId,
           basedOnSequence: 0,
@@ -2437,6 +2511,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     const workspacePath = await validateCodexWorkspace(this.#workspacePath);
     let state = await this.#loadState(runtime.sessionId, workspacePath);
     if (!state) return;
+    if (state.contextResetRequired !== undefined || state.localOnlyThreadIds?.includes(state.threadId)) return;
     if (state.projectionJournal && !this.#desktopHookOnly) {
       state = await this.#rebuildProjection(
         api,
@@ -2475,6 +2550,12 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     }
     if (!forceUpload && !state.automaticUpload) return;
     for (const pending of [...state.pendingLocalTurns]) {
+      if (pending.threadId !== state.threadId || (pending.contentRevision ?? 0) !== (state.contentRevision ?? 0)) {
+        state.pendingLocalTurns = state.pendingLocalTurns.filter((item) => item !== pending);
+        delete state.localTurnBindings[pending.localTurnId];
+        await this.#saveState(state);
+        continue;
+      }
       const upload = boundLocalTurnUpload(pending);
       const pendingBinding = state.localTurnBindings[pending.localTurnId];
       if (!pendingBinding) {
@@ -2490,6 +2571,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       const result = await api.commitLocalTurn(runtime.sessionId, {
         localTurnId: pending.localTurnId,
         runtimeId: runtime.id,
+        contentRevision: pending.contentRevision ?? 0,
         basedOnSequence: pending.basedOnSequence,
         occurredAt: pending.occurredAt,
         ...(pending.observedModel === undefined ? {} : { observedModel: pending.observedModel }),
@@ -2631,6 +2713,13 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       state.coveredThroughSequence = event.sequence;
       state.cloudCursor = Math.max(state.cloudCursor, event.sequence);
       state.sidecar.push(sidecarEntry(event, 0, projectionRole(event), "summary_control"));
+      if (persistState) await this.#saveState(state);
+      return state;
+    }
+    if (event.deleted || event.type === "message_deleted") {
+      state.lastInjectedSequence = event.sequence;
+      state.coveredThroughSequence = event.sequence;
+      state.cloudCursor = Math.max(state.cloudCursor, event.sequence);
       if (persistState) await this.#saveState(state);
       return state;
     }
@@ -2833,6 +2922,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     const threadId = await this.#startManagedThread(state.workspacePath);
     const replacement = this.#newState(state.gatherThreadSessionId, state.workspacePath, threadId);
     replacement.projectionGeneration = state.projectionGeneration + 1;
+    replacement.contentRevision = state.contentRevision ?? 0;
+    replacement.localOnlyThreadIds = [...(state.localOnlyThreadIds ?? [])];
     replacement.executionJournal = Object.fromEntries(
       Object.entries(state.executionJournal).filter(([, entry]) =>
         entry.status === "completed" || entry.status === "failed",
@@ -2842,6 +2933,64 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     await this.#setManagedThreadName(threadId, this.#threadName);
     await this.#unsubscribeManagedThread(oldThreadId);
     return replacement;
+  }
+
+  async #retireDeletedProjection(state: CodexAppServerState, revision: number): Promise<void> {
+    state.contextResetRequired = revision;
+    state.localOnlyThreadIds = mergeLocalOnlyThreadIds(state.localOnlyThreadIds, [state.threadId], "");
+    // Deliberately discard stale publication drafts, not the native task or
+    // working files. An uncertain commit cannot authorize a post-delete echo.
+    state.pendingLocalTurns = [];
+    state.localTurnBindings = {};
+    state.hookDrafts = {};
+    delete state.desktopRelayCheckpoint;
+    delete state.desktopProjectionJournal;
+    delete state.projectionJournal;
+    delete state.rebuild;
+    await this.#saveState(state, false);
+    if (this.#hookRegistryPath) await updateCodexHookRegistry({
+      registryPath: this.#hookRegistryPath, workspacePath: state.workspacePath,
+      add: { ...localOnlyHookEntries(state), [state.threadId]: "local_only" },
+    });
+  }
+
+  async #replaceDeletedExecutionProjection(state: CodexAppServerState, revision: number): Promise<CodexAppServerState> {
+    await this.#retireDeletedProjection(state, revision);
+    const threadId = await this.#startManagedThread(state.workspacePath);
+    const replacement = this.#newState(state.gatherThreadSessionId, state.workspacePath, threadId);
+    replacement.contentRevision = revision;
+    replacement.projectionGeneration = state.projectionGeneration + 1;
+    replacement.automaticUpload = state.automaticUpload;
+    replacement.localOnlyThreadIds = [...(state.localOnlyThreadIds ?? [])];
+    await this.#saveState(replacement);
+    return replacement;
+  }
+
+  async #ensureDeletionRevision(api: CollaborationApi, runtime: RegisteredRuntime): Promise<void> {
+    // Old servers/runtimes have no deletion contract; their unchanged replay
+    // remains compatible. A current server refuses them after any deletion.
+    if (runtime.contextDeletionVersion !== 1) return;
+    const page = await api.readEvents(runtime.sessionId, 0, 1);
+    const revision = page.contentRevision ?? 0;
+    const reset = await this.#withStateWriter(async () => {
+      const workspacePath = await validateCodexWorkspace(this.#workspacePath);
+      const state = await this.#loadState(runtime.sessionId, workspacePath);
+      if (!state) return undefined;
+      if (revision < (state.contentRevision ?? 0)) throw new Error("Stale shared history content revision");
+      if (revision === (state.contentRevision ?? 0) && state.contextResetRequired === undefined) return undefined;
+      if (!this.#desktopHookOnly) {
+        await this.#replaceDeletedExecutionProjection(state, revision);
+        return undefined;
+      }
+      await this.#retireDeletedProjection(state, revision);
+      return { workspacePath, revision };
+    });
+    if (!reset) return;
+    if (!this.#visibleHistoryImporter) throw new Error("Deleted shared history requires a compatible Codex visible-history importer");
+    const history = await readCanonicalThrough(api, runtime.sessionId, Number.MAX_SAFE_INTEGER);
+    if ((history.contentRevision ?? reset.revision) !== reset.revision) throw new Error("Shared history changed again during Codex replacement");
+    await this.importVisibleHistorySnapshot(history.events.filter((event) => !event.deleted), history.coveredThroughSequence,
+      { contentRevision: reset.revision, resetAfterDeletion: true });
   }
 
   async #rebuildProjection(
@@ -2946,6 +3095,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       : draft.finalResponse;
     if (!state.pendingLocalTurns.some((pending) => pending.localTurnId === draft.localTurnId)) {
       state.pendingLocalTurns.push({
+        contentRevision: draft.contentRevision ?? 0,
         localTurnId: draft.localTurnId,
         threadId: draft.threadId,
         turnId: draft.turnId,
@@ -2966,6 +3116,7 @@ export class CodexAppServerExecutor implements HarnessExecutor {
     if (!draft.finalResponse) return;
     if (!state.pendingLocalTurns.some((pending) => pending.localTurnId === draft.localTurnId)) {
       state.pendingLocalTurns.push({
+        contentRevision: draft.contentRevision ?? 0,
         localTurnId: draft.localTurnId,
         threadId: draft.threadId,
         turnId: draft.turnId,
@@ -3156,7 +3307,8 @@ export class CodexAppServerExecutor implements HarnessExecutor {
       await updateCodexHookRegistry({
         registryPath: this.#hookRegistryPath,
         workspacePath: state.workspacePath,
-        add: { [state.threadId]: this.#hookThreadPurpose },
+        add: { ...localOnlyHookEntries(state), [state.threadId]: state.contextResetRequired !== undefined
+          || state.localOnlyThreadIds?.includes(state.threadId) ? "local_only" : this.#hookThreadPurpose },
       });
     }
   }
@@ -3400,6 +3552,7 @@ export class CodexProjectHarness implements ProjectHarnessAdapter {
             const history = await readCanonicalThrough(api, input.session.id, throughSequence);
             return desktop.importVisibleHistorySnapshot(history.events, throughSequence, {
               onlyIfMissing: automatic && mode === "first-connect",
+              ...(history.contentRevision === undefined ? {} : { contentRevision: history.contentRevision }),
             });
           },
           synchronizeCanonicalHistory: ({ api, runtime }: { api: CollaborationApi; runtime: RegisteredRuntime }) =>
@@ -3634,7 +3787,8 @@ async function scrubCodexExecutionStates(
       if (!isCodexAppServerState(parsed) || parsed.workspacePath !== workspacePath) continue;
       Object.assign(retainedThreads, localOnlyHookEntries(parsed));
       if (retainSessionIds.has(parsed.gatherThreadSessionId)) {
-        retainedThreads[parsed.threadId] = "execution";
+        retainedThreads[parsed.threadId] = parsed.contextResetRequired !== undefined
+          || parsed.localOnlyThreadIds?.includes(parsed.threadId) ? "local_only" : "execution";
         continue;
       }
       if (preserveSessionIds.has(parsed.gatherThreadSessionId)) continue;
@@ -3666,6 +3820,8 @@ function isCodexAppServerState(value: unknown): value is CodexAppServerState {
     && Number.isSafeInteger(value.desktopProjectGeneration)
     && Number(value.desktopProjectGeneration) >= 0
     && typeof value.model === "string"
+    && (value.contentRevision === undefined || (Number.isSafeInteger(value.contentRevision) && Number(value.contentRevision) >= 0))
+    && (value.contextResetRequired === undefined || (Number.isSafeInteger(value.contextResetRequired) && Number(value.contextResetRequired) >= 0))
     && Number.isSafeInteger(value.contextWindowTokens)
     && (value.contextWindowSource === undefined || value.contextWindowSource === "configured" || value.contextWindowSource === "app_server")
     && Number.isSafeInteger(value.estimatedContextTokens)
@@ -3963,7 +4119,7 @@ export function buildVisibleHistoryImport(
   _contextWindowTokens: number,
 ): VisibleHistoryImport {
   const ordered = events
-    .filter((event) => event.sequence <= throughSequence)
+    .filter((event) => event.sequence <= throughSequence && !event.deleted && event.type !== "message_deleted")
     .sort((left, right) => left.sequence - right.sequence);
   const digest = createHash("sha256")
     .update(JSON.stringify({
@@ -4403,11 +4559,16 @@ async function readCanonicalThrough(
   api: CollaborationApi,
   sessionId: string,
   throughSequence: number,
-): Promise<{ events: CanonicalEvent[]; coveredThroughSequence: number }> {
+): Promise<{ events: CanonicalEvent[]; coveredThroughSequence: number; contentRevision?: number }> {
   const events: CanonicalEvent[] = [];
   let cursor = 0;
+  let contentRevision: number | undefined;
   while (cursor < throughSequence) {
     const page = await api.readEvents(sessionId, cursor, 500);
+    if (page.contentRevision !== undefined) {
+      if (contentRevision !== undefined && contentRevision !== page.contentRevision) throw new Error("Shared history changed during canonical replay");
+      contentRevision = page.contentRevision;
+    }
     const relevant = page.events.filter((event) => event.sequence > cursor && event.sequence <= throughSequence);
     events.push(...relevant);
     const next = Math.min(page.nextSequence, throughSequence);
@@ -4418,6 +4579,7 @@ async function readCanonicalThrough(
   return {
     events: events.sort((left, right) => left.sequence - right.sequence),
     coveredThroughSequence: cursor,
+    ...(contentRevision === undefined ? {} : { contentRevision }),
   };
 }
 

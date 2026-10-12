@@ -74,6 +74,7 @@ interface DshAgentLike {
   readonly ctx: unknown;
   followup(message: unknown): void;
   whenIdle(): Promise<void>;
+  cancel?(cause: { kind: "user" }): void;
 }
 
 interface DshAgentHandleLike {
@@ -226,11 +227,13 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
   const lifecycleAbort = new AbortController();
   let handle: DshAgentHandleLike | undefined;
   let executionHandle: DshAgentHandleLike | undefined;
-  let contextPreparationPromise: Promise<unknown> | undefined;
+  let nativeSessionId = options.sessionId;
+  let contentRevision = 0;
+  let contextOperationPromise: Promise<unknown> | undefined;
   const executionBinding = JSON.stringify({ nativeSessionId: options.sessionId, ...options.contextBinding });
-  const executionSessionId = `gatherthread-execution-${createHash("sha256").update(executionBinding).digest("hex").slice(0, 32)}`;
-  const executionOwnerId = `gatherthread-execution-owner:${createHash("sha256").update(executionBinding).digest("hex")}`;
-  const executionOwnerText = JSON.stringify({ version: 1, owner: "gatherthread", native_session_id: options.sessionId,
+  let executionSessionId = `gatherthread-execution-${createHash("sha256").update(executionBinding).digest("hex").slice(0, 32)}`;
+  let executionOwnerId = `gatherthread-execution-owner:${createHash("sha256").update(executionBinding).digest("hex")}`;
+  let executionOwnerText = JSON.stringify({ version: 1, owner: "gatherthread", native_session_id: options.sessionId,
     execution_session_id: executionSessionId, binding: options.contextBinding });
   let openPromise: Promise<"created" | "resumed"> | undefined;
   let promptActive = false;
@@ -250,7 +253,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
   listenerDisposers.push(context.on("session/event", (...args) => {
     const session = asSession(args[0]);
     const event = asSessionEvent(args[1]);
-    if (session === undefined || (session.id !== options.sessionId && session.id !== executionHandle?.agent.session.id) || event === undefined) return;
+    if (session === undefined || (session.id !== nativeSessionId && session.id !== executionHandle?.agent.session.id) || event === undefined) return;
     for (const subscriber of eventSubscribers) subscriber({ ...event, sourceSessionId: session.id });
     const owner = livePrompt;
     if (owner === undefined || owner.closed || session !== owner.agent.session) return;
@@ -309,7 +312,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     const payload = asObject(args[0]);
     const agent = payload ? asAgent(payload.agent) : undefined;
     const status = payload?.status;
-    if (agent === undefined || (agent.session.id !== options.sessionId && agent.session.id !== executionHandle?.agent.session.id)
+    if (agent === undefined || (agent.session.id !== nativeSessionId && agent.session.id !== executionHandle?.agent.session.id)
       || (status !== "running" && status !== "idle")) return;
     for (const subscriber of statusSubscribers) subscriber(status, agent.session.id);
   }, { global: true }));
@@ -331,7 +334,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
       await releaseHandle();
       throw new Error("DSH host facade was disposed during open");
     }
-    if (acquired.agent.session.id !== options.sessionId) {
+    if (acquired.agent.session.id !== nativeSessionId) {
       await releaseHandle();
       throw new Error("DSH Host returned an agent for an unexpected Session identity");
     }
@@ -365,7 +368,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
   const assertExecutionParentIdle = (): void => {
     const parent = requireAgent(handle);
     if (parent.status !== "idle") throw new Error("Native DSH Agent must be idle before isolated context execution");
-    if (parent.session.header?.cwd !== options.workspacePath || agents.get?.(options.sessionId) !== parent) {
+    if (parent.session.header?.cwd !== options.workspacePath || agents.get?.(nativeSessionId) !== parent) {
       throw new Error("Native DSH workspace or live owner does not match the isolated context binding");
     }
   };
@@ -373,7 +376,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
   const assertExecutionOwnership = (agent: DshAgentLike): void => {
     const session = agent.session;
     if (session.id !== executionSessionId || session.header?.cwd !== options.workspacePath
-      || session.header.parentSession !== options.sessionId || session.header.origin !== "subagent") {
+      || session.header.parentSession !== nativeSessionId || session.header.origin !== "subagent") {
       throw new Error("DSH isolated execution Session ownership does not match this native binding");
     }
     if (agents.get !== undefined && agents.get(executionSessionId) !== agent) {
@@ -397,6 +400,103 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     }
   };
 
+  const recordedRevision = (session: DshSessionLike): number => session.snapshotEvents(0).reduce<number>((highest, value) => {
+    const event = asObject(value), data = asObject(event?.data);
+    const id = data?.id;
+    if (event?.type !== "user/message" || typeof id !== "string" || !/^gatherthread-retired:[0-9]+$/.test(id)
+      || asObject(data?.source)?.kind !== "plugin" || asObject(data?.source)?.plugin !== "gatherthread") return highest;
+    const revision = Number(id.slice("gatherthread-retired:".length));
+    return Number.isSafeInteger(revision) ? Math.max(highest, revision) : highest;
+  }, 0);
+
+  const resetCanonicalContext = async (revision: number): Promise<{ sessionId: string }> => {
+    if (!Number.isSafeInteger(revision) || revision < 1 || revision < contentRevision) throw new Error("Stale DSH content revision");
+    if (options.contextBinding === undefined || Object.values(options.contextBinding).some((value) => !value)
+      || typeof agents.get !== "function") throw new Error("DSH context reset requires an explicit owned GatherThread binding");
+    throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+    await open();
+    throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+    if (promptActive || projectionActive) throw new Error("Wait for the active DSH turn before replacing its projection");
+    const parent = requireAgent(handle);
+    if (revision < recordedRevision(parent.session)) throw new Error("Retired DSH revision cannot resume");
+    assertExecutionParentIdle();
+    const targetId = `gatherthread-projection-${createHash("sha256").update(`${executionBinding}:${revision}`).digest("hex").slice(0, 32)}`;
+    if (nativeSessionId === targetId && contentRevision === revision) return { sessionId: targetId };
+    const ownerId = `gatherthread-projection-owner:${createHash("sha256").update(`${executionBinding}:${revision}`).digest("hex")}`;
+    const ownerText = JSON.stringify({ version: 1, binding: options.contextBinding, native_session_id: options.sessionId, content_revision: revision });
+    projectionActive = true;
+    let candidate: DshAgentHandleLike | undefined;
+    try {
+      const retired = await createIsolatedMessage(`gatherthread-retired:${revision}`, "GatherThread retired this context. Continue here locally only.", options);
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      if (recordedRevision(parent.session) < revision) {
+        // Preserve all prior messages and append a durable local-only marker;
+        // public Session restores user/message events only with a surface operation.
+        parent.session.append("user/message", retired, { surfaceOp: "append" });
+        await sessions.flush(parent.session);
+        throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      }
+      if (agents.get?.(targetId) !== undefined) throw new Error("DSH clean projection already has another live owner");
+      const stored = await hasPersistedSession(persistence, targetId, lifecycleAbort.signal);
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      const presets = asObject(context.get("agentPresets"));
+      const setup = (ctx: unknown) => {
+        if (presets !== undefined) {
+          if (typeof presets.composeFrom !== "function" || typeof presets.composedPreset !== "function") throw new Error("Native DSH tool inheritance unavailable");
+          const expected = presets.composedPreset(parent.ctx);
+          if (presets.composeFrom(ctx, parent.ctx) !== expected) throw new Error("DSH clean projection did not inherit native tools");
+        }
+      };
+      candidate = await (stored ? agents.resume({ resumeSessionId: targetId,
+        agentOptions: { provider: options.provider, model: options.model }, signal: lifecycleAbort.signal, setup })
+        : agents.create({ sessionId: targetId, meta: { cwd: options.workspacePath, parentSession: options.sessionId, origin: "subagent" },
+          agentOptions: { provider: options.provider, model: options.model }, signal: lifecycleAbort.signal, setup }));
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      const agent = candidate.agent;
+      if (agent.session.id !== targetId || agent.session.header?.cwd !== options.workspacePath || agent.status !== "idle"
+        || agent.session.header.parentSession !== options.sessionId || agent.session.header.origin !== "subagent"
+        || agents.get?.(targetId) !== agent) throw new Error("DSH clean projection ownership is invalid");
+      if (!stored) {
+        if (agent.session.seq !== 0) throw new Error("DSH clean projection is not fresh");
+        const owner = await createIsolatedMessage(ownerId, ownerText, options);
+        throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+        agent.session.append("user/message", owner, { surfaceOp: "append" });
+      }
+      const events = agent.session.snapshotEvents(0).map(asObject);
+      if (!events.some((event) => {
+        const data = asObject(event?.data), source = asObject(data?.source);
+        return event?.type === "user/message" && data?.id === ownerId && source?.kind === "plugin" && source.plugin === "gatherthread"
+          && Array.isArray(data?.content) && data.content.length === 1 && asObject(data.content[0])?.text === ownerText;
+      })) {
+        throw new Error("DSH clean projection is missing its durable owner marker");
+      }
+      await sessions.flush(agent.session);
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      if (sessionTitle && options.sessionTitle) {
+        await sessionTitle.rename(agent.session, options.sessionTitle);
+        throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      }
+      if (workspaceRegistry && options.workspaceTitle) {
+        const workspace = await workspaceRegistry.create(options.workspacePath, options.workspaceTitle);
+        throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+        await workspace.attachSession(targetId);
+        throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      }
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      await releaseExecutionHandle();
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      await releaseHandle();
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      handle = candidate; candidate = undefined;
+      nativeSessionId = targetId;
+      contentRevision = revision;
+      knownProjectionMessageIds = undefined;
+      return { sessionId: targetId };
+    } finally {
+      try { await candidate?.dispose(); } finally { projectionActive = false; }
+    }
+  };
+
   const prepareContextExecution = async (input: DshContextExecutionInput): Promise<{ sessionId: string; fromSequence: number }> => {
     if (disposed) throw new Error("DSH host facade is disposed");
     if (options.contextBinding === undefined || Object.values(options.contextBinding).some((value) => !value)) {
@@ -414,6 +514,23 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     await open();
     if (disposed || promptActive || projectionActive) throw new Error("DSH host facade permits only one active write");
     const parent = requireAgent(handle);
+    const revision = historyContext.content_revision ?? 0;
+    if (revision < Math.max(contentRevision, recordedRevision(parent.session))) throw new Error("Stale retired DSH context revision");
+    if (revision !== contentRevision || (revision > 0 && !executionSessionId.endsWith(createHash("sha256").update(`${executionBinding}:${revision}`).digest("hex").slice(0, 32)))) {
+      await releaseExecutionHandle();
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      contentRevision = revision;
+      const binding = `${executionBinding}:${revision}`;
+      executionSessionId = `gatherthread-execution-${createHash("sha256").update(binding).digest("hex").slice(0, 32)}`;
+      executionOwnerId = `gatherthread-execution-owner:${createHash("sha256").update(binding).digest("hex")}`;
+      executionOwnerText = JSON.stringify({ version: 1, owner: "gatherthread", native_session_id: options.sessionId,
+        execution_session_id: executionSessionId, binding: options.contextBinding, content_revision: revision });
+      const marker = await createIsolatedMessage(`gatherthread-retired:${revision}`, "GatherThread previous execution context is local only.", options);
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+      parent.session.append("user/message", marker, { surfaceOp: "append" });
+      await sessions.flush(parent.session);
+      throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
+    }
     assertExecutionParentIdle();
     const presets = asObject(context.get("agentPresets"));
     let parentPreset: string | undefined;
@@ -450,7 +567,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
           setup: setupExecution,
         }) : agents.create({
           sessionId: executionSessionId,
-          meta: { cwd: options.workspacePath, parentSession: options.sessionId, origin: "subagent",
+          meta: { cwd: options.workspacePath, parentSession: nativeSessionId, origin: "subagent",
             ...(parentPreset === undefined ? {} : { agentPreset: parentPreset }) },
           agentOptions: { provider: options.provider, model: options.model }, signal: lifecycleAbort.signal,
           setup: setupExecution,
@@ -462,7 +579,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         const agent = operationAgent(executionSessionId);
         if (!stored) {
           if (agent.session.id !== executionSessionId || agent.session.seq !== 0
-            || agent.session.header?.parentSession !== options.sessionId || agent.session.header.origin !== "subagent"
+            || agent.session.header?.parentSession !== nativeSessionId || agent.session.header.origin !== "subagent"
             || agent.session.header.cwd !== options.workspacePath || agent.status !== "idle") {
             throw new Error("DSH did not create a fresh, owned isolated execution Session");
           }
@@ -658,7 +775,9 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     text: string,
     requestedSelection?: DshExecutionSelection,
     requestedExecutionId?: string,
+    signal?: AbortSignal,
   ): Promise<DshPromptResult> => {
+    signal?.throwIfAborted();
     if (disposed) throw new Error("DSH host facade is disposed");
     if (!text.trim()) throw new Error("DSH prompt must not be empty");
     if (Buffer.byteLength(text, "utf8") > 256 * 1_024) {
@@ -669,10 +788,13 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     promptActive = true;
     let disposeSelection: (() => void) | undefined;
     let selectionRef: DshModelSelectionRef | undefined;
+    let abortPrompt: (() => void) | undefined;
     try {
       if (requestedExecutionId === undefined) await open();
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
       const agent = operationAgent(requestedExecutionId);
+      signal?.throwIfAborted();
+      if (signal && typeof agent.cancel !== "function") throw new Error("DSH public cancel API is required for deletion-safe execution");
       if (requestedExecutionId !== undefined) { assertExecutionParentIdle(); assertExecutionOwnership(agent); }
       if (agent.status !== "idle") throw new Error("DSH Agent must be idle before a GatherThread prompt");
       if (requestedSelection !== undefined) {
@@ -709,8 +831,18 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
           provider: requestedSelection?.provider ?? options.provider,
           model: requestedSelection?.model ?? options.model };
       }
+      signal?.throwIfAborted();
       agent.followup(message);
+      abortPrompt = () => {
+        livePrompt = undefined;
+        if (typeof agent.cancel === "function") agent.cancel({ kind: "user" });
+        else if (requestedExecutionId !== undefined) void releaseExecutionHandle();
+        else void releaseHandle();
+      };
+      signal?.addEventListener("abort", abortPrompt, { once: true });
+      if (signal?.aborted) abortPrompt();
       await agent.whenIdle();
+      signal?.throwIfAborted();
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
       await sessions.flush(agent.session);
       throwIfDisposed(disposed, lifecycleAbort.signal, "prompt");
@@ -721,6 +853,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         events: snapshotFrom(fromSequence, requestedExecutionId),
       };
     } finally {
+      if (abortPrompt) signal?.removeEventListener("abort", abortPrompt);
       if (selectionRef !== undefined) {
         selectionRef.current = undefined;
         selectionRef.assembled = undefined;
@@ -799,7 +932,7 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
       } catch {
         // Disposal intentionally makes an in-flight open reject.
       }
-      try { await contextPreparationPromise; } catch {
+      try { await contextOperationPromise; } catch {
         // The context operation releases a late acquisition after observing disposal.
       }
       try {
@@ -814,18 +947,27 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
   };
 
   return {
-    sessionId: options.sessionId,
+    get sessionId() { return nativeSessionId; },
+    ...(options.contextBinding === undefined ? {} : { contextDeletionVersion: 1 as const }),
+    resetCanonicalContext(revision) {
+      if (contextOperationPromise !== undefined) return Promise.reject(new Error("DSH host facade permits only one active context operation"));
+      const operation = resetCanonicalContext(revision);
+      contextOperationPromise = operation;
+      return operation.finally(() => {
+        if (contextOperationPromise === operation) contextOperationPromise = undefined;
+      });
+    },
     open,
     currentSequence(requestedExecutionId) {
       return operationAgent(requestedExecutionId).session.seq;
     },
     snapshotFrom,
     prepareContextExecution(input) {
-      if (contextPreparationPromise !== undefined) return Promise.reject(new Error("DSH host facade permits only one active context preparation"));
+      if (contextOperationPromise !== undefined) return Promise.reject(new Error("DSH host facade permits only one active context preparation"));
       const operation = prepareContextExecution(input);
-      contextPreparationPromise = operation;
+      contextOperationPromise = operation;
       return operation.finally(() => {
-        if (contextPreparationPromise === operation) contextPreparationPromise = undefined;
+        if (contextOperationPromise === operation) contextOperationPromise = undefined;
       });
     },
     projectCanonicalEvents,
@@ -902,6 +1044,7 @@ export async function registerDshNativeWorkspace(
   );
   const sessionTitle = requireService<DshSessionTitleServiceLike>(context, "sessionTitle", ["rename", "get"]);
   const completed = new Map<string, DshLocalSessionCandidate>();
+  const retired = new Set<string>();
   // A registry Workspace may expose a snapshot of sessionIds. Observe later
   // native sessions too, so a newly started local run cannot be missed by sync.
   const observedSessionIds = new Set(workspace.sessionIds);
@@ -920,6 +1063,10 @@ export async function registerDshNativeWorkspace(
     if (session?.header?.cwd !== workspace.path) return;
     observedSessionIds.add(session.id);
     const event = asSessionEvent(args[1]);
+    if (event?.type === "user/message" && /^gatherthread-retired:[0-9]+$/.test(String(asObject(event.data)?.id))
+      && asObject(asObject(event.data)?.source)?.plugin === "gatherthread") {
+      retired.add(session.id); completed.delete(session.id);
+    }
     if (event?.type === "turn/start") runningSessionIds.add(session.id);
     if (event?.type === "turn/end") runningSessionIds.delete(session.id);
   }, { global: true });
@@ -962,6 +1109,7 @@ export async function registerDshNativeWorkspace(
       }
       for (const localSessionId of [...currentIds]) {
         if (!isUserCreatedDshSessionId(localSessionId)) continue;
+        if (retired.has(localSessionId)) { candidates.delete(localSessionId); continue; }
         const cached = completed.get(localSessionId);
         if (cached !== undefined) continue;
         const live = sessions.get(localSessionId);
@@ -976,7 +1124,9 @@ export async function registerDshNativeWorkspace(
           if (parsed === undefined) throw new Error("Pinned DSH Session reader returned an invalid event");
           return parsed;
         });
-        if (!hasCompletedDshLocalTurn(events, localSessionId)) continue;
+        if (!hasCompletedDshLocalTurn(events, localSessionId)) {
+          completed.delete(localSessionId); candidates.delete(localSessionId); continue;
+        }
         const title = live === undefined
           ? titleFromEvents(events)
           : normalizedLocalSessionTitle(sessionTitle.get(live)?.title) ?? titleFromEvents(events);
@@ -1000,7 +1150,7 @@ export async function registerDshNativeWorkspace(
           if (parsed === undefined) return;
           events.push(parsed);
         }
-        if (!hasCompletedDshLocalTurn(events, session.id)) return;
+        if (!hasCompletedDshLocalTurn(events, session.id)) { completed.delete(session.id); return; }
         completed.set(session.id, {
           localSessionId: session.id,
           title: normalizedLocalSessionTitle(sessionTitle.get(session)?.title) ?? titleFromEvents(events),

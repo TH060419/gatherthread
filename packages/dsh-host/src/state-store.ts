@@ -136,6 +136,7 @@ export function validateConnectorState(value: unknown): ConnectorState {
       ...(legacyUploadPolicy ? [] : ["automaticUpload"]),
       "activeRequest",
       "outbox",
+      "contentRevision", "projectionSessionId", "localOnlySessionIds",
     ]),
     "state",
   );
@@ -161,6 +162,9 @@ export function validateConnectorState(value: unknown): ConnectorState {
   if (!Array.isArray(state.outbox)) throw new Error("state.outbox must be an array");
   const outbox = state.outbox.map(parseOutboxOperation);
   const validated: ConnectorState = {
+    ...(state.contentRevision === undefined ? {} : { contentRevision: nonNegativeInteger(state.contentRevision, "state.contentRevision") }),
+    ...(state.projectionSessionId === undefined ? {} : { projectionSessionId: safeString(state.projectionSessionId, "state.projectionSessionId", 128) }),
+    ...(state.localOnlySessionIds === undefined ? {} : { localOnlySessionIds: parseRetiredSessionIds(state.localOnlySessionIds) }),
     version: 3,
     binding: {
       projectId: safeString(binding.projectId, "state.binding.projectId", 128),
@@ -184,10 +188,11 @@ function parseActiveRequest(value: unknown): NonNullable<ConnectorState["activeR
   const active = requiredObject(value, "state.activeRequest");
   exactKeys(
     active,
-    new Set(["requestId", "requestSequence", "dshFromSequence", "dshToSequence", "promptDigest", "claimAttempt", "contextExecution"]),
+    new Set(["requestId", "requestSequence", "dshFromSequence", "dshToSequence", "promptDigest", "claimAttempt", "contextExecution", "contentRevision"]),
     "state.activeRequest",
   );
   const parsed = {
+    ...(active.contentRevision === undefined ? {} : { contentRevision: nonNegativeInteger(active.contentRevision, "state.activeRequest.contentRevision") }),
     requestId: safeString(active.requestId, "state.activeRequest.requestId", 128),
     requestSequence: positiveInteger(active.requestSequence, "state.activeRequest.requestSequence"),
     dshFromSequence: nonNegativeInteger(active.dshFromSequence, "state.activeRequest.dshFromSequence"),
@@ -269,6 +274,7 @@ function parseLocalTurnInput(value: unknown, label: string): CommitLocalTurnInpu
       "requestPayload",
       "responsePayload",
       "toolEvents",
+      "contentRevision",
     ]),
     label,
   );
@@ -279,6 +285,7 @@ function parseLocalTurnInput(value: unknown, label: string): CommitLocalTurnInpu
   }
   return {
     localTurnId: safeString(input.localTurnId, `${label}.localTurnId`, 200),
+    ...(input.contentRevision === undefined ? {} : { contentRevision: nonNegativeInteger(input.contentRevision, `${label}.contentRevision`) }),
     runtimeId: safeString(input.runtimeId, `${label}.runtimeId`, 128),
     basedOnSequence: nonNegativeInteger(input.basedOnSequence, `${label}.basedOnSequence`),
     occurredAt,
@@ -317,6 +324,7 @@ function parseAppendInput(value: unknown, label: string): DshAppendEventInput {
       "claimAttempt",
       "observedModel",
       "observedReasoningEffort",
+      "contentRevision",
     ]),
     label,
   );
@@ -325,6 +333,7 @@ function parseAppendInput(value: unknown, label: string): DshAppendEventInput {
   }
   return {
     type: input.type,
+    ...(input.contentRevision === undefined ? {} : { contentRevision: nonNegativeInteger(input.contentRevision, `${label}.contentRevision`) }),
     idempotencyKey: safeString(input.idempotencyKey, `${label}.idempotencyKey`, 200),
     payload: jsonValue(input.payload, `${label}.payload`),
     ...(input.replyTo === undefined ? {} : { replyTo: safeString(input.replyTo, `${label}.replyTo`, 128) }),
@@ -344,11 +353,12 @@ function parseCompletionInput(value: unknown, label: string): CompleteAgentReque
   const input = requiredObject(value, label);
   exactKeys(
     input,
-    new Set(["runtimeId", "claimAttempt", "idempotencyKey", "payload", "observedModel", "observedReasoningEffort"]),
+    new Set(["runtimeId", "claimAttempt", "idempotencyKey", "payload", "observedModel", "observedReasoningEffort", "contentRevision"]),
     label,
   );
   return {
     runtimeId: safeString(input.runtimeId, `${label}.runtimeId`, 128),
+    ...(input.contentRevision === undefined ? {} : { contentRevision: nonNegativeInteger(input.contentRevision, `${label}.contentRevision`) }),
     ...(input.claimAttempt === undefined ? {} : {
       claimAttempt: positiveInteger(input.claimAttempt, `${label}.claimAttempt`),
     }),
@@ -359,6 +369,11 @@ function parseCompletionInput(value: unknown, label: string): CompleteAgentReque
       observedReasoningEffort: safeString(input.observedReasoningEffort, `${label}.observedReasoningEffort`, 80),
     }),
   };
+}
+
+function parseRetiredSessionIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 4096 || new Set(value).size !== value.length) throw new Error("Invalid DSH retired Session identities");
+  return value.map((id, index) => safeString(id, `state.localOnlySessionIds[${index}]`, 128));
 }
 
 function assertAlreadyRedacted(state: ConnectorState): void {

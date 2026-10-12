@@ -848,6 +848,7 @@ export async function initializeProjectSession(options: {
       localSessionId: binding.localSessionId,
       captureFidelity: descriptor.captureFidelity,
       capabilities: descriptor.capabilities,
+      ...(options.harness instanceof CodexProjectHarness ? { contextDeletionVersion: 1 as const } : {}),
       purpose: "execution",
     },
     transcriptRoots: {},

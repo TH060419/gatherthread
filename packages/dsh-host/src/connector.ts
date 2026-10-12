@@ -115,6 +115,8 @@ export class DshHostConnector {
   #activeExecutionSelection: DshExecutionSelection | undefined;
   #summaryScanSequence = 0;
   #hasSummaryHistory = false;
+  #revisionPollPromise: Promise<void> | undefined;
+  #revisionSupported = false;
   #liveEventSequences = new Set<number>();
   #session: SessionSummary | undefined;
   #visibleState: DshConnectorLifecycleState = "connecting";
@@ -230,6 +232,7 @@ export class DshHostConnector {
         executionProfiles: cloneExecutionProfiles(executionProfiles),
       }),
       purpose: "execution",
+      ...(this.#host.contextDeletionVersion === 1 ? { contextDeletionVersion: 1 as const } : {}),
     };
   }
 
@@ -274,6 +277,7 @@ export class DshHostConnector {
 
   uploadLocalTurns(): Promise<LocalConversationUploadResult> {
     return this.#withLocalSyncControl(async () => {
+      await this.#refreshContentRevision();
       const before = this.localSyncStatus();
       // Retry already-durable operations first, then scan beyond their native
       // sequence so one explicit action uploads every currently eligible turn.
@@ -361,6 +365,7 @@ export class DshHostConnector {
 
     try {
       const session = await this.#verifySessionBinding();
+      this.#revisionSupported = session.contentRevision !== undefined;
       this.#session = session;
       this.#notifyLifecycle("connecting");
       const storedState = await this.#stateStore.load();
@@ -370,8 +375,14 @@ export class DshHostConnector {
         throw new Error("GatherThread Session head precedes the persisted DSH cursor; refusing identity reuse");
       }
       const mode = await this.#host.open();
+      if (storedState?.projectionSessionId && (storedState.contentRevision ?? 0) > 0) {
+        if (!this.#host.resetCanonicalContext) throw new Error("DSH deletion-safe projection requires an updated native facade");
+        const restored = await this.#host.resetCanonicalContext(storedState.contentRevision!);
+        if (restored.sessionId !== storedState.projectionSessionId) throw new Error("DSH restored another native projection");
+      }
       this.#state = this.#reconcileState(storedState, mode);
       await this.#stateStore.save(this.#state);
+      await this.#refreshContentRevision();
       this.#runtime = await this.#api.registerRuntime(this.#runtimeRegistration());
       this.#assertRuntime(this.#runtime);
       this.#notifyLifecycle("idle");
@@ -470,6 +481,7 @@ export class DshHostConnector {
   }
 
   async #poll(): Promise<DshPollResult> {
+    await this.#refreshContentRevision();
     const state = this.#requireState();
     if (state.activeRequest !== undefined) {
       await this.#withExecutionPermit(() => this.#recoverActiveRequest());
@@ -493,6 +505,11 @@ export class DshHostConnector {
         scanCursor,
         this.#config.pollLimit,
       );
+      if (page.contentRevision !== undefined) this.#revisionSupported = true;
+      if ((page.contentRevision ?? 0) !== (state.contentRevision ?? 0)) {
+        await this.#refreshContentRevision();
+        return this.#poll();
+      }
       this.#validatePage(page.events, scanCursor);
       const passive: DshCanonicalEvent[] = [];
       for (const event of page.events) {
@@ -545,6 +562,35 @@ export class DshHostConnector {
     throw new Error("DSH connector stopped during event replay");
   }
 
+  async #refreshContentRevision(): Promise<void> {
+    const state = this.#requireState();
+    if (!this.#revisionSupported && (state.contentRevision ?? 0) === 0) return;
+    const page = await this.#api.readEvents(this.#config.sessionId, 0, 1);
+    const revision = page.contentRevision ?? 0;
+    if (!Number.isSafeInteger(revision) || revision < (state.contentRevision ?? 0)) throw new Error("Stale DSH shared context revision");
+    if (revision === (state.contentRevision ?? 0)) {
+      if (revision > 0 && state.projectionSessionId && this.#host.resetCanonicalContext) {
+        const restored = await this.#host.resetCanonicalContext(revision);
+        if (restored.sessionId !== state.projectionSessionId) throw new Error("DSH clean projection binding changed on reconnect");
+      }
+      return;
+    }
+    state.localOnlySessionIds = [...new Set([...(state.localOnlySessionIds ?? []), this.#config.dshSessionId, this.#host.sessionId])];
+    state.outbox = [];
+    delete state.activeRequest;
+    this.#activeStatuses = []; this.#activeExecutionSelection = undefined;
+    this.#summaryScanSequence = 0; this.#hasSummaryHistory = false;
+    await this.#stateStore.save(state);
+    if (this.#host.resetCanonicalContext) {
+      const replacement = await this.#host.resetCanonicalContext(revision);
+      state.projectionSessionId = replacement.sessionId;
+      state.projectionCursor = 0;
+      state.publishedDshSequence = this.#host.currentSequence();
+    }
+    state.contentRevision = revision;
+    await this.#stateStore.save(state);
+  }
+
   async #executeRequest(
     request: DshCanonicalEvent,
     selection: DshExecutionSelection,
@@ -568,6 +614,7 @@ export class DshHostConnector {
       await this.#projectCanonicalBatch([request], request.sequence);
       return { claimed: false, completed: false };
     }
+    if ((claim.contentRevision ?? state.contentRevision ?? 0) !== (state.contentRevision ?? 0)) throw new Error("context_changed");
 
     const quotedEvent = request.replyTo ? (await this.#readThroughRequest(request.id, request.sequence))
       .find((event) => event.id === request.replyTo) : undefined;
@@ -579,6 +626,7 @@ export class DshHostConnector {
     const baseline = this.#host.currentSequence(prepared?.sessionId);
     if (prepared !== undefined && prepared.fromSequence !== baseline) throw new Error("DSH context preparation returned an inconsistent sequence");
     state.activeRequest = {
+      contentRevision: state.contentRevision ?? 0,
       requestId: request.id,
       requestSequence: request.sequence,
       dshFromSequence: baseline,
@@ -614,7 +662,8 @@ export class DshHostConnector {
     // have never requested a summary, including old servers without /context.
     // Once a summary exists, both modes use a frozen isolated projection so a
     // switch back to originals cannot leave hidden prior summaries in context.
-    if (!selectedOnly && !await this.#sessionHasSummaryBefore(request.sequence)) return undefined;
+    if (!selectedOnly && (this.#requireState().contentRevision ?? 0) === 0
+      && !await this.#sessionHasSummaryBefore(request.sequence)) return undefined;
     if (!selectedOnly && this.#api.readContext === undefined) {
       throw new Error("GatherThread summarized context is unavailable; update the connector before continuing");
     }
@@ -622,8 +671,9 @@ export class DshHostConnector {
       throw new Error("DSH isolated context execution is unavailable; refusing to run a summary-aware request in native history");
     }
     const received = selectedOnly
-      ? { view: "original" as const, through_sequence: request.sequence - 1, items: [] }
+      ? { view: "original" as const, content_revision: this.#requireState().contentRevision ?? 0, through_sequence: request.sequence - 1, items: [] }
       : parseHistoryContext(await this.#api.readContext!(this.#config.sessionId, undefined, request.sequence - 1), undefined, request.sequence - 1);
+    if ((received.content_revision ?? 0) !== (this.#requireState().contentRevision ?? 0)) throw new Error("context_changed");
     // Apply the same existing secret redaction as passive native projection
     // before either local durable state or the isolated model surface sees it.
     const historyContext = { ...received, items: received.items.map((item) => ({ ...item, content: redactText(item.content) })) };
@@ -735,6 +785,10 @@ export class DshHostConnector {
       throw new Error("Active GatherThread request no longer has a recoverable claim");
     }
     const claimAttempt = claim.attemptCount ?? active.claimAttempt ?? 1;
+    if ((active.contentRevision ?? 0) !== (state.contentRevision ?? 0)
+      || (claim.contentRevision ?? active.contentRevision ?? 0) !== (active.contentRevision ?? 0)) {
+      await this.#retireFencedActiveRequest(state, active); return;
+    }
     active.claimAttempt = claimAttempt;
     if (active.dshToSequence !== undefined) {
       state.outbox = state.outbox.map((operation) => {
@@ -866,6 +920,7 @@ export class DshHostConnector {
             || this.#runtime?.id !== runtime.id || this.#activeExecutionSelection !== selection) return false;
           await this.#api.appendAgentProgress(this.#config.sessionId, requestId, {
             runtimeId: runtime.id, claimAttempt,
+            contentRevision: active.contentRevision ?? 0,
             idempotencyKey: `${this.#config.deviceId}:${digest(requestId).slice(0, 24)}:${claimAttempt}:live-${update.id}`,
             payload: { ...liveOutputPayload(update), capture_fidelity: "harness_transcript", source_harness: "deepseek-harness" },
             observedModel: selection.model,
@@ -881,11 +936,41 @@ export class DshHostConnector {
     });
     const output = { publisher, mapper: createDshLiveEventMapper(publisher), sourceSessionId };
     this.#activeLiveOutput = output;
+    const abort = new AbortController();
+    const abortLifecycle = () => abort.abort(this.#lifecycleAbort.signal.reason);
+    this.#lifecycleAbort.signal.addEventListener("abort", abortLifecycle, { once: true });
+    const verifyRevision = async () => {
+      if (!this.#revisionSupported && (active.contentRevision ?? 0) === 0) return;
+      try {
+        const page = await this.#api.readEvents(this.#config.sessionId, 0, 1);
+        if ((page.contentRevision ?? 0) !== (active.contentRevision ?? 0)) abort.abort(new Error("context_changed"));
+      } catch (error) { abort.abort(error); }
+    };
+    const timer = setInterval(() => {
+      if (this.#revisionPollPromise) return;
+      const poll = verifyRevision(); this.#revisionPollPromise = poll;
+      void poll.finally(() => { if (this.#revisionPollPromise === poll) this.#revisionPollPromise = undefined; });
+    }, 1_000);
+    timer.unref();
     try {
-      const result = await this.#host.prompt(text, selection, executionSessionId);
+      await verifyRevision(); abort.signal.throwIfAborted();
+      const result = await this.#host.prompt(text, selection, executionSessionId, abort.signal);
+      await verifyRevision(); abort.signal.throwIfAborted();
       await output.mapper.finish();
       return result;
+    } catch (error) {
+      if (abort.signal.aborted) {
+        const state = this.#requireState();
+        state.outbox = state.outbox.filter((operation) => !outboxBelongsToRequest(operation, requestId));
+        delete state.activeRequest;
+        this.#activeExecutionSelection = undefined;
+        await this.#stateStore.save(state);
+      }
+      throw error;
     } finally {
+      clearInterval(timer);
+      this.#lifecycleAbort.signal.removeEventListener("abort", abortLifecycle);
+      await this.#revisionPollPromise;
       // Retiring the scope first makes any queued/timer-driven callback refuse
       // its ACK, including a prompt that throws or a Host disposed mid-stream.
       if (this.#activeLiveOutput === output) this.#activeLiveOutput = undefined;
@@ -923,6 +1008,7 @@ export class DshHostConnector {
         await this.#api.appendAgentProgress(this.#config.sessionId, requestId, {
           runtimeId: runtime.id,
           claimAttempt,
+          contentRevision: active.contentRevision ?? 0,
           idempotencyKey,
           payload,
           observedModel: selection.model,
@@ -945,10 +1031,12 @@ export class DshHostConnector {
     throughSequence: number,
   ): Promise<void> {
     const state = this.#requireState();
+    if (state.localOnlySessionIds?.includes(this.#host.sessionId)) return;
     if (throughSequence <= state.projectionCursor) return;
     const runtime = this.#requireRuntime();
     const projections: DshCanonicalProjection[] = [];
     for (const event of events) {
+      if (event.deleted) continue;
       if (event.type === "agent_request" && asObject(event.payload)?.history_summary !== undefined) {
         this.#hasSummaryHistory = true;
         // This control prompt contains the selected original texts. Showing it
@@ -1001,6 +1089,7 @@ export class DshHostConnector {
 
   async #captureLocalTurns(basedOnSequence?: number): Promise<void> {
     const state = this.#requireState();
+    if (state.localOnlySessionIds?.includes(this.#host.sessionId)) return;
     if (state.activeRequest !== undefined || state.outbox.length > 0) return;
     const current = this.#host.currentSequence();
     if (current <= state.publishedDshSequence) return;
@@ -1019,6 +1108,7 @@ export class DshHostConnector {
       input: {
         localTurnId: turn.localTurnId,
         runtimeId: runtime.id,
+        contentRevision: state.contentRevision ?? 0,
         basedOnSequence: basedOnSequence ?? state.serverCursor,
         occurredAt: turn.occurredAt,
         observedModel: this.#config.model,
@@ -1145,7 +1235,9 @@ export class DshHostConnector {
         }),
       },
     });
-    return operations;
+    return operations.map((operation) => ({ ...operation,
+      input: { ...operation.input, contentRevision: this.#requireState().activeRequest?.contentRevision ?? 0 },
+    })) as ConnectorOutboxOperation[];
   }
 
   async #flushOutbox(includeLocalTurns = true): Promise<void> {
@@ -1154,6 +1246,10 @@ export class DshHostConnector {
     while (state.outbox.length > 0) {
       const operation = state.outbox[0];
       if (operation === undefined) break;
+      if ((operation.input.contentRevision ?? 0) !== (state.contentRevision ?? 0)
+        || (operation.kind === "local_turn" && state.localOnlySessionIds?.includes(this.#host.sessionId))) {
+        state.outbox.shift(); await this.#stateStore.save(state); continue;
+      }
       if (operation.kind === "local_turn" && !includeLocalTurns) break;
       if (operation.input.runtimeId !== runtime.id) {
         throw new Error("DSH connector outbox belongs to a different runtime");
@@ -1572,6 +1668,9 @@ export function hasCompletedDshLocalTurn(
   events: readonly DshSessionEventRecord[],
   dshSessionId: string,
 ): boolean {
+  if (events.some((event) => event.type === "user/message"
+    && /^gatherthread-retired:[0-9]+$/.test(String(asObject(event.data)?.id))
+    && asObject(asObject(event.data)?.source)?.plugin === "gatherthread")) return false;
   return captureCompletedLocalTurns(events, 0, dshSessionId).turns.length > 0;
 }
 

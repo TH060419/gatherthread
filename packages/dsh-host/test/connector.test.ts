@@ -595,6 +595,42 @@ test("DSH author deletion isolates an original-history request without any summa
   await connector.stop();
 });
 
+test("DSH author deletion interrupt retains the execution permit until the native prompt actually stops", async () => {
+  const cfg = config(), api = new ContextApi();
+  api.sessions[0]!.contentRevision = 0;
+  const originalRead = api.readEvents.bind(api);
+  api.readEvents = async (...args) => ({ ...await originalRead(...args), contentRevision: api.contentRevision });
+  api.events.push(summaryRequest(1, "user-2"), request(2));
+  const host = new ContextHost(cfg.dshSessionId, freshPersistence());
+  let interrupted = false, released = false;
+  let started!: () => void, nativeStopped!: () => void;
+  const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+  const stoppedPromise = new Promise<void>((resolve) => { nativeStopped = resolve; });
+  host.prompt = async (_text, _profile, _id, signal?: AbortSignal) => {
+    signal?.addEventListener("abort", () => { interrupted = true; }, { once: true });
+    started(); await stoppedPromise;
+    released = true; signal?.throwIfAborted();
+    throw new Error("fixture should only terminate from context deletion");
+  };
+  const store = new MemoryConnectorStateStore();
+  const connector = new DshHostConnector({ config: cfg, api, host, stateStore: store });
+  await connector.start({ schedule: false, runImmediately: false });
+  const turn = connector.pollOnce();
+  const rejected = assert.rejects(turn, /context_changed/);
+  await startedPromise;
+  api.contentRevision = 1;
+  const timeout = Date.now() + 2500;
+  while (!interrupted && Date.now() < timeout) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(interrupted, true, "deletion must interrupt without waiting for model progress");
+  assert.equal(released, false, "cancellation notification is not proof of actual native termination");
+  assert.equal(api.completions.length, 0);
+  nativeStopped(); await rejected;
+  assert.equal(released, true);
+  assert.equal((await store.load())!.activeRequest, undefined);
+  assert.equal(api.completions.length, 0); assert.equal(api.appended.length, 0);
+  await connector.stop();
+});
+
 class ContextHost extends FakeHost {
   readonly execution: FakeHost;
   readonly executionPersistence: FakeDshPersistence;
