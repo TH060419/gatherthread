@@ -114,7 +114,8 @@ async function settled(f: ReturnType<typeof fixture>, id: string) {
 }
 
 for (const payer of ["service", "personal"] as const) {
- unixTest(`GitHub ${payer} automatic retry preserves its captured history revision before reserving or dispatching`, async () => {
+ for (const pin of ["stale", "missing"] as const) {
+ unixTest(`GitHub ${payer} automatic retry with a ${pin} history pin is refused before reserving or dispatching`, async () => {
   const f = fixture(), other = deletionPeer(f);
   try {
    await connect(f);
@@ -129,15 +130,24 @@ for (const payer of ["service", "personal"] as const) {
    other.deleteMessage(f.actor, f.session.id, String(original.request_event_id), "github-in-flight-delete");
    f.advance();
    const before = f.service.replay(f.actor, f.session.id, 0, 100).events.length, calls = f.calls.length;
-   assert.throws(() => f.github.start(f.actor, f.session.id, { ...input, content_revision: 0,
-    idempotency_key: "github-in-flight-automatic-retry" } as typeof input), e => e instanceof ApiError && e.code === "context_changed");
+   assert.throws(() => f.github.start(f.actor, f.session.id, { ...input, ...(pin === "stale" ? { content_revision: 0 } : {}),
+    idempotency_key: "github-in-flight-automatic-retry" } as typeof input),
+     e => e instanceof ApiError && e.code === "context_changed" && (pin === "stale" || /refresh/iu.test(e.message)));
    assert.equal(f.calls.length, calls); assert.equal(f.runs(), 1); assert.equal(f.db.hostedActiveRuns(), 0);
    assert.equal(f.service.replay(f.actor, f.session.id, 0, 100).events.length, before);
    assert.equal(f.db.hostedAgentUsage(f.actor, 100, 1000, payer).user_used_runs, 1);
    assert.equal(f.db.hostedAgentUsage(f.actor, 100, 1000, payer === "service" ? "personal" : "service").user_used_runs, 0);
    assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM events WHERE idempotency_key=?").get("github-in-flight-automatic-retry")?.n, 0);
+   const current = f.github.start(f.actor, f.session.id, { ...input, content: "New explicitly authored GitHub request",
+    content_revision: 1, idempotency_key: "github-current-history" } as typeof input);
+   assert.equal((await settled(f, current.id)).state, "completed"); assert.equal(f.runs(), 2);
+   const currentRequest = f.db.sqlite.prepare("SELECT request_event_id FROM hosted_github_tasks WHERE id=?").get(current.id)!;
+   assert.equal(f.db.getEvent(f.session.id, String(currentRequest.request_event_id)).content_revision, 1);
+   assert.equal(f.db.hostedAgentUsage(f.actor, 100, 1000, payer).user_used_runs, 2);
+   assert.equal(f.db.hostedAgentUsage(f.actor, 100, 1000, payer === "service" ? "personal" : "service").user_used_runs, 0);
   } finally { await f.close(); other.close(); }
  });
+ }
 }
 
 async function inactive(f: ReturnType<typeof fixture>) {

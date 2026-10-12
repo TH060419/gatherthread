@@ -13,7 +13,7 @@ import { HostedAgent, type HostedAgentOptions } from "../src/hosted-agent.js";
 import { ApiError } from "../src/errors.js";
 
 const socketTest = process.platform === "win32" ? test.skip : test;
-function fixture(runContainer: NonNullable<HostedAgentOptions["runContainer"]>) {
+function fixture(runContainer: NonNullable<HostedAgentOptions["runContainer"]>, userDailyRuns = 1) {
   const root = mkdtempSync(join(tmpdir(), "gt-personal-route-"));
   let time = Date.now();
   const database = new CollaborationDatabase(join(root, "identity.db"), { authTokenPepper: "personal-routing-fixture-pepper", clock: () => new Date(time) });
@@ -28,7 +28,7 @@ function fixture(runContainer: NonNullable<HostedAgentOptions["runContainer"]>) 
     personalApiEncryptionKey: key, image: `fixture/cloud@sha256:${"c".repeat(64)}`, endpoints: [{ id: "free", profileId: "free",
       provider: "deepseek", label: "Existing service model", model: "deepseek-chat", baseUrl: "https://api.deepseek.com/v1",
       apiToken: "synthetic-operator-provider-secret", quotaGroup: "operator", dailyRuns: 4, maxConcurrent: 1 }],
-    userDailyRuns: 1, globalDailyRuns: 4, maxConcurrent: 1, runContainer,
+    userDailyRuns, globalDailyRuns: 4, maxConcurrent: 1, runContainer,
   });
   const input = { profile_id: saved.profile_id, api_config_revision: saved.revision, content: "Reply hello", include_code: false, idempotency_key: "personal-request" };
   return { root, database, service, actor, session, store, saved, agent, repository, input, key, advance() { time += 31_000; },
@@ -42,7 +42,8 @@ function reserve(f: ReturnType<typeof fixture>, input: HostedAgentRequestInput =
 }
 
 for (const payer of ["service", "personal"] as const) {
-  test(`an in-flight ${payer} retry cannot reserve or charge an old body after independent deletion`, () => {
+ for (const pin of ["stale", "missing"] as const) {
+  test(`an in-flight ${payer} retry with a ${pin} history pin cannot reserve or charge an old body after independent deletion`, () => {
     const f = fixture(async () => JSON.stringify({ answer: "No execution expected", files: [] }));
     const other = new CollaborationDatabase(join(f.root, "identity.db"), { authTokenPepper: "personal-routing-fixture-pepper" });
     try {
@@ -59,9 +60,10 @@ for (const payer of ["service", "personal"] as const) {
       f.advance();
       const before = f.service.replay(f.actor, f.session.id, 0, 100).events.length;
       const oldActivity = f.database.sqlite.prepare("SELECT last_started_at FROM hosted_agent_user_activity WHERE user_id=?").get(f.actor.user_id)?.last_started_at;
-      const retry = { ...input, content_revision: capturedRevision, idempotency_key: "in-flight-old-body-retry" };
+      const retry = { ...input, ...(pin === "stale" ? { content_revision: capturedRevision } : {}),
+        idempotency_key: "in-flight-old-body-retry" };
       assert.throws(() => f.database.reserveHostedAgentRequest(f.actor, f.session.id, retry, [endpoint], limits),
-        e => e instanceof ApiError && e.code === "context_changed");
+        e => e instanceof ApiError && e.code === "context_changed" && (pin === "stale" || /refresh/iu.test(e.message)));
       assert.equal(f.service.replay(f.actor, f.session.id, 0, 100).events.length, before);
       assert.equal(f.database.hostedAgentUsage(f.actor, 100, 1000, payer).user_used_runs, 1);
       assert.equal(f.database.hostedAgentUsage(f.actor, 100, 1000, payer === "service" ? "personal" : "service").user_used_runs, 0);
@@ -71,6 +73,43 @@ for (const payer of ["service", "personal"] as const) {
       const current = { ...input, content: "New explicit question", content_revision: 1, idempotency_key: "explicit-current-revision" };
       const accepted = f.database.reserveHostedAgentRequest(f.actor, f.session.id, current, [endpoint], limits);
       assert.equal(accepted.event.content_revision, 1); f.database.finishHostedAgentRequest(accepted.event.id, {});
+    } finally { other.close(); f.close(); }
+  });
+ }
+}
+
+for (const payer of ["service", "personal"] as const) {
+  socketTest(`${payer} selected summaries after erasure use a server-captured history pin and reject a later deletion`, async () => {
+    let runs = 0;
+    const f = fixture(async () => { runs++; return JSON.stringify({ answer: "Safe selected summary", files: [] }); }, 10);
+    const other = new CollaborationDatabase(join(f.root, "identity.db"), { authTokenPepper: "personal-routing-fixture-pepper" });
+    try {
+      const chat = (content: string) => f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session",
+        idempotency_key: randomUUID(), payload: { content } });
+      const erased = chat("SUMMARY_ERASED_SOURCE"), survivor = chat("SUMMARY_SELECTED_SURVIVOR");
+      f.service.deleteMessage(f.actor, f.session.id, erased.id, "summary-erase-first");
+      const input = { profile_id: payer === "personal" ? f.saved.profile_id : "free",
+        ...(payer === "personal" ? { api_config_revision: f.saved.revision } : {}),
+        source_event_ids: [survivor.id], idempotency_key: "summary-after-erasure" };
+      const accepted = await f.agent.startSummary(f.actor, f.session.id, input);
+      for (let n = 0; f.database.hostedActiveRuns() && n < 100; n++) await new Promise(resolve => setTimeout(resolve, 5));
+      assert.equal(f.database.hostedActiveRuns(), 0); assert.equal(runs, 1);
+      assert.equal(accepted.request_event.content_revision, 1);
+      assert.match(JSON.stringify(accepted.request_event.payload), /SUMMARY_SELECTED_SURVIVOR/);
+      assert.doesNotMatch(JSON.stringify(accepted.request_event.payload), /SUMMARY_ERASED_SOURCE/);
+      if (payer === "personal") assert.equal(f.agent.selection(f.actor, f.session.id, accepted.request_event.id).api_config_revision, f.saved.revision);
+      const incidental = chat("SUMMARY_RACE_OTHER_SOURCE"); f.advance();
+      const reserve = f.service.reserveHostedAgentRequest.bind(f.service);
+      f.service.reserveHostedAgentRequest = (...args) => {
+        other.deleteMessage(f.actor, f.session.id, incidental.id, "summary-erase-before-acceptance");
+        return reserve(...args);
+      };
+      const before = f.database.hostedAgentUsage(f.actor, 100, 1000, payer).user_used_runs;
+      await assert.rejects(f.agent.startSummary(f.actor, f.session.id, { ...input, idempotency_key: "summary-in-flight-revision" }),
+        e => e instanceof ApiError && e.code === "context_changed");
+      assert.equal(runs, 1); assert.equal(f.database.hostedActiveRuns(), 0);
+      assert.equal(f.database.hostedAgentUsage(f.actor, 100, 1000, payer).user_used_runs, before);
+      assert.equal(f.database.sqlite.prepare("SELECT count(*) AS n FROM events WHERE idempotency_key=?").get("summary-in-flight-revision")?.n, 0);
     } finally { other.close(); f.close(); }
   });
 }
