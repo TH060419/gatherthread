@@ -350,7 +350,9 @@ test("project Codex connector presents a concise Beta install-connect-confirm fl
   assert.match(html, /official Codex CLI installation guide/);
   assert.doesNotMatch(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);
-  assert.match(html, /git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE\nnpm ci\nnpm run build:ts &amp;&amp; npm run build:connector\nnode plugins\/gatherthread\/scripts\/prepare-source-plugin\.mjs/);
+  for (const sourceHtml of [html, html.replace(/\r\n?/gu, "\n").replaceAll("\n", "\r\n")]) {
+    assert.match(sourceHtml, /git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE\nnpm ci\nnpm run build:ts &amp;&amp; npm run build:connector\nnode plugins\/gatherthread\/scripts\/prepare-source-plugin\.mjs/);
+  }
   assert.match(domain, /--plugin-hooks/);
   const pluginCommands = (html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "")
     .replace(/\r\n?/gu, "\n").replaceAll("&amp;", "&");
