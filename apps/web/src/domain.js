@@ -4,7 +4,8 @@ export const INVITATION_ROLES = Object.freeze(["participant", "viewer"]);
 export const INVITATION_TTLS = Object.freeze(["1h", "24h", "7d"]);
 export const SNAPSHOT_STATUSES = Object.freeze(["queued", "claimed", "importing", "compacting", "completed", "failed"]);
 export const CONNECTOR_STATUSES = Object.freeze(["synced", "offline", "reconciling", "rebuilding", "local_fork"]);
-export const CODEX_CONNECT_PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-beta.1";
+// A placeholder for this server's downloaded TGZ, not an older npm release.
+export const CODEX_CONNECT_PACKAGE_SPEC = "/absolute/path/to/LOCAL_CODEX_CONNECTOR.tgz";
 export const CODEX_LAUNCHER_ORIGIN = "https://gatherthread.cn";
 export const CODEX_LAUNCHER_LINK_VERSION = "1";
 export const CODEX_LAUNCHER_ORIGINS = Object.freeze([CODEX_LAUNCHER_ORIGIN, "https://test.gatherthread.cn"]);
@@ -91,7 +92,7 @@ export function projectCodexConnectionCommands({
   ];
   return Object.freeze({
     posix: [
-      "npx", "--yes", CODEX_CONNECT_PACKAGE_SPEC,
+      "npx", "--yes", "--package", posixQuote(CODEX_CONNECT_PACKAGE_SPEC), "gatherthread-codex-connect",
       "--url", posixQuote(normalizedBaseUrl),
       "--project", posixQuote(projectId),
       "--create-workspace",
@@ -100,7 +101,7 @@ export function projectCodexConnectionCommands({
       ...optionalArguments(posixQuote),
     ].join(" "),
     powershell: [
-      "npx.cmd", "--yes", CODEX_CONNECT_PACKAGE_SPEC,
+      "npx.cmd", "--yes", "--package", powerShellQuote("C:/path/to/LOCAL_CODEX_CONNECTOR.tgz"), "gatherthread-codex-connect",
       "--url", powerShellQuote(normalizedBaseUrl),
       "--project", powerShellQuote(projectId),
       "--create-workspace",

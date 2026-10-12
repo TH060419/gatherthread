@@ -7,7 +7,7 @@ export function retryAgentRequestPermission(request, context) {
   return canAppend({ ...context, kind: isCloudTrialRequest(request) || request?.payload?.github_task_id ? "human_chat" : "agent_request" });
 }
 
-export function cloudRequestInput(request, idempotencyKey, profiles, selection) {
+export function cloudRequestInput(request, idempotencyKey, profiles, selection, contentRevision) {
   const recorded = request.payload?.execution_profile;
   const profile = profiles?.find((candidate) => candidate.id === request.payload?.profile_id);
   if (!isCloudTrialRequest(request) || !profile || profile.provider !== recorded?.provider || profile.model !== recorded?.model) {
@@ -20,7 +20,8 @@ export function cloudRequestInput(request, idempotencyKey, profiles, selection) 
   }
   return { content: retryAgentRequestInput(request, idempotencyKey).content, profileId: profile.id,
     includeCode: request.payload.include_code === true, idempotencyKey, replyTo: request.replyTo,
-    ...(personal ? { apiConfigRevision: selection.api_config_revision } : {}) };
+    ...(personal ? { apiConfigRevision: selection.api_config_revision } : {}),
+    ...(contentRevision === undefined ? {} : { contentRevision }) };
 }
 
 const targetId = (event) => event.replyTo ?? event.reply_to_event_id ?? event.payload?.reply_to_event_id;
@@ -107,6 +108,13 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
 
   function handleClick() {
     const current = view();
+    const contentRevision = current.contentRevision ?? 0;
+    const sourceNow = () => {
+      const latest = getContext();
+      if (latest.scope !== current.scope || (latest.contentRevision ?? 0) !== contentRevision || !latest.writable) return undefined;
+      return latest.events.find(event => event.id === current.request?.id && event.type === "agent_request"
+        && !event.deleted && !event.contentUnavailable && event.actor?.id === latest.userId);
+    };
     if (current.action === "request") return false;
     if (button.disabled || operation?.scope === current.scope || !current.writable) return true;
     if (current.action === "resume" && !confirmResume(current.request)) return true;
@@ -128,9 +136,14 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
         } else if (current.cloud) {
           const selection = current.request.payload?.profile_id?.startsWith("api-")
             ? await api.getHostedAgentSelection(current.sessionId, current.request.id) : undefined;
-          if (getContext().scope !== current.scope) return;
-          await api.appendHostedAgentRequest(current.sessionId, cloudRequestInput(current.request, key, current.cloudProfiles, selection));
-        } else await api.appendAgentRequest(current.sessionId, resumeAgentRequestInput(current.request, key));
+          const source = sourceNow();
+          if (!source) return;
+          await api.appendHostedAgentRequest(current.sessionId, cloudRequestInput(source, key, current.cloudProfiles, selection, contentRevision));
+        } else {
+          const source = sourceNow();
+          if (!source) return;
+          await api.appendAgentRequest(current.sessionId, { ...resumeAgentRequestInput(source, key), contentRevision });
+        }
       } catch (error) {
         if (getContext().scope === current.scope) errorNode.textContent = t(error.message ?? "Unable to control this Agent request. Try again.");
       } finally {

@@ -1038,7 +1038,7 @@
           <summary>Terminal connection · Linux and advanced setup</summary>
         <ol id="connect-codex-steps" class="connection-guide codex-connect-steps">
           <li>
-            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>The manual terminal path requires Node 24+ and a signed-in Codex Desktop. Add the fixed GatherThread plugin.</p></div></div>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>The manual terminal path requires Node 24+ and a signed-in Codex Desktop.</p><p><a id="connect-codex-package-download" href="https://github.com/TH060419/gatherthread/blob/main/docs/CODEX_CONNECT.md#source-checkout-fallback" target="_blank" rel="noopener noreferrer">Source-checkout instructions</a></p><p>Download the Codex connector TGZ for this server. Replace LOCAL_CODEX_CONNECTOR.tgz below with its full file path.</p><p>For Hooks, check out the source commit shown on the download page. The connector TGZ does not contain the Codex plugin.</p></div></div>
             <details class="connection-alternative codex-cli-recovery-hint">
               <summary>If Terminal says “command not found: codex”</summary>
               <p>On macOS, if ChatGPT Desktop is installed in Applications, check its bundled Codex CLI and add it to this terminal's PATH:</p>
@@ -1054,7 +1054,10 @@ codex plugin --help</code>
               <span id="connect-codex-marketplace-title" class="command-label">Codex plugin</span>
               <button class="button button-secondary" type="button" data-copy-command="marketplace" aria-describedby="copy-marketplace-command-status">Copy commands</button>
             </div>
-            <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Fixed GitHub plugin source and install commands">codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
+              <code id="connect-codex-marketplace-command" class="connector-command" tabindex="0" aria-label="Source checkout plugin install commands">git clone https://github.com/TH060419/gatherthread.git
+cd gatherthread
+git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
+codex plugin marketplace add .
 codex plugin add gatherthread@gatherthread</code>
           <p id="copy-marketplace-command-status" class="field-help copy-command-status" role="status" aria-live="polite" data-copy-status></p>
           </li>
@@ -1131,7 +1134,7 @@ codex plugin add gatherthread@gatherthread</code>
         </div>
         <ol class="connection-guide dsh-connect-steps">
           <li>
-            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>Requires Node 24+ and pnpm 10. Add the GatherThread plugin to the DSH Web profile.</p></div></div>
+            <div class="connection-step-heading"><span class="step-number" aria-hidden="true">1</span><div><h3>Install once</h3><p>Requires Node 24+ and pnpm 10.</p><p><a id="connect-dsh-package-download" href="https://github.com/TH060419/gatherthread/blob/main/docs/DSH_CONNECT.md#source-checkout-fallback" target="_blank" rel="noopener noreferrer">Source-checkout instructions</a></p><p>Download the DSH plugin TGZ for this server. Replace LOCAL_DSH_PLUGIN.tgz below with its full file path.</p><p>On Windows, use a full path such as C:/Users/you/Downloads/your-plugin.tgz.</p></div></div>
             <div class="command-heading">
               <span class="command-label">DSH plugin</span>
               <button class="button button-secondary" type="button" data-copy-dsh-command="install" aria-describedby="copy-dsh-install-status">Copy command</button>

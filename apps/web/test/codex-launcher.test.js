@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createAccountEmailHint, mountCodexLauncher } from "../src/codex-launcher.js";
+import { createAccountEmailHint, mountCodexLauncher, mountAgentPackageDownloads, currentAgentDownloadIndex } from "../src/codex-launcher.js";
 
 const id = "12345678-1234-4234-8234-123456789abc";
 const storage = () => { const data = new Map(); return { getItem: key => data.get(key) ?? null,
@@ -109,6 +109,49 @@ test("a late download read after dialog close cannot rewrite the currently displ
   resolve(Response.json({ source_commit: source, index_path: `/downloads/${source}/index.html` }));
   await work;
   assert.equal(f.get("download-codex-launcher-button").href, fallback);
+  f.ui.clear();
+});
+
+function packageFixture(fetchResponse) {
+  const nodes = new Map(["codex", "dsh"].map(kind => [kind, { href: `https://github.com/TH060419/gatherthread/blob/main/docs/${kind.toUpperCase()}_CONNECT.md#source-checkout-fallback`,
+    textContent: "", getAttribute(name) { return this[name]; } }]));
+  const ui = mountAgentPackageDownloads({ document: { getElementById: id => nodes.get(id.split("-")[1]) },
+    localizer: { setText(node, text) { node.textContent = text; } }, fetchResponse });
+  return { ui, nodes };
+}
+
+test("Codex terminal and DSH links use the very same strict server source index without choosing a package filename", async () => {
+  const source = "a".repeat(40), requests = [];
+  const f = packageFixture(async (url, options) => {
+    requests.push({ url, options }); return Response.json({ source_commit: source, index_path: `/downloads/${source}/index.html` });
+  });
+  await Promise.all([f.ui.open("codex"), f.ui.open("dsh")]);
+  for (const node of f.nodes.values()) {
+    assert.equal(node.href, `/downloads/${source}/index.html`);
+    assert.equal(node.textContent, "Download packages for this server");
+  }
+  assert.equal(requests.length, 2);
+  for (const request of requests) { assert.equal(request.url, "/downloads/launcher.json"); assert.equal(request.options.redirect, "error"); }
+});
+
+test("unsafe/missing package metadata uses source-checkout guidance, never an older registry installation", async () => {
+  for (const value of [null, { source_commit: "a".repeat(40), index_path: "https://evil.invalid/package.tgz" },
+    { source_commit: "a".repeat(40), index_path: `/downloads/${"b".repeat(40)}/index.html` }]) {
+    const f = packageFixture(async () => value === null ? new Response("", { status: 404 }) : Response.json(value));
+    await f.ui.open("dsh");
+    assert.match(f.nodes.get("dsh").href, /docs\/DSH_CONNECT\.md#source-checkout-fallback$/);
+    assert.equal(f.nodes.get("dsh").textContent, "Source-checkout instructions");
+  }
+});
+
+test("closing a package guide fences a late index read while another guide remains usable", async () => {
+  let finish; const pending = new Promise(resolve => { finish = resolve; });
+  const f = packageFixture(() => pending);
+  const work = f.ui.open("dsh"); f.ui.close("dsh");
+  finish(Response.json({ source_commit: "a".repeat(40), index_path: `/downloads/${"a".repeat(40)}/index.html` }));
+  await work;
+  assert.match(f.nodes.get("dsh").href, /DSH_CONNECT/);
+  assert.equal(await currentAgentDownloadIndex(async () => { throw new DOMException("Timed out", "TimeoutError"); }), null);
   f.ui.clear();
 });
 test("Launcher prepares a password handoff then opens synchronously on the actual click", async () => {

@@ -6,6 +6,8 @@
 
 在 `https://gatherthread.cn/app/` 用邮箱和密码登录，再通过「连接 Codex」打开启动器，连接这台电脑。邮箱会自动带入，只需在启动器输入密码；不再手动复制 Token。使用终端备用方式时，才需创建一次性设备授权。
 
+「下载此服务器的配套安装包」会打开带源码版本的下载页。终端备用方式使用该页的 Codex 连接器 TGZ，不使用旧 npm 发行包；没有下载页时，使用下方源码路径。
+
 **测试服：**通过测试准入后，在 `https://test.gatherthread.cn/app/` 登录。新版邮箱启动器支持正式与测试环境，会严格连接网页标明的环境；请使用独立的测试账号和工作区，正式服凭据不能混用。旧 v1 启动器需要更新。
 
 ## 启动器连接 · 官网 Windows / macOS
@@ -39,10 +41,13 @@ source ~/.zshrc
 codex plugin --help
 ```
 
-如果找不到该文件、ChatGPT Desktop 安装在其他位置，或你使用其他系统，请按照 [Codex CLI 官方安装指南](https://learn.chatgpt.com/docs/codex/cli)操作，不要把不存在的目录加入 `PATH`。运行 `codex plugin --help` 确认当前 Codex 版本支持插件后，再安装共序：
+如果找不到该文件、ChatGPT Desktop 安装在其他位置，或你使用其他系统，请按照 [Codex CLI 官方安装指南](https://learn.chatgpt.com/docs/codex/cli)操作，不要把不存在的目录加入 `PATH`。运行 `codex plugin --help` 确认插件支持。终端方式需安装与服务器配套的源码插件：把下方 `SOURCE_COMMIT_FROM_DOWNLOADS_PAGE` 换成下载页标明的 40 位源码版本编号。连接器 TGZ **不包含**插件市场和 Hooks：
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
+git clone https://github.com/TH060419/gatherthread.git
+cd gatherthread
+git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
+codex plugin marketplace add .
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -50,10 +55,10 @@ codex plugin add gatherthread@gatherthread
 
 ### 2. 连接一个共序项目
 
-在共序网页打开目标项目，选择 **连接 Codex**，复制与系统对应的命令。命令形式如下：
+在共序网页打开目标项目，展开 **连接 Codex → 终端连接**，从「下载此服务器的配套安装包」下载 **Codex 连接器 TGZ**。把下方占位路径替换为下载文件的完整路径，服务器地址和项目 ID 使用网页显示的值：
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-beta.1 \
+npx --yes --package '/absolute/path/to/LOCAL_CODEX_CONNECTOR.tgz' gatherthread-codex-connect \
   --url 'https://你的共序服务器地址' \
   --project 'PROJECT_ID' \
   --create-workspace \
@@ -66,15 +71,20 @@ npx --yes @gatherthread/codex-connect@0.1.0-beta.1 \
 
 Codex Desktop 会打开经过验证的本地工作区；共序成员栏会显示 **Agent 在线**。连接器会自动发现当前及之后新增的可写会话。
 
-## npm 包不可用时的源码路径
+Windows 使用 `npx.cmd` 和带引号的完整路径，例如 `C:/Users/you/Downloads/your-connector.tgz`。npm 的 `@gatherthread/codex-connect@0.1.0-beta.1` 与 `v0.1.0-beta.1` 标签是旧发行版，不包含本次安全删除消息的处理。
 
-有仓库访问权限的协作者可以从当前源码测试完整本地体验：
+## 从源码安装
+
+有仓库访问权限的协作者可以从配套源码构建；没有下载页时，请向服务器管理员确认源码版本：
 
 ```bash
 git clone https://github.com/TH060419/gatherthread.git
 cd gatherthread
-npm install
+git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
+npm ci
 npm run build
+codex plugin marketplace add .
+codex plugin add gatherthread@gatherthread
 npm run codex:connect -- \
   --url 'http://127.0.0.1:18787' \
   --project 'PROJECT_ID' \
@@ -82,7 +92,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-服务器地址和项目 ID 以网页显示内容为准：Beta 1 测试使用 `https://test.gatherthread.cn`，独立部署的正式服使用 `https://gatherthread.cn`。使用 `npx` 前请核对 `v0.1.0-beta.1` 插件引用和同版连接器包均已发布。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
+服务器地址和项目 ID 以网页显示内容为准：测试使用 `https://test.gatherthread.cn`，正式服使用 `https://gatherthread.cn`。没有经过审查并启用的插件 Hooks 时，网页 Agent 请求仍可运行，但 Codex Desktop 中的直接回合不会上传。
 
 ## 会同步什么
 

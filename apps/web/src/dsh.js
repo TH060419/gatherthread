@@ -1,11 +1,10 @@
 export const DSH_HARNESS = "deepseek-harness";
 export const CODEX_HARNESS = "codex";
 export const DSH_NPM_VERSION = "0.1.2-rc.1";
-export const GATHERTHREAD_DSH_PLUGIN_VERSION = "0.1.0-beta.1";
 export const DSH_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
 export const DSH_VERSION_COMMAND = "npx @deepseek-ai/dsh --version";
 export const DSH_PINNED_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
-export const DSH_INSTALL_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} plugin --profile web add @gatherthread/dsh-host@${GATHERTHREAD_DSH_PLUGIN_VERSION}`;
+export const DSH_INSTALL_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"`;
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const SAFE_TEXT = /^[^\u0000-\u001f\u007f-\u009f]+$/u;

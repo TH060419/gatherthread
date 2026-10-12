@@ -240,6 +240,7 @@ export function mountCloudGithub({ api: getApi, context, t, setText = (node, sou
       const revision = parentId && selected?.id === parentId ? selected.api_config_revision : input.apiConfigRevision;
       const task = await getApi().startHostedGithubTask(sessionId, { content: input.content, profile_id: input.profileId,
         idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null,
+        ...(input.contentRevision === undefined ? {} : { content_revision: input.contentRevision }),
         ...(revision === undefined ? {} : { api_config_revision: revision }),
         ...(parentId ? { continue_task_id: parentId } : {}) });
       if (gen === generation && context().sessionId === sessionId) {

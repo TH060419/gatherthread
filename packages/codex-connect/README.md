@@ -4,22 +4,29 @@ The standalone GatherThread connector for a locally installed and authenticated 
 
 ## Minimum connection
 
-Copy the fixed-version command from GatherThread Web. It contains the server origin and project ID, but no browser cookie, invitation secret, device token, or local path:
+Windows/macOS users should use **Connect Codex → Open Launcher** first: the page fills the account email and environment, and the Launcher asks only for the password to authorize an independent device. No Token copying is required.
+
+For the folded terminal fallback, open **Download packages for this server** and download its source-matched Codex connector TGZ. Replace the example path below with that downloaded file's full path. The command includes the server origin and project ID, but no browser cookie, invitation secret, device token or password:
 
 ```sh
-npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url https://gatherthread.example --project PROJECT_ID --create-workspace --plugin-hooks --visible-history-sync first-connect
+npx --yes --package '/absolute/path/to/LOCAL_CODEX_CONNECTOR.tgz' gatherthread-codex-connect --url https://gatherthread.example --project PROJECT_ID --create-workspace --plugin-hooks --visible-history-sync first-connect
 ```
 
 Create a one-time device authorization in the signed-in Connect Codex dialog, then paste it into the hidden terminal input within ten minutes. The connector claims its own device token, never your password. It supports Web **Request my agent**, canonical per-session projections, read-only snapshots, and a verified Desktop-visible history snapshot. `first-connect` imports once when each session is first established locally; `never` disables automatic import. Each manual import creates a new task and leaves the previous task for the user to archive. Realtime context injection stays active in both modes. Keep the process running.
 
-After the matching Git release ref exists, install the fixed plugin source and plugin explicitly:
+The TGZ installs only the connector, not the Codex marketplace or Hooks. For terminal setup, check out the source commit printed on the download page and install its plugin explicitly. Replace `SOURCE_COMMIT_FROM_DOWNLOADS_PAGE` with that exact commit:
 
 ```sh
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
+git clone https://github.com/TH060419/gatherthread.git
+cd gatherthread
+git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
+codex plugin marketplace add .
 codex plugin add gatherthread@gatherthread
 ```
 
 Restart Codex Desktop and review the plugin's MCP server and Hooks before enabling them. Neither the Web page nor the connector runs these commands or edits global Codex configuration.
+
+On Windows, use `npx.cmd` and a quoted full file path such as `C:/Users/you/Downloads/your-connector.tgz`. The registry's `@gatherthread/codex-connect@0.1.0-beta.1` and `v0.1.0-beta.1` tag are older releases, not this source-pinned build; they do not include the current safe message-deletion handling. Without server downloads, [build the matching source checkout](../../docs/CODEX_CONNECT.md#source-checkout-fallback).
 
 The connector also exposes a private local API for the **共序 / GatherThread** Codex plugin. The plugin's stdio MCP process receives no device token. Multiple running project connectors publish leased, non-secret instance/endpoint/project registrations; their separate random per-run capabilities authorize calls. MCP discovery collapses crash/restart overlap for the same endpoint to its newest lease, aggregates distinct projects, and routes unique project/session IDs, while duplicate IDs across distinct endpoints or an offline target fail closed.
 

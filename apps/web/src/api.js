@@ -611,6 +611,7 @@ export class HttpCollaborationApi {
       method: "POST",
       body: JSON.stringify({ profile_id: input.profileId ?? "default", content: input.content, include_code: input.includeCode === true,
         idempotency_key: input.idempotencyKey, reply_to_event_id: input.replyTo ?? null,
+        ...(input.contentRevision === undefined ? {} : { content_revision: input.contentRevision }),
         ...(input.apiConfigRevision === undefined ? {} : { api_config_revision: input.apiConfigRevision }) }),
     }), HOSTED_AGENT_RESPONSE_ERROR);
   }
@@ -687,6 +688,7 @@ export class HttpCollaborationApi {
         },
         idempotency_key: input.idempotencyKey,
         reply_to_event_id: input.replyTo ?? null,
+        ...(input.contentRevision === undefined ? {} : { content_revision: input.contentRevision }),
       }),
     }).then(({ event }) => this.#event(event));
   }
@@ -1636,6 +1638,8 @@ export class MockCollaborationApi {
         && ["agent_response", "agent_progress", "tool_call", "tool_result"].includes(event.type)) reasons.set(event.id, reason);
     };
     if (target.type === "agent_request") includeLinked(eventId, "request");
+    if (target.type === "agent_response" && target.replyTo) includeLinked(target.replyTo, "request");
+    reasons.set(eventId, "author");
     // Match the real service's conservative invalidation of old generated work.
     // An independently authored request/chat is retained, never impersonated.
     for (const event of events) if (event.type === "agent_request" && event.sequence > target.sequence) includeLinked(event.id, "request");
@@ -1760,6 +1764,7 @@ export class MockCollaborationApi {
   async createHistorySummary(sessionId, input) {
     const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
     if (existing) return structuredClone(existing);
+    const contentRevision = this.#findSession(sessionId).contentRevision ?? 0;
     const { historyWireEvents, historySummaryExecutionWire } = await import("./history-summaries.js?v=20261012-content-1");
     const { selectHistorySummarySources, historySummarySourceJson, buildHistorySummaryPrompt } = await import("./history-summary-policy.js");
     historySummaryExecutionWire(input.executionProfile);
@@ -1770,7 +1775,7 @@ export class MockCollaborationApi {
     const marker = { version: 1, source_event_ids: sources.map((event) => event.id),
       source_digest: [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("") };
     return this.appendAgentRequest(sessionId, { ...input,
-      content: buildHistorySummaryPrompt(sources, input.instructions), historySummary: marker });
+      contentRevision, content: buildHistorySummaryPrompt(sources, input.instructions), historySummary: marker });
   }
 
   async getProjectContextPolicy(projectId) {
@@ -1815,6 +1820,10 @@ export class MockCollaborationApi {
     }
     const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
     if (existing) return structuredClone(existing);
+    if (type === "agent_request" && ((input.contentRevision !== undefined && input.contentRevision !== (session.contentRevision ?? 0))
+      || ((session.contentRevision ?? 0) > 0 && input.contentRevision === undefined))) {
+      throw new ApiError("Shared history changed.", { status: 409, code: "context_changed" });
+    }
     if (input.replyTo && (this.events.get(sessionId) ?? []).find(event => event.id === input.replyTo)?.deleted) {
       throw new ApiError("The quoted message was deleted.", { status: 409, code: "message_deleted" });
     }

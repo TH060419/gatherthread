@@ -115,11 +115,20 @@ try {
           return append.apply(this, args);
         };
       });
-      const cloudReady = () => page.waitForFunction(async profileId => {
-        const response = await fetch("/v1/hosted-agent");
-        if (!response.ok) return false;
-        return (await response.json()).data.profiles?.find(profile => profile.id === profileId)?.available;
-      }, config.profile_id);
+      const cloudReady = async () => {
+        const deadline = Date.now() + 10_000;
+        while (Date.now() < deadline) {
+          const response = await context.request.get(`${origin}/v1/hosted-agent`, { headers: { "Cache-Control": "no-store" } });
+          assert.equal(response.status(), 200);
+          const status = (await response.json()).data;
+          if (status.profiles?.find(profile => profile.id === config.profile_id)?.available) return;
+          if (status.rate_limits.retry_after_seconds > 0) {
+            // Honor the real server's rate-limit deadline, not an arbitrary UI delay.
+            await new Promise(done => setTimeout(done, status.rate_limits.retry_after_seconds * 1000));
+          } else await page.evaluate(() => new Promise(requestAnimationFrame));
+        }
+        throw Error("Actual Cloud Agent availability did not settle within 10 seconds");
+      };
       const failedCloudRequest = async content => {
         await cloudReady();
         failNextCloudRun = true;
@@ -157,9 +166,13 @@ try {
       await page.locator("#message-input").fill("Keep this new retry draft");
       await page.evaluate(() => { window.fixtureHostedWrites = []; });
       await cloudReady();
+      assert.equal(server.database.hostedAgentRateUsage(f.actor, 1).retry_after_seconds, 0, "actual ledger is ready before the retry click");
       const retried = page.waitForResponse(r => r.request().method() === "POST" && r.url().endsWith("/hosted-agent-requests"));
       await page.locator(`.agent-retry-button[data-request-id="${valid.id}"]`).click();
-      const retryResponse = await retried; assert.equal(retryResponse.status(), 202);
+      const retryResponse = await retried; assert.equal(retryResponse.status(), 202,
+        retryResponse.ok() ? "Accepted retry" : JSON.stringify({ response: await retryResponse.json(),
+          writes: await page.evaluate(() => window.fixtureHostedWrites.map(input => ({ idempotencyKey: input.idempotencyKey, contentRevision: input.contentRevision }))),
+          ledger: server.database.hostedAgentRateUsage(f.actor, 1) }));
       assert.equal(retryResponse.request().postDataJSON().content_revision, 1);
       assert.equal(retryResponse.request().postDataJSON().api_config_revision, config.revision);
       await page.getByText("Selected personal model answered.", { exact: true }).last().waitFor();

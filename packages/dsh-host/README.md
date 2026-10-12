@@ -16,13 +16,15 @@ The package does not install a DSH runtime dependency.
 
 ## Plugin-first connection
 
-After `@gatherthread/dsh-host` is published, the ordinary three-step path is:
+Use **Connect DeepSeek Harness → Download packages for this server** in GatherThread to download its source-matched DSH plugin TGZ. Replace the example path below with the downloaded file's full path:
 
 ```text
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 npx @deepseek-ai/dsh@0.1.2-rc.1 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
 ```
+
+On Windows, use a quoted path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older build and does not include the current message-deletion safeguards. If server downloads are unavailable, [build the matching source checkout](../../docs/DSH_CONNECT.md#source-checkout-fallback); do not substitute the old npm build.
 
 Check the active CLI with `npx @deepseek-ai/dsh --version`. The normal start
 command already pins `0.1.2-rc.1`. DSH 0.1.2 does not
@@ -38,7 +40,7 @@ public plugin marketplace, marketplace index, or registration workflow. This
 repository change prepares the package but does not publish it or modify a real
 DSH profile.
 
-Inside DSH, choose the future GatherThread public service or enter one custom
+Inside DSH, choose the GatherThread public service or enter one custom
 server origin. The same field covers an HTTPS LAN host, self-hosted deployment,
 or Tailscale address; plain HTTP is accepted only on loopback. The plugin opens
 an outbound HTTPS connection. A five-minute, single-use short code is confirmed

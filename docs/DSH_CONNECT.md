@@ -4,7 +4,7 @@ The GatherThread DSH plugin runs inside the DeepSeek Harness Web profile and con
 
 The plugin provides optional **project code** upload/download/recovery in DSH settings, with separate per-project consent. GT Cloud automatic code upload defaults off; a newly authorized GitHub binding defaults on and can be switched off. See [Project code collaboration](CODE_SYNC.md).
 
-Sign in with email and password before approving pairing. In the plugin, select the official service at `https://gatherthread.cn` or enter your self-hosted server address. Use the matching package version shown in the workspace; if it is unavailable, use the source-checkout path below.
+Sign in with email and password before approving pairing. In the plugin, select the official service at `https://gatherthread.cn` or enter your self-hosted server address. **Connect DeepSeek Harness → Download packages for this server** opens its source-pinned index. Install that page's DSH plugin TGZ; if it is unavailable, use the [source-checkout fallback](#source-checkout-fallback).
 
 ## Normal four-step setup
 
@@ -16,11 +16,13 @@ DSH's profile installer uses `pnpm`. If it is missing, install it first:
 npm install --global pnpm@10
 ```
 
-Then add the fixed GatherThread plugin to the DSH Web profile:
+Download the DSH plugin TGZ from that index and add it to the DSH Web profile. Replace the placeholder below with the downloaded file's full path:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
+
+On Windows, use a quoted full path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older release, not this source-pinned build; it does not provide the current safe message-deletion handling.
 
 ### 2. Open DSH
 
@@ -38,12 +40,13 @@ Paste the selected GatherThread server address (`https://test.gatherthread.cn` f
 
 Approving the short code completes pairing, but pairing alone registers nothing. Back in **Settings → GatherThread / 共序**, choose a provider and a model, then confirm to connect every project this identity can access. No GatherThread runtime exists for this device until that step, so the GatherThread Web workspace cannot find this DSH yet, and the panel still reports a stopped connection. For a compatible DeepSeek route, this selection is the connection default and the plugin also advertises the exact models and reasoning efforts reported by DSH. The GatherThread work page may then choose one of those profiles for an individual Agent request. That temporary request choice does not overwrite the model selected in DSH. Nothing falls back to Codex.
 
-## Source-checkout fallback when the npm package is unavailable
+## Source-checkout fallback
 
-From a source checkout with repository access:
+From a source checkout matching the commit printed on the server's download page (or confirmed by its administrator):
 
 ```bash
-npm install
+git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
+npm ci
 npm run build
 npm run release:pack-npm
 npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz

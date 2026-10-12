@@ -2,7 +2,7 @@ import { renderAvatar, isAgentReply, eventAuthorLabel } from "./avatars.js?v=202
 import { mountAvatarSettings } from "./avatar-settings.js?v=20261012-content-1";
 import { mountCloudGithub } from "./cloud-github-view.js?v=20261012-content-1";
 import { mountDeviceAuthorization } from "./device-authorization.js";
-import { createAccountEmailHint, mountCodexLauncher } from "./codex-launcher.js?v=20261012-content-1";
+import { createAccountEmailHint, mountCodexLauncher, mountAgentPackageDownloads } from "./codex-launcher.js?v=20261012-content-1";
 import { mountAccountDevices } from "./account-devices.js";
 import { mountPersonalCloudApi } from "./personal-cloud-api.js?v=20261012-content-1";
 import { cloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js?v=20261012-content-1";
@@ -317,6 +317,7 @@ const agentRequestControl = mountAgentRequestControl({
   button: sendAgentButton, targetLabel: element("agent-target-label"), errorNode: sendError, api,
   getContext: () => ({
     events: state.sync.events, userId: state.currentUser?.id, sessionId: state.session?.id,
+    contentRevision: state.sync.contentRevision ?? 0,
     scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.project?.id}:${state.session?.id}:${state.sync.contentRevision ?? 0}`,
     writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
     sending: Boolean(pendingMessageSend?.()),
@@ -385,6 +386,7 @@ element("cloud-agent-source").addEventListener("change", renderComposerPermissio
 const codexDeviceAuthorization = mountDeviceAuthorization({ document, api, localizer,
   scope: () => `${authenticationGeneration}:${state.currentUser?.id}:${state.project?.id}` });
 const accountEmailHint = createAccountEmailHint();
+const agentPackageDownloads = mountAgentPackageDownloads({ document, localizer });
 const codexLauncher = mountCodexLauncher({ document, api, localizer, emailHint: accountEmailHint,
   context: () => state.currentUser && state.project ? {
     scope: `${authenticationGeneration}:${state.currentUser.id}:${state.project.id}`,
@@ -975,6 +977,7 @@ element("done-connect-codex-button").addEventListener("click", () => connectCode
 connectCodexDialog.addEventListener("close", () => {
   codexDeviceAuthorization.clear();
   codexLauncher.close();
+  agentPackageDownloads.close("codex");
   const returnFocus = connectCodexReturnFocus;
   connectCodexReturnFocus = null;
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
@@ -987,6 +990,7 @@ element("close-connect-dsh-button").addEventListener("click", () => connectDshDi
 element("done-connect-dsh-button").addEventListener("click", () => connectDshDialog.close());
 element("refresh-dsh-runtimes-button").addEventListener("click", () => void refreshDshRuntimes({ announceFailure: true }));
 connectDshDialog.addEventListener("close", () => {
+  agentPackageDownloads.close("dsh");
   const returnFocus = connectDshReturnFocus;
   connectDshReturnFocus = null;
   requestAnimationFrame(() => returnFocus?.isConnected && returnFocus.focus());
@@ -3107,6 +3111,7 @@ async function sendMessage(kind) {
   }
   const isCurrent = captureWorkspaceScope();
   const sessionId = state.session.id;
+  const contentRevision = state.sync.contentRevision ?? 0;
   const draft = messageInput.value;
   const metadata = messageActions.metadata();
   const metadataFingerprint = JSON.stringify(metadata);
@@ -3124,9 +3129,9 @@ async function sendMessage(kind) {
       const includeCode = element("cloud-agent-include-code").checked;
       element("cloud-agent-include-code").checked = false;
       if (element("cloud-agent-source").value === "github") {
-        await cloudGithubUi.start(sessionId, { ...input, profileId: cloudProfile?.id, apiConfigRevision: cloudProfile?.api_config_revision });
+        await cloudGithubUi.start(sessionId, { ...input, contentRevision, profileId: cloudProfile?.id, apiConfigRevision: cloudProfile?.api_config_revision });
       } else {
-        await api.appendHostedAgentRequest(sessionId, { ...input, includeCode, profileId: cloudProfile?.id, apiConfigRevision: cloudProfile?.api_config_revision });
+        await api.appendHostedAgentRequest(sessionId, { ...input, contentRevision, includeCode, profileId: cloudProfile?.id, apiConfigRevision: cloudProfile?.api_config_revision });
       }
       void api.getHostedAgentStatus().then((status) => {
         if (isCurrent()) { hostedAgentStatus = status; renderComposerPermissions(); }
@@ -3146,7 +3151,7 @@ async function sendMessage(kind) {
           model: agentModelSelect.value,
           reasoningEffort: agentEffortSelect.value,
         });
-      await api.appendAgentRequest(sessionId, { ...input, executionProfile });
+      await api.appendAgentRequest(sessionId, { ...input, contentRevision, executionProfile });
     }
     if (isCurrent() && messageInput.value === draft && JSON.stringify(messageActions.metadata()) === metadataFingerprint) {
       messageInput.value = "";
@@ -3174,11 +3179,20 @@ async function retryAgentRequest(requestId, button) {
   const request = state.session
     ? state.sync.events.find((event) => event.type === "agent_request" && event.id === requestId)
     : undefined;
-  if (!request || !state.session || request.actor?.id !== state.currentUser?.id
+  if (!request || request.deleted || request.contentUnavailable || !state.session || request.actor?.id !== state.currentUser?.id
     || !retryAgentRequestPermission(request, { session: state.session, currentUser: state.currentUser,
       connectionPhase: state.sync.phase }).allowed) return;
-  const isCurrent = captureWorkspaceScope();
-  const retryScope = `${state.currentUser.id}:${state.session.id}:${requestId}`;
+  const sessionId = state.session.id, contentRevision = state.sync.contentRevision ?? 0;
+  const workspaceCurrent = captureWorkspaceScope();
+  const isCurrent = () => workspaceCurrent() && contentRevision === (state.sync.contentRevision ?? 0);
+  const currentRequest = () => {
+    if (!isCurrent()) return undefined;
+    const source = state.sync.events.find(event => event.type === "agent_request" && event.id === requestId);
+    return source && !source.deleted && !source.contentUnavailable && source.actor?.id === state.currentUser?.id
+      && retryAgentRequestPermission(source, { session: state.session, currentUser: state.currentUser,
+        connectionPhase: state.sync.phase }).allowed ? source : undefined;
+  };
+  const retryScope = `${state.currentUser.id}:${sessionId}:${requestId}:${contentRevision}`;
   const retryKey = retryAgentRequestKeys.get(retryScope) ?? createIdempotencyKey("agent-retry");
   retryingAgentRequestIds.add(requestId);
   button.disabled = true;
@@ -3197,16 +3211,20 @@ async function retryAgentRequest(requestId, button) {
     if (request.payload?.execution_profile?.harness === "opencode") {
       if (!CLOUD_AGENT_ENTRY_ENABLED) throw new Error(localizer.t("Cloud Agent · coming later"));
       const selection = request.payload?.profile_id?.startsWith("api-")
-        ? await api.getHostedAgentSelection(state.session.id, request.id) : undefined;
-      if (!isCurrent()) return;
-      const input = cloudRequestInput(request, retryKey, hostedAgentStatus.profiles, selection);
-      if (request.payload.include_code && !window.confirm(localizer.t("Retry with current GT Cloud code and save changes to your branch?"))) return;
+        ? await api.getHostedAgentSelection(sessionId, request.id) : undefined;
+      const authoritative = currentRequest();
+      if (!authoritative) return;
+      const input = cloudRequestInput(authoritative, retryKey, hostedAgentStatus.profiles, selection, contentRevision);
+      if (authoritative.payload.include_code && !window.confirm(localizer.t("Retry with current GT Cloud code and save changes to your branch?"))) return;
+      if (!currentRequest()) return;
       retryAgentRequestKeys.set(retryScope, retryKey);
-      await api.appendHostedAgentRequest(state.session.id, input);
+      await api.appendHostedAgentRequest(sessionId, input);
       void refreshHostedAgentStatus();
     } else {
+      const authoritative = currentRequest();
+      if (!authoritative) return;
       retryAgentRequestKeys.set(retryScope, retryKey);
-      await api.appendAgentRequest(state.session.id, retryAgentRequestInput(request, retryKey));
+      await api.appendAgentRequest(sessionId, { ...retryAgentRequestInput(authoritative, retryKey), contentRevision });
     }
     retryAgentRequestKeys.delete(retryScope);
   } catch (error) {
@@ -3342,6 +3360,7 @@ function openConnectCodexDialog() {
   }
   connectCodexReturnFocus = document.activeElement;
   connectCodexDialog.showModal();
+  void agentPackageDownloads.open("codex");
   if (launcherAvailable) void codexLauncher.open();
   requestAnimationFrame(() => element("close-connect-codex-button").focus());
 }
@@ -3397,6 +3416,7 @@ function openConnectDshDialog() {
   renderDshConnectionStatus();
   renderDshRuntimeList();
   if (!connectDshDialog.open) connectDshDialog.showModal();
+  void agentPackageDownloads.open("dsh");
   void refreshDshRuntimes({ announceFailure: true });
   requestAnimationFrame(() => element("close-connect-dsh-button").focus());
 }

@@ -350,11 +350,11 @@ test("project Codex connector presents a concise Beta install-connect-confirm fl
   assert.match(html, /official Codex CLI installation guide/);
   assert.doesNotMatch(html, /npm install -g @openai\/codex/);
   assert.match(html, /codex plugin --help/);
-  assert.match(html, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-beta\.1 --sparse \.agents\/plugins --sparse plugins\/gatherthread/);
+  assert.match(html, /git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE\ncodex plugin marketplace add \./);
   assert.match(domain, /--plugin-hooks/);
   const pluginCommands = (html.match(/id="connect-codex-marketplace-command"[^>]*>([^<]+)/)?.[1] ?? "")
     .replace(/\r\n?/gu, "\n");
-  assert.equal(pluginCommands, "codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread\ncodex plugin add gatherthread@gatherthread");
+  assert.equal(pluginCommands, "git clone https://github.com/TH060419/gatherthread.git\ncd gatherthread\ngit checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE\ncodex plugin marketplace add .\ncodex plugin add gatherthread@gatherthread");
   assert.doesNotMatch(pluginCommands, /gta_|Bearer|cookie|token=|password|client_secret/i);
   assert.match(i18n, /Beta 1 测试版/);
   assert.match(i18n, /"Install once": "仅需安装一次"/);
@@ -411,7 +411,7 @@ test("DeepSeek Harness is a selectable exact runtime with the same concise three
   assert.match(html, /current local, LAN, self-hosted, or Tailscale server/i);
   assert.match(html, /single-use and expires shortly/);
   assert.match(dsh, /DSH_START_COMMAND = `npx @deepseek-ai\/dsh@\$\{DSH_NPM_VERSION\} web`/);
-  assert.match(dsh, /plugin --profile web add @gatherthread\/dsh-host/);
+  assert.match(dsh, /plugin --profile web add.*LOCAL_DSH_PLUGIN\.tgz/);
   assert.doesNotMatch(dsh, /--dsh-source|(?:https?|dsh):\/\/localhost|deep[-_ ]?link/iu);
   assert.match(main, /api\.listSessionRuntimes\(sessionId\)/);
   assert.match(main, /dshExecutionProfile\([\s\S]*?currentDshResolution\(\)\.runtime,/);

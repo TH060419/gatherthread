@@ -4,7 +4,7 @@
 
 DSH 设置中的项目代码上传、下载与恢复需逐项目单独授权；GT Cloud 文件自动上传默认关闭，新授权的 GitHub 连接默认开启，可随时关闭。详见[项目文件协作](CODE_SYNC.md)。
 
-先用邮箱和密码登录，再批准设备配对。插件中可选择 `https://gatherthread.cn` 共序官方服务，也可输入自托管服务器地址。请使用工作页显示的匹配包版本；对应包不可用时，使用下方源码路径。
+先用邮箱和密码登录，再批准设备配对。插件中可选择 `https://gatherthread.cn` 共序官方服务，也可输入自托管服务器地址。「连接 DeepSeek Harness → 下载此服务器的配套安装包」会打开带源码版本的下载页，使用该页的 DSH 插件 TGZ；下载不可用时，使用下方源码路径。
 
 ## 正常连接只需四步
 
@@ -16,11 +16,13 @@ DSH 的 profile 安装器使用 `pnpm`。若系统尚未安装，请先运行：
 npm install --global pnpm@10
 ```
 
-再把固定版本的共序插件加入 DSH Web profile：
+下载配套的 DSH 插件 TGZ，把下方占位路径换成下载文件的完整路径，再加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add @gatherthread/dsh-host@0.1.0-beta.1
+npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
+
+Windows 使用带引号的完整路径，例如 `C:/Users/you/Downloads/your-plugin.tgz`。npm 的 `@gatherthread/dsh-host@0.1.0-beta.1` 是旧发行版，不是此源码构建，也不包含本次安全删除消息的处理。
 
 ### 2. 打开 DSH
 
@@ -38,12 +40,13 @@ npx @deepseek-ai/dsh@0.1.2-rc.1 web
 
 批准短码只完成配对，本身不会注册任何东西。回到 **设置 → GatherThread / 共序**，选择 Provider 与 Model，再确认连接当前身份可见的全部项目。只有完成这一步，本机才会注册共序运行时；在此之前，共序网页无法发现这台 DSH，面板也会一直显示为已停止。对于兼容的 DeepSeek 路由，该选择既是连接默认值，插件也会声明 DSH 实际提供的模型和推理强度。之后可以在 GatherThread 工作页为单次 Agent 请求选择其中一个组合；这个临时选择不会覆盖 DSH 页面自己的模型设置，也不会回退到 Codex。
 
-## npm 包不可用时的源码路径
+## 从源码安装
 
-在有访问权限的源码目录执行：
+先把源码切换到下载页标明的版本（没有下载页时向服务器管理员确认），再执行：
 
 ```bash
-npm install
+git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
+npm ci
 npm run build
 npm run release:pack-npm
 npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz

@@ -127,6 +127,13 @@ try {
       await page.locator("#connect-codex-manual > summary").click();
       await page.locator("#connect-codex-posix-command").waitFor({ state: "visible" });
       assert.match(await page.locator("#connect-codex-posix-command").innerText(), /codex-connect/);
+      assert.match(await page.locator("#connect-codex-posix-command").innerText(), /--package.*LOCAL_CODEX_CONNECTOR\.tgz/);
+      assert.doesNotMatch(await page.locator("#connect-codex-posix-command").innerText(), /@0\.1\.0-beta\.1/);
+      await page.waitForFunction(path => new URL(document.getElementById("connect-codex-package-download").href).pathname === path, downloadIndex);
+      const [terminalDownloads] = await Promise.all([page.waitForEvent("popup"), page.locator("#connect-codex-package-download").click()]);
+      await terminalDownloads.waitForLoadState("domcontentloaded");
+      assert.equal(terminalDownloads.url(), `${origin}${downloadIndex}`);
+      await terminalDownloads.close();
       await page.locator("#close-connect-codex-button").click();
       // A delayed handoff cannot enable Launch after the actual close click.
       await page.evaluate(() => { window.launcherDelayed = true; });
@@ -142,6 +149,20 @@ try {
       await page.locator("#connect-codex-button").click();
       await page.locator("#open-codex-launcher-button:not([disabled])").waitFor();
       await page.screenshot({ path: `${artifacts}/${name}-${platform}-${new URL(origin).hostname}-launcher.png` });
+      await page.locator("#close-connect-codex-button").click();
+      await page.locator("#add-agent-button").click();
+      await page.locator("#settings-enabled-dsh").check();
+      await page.locator("#settings-form button[type=submit]").click();
+      await page.locator("#settings-dialog").waitFor({ state: "hidden" });
+      await page.locator("#connect-dsh-button").click();
+      assert.match(await page.locator("#connect-dsh-install-command").innerText(), /plugin --profile web add.*LOCAL_DSH_PLUGIN\.tgz/);
+      assert.doesNotMatch(await page.locator("#connect-dsh-install-command").innerText(), /@gatherthread\/dsh-host@/);
+      await page.waitForFunction(path => new URL(document.getElementById("connect-dsh-package-download").href).pathname === path, downloadIndex);
+      const [dshDownloads] = await Promise.all([page.waitForEvent("popup"), page.locator("#connect-dsh-package-download").click()]);
+      await dshDownloads.waitForLoadState("domcontentloaded");
+      assert.equal(dshDownloads.url(), `${origin}${downloadIndex}`);
+      await dshDownloads.close();
+      await page.locator("#close-connect-dsh-button").click();
       console.log(`${name}: ${platform} ${new URL(origin).hostname} pointer flow passed`);
       await context.close();
     }

@@ -76,6 +76,7 @@ function makeFixture() {
   const nestedSummary = answer(nestedRequest, "NESTED_DERIVED_REMOVE fixture summary");
   for (let index = 0; index < 24; index++) chat(`Readable older message ${index}. ${"Shared discussion. ".repeat(16)}`, member);
   const request = content => running.service.appendEvent(owner.actor, session.id, { type: "agent_request", visibility: "session",
+    content_revision: running.database.requireSession(session.id).content_revision,
     idempotency_key: key(), payload: { content, execution_profile: profile } });
   const active = request("ACTIVE_REQUEST fixture");
   running.service.claimAgentRequest(owner.actor, session.id, active.id, runtime.id);
@@ -107,8 +108,15 @@ async function pageFor(browser, f, identity, locale, width, height, mobile, erro
     Storage.prototype.getItem = function (name) { return name.startsWith("gatherthread.onboarding.v1:") ? "skipped" : read.call(this, name); };
     Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: async text => { window.fixtureCopied = text; } } });
     window.fixtureSockets = [];
+    window.fixtureReceivedSequences = [];
     const Socket = WebSocket;
-    window.WebSocket = class extends Socket { constructor(...args) { super(...args); window.fixtureSockets.push(this); } };
+    window.WebSocket = class extends Socket { constructor(...args) {
+      super(...args); window.fixtureSockets.push(this);
+      this.addEventListener("message", message => {
+        const frame = JSON.parse(message.data);
+        if (frame.type === "event" && Number.isSafeInteger(frame.event?.sequence)) window.fixtureReceivedSequences.push(frame.event.sequence);
+      });
+    } };
   }, locale);
   await context.route(/^https?:/, route => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
   const page = await context.newPage();
@@ -201,6 +209,18 @@ try {
           events: [stale], cursor: stale.sequence, has_more: false, content_revision: 0,
         } }) });
       });
+      let releaseFresh, enterFresh;
+      const freshEntered = new Promise(resolve => { enterFresh = resolve; });
+      let freshHeld = false, capturedFreshCursor;
+      await page.route(`${origin}/v1/sessions/${f.session.id}/events?*`, async route => {
+        const after = Number(new URL(route.request().url()).searchParams.get("after_sequence"));
+        if (freshHeld || after !== 0) return route.fallback();
+        freshHeld = true;
+        const response = await route.fetch();
+        capturedFreshCursor = (await response.json()).data.cursor;
+        await new Promise(resolve => { releaseFresh = resolve; enterFresh(); });
+        return route.fulfill({ response });
+      });
       let releaseDelete, enterDelete;
       const deleteEntered = new Promise(resolve => { enterDelete = resolve; });
       await page.route(deleteUrl, async route => {
@@ -218,7 +238,23 @@ try {
         data: JSON.stringify({ type: "event", event }) })), { ...stale, sequence: oldHead + 2 });
       await bounded(oldEntered, "Old replay fixture");
       releaseDelete();
+      await bounded(freshEntered, "Authoritative deletion snapshot");
+      const peerCookie = browserSessionFixture(running, { token: f.member.token, origin }).headers.get("set-cookie").split(";")[0];
+      const peerResponse = await fetch(`${origin}/v1/sessions/${f.session.id}/events`, { method: "POST",
+        headers: { Cookie: peerCookie, Origin: origin, "Content-Type": "application/json" }, body: JSON.stringify({
+          type: "human_chat", visibility: "session", idempotency_key: key(),
+          payload: { content: "NEW_WHILE_DELETION_REFRESH fixture" },
+        }) });
+      assert.equal(peerResponse.status, 201);
+      const peerDuringRefresh = (await peerResponse.json()).data.event;
+      assert.ok(peerDuringRefresh.sequence > capturedFreshCursor, "new message was written after the held snapshot");
+      await page.waitForFunction(sequence => window.fixtureReceivedSequences.includes(sequence), peerDuringRefresh.sequence);
+      assert.doesNotMatch(await page.locator("#event-timeline").textContent(), /NEW_WHILE_DELETION_REFRESH/,
+        "no unverified body is retained while the deletion snapshot is pending");
+      releaseFresh();
       const warning = await deleting;
+      await page.getByText("NEW_WHILE_DELETION_REFRESH fixture", { exact: true }).waitFor();
+      assert.equal(await page.locator("#message-input").inputValue(), "Keep this unfinished draft");
       const oldFinished = page.waitForResponse(response => {
         const url = new URL(response.url());
         return url.pathname === `/v1/sessions/${f.session.id}/events`
@@ -303,7 +339,7 @@ try {
       assert.equal(await page.locator(".message-delete-action").count(), 0, "project owner has no other-Solo override");
       assert.equal(await page.locator("#message-input").isDisabled(), true);
       assert.deepEqual(errors, []);
-      console.log(`PASS ${name}: author deletion, Cookie/DB/WS, stale delivery, summaries, quotes, mentions, draft/scroll/focus, viewer and Solo`);
+      console.log(`PASS ${name}: author deletion, Cookie/DB/WS, stale delivery, no-loss refresh, summaries, quotes, mentions, draft/scroll/focus, viewer and Solo`);
       passed++;
     } catch (error) {
       if (page) await page.screenshot({ path: join(artifacts, `${name}-failure.png`), fullPage: true }).catch(() => {});

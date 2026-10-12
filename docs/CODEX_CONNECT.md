@@ -2,9 +2,9 @@
 
 GatherThread keeps one selected cloud project connected to Codex Desktop through a small local connector. The browser never launches Codex and never places a credential in a copied command.
 
-For optional **project code** upload/download/recovery, use the `0.1.0-beta.1` connector with the separate `--code-sync` opt-in; follow [Project code collaboration](CODE_SYNC.md). This is independent of conversation/history synchronization.
+For optional **project code** upload/download/recovery, use the connector's separate `--code-sync` opt-in; follow [Project code collaboration](CODE_SYNC.md). This is independent of conversation/history synchronization.
 
-Sign in at `https://gatherthread.cn/app/` with email and password, then use **Connect Codex → Open Launcher** on a supported desktop to authorize the computer separately. The folded terminal fallback uses the matching connector/plugin version shown by the workspace. If a corresponding package or tag is unavailable, use the source-checkout fallback below.
+Sign in at `https://gatherthread.cn/app/` with email and password, then use **Connect Codex → Open Launcher** on a supported desktop to authorize the computer separately. **Download packages for this server** opens its source-pinned download index. The folded terminal fallback uses that page's Codex connector TGZ, not the older npm release. If downloads are unavailable, use the [source-checkout fallback](#source-checkout-fallback).
 
 **Test service:** sign in at `https://test.gatherthread.cn/app/` after test admission. The email-account Launcher supports both official environments and connects to the exact one shown by the page. Use your separate test account and workspace; production credentials do not cross over. Older v1 Launchers require an update for this flow.
 
@@ -39,10 +39,13 @@ source ~/.zshrc
 codex plugin --help
 ```
 
-If that file is missing, ChatGPT Desktop is installed elsewhere, or you use another system, follow the [official Codex CLI installation guide](https://learn.chatgpt.com/docs/codex/cli) instead. Do not add a nonexistent directory to `PATH`. Run `codex plugin --help` to confirm that the available Codex build supports plugins, then install GatherThread:
+If that file is missing, ChatGPT Desktop is installed elsewhere, or you use another system, follow the [official Codex CLI installation guide](https://learn.chatgpt.com/docs/codex/cli) instead. Do not add a nonexistent directory to `PATH`. Run `codex plugin --help` to confirm plugin support. For terminal setup, check out the **source commit** printed on the server's download page and install its plugin. Replace `SOURCE_COMMIT_FROM_DOWNLOADS_PAGE` below with that exact 40-character commit; the connector TGZ does **not** contain the marketplace or Hooks:
 
 ```bash
-codex plugin marketplace add https://github.com/TH060419/gatherthread.git --ref v0.1.0-beta.1 --sparse .agents/plugins --sparse plugins/gatherthread
+git clone https://github.com/TH060419/gatherthread.git
+cd gatherthread
+git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
+codex plugin marketplace add .
 codex plugin add gatherthread@gatherthread
 ```
 
@@ -50,10 +53,10 @@ Restart Codex Desktop. Open Settings, review the **共序 / GatherThread** MCP s
 
 ### 2. Connect one GatherThread project
 
-Open that project in GatherThread, select **Connect Codex**, and copy the command shown for your operating system. It has this shape:
+Open that project in GatherThread, select **Connect Codex → Terminal connection**, and download the **Codex connector TGZ** from **Download packages for this server**. Replace the placeholder below with the downloaded file's full path, then use the server address and project ID from the page:
 
 ```bash
-npx --yes @gatherthread/codex-connect@0.1.0-beta.1 \
+npx --yes --package '/absolute/path/to/LOCAL_CODEX_CONNECTOR.tgz' gatherthread-codex-connect \
   --url 'https://your-gatherthread-server.example' \
   --project 'PROJECT_ID' \
   --create-workspace \
@@ -66,15 +69,20 @@ Expand **Terminal connection** in Connect Codex, create a ten-minute one-use dev
 
 Codex Desktop opens the verified local workspace. In GatherThread, the member panel changes to **Agent online**. New and existing writable sessions are discovered automatically.
 
-## Source-checkout fallback when the npm package is unavailable
+On Windows, use `npx.cmd` and a quoted full file path such as `C:/Users/you/Downloads/your-connector.tgz`. The registry's `@gatherthread/codex-connect@0.1.0-beta.1` and `v0.1.0-beta.1` tag are older releases; they do not include the current safe message-deletion handling.
 
-A collaborator with repository access can test the complete local experience with the current source:
+## Source-checkout fallback
+
+A collaborator with repository access can build the connector locally. Check out the running server's source commit first; if no download index is available, ask its administrator for that commit:
 
 ```bash
 git clone https://github.com/TH060419/gatherthread.git
 cd gatherthread
-npm install
+git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
+npm ci
 npm run build
+codex plugin marketplace add .
+codex plugin add gatherthread@gatherthread
 npm run codex:connect -- \
   --url 'http://127.0.0.1:18787' \
   --project 'PROJECT_ID' \
@@ -82,7 +90,7 @@ npm run codex:connect -- \
   --plugin-hooks
 ```
 
-Use the server URL and project ID displayed by the Web app: `https://test.gatherthread.cn` for Beta 1 testing, or `https://gatherthread.cn` for the independently deployed production service. Verify both the `v0.1.0-beta.1` plugin ref and matching connector package before using `npx`. Without the reviewed plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
+Use the server URL and project ID displayed by the Web app: `https://test.gatherthread.cn` for testing, or `https://gatherthread.cn` for production. Without reviewed and enabled plugin Hooks, Web Agent requests still work, but direct Codex Desktop turns are not uploaded.
 
 ## What synchronizes
 

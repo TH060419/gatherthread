@@ -3,6 +3,52 @@ import { normalizeLauncherEmail, projectCodexLauncherUrl } from "./domain.js?v=2
 const EMAIL_HINT_KEY = "gt-account-email-hint";
 const optionalStorage = (name) => { try { return globalThis[name]; } catch { return null; } };
 
+/** One exact, bounded same-origin source index; never an arbitrary download URL. */
+export async function currentAgentDownloadIndex(fetchResponse = globalThis.fetch) {
+  if (typeof fetchResponse !== "function") return null;
+  let reader;
+  try {
+    const response = await fetchResponse("/downloads/launcher.json", { cache: "no-store", redirect: "error",
+      credentials: "same-origin", signal: AbortSignal.timeout(2000) });
+    if (response.status !== 200 || response.redirected || !/^application\/json(?:;|$)/i.test(response.headers.get("content-type") ?? "")
+      || Number(response.headers.get("content-length")) > 2048 || !response.body) return null;
+    reader = response.body.getReader();
+    let bytes = 0, text = ""; const decoder = new TextDecoder();
+    for (;;) {
+      const chunk = await reader.read(); if (chunk.done) break;
+      bytes += chunk.value.byteLength; if (bytes > 2048) return null;
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+    const manifest = JSON.parse(text);
+    if (!manifest || Array.isArray(manifest) || Object.keys(manifest).sort().join(",") !== "index_path,source_commit"
+      || typeof manifest.source_commit !== "string" || manifest.source_commit.length !== 40 || !/^[a-f0-9]{40}$/u.test(manifest.source_commit)
+      || manifest.index_path !== `/downloads/${manifest.source_commit}/index.html`) return null;
+    return manifest.index_path;
+  } catch { return null; }
+  finally { try { await reader?.cancel(); } catch {} }
+}
+
+/** Advanced terminal setup shares the Launcher's index, not the old registry build. */
+export function mountAgentPackageDownloads({ document, localizer, fetchResponse = globalThis.fetch }) {
+  const versions = new Map();
+  const nodes = new Map(["codex", "dsh"].map(kind => {
+    const node = document.getElementById(`connect-${kind}-package-download`);
+    return [kind, { node, fallback: node?.getAttribute("href") }];
+  }));
+  const close = kind => versions.set(kind, (versions.get(kind) ?? 0) + 1);
+  return { close, clear() { for (const kind of nodes.keys()) close(kind); }, async open(kind) {
+    close(kind); const run = versions.get(kind), entry = nodes.get(kind);
+    if (!entry?.node) return;
+    entry.node.href = entry.fallback;
+    localizer.setText(entry.node, "Source-checkout instructions");
+    const index = await currentAgentDownloadIndex(fetchResponse);
+    if (run !== versions.get(kind) || !index) return;
+    entry.node.href = index;
+    localizer.setText(entry.node, "Download packages for this server");
+  } };
+}
+
 // A non-secret login hint, never a password or a credential. Bound to the
 // authenticated actor so a shared browser cannot prefill another account.
 export function createAccountEmailHint({ sessionStorage = optionalStorage("sessionStorage"),
@@ -64,27 +110,8 @@ export function mountCodexLauncher({ document, api, localizer, emailHint, contex
     const run = downloadGeneration;
     if (!download || typeof fetchResponse !== "function") return;
     download.href = releaseFallback;
-    let reader;
-    try {
-      const response = await fetchResponse("/downloads/launcher.json", { cache: "no-store", redirect: "error",
-        credentials: "same-origin", signal: AbortSignal.timeout(2000) });
-      if (response.status !== 200 || response.redirected || !/^application\/json(?:;|$)/i.test(response.headers.get("content-type") ?? "")
-        || Number(response.headers.get("content-length")) > 2048 || !response.body) return;
-      reader = response.body.getReader();
-      let bytes = 0, text = ""; const decoder = new TextDecoder();
-      for (;;) {
-        const chunk = await reader.read(); if (chunk.done) break;
-        bytes += chunk.value.byteLength; if (bytes > 2048) return;
-        text += decoder.decode(chunk.value, { stream: true });
-      }
-      text += decoder.decode();
-      const manifest = JSON.parse(text);
-      if (!manifest || Array.isArray(manifest) || Object.keys(manifest).sort().join(",") !== "index_path,source_commit"
-        || typeof manifest.source_commit !== "string" || manifest.source_commit.length !== 40 || !/^[a-f0-9]{40}$/u.test(manifest.source_commit)
-        || manifest.index_path !== `/downloads/${manifest.source_commit}/index.html`) return;
-      if (run === downloadGeneration) download.href = manifest.index_path;
-    } catch { /* Unconfigured/self-hosted instances retain the official Release link. */ }
-    finally { try { await reader?.cancel(); } catch {} }
+    const index = await currentAgentDownloadIndex(fetchResponse);
+    if (index && run === downloadGeneration) download.href = index;
   };
   const tell = value => { status.textContent = localizer.t(value); };
   const revoke = id => { void api.revokeDeviceAuthorization(id).catch(() => {}); };

@@ -29,6 +29,7 @@ export class SessionSync {
     this.contentRefreshing = false;
     this.revisionEpoch = (this.revisionEpoch ?? 0) + 1;
     this.contentRefreshPromise = null;
+    this.contentRefreshHead = 0;
     this.eventIds = new Set();
     this.buffer = new Map();
     this.socket?.close?.();
@@ -100,6 +101,8 @@ export class SessionSync {
     if (revision === this.contentRevision && this.eventIds.has(receipt.event.id)) return;
     this.contentRevision = revision;
     this.revisionEpoch++;
+    this.contentRefreshHead = Math.max(this.contentRefreshHead, this.cursor,
+      Number.isSafeInteger(receipt.event?.sequence) ? receipt.event.sequence : 0);
     // The receipt's affected IDs are deliberately bounded. Until authoritative
     // replay finishes, no cached body, quote, tool or summary may be trusted.
     this.events = this.events.map(event => ({ ...event, payload: { content: "" }, provenance: null, contentUnavailable: true }));
@@ -149,11 +152,15 @@ export class SessionSync {
     if (!this.#isCurrent(generation) || event.sessionId !== this.sessionId) return;
     const revision = Number(event.contentRevision ?? event.content_revision ?? event.payload?.content_revision ?? 0);
     if (!Number.isSafeInteger(revision) || revision < this.contentRevision) return;
+    if (this.contentRefreshing && Number.isSafeInteger(event.sequence)) this.contentRefreshHead = Math.max(this.contentRefreshHead, event.sequence);
     if (revision > this.contentRevision || (event.type === "message_deleted" && !this.eventIds.has(event.id))) {
       void this.invalidateContent({ contentRevision: revision, event });
       return;
     }
-    if (this.contentRefreshing) return;
+    if (this.contentRefreshing) {
+      // Keep only the head, never a body which may belong to a deleted snapshot.
+      return;
+    }
     if (event.sequence <= this.cursor || this.eventIds.has(event.id)) return;
     if (event.sequence === this.cursor + 1) {
       this.#apply(event);
@@ -172,7 +179,11 @@ export class SessionSync {
   }
 
   #onSocketCursor(cursor, generation) {
-    if (!this.#isCurrent(generation) || this.contentRefreshing || !Number.isInteger(cursor) || cursor <= this.cursor) return;
+    if (!this.#isCurrent(generation) || !Number.isSafeInteger(cursor) || cursor <= this.cursor) return;
+    if (this.contentRefreshing) {
+      this.contentRefreshHead = Math.max(this.contentRefreshHead, cursor);
+      return;
+    }
     this.cursor = cursor;
     this.#drainBuffer();
   }
@@ -218,7 +229,9 @@ export class SessionSync {
       }
       if (replacing) replayCursor = Math.max(replayCursor, page.nextAfterSequence);
       else this.cursor = Math.max(this.cursor, page.nextAfterSequence);
-      hasMore = page.hasMore;
+      // A socket event can arrive after this page's HTTP snapshot was captured.
+      // Authoritatively catch up to its sequence before atomically becoming live.
+      hasMore = page.hasMore || (replacing && replayCursor < this.contentRefreshHead);
       if (hasMore && (replacing ? replayCursor : this.cursor) <= cursorBeforePage) {
         throw new Error("Replay cursor did not advance.");
       }
@@ -229,6 +242,7 @@ export class SessionSync {
       this.eventIds = replacementIds;
       this.cursor = replayCursor;
       this.contentRefreshing = false;
+      this.contentRefreshHead = 0;
     }
     this.#drainBuffer(false);
     if (this.#isCurrent(generation)) this.#setPhase(this.buffer.size ? "blocked" : "live");
