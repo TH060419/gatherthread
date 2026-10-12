@@ -11,6 +11,7 @@ import type { AddressInfo } from "node:net";
 import { extname, resolve, sep, join } from "node:path";
 import {
   SetAccountAvatarInputSchema,
+  DeleteMessageInputSchema, DeleteMessageResultSchema,
   EmailLoginInputSchema, EmailAccountSessionSchema, RegistrationStatusSchema, RegistrationSentSchema, SendRegistrationInputSchema, VerifyRegistrationInputSchema,
   SendPasswordResetInputSchema, VerifyPasswordResetInputSchema, PasswordResetSentSchema,
   CreateCodexLauncherAuthorizationInputSchema, ClaimCodexLauncherAuthorizationInputSchema, CodexLauncherAuthorizationSchema,
@@ -1328,6 +1329,13 @@ export async function startCollaborationServer(
         codeRepository.repairAfterMembershipRemoval(projectId);
         closeRealtimeWithoutMembership();
         sendJson(response, 200, { data: { event } });
+        return;
+      }
+
+      if (sessionId && parts[3] === "events" && parts[4] && parts[5] === "delete" && parts.length === 6 && request.method === "POST") {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Delete messages in the signed-in browser");
+        const input = DeleteMessageInputSchema.parse(await readAuthenticatedJson(1024));
+        sendJson(response, 200, { data: DeleteMessageResultSchema.parse(service.deleteMessage(actor, sessionId, parts[4], input.idempotency_key)) });
         return;
       }
 

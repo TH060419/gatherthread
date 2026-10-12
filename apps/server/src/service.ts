@@ -413,6 +413,12 @@ export class CollaborationService {
     return this.database.readHistoryContext(actor, sessionId, view, throughSequence);
   }
 
+  deleteMessage(actor: Actor, sessionId: string, eventId: string, idempotencyKey: string) {
+    const result = this.database.deleteMessage(actor, sessionId, eventId, idempotencyKey);
+    this.publish(result.event);
+    return result;
+  }
+
   registerRuntime(actor: Actor, input: Parameters<CollaborationDatabase["registerRuntime"]>[1]): RuntimeRecord {
     if ((input.purpose ?? "execution") === "snapshot_connector") this.requireMembership(actor, input.session_id);
     else this.requireWrite(actor, input.session_id);

@@ -22,6 +22,7 @@ export const eventTypes = [
   "context_snapshot",
   "membership_change",
   "session_state_change",
+  "message_deleted",
 ] as const;
 export const eventVisibilities = ["session", "owner_only"] as const;
 export const captureFidelities = [
@@ -155,9 +156,17 @@ export const CanonicalEventSchema = z.object({
   reply_to_event_id: IdSchema.nullable(),
   payload: JsonValueSchema,
   runtime_provenance: RuntimeProvenanceSchema.nullable(),
+  deleted: z.object({ deleted_at: z.string().datetime(), reason: z.enum(["author", "request", "summary_invalidated"]) }).strict().optional(),
 });
 
 export type CanonicalEvent = z.infer<typeof CanonicalEventSchema>;
+
+export const DeleteMessageInputSchema = z.object({ idempotency_key: IdempotencyKeySchema }).strict();
+export type DeleteMessageInput = z.infer<typeof DeleteMessageInputSchema>;
+export const DeleteMessageResultSchema = z.object({ event: CanonicalEventSchema, target_event_id: IdSchema,
+  content_revision: z.number().int().nonnegative(), affected_event_ids: z.array(IdSchema).max(256), affected_truncated: z.boolean(),
+}).strict();
+export type DeleteMessageResult = z.infer<typeof DeleteMessageResultSchema>;
 
 // UTF-16 offsets match browser text selection; labels remain in the message.
 export const MessageMentionsSchema = z.array(z.object({
@@ -720,6 +729,7 @@ export const ReplayResponseSchema = z.object({
   events: z.array(CanonicalEventSchema),
   cursor: z.number().int().nonnegative(),
   has_more: z.boolean(),
+  content_revision: z.number().int().nonnegative().optional(),
 });
 
 export type ReplayResponse = z.infer<typeof ReplayResponseSchema>;
@@ -733,6 +743,7 @@ export const SessionListItemSchema = z.object({
   state: z.enum(["active", "archived"]),
   role: MembershipRoleSchema,
   current_sequence: z.number().int().nonnegative(),
+  content_revision: z.number().int().nonnegative().optional(),
   member_count: z.number().int().nonnegative().optional(),
   updated_at: z.string().datetime(),
 });

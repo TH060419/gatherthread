@@ -10,6 +10,7 @@ import type {
   CommitLocalTurnInput,
   CommitLocalTurnResult,
   CreateHistorySummaryInput,
+  DeleteMessageResult,
   HostedAgentRequestInput,
   HostedHistorySummaryInput,
   DeviceAuthorizationRecord,
@@ -75,6 +76,7 @@ export interface SessionRecord {
   title: string;
   state: "active" | "archived";
   next_sequence: number;
+  content_revision?: number;
   created_at: string;
   updated_at: string;
 }
@@ -233,6 +235,8 @@ interface EventRow {
   reply_to_event_id: string | null;
   payload_json: string;
   runtime_provenance_json: string | null;
+  deleted_at?: string | null;
+  deleted_reason?: "author" | "request" | "summary_invalidated" | null;
 }
 
 interface SessionRow extends SessionRecord {}
@@ -447,6 +451,7 @@ CREATE TABLE IF NOT EXISTS sessions (
   title TEXT NOT NULL,
   state TEXT NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'archived')),
   next_sequence INTEGER NOT NULL DEFAULT 0,
+  content_revision INTEGER NOT NULL DEFAULT 0 CHECK (content_revision >= 0),
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 ) STRICT;
@@ -480,7 +485,7 @@ CREATE TABLE IF NOT EXISTS events (
   session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
   sequence INTEGER NOT NULL,
   idempotency_key TEXT NOT NULL,
-  type TEXT NOT NULL CHECK (type IN ('human_chat','agent_request','agent_progress','agent_response','tool_call','tool_result','attachment','context_snapshot','membership_change','session_state_change')),
+  type TEXT NOT NULL CHECK (type IN ('human_chat','agent_request','agent_progress','agent_response','tool_call','tool_result','attachment','context_snapshot','membership_change','session_state_change','message_deleted')),
   actor_user_id TEXT NOT NULL REFERENCES users(id),
   actor_display_name TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -488,6 +493,8 @@ CREATE TABLE IF NOT EXISTS events (
   reply_to_event_id TEXT REFERENCES events(id),
   payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
   runtime_provenance_json TEXT CHECK (runtime_provenance_json IS NULL OR json_valid(runtime_provenance_json)),
+  deleted_at TEXT,
+  deleted_reason TEXT CHECK (deleted_reason IN ('author','request','summary_invalidated')),
   UNIQUE (session_id, sequence),
   UNIQUE (session_id, idempotency_key)
 ) STRICT;
@@ -893,6 +900,7 @@ function mapEvent(row: EventRow): CanonicalEvent {
     runtime_provenance: storedProvenance === null
       ? null
       : { ...storedProvenance, local_session_id: "private" },
+    ...(row.deleted_at && row.deleted_reason ? { deleted: { deleted_at: row.deleted_at, reason: row.deleted_reason } } : {}),
   };
 }
 
@@ -1016,6 +1024,7 @@ export class CollaborationDatabase {
     this.migrateRuntimeExecutionProfilesColumn();
     this.migrateEventActorDisplayNameColumn();
     this.migrateAgentProgressEventType();
+    this.migrateMessageDeletion();
     this.migrateCanonicalProvenancePrivacy();
     this.migrateSnapshotStorageLedger();
     this.migrateSnapshotControlRequests();
@@ -3098,6 +3107,71 @@ export class CollaborationDatabase {
     return mapEvent(row);
   }
 
+  /** Revocation of conversation content retains immutable IDs/order, not a
+   * second readable copy of the payload. All existing row readers therefore
+   * receive the same safe tombstone, including frozen-head and retry reads. */
+  deleteMessage(actor: Actor, sessionId: string, eventId: string, idempotencyKey: string): DeleteMessageResult {
+    return this.transaction(() => {
+      this.assertActiveDevice(actor);
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (session.state !== "active") throw conflict("Archived sessions do not accept message deletion");
+      const target = this.getEvent(sessionId, eventId);
+      if (target.actor_user_id !== actor.user_id) throw forbidden("Only the message author can delete it");
+      if (!["human_chat", "agent_request", "agent_response"].includes(target.type)) throw forbidden("Only conversation messages can be deleted");
+      const existing = this.sqlite.prepare("SELECT * FROM message_deletions WHERE session_id=? AND idempotency_key=?")
+        .get(sessionId, idempotencyKey) as { target_event_id: string; actor_user_id: string; deletion_event_id: string; content_revision: number } | undefined;
+      if (existing) {
+        if (existing.target_event_id !== eventId || existing.actor_user_id !== actor.user_id) throw idempotencyConflict();
+        return this.messageDeletionResult(sessionId, eventId, existing.deletion_event_id, existing.content_revision);
+      }
+      if (target.deleted) throw new ApiError(409, "message_deleted", "This message was already deleted");
+      if (this.findByIdempotencyKey(sessionId, idempotencyKey)) throw idempotencyConflict();
+      // Only Agent work follows its request. Ordinary human quotes are references
+      // and keep their independently authored body. Summary dependencies recurse.
+      const affected = this.sqlite.prepare(`WITH RECURSIVE
+        deps(child,parent) AS (
+          SELECT e.id,e.reply_to_event_id FROM events e JOIN events p ON p.id=e.reply_to_event_id
+          WHERE e.session_id=? AND p.type='agent_request' AND e.type IN ('agent_progress','agent_response','tool_call','tool_result')
+          UNION SELECT e.id,j.value FROM events e,json_each(e.payload_json,'$.history_summary.source_event_ids') j
+          WHERE e.session_id=? AND e.type='agent_request' AND json_type(e.payload_json,'$.history_summary.source_event_ids')='array'
+        ), gone(id) AS (SELECT ? UNION SELECT d.child FROM deps d JOIN gone g ON g.id=d.parent)
+        SELECT e.* FROM events e JOIN gone g ON g.id=e.id WHERE e.session_id=? ORDER BY e.sequence`)
+        .all(sessionId, sessionId, eventId, sessionId) as unknown as EventRow[];
+      const now = this.now();
+      const revision = (session.content_revision ?? 0) + 1;
+      for (const row of affected) {
+        if (row.deleted_at) continue;
+        const event = mapEvent(row);
+        const reason = row.id === eventId ? "author" : row.reply_to_event_id === eventId && target.type === "agent_request"
+          && !isHistorySummaryRequest(target) ? "request" : "summary_invalidated";
+        const digest = this.eventReceiptDigest(event);
+        this.sqlite.prepare("INSERT INTO deleted_event_receipts(event_id,input_digest) VALUES(?,?)").run(row.id, digest);
+        this.sqlite.prepare("UPDATE events SET payload_json=?,runtime_provenance_json=NULL,deleted_at=?,deleted_reason=? WHERE id=?")
+          .run('{"content":"[Message deleted]"}', now, reason, row.id);
+      }
+      this.sqlite.prepare("UPDATE sessions SET content_revision=? WHERE id=?").run(revision, sessionId);
+      const control = this.appendInsideTransaction(actor.user_id, sessionId, { idempotency_key: idempotencyKey,
+        type: "message_deleted", visibility: "session", payload: { target_event_id: eventId, content_revision: revision } }, null, "message-delete");
+      this.sqlite.prepare("INSERT INTO message_deletions(session_id,idempotency_key,actor_user_id,target_event_id,deletion_event_id,content_revision) VALUES(?,?,?,?,?,?)")
+        .run(sessionId, idempotencyKey, actor.user_id, eventId, control.id, revision);
+      return { event: control, target_event_id: eventId, content_revision: revision,
+        affected_event_ids: affected.slice(0, 256).map((row) => row.id), affected_truncated: affected.length > 256 };
+    });
+  }
+
+  private messageDeletionResult(sessionId: string, targetEventId: string, deletionEventId: string, revision: number): DeleteMessageResult {
+    // Replay is always required on a deletion notification. Retry receipts contain
+    // no original payload or unbounded ancestry list.
+    return { event: this.getEvent(sessionId, deletionEventId), target_event_id: targetEventId, content_revision: revision,
+      affected_event_ids: [targetEventId], affected_truncated: true };
+  }
+
+  private eventReceiptDigest(event: Pick<CanonicalEvent, "actor_user_id" | "type" | "payload" | "reply_to_event_id" | "visibility" | "runtime_provenance">): string {
+    return this.tokenDigest(`deleted-event-v1\u0000${stableJson({ actor_user_id: event.actor_user_id, type: event.type,
+      payload: event.payload, reply_to_event_id: event.reply_to_event_id, visibility: event.visibility,
+      runtime_id: event.runtime_provenance?.runtime_id ?? null })}`);
+  }
+
   private historySummaryPayload(sessionId: string, input: Pick<CreateHistorySummaryInput, "source_event_ids" | "instructions">) {
     // Fetch the bounded selection and its canonical relationships, not a replay
     // page. A missing or foreign-session ID must never produce a partial summary.
@@ -3214,6 +3288,7 @@ export class CollaborationDatabase {
       // The frozen canonical head includes invisible/control events; it is not
       // the sequence of the last conversational item returned by the projection.
       context.through_sequence = through;
+      context.content_revision = session.content_revision ?? 0;
       if (Buffer.byteLength(JSON.stringify(context)) > HISTORY_SUMMARY_MAX_CONTEXT_BYTES) {
         throw new HistorySummaryError("too_large", "Context view exceeds 256 KiB; use paginated canonical history");
       }
@@ -3223,6 +3298,7 @@ export class CollaborationDatabase {
 
   appendEvent(actor: Actor, sessionId: string, input: AppendEventInput, provenance: RuntimeProvenance | null): CanonicalEvent {
     this.assertActiveDevice(actor);
+    if (input.type === "message_deleted") throw forbidden("Message deletion requires its dedicated browser endpoint");
     rejectHistorySummaryMetadata(input.payload);
     return this.transaction(() => {
       const replyTarget = input.reply_to_event_id === undefined || input.reply_to_event_id === null
@@ -3612,7 +3688,7 @@ export class CollaborationDatabase {
     const cursor = hasMore
       ? lastVisibleSequence
       : session.next_sequence;
-    return { events, cursor, has_more: hasMore };
+    return { events, cursor, has_more: hasMore, content_revision: session.content_revision ?? 0 };
   }
 
   registerRuntime(actor: Actor, input: {
@@ -4843,7 +4919,7 @@ export class CollaborationDatabase {
   private migrateAgentProgressEventType(): void {
     const table = this.sqlite.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'events'")
       .get() as { sql?: string } | undefined;
-    if (table?.sql?.includes("'agent_progress'")) return;
+    if (table?.sql?.includes("'agent_progress'") && table.sql.includes("'message_deleted'")) return;
     this.sqlite.exec("PRAGMA foreign_keys = OFF");
     try {
       this.sqlite.exec(`
@@ -4853,7 +4929,7 @@ export class CollaborationDatabase {
           session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
           sequence INTEGER NOT NULL,
           idempotency_key TEXT NOT NULL,
-          type TEXT NOT NULL CHECK (type IN ('human_chat','agent_request','agent_progress','agent_response','tool_call','tool_result','attachment','context_snapshot','membership_change','session_state_change')),
+          type TEXT NOT NULL CHECK (type IN ('human_chat','agent_request','agent_progress','agent_response','tool_call','tool_result','attachment','context_snapshot','membership_change','session_state_change','message_deleted')),
           actor_user_id TEXT NOT NULL REFERENCES users(id),
           actor_display_name TEXT NOT NULL,
           created_at TEXT NOT NULL,
@@ -4897,6 +4973,22 @@ export class CollaborationDatabase {
     }
     const violations = this.sqlite.prepare("PRAGMA foreign_key_check").all();
     if (violations.length > 0) throw new Error("Agent progress migration failed foreign-key validation");
+  }
+
+  private migrateMessageDeletion(): void {
+    const sessionColumns = this.sqlite.prepare("PRAGMA table_info(sessions)").all();
+    if (!sessionColumns.some((row) => row.name === "content_revision")) this.sqlite.exec("ALTER TABLE sessions ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0 CHECK(content_revision>=0)");
+    const eventColumns = this.sqlite.prepare("PRAGMA table_info(events)").all();
+    if (!eventColumns.some((row) => row.name === "deleted_at")) this.sqlite.exec("ALTER TABLE events ADD COLUMN deleted_at TEXT");
+    if (!eventColumns.some((row) => row.name === "deleted_reason")) this.sqlite.exec("ALTER TABLE events ADD COLUMN deleted_reason TEXT CHECK(deleted_reason IN ('author','request','summary_invalidated'))");
+    this.sqlite.exec(`CREATE TABLE IF NOT EXISTS message_deletions (
+      session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+      idempotency_key TEXT NOT NULL, actor_user_id TEXT NOT NULL REFERENCES users(id),
+      target_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      deletion_event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+      content_revision INTEGER NOT NULL CHECK(content_revision>0), PRIMARY KEY(session_id,idempotency_key), UNIQUE(session_id,target_event_id)
+    ) STRICT;
+    CREATE TABLE IF NOT EXISTS deleted_event_receipts (event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,input_digest TEXT NOT NULL) STRICT;`);
   }
 
   /**
@@ -5192,6 +5284,13 @@ export class CollaborationDatabase {
     visibility: EventVisibility = event.visibility,
     runtimeId: string | null = event.runtime_provenance?.runtime_id ?? null,
   ): CanonicalEvent {
+    if (event.deleted) {
+      const receipt = this.sqlite.prepare("SELECT input_digest FROM deleted_event_receipts WHERE event_id=?").get(event.id) as { input_digest: string } | undefined;
+      const digest = this.eventReceiptDigest({ actor_user_id: actorUserId, type, payload: payload ?? event.payload,
+        reply_to_event_id: replyTo, visibility, runtime_provenance: runtimeId === null ? null : { runtime_id: runtimeId } as RuntimeProvenance });
+      if (!receipt || receipt.input_digest !== digest) throw idempotencyConflict();
+      return event;
+    }
     const matches = event.actor_user_id === actorUserId
       && event.type === type
       && event.reply_to_event_id === replyTo
@@ -5207,7 +5306,7 @@ export class CollaborationDatabase {
     sessionId: string,
     input: Omit<AppendEventInput, "visibility"> & { visibility?: EventVisibility },
     provenance: RuntimeProvenance | null,
-    lifecycleAllowance?: "pause" | "hosted-terminal",
+    lifecycleAllowance?: "pause" | "hosted-terminal" | "message-delete",
   ): CanonicalEvent {
     const session = this.requireSession(sessionId);
     const sequence = session.next_sequence + 1;
@@ -5229,7 +5328,9 @@ export class CollaborationDatabase {
     const payloadJson = JSON.stringify(event.payload);
     const provenanceJson = event.runtime_provenance === null ? null : JSON.stringify(event.runtime_provenance);
     const eventBytes = Buffer.byteLength(payloadJson) + (provenanceJson === null ? 0 : Buffer.byteLength(provenanceJson)) + 512;
-    if (eventBytes > this.maxEventBytes && lifecycleAllowance !== "hosted-terminal") throw storageQuotaExceeded("event", this.maxEventBytes);
+    if (eventBytes > this.maxEventBytes && lifecycleAllowance !== "hosted-terminal" && lifecycleAllowance !== "message-delete") throw storageQuotaExceeded("event", this.maxEventBytes);
+    if (lifecycleAllowance === "message-delete" && (eventBytes > 1024 || provenance !== null || input.type !== "message_deleted"
+      || input.reply_to_event_id !== undefined || input.visibility !== "session")) throw conflict("Invalid message deletion control");
     if (lifecycleAllowance === "pause") {
       const request = input.reply_to_event_id ? this.getEvent(sessionId, input.reply_to_event_id) : undefined;
       const claim = request === undefined ? undefined : this.requireClaimRow(request.id);
@@ -5259,7 +5360,7 @@ export class CollaborationDatabase {
     // Exactly one fixed, <=1 KiB failed terminal per accepted job. It is charged
     // normally; subsequent ordinary writes cannot use this control allowance.
     this.enforceEventStorageQuota(sessionId, actorUserId, eventBytes, lifecycleAllowance === "pause",
-      lifecycleAllowance === "hosted-terminal");
+      lifecycleAllowance === "hosted-terminal" || lifecycleAllowance === "message-delete");
     this.sqlite.prepare(`
       INSERT INTO events(id, session_id, sequence, idempotency_key, type, actor_user_id, actor_display_name, created_at, visibility, reply_to_event_id, payload_json, runtime_provenance_json)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

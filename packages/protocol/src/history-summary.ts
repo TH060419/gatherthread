@@ -18,6 +18,7 @@ export interface HistorySummaryEvent {
   payload: unknown;
   reply_to_event_id?: string | null;
   visibility?: string;
+  deleted?: unknown;
 }
 
 export interface HistorySummaryMarker {
@@ -39,6 +40,7 @@ export interface HistoryContext {
   view: "summary" | "original";
   through_sequence: number;
   items: HistoryContextItem[];
+  content_revision?: number;
 }
 
 export interface HistorySummaryVersion {
@@ -70,7 +72,7 @@ export function historySummaryText(payload: unknown): string {
 }
 
 export function historySummaryMarker(event: HistorySummaryEvent): HistorySummaryMarker | undefined {
-  if (event.type !== "agent_request") return undefined;
+  if (event.deleted || event.type !== "agent_request") return undefined;
   const marker = record(record(event.payload)?.history_summary);
   const ids = marker?.source_event_ids;
   if (marker?.version !== 1 || !Array.isArray(ids) || ids.length < 1 || ids.length > 100
@@ -94,13 +96,13 @@ function replyTo(event: HistorySummaryEvent): string | undefined {
 
 function isSuccessfulResponse(event: HistorySummaryEvent): boolean {
   const payload = record(event.payload);
-  return event.type === "agent_response" && event.visibility !== "owner_only"
+  return !event.deleted && event.type === "agent_response" && event.visibility !== "owner_only"
     && (payload?.status === undefined || payload.status === "completed" || payload.status === "succeeded")
     && payload?.error === undefined && Boolean(historySummaryText(event.payload).trim());
 }
 
 function isOrdinaryHistorySummarySource(event: HistorySummaryEvent, events: readonly HistorySummaryEvent[]): boolean {
-  if (event.visibility === "owner_only" || !historySummaryText(event.payload).trim()
+  if (event.deleted || event.visibility === "owner_only" || !historySummaryText(event.payload).trim()
     || isHistorySummaryRequest(event)) return false;
   const parent = replyTo(event);
   if (parent && events.some((candidate) => candidate.id === parent && isHistorySummaryRequest(candidate))) return false;
@@ -179,7 +181,7 @@ export function historySummaryVersions(events: readonly HistorySummaryEvent[]): 
   const completedOrdinaryRequestIds = new Set(events.filter((event) => isSuccessfulResponse(event)
     && !summaryRequestIds.has(replyTo(event) ?? "")).map((event) => replyTo(event)).filter((id): id is string => Boolean(id)));
   function ordinarySource(event: HistorySummaryEvent): boolean {
-    if (event.visibility === "owner_only" || !historySummaryText(event.payload).trim()
+    if (event.deleted || event.visibility === "owner_only" || !historySummaryText(event.payload).trim()
       || summaryRequestIds.has(event.id) || summaryRequestIds.has(replyTo(event) ?? "")) return false;
     if (event.type === "human_chat") return true;
     if (event.type === "agent_response") return isSuccessfulResponse(event);
@@ -282,7 +284,7 @@ export function buildHistoryContext(events: readonly HistorySummaryEvent[], view
       }
       continue;
     }
-    if (requestIds.has(event.id) || requestIds.has(replyTo(event) ?? "") || event.visibility === "owner_only"
+    if (event.deleted || requestIds.has(event.id) || requestIds.has(replyTo(event) ?? "") || event.visibility === "owner_only"
       || !["human_chat", "agent_request", "agent_response"].includes(event.type)) continue;
     const content = historySummaryText(event.payload);
     if (content.trim()) items.push({ kind: "original", event_id: event.id, sequence: event.sequence,
