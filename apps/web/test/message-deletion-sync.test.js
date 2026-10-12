@@ -84,3 +84,81 @@ test("a failed obsolete replay cannot block the newer deletion refresh", async (
   assert.equal(sync.snapshot().phase, "live");
   assert.equal(sync.snapshot().contentRevision, 1);
 });
+
+for (const signal of ["event", "cursor"]) test(`deletion replay catches up a current ${signal} received after its snapshot was captured`, async () => {
+  const api = new Api(), sync = new SessionSync(api); await sync.connect("s1");
+  api.revision = 1; api.events = [deleted(event(1), 1), marker(2, 1)]; api.defer = true;
+  const captured = structuredClone(api.events);
+  api.socket.onEvent(marker(2, 1));
+  const firstReplay = api.pending.shift();
+  api.events.push(event(3, 1));
+  if (signal === "event") api.socket.onEvent(event(3, 1));
+  else api.socket.onCursor(3);
+  assert.equal(sync.snapshot().events.some(item => item.id === "e-3"), false,
+    "refresh retains only the head sequence, not an unverified body");
+  firstReplay({ events: captured, contentRevision: 1, nextAfterSequence: 2, hasMore: false });
+  await flush();
+  assert.equal(sync.snapshot().phase, "recovering");
+  assert.equal(api.calls.at(-1), 2, "catch up from the authoritative snapshot before declaring live");
+  api.pending.shift()({ events: [structuredClone(event(3, 1))], contentRevision: 1, nextAfterSequence: 3, hasMore: false });
+  await flush();
+  assert.equal(sync.snapshot().phase, "live");
+  assert.equal(sync.snapshot().cursor, 3);
+  assert.equal(sync.snapshot().events.find(item => item.id === "e-3")?.payload.content, "private fixture 3");
+  assert.equal(sync.snapshot().events.find(item => item.id === "e-1")?.deleted.reason, "author");
+});
+
+test("consecutive deletions keep the latest observed head without accepting either stale body", async () => {
+  const api = new Api(), sync = new SessionSync(api); await sync.connect("s1");
+  api.defer = true; api.socket.onEvent(marker(2, 1)); const first = api.pending.shift();
+  api.socket.onEvent(event(3, 1));
+  api.socket.onEvent(marker(4, 2)); const second = api.pending.shift();
+  api.socket.onEvent(event(5, 1)); // Already obsolete despite its higher sequence.
+  api.socket.onEvent(event(5, 2));
+  first({ events: [deleted(event(1), 1), marker(2, 1), event(3, 1)], contentRevision: 1, nextAfterSequence: 3, hasMore: false });
+  second({ events: [deleted(event(1), 2), marker(2, 2), deleted(event(3), 2), marker(4, 2)],
+    contentRevision: 2, nextAfterSequence: 4, hasMore: false });
+  await flush();
+  assert.equal(api.calls.at(-1), 4);
+  assert.equal(sync.snapshot().phase, "recovering");
+  api.pending.shift()({ events: [event(5, 2)], contentRevision: 2, nextAfterSequence: 5, hasMore: false });
+  await flush();
+  assert.equal(sync.snapshot().cursor, 5);
+  assert.equal(sync.snapshot().contentRevision, 2);
+  assert.equal(sync.snapshot().events.find(item => item.id === "e-3")?.deleted.reason, "author");
+});
+
+test("a failed deletion catch-up stays scrubbed and retry retrieves the missed head", async () => {
+  const api = new Api(), sync = new SessionSync(api); await sync.connect("s1");
+  api.revision = 1; api.events = [deleted(event(1), 1), marker(2, 1)]; api.defer = true;
+  api.socket.onEvent(marker(2, 1)); const first = api.pending.shift();
+  api.socket.onEvent(event(3, 1)); api.events.push(event(3, 1));
+  const originalReplay = api.replayEvents.bind(api);
+  api.replayEvents = (sessionId, input) => input.afterSequence === 2
+    ? Promise.reject(new Error("fixture catch-up disconnected")) : originalReplay(sessionId, input);
+  first({ events: structuredClone(api.events.slice(0, 2)), contentRevision: 1, nextAfterSequence: 2, hasMore: false });
+  await flush();
+  assert.equal(sync.snapshot().phase, "blocked");
+  assert.equal(sync.snapshot().contentRefreshing, true);
+  assert.equal(JSON.stringify(sync.snapshot()).includes("private fixture"), false);
+  api.defer = false; api.replayEvents = originalReplay;
+  await sync.retry();
+  assert.equal(sync.snapshot().phase, "live");
+  assert.equal(sync.snapshot().cursor, 3);
+  assert.equal(sync.snapshot().events.find(item => item.id === "e-1")?.deleted.reason, "author");
+});
+
+test("switching account or session while deletion catch-up is pending discards its numeric head", async () => {
+  const api = new Api(), sync = new SessionSync(api); await sync.connect("s1");
+  api.defer = true; api.socket.onEvent(marker(2, 1)); const old = api.pending.shift();
+  api.socket.onEvent(event(99, 1));
+  api.defer = false; api.revision = 0; api.events = [{ ...event(1), sessionId: "s2" }];
+  await sync.connect("s2");
+  old({ events: [deleted(event(1), 1), marker(2, 1)], contentRevision: 1, nextAfterSequence: 2, hasMore: false });
+  await flush();
+  assert.equal(sync.snapshot().sessionId, "s2");
+  assert.equal(sync.snapshot().cursor, 1);
+  assert.equal(sync.snapshot().contentRevision, 0);
+  assert.equal(sync.snapshot().phase, "live");
+  assert.equal(api.calls.at(-1), 0);
+});
