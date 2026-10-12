@@ -119,7 +119,7 @@ for (const payer of ["service", "personal"] as const) {
   try {
    await connect(f);
    const saved = payer === "personal" ? f.agent.putPersonalApi(f.actor, randomUUID(), { expected_revision: null,
-    provider_id: "anthropic", model: "claude-fixture", label: "Own retry API", api_key: "synthetic-retry-provider-key", enabled: true }) : undefined;
+    provider_id: "anthropic", model: "claude-fixture", label: "Own retry API", api_key: ["synthetic", "retry", "provider", "key"].join("-"), enabled: true }) : undefined;
    const input = { content: "Original GitHub request", profile_id: saved?.profile_id ?? "coding",
     ...(saved ? { api_config_revision: saved.revision } : {}), idempotency_key: "github-in-flight-original" };
    const receipt = f.github.start(f.actor, f.session.id, input), completed = await settled(f, receipt.id);

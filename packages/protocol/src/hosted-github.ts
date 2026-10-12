@@ -15,6 +15,7 @@ export const HostedGithubTaskInputSchema = z.object({
   continue_task_id: z.string().regex(/^gh-task-[a-f0-9]{32}$/u).optional(),
   reply_to_event_id: z.string().min(1).max(128).nullable().optional(),
   api_config_revision: PersonalCloudRevisionSchema,
+  content_revision: z.number().int().nonnegative().optional(),
 }).strict().refine(hasValidPersonalCloudRevision, { message: "Personal cloud profiles require their exact configuration revision" });
 export const HostedGithubCompleteInputSchema = z.object({
   state: z.string().regex(/^[A-Za-z0-9_-]{43}$/u), code: z.string().min(1).max(500),

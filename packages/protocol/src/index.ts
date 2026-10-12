@@ -217,6 +217,7 @@ export const HostedAgentRequestInputSchema = z.object({
   reply_to_event_id: IdSchema.nullable().optional(),
   github_task_id: z.string().regex(/^gh-task-[a-f0-9]{32}$/u).optional(),
   api_config_revision: PersonalCloudRevisionSchema,
+  content_revision: z.number().int().nonnegative().optional(),
 }).strict().refine(hasValidPersonalCloudRevision, { message: "Personal cloud profiles require their exact configuration revision" });
 export type HostedAgentRequestInput = z.infer<typeof HostedAgentRequestInputSchema>;
 

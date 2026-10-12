@@ -414,6 +414,7 @@ export class HostedGithub {
    if (count.n >= 10 || all.n >= 64) throw new ApiError(429, "github_task_storage", "Cloud task storage is full; delete an old task first");
    const reserved = this.agent.reserveRepository(actor, sessionId, { content: input.content, profile_id: input.profile_id,
      ...(input.api_config_revision ? { api_config_revision: input.api_config_revision } : {}),
+     ...(input.content_revision === undefined ? {} : { content_revision: input.content_revision }),
      include_code: false, github_task_id: id, idempotency_key: input.idempotency_key,
      reply_to_event_id: input.reply_to_event_id ?? null }, (event) => {
        this.sqlite.prepare(`INSERT INTO hosted_github_tasks(id,request_event_id,user_id,device_id,session_id,project_id,

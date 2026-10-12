@@ -3555,6 +3555,9 @@ export class CollaborationDatabase {
     }
     return historySummaryOperation(() => this.transaction(() => {
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (input.content_revision !== undefined && input.content_revision !== (session.content_revision ?? 0)) {
+        throw new ApiError(409, "context_changed", "Shared history changed; start a new request with current history");
+      }
       for (const endpoint of endpoints) {
         if (endpoint.personal && (endpoint.personal.userId !== actor.user_id || input.api_config_revision !== endpoint.personal.configRevision
           || !this.sqlite.prepare("SELECT 1 FROM cloud_api_configs WHERE id=? AND user_id=? AND revision=? AND enabled=1")
