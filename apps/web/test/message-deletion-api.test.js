@@ -81,3 +81,21 @@ test("mock refuses a fresh quote of a deleted source without blocking an accepte
   assert.equal((await api.appendHumanChat("session-orbit", { content: "existing quote", replyTo: source.id,
     idempotencyKey: "quote-existing-0001" })).id, accepted.id);
 });
+
+test("mock source deletion invalidates later generated work without deleting independent human requests", async () => {
+  const api = new MockCollaborationApi({ latency: 0 }), sessionId = "session-orbit";
+  const source = await api.appendHumanChat(sessionId, { content: "remove later work", idempotencyKey: "later-source-0001" });
+  const events = api.events.get(sessionId), actor = api.currentUser;
+  const add = (id, type, content, replyTo = null) => events.push({ id, type, sessionId, sequence: events.at(-1).sequence + 1,
+    createdAt: wire.created_at, actor, visibility: "session", replyTo, payload: { content } });
+  add("later-request", "agent_request", "Human request remains");
+  add("later-response", "agent_response", "Old derived work disappears", "later-request");
+  add("pending-request", "agent_request", "Pending human request remains");
+  add("pending-work", "agent_progress", "Old pending work disappears", "pending-request");
+  await api.deleteMessage(sessionId, source.id, { idempotencyKey: "later-delete-0001" });
+  const replay = await api.replayEvents(sessionId, { afterSequence: 0 });
+  assert.equal(replay.events.find(item => item.id === "later-request").deleted, undefined);
+  assert.equal(replay.events.find(item => item.id === "later-response").deleted?.reason, "request");
+  assert.equal(replay.events.find(item => item.id === "pending-work").deleted?.reason, "request");
+  assert.ok(replay.events.some(item => item.replyTo === "pending-request" && item.payload?.error?.code === "context_changed"));
+});

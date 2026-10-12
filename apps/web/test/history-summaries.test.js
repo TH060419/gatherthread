@@ -12,6 +12,17 @@ const request = (id, sequence, ids) => event(id, sequence, "agent_request", {
 });
 const response = (id, sequence, replyTo, extra = {}) => event(id, sequence, "agent_response", { replyTo, ...extra });
 
+test("deleting a summary reply never leaves a pending version or blocks a fresh summary of surviving originals", () => {
+  const original = event("a", 1), summary = request("summary", 2, ["a"]);
+  const gone = response("summary-answer", 3, "summary", { payload: { content: "[Message deleted]" },
+    deleted: { deleted_at: "2026-10-12T00:00:00Z", reason: "author" } });
+  const timeline = historySummaryTimeline([original, summary, gone]);
+  assert.equal(timeline.versions.length, 0);
+  assert.equal(timeline.hidden.has(summary.id), true, "generated summary prompt stays hidden");
+  assert.equal(timeline.hidden.has(gone.id), false, "the reply's harmless deletion placeholder remains visible");
+  assert.deepEqual(eligibleHistorySources([original, summary, gone]).map(item => item.id), ["a"]);
+});
+
 test("only public completed messages and summaries are selectable, never generated prompts or progress", () => {
   const events = [event("a", 1), event("r", 2, "agent_request"), response("answer", 3, "r"),
     event("pending", 4, "agent_request"), event("failed-request", 5, "agent_request"),
