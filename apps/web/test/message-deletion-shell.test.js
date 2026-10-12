@@ -1,0 +1,20 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { translateUiText } from "../src/i18n.js";
+test("workspace wires deletion into message actions and history revision cache invalidation", async () => {
+  const source = await readFile(new URL("../src/main.js", import.meta.url), "utf8");
+  assert.match(source, /mountMessageDeletion/);
+  assert.match(source, /deletionAction:\s*messageDeletion\.action/);
+  assert.match(source, /messageActions\.invalidateContent\(/);
+  assert.match(source, /messageActions\.reconcileContent\(/);
+  assert.match(source, /contentRevision:\s*state\.sync\.contentRevision/);
+  assert.match(source, /localizer\.t\("Message deleted"\)/);
+});
+test("deletion labels and privacy confirmation are bilingual", () => {
+  for (const text of ["Delete my message", "Message deleted", "Original message deleted", "Refreshing history…",
+    "Delete this message? It will be excluded from future GatherThread Agent context. Existing independent local or provider copies are not erased.",
+    "Delete this request, its linked replies and work? It will be excluded from future GatherThread Agent context. Existing independent local or provider copies are not erased."]) {
+    assert.notEqual(translateUiText(text, "zh-CN"), text);
+  }
+});
