@@ -38,7 +38,10 @@ try {
   assert.deepEqual(manifest.dependencies ?? {}, {});
   const executable = path.join(installDirectory, "node_modules", ".bin", "gatherthread-codex-connect");
   const help = await runExecutable(executable, ["--help"]);
-  assert.match(help.stdout, /@gatherthread\/codex-connect@0\.1\.0-beta\.1/);
+  assert.match(help.stdout, /npx --yes --package '\/absolute\/path\/to\/LOCAL_CODEX_CONNECTOR\.tgz' gatherthread-codex-connect/);
+  assert.doesNotMatch(help.stdout, /npx --yes @gatherthread\/codex-connect@/);
+  assert.match(help.stdout, /enter your password only in the Launcher/);
+  assert.match(help.stdout, /Paste that grant into the hidden terminal prompt within ten minutes/);
 
   const initialized = await runExecutable(executable, ["mcp"], {
     input: [
@@ -58,6 +61,11 @@ try {
   const toolNames = mcpResponses[1].result.tools.map(({ name }) => name);
   assert.ok(toolNames.includes("collaboration_list_projects"));
   assert.ok(!toolNames.includes("collaboration_register_runtime"));
+  const requestTool = mcpResponses[1].result.tools.find(({ name }) => name === "collaboration_request_agent");
+  assert.equal(requestTool.inputSchema.properties.content_revision.type, "integer");
+  assert.equal(requestTool.inputSchema.properties.content_revision.minimum, 0);
+  assert.equal(requestTool.inputSchema.additionalProperties, false);
+  assert.doesNotMatch(`${initialized.stdout}\n${initialized.stderr}`, /gta_hostile-ambient-test-only/);
 
   if (process.platform !== "win32") {
     await verifyPackedMcpRelay(executable, installDirectory);
