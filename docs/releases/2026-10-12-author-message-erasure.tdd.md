@@ -1,6 +1,6 @@
 # Author-message erasure: review evidence
 
-Status: integration and independent review pending. This note separates source/fixture results from native GUI, live providers and deployment.
+This note records integrated source/fixture evidence. Exact-head release gates, independent final review, CI and deployment receipts are reported separately in the PR and final delivery; native GUI and live-provider coverage are not inferred from fixtures.
 
 ## Scope and authority
 
@@ -14,11 +14,27 @@ Future GatherThread-derived model context excludes erased content and invalidate
 - Native adapters: RED `cda7ab5` exposes three compacted/summary-free context paths; RED `aefdb78` exposes replacement registry and teardown races. GREEN `5d49e75` passes 387 focused tests: 381 pass, six existing skips. Isolated public DSH 0.1.2-rc.1 Session/Agent/file-tool checks pass 17/17 without a model or real account. Codex uses a controlled stdio App Server fixture, not a real Desktop GUI or model.
 - Web: RED `394366c`, `8058de3`, `aecf799`, `466226a` cover generated history, update guidance, late private-cache responses and focus. GREEN `4ac70a1` and browser-strengthening `379c875` pass 470 Web tests plus three build-output checks. Documentation RED checkpoints `9efaadd`, `e34824b`, `e847689` become GREEN `6773e29`: 475 Web tests plus three output checks pass.
 
+## Integrated history and personal-API fences
+
+Merge checkpoint `714e51a` integrates main `7c9bf38` without dropping the account-private API or launcher features and pins three genuine failing regressions: stale private retry selection, stale hosted idempotency replay and a deleted quote accepted as a new cloud task. Minimal GREEN `0370ff1` adds the missing history checks while preserving canonical tombstone append retries and the existing behavior for completed private GitHub results after a personal-API configuration change.
+
+The same 146 personal-API/deletion/GitHub tests pass with no skips. All protocol, adapter, bridge, DSH, MCP and server tests then pass: 1,084 total, 1,078 pass, six existing skips, zero failures. TypeScript, reference checks, secret checks and diff checks pass. These are integrated source results, not final-head CI, live-provider or deployment evidence.
+
+Independent review then exposed same-request streamed content preceding a deleted final answer (`b648778`), delayed private selection and dispatch races (`9122fe0`, `6874996`, `c735c5b`), and legacy unpinned requests plus a server-summary capture race (`f3c1f14`). Server GREEN `b412623`, `5cc379b` and `fd2cd55` scrub linked output from the earliest affected boundary and fence accepting transactions before event creation, slots, cooldown or quota changes. After a deletion, missing as well as stale cloud history pins are refused; pristine revision-zero compatibility and correctly pinned new requests remain supported. Server-side summaries capture an authoritative revision without accepting caller-supplied summary text.
+
+The ten last backend RED cases pass on `fd2cd55`; 157 personal-API/deletion/GitHub cases pass with no skips. The integrated protocol, adapter, bridge, DSH, MCP and server suite reports 1,096 total, 1,090 pass, six existing skips and zero failures.
+
+The Standards follow-up also reproduced old or missing history pins being accepted by the ordinary native `agent_request` entry (`5389db8`). GREEN `4e879d7` checks these pins inside the accepting transaction and exposes the captured revision on the MCP request tool. It never fetches a new revision to relabel an old body. Seven actual HTTP/Cookie, Bearer and MCP RED cases become GREEN; 206 focused cases pass. The integrated suite reports 1,103 total, 1,097 pass, six existing skips and zero failures. Pristine-session compatibility, ordinary chat and same-key safe tombstone replay remain covered.
+
 ## Real interaction fixtures
 
 Six ordinary click/tap matrices cover Chrome and WebKit desktop, phone and tablet in both languages. The fixture uses actual loopback HTTP, HttpOnly browser sessions, SQLite and WebSockets; no forced click or Enter-only bypass substitutes for pointer hit testing.
 
 Covered: author versus another member/viewer/foreign Solo, confirmation and cancel, uncertain 503 retry with the same key and one mutation, late HTTP/WebSocket responses not resurrecting content, nested summary/quote/mention invalidation, current draft/reading anchor/focus, request-linked outputs and reply-only deletion. WebKit results do not claim native Safari GUI coverage. Fixture identifiers and content are synthetic.
+
+Final Web GREEN `40f830d` follows genuine RED checkpoints `9122fe0`, `c735c5b`, `4fbfe67`, `8d82c26`, `cd50033` and `7c2f9ad`: 534 Web tests and three build-output checks pass. The six deletion matrices also capture a fresh replay snapshot, hold its response, deliver a peer message through the real WebSocket and verify that the new message appears without another delivery or reconnect. Three private-API/retry and three GitHub matrices pass. Chrome and WebKit each pass four desktop Launcher flows, two terminal fallback flows and phone/tablet regressions with ordinary pointer interaction.
+
+The install guide no longer advertises the immutable old registry/tag as the current deletion-aware client. Launchers and advanced local installs use one bounded same-origin source index; source-checkout Hooks remain distinct from the connector TGZ. `agent-local-package-install.mjs` verifies the exact public DSH CLI **0.1.2-rc.1** accepting the local TGZ twice without duplicate profile layers, and the real Codex TGZ via `npm exec --help`, without a model or actual account. The separate older full DSH harness test reached installation/pairing but failed on a later obsolete locator; it is not reported as a passing full harness test.
 
 ## Storage and delivery boundary
 
