@@ -150,3 +150,33 @@ test("stale native outboxes and old connectors cannot publish or execute after d
       (error: unknown) => ["connector_update_required", "context_changed"].includes((error as { code?: string }).code ?? ""));
   } finally { await f.close(); }
 });
+
+test("a deletion erases in-flight work derived from old context and invalidates frozen native imports", async () => {
+  const f = await fixture();
+  try {
+    const source = f.chat("DERIVED_OLD_CONTEXT_SECRET");
+    const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "delete-work-runtime", session_id: f.session.id,
+      device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "work-native", capture_fidelity: "harness_transcript", context_deletion_version: 1 });
+    const snapshotRuntime = f.service.registerRuntime(f.owner.actor, { runtime_id: "delete-import-runtime", session_id: f.session.id,
+      device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "import-native", capture_fidelity: "canonical_history", purpose: "snapshot_connector", context_deletion_version: 1 });
+    const completed = f.database.createSnapshotRequest(f.owner.actor, f.session.id);
+    f.database.claimSnapshotRequest(f.owner.actor, completed.id, snapshotRuntime.id);
+    f.database.completeSnapshotRequest(f.owner.actor, completed.id, snapshotRuntime.id, { imported_text: "DERIVED_OLD_CONTEXT_SECRET" });
+    const pending = f.database.createSnapshotRequest(f.owner.actor, f.session.id);
+    const request = f.service.appendEvent(f.owner.actor, f.session.id, { type: "agent_request", visibility: "session", idempotency_key: randomUUID(),
+      payload: { content: "Use shared history", execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: runtime.id } } });
+    f.service.claimAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id);
+    const progress = f.service.appendAgentProgress(f.owner.actor, f.session.id, request.id, runtime.id, randomUUID(), { content: "DERIVED_OLD_CONTEXT_SECRET" }, 1);
+    await f.remove(source);
+    const replay = f.service.replay(f.owner.actor, f.session.id, 0, 100);
+    assert.doesNotMatch(JSON.stringify(replay), /DERIVED_OLD_CONTEXT_SECRET/);
+    assert.ok(replay.events.find((event) => event.id === progress.id)?.deleted);
+    assert.doesNotMatch(JSON.stringify(f.database.getSnapshotRequest(f.owner.actor, completed.id)), /DERIVED_OLD_CONTEXT_SECRET/);
+    assert.equal(f.database.getSnapshotRequest(f.owner.actor, pending.id).failure?.code, "context_changed");
+    assert.throws(() => f.database.claimSnapshotRequest(f.owner.actor, pending.id, snapshotRuntime.id),
+      (error: unknown) => (error as { code?: string }).code === "context_changed");
+    assert.throws(() => f.service.appendEvent(f.owner.actor, f.session.id, { type: "tool_result", visibility: "session", idempotency_key: randomUUID(),
+      reply_to_event_id: request.id, runtime_id: runtime.id, claim_attempt: 1, payload: { content: "LATE_TOOL_SECRET" } }),
+      (error: unknown) => (error as { code?: string }).code === "context_changed");
+  } finally { await f.close(); }
+});
