@@ -115,12 +115,14 @@ unixTest("deleted history makes private GitHub answers, source snapshots, contin
   assert.throws(() => f.github.view(f.actor, task.id), changed);
   assert.throws(() => f.github.start(f.actor, f.session.id, { ...input, idempotency_key: "github-delete-continue", continue_task_id: task.id }), changed);
   await assert.rejects(f.github.publish(f.actor, task.id, { expected_revision: task.revision!, title: "Old result", body: "Old result" }), changed);
-  assert.deepEqual(f.github.list(f.actor, f.session.project_id), []);
   assert.equal(f.calls.length, calls); assert.equal(f.runs(), runs);
   const row = f.db.sqlite.prepare("SELECT input_json,initial_files,starting_files,result_files,answer,revision,error_code FROM hosted_github_tasks WHERE id=?").get(task.id)!;
   assert.equal(JSON.parse(String(row.input_json)).content, "[Message deleted]");
   for (const field of ["initial_files", "starting_files", "result_files", "answer", "revision"]) assert.equal(row[field], null);
   assert.equal(row.error_code, "context_changed");
+  assert.deepEqual(f.github.list(f.actor, f.session.project_id), []);
+  assert.equal(f.db.sqlite.prepare("SELECT count(*) AS n FROM hosted_github_tasks WHERE id=?").get(task.id)?.n, 0,
+   "already-stopped erased task metadata must not occupy invisible, unremovable task-storage quota");
  } finally { await f.close(); other.close(); }
 });
 
