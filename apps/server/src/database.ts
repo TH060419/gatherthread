@@ -3568,6 +3568,7 @@ export class CollaborationDatabase {
       if (replyId !== null) {
         const target = this.getEvent(sessionId, replyId);
         if (target.visibility !== "session") throw forbidden("Cloud Agent cannot quote private history");
+        if (target.deleted) throw new ApiError(409, "message_deleted", "Deleted messages cannot be quoted");
       }
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
       if (existing) {
@@ -3575,6 +3576,7 @@ export class CollaborationDatabase {
         if (!this.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=?").get(event.id)) {
           throw idempotencyConflict("The key belongs to another Agent request");
         }
+        this.assertRequestContextCurrent(sessionId, event.id);
         const pin = this.sqlite.prepare("SELECT user_id,config_id,config_revision FROM cloud_api_run_bindings WHERE request_event_id=?")
           .get(event.id) as { user_id: string; config_id: string; config_revision: string } | undefined;
         const personal = endpoints[0]!.personal;

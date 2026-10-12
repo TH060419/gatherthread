@@ -362,6 +362,7 @@ export class HostedAgent {
     const job = database.sqlite.prepare("SELECT profile_id,provider,model FROM hosted_agent_runs WHERE request_event_id=? AND session_id=? AND user_id=?")
       .get(requestId, sessionId, actor.user_id) as { profile_id: string; provider: string; model: string } | undefined;
     if (!job) throw new ApiError(404, "hosted_request_unavailable", "Cloud Agent request is unavailable");
+    database.assertRequestContextCurrent(sessionId, requestId);
     const event = database.getEvent(sessionId, requestId);
     const payload = event.payload as { profile_id?: unknown; execution_profile?: { provider?: unknown; model?: unknown } };
     if (event.type !== "agent_request" || event.actor_user_id !== actor.user_id || payload.profile_id !== job.profile_id
