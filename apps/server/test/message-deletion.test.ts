@@ -11,7 +11,7 @@ import { startCollaborationServer } from "../src/server.js";
 import { browserSessionFixture } from "./auth-fixtures.js";
 import { CollaborationDatabase } from "../src/database.js";
 import { CollaborationService } from "../src/service.js";
-import { HttpCollaborationClient } from "@gatherthread/bridge";
+import { HttpCollaborationClient, LocalBridge, MemoryCursorStore, type CanonicalEvent as BridgeCanonicalEvent } from "@gatherthread/bridge";
 import { CollaborationMcpService } from "@gatherthread/mcp";
 
 async function fixture() {
@@ -99,6 +99,86 @@ test("request deletion removes linked work and replies; response deletion keeps 
     assert.equal((await f.remove(secondResponse)).status, 200);
     const context = await f.request(`/v1/sessions/${f.session.id}/context`);
     assert.match(JSON.stringify(context), /KEEP_REQUEST/); assert.doesNotMatch(JSON.stringify(context), /DELETE_ONLY_REPLY/);
+  } finally { await f.close(); }
+});
+
+test("reply-only deletion erases same-request streams and tools from SQL, old heads, MCP and canonical projection", async () => {
+  const f = await fixture();
+  try {
+    const sentinel = "REPLY_DELETE_PRIVATE_BODY";
+    const runtime = f.service.registerRuntime(f.owner.actor, { runtime_id: "reply-delete-runtime", session_id: f.session.id,
+      device_id: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "reply-delete-native",
+      capture_fidelity: "harness_transcript", context_deletion_version: 1 });
+    const makeRequest = (content: string, identity = f.owner, selectedRuntime = runtime) => f.service.appendEvent(identity.actor, f.session.id, { type: "agent_request",
+      visibility: "session", idempotency_key: randomUUID(), payload: { content,
+        execution_profile: { harness: "codex", provider: "test", model: "test", runtime_id: selectedRuntime.id } } });
+    const preceding = makeRequest("EARLIER_REQUEST_SURVIVES");
+    f.service.claimAgentRequest(f.owner.actor, f.session.id, preceding.id, runtime.id);
+    const earlierAnswer = f.service.completeAgentRequest(f.owner.actor, f.session.id, preceding.id, runtime.id, randomUUID(),
+      { content: "EARLIER_INDEPENDENT_ANSWER_SURVIVES" }, undefined, undefined, 1);
+    const request = makeRequest("ORIGINAL_QUESTION_SURVIVES");
+    f.service.claimAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id);
+    const streams = ["answer", "reasoning", "tool", "plan"].map((kind) => f.service.appendAgentProgress(f.owner.actor,
+      f.session.id, request.id, runtime.id, randomUUID(), { content: sentinel, phase: "stream", stream_id: randomUUID(),
+        stream_mode: "snapshot", stream_kind: kind, stream_revision: 1, stream_state: "completed",
+        ...(kind === "plan" ? { plan: [{ step: sentinel, status: "completed" }] } : {}) }, undefined, undefined, 1));
+    const tools = ["tool_call", "tool_result"].map((type) => f.service.appendEvent(f.owner.actor, f.session.id,
+      { type: type as "tool_call" | "tool_result", visibility: "session", idempotency_key: randomUUID(), runtime_id: runtime.id,
+        claim_attempt: 1, reply_to_event_id: request.id, payload: { content: sentinel } }));
+    const snapshot = f.service.appendEvent(f.owner.actor, f.session.id, { type: "context_snapshot", visibility: "session",
+      idempotency_key: randomUUID(), runtime_id: runtime.id, payload: { capture_fidelity: "canonical_history",
+        covers_through_sequence: tools.at(-1)!.sequence, content: sentinel } });
+    const peerRuntime = f.service.registerRuntime(f.member.actor, { runtime_id: "reply-delete-peer-runtime", session_id: f.session.id,
+      device_id: f.member.actor.device_id, harness: "codex", provider: "test", model: "test", local_session_id: "reply-delete-peer-native",
+      capture_fidelity: "harness_transcript", context_deletion_version: 1 });
+    const copied = makeRequest("QUESTION_BETWEEN_STREAM_AND_FINAL_SURVIVES", f.member, peerRuntime);
+    f.service.claimAgentRequest(f.member.actor, f.session.id, copied.id, peerRuntime.id);
+    const copiedAnswer = f.service.completeAgentRequest(f.member.actor, f.session.id, copied.id, peerRuntime.id, randomUUID(),
+      { content: sentinel }, undefined, undefined, 1);
+    const answer = f.service.completeAgentRequest(f.owner.actor, f.session.id, request.id, runtime.id, randomUUID(),
+      { content: sentinel }, undefined, undefined, 1);
+    const chat = f.chat("OTHER_MEMBER_CHAT_SURVIVES", f.member);
+    assert.match(JSON.stringify(f.service.replay(f.owner.actor, f.session.id, 0, 100)), new RegExp(sentinel));
+    assert.ok(streams.every((event) => event.sequence < answer.sequence));
+    assert.ok(snapshot.sequence < answer.sequence && copied.sequence < answer.sequence);
+    const deletionKey = randomUUID(); const removed = await f.remove(answer, f.owner, deletionKey);
+    assert.equal(removed.status, 200);
+    for (const output of [...streams, ...tools, snapshot, copiedAnswer, answer]) {
+      const row = f.database.sqlite.prepare("SELECT deleted_at,payload_json,runtime_provenance_json FROM events WHERE id=?").get(output.id)!;
+      assert.ok(row.deleted_at, `${output.type} #${output.sequence} must not retain a readable reply copy`);
+      assert.equal(row.payload_json, '{"content":"[Message deleted]"}'); assert.equal(row.runtime_provenance_json, null);
+    }
+    for (const independent of [preceding, earlierAnswer, request, copied, chat]) {
+      assert.equal(f.database.getEvent(f.session.id, independent.id).deleted, undefined);
+      assert.deepEqual(f.database.getEvent(f.session.id, independent.id).payload, independent.payload);
+    }
+    const replay = await f.request(`/v1/sessions/${f.session.id}/events`);
+    assert.doesNotMatch(JSON.stringify(replay), new RegExp(sentinel));
+    const envelopes = replay.body.data?.events as CanonicalEvent[];
+    assert.deepEqual(envelopes.map(event => event.sequence), Array.from({ length: envelopes.at(-1)!.sequence }, (_, index) => index + 1));
+    for (const view of ["original", "summary"]) {
+      const context = await f.request(`/v1/sessions/${f.session.id}/context?view=${view}&through_sequence=${snapshot.sequence}`);
+      assert.doesNotMatch(JSON.stringify(context), new RegExp(sentinel));
+      assert.match(JSON.stringify(context), /ORIGINAL_QUESTION_SURVIVES|EARLIER_INDEPENDENT_ANSWER_SURVIVES/);
+    }
+    const api = new HttpCollaborationClient({ baseUrl: `${f.origin}/v1`, bearerToken: f.member.token });
+    const mcp = new CollaborationMcpService({ api });
+    for (const name of ["collaboration_read_context", "collaboration_read_history"]) {
+      const result = await mcp.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: { session_id: f.session.id } } });
+      assert.ok(result && "result" in result); assert.doesNotMatch(JSON.stringify(result), new RegExp(sentinel));
+      assert.match(JSON.stringify(result), /ORIGINAL_QUESTION_SURVIVES/);
+    }
+    const projected: BridgeCanonicalEvent[] = [];
+    const bridge = new LocalBridge({ api: new HttpCollaborationClient({ baseUrl: `${f.origin}/v1`, bearerToken: f.owner.token }),
+      cursorStore: new MemoryCursorStore(), transcriptRoots: {}, runtime: { runtimeId: "reply-delete-new-projection",
+        sessionId: f.session.id, deviceId: f.owner.actor.device_id, harness: "codex", provider: "test", model: "test",
+        localSessionId: "fresh-reply-delete-native", captureFidelity: "canonical_history", purpose: "snapshot_connector", contextDeletionVersion: 1 } });
+    await bridge.connect();
+    assert.equal(await bridge.materializeAuthoritativeHistory({ async execute() { throw new Error("No model execution in this fixture"); },
+      async projectCanonicalEvents(events) { projected.push(...events); } }, snapshot.sequence, 2), snapshot.sequence);
+    assert.doesNotMatch(JSON.stringify(projected), new RegExp(sentinel));
+    assert.match(JSON.stringify(projected), /ORIGINAL_QUESTION_SURVIVES/);
+    assert.equal((await f.remove(answer, f.owner, deletionKey)).status, 200);
   } finally { await f.close(); }
 });
 
