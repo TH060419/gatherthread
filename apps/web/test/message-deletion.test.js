@@ -33,13 +33,17 @@ function fixture(api = {}, confirm = () => true) {
   class Element { constructor() { this.dataset = {}; this.attributes = {}; this.listeners = new Map(); this.isConnected = true; }
     setAttribute(k, v) { this.attributes[k] = v; } addEventListener(k, v) { this.listeners.set(k, v); }
     append() {} click() { this.listeners.get("click")?.(); } }
-  const document = { createElement: () => new Element(), createElementNS: () => new Element() };
+  const document = { body: {}, createElement: () => new Element(), createElementNS: () => new Element() };
+  const placeholder = { focuses: 0, focus() { this.focuses++; document.activeElement = this; } };
+  document.activeElement = document.body;
+  document.getElementById = () => placeholder;
   let context = { scope: "one", userId: "me", sessionId: "s1", writable: true, events: [own] };
   const receipts = [], notices = [], confirmations = []; let keys = 0;
   const control = mountMessageDeletion({ document, api, getContext: () => context, localizer: { t: value => value },
     confirm: text => { confirmations.push(text); return confirm(text); }, makeKey: () => `key-${++keys}`,
     onDeleted: receipt => receipts.push(receipt), announce: text => notices.push(text) });
-  return { control, receipts, notices, confirmations, setContext: patch => { context = { ...context, ...patch }; } };
+  return { control, receipts, notices, confirmations, document, placeholder,
+    setContext: patch => { context = { ...context, ...patch }; } };
 }
 const flush = () => new Promise(setImmediate);
 test("cancel and double click create no accidental deletion and uncertain retries reuse one key", async () => {
@@ -60,4 +64,16 @@ test("an old deletion receipt cannot mutate a new account/session and request wa
   f.setContext({ scope: "two", userId: "other", sessionId: "s2", events: [] });
   resolve({ contentRevision: 1 }); await flush();
   assert.equal(f.receipts.length, 0); assert.equal(f.notices.length, 0);
+});
+
+test("a deleted button restores focus to its placeholder but never steals focus moved into a draft", async () => {
+  for (const moved of [false, true]) {
+    let resolve; const f = fixture({ deleteMessage: () => new Promise(ok => { resolve = ok; }) });
+    const button = f.control.action(own); f.document.activeElement = button; button.click(); await flush();
+    const next = moved ? { value: "a newer draft" } : f.document.body;
+    f.document.activeElement = next;
+    resolve({ contentRevision: 1 }); await flush();
+    assert.equal(f.placeholder.focuses, moved ? 0 : 1);
+    if (moved) assert.equal(f.document.activeElement, next);
+  }
 });
