@@ -45,9 +45,14 @@ If that file is missing, ChatGPT Desktop is installed elsewhere, or you use anot
 git clone https://github.com/TH060419/gatherthread.git
 cd gatherthread
 git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
-codex plugin marketplace add .
-codex plugin add gatherthread@gatherthread
+npm ci
+npm run build:ts && npm run build:connector
+node plugins/gatherthread/scripts/prepare-source-plugin.mjs
+codex plugin marketplace add "PREPARED_PLUGIN_DIRECTORY"
+codex plugin add gatherthread@gatherthread-source
 ```
+
+Replace `PREPARED_PLUGIN_DIRECTORY` with the path printed by the preparation command. Preparation creates a new local copy with the matching MCP code, never an old npm fallback. Disable older GatherThread plugin copies in Codex before enabling this prepared plugin.
 
 Restart Codex Desktop. Open Settings, review the **共序 / GatherThread** MCP server and Hooks, then enable Hooks.
 
@@ -81,8 +86,9 @@ cd gatherthread
 git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
-codex plugin marketplace add .
-codex plugin add gatherthread@gatherthread
+node plugins/gatherthread/scripts/prepare-source-plugin.mjs
+codex plugin marketplace add "PREPARED_PLUGIN_DIRECTORY"
+codex plugin add gatherthread@gatherthread-source
 npm run codex:connect -- \
   --url 'http://127.0.0.1:18787' \
   --project 'PROJECT_ID' \

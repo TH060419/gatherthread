@@ -9,7 +9,6 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 const pluginRoot = path.join(root, "plugins", "gatherthread");
-const PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-beta.1";
 
 test("current connector help uses the local package and password-based Launcher path", () => {
   const result = spawnSync(process.execPath, [path.join(root, "packages/codex-connect/dist/codex-connect.js"), "--help"], { encoding: "utf8", timeout: 10_000 });
@@ -40,7 +39,7 @@ test("GatherThread plugin manifest has valid local components and bilingual bran
   ]);
 });
 
-test("plugin stdio MCP uses the fixed package without embedding credentials", async () => {
+test("unprepared source MCP fails closed instead of executing an old registry package", async () => {
   const config = await json(".mcp.json");
   const server = config.mcpServers.gatherthread;
   assert.equal(server.command, "node");
@@ -50,26 +49,19 @@ test("plugin stdio MCP uses the fixed package without embedding credentials", as
   assert.doesNotMatch(JSON.stringify(config), /gta_|Bearer|cookie|password|client_secret/i);
 
   const launcherPath = path.join(pluginRoot, "scripts", "mcp-launcher.mjs");
-  const launcher = await import(pathToFileURL(launcherPath).href);
-  assert.deepEqual(launcher.resolveMcpLauncherInvocation("linux", {}), {
-    command: "npx",
-    args: ["--yes", PACKAGE_SPEC, "mcp"],
-  });
-  const windows = launcher.resolveMcpLauncherInvocation("win32", { ComSpec: "C:\\Windows\\System32\\cmd.exe" });
-  assert.equal(windows.command, "C:\\Windows\\System32\\cmd.exe");
-  assert.deepEqual(windows.args, ["/d", "/s", "/c", "npx.cmd", "--yes", PACKAGE_SPEC, "mcp"]);
-  assert.notEqual(windows.command, "npx");
-  const npmCli = launcher.resolveMcpLauncherInvocation("win32", { npm_execpath: "C:\\npm\\npm-cli.js" });
-  assert.equal(npmCli.command, process.execPath);
-  assert.deepEqual(npmCli.args, [
-    "C:\\npm\\npm-cli.js", "exec", "--yes", `--package=${PACKAGE_SPEC}`, "--", "gatherthread-codex-connect", "mcp",
-  ]);
   const launcherSource = await readFile(launcherPath, "utf8");
-  assert.match(launcherSource, /!name\.startsWith\("GATHERTHREAD_"\)/);
+  assert.doesNotMatch(launcherSource, /@gatherthread\/codex-connect@|"npx"|"npx\.cmd"/);
+  assert.match(launcherSource, /prepare-source-plugin\.mjs/);
   assert.doesNotMatch(launcherSource, /GATHERTHREAD_TOKEN\s*[:=]/);
+  const result = spawnSync(process.execPath, [launcherPath], { encoding: "utf8", timeout: 10_000,
+    env: { ...process.env, GATHERTHREAD_TOKEN: "synthetic-unprepared-mcp-secret" } });
+  assert.notEqual(result.status, 0);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /prepare-source-plugin\.mjs/);
+  assert.doesNotMatch(result.stderr, /synthetic-unprepared-mcp-secret|gta_|Bearer|cookie|client_secret/);
 });
 
-test("repo marketplace exposes the real plugin and all install surfaces pin one release ref", async () => {
+test("repo marketplace and current install surfaces preserve exact source and local package setup", async () => {
   const marketplace = JSON.parse(await readFile(path.join(root, ".agents", "plugins", "marketplace.json"), "utf8"));
   assert.equal(marketplace.name, "gatherthread");
   assert.equal(marketplace.interface.displayName, "共序 / GatherThread");
@@ -90,10 +82,21 @@ test("repo marketplace exposes the real plugin and all install surfaces pin one 
     readFile(path.join(root, "docs", "releases", "0.1.0-beta.1.md"), "utf8"),
     readFile(path.join(root, "apps", "web", "src", "i18n.js"), "utf8"),
   ]);
-  const installCommand = "codex plugin add gatherthread@gatherthread";
-  for (const surface of [html, english, chinese, packageReadme, release]) {
-    assert.match(surface, new RegExp(fixedCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  const installCommand = "codex plugin add gatherthread@gatherthread-source";
+  // Historical release notes stay tied to that release. Current setup instead
+  // prepares matching local MCP code; a source checkout alone is insufficient.
+  assert.match(release, new RegExp(fixedCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+  assert.match(release, /codex plugin add gatherthread@gatherthread/);
+  for (const surface of [html, english, chinese, packageReadme]) {
+    assert.match(surface, /git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE/);
+    assert.match(surface, /npm ci/);
+    assert.match(surface, /npm run build:ts[\s\S]*npm run build:connector/);
+    assert.match(surface, /node plugins\/gatherthread\/scripts\/prepare-source-plugin\.mjs/);
+    assert.match(surface, /codex plugin marketplace add "PREPARED_PLUGIN_DIRECTORY"/);
     assert.match(surface, new RegExp(installCommand.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.doesNotMatch(surface, /codex plugin marketplace add https:\/\/github\.com\/TH060419\/gatherthread\.git --ref v0\.1\.0-beta\.1/);
+    assert.doesNotMatch(surface, /codex plugin marketplace add \.\s*\n/);
+    assert.match(surface, /LOCAL_CODEX_CONNECTOR\.tgz/);
   }
   for (const guide of [html, english, chinese]) {
     assert.match(guide, /command not found: codex/);

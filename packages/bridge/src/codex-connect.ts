@@ -111,7 +111,7 @@ const CODEX_THREAD_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 const HELP = `GatherThread Codex connector
 
 Usage:
-  npx --yes @gatherthread/codex-connect@0.1.0-beta.1 --url <GatherThread URL> [options]
+  npx --yes --package '/absolute/path/to/LOCAL_CODEX_CONNECTOR.tgz' gatherthread-codex-connect --url <GatherThread URL> [options]
 
 Repository development / compatibility entry:
   npm run codex:connect -- --url <GatherThread URL> [options]
@@ -142,8 +142,11 @@ Options:
   --recover-github-code    Recover GitHub files into a NEW sibling folder, then exit
   --help                   Show this help
 
-Sign in on the Web, choose Connect Codex, and create a one-time device
-authorization. Paste it into the hidden prompt or Launcher within ten minutes.
+For the Launcher, sign in on the Web and choose Connect Codex: your email and
+environment are filled in; enter your password only in the Launcher.
+For advanced terminal setup, download the matching connector TGZ from your
+server's download page and create a one-time device authorization on the Web.
+Paste that grant into the hidden terminal prompt within ten minutes.
 Existing private connector credentials can still use GATHERTHREAD_TOKEN.
 The connector exchanges the grant for its own device credential, kept only in this process
 and is never passed to Codex, written to the session state, or printed. Each

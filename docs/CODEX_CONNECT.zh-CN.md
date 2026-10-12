@@ -47,9 +47,14 @@ codex plugin --help
 git clone https://github.com/TH060419/gatherthread.git
 cd gatherthread
 git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
-codex plugin marketplace add .
-codex plugin add gatherthread@gatherthread
+npm ci
+npm run build:ts && npm run build:connector
+node plugins/gatherthread/scripts/prepare-source-plugin.mjs
+codex plugin marketplace add "PREPARED_PLUGIN_DIRECTORY"
+codex plugin add gatherthread@gatherthread-source
 ```
+
+把 `PREPARED_PLUGIN_DIRECTORY` 换成准备命令输出的目录。该命令创建新的本地插件副本并绑定配套 MCP，不会回退旧 npm 包。启用新副本前，在 Codex 中关闭旧的 GatherThread 插件副本。
 
 重启 Codex Desktop。在设置中检查 **共序 / GatherThread** 的 MCP 服务和 Hooks，确认无误后启用 Hooks。
 
@@ -83,8 +88,9 @@ cd gatherthread
 git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
-codex plugin marketplace add .
-codex plugin add gatherthread@gatherthread
+node plugins/gatherthread/scripts/prepare-source-plugin.mjs
+codex plugin marketplace add "PREPARED_PLUGIN_DIRECTORY"
+codex plugin add gatherthread@gatherthread-source
 npm run codex:connect -- \
   --url 'http://127.0.0.1:18787' \
   --project 'PROJECT_ID' \

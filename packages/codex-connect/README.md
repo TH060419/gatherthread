@@ -20,11 +20,14 @@ The TGZ installs only the connector, not the Codex marketplace or Hooks. For ter
 git clone https://github.com/TH060419/gatherthread.git
 cd gatherthread
 git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
-codex plugin marketplace add .
-codex plugin add gatherthread@gatherthread
+npm ci
+npm run build:ts && npm run build:connector
+node plugins/gatherthread/scripts/prepare-source-plugin.mjs
+codex plugin marketplace add "PREPARED_PLUGIN_DIRECTORY"
+codex plugin add gatherthread@gatherthread-source
 ```
 
-Restart Codex Desktop and review the plugin's MCP server and Hooks before enabling them. Neither the Web page nor the connector runs these commands or edits global Codex configuration.
+Replace `PREPARED_PLUGIN_DIRECTORY` with the preparation command's output. It creates a fresh local plugin and matching MCP code without overwriting your existing plugin or falling back to the old npm package. Disable older GatherThread plugin copies in Codex before enabling the prepared copy. Restart Codex Desktop and review its MCP server and Hooks. Neither the Web page nor the connector runs these commands or edits global Codex configuration.
 
 On Windows, use `npx.cmd` and a quoted full file path such as `C:/Users/you/Downloads/your-connector.tgz`. The registry's `@gatherthread/codex-connect@0.1.0-beta.1` and `v0.1.0-beta.1` tag are older releases, not this source-pinned build; they do not include the current safe message-deletion handling. Without server downloads, [build the matching source checkout](../../docs/CODEX_CONNECT.md#source-checkout-fallback).
 
@@ -59,6 +62,6 @@ Requires Node.js 24 or newer and an authenticated Codex installation. Licensed u
 
 ## 中文说明
 
-这是面向本地已安装并登录的 Codex Desktop / CLI 的独立连接器。网页复制的固定版本 `npx` 命令不含凭据；设备 Token 在终端中隐藏输入。默认基础模式支持网页发起 Agent 请求、逐会话规范投影、只读快照，以及插件通过私有 IPC 调用普通用户 MCP 工具。`--visible-history-sync first-connect` 默认在每个会话首次于本地建立时导入一次可见原生历史；也可设为 `never` 关闭自动导入。每次从网页或 MCP 手动导入都会创建新任务，旧任务由用户自行归档，实时上下文注入不受影响。需要把 Codex Desktop 直接回合双向同步时，显式添加 `--plugin-hooks` 并在 Codex 中审查和信任插件 Hooks；`--install-hooks` 只作为项目 Hook 兼容路径。每个已绑定会话默认自动上传，也可由工作页或 MCP 单独关闭；Hook 漏传时可手动扫描并补传已完成回合，且手动操作不会改回自动设置。
+这是面向本地已安装并登录的 Codex Desktop / CLI 的独立连接器。优先使用启动器，由网页带入邮箱和环境，只需在启动器输入密码；终端备用方式使用本服务器配套 TGZ 和十分钟一次性设备授权，不手动复制账号 Token。默认基础模式支持网页发起 Agent 请求、逐会话规范投影、只读快照，以及插件通过私有 IPC 调用普通用户 MCP 工具。`--visible-history-sync first-connect` 默认在每个会话首次于本地建立时导入一次可见原生历史；也可设为 `never` 关闭自动导入。每次从网页或 MCP 手动导入都会创建新任务，旧任务由用户自行归档，实时上下文注入不受影响。需要把 Codex Desktop 直接回合双向同步时，显式添加 `--plugin-hooks` 并在 Codex 中审查和信任插件 Hooks；`--install-hooks` 只作为项目 Hook 兼容路径。每个已绑定会话默认自动上传，也可由工作页或 MCP 单独关闭；Hook 漏传时可手动扫描并补传已完成回合，且手动操作不会改回自动设置。
 
 此包不会修改 `~/.codex/config.toml`，也没有实现 `--install-mcp`。发布前必须确认 `@gatherthread` 组织与包名所有权。
