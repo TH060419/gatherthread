@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, mkdir, mkdtemp, readFile, symlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveMcpLauncherInvocation } from "../../plugins/gatherthread/scripts/mcp-launcher.mjs";
 
@@ -15,6 +15,13 @@ const helper = path.join(plugin, "scripts/prepare-source-plugin.mjs");
 const bundleFiles = ["codex-connect.js", "codex-hook.js", "index.js", "mcp.js"];
 const pluginFiles = [".codex-plugin/plugin.json", ".mcp.json", "hooks/hooks.json",
   "scripts/mcp-launcher.mjs", "scripts/hook-forwarder.mjs", "skills/gatherthread/SKILL.md"];
+const temporaryRoots = [];
+async function temporaryDirectory(prefix) {
+  const directory = await realpath(await mkdtemp(path.join(tmpdir(), prefix)));
+  temporaryRoots.push(directory);
+  return directory;
+}
+after(async () => { for (const directory of temporaryRoots) await rm(directory, { recursive: true, force: true }); });
 
 test("unbound source MCP refuses instead of selecting an immutable npm package on every platform", () => {
   for (const [platform, env] of [["linux", {}], ["win32", { ComSpec: "cmd.exe" }],
@@ -24,7 +31,7 @@ test("unbound source MCP refuses instead of selecting an immutable npm package o
 });
 
 test("unbound MCP CLI fails with fixed upgrade guidance without running npm", async () => {
-  const temp = await mkdtemp(path.join(tmpdir(), "gt-source-unbound-"));
+  const temp = await temporaryDirectory("gt-source-unbound-");
   const fakeNpm = path.join(temp, "npm.mjs");
   await writeFile(fakeNpm, 'process.stdout.write("STALE_NPM_STARTED");\n');
   const result = spawnSync(process.execPath, [launcher], { encoding: "utf8", timeout: 5000,
@@ -36,7 +43,7 @@ test("unbound MCP CLI fails with fixed upgrade guidance without running npm", as
 });
 
 async function sourceFixture() {
-  const directory = await mkdtemp(path.join(tmpdir(), "gt-source-plugin-"));
+  const directory = await temporaryDirectory("gt-source-plugin-");
   for (const relative of pluginFiles) {
     const destination = path.join(directory, "plugins/gatherthread", relative);
     await mkdir(path.dirname(destination), { recursive: true });
@@ -70,8 +77,12 @@ test("source preparation creates fresh ignored same-source MCP bindings without 
   const invocation = resolveMcpLauncherInvocation(process.platform, { npm_execpath: "/ignored/npm.js" }, stagedPlugin);
   assert.equal(invocation.command, process.execPath);
   assert.deepEqual(invocation.args, [path.join(stagedPlugin, "connector/codex-connect.js"), "mcp"]);
-  for (const file of bundleFiles) assert.deepEqual(await readFile(path.join(stagedPlugin, "connector", file)),
-    await readFile(path.join(directory, "packages/codex-connect/dist", file)));
+  const binding = JSON.parse(await readFile(path.join(stagedPlugin, ".source-connector.json"), "utf8"));
+  for (const file of bundleFiles) {
+    const source = await readFile(path.join(directory, "packages/codex-connect/dist", file));
+    assert.deepEqual(await readFile(path.join(stagedPlugin, "connector", file)), source);
+    assert.equal(binding.files[file], createHash("sha256").update(source).digest("hex"));
+  }
   assert.equal(await readFile(path.join(directory, "plugins/gatherthread/.mcp.json"), "utf8"), original);
   assert.equal(await readFile(path.join(directory, ".local/user-note"), "utf8"), "USER_OWNED");
   await assert.rejects(readFile(path.join(stagedPlugin, ".private-fixture")), /ENOENT/);
@@ -112,7 +123,7 @@ test("local MCP binding refuses modified connector bytes and symlinked receipt o
 });
 
 test("source preparation refuses symlinked output parents and malformed or stale input bundles", async () => {
-  const directory = await sourceFixture(), elsewhere = await mkdtemp(path.join(tmpdir(), "gt-source-outside-"));
+  const directory = await sourceFixture(), elsewhere = await temporaryDirectory("gt-source-outside-");
   await symlink(elsewhere, path.join(directory, ".local"), "dir");
   await assert.rejects(prepare(directory), /symlink|directory|owned/i);
   const other = await sourceFixture();

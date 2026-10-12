@@ -1,27 +1,47 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
+import { lstatSync, readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
-const PACKAGE_SPEC = "@gatherthread/codex-connect@0.1.0-beta.1";
+const PLUGIN_ROOT = fileURLToPath(new URL("../", import.meta.url));
+const BUNDLE_FILES = ["codex-connect.js", "codex-hook.js", "index.js", "mcp.js", "package.json"];
+const UPGRADE_MESSAGE = "GatherThread source MCP requires a verified current local build. Run node plugins/gatherthread/scripts/prepare-source-plugin.mjs and install its printed marketplace directory; no older npm package is used.";
+
+function regularFileBytes(file, maximumBytes) {
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > maximumBytes) throw new Error(UPGRADE_MESSAGE);
+  return readFileSync(file);
+}
 
 export function resolveMcpLauncherInvocation(
-  platform = process.platform,
-  env = process.env,
+  _platform = process.platform,
+  _env = process.env,
+  pluginRoot = PLUGIN_ROOT,
 ) {
-  const npmCli = env.npm_execpath?.trim();
-  if (npmCli) {
+  try {
+    if (Number(process.versions.node.split(".")[0]) < 24 || !path.isAbsolute(pluginRoot)) throw new Error(UPGRADE_MESSAGE);
+    const directory = path.join(pluginRoot, "connector");
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error(UPGRADE_MESSAGE);
+    const binding = JSON.parse(regularFileBytes(path.join(pluginRoot, ".source-connector.json"), 32_768).toString("utf8"));
+    if (binding.schema_version !== 1 || !binding.files || typeof binding.files !== "object"
+      || Object.keys(binding.files).sort().join("\n") !== [...BUNDLE_FILES].sort().join("\n")) throw new Error(UPGRADE_MESSAGE);
+    for (const file of BUNDLE_FILES) {
+      if (!/^[a-f0-9]{64}$/.test(binding.files[file])
+        || createHash("sha256").update(regularFileBytes(path.join(directory, file), 16 * 1024 * 1024)).digest("hex") !== binding.files[file]) {
+        throw new Error(UPGRADE_MESSAGE);
+      }
+    }
+    if (JSON.parse(regularFileBytes(path.join(directory, "package.json"), 32_768)).type !== "module") throw new Error(UPGRADE_MESSAGE);
     return {
       command: process.execPath,
-      args: [npmCli, "exec", "--yes", `--package=${PACKAGE_SPEC}`, "--", "gatherthread-codex-connect", "mcp"],
+      args: [path.join(directory, "codex-connect.js"), "mcp"],
     };
+  } catch {
+    throw new Error(UPGRADE_MESSAGE);
   }
-  if (platform === "win32") {
-    return {
-      command: env.ComSpec?.trim() || "cmd.exe",
-      args: ["/d", "/s", "/c", "npx.cmd", "--yes", PACKAGE_SPEC, "mcp"],
-    };
-  }
-  return { command: "npx", args: ["--yes", PACKAGE_SPEC, "mcp"] };
 }
 
 export async function runMcpLauncher(env = process.env) {
@@ -57,7 +77,7 @@ export async function runMcpLauncher(env = process.env) {
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   runMcpLauncher().catch(() => {
-    process.stderr.write("gatherthread-mcp-launcher: could not start the fixed-version connector package\n");
+    process.stderr.write(`gatherthread-mcp-launcher: ${UPGRADE_MESSAGE}\n`);
     process.exitCode = 1;
   });
 }
