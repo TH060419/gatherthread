@@ -12,6 +12,7 @@ const directory = mkdtempSync(join(tmpdir(), "gt-personal-api-browser-"));
 const reserve = createServer(); await new Promise(done => reserve.listen(0, "127.0.0.1", done));
 const port = reserve.address().port; await new Promise(done => reserve.close(done));
 const origin = `http://127.0.0.1:${port}`, mails = [];
+let failNextCloudRun = false;
 const registration = { enabled: true, origin, siteKey: "fixture", challenge: { async verify() { return true; } },
   mailer: { async send(mail) { mails.push(mail); } } };
 const server = await startCollaborationServer({ databasePath: ":memory:", codeRepositoryDirectory: join(directory, "code"),
@@ -23,7 +24,10 @@ const server = await startCollaborationServer({ databasePath: ":memory:", codeRe
     image: `fixture/cloud@sha256:${"a".repeat(64)}`, userMinIntervalSeconds: 1,
     userDailyRuns: 4, globalDailyRuns: 20, maxConcurrent: 1,
     fetch: async () => { throw Error("Live providers are forbidden in this fixture"); },
-    runContainer: async () => JSON.stringify({ answer: "Selected personal model answered.", files: [] }),
+    runContainer: async () => {
+      if (failNextCloudRun) { failNextCloudRun = false; throw Error("fixture_run_failed"); }
+      return JSON.stringify({ answer: "Selected personal model answered.", files: [] });
+    },
   } }, port);
 async function seed(context, locale) {
   const marker = randomUUID();
@@ -91,6 +95,75 @@ try {
       await page.locator("#send-agent-button").click(); const accepted = await requested;
       assert.equal(accepted.status(), 202); assert.equal(accepted.request().postDataJSON().api_config_revision, config.revision);
       await page.getByText("Selected personal model answered.", { exact: true }).waitFor();
+      // Sensors wrap the real HTTP methods, not UI handlers or network results.
+      await page.evaluate(async () => {
+        const bootstrapUrl = document.querySelector('script[type="module"]').src;
+        const bootstrap = await (await fetch(bootstrapUrl)).text();
+        const mainUrl = new URL(bootstrap.match(/import\("([^\"]*main\.js[^\"]*)"\)/)[1], bootstrapUrl).href;
+        const main = await (await fetch(mainUrl)).text();
+        const apiUrl = new URL(main.match(/from\s+["'](\.\/api\.js(?:\?[^"']*)?)["']/)[1], mainUrl).href;
+        const { HttpCollaborationApi } = await import(apiUrl);
+        const selection = HttpCollaborationApi.prototype.getHostedAgentSelection;
+        const append = HttpCollaborationApi.prototype.appendHostedAgentRequest;
+        window.fixtureSelectionSettled = 0; window.fixtureHostedWrites = [];
+        HttpCollaborationApi.prototype.getHostedAgentSelection = async function (...args) {
+          try { return await selection.apply(this, args); }
+          finally { window.fixtureSelectionSettled++; }
+        };
+        HttpCollaborationApi.prototype.appendHostedAgentRequest = function (...args) {
+          window.fixtureHostedWrites.push(structuredClone(args[1]));
+          return append.apply(this, args);
+        };
+      });
+      const cloudReady = () => page.waitForFunction(async profileId => {
+        const response = await fetch("/v1/hosted-agent");
+        if (!response.ok) return false;
+        return (await response.json()).data.profiles?.find(profile => profile.id === profileId)?.available;
+      }, config.profile_id);
+      const failedCloudRequest = async content => {
+        await cloudReady();
+        failNextCloudRun = true;
+        await page.locator("#message-input").fill(content);
+        const reply = page.waitForResponse(r => r.request().method() === "POST" && r.url().endsWith("/hosted-agent-requests"));
+        await page.locator("#send-agent-button").click();
+        const response = await reply; assert.equal(response.status(), 202);
+        const request = (await response.json()).data.request_event;
+        await page.locator(`.agent-retry-button[data-request-id="${request.id}"]`).waitFor();
+        return request;
+      };
+      const erased = await failedCloudRequest("ERASED_RETRY_INSTRUCTIONS fixture");
+      const selectionUrl = `${origin}/v1/sessions/${f.session.id}/hosted-agent-requests/${erased.id}/selection`;
+      let release, entered;
+      const held = new Promise(done => { release = done; }), captured = new Promise(done => { entered = done; });
+      await page.route(selectionUrl, async route => {
+        const response = await route.fetch(); assert.equal(response.status(), 200);
+        entered(); await held; await route.fulfill({ response });
+      });
+      await page.locator("#message-input").fill("Keep this unfinished retry draft");
+      await page.evaluate(() => { window.fixtureHostedWrites = []; });
+      await cloudReady();
+      await page.locator(`.agent-retry-button[data-request-id="${erased.id}"]`).click();
+      await captured;
+      await page.locator(`#message-${erased.id} .message-delete-action`).click();
+      await page.locator(`#message-${erased.id} .event-content`).getByText(/消息已删除|Message deleted/, { exact: true }).waitFor();
+      release();
+      await page.waitForFunction(() => window.fixtureSelectionSettled === 1);
+      assert.deepEqual(await page.evaluate(() => window.fixtureHostedWrites), [], "a held selection cannot resubmit erased instructions");
+      assert.equal(await page.locator("#message-input").inputValue(), "Keep this unfinished retry draft");
+      await page.unroute(selectionUrl);
+
+      // A fresh retry after deletion remains usable and pins the current history.
+      const valid = await failedCloudRequest("A fresh, independent retry after deletion");
+      await page.locator("#message-input").fill("Keep this new retry draft");
+      await page.evaluate(() => { window.fixtureHostedWrites = []; });
+      await cloudReady();
+      const retried = page.waitForResponse(r => r.request().method() === "POST" && r.url().endsWith("/hosted-agent-requests"));
+      await page.locator(`.agent-retry-button[data-request-id="${valid.id}"]`).click();
+      const retryResponse = await retried; assert.equal(retryResponse.status(), 202);
+      assert.equal(retryResponse.request().postDataJSON().content_revision, 1);
+      assert.equal(retryResponse.request().postDataJSON().api_config_revision, config.revision);
+      await page.getByText("Selected personal model answered.", { exact: true }).last().waitFor();
+      assert.equal(await page.locator("#message-input").inputValue(), "Keep this new retry draft");
       await openSettings(); await page.locator('.settings-navigation a[href="#settings-personal-api"]').click();
       await page.locator("#cloud-api-list button").click(); await page.locator("#cloud-api-enabled").uncheck();
       const paused = page.waitForResponse(r => r.request().method() === "PUT" && r.url().includes("/v1/cloud-api/"));
@@ -100,7 +173,7 @@ try {
       await page.locator("#cloud-api-delete").click(); assert.equal((await deleted).status(), 204);
       await page.locator("#cloud-api-editor").waitFor({ state: "hidden" }); assert.equal(await page.locator("#cloud-api-list li").count(), 0);
       assert.equal(await page.locator("#settings-dialog").evaluate(node => node.scrollWidth > node.clientWidth + 1), false);
-      assert.deepEqual(errors, []); console.log(`${name}: private metadata → add/edit → exact cloud model → pause/delete, ordinary clicks passed`);
+      assert.deepEqual(errors, []); console.log(`${name}: private API, exact cloud model, held-selection deletion fence, normal revision-pinned retry and drafts, pause/delete; ordinary clicks passed`);
     } finally { await context.close(); await browser.close(); }
   }
 } finally { await server.close(); rmSync(directory, { recursive: true, force: true }); }

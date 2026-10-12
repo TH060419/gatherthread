@@ -102,6 +102,18 @@ test("mock source deletion invalidates later generated work without deleting ind
   assert.ok(replay.events.some(item => item.replyTo === "pending-request" && item.payload?.error?.code === "context_changed"));
 });
 
+test("mock local retry rejects an old captured revision before appending or replaying it", async () => {
+  const api = new MockCollaborationApi({ latency: 0 }), sessionId = "session-orbit";
+  const source = await api.appendHumanChat(sessionId, { content: "Delete this before the retry", idempotencyKey: "pin-source" });
+  await api.deleteMessage(sessionId, source.id, { idempotencyKey: "pin-delete" });
+  const before = api.events.get(sessionId).length;
+  await assert.rejects(api.appendAgentRequest(sessionId, { content: "Captured old retry", idempotencyKey: "pin-retry", contentRevision: 0 }),
+    error => error.status === 409 && error.code === "context_changed");
+  assert.equal(api.events.get(sessionId).length, before);
+  const accepted = await api.appendAgentRequest(sessionId, { content: "Explicit fresh retry", idempotencyKey: "pin-current", contentRevision: 1 });
+  assert.equal(accepted.payload.content, "Explicit fresh retry");
+});
+
 test("context-change errors give a bilingual reconnect action and runtime capability survives normalization", async () => {
   const api = new HttpCollaborationApi();
   api.request = async () => ({ runtimes: [{ id: "r1", device_id: "d1", harness: "codex", provider: "fixture",

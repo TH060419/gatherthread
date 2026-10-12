@@ -82,7 +82,7 @@ test("resume retains Codex/DSH exact original routing, quote and mentions", () =
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 function fixture(api = {}, options = {}) {
   const own = request();
-  let context = { scope: "scope1", userId: "me", sessionId: "s1", writable: true, sending: false, events: [own, progress(own.id)] };
+  let context = { scope: "scope1", contentRevision: 0, userId: "me", sessionId: "s1", writable: true, sending: false, events: [own, progress(own.id)] };
   const button = { disabled: false, dataset: {}, attributes: {}, textContent: "",
     setAttribute(name, value) { this.attributes[name] = value; },
     replaceChildren(...nodes) { this.textContent = nodes.map((node) => typeof node === "string" ? node : node.textContent).join(""); },
@@ -108,6 +108,37 @@ test("personal cloud resume waits for its private selection and cannot write aft
   f.setContext({ scope: "other", sessionId: "s2", events: [] });
   resolve({ profile_id: profile.id, api_config_revision: profile.api_config_revision }); await flush();
   assert.equal(writes.length, 0); assert.equal(f.errorNode.textContent, "");
+});
+
+test("personal cloud resume rechecks authoritative history after its delayed private selection", async () => {
+  let resolve; const writes = [];
+  const cloud = request("cloud", "me", "opencode"); cloud.payload.profile_id = "api-fixture";
+  const profile = { id: "api-fixture", provider: "deepseek-official", model: "original-model", api_config_revision: "revision-fixture" };
+  const f = fixture({ getHostedAgentSelection: () => new Promise(done => { resolve = done; }),
+    appendHostedAgentRequest: async (...args) => { writes.push(args); } });
+  f.setContext({ events: [cloud, progress("cloud", "paused")], cloudProfiles: [profile] });
+  f.control.handleClick();
+  f.setContext({ contentRevision: 1, events: [{ ...cloud, deleted: { reason: "author" }, payload: {} }] });
+  resolve({ profile_id: profile.id, api_config_revision: profile.api_config_revision }); await flush();
+  assert.deepEqual(writes, []); assert.equal(f.errorNode.textContent, "");
+});
+
+test("a valid cloud resume sends the captured history revision without changing its model", async () => {
+  const writes = [], cloud = request("cloud", "me", "opencode"); cloud.payload.profile_id = "cloud-free";
+  const f = fixture({ appendHostedAgentRequest: async (...args) => { writes.push(args); } });
+  f.setContext({ contentRevision: 7, events: [cloud, progress("cloud", "paused")], cloudProfiles: [
+    { id: "cloud-free", provider: "deepseek-official", model: "original-model" },
+  ] });
+  f.control.handleClick(); await flush();
+  assert.equal(writes.length, 1); assert.equal(writes[0][1].contentRevision, 7);
+  assert.equal(writes[0][1].profileId, "cloud-free");
+});
+
+test("a valid local resume sends its exact history revision", async () => {
+  const writes = [], f = fixture({ appendAgentRequest: async (...args) => { writes.push(args); } });
+  f.setContext({ contentRevision: 3, events: [request(), progress("r1", "paused")] });
+  f.control.handleClick(); await flush();
+  assert.equal(writes.length, 1); assert.equal(writes[0][1].contentRevision, 3);
 });
 
 test("control writes are single-flight; stale failures cannot overwrite another session", async () => {

@@ -46,3 +46,11 @@ test("a hosted retry sends the captured history revision, including zero, withou
   assert.equal(bodies[1].content_revision, 7);
   assert.equal(Object.hasOwn(bodies[2], "content_revision"), false);
 });
+
+test("local retry pins history at the append envelope without exposing it as shared content", async () => {
+  const api = new HttpCollaborationApi(), bodies = [];
+  api.request = async (_path, options) => { bodies.push(JSON.parse(options.body)); throw Error("fixture capture finished"); };
+  await assert.rejects(api.appendAgentRequest("s", { content: "fixture", idempotencyKey: "local-pin", contentRevision: 0 }));
+  assert.equal(bodies[0].content_revision, 0);
+  assert.equal(Object.hasOwn(bodies[0].payload, "content_revision"), false);
+});

@@ -199,6 +199,15 @@ test("a request finishing in an old session cannot replace a newer continuation 
   assert.equal(ui.el("cloud-github-selected").textContent, "New draft");
 });
 
+test("cloud GitHub dispatch preserves the composer-captured history revision, including zero", async () => {
+  const inputs = [], ui = fixture({ startHostedGithubTask: async (_session, input) => { inputs.push(input); return task(); } });
+  for (const contentRevision of [0, 3]) await ui.view.start("s1", {
+    content: "New task", profileId: "coding", idempotencyKey: `task-${contentRevision}`, contentRevision,
+  });
+  assert.equal(inputs[0].content_revision, 0);
+  assert.equal(inputs[1].content_revision, 3);
+});
+
 test("refresh preserves repository and PR edits; task buttons select the cloud repository route", async () => {
   const ui = fixture();
   await ui.view.openTask("private-task");

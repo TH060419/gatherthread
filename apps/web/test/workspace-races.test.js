@@ -604,6 +604,25 @@ function messageHarness(pending) {
   return { app, input, writes: () => writes };
 }
 
+for (const source of ["trial", "github"]) {
+  test(`a normal cloud ${source} request sends the captured history revision and keeps its draft on rejection`, async () => {
+    const pending = deferred(), f = messageHarness(pending), writes = [];
+    f.app.CLOUD_AGENT_ENTRY_ENABLED = true;
+    f.app.currentCloudProfile = () => ({ id: "fixture", provider: "fixture", model: "fixture" });
+    f.app.api.appendHostedAgentRequest = (...args) => { writes.push(args); return pending.promise; };
+    f.app.cloudGithubUi.start = (...args) => { writes.push(args); return pending.promise; };
+    f.app.element("cloud-agent-source").value = source;
+    f.app.state.sync.contentRevision = 4;
+    const work = f.app.sendMessage("hosted_agent");
+    assert.equal(writes[0][1].contentRevision, 4);
+    f.app.state.sync.contentRevision = 5;
+    pending.reject(new Error("Shared history changed. Refresh the page and try again."));
+    await work;
+    assert.equal(f.input.value, "First draft");
+    assert.match(f.app.sendError.textContent, /Refresh/);
+  });
+}
+
 test("repeat submit while a message is pending writes once and keeps a newer draft", async () => {
   const pending = deferred();
   const { app, input, writes } = messageHarness(pending);
