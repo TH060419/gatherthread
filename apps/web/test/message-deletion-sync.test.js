@@ -72,3 +72,15 @@ test("a higher replay revision discovered on reconnect replaces all earlier page
   assert.equal(sync.snapshot().events[0].deleted.reason, "author");
   assert.equal(JSON.stringify(sync.snapshot()).includes("private fixture"), false);
 });
+
+test("a failed obsolete replay cannot block the newer deletion refresh", async () => {
+  const api = new Api(), sync = new SessionSync(api); await sync.connect("s1");
+  let rejectOld; const replay = api.replayEvents.bind(api);
+  api.replayEvents = (sessionId, input) => input.afterSequence > 0 ? new Promise((_ok, no) => { rejectOld = no; }) : replay(sessionId, input);
+  api.socket.onEvent(event(3));
+  api.revision = 1; api.events = [deleted(event(1), 1), marker(2, 1)];
+  api.socket.onEvent(marker(2, 1)); await flush();
+  rejectOld(new Error("old failed")); await flush();
+  assert.equal(sync.snapshot().phase, "live");
+  assert.equal(sync.snapshot().contentRevision, 1);
+});
