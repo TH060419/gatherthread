@@ -194,6 +194,60 @@ unixTest("history deletion fences GitHub publication after an already-issued rem
  } finally { release.resolve(); await publication?.catch(() => undefined); await f.close(); other.close(); }
 });
 
+unixTest("another database's deletion aborts an active GitHub run but keeps its slot until actual exit", { timeout: fixtureTimeout }, async () => {
+ const f = fixture(), other = deletionPeer(f), entered = deferred(), release = deferred();
+ const original = f.runOptions.runContainer!;
+ let signal: AbortSignal | undefined, runs = 0;
+ const prompts: string[] = [];
+ f.runOptions.runContainer = async (...args) => {
+  runs++; signal = args[2];
+  const mount = args[0].find((value) => value.endsWith("dst=/run/gatherthread,readonly"))!;
+  prompts.push(readFileSync(join(mount.split("src=")[1]!.split(",dst=")[0]!, "prompt.txt"), "utf8"));
+  if (runs === 1) { entered.resolve(); await release.promise; }
+  return original(...args);
+ };
+ try {
+  const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "github-active-source", payload: { content: "GITHUB_ACTIVE_DELETED_SENTINEL" } });
+  f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "github-active-surviving", payload: { content: "GITHUB_ACTIVE_SURVIVING_SENTINEL" } });
+  await connect(f);
+  const task = f.github.start(f.actor, f.session.id, { content: "Work", profile_id: "coding", idempotency_key: "github-active-race" });
+  await entered.promise;
+  assert.match(prompts[0]!, /GITHUB_ACTIVE_DELETED_SENTINEL/);
+  other.deleteMessage(f.actor, f.session.id, source.id, "github-delete-active");
+  for (let n = 0; n < 400 && !signal?.aborted; n++) await setTimeout(5);
+  assert.equal(signal?.aborted, true, "independent authority poll must abort without in-process notification");
+  assert.equal(f.db.hostedActiveRuns(), 1, "a still-running executor is not a free resource slot");
+  assert.equal(f.service.appendHostedGithubProgress(task.id, { id: "late", content: "GITHUB_ACTIVE_DELETED_SENTINEL", phase: "stream",
+   streamId: "00000000-0000-4000-8000-000000000001", streamMode: "snapshot", streamKind: "answer", streamRevision: 1, streamState: "running" }), false);
+  release.resolve(); await inactive(f);
+  const row = f.db.sqlite.prepare("SELECT result_files,answer,revision,error_code FROM hosted_github_tasks WHERE id=?").get(task.id)!;
+  assert.equal(row.result_files, null); assert.equal(row.answer, null); assert.equal(row.revision, null); assert.equal(row.error_code, "context_changed");
+  f.advance();
+  const next = f.github.start(f.actor, f.session.id, { content: "New work", profile_id: "coding", idempotency_key: "github-active-fresh" });
+  assert.equal((await settled(f, next.id)).state, "completed");
+  assert.doesNotMatch(prompts[1]!, /GITHUB_ACTIVE_DELETED_SENTINEL/); assert.match(prompts[1]!, /GITHUB_ACTIVE_SURVIVING_SENTINEL/);
+  assert.equal(runs, 2); assert.equal(f.db.hostedAgentUsage(f.actor, 20, 20).user_used_runs, 2);
+ } finally { release.resolve(); await f.close(); other.close(); }
+});
+
+unixTest("deletion before GitHub execution authorization releases an undispatched reserved slot", { timeout: fixtureTimeout }, async () => {
+ const f = fixture(), other = deletionPeer(f);
+ try {
+  const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "github-before-start-source", payload: { content: "UNDISPATCHED_SOURCE" } });
+  await connect(f);
+  const read = (f.github as any).task.bind(f.github);
+  let armed = true;
+  (f.github as any).task = (...args: unknown[]) => {
+   if (armed) { armed = false; other.deleteMessage(f.actor, f.session.id, source.id, "github-delete-before-authorize"); }
+   return read(...args);
+  };
+  assert.throws(() => f.github.start(f.actor, f.session.id, { content: "Work", profile_id: "coding", idempotency_key: "github-no-dispatch" }),
+   (e: unknown) => e instanceof ApiError && e.code === "context_changed");
+  assert.equal(f.runs(), 0);
+  assert.equal(f.db.hostedActiveRuns(), 0, "authorization failure before any executor starts must not leak the reserved slot");
+ } finally { await f.close(); other.close(); }
+});
+
 function deferred() {
  let resolve!: () => void;
  const promise = new Promise<void>((done) => { resolve = done; });
