@@ -182,7 +182,7 @@ test("mobile Cloud rejection reasons stay visible while ready and local labels s
  let writable = true, selectedHarness = "cloud";
  const app = harness(["currentCloudProfile", "cloudStatusText", "renderComposerPermissions"], {
   element: el, CLOUD_AGENT_ENTRY_ENABLED: true, DSH_HARNESS: "deepseek-harness",
-  pendingMessageSend: null, codeSyncUi: { updateContext: noop },
+  pendingMessageSend: null, codeSyncUi: { updateContext: noop }, agentTeamUi: { updateContext: noop },
   canAppend: () => ({ allowed: writable, reason: "This conversation is read-only." }),
   currentProjectHarness: () => selectedHarness, projectCloudProfile: () => null,
   currentCodexResolution: () => ({ runtime: null, reason: "Connect your Agent on a computer." }),

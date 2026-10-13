@@ -1,0 +1,589 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { AgentTeamRunDetailSchema, type AgentTeamPlan, type CanonicalEvent } from "@gatherthread/protocol";
+import { CollaborationDatabase } from "../src/database.js";
+import { CollaborationService } from "../src/service.js";
+import { AgentTeams, parseTeamDirective } from "../src/agent-teams.js";
+import { HostedAgent, type HostedAgentOptions } from "../src/hosted-agent.js";
+import { CodeRepository } from "../src/code-repository.js";
+import { ApiError } from "../src/errors.js";
+import { randomBytes, randomUUID } from "node:crypto";
+
+const directive = (stepId: string, action: "complete" | "delegate" = "complete", target = "worker") =>
+  `Public result.\n\n\`\`\`gatherthread-team\n${JSON.stringify({ version: 1, step_id: stepId, action,
+    ...(action === "delegate" ? { target_node_id: target, task: "Carry out the subordinate task" } : {}) })}\n\`\`\``;
+function fixture() {
+  let time = Date.now(); const clock = () => new Date(time);
+  const db = new CollaborationDatabase(":memory:", { clock });
+  const service = new CollaborationService(db);
+  const actor = db.bootstrapIdentity({ display_name: "Fixture owner", device_name: "Fixture desktop" }).actor;
+  const session = service.createSession(actor, { title: "Team fixture", mode: "multi", idempotency_key: "fixture-team-session" }).session;
+  const lead = service.registerRuntime(actor, { session_id: session.id, device_id: actor.device_id, harness: "codex", provider: "openai", model: "fixture-gpt",
+    context_deletion_version: 1, execution_profiles: [{ provider: "openai", model: "fixture-gpt", reasoning_efforts: ["low"] }],
+    local_session_id: "fixture-codex", capture_fidelity: "harness_transcript" });
+  const worker = service.registerRuntime(actor, { session_id: session.id, device_id: actor.device_id, harness: "deepseek-harness", provider: "deepseek", model: "fixture-deepseek",
+    context_deletion_version: 1, execution_profiles: [{ provider: "deepseek", model: "fixture-deepseek" }], local_session_id: "fixture-dsh", capture_fidelity: "harness_transcript" });
+  const plan: AgentTeamPlan = { name: "Fixture team", team_prompt: "Coordinate accurately", nodes: [
+    { id: "lead", label: "Director", role: "Delegate then review", x: 0, y: 0,
+      target: { kind: "local", runtime_id: lead.id, harness: "codex", provider: "openai", model: "fixture-gpt", reasoning_effort: "low" } },
+    { id: "worker", label: "Implementer", role: "Implement and return a public result", x: 350, y: 0,
+      target: { kind: "local", runtime_id: worker.id, harness: "deepseek-harness", provider: "deepseek", model: "fixture-deepseek" } },
+  ], edges: [{ id: "lead-worker", source: "lead", target: "worker", direction: "one_way" }] };
+  const teams = new AgentTeams(service, undefined, { clock, autoStart: false });
+  const start = (custom: AgentTeamPlan = plan, maxCalls = 12) => teams.start(actor, session.id, { plan: custom, entry_node_id: "lead", content: "Human task",
+    max_calls: maxCalls, max_duration_minutes: 30, content_revision: db.requireSession(session.id).content_revision ?? 0,
+    idempotency_key: `fixture-team-start-${Math.random()}` }).run;
+  const complete = (runId: string, action: "complete" | "delegate" = "complete", target = "worker", answer?: string) => {
+    const run = teams.read(actor, session.id, runId).run, step = run.steps.find(step => step.id === run.current_step_id)!;
+    const node = run.plan.nodes.find(node => node.id === step.node_id)!;
+    assert.equal(node.target.kind, "local");
+    if (node.target.kind !== "local" || !step.request_event_id) throw new Error("Expected an accepted local step");
+    const claim = service.claimAgentRequest(actor, session.id, step.request_event_id, node.target.runtime_id);
+    return service.completeAgentRequest(actor, session.id, step.request_event_id, node.target.runtime_id,
+      `fixture-complete-${step.id}`, { text: answer ?? directive(step.id, action, target) }, node.target.model, node.target.reasoning_effort, claim.attempt_count);
+  };
+  const close = () => { teams.close(); db.close(); };
+  return { db, service, actor, session, lead, worker, plan, teams, start, complete, clock, advance: (ms: number) => { time += ms; }, close };
+}
+async function drive(teams: AgentTeams, check: () => boolean) {
+  for (let index = 0; index < 100 && !check(); index++) { await teams.pump(); await new Promise(resolve => setTimeout(resolve, 2)); }
+  assert.ok(check(), "Team coordinator did not reach the expected durable state");
+}
+test("human-started exact Codex -> DSH delegation returns the result to the director over a one-way edge", async () => {
+  const f = fixture(); try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.complete(run.id, "delegate");
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.current_node_id, "worker");
+    const childResponse = f.complete(run.id);
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 3);
+    const resumed = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(resumed.current_node_id, "lead");
+    const request = f.db.getEvent(f.session.id, resumed.steps.at(-1)!.request_event_id!);
+    assert.match(String((request.payload as { content: string }).content), /Returned subordinate result/);
+    assert.match(String((request.payload as { content: string }).content), /Public result/);
+    assert.equal(f.teams.store.step(resumed.current_step_id!).context_response_id, childResponse.id);
+    f.complete(run.id); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    const finished = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(finished.calls_used, 3); AgentTeamRunDetailSchema.parse(finished);
+    assert.equal(f.service.replay(f.actor, f.session.id, 0, 100).events.filter(event => event.type === "agent_request").length, 3);
+    assert.equal(f.teams.start(f.actor, f.session.id, JSON.parse(f.teams.store.row(run.id).input_json)).replayed, true);
+  } finally { f.close(); }
+});
+test("a plain canonical leaf answer returns to its parent with counted calls; public chat never does", async () => {
+  const f = fixture(); try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.complete(run.id, "delegate"); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "leaf-chat-is-not-completion",
+      payload: { content: "6 × 7 = 42" } });
+    await f.teams.pump(); assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 2);
+    f.complete(run.id, "complete", "worker", "6 × 7 = 42. The gatherthread-team protocol is documented separately.");
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 3);
+    const returned = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(returned.current_node_id, "lead");
+    const prompt = f.db.getEvent(f.session.id, returned.steps.at(-1)!.request_event_id!);
+    assert.match(String((prompt.payload as { content: string }).content), /6 × 7 = 42/);
+    f.complete(run.id); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 3);
+  } finally { f.close(); }
+});
+
+test("plain answers cannot silently complete a delegating node, and leaf control blocks still require exact validity", async () => {
+  for (const answer of ["", directive("step-from-another-run"), "```gatherthread-team\n{broken}\n```", directive("step-from-another-run") + "\n" + directive("step-from-another-run")]) {
+    const f = fixture(); try {
+      const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      f.complete(run.id, "delegate"); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+      f.complete(run.id, "complete", "worker", answer);
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "failed");
+      const failed = f.teams.read(f.actor, f.session.id, run.id).run;
+      assert.match(failed.error_code!, /^team_directive_(invalid|mismatch)$/u); assert.equal(failed.calls_used, 2);
+    } finally { f.close(); }
+  }
+  const f = fixture(); try {
+    const plan = structuredClone(f.plan); plan.edges[0]!.direction = "bidirectional";
+    const run = f.start(plan); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.complete(run.id, "delegate"); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    f.complete(run.id, "complete", "worker", "6 × 7 = 42");
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "failed");
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.error_code, "team_directive_invalid");
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 2);
+  } finally { f.close(); }
+});
+
+test("a leaf's explicit delegation cannot borrow the implicit parent-return grant", async () => {
+  const f = fixture(); try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.complete(run.id, "delegate"); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    f.complete(run.id, "delegate", "lead");
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "failed");
+    const failed = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(failed.error_code, "team_delegation_forbidden"); assert.equal(failed.calls_used, 2);
+  } finally { f.close(); }
+});
+
+test("bidirectional cycles terminate at the transactional accepted-call limit", async () => {
+  const f = fixture(); try {
+    const plan = structuredClone(f.plan); plan.edges[0]!.direction = "bidirectional";
+    const run = f.start(plan, 3);
+    for (let call = 1; call <= 3; call++) {
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === call);
+      const current = f.teams.read(f.actor, f.session.id, run.id).run.current_node_id;
+      f.complete(run.id, "delegate", current === "lead" ? "worker" : "lead");
+    }
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "call_limit");
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 3);
+    assert.throws(() => f.teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "no-budget-resume" }));
+  } finally { f.close(); }
+});
+test("invalid edges, stale nonces and unrelated public messages cannot authorize a next call", async () => {
+  for (const failure of ["edge", "nonce", "missing"] as const) {
+    const f = fixture(); try {
+      const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "unrelated-handoff-message", payload: { content: directive("forged", "delegate") } });
+      const step = f.teams.read(f.actor, f.session.id, run.id).run.current_step_id!;
+      f.complete(run.id, "complete", "worker", failure === "edge" ? directive(step, "delegate", "outside-plan")
+        : failure === "nonce" ? directive("another-step", "delegate") : "Plain answer without a team control block");
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "failed");
+      assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 1);
+    } finally { f.close(); }
+  }
+  assert.throws(() => parseTeamDirective(`${directive("step")}\n${directive("step")}`, "step"));
+  assert.throws(() => parseTeamDirective(`${directive("step")}\ntrailing text`, "step"));
+});
+test("paused queued steps cannot be claimed, and resume is a fresh counted request without a duplicate control", async () => {
+  const f = fixture(); try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const first = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+    f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "pause-queued-team" });
+    assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, first.request_event_id!, f.lead.id).status, "paused");
+    assert.throws(() => f.service.completeAgentRequest(f.actor, f.session.id, first.request_event_id!, f.lead.id, "late-team-answer", { text: directive(first.id) }));
+    const input = { action: "resume" as const, idempotency_key: "resume-queued-team" };
+    f.teams.control(f.actor, f.session.id, run.id, input); f.teams.control(f.actor, f.session.id, run.id, input);
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.steps.length, 2);
+    assert.throws(() => f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: input.idempotency_key }));
+    assert.throws(() => f.service.pauseAgentRequest(f.actor, f.session.id, f.teams.read(f.actor, f.session.id, run.id).run.steps[1]!.request_event_id!), /bounded team/);
+  } finally { f.close(); }
+});
+test("deadline fences queued and active native work even without an online connector", async () => {
+  const f = fixture(); try {
+    const run = f.teams.start(f.actor, f.session.id, { plan: f.plan, entry_node_id: "lead", content: "Deadline task", max_calls: 12,
+      max_duration_minutes: 1, idempotency_key: "deadline-team-start" }).run;
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const step = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+    f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id);
+    f.advance(61000); await f.teams.pump();
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.status, "timed_out");
+    assert.throws(() => f.service.appendAgentProgress(f.actor, f.session.id, step.request_event_id!, f.lead.id, "late-team-progress", { content: "Late work" }));
+    assert.throws(() => f.service.completeAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id, "late-team-deadline-result", { text: directive(step.id) }));
+    f.service.heartbeatRuntime(f.actor, f.lead.id);
+    assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id).status, "paused");
+  } finally { f.close(); }
+});
+test("private plans use revisions; viewers, foreign runtimes and generic forged metadata are refused", async () => {
+  const f = fixture(); try {
+    assert.equal(f.teams.savePlan(f.actor, f.session.id, f.plan, null).revision, 1);
+    assert.equal(f.teams.savePlan(f.actor, f.session.id, f.plan, null).revision, 1);
+    assert.throws(() => f.teams.savePlan(f.actor, f.session.id, { ...f.plan, name: "Stale edit" }, null));
+    const other = f.db.createIdentity({ display_name: "Other fixture", device_name: "Other desktop" }).actor;
+    f.service.setMembership(f.actor, f.session.id, other.user_id, "participant", "other-team-member");
+    assert.deepEqual(f.teams.getPlan(other, f.session.id), { plan: null, revision: null });
+    assert.throws(() => f.teams.start(other, f.session.id, { plan: f.plan, entry_node_id: "lead", content: "Foreign target", max_calls: 12,
+      max_duration_minutes: 30, idempotency_key: "foreign-team-start" }));
+    f.service.setMembership(f.actor, f.session.id, other.user_id, "viewer", "other-team-viewer");
+    assert.throws(() => f.teams.savePlan(other, f.session.id, f.plan, null));
+    for (const type of ["human_chat", "agent_request"] as const) assert.throws(() => f.service.appendEvent(f.actor, f.session.id, {
+      type, visibility: "session", idempotency_key: `forged-team-${type}`, payload: { content: "Forged", agent_team: {} } }), /server-owned/);
+    const malformed = structuredClone(f.plan); malformed.nodes[0]!.target = { ...f.plan.nodes[0]!.target, model: "not-advertised" };
+    assert.throws(() => f.start(malformed));
+  } finally { f.close(); }
+});
+test("server restart pauses the bounded run and retains accepted-call accounting", async () => {
+  const f = fixture(); try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.teams.close(); const restored = new AgentTeams(f.service, undefined, { clock: f.clock, autoStart: false });
+    try {
+      const recovered = restored.read(f.actor, f.session.id, run.id).run;
+      assert.equal(recovered.status, "paused"); assert.equal(recovered.error_code, "server_restart"); assert.equal(recovered.calls_used, 1);
+      await restored.pump(); assert.equal(restored.read(f.actor, f.session.id, run.id).run.calls_used, 1);
+      restored.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "restart-team-resume" });
+      await drive(restored, () => restored.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    } finally { restored.close(); }
+  } finally { f.close(); }
+});
+
+const cloudOptions = (runContainer: NonNullable<HostedAgentOptions["runContainer"]>): HostedAgentOptions => ({ image: `example/hosted@sha256:${"a".repeat(64)}`,
+  endpoints: [{ id: "fixture-endpoint", profileId: "fixture-cloud", label: "Fixture cloud", provider: "deepseek", model: "fixture-cloud-model",
+    baseUrl: "https://api.deepseek.com/v1", apiToken: "fixture-only-never-production", quotaGroup: "fixture-account", dailyRuns: 100, maxConcurrent: 1 }],
+  userDailyRuns: 100, globalDailyRuns: 100, maxConcurrent: 1, userMinIntervalSeconds: 1, userMaxConcurrent: 1, runContainer });
+function cloudStep(args: string[]) {
+  const control = args.find(arg => arg.includes("dst=/run/gatherthread,readonly"))!;
+  const directory = /src=([^,]+),dst/u.exec(control)![1]!;
+  const prompt = readFileSync(join(directory, "prompt.txt"), "utf8");
+  return { prompt, step: /"step_id":"(step-[a-f0-9-]+)"/u.exec(prompt)![1]! };
+}
+test("a server-contained cloud leaf completes from its plain final answer without inventing native provenance", { skip: process.platform === "win32" }, async () => {
+  const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-cloud-leaf-")); let calls = 0;
+  const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), cloudOptions(async () => {
+    calls++; return JSON.stringify({ answer: "6 × 7 = 42", files: [] });
+  }));
+  f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+  try {
+    const plan = structuredClone(f.plan); plan.nodes = [{ ...plan.nodes[0]!, target: { kind: "cloud", profile_id: "fixture-cloud",
+      provider: "deepseek", model: "fixture-cloud-model", include_code: false } }]; plan.edges = [];
+    const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Calculate 6*7", max_calls: 1,
+      max_duration_minutes: 30, idempotency_key: "plain-cloud-leaf-start" }).run;
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    const completed = teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(completed.calls_used, 1); assert.equal(calls, 1);
+    const reply = f.db.getEvent(f.session.id, completed.steps[0]!.response_event_id!);
+    assert.equal((reply.payload as { content: string }).content, "6 × 7 = 42");
+    assert.equal(reply.runtime_provenance?.harness, "opencode"); assert.equal(reply.runtime_provenance?.runtime_id, undefined);
+  } finally { teams.close(); await hosted.close(); f.db.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("cloud code notices preserve valid terminal team decisions after either save outcome", { skip: process.platform === "win32" }, async () => {
+  for (const saveError of [false, true]) {
+    const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-notice-"));
+    const repository = new CodeRepository(f.db, directory);
+    const file = { path: "result.txt", content_base64: Buffer.from("42\n").toString("base64"), executable: false };
+    const hosted = new HostedAgent(f.service, repository, cloudOptions(async args => {
+      const { step } = cloudStep(args);
+      return JSON.stringify({ answer: directive(step).replace("```gatherthread-team\n", "```gatherthread-team \t\r\n"),
+        files: [file], save_error: saveError ? "synthetic save refusal" : null });
+    }));
+    f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+    try {
+      repository.enable(f.actor, f.session.project_id, { idempotency_key: "team-notice-code-enable" });
+      const plan = structuredClone(f.plan); plan.nodes = [{ ...plan.nodes[0]!, target: { kind: "cloud", profile_id: "fixture-cloud",
+        provider: "deepseek", model: "fixture-cloud-model", include_code: true } }]; plan.edges = [];
+      const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Write the arithmetic result",
+        max_calls: 1, max_duration_minutes: 30, idempotency_key: "team-notice-start" }).run;
+      await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status !== "running");
+      const completed = teams.read(f.actor, f.session.id, run.id).run;
+      assert.equal(completed.status, "completed"); assert.equal(completed.calls_used, 1);
+      const content = (f.db.getEvent(f.session.id, completed.steps[0]!.response_event_id!).payload as { content: string }).content;
+      assert.match(content, saveError ? /files could not be saved/ : /Changes were saved/);
+      assert.equal(parseTeamDirective(content, completed.steps[0]!.id).action, "complete");
+      const branch = repository.status(f.actor, f.session.project_id).own_branch_id;
+      if (saveError) {
+        assert.equal(branch, null, "a refused save cannot create a personal branch");
+        assert.deepEqual(repository.snapshot(f.actor, f.session.project_id, "main").snapshot.files, []);
+      } else {
+        assert.ok(branch);
+        assert.deepEqual(repository.snapshot(f.actor, f.session.project_id, branch).snapshot.files, [file]);
+      }
+    } finally { teams.close(); await hosted.close(); f.db.close(); rmSync(directory, { recursive: true, force: true }); }
+  }
+});
+
+test("cloud timeout continuation is a fresh counted step, rejects public continuation bypass, and stays under 12KiB context", { skip: process.platform === "win32" }, async () => {
+  const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-cloud-")); let calls = 0;
+  const repository = new CodeRepository(f.db, directory);
+  const hosted = new HostedAgent(f.service, repository, cloudOptions(async args => {
+    calls++; const { step, prompt } = cloudStep(args); assert.ok(Buffer.byteLength(prompt) < 36000);
+    assert.ok(prompt.includes("Prior shared requirement: preserve the agreed behavior."));
+    if (calls === 1) throw new Error("agent_timeout");
+    assert.ok(prompt.includes("Human update after timeout: check the final result."));
+    assert.equal(prompt.split("Original cloud task").length, 2);
+    return JSON.stringify({ answer: directive(step), files: [] });
+  }));
+  f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+  try {
+    const plan = structuredClone(f.plan); plan.nodes = [{ ...plan.nodes[0]!, target: { kind: "cloud", profile_id: "fixture-cloud", provider: "deepseek", model: "fixture-cloud-model", include_code: false } }]; plan.edges = [];
+    f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "team-prior-human-context",
+      payload: { content: "Prior shared requirement: preserve the agreed behavior." } });
+    const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Original cloud task", max_calls: 3,
+      max_duration_minutes: 30, idempotency_key: "cloud-team-start" }).run;
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "paused");
+    const paused = teams.read(f.actor, f.session.id, run.id).run; assert.equal(paused.error_code, "agent_timeout"); assert.equal(paused.calls_used, 1);
+    const original = f.db.getEvent(f.session.id, paused.steps[0]!.request_event_id!);
+    await assert.rejects(hosted.start(f.actor, f.session.id, { profile_id: "fixture-cloud", include_code: false,
+      content: String((original.payload as { content: string }).content), idempotency_key: "bypass-team-continue", continue_from_event_id: original.id }), /bounded team/);
+    f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "team-timeout-human-update",
+      payload: { content: "Human update after timeout: check the final result." } });
+    f.advance(1000);
+    teams.control(f.actor, f.session.id, run.id, { action: "continue", idempotency_key: "cloud-team-continue" });
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    assert.equal(teams.read(f.actor, f.session.id, run.id).run.calls_used, 2); assert.equal(hosted.status(f.actor).user_used_runs, 2);
+  } finally { teams.close(); f.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+test("a timed-out cloud subordinate continues explicitly then returns to its native parent within the original budget", { skip: process.platform === "win32" }, async () => {
+  const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-mixed-")); let cloudCalls = 0;
+  const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), cloudOptions(async args => {
+    const { step, prompt } = cloudStep(args); cloudCalls++;
+    assert.ok(prompt.includes("Original mixed task"));
+    if (cloudCalls === 1) throw new Error("agent_timeout");
+    return JSON.stringify({ answer: `Cloud subordinate verified result.\n\n${directive(step)}`, files: [] });
+  }));
+  f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+  try {
+    const plan = structuredClone(f.plan);
+    plan.nodes[1]!.target = { kind: "cloud", profile_id: "fixture-cloud", provider: "deepseek", model: "fixture-cloud-model", include_code: false };
+    const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Original mixed task",
+      max_calls: 4, max_duration_minutes: 30, idempotency_key: "mixed-team-start" }).run;
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.complete(run.id, "delegate");
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "paused");
+    const paused = teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(paused.current_node_id, "worker"); assert.equal(paused.calls_used, 2);
+    await teams.pump(); assert.equal(cloudCalls, 1, "timeout cannot retry itself");
+    f.advance(1000);
+    teams.control(f.actor, f.session.id, run.id, { action: "continue", idempotency_key: "mixed-team-continue" });
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.calls_used === 4);
+    const returned = teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(returned.current_node_id, "lead"); assert.equal(returned.deadline_at, run.deadline_at);
+    const request = f.db.getEvent(f.session.id, returned.steps.at(-1)!.request_event_id!);
+    const prompt = String((request.payload as { content: string }).content);
+    assert.ok(prompt.includes("Original mixed task")); assert.ok(prompt.includes("Cloud subordinate verified result"));
+    f.complete(run.id);
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    const finished = teams.read(f.actor, f.session.id, run.id).run;
+    assert.deepEqual(finished.steps.map(step => step.node_id), ["lead", "worker", "worker", "lead"]);
+    assert.equal(finished.calls_used, 4); assert.equal(cloudCalls, 2);
+  } finally { teams.close(); f.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+test("private storage caps refuse oversized control growth and still allow stopping", async () => {
+  const f = fixture(); try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.db.sqlite.prepare("UPDATE agent_team_runs SET bytes=524288 WHERE id=?").run(run.id);
+    f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "full-team-pause" });
+    assert.throws(() => f.teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "full-team-resume" }),
+      error => error instanceof ApiError && error.code === "agent_team_storage_full");
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "full-team-stop" }).run.status, "stopped");
+    const head = f.db.requireSession(f.session.id).next_sequence; f.teams.forget(f.actor, f.session.id, run.id);
+    assert.equal(f.db.requireSession(f.session.id).next_sequence, head);
+  } finally { f.close(); }
+});
+
+test("successful no-op control retries never operate a later run state", () => {
+  const f = fixture();
+  try {
+    const run = f.start();
+    const resume = { action: "resume" as const, idempotency_key: "noop-team-resume" };
+    const continuing = { action: "continue" as const, idempotency_key: "noop-team-continue" };
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, resume).run.status, "running");
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, continuing).run.status, "running");
+    f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "human-team-pause" });
+    const pause = { action: "pause" as const, idempotency_key: "noop-team-pause" };
+    f.teams.control(f.actor, f.session.id, run.id, pause);
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, resume).run.status, "paused");
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, continuing).run.status, "paused");
+    f.teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "new-team-resume" });
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, pause).run.status, "running");
+    assert.throws(() => f.teams.control(f.actor, f.session.id, run.id, { ...pause, action: "stop" }),
+      error => error instanceof ApiError && error.code === "idempotency_conflict");
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 0);
+  } finally { f.close(); }
+});
+
+test("bounded control receipts reserve only two critical pause/stop slots", () => {
+  const f = fixture();
+  try {
+    const run = f.start();
+    for (let index = 0; index < 128; index++) f.teams.control(f.actor, f.session.id, run.id,
+      { action: "resume", idempotency_key: `noop-resume-receipt-${index}` });
+    const pause = { action: "pause" as const, idempotency_key: "reserved-team-pause" };
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, pause).run.status, "paused");
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, pause).run.status, "paused");
+    assert.throws(() => f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "extra-noop-pause" }),
+      error => error instanceof ApiError && error.code === "agent_team_storage_full");
+    const stop = { action: "stop" as const, idempotency_key: "reserved-team-stop" };
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, stop).run.status, "stopped");
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, stop).run.status, "stopped");
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_controls WHERE run_id=?").get(run.id)!.count, 130);
+  } finally { f.close(); }
+});
+
+test("recognized credentials are rejected before private storage and before canonical Agent acceptance", () => {
+  const f = fixture();
+  try {
+    const sensitive = ["sk", "syntheticfixturevalue12345678"].join("-");
+    for (const field of ["team_prompt", "role", "task"]) {
+      const plan = structuredClone(f.plan);
+      if (field === "team_prompt") plan.team_prompt = sensitive;
+      if (field === "role") plan.nodes[0]!.role = sensitive;
+      if (field !== "task") assert.throws(() => f.teams.savePlan(f.actor, f.session.id, plan, null),
+        error => error instanceof ApiError && error.code === "agent_team_sensitive_input");
+      assert.throws(() => f.teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: field === "task" ? sensitive : "Public task",
+        max_calls: 12, max_duration_minutes: 30, idempotency_key: `sensitive-team-${field}` }),
+        error => error instanceof ApiError && error.code === "agent_team_sensitive_input");
+    }
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_plans").get()!.count, 0);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_runs").get()!.count, 0);
+    assert.equal(f.service.replay(f.actor, f.session.id, 0, 100).events.some(event => event.type === "agent_request"), false);
+  } finally { f.close(); }
+});
+
+test("message erasure scrubs private team copies, fences late work and rejects stale automatic starts", async () => {
+  const f = fixture();
+  try {
+    const source = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "team-erasure-source", payload: { content: "Disposable source" } });
+    const run = f.start();
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const step = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+    f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id);
+    f.db.deleteMessage(f.actor, f.session.id, source.id, "team-source-erasure");
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_runs WHERE session_id=?").get(f.session.id)!.count, 0);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_steps").get()!.count, 0);
+    assert.equal(f.db.teamRequestMayExecute(step.request_event_id!), false);
+    assert.throws(() => f.service.completeAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id,
+      "late-erased-team-result", { text: directive(step.id, "delegate") }));
+    assert.throws(() => f.teams.start(f.actor, f.session.id, { plan: f.plan, entry_node_id: "lead", content: "Stale task",
+      max_calls: 12, max_duration_minutes: 30, content_revision: 0, idempotency_key: "stale-erased-team-start" }),
+      error => error instanceof ApiError && error.code === "context_changed");
+    assert.throws(() => f.teams.start(f.actor, f.session.id, { plan: f.plan, entry_node_id: "lead", content: "Unpinned task",
+      max_calls: 12, max_duration_minutes: 30, idempotency_key: "unpinned-erased-team-start" }),
+      error => error instanceof ApiError && error.code === "context_changed");
+    await f.teams.pump();
+    const current = f.start();
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, current.id).run.calls_used === 1);
+    const request = f.db.getEvent(f.session.id, f.teams.read(f.actor, f.session.id, current.id).run.steps[0]!.request_event_id!);
+    assert.equal(request.content_revision, 1);
+  } finally { f.close(); }
+});
+
+test("personal cloud team continuation retains its exact configuration revision and never switches payer after an edit", { skip: process.platform === "win32" }, async () => {
+  const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-personal-")); let calls = 0;
+  const options = { ...cloudOptions(async () => { calls++; throw new Error("container_timeout"); }), personalApiEncryptionKey: randomBytes(32).toString("base64") };
+  const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), options);
+  f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+  try {
+    const metadata = { expected_revision: null, provider_id: "deepseek" as const, label: "Fixture personal model", model: "deepseek-chat",
+      enabled: true, api_key: ["synthetic", "team", "provider", "value"].join("-") };
+    const config = hosted.putPersonalApi(f.actor, randomUUID(), metadata);
+    const profile = hosted.status(f.actor).profiles.find(profile => profile.id === config.profile_id)!;
+    const plan = structuredClone(f.plan); plan.edges = []; plan.nodes = [{ ...plan.nodes[0]!, target: {
+      kind: "cloud", profile_id: config.profile_id, provider: profile.provider, model: profile.model, include_code: false, api_config_revision: config.revision } }];
+    const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "Fixture personal task", max_calls: 3,
+      max_duration_minutes: 30, idempotency_key: "team-personal-original" }).run;
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "paused");
+    assert.equal(teams.read(f.actor, f.session.id, run.id).run.error_code, "agent_timeout");
+    const requestId = teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+    assert.equal(hosted.selection(f.actor, f.session.id, requestId).api_config_revision, config.revision);
+    const updated = hosted.putPersonalApi(f.actor, config.id, { ...metadata, label: "Updated fixture label", expected_revision: config.revision });
+    assert.notEqual(updated.revision, config.revision);
+    assert.throws(() => teams.control(f.actor, f.session.id, run.id, { action: "continue", idempotency_key: "team-personal-continue" }),
+      error => error instanceof ApiError && error.code === "agent_team_target_unavailable");
+    assert.equal(teams.read(f.actor, f.session.id, run.id).run.status, "paused");
+    assert.equal(teams.read(f.actor, f.session.id, run.id).run.calls_used, 1);
+    assert.equal(calls, 1);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_daily_usage WHERE billing_source='personal'").get()!.count, 1);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM hosted_agent_daily_usage WHERE billing_source='service'").get()!.count, 0);
+  } finally { teams.close(); f.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("maximum-length Chinese team instructions preserve the entire original task across delegation and return", async () => {
+  const f = fixture();
+  try {
+    const original = "原".repeat(3000), plan = structuredClone(f.plan);
+    plan.team_prompt = "规".repeat(2000); plan.nodes.forEach(node => { node.role = "职".repeat(1000); });
+    const run = f.teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: original, max_calls: 3,
+      max_duration_minutes: 30, idempotency_key: "long-chinese-team" }).run;
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.complete(run.id, "delegate");
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    const child = f.teams.read(f.actor, f.session.id, run.id).run.steps[1]!;
+    const prompt = String((f.db.getEvent(f.session.id, child.request_event_id!).payload as { content: string }).content);
+    assert.ok(prompt.includes(original)); assert.ok(prompt.includes(plan.team_prompt)); assert.ok(prompt.includes(plan.nodes[1]!.role));
+    assert.ok(prompt.length > 6000); assert.ok(Buffer.byteLength(prompt) < 40000);
+    f.complete(run.id);
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 3);
+    f.complete(run.id);
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+  } finally { f.close(); }
+});
+
+test("waiting native executions do not occupy every scheduler slot or starve another owner's accepted team", async () => {
+  const f = fixture();
+  try {
+    const runs = [];
+    for (let index = 0; index < 33; index++) {
+      const actor = f.db.createIdentity({ display_name: `Scheduler fixture ${index}`, device_name: "Fixture", can_create_projects: true }).actor;
+      const project = f.service.createProject(actor, { title: "Own scheduler fixture", idempotency_key: `scheduler-project-${index}` });
+      const { session } = f.service.createSession(actor, { project_id: project.id, mode: "multi", title: "Waiting native execution", idempotency_key: `scheduler-session-${index}` });
+      const runtime = f.service.registerRuntime(actor, { session_id: session.id, device_id: actor.device_id,
+        harness: "codex", provider: "openai", model: "fixture-scheduler", context_deletion_version: 1,
+        capture_fidelity: "harness_transcript", local_session_id: `fixture-scheduler-${index}` });
+      const plan: AgentTeamPlan = { name: "Scheduler team", team_prompt: "Finish this assignment", edges: [], nodes: [{
+        id: "lead", label: "Lead", role: "Finish", x: 0, y: 0,
+        target: { kind: "local", runtime_id: runtime.id, harness: "codex", provider: "openai", model: "fixture-scheduler" } }] };
+      runs.push({ actor, session, run: f.teams.start(actor, session.id, { plan, entry_node_id: "lead", content: "Public scheduler fixture",
+        max_calls: 1, max_duration_minutes: 30, content_revision: 0, idempotency_key: `scheduler-team-start-${index}` }).run });
+    }
+    const last = runs.at(-1)!;
+    await drive(f.teams, () => f.teams.read(last.actor, last.session.id, last.run.id).run.calls_used === 1);
+    for (const entry of runs) assert.equal(f.teams.read(entry.actor, entry.session.id, entry.run.id).run.calls_used, 1);
+    assert.equal(f.teams.store.due().length, 0, "unfinished native replies wait without resubmitting or blocking ready teams");
+  } finally { f.close(); }
+});
+
+test("an accepted native call is displayed as queued until the exact runtime actually claims it", async () => {
+  const f = fixture();
+  try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const queued = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(queued.steps[0]!.status, "pending"); assert.ok(queued.steps[0]!.request_event_id);
+    f.service.claimAgentRequest(f.actor, f.session.id, queued.steps[0]!.request_event_id!, f.lead.id);
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!.status, "running");
+    assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.calls_used, 1);
+  } finally { f.close(); }
+});
+
+test("erasing a returned subordinate result scrubs its copied parent prompt and leaves the independent human task", async () => {
+  const f = fixture();
+  try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    f.complete(run.id, "delegate"); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    const marker = "Disposable derived result must disappear";
+    const child = f.teams.read(f.actor, f.session.id, run.id).run.steps.at(-1)!;
+    const answer = f.complete(run.id, "complete", "worker", `${marker}\n\n${directive(child.id)}`);
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 3);
+    const steps = f.teams.read(f.actor, f.session.id, run.id).run.steps;
+    const copied = steps.at(-1)!.request_event_id!;
+    assert.ok(JSON.stringify(f.db.getEvent(f.session.id, copied).payload).includes(marker));
+    f.db.deleteMessage(f.actor, f.session.id, answer.id, "team-child-result-erasure");
+    assert.equal(f.db.getEvent(f.session.id, copied).deleted?.reason, "request");
+    assert.equal(f.db.teamRequestMayExecute(copied), false);
+    assert.ok(!JSON.stringify(f.service.replay(f.actor, f.session.id, 0, 100).events).includes(marker));
+    assert.equal(f.db.getEvent(f.session.id, steps[0]!.request_event_id!).deleted, undefined);
+  } finally { f.close(); }
+});
+
+test("canonical team derivation remains erasable after its ended private record has been cleared", async () => {
+  const f = fixture();
+  try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const lead = f.complete(run.id, "delegate"); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    f.complete(run.id); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 3);
+    f.complete(run.id); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    const steps = f.teams.read(f.actor, f.session.id, run.id).run.steps;
+    f.teams.forget(f.actor, f.session.id, run.id);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_steps").get()!.count, 0);
+    f.db.deleteMessage(f.actor, f.session.id, lead.id, "team-forgotten-result-erasure");
+    for (const step of steps.slice(1)) {
+      assert.ok(f.db.getEvent(f.session.id, step.request_event_id!).deleted);
+      assert.ok(f.db.getEvent(f.session.id, step.response_event_id!).deleted);
+      assert.equal(f.db.teamRequestMayExecute(step.request_event_id!), false);
+    }
+  } finally { f.close(); }
+});
+
+test("deleting the original paused request also erases its resumed copy without needing a final response", async () => {
+  const f = fixture();
+  try {
+    const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const original = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+    f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: "team-copy-pause" });
+    f.teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: "team-copy-resume" });
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    const resumed = f.teams.read(f.actor, f.session.id, run.id).run.steps.at(-1)!.request_event_id!;
+    f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "team-copy-stop" }); f.teams.forget(f.actor, f.session.id, run.id);
+    f.db.deleteMessage(f.actor, f.session.id, original, "team-original-copy-erasure");
+    assert.ok(f.db.getEvent(f.session.id, resumed).deleted); assert.equal(f.db.teamRequestMayExecute(resumed), false);
+  } finally { f.close(); }
+});

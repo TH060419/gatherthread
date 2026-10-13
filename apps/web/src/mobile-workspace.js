@@ -49,7 +49,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   // One settings dialog on every screen, preserving IDs and event handlers.
   el("mobile-agent-content").append(profile, el("send-cloud-agent-help"));
   remember(el("member-panel"), el("mobile-members-content"));
-  for (const id of ["project-code-button", "settings-button", "mobile-members-button", "logout-button",
+  for (const id of ["project-code-button", "settings-button", "agent-team-button", "mobile-members-button", "logout-button",
     "rename-session-button", "delete-session-button", "session-context-details",
     "history-summary-select-button", "mentions-button", "history-summary-view-button",
     "history-summary-versions-button", "download-codex-button"]) {

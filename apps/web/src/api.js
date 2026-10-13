@@ -2,7 +2,8 @@ import { avatarImage } from "./avatars.js?v=20261012-content-1";
 import { HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
   HostedGithubTaskSchema, HostedGithubTaskListSchema, HostedAgentAcceptedSchema, HostedAgentPausedSchema,
   ProjectInvitationPreviewSchema, DeleteMessageResultSchema, CloudApiStatusSchema, CloudApiSavedSchema,
-  HostedAgentSelectionSchema } from "@gatherthread/protocol";
+  HostedAgentSelectionSchema, SaveAgentTeamPlanInputSchema, StartAgentTeamRunInputSchema, ControlAgentTeamRunInputSchema,
+  AgentTeamPlanResponseSchema, AgentTeamRunsResponseSchema, AgentTeamRunResponseSchema, AgentTeamRunAcceptedSchema } from "@gatherthread/protocol";
 import {
   createIdempotencyKey,
   isExecutionRuntime,
@@ -14,6 +15,39 @@ const TITLE_CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/u;
 
 const HOSTED_AGENT_RESPONSE_ERROR = "Cloud Agent response is invalid. Refresh and try again.";
 const PERSONAL_API_RESPONSE_ERROR = "Personal API response is invalid. Refresh and try again.";
+const AGENT_TEAM_RESPONSE_ERROR = "Agent team response is invalid. Refresh and try again.";
+const AGENT_TEAM_REQUEST_ERROR = "Agent team request failed. Refresh and try again.";
+
+function agentTeamInput(schema, input) {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) throw new ApiError("Agent team input is invalid. Review the plan and try again.", {
+    status: 422, code: "validation_error",
+  });
+  return parsed.data;
+}
+
+async function agentTeamResponse(schema, request, expected = {}) {
+  let response;
+  try { response = await request; }
+  catch (error) {
+    if (error instanceof ApiError && error.code === "invalid_api_origin") throw error;
+    if (error instanceof SyntaxError) {
+      throw new ApiError(AGENT_TEAM_RESPONSE_ERROR, { status: 502, code: "invalid_agent_team_response" });
+    }
+    throw new ApiError(AGENT_TEAM_REQUEST_ERROR, {
+      status: error instanceof ApiError ? error.status : 0,
+      code: error instanceof ApiError && typeof error.code === "string" && /^[a-z][a-z0-9_]{0,79}$/u.test(error.code)
+        ? error.code : error instanceof ApiError ? "http_error" : "network_error",
+    });
+  }
+  const parsed = schema.safeParse(response);
+  if (!parsed.success || (expected.sessionId !== undefined && parsed.data.run?.session_id !== expected.sessionId)
+    || (expected.runId !== undefined && parsed.data.run?.id !== expected.runId)
+    || (expected.listSessionId !== undefined && parsed.data.runs?.some(run => run.session_id !== expected.listSessionId))) {
+    throw new ApiError(AGENT_TEAM_RESPONSE_ERROR, { status: 502, code: "invalid_agent_team_response" });
+  }
+  return parsed.data;
+}
 
 async function hostedResponse(schema, request, errorMessage = "Cloud GitHub response is invalid. Refresh and try again.") {
   const parsed = schema.safeParse(await request);
@@ -580,6 +614,46 @@ export class HttpCollaborationApi {
     return this.#append(sessionId, "agent_request", input);
   }
 
+  getAgentTeamPlan(sessionId) {
+    return agentTeamResponse(AgentTeamPlanResponseSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-plan`));
+  }
+
+  saveAgentTeamPlan(sessionId, input) {
+    const body = agentTeamInput(SaveAgentTeamPlanInputSchema, input);
+    return agentTeamResponse(AgentTeamPlanResponseSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-plan`, {
+      method: "PUT", body: JSON.stringify(body),
+    }));
+  }
+
+  listAgentTeamRuns(sessionId) {
+    return agentTeamResponse(AgentTeamRunsResponseSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs`), { listSessionId: sessionId });
+  }
+
+  startAgentTeamRun(sessionId, input) {
+    const body = agentTeamInput(StartAgentTeamRunInputSchema, input);
+    return agentTeamResponse(AgentTeamRunAcceptedSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs`, {
+      method: "POST", body: JSON.stringify(body),
+    }), { sessionId });
+  }
+
+  getAgentTeamRun(sessionId, runId) {
+    return agentTeamResponse(AgentTeamRunResponseSchema,
+      this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(runId)}`), { sessionId, runId });
+  }
+
+  controlAgentTeamRun(sessionId, runId, input) {
+    const body = agentTeamInput(ControlAgentTeamRunInputSchema, input);
+    return agentTeamResponse(AgentTeamRunResponseSchema,
+      this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(runId)}/control`, {
+        method: "POST", body: JSON.stringify(body),
+      }), { sessionId, runId });
+  }
+
+  async forgetAgentTeamRun(sessionId, runId) {
+    try { await this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(runId)}`, { method: "DELETE", body: "{}" }); }
+    catch (error) { throw new ApiError(AGENT_TEAM_REQUEST_ERROR, { status: error instanceof ApiError ? error.status : 0, code: error instanceof ApiError ? error.code : "network_error" }); }
+  }
+
   getHostedGithubStatus(projectId) { return hostedResponse(HostedGithubStatusSchema, this.request(`/v1/projects/${encodeURIComponent(projectId)}/hosted-github`)); }
   authorizeHostedGithub() { return hostedResponse(HostedGithubAuthorizationSchema, this.request("/v1/hosted-github/authorize", { method: "POST", body: "{}" })); }
   completeHostedGithub(input) { return hostedResponse(HostedGithubConnectionSchema, this.request("/v1/hosted-github/complete", { method: "POST", body: JSON.stringify(input) })); }
@@ -803,6 +877,7 @@ export class MockCollaborationApi {
     this.codeAutomaticUpload = new Map();
     this.githubConnections = new Map();
     this.githubAutomaticUpload = new Map();
+    this.agentTeamPlans = new Map();
     this.credential = "";
     this.deviceName = "Safari · macOS";
     this.dshDeviceName = "DeepSeek Harness · macOS";
@@ -1682,6 +1757,68 @@ export class MockCollaborationApi {
     return this.#append(sessionId, "human_chat", input);
   }
 
+  #agentTeamAccess(sessionId, write = false) {
+    const session = this.#findSession(sessionId);
+    const member = session.members.find(item => item.userId === this.currentUser?.id);
+    const project = this.projects.find(item => item.id === session.projectId);
+    if (!member || (write && (member.role === "viewer" || project?.state !== "active"
+      || session.state === "archived" || (session.mode === "solo" && session.ownerUserId !== this.currentUser.id)))) {
+      throw new ApiError("This session is read only for your role.", { status: 403, code: "forbidden" });
+    }
+    return JSON.stringify([sessionId, this.currentUser.id]);
+  }
+
+  async forgetAgentTeamRun() {
+    throw new ApiError("Agent team runs require a connected server.", { status: 409, code: "agent_team_server_required" });
+  }
+
+  async getAgentTeamPlan(sessionId) {
+    await this.#wait();
+    const key = this.#agentTeamAccess(sessionId);
+    return structuredClone(this.agentTeamPlans.get(key) ?? { plan: null, revision: null });
+  }
+
+  async saveAgentTeamPlan(sessionId, input) {
+    await this.#wait();
+    const key = this.#agentTeamAccess(sessionId, true);
+    const body = agentTeamInput(SaveAgentTeamPlanInputSchema, input);
+    const previous = this.agentTeamPlans.get(key);
+    if ((previous?.revision ?? null) !== body.expected_revision) {
+      throw new ApiError("Agent team plan changed. Refresh and try again.", { status: 409, code: "revision_conflict" });
+    }
+    const result = { plan: body.plan, revision: (previous?.revision ?? 0) + 1 };
+    this.agentTeamPlans.set(key, structuredClone(result));
+    return structuredClone(result);
+  }
+
+  async listAgentTeamRuns(sessionId) {
+    await this.#wait();
+    this.#agentTeamAccess(sessionId);
+    return { runs: [] };
+  }
+
+  async startAgentTeamRun(sessionId, input) {
+    await this.#wait();
+    this.#agentTeamAccess(sessionId, true);
+    agentTeamInput(StartAgentTeamRunInputSchema, input);
+    // The disposable example edits plans in memory. A real server owns all
+    // execution, canonical steps, graph directives and durable call budgets.
+    throw new ApiError("Agent team runs require a connected server.", { status: 409, code: "agent_team_server_required" });
+  }
+
+  async getAgentTeamRun(sessionId) {
+    await this.#wait();
+    this.#agentTeamAccess(sessionId);
+    throw new ApiError("Agent team runs require a connected server.", { status: 409, code: "agent_team_server_required" });
+  }
+
+  async controlAgentTeamRun(sessionId, _runId, input) {
+    await this.#wait();
+    this.#agentTeamAccess(sessionId, true);
+    agentTeamInput(ControlAgentTeamRunInputSchema, input);
+    throw new ApiError("Agent team runs require a connected server.", { status: 409, code: "agent_team_server_required" });
+  }
+
   async appendAgentRequest(sessionId, input) {
     const existing = this.idempotentEvents.get(`${sessionId}:${input.idempotencyKey}`);
     const request = await this.#append(sessionId, "agent_request", input);
@@ -1941,6 +2078,9 @@ export class MockCollaborationApi {
 
   #discardSessionCloudState(sessionId) {
     this.events.delete(sessionId);
+    for (const key of this.agentTeamPlans.keys()) {
+      if (JSON.parse(key)[0] === sessionId) this.agentTeamPlans.delete(key);
+    }
     for (const [key, event] of this.idempotentEvents) {
       if (event.sessionId === sessionId) this.idempotentEvents.delete(key);
     }

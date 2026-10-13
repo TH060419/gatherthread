@@ -1663,6 +1663,13 @@ function captureCompletedLocalTurns(
   return { turns, safeThroughSequence };
 }
 
+/** Exact producer identities emitted by GatherThread or DSH's v3 -> v4 migration. */
+export function isGatherThreadMessageSource(value: unknown): boolean {
+  const source = asObject(value);
+  return source?.kind === "plugin" ? source.plugin === "gatherthread"
+    : source?.plugin === undefined && (source?.kind === "gatherthread" || source?.kind === "plugin:gatherthread");
+}
+
 /** True only after DSH durably closes a local human/assistant turn successfully. */
 export function hasCompletedDshLocalTurn(
   events: readonly DshSessionEventRecord[],
@@ -1670,7 +1677,7 @@ export function hasCompletedDshLocalTurn(
 ): boolean {
   if (events.some((event) => event.type === "user/message"
     && /^gatherthread-retired:[0-9]+$/.test(String(asObject(event.data)?.id))
-    && asObject(asObject(event.data)?.source)?.plugin === "gatherthread")) return false;
+    && isGatherThreadMessageSource(asObject(event.data)?.source))) return false;
   return captureCompletedLocalTurns(events, 0, dshSessionId).turns.length > 0;
 }
 

@@ -1,3 +1,5 @@
+import { AGENT_TEAM_ZH_CN } from "./agent-team-i18n.js";
+
 const ZH_CN = Object.freeze({
   "Qwen · Alibaba Cloud (Beijing)": "Qwen · 阿里百炼（北京）",
   "GLM · Zhipu": "GLM · 智谱",
@@ -98,6 +100,7 @@ const ZH_CN = Object.freeze({
   "This server cannot show the invitation. You can sign in and enter the invitation secret under Join another project.": "此服务器暂时无法显示邀请，你可以登录后在「加入其他项目」中输入邀请密钥。",
   "Could not confirm joining. Retry checks whether you already joined before sending another request.": "暂时无法确认是否加入。重试会先检查加入结果，再决定是否需要重新提交。",
   "Could not load the invitation. Check your connection and try again.": "读取邀请失败，请检查网络后重试。",
+  ...AGENT_TEAM_ZH_CN,
   "Cloud Agent is working…": "云端 Agent 正在处理…",
   "Cloud Agent is unavailable. Please try a new request later.": "云端 Agent 暂时不可用，请稍后重新请求。",
   "Cloud Agent timed out. Please try a shorter request or another cloud model.": "云端 Agent 处理超时，请缩短请求或更换云端模型后重试。",

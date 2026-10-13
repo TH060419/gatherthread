@@ -213,8 +213,10 @@ The published MCP surface is intentionally narrower than the internal collaborat
 - Codex and DSH model selection both use exact metadata advertised by the connected runtime. The Codex connector reads its installation's own catalog through the App Server's documented `model/list` method; DSH re-reads its native LLM metadata on a bounded interval. A request may name only an advertised model and, for that model, only an advertised reasoning effort. A harness that cannot be queried advertises nothing and keeps fixed-model routing; a harness or provider that configures models elsewhere keeps its own catalog as the source of truth.
 - Codex Hooks are limited to reviewed `UserPromptSubmit` and `Stop` definitions. Hook payloads, output limits, registry purpose, and workspace path checks are security contracts.
 - Codex Desktop projection, background execution, and snapshot tasks have separate purposes and single-writer rules. Never mutate an active or ambiguously owned native task.
+- Native canonical replay honors the protocol's optional provenance `runtime_id`: server-contained Cloud replies do not acquire an invented local runtime identity. Local echo suppression and execution selection still require the exact authorized runtime; accepting public Cloud history grants no local execution capability.
 - Native context capacity and transport bounds are separate. Codex context accounting uses fresh last-request usage, not cumulative lifetime billing; a reported model window takes precedence over a fallback estimate. Ordinary native automatic compaction remains enabled according to the user's harness configuration. GatherThread must not overwrite that configuration or label local truncation as native compaction. See [ADR-0026](adr/0026-native-first-context-management.md).
 - DSH uses public session append/flush and Agent services, durable projected-event IDs, echo suppression, and an outgoing outbox. Only allowlisted assistant output and redacted tool data may leave DSH.
+- GatherThread relay/ownership/retirement messages retain `source:{kind:"plugin",plugin:"gatherthread"}` in Session formats 2/3 and use producer kind `gatherthread` in format 4. The exact `kind:"plugin:gatherthread"` identity created by upstream v3-to-v4 migration is also recognized. Format 4 surface replacement uses `startSeq/endSeq`; older supported formats keep `start/end`. Unknown explicit format versions refuse context writes. This narrow Session compatibility boundary does not promote a new DSH distribution/profile into the verified compatibility matrix. See [ADR-0055](adr/0055-dsh-session-format-owned-context.md).
 - DSH model selection uses exact metadata advertised by the connected runtime. A GatherThread request may temporarily select one declared model and effort for its own DSH turn; it must not persistently rewrite DSH-native selection for later local turns.
 - Native DSH pairing/configuration is single-flight. Disconnect drains canceled configuration writes before clearing its credential, and a project-role change refreshes only that project's native owner and permissions.
 - Persistent connector and DSH state must carry a version. A state change needs atomic migration or a safe, actionable refusal; never guess at an old structure.
@@ -353,3 +355,44 @@ A verified reset retains account/project/membership IDs, roles and quotas and at
 - `GET /v1/sessions/:session_id/avatar-profiles` returns `{ data: { profiles: [{ user_id, avatar_id }] } }` after current session membership/device authorization. Profiles cover current project members and historical authors whose events the caller can read, including departed members. No global user lookup is exposed. Unknown catalog IDs fall back to null for presentation.
 - Avatars are a mutable read model; no avatar field or profile-change event is added to the canonical event log. Sequence, replay payloads, frozen `actor_display_name`, history injection and native transcript projection remain unchanged. Web refresh is best-effort on session selection and existing member polling, with account/selection/save fences for late responses. Avatar reads run independently of project/session loading, membership and permission refresh, and realtime connection. HTTP avatar reads have a four-second deadline; one in-flight profile read per active selection prevents overlapping polls. Failed reads retain confirmed presentation and may retry without delaying authoritative access changes.
 - Persistence adds nullable `users.avatar_id`; existing databases migrate additively and default to initials. Account deletion removes the original user's profile; the existing shared-history deletion identity has no avatar. Rollback clients ignore avatar metadata; replacing an image retains its stable ID. The catalog/schema consistency test guards newly added IDs.
+
+## Agent team preview contract
+
+Strict public prerelease schemas are in `packages/protocol/src/agent-team.ts`;
+HTTP routes are in `server.ts`. Requester-private routes are:
+
+- `GET/PUT /v1/sessions/:id/agent-team-plan` (revision-checked save).
+- `GET/POST /v1/sessions/:id/agent-team-runs` (list or explicit human start).
+- `GET/DELETE /v1/sessions/:id/agent-team-runs/:run` (own detail or terminal cleanup).
+- `POST /v1/sessions/:id/agent-team-runs/:run/control` (pause/resume/stop/continue).
+
+Inputs are strict snake_case; start and control require stable idempotency keys.
+Plans allow 16 nodes/32 edges and 64 KiB serialized data. Optional saved `entry_node_id` selects a default first node; older plans omit it and use their first node. The explicit start input remains authoritative. Start permits a 3,000
+character task; shared rules and per-node role permit 2,000/1,000 characters.
+Defaults are 12 accepted calls/30 minutes, maxima 48/120. Local targets bind an
+exact runtime/harness/provider/model/effort; personal cloud profiles also require
+their original private configuration revision. Start pins `content_revision`;
+legacy omission is accepted only for pristine revision zero. Read/list are owner
+scoped; every mutation checks active device/current session write authority.
+
+`agent_team` request metadata is server-owned. One strict final fenced JSON
+`gatherthread-team` block carries version 1/current step ID and either complete
+or delegate to a configured neighbor with a bounded task. A node with no outgoing
+delegation grants may complete with a nonempty plain canonical final answer;
+its already-authorized parent return is still a counted call. An explicit control
+marker is always strictly validated, including at leaves. Nodes with outgoing
+grants still require a directive; no plain text chooses a new edge. Public progress cannot
+advance the graph. An accepted native request displays as pending until its exact runtime claims it; accepted-call accounting does not imply observed work. Canonical copy/quote fidelity is unchanged by Web folding.
+Cloud team calls use the normal authorized session context and summary policy,
+including human updates before a continuation. After summary folding, verified
+current-run control requests become explicit references to the current prompt;
+successful current-run public answers are bounded with an explicit truncation
+notice. Canonical IDs, sequence and content revision remain pinned. Other public
+messages and generated summaries remain intact; the normal 12 KiB cloud context
+limit still refuses oversized context. This server-only transformation is not an
+HTTP option and does not change ordinary context reads or canonical replay.
+Controls retain durable same-key intent receipts, including no-ops; different
+intent under a used key conflicts. Receipt lifetime follows private record
+retention; it is not an indefinite deduplication promise. Server restart pauses
+active work; cleanup never permits executing an orphaned canonical team request.
+See [ADR-0054](adr/0054-human-started-bounded-agent-teams.md).

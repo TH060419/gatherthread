@@ -4,6 +4,7 @@ export const isCloudTrialRequest = (request) => request?.payload?.execution_prof
   && !request.payload.github_task_id;
 
 export function retryAgentRequestPermission(request, context) {
+  if (request?.payload?.agent_team) return { allowed: false, reason: "Use the Agent team controls for this request." };
   return canAppend({ ...context, kind: isCloudTrialRequest(request) || request?.payload?.github_task_id ? "human_chat" : "agent_request" });
 }
 
@@ -42,7 +43,7 @@ export function composerAgentAction(events, userId) {
   let request;
   // Keep the unbundled browser path compatible with Safari 15/Chrome 100.
   for (let index = history.length - 1; index >= 0; index--) {
-    if (history[index].type === "agent_request" && history[index].actor?.id === userId && !history[index].payload?.history_summary) {
+    if (history[index].type === "agent_request" && history[index].actor?.id === userId && !history[index].payload?.history_summary && !history[index].payload?.agent_team) {
       request = history[index];
       break;
     }

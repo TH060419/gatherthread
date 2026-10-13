@@ -58,3 +58,5 @@ Current account guidance (2026-10-08): `main` uses verified-email registration a
 | [0050](0050-author-message-erasure-and-context-revisions.md) | Author message erasure and deletion-aware execution revisions | proposed / implementation review | 2026-10-12 |
 | [0052](0052-cloud-timeouts-and-explicit-continuation.md) | Distinguish cloud timeouts and continue with bounded fresh rounds | proposed / implementation review | 2026-10-12 |
 | [0053](0053-persistent-project-cloud-code-choice.md) | Remember the project's Cloud Agent code choice | accepted implementation decision | 2026-10-13 |
+| [0054](0054-human-started-bounded-agent-teams.md) | Human-started bounded Agent teams | proposed / implementation review | 2026-10-13 |
+| [0055](0055-dsh-session-format-owned-context.md) | Versioned DSH Session attribution and owned context | proposed / compatibility review | 2026-10-13 |

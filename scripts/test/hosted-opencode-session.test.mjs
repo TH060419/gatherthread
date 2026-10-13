@@ -278,8 +278,8 @@ const parserClock = createRequire(import.meta.url)('undici/lib/util/timers.js');
 const flushParser = () => new Promise(resolve => setImmediate(resolve));
 
 for (const phase of ['headers', 'body']) for (const timesOut of [false, true]) {
-  test(`actual final JSON runner ${timesOut ? 'classifies a real 12-minute timeout' : 'survives the old five-minute deadline'} in ${phase}`, { timeout: 5000 }, async () => {
-    const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  test(`actual final JSON runner ${timesOut ? 'classifies a real 12-minute timeout' : 'survives the old five-minute deadline'} in ${phase}`, { timeout: 5000 }, async t => {
+    const entered = Promise.withResolvers(), receivedHeaders = Promise.withResolvers(), release = Promise.withResolvers();
     const final = JSON.stringify(finalReply());
     let prompts = 0, sse = false;
     const server = createServer(async (request, response) => {
@@ -306,8 +306,16 @@ for (const phase of ['headers', 'body']) for (const timesOut of [false, true]) {
     const dispatcher = createOpencodeDispatcher((_, options) => new Pool(origin, options));
     const unrelated = createOpencodeDispatcher();
     const f = fixture(); let settled = false;
+    // Test cancellation must also release real sockets; a failed fixture must
+    // not wait for the actual twelve-minute round timer to clean up.
+    const cancel = () => { release.resolve(); server.closeAllConnections(); void dispatcher.destroy(); };
+    t.signal.addEventListener('abort', cancel, { once: true });
     const result = runOpencodeSession(workspace, 'Observed task', 64_000, { spawnProcess: f.options.spawnProcess,
-      fetchResponse: runnerFetch, createDispatcher: () => dispatcher, onProgress: () => {} }).finally(() => { settled = true; });
+      fetchResponse: async (...args) => {
+        const response = await runnerFetch(...args);
+        if (new URL(args[0]).pathname === '/session/ses_fixture/message') receivedHeaders.resolve();
+        return response;
+      }, createDispatcher: () => dispatcher, onProgress: () => {} }).finally(() => { settled = true; });
     // Register expected failure before the real transport rejects.
     const checked = timesOut ? assert.rejects(result, error => {
       assert.equal(error.message, 'agent_failed'); assert.equal(error.diagnosticCode, 'agent_timeout');
@@ -315,6 +323,9 @@ for (const phase of ['headers', 'body']) for (const timesOut of [false, true]) {
     }) : result;
     try {
       await entered.promise; await flushParser(); await flushParser();
+      // The server writing bytes does not prove the client parser received
+      // them. Arm the real body timer before advancing its simulated clock.
+      if (phase === 'body') { await receivedHeaders.promise; await flushParser(); }
       assert.equal(sse, true, 'the SSE connection must not block the final-response connection');
       assert.equal(OPENCODE_ROUND_TIMEOUT_MS, 720_000);
       parserClock.tick(0); parserClock.tick(301_000); await flushParser();
@@ -324,6 +335,7 @@ for (const phase of ['headers', 'body']) for (const timesOut of [false, true]) {
       assert.equal(prompts, 1, 'waiting/timeout must never silently submit a second model request');
       assert.equal(dispatcher.destroyed, true); assert.equal(unrelated.destroyed, false); assert.equal(f.child.closed, true);
     } finally {
+      t.signal.removeEventListener('abort', cancel);
       release.resolve(); await dispatcher.destroy(); await unrelated.destroy();
       await result.catch(() => {}); server.closeAllConnections();
       await new Promise(resolve => server.close(resolve)); parserClock.reset();

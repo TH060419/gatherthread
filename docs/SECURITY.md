@@ -241,3 +241,29 @@ An OTP is bound to its browser, mailbox and the account's password version at is
 ### Avatar profile boundary
 
 Only the signed-in account can assign its official avatar through the browser-only self route. Browser Origin, admission, body limit, strict allowlist, active device checks and existing write rate limits apply; native Agent credentials cannot edit a human account's avatar. No file upload, remote image URL, executable image source or user-provided SVG is accepted. Catalog assets are reviewed application resources with initials on failed/unknown images. Session profile reads disclose IDs/avatars only for current project members or readable historical authors, after session authorization; avatar changes do not grant roles or rewrite history. The isolated example keeps its catalog and mutable selections inside the static memory-only sandbox.
+
+## Agent team preview boundary
+
+A human-started team grants bounded sequential execution only to already
+owned/authorized exact targets. Draft plans and run/control detail are requester
+private; after start, public task/rules and selected public results follow ordinary
+session/provider sharing. Automatic dispatch rechecks the original active device,
+current membership/session mode, resource ownership, runtime capability, pinned
+history and personal API revision. No public chat, tool stream or arbitrary model
+text grants further execution. Only verified current-step final decisions can
+select configured edges. Recognized credentials in rules/roles/tasks are rejected.
+Plain completion is admitted only for a node with no outgoing grants and an
+authenticated, exact-request canonical final response. It cannot select an edge;
+the already-granted parent return still passes the ordinary authorization and
+accepted-call checks. Explicit control markers are never repaired or ignored.
+
+Private records are capped: 64 KiB per saved plan, 512 KiB ordinary per-run
+accounting, 8 MiB per user, 16 MiB per session and 64 MiB per deployment; row caps
+are 100/200/2,000, with at most two active runs per user. There are 128 ordinary
+control receipts and only two reserved critical Pause/Stop receipts, each charged
+512 bytes. Ended records expire after 30 days; active/paused runs are deadline
+fenced. Author erasure removes derived session runs/steps/receipts atomically and follows canonical same-run request/answer dependencies to scrub copied task/result prompts, even after private records were cleared;
+canonical content-revision and team-metadata gates continue fencing late work
+and orphaned requests. Cleanup does not affect native histories/local files.
+See [ADR-0054](adr/0054-human-started-bounded-agent-teams.md) and the existing
+[author erasure policy](adr/0050-author-message-erasure-and-context-revisions.md).

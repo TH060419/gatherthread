@@ -12,7 +12,7 @@ import type {
 } from "@gatherthread/bridge";
 import { buildDshCanonicalPrompt } from "../src/canonical-prompt.js";
 import { parseDshHostConfig, type EnabledDshHostConfig } from "../src/config.js";
-import { DshHostConnector } from "../src/connector.js";
+import { DshHostConnector, hasCompletedDshLocalTurn } from "../src/connector.js";
 import { MemoryConnectorStateStore } from "../src/state-store.js";
 import type {
   ConnectorState,
@@ -593,6 +593,22 @@ test("DSH author deletion isolates an original-history request without any summa
   await connector.uploadLocalTurns();
   assert.equal(api.localTurns.length, 0, "retired native input must remain local only even for manual upload");
   await connector.stop();
+});
+
+test("DSH retired v4 or migrated producer markers keep completed native work local only", () => {
+  const cfg = config();
+  for (const source of [{ kind: "gatherthread", form: "relay" }, { kind: "plugin:gatherthread", form: "relay" }]) {
+    const persistence = freshPersistence();
+    const host = new FakeHost(cfg.dshSessionId, persistence);
+    host.emitLocalTurn();
+    assert.equal(hasCompletedDshLocalTurn(persistence.events, cfg.dshSessionId), true);
+    const marker = { type: "user/message", seq: persistence.events.length, time: eventTime,
+      data: { id: "gatherthread-retired:1", role: "user", source, content: [{ type: "text", text: "Local only" }] } };
+    assert.equal(hasCompletedDshLocalTurn([...persistence.events, marker], cfg.dshSessionId), false);
+    assert.equal(hasCompletedDshLocalTurn([...persistence.events, { ...marker, data: { ...marker.data,
+      source: { kind: "plugin:other-producer", form: "relay" } } }], cfg.dshSessionId), true,
+    "an unrelated producer cannot retire this native conversation");
+  }
 });
 
 test("DSH author deletion interrupt retains the execution permit until the native prompt actually stops", async () => {

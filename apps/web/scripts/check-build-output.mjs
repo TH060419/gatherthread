@@ -56,3 +56,9 @@ test("isolated example uses a classic bundle and forbids backend connections", a
   assert.ok(script, 'self-contained example has one authored script');
   assert.doesNotThrow(() => new Script(script[1]), 'bundling preserves literal replacement characters');
 });
+
+test("team message presentation bundles its strict protocol schemas for native browser module loading", async () => {
+  const helper = await readFile(new URL("app/src/agent-team-message.js", dist), "utf8");
+  assert.doesNotMatch(helper, /(?:from\s*|import\s*)["']@gatherthread\/protocol["']/u);
+  assert.match(helper, /teamMessagePresentation/u);
+});

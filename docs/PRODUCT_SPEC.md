@@ -219,3 +219,33 @@ The macOS primary package is a DMG with an adjacent Applications drag target and
 The Web Settings → Profile picker selects an official catalog image or the initials fallback. Selection is account-wide across projects, Solo/Multi sessions and devices. Save avatar persists the selection separately from browser preferences; canceling an unsaved selection does not change the account. The current-account entry, members and chat history show current avatars, including retained messages from members who have left. Historical display names remain frozen. Human chat and Agent requests use the user's avatar; Agent replies (including summaries) combine the reply owner's avatar with a small robot badge and a localized “{name}'s Agent” label. Ownership comes from the authenticated event actor, never a name match or the requester's identity. Deleted accounts use a neutral fallback.
 
 The first catalog contains six original temporary animal images; the team can replace reviewed image sources while preserving stable IDs. Images are shipped with the app, including the isolated example. User uploads, arbitrary image URLs and native Codex/DSH UI avatars are outside this version. Current-session metadata refreshes with the existing five-second member refresh; selected avatars appear immediately after a successful save in the same browser. The example remains memory-only.
+
+## Agent teams (local implementation preview)
+
+The workspace offers a draggable node graph for the current account's authorized
+Codex, DSH and Cloud Agent targets. A team has shared rules, node-specific roles,
+exact model choices, a saved first Agent and one-way or two-way delegation edges. Only a human starts
+a team task. Calls execute sequentially; a child's result returns to its parent,
+including on a one-way edge. Returns and timeout continuation count as new calls.
+An Agent with no outgoing delegation connections can finish with an ordinary
+final answer and return its result. Agents able to delegate must make an explicit
+team decision; an invalid or stale decision ends the run without choosing a new
+Agent or silently retrying.
+
+Defaults are 12 accepted calls and 30 total minutes, adjustable before start up
+to 48 calls and 120 minutes. Paused time counts toward the total deadline. A
+single cloud round retains its 12-minute bound. A timeout offers Continue with
+the original task and recoverable public context; ordinary failure does not
+pretend to resume hidden thought. Server restart pauses unfinished work.
+
+Pause/Stop prevent further delegation and fence late shared results. Already
+started local work may finish in its own application. Exact targets are never
+silently replaced. Task startup explains that team/role instructions, tasks and
+public results are shared with session members and selected providers; private
+plans stay private until submitted as a human-authorized run.
+
+The top of the team dialog keeps the selected task status, call budget and Pause/Resume/Continue/Stop controls reachable while the graph scrolls. Viewing a run shows its accepted, read-only configuration. The editable draft
+and unsaved task are retained separately. Team messages show the assigned task
+and node name, with expandable canonical instructions/routing; copy and quote
+retain canonical content. Ended private records can be cleared after confirmation
+without removing shared messages or local files. See [ADR-0054](adr/0054-human-started-bounded-agent-teams.md).

@@ -11,11 +11,19 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Added
 
+- Let a verified plain final answer complete a team node that has no outgoing delegation grants. Explicit routing blocks still require the exact nonce/schema, and nodes able to delegate still require an explicit decision. Returning to the already-authorized parent remains a counted call; public chat and progress grant no execution.
+
+- Add a local Agent team preview with draggable nodes, directed or bidirectional delegation and requester-private saved plans. Humans start each bounded task using their own exact Codex, DeepSeek Harness and Cloud targets; default limits are twelve accepted calls and thirty minutes. Parent returns and explicit timeout continuations count as new calls. Preserve current authorization, private API revisions, ordinary context/summary policy, history-erasure dependencies and native tool approvals. Real provider/native, Safari and cross-platform acceptance remain separate gates before release. See [ADR-0054](docs/adr/0054-human-started-bounded-agent-teams.md).
+
 - Add a Mac Launcher DMG with drag-to-Applications installation, bilingual first-open instructions, a prominent macOS security path and explicit review/trust/allow guidance for GatherThread Hooks. Validate the mounted image against its reviewed source inventory and public file-hash provenance before producing checksum sidecars; preserve the Windows ZIP, native email/password login and exact test/production binding. The Mac app remains ad-hoc signed, not Apple-notarized; publishing a matching installer is a separate release action. See [ADR-0047](docs/adr/0047-macos-launcher-dmg-installation.md).
 
 - Stream live answers, native-visible thinking summaries, tool activity and plans across Codex, DeepSeek Harness and Cloud Agent. Keep independent collapsible sections, paused partial output, exact quoted revisions and stable history position. Bounded cumulative snapshots preserve interleaving/replay, redact split credentials and retry identical updates until acknowledgement; Codex hidden reasoning and unrelated local conversations remain excluded. Matching native connector/plugin builds and a matching hosted image are required. See [ADR-0045](docs/adr/0045-streamed-public-agent-output.md).
 
 ### Fixed
+
+- Allow Codex/DSH canonical replay to consume server-contained Cloud replies whose provenance has no local runtime ID, as permitted by the existing protocol. Preserve exact local routing and echo suppression without fabricating a native identity.
+
+- Preserve GatherThread relay, execution ownership and retired-history fences with DSH Session format 4, while retaining format 2/3 message and surface shapes. Recognize upstream-migrated producer attribution without accepting another producer or manual input. Isolated SDK checks do not claim full Web-profile or real DeepSeek-provider acceptance. See [ADR-0055](docs/adr/0055-dsh-session-format-owned-context.md).
 
 - Distinguish Cloud Agent timeouts from ordinary failure while retaining legacy `status:"failed"`; add strict `outcome:"timed_out"|"failed"` and an additive durable outcome table. Bound trial, selected-summary and repository rounds to twelve minutes across both provider inference and the independent container final-response HTTP transport. Continue starts a separately charged, author-authorized fresh round with the original exact task/profile and recoverable public context; normal failures retain Retry. Preserve history-erasure/API-revision fences and existing resource limits. Repository continuation retains canonical instruction references through private ancestor snapshot deletion, expiry and restart, without duplicating instruction text or retaining erased history. Upgrade server/Web with a rebuilt matching immutable runner image; published Beta 1 metadata and deployment remain unchanged. See [ADR-0052](docs/adr/0052-cloud-timeouts-and-explicit-continuation.md).
 

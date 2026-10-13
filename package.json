@@ -36,6 +36,7 @@
     "test:web": "npm --workspace apps/web run check",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:dsh-host:real": "npm run build:ts && node scripts/test-dsh-host-real.mjs",
+    "test:agent-team:codex-real": "npm run build:ts && node scripts/test-agent-team-codex-real.mjs",
     "test:dsh-connect:real": "npm run build:ts && node scripts/test-dsh-connect-real.mjs",
     "test:dsh-npm-plugin:real": "npm run build && node scripts/test-dsh-npm-plugin-real.mjs",
     "test:e2e": "node scripts/run-e2e.mjs",

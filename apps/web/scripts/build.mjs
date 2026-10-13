@@ -36,6 +36,7 @@ await build({
     markdown: resolve(root, "src/markdown.js"),
     onboarding: resolve(root, "src/onboarding.js"),
     "history-summary-policy": resolve(root, "src/history-summary-policy.js"),
+    "agent-team-message": resolve(root, "src/agent-team-message.js"),
     styles: resolve(root, "src/styles.css"),
   },
   outdir: resolve(applicationDist, "src"),

@@ -730,7 +730,7 @@ function fromWireProvenance(value: unknown): RuntimeProvenance {
   return {
     userId: requiredString(input.user_id, "runtime_provenance.user_id"),
     deviceId: requiredString(input.device_id, "runtime_provenance.device_id"),
-    runtimeId: requiredString(input.runtime_id, "runtime_provenance.runtime_id"),
+    ...(input.runtime_id === undefined ? {} : { runtimeId: requiredString(input.runtime_id, "runtime_provenance.runtime_id") }),
     harness: requiredString(input.harness, "runtime_provenance.harness") as RuntimeProvenance["harness"],
     provider: requiredString(input.provider, "runtime_provenance.provider"),
     model: requiredString(input.model, "runtime_provenance.model"),

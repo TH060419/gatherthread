@@ -157,3 +157,21 @@ MCP exposes collaboration capabilities but is not assumed to see a host's full c
 ## Verified-email identity
 
 `registration.ts` owns durable OTP/budget/pause state; `registration-providers.ts` owns mail and mandatory challenge verification. Bounded asynchronous scrypt runs outside SQLite transactions. The verified-email account table stores unique mailbox digests and salted password hashes; per-browser bindings create independent devices. Enrollment and password login return token-free actor metadata and HttpOnly Cookies. A project owner creates a single-use `gti_` invitation granting `participant` or `viewer` membership. Recipients register or sign in first, then accept it from the workspace. Acceptance does not create an account, issue a user credential or change project-creation capability. Owners choose one hour, 24 hours or seven days, with 24 hours as the default. Each additional Agent/device uses its own short-lived authorization or browser-approved DSH pairing; connector/device tokens, Cookie sessions and independent revocation remain supported. See [OPERATIONS](OPERATIONS.md) and [ADR-0036](adr/0036-verified-email-registration-and-password-login.md).
+
+## Agent team control plane
+
+`agent-team-store.ts` owns bounded requester-private plans, runs, steps and action
+receipts; `agent-teams.ts` coordinates sequential calls. `packages/protocol/src/agent-team.ts`
+owns strict wire shapes. Each run snapshots its grant and content revision. The
+ordinary native claim/completion and hosted reservation paths retain authority;
+team reservation and accepted-call accounting commit together with the canonical
+request. Only an exact final response can advance the graph. A bounded dispatch batch selects ready assignments/results instead of waiting native replies, so waiting runs cannot occupy all slots and starve later tasks. A partial index covers the canonical final-response lookup. Model proxy,
+checkpoint and live progress paths recheck team state as well as their existing
+execution gates. See [ADR-0054](adr/0054-human-started-bounded-agent-teams.md).
+
+The additive schema lives in `agent-team-schema.ts`; startup explicitly adds old
+missing `content_revision` and control `reserved` columns. Canonical team metadata
+survives private retention/cleanup as a permanent execution fence. Author erasure
+scrubs derived session team records within the existing deletion transaction.
+The browser separates an editable private draft from accepted run snapshots and
+retains uncertain action keys across reads until acknowledgment.

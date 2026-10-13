@@ -25,7 +25,8 @@ export type CanonicalEventType =
 export interface RuntimeProvenance {
   userId: string;
   deviceId: string;
-  runtimeId: string;
+  /** Server-contained Cloud replies have provenance without a local runtime. */
+  runtimeId?: string;
   harness: HarnessName;
   provider: string;
   model: string;

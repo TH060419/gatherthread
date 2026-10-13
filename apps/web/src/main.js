@@ -1,6 +1,8 @@
+import { teamMessagePresentation } from "./agent-team-message.js";
 import { renderAvatar, isAgentReply, eventAuthorLabel } from "./avatars.js?v=20261012-content-1";
 import { mountAvatarSettings } from "./avatar-settings.js?v=20261012-content-1";
 import { mountCloudGithub } from "./cloud-github-view.js?v=20261012-content-1";
+import { mountAgentTeams } from "./agent-team-view.js?v=20261012-content-1";
 import { mountDeviceAuthorization } from "./device-authorization.js";
 import { createAccountEmailHint, mountCodexLauncher, mountAgentPackageDownloads } from "./codex-launcher.js?v=20261012-content-1";
 import { mountAccountDevices } from "./account-devices.js";
@@ -438,6 +440,22 @@ const cloudCodeConsent = mountCloudCodeConsent({
   } : null,
 });
 element("project-code-dialog").addEventListener("close", () => void cloudCodeConsent.refresh());
+const agentTeamUi = mountAgentTeams({ document, api, localizer,
+  getContext: () => ({ scope: `${authenticationGeneration}:${selectedSessionGeneration}:${state.currentUser?.id}:${state.project?.id}:${state.session?.id}:${state.sync.contentRevision ?? 0}`,
+    userId: state.currentUser?.id, sessionId: state.session?.id,
+    contentRevision: state.sync.contentRevision ?? 0,
+    writable: canAppend({ session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase, kind: "human_chat" }).allowed,
+    runtimes: state.executionRuntimes, devices: state.devices, cloudStatus: hostedAgentStatus,
+    refreshAgents: () => Promise.all([refreshDshRuntimes(), refreshHostedAgentStatus()]),
+  }),
+  onBeforeOpen: () => mobileWorkspace.close(),
+  onNavigateEvent: id => {
+    const event = state.sync.events.find(candidate => candidate.id === id);
+    if (!event) return;
+    pendingHistoryTarget = { id, sequence: event.sequence, sessionId: state.session?.id };
+    historySummaryUi.revealOriginal(id); renderTimeline();
+  },
+});
 const onboarding = mountOnboarding({
   document,
   getContext: () => ({
@@ -2334,9 +2352,11 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
     header.append(identity, sequence, timeButton);
     const sourceControl = historySummaryUi.sourceControl(event);
     if (sourceControl) identity.prepend(sourceControl);
-    const content = event.deleted ? localizer.t(event.deleted.reason === "author"
+    const canonicalContent = event.deleted ? localizer.t(event.deleted.reason === "author"
       ? "Message deleted" : "Unavailable because its source was deleted")
       : event.contentUnavailable ? localizer.t("Refreshing history…") : eventContent(event);
+    const teamMessage = teamMessagePresentation(event, events, canonicalContent);
+    const content = teamMessage?.content ?? canonicalContent;
     const quoted = messageActions.quoted(event, events);
     article.append(header);
     if (quoted) article.append(quoted);
@@ -2350,6 +2370,20 @@ function renderTimeline({ followNewEvents = false, preserveAnchor = false, focus
       }
       body.classList.add("event-content");
       article.append(body);
+    }
+    if (teamMessage) {
+      const label = document.createElement("p"); label.className = "team-message-label";
+      label.textContent = `${localizer.t("Team call")} · ${teamMessage.node_label}`; article.append(label);
+      if (teamMessage.details) {
+        const details = document.createElement("details"), summary = document.createElement("summary"), source = document.createElement("pre");
+        details.className = "team-message-details";
+        summary.textContent = localizer.t(teamMessage.kind === "instructions" ? "Shared team instructions" : "Team routing details");
+        source.textContent = teamMessage.details; details.append(summary, source); article.append(details);
+      }
+      if (teamMessage.ownerId === state.currentUser?.id) {
+        const button = document.createElement("button"); button.type = "button"; button.className = "text-button";
+        button.textContent = localizer.t("Open team controls"); button.addEventListener("click", () => void agentTeamUi.open(teamMessage.run_id)); article.append(button);
+      }
     }
     article.append(messageActions.actions(event));
 
@@ -3052,6 +3086,7 @@ function renderComposerPermissions() {
   codeSyncUi.updateContext();
   cloudCodeConsent.updateContext();
   cloudGithubUi.updateContext();
+  agentTeamUi.updateContext();
   const common = { session: state.session, currentUser: state.currentUser, connectionPhase: state.sync.phase };
   const chat = canAppend({ ...common, kind: "human_chat" });
   const harness = currentProjectHarness();
@@ -3656,6 +3691,7 @@ function applyVisualSettings(settings) {
   }
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  if (localeChanged) agentTeamUi.refreshLocale();
   if (localeChanged) accountDevices.refreshLanguage();
   if (localeChanged) personalCloudApi.refreshLanguage();
   if (localeChanged) cloudCodeConsent.refreshLanguage();

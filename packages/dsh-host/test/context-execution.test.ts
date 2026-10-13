@@ -12,7 +12,7 @@ import type { DshContextExecutionInput } from "../src/types.js";
 const nativeModule = process.env.GATHERTHREAD_TEST_DSH_SESSION_MODULE;
 const publicSession = nativeModule ? await import(nativeModule) : undefined;
 
-function fixture(options: { preset?: boolean; workspacePath?: string; projectionCreateGate?: Promise<void> } = {}) {
+function fixture(options: { preset?: boolean; workspacePath?: string; projectionCreateGate?: Promise<void>; formatVersion?: number } = {}) {
   const stored = new Map<string, any>();
   const live = new Map<string, any>();
   const listeners = new Map<string, Set<(...args: any[]) => void>>();
@@ -37,7 +37,7 @@ function fixture(options: { preset?: boolean; workspacePath?: string; projection
     for (const listener of listeners.get(name) ?? []) listener(...args);
   };
   const createSession = (id: string, meta: object) => {
-    const header = { version: publicSession?.SESSION_FORMAT_VERSION ?? 2, id, createdAt: 1, isSeeded: false, ...meta };
+    const header = { version: options.formatVersion ?? publicSession?.SESSION_FORMAT_VERSION ?? 2, id, createdAt: 1, isSeeded: false, ...meta };
     // A new public Session has no seed. Passing [] is a replay operation and
     // deliberately appends session/end-seed in the pinned implementation.
     const native = publicSession?.Session.create(id, undefined, header);
@@ -50,14 +50,17 @@ function fixture(options: { preset?: boolean; workspacePath?: string; projection
       snapshotEvents(from = 0): any[] { return native?.snapshotEvents(from) ?? events.slice(from); },
       deriveMessages(): any[] { return native?.deriveMessages() ?? nodes.map((seq) => events[seq].data); },
       append(type: string, data: unknown, options?: any) {
+        if (header.version === 4 && type === "user/message") {
+          assert.notEqual((data as any)?.source?.kind, "plugin", "v4 refuses generic plugin sources");
+        }
         let event;
         if (native) event = native.append(type, data, options);
         else {
           event = { type, seq: events.length, time: 1, data, ...options };
           if (options?.surfaceOp === "append") nodes.push(event.seq);
           else if (options?.surfaceOp?.op === "replace") {
-            const start = nodes.indexOf(options.surfaceOp.start);
-            const end = nodes.indexOf(options.surfaceOp.end);
+            const start = nodes.indexOf(header.version === 4 ? options.surfaceOp.startSeq : options.surfaceOp.start);
+            const end = nodes.indexOf(header.version === 4 ? options.surfaceOp.endSeq : options.surfaceOp.end);
             assert.ok(start >= 0 && end >= start);
             assert.deepEqual(options.sourceEventSeqs, nodes.slice(start, end + 1));
             nodes.splice(start, end - start + 1, event.seq);
@@ -171,6 +174,59 @@ function contextInput(requestSequence = 6, view: "summary" | "original" = "summa
     ] },
   };
 }
+
+test("format v4 DSH relay and isolated execution preserve producer attribution and reconnect ownership", {
+  skip: publicSession !== undefined && publicSession.SESSION_FORMAT_VERSION !== 4,
+}, async () => {
+  const f = fixture({ formatVersion: 4 });
+  await f.facade.projectCanonicalEvents!([
+    { eventId: "human", canonicalSequence: 1, occurredAt: "2026-10-13T00:00:00Z", role: "user", content: "human input", actorDisplayName: "Alice" },
+    { eventId: "remote", canonicalSequence: 2, occurredAt: "2026-10-13T00:00:01Z", role: "assistant", content: "remote answer", provider: "remote", model: "model" },
+  ]);
+  const native = f.stored.get("native-session");
+  const messages = native.snapshotEvents().filter((event: any) => event.type === "user/message");
+  assert.deepEqual(messages.map((event: any) => event.data.source), [{ kind: "user" }, { kind: "gatherthread", form: "relay" }]);
+  assert.equal(messages[1].data.role, "user", "remote answers remain quoted collaboration context");
+  const prepared = await f.facade.prepareContextExecution!(contextInput());
+  await f.facade.prompt("owned request", undefined, prepared.sessionId);
+  const execution = f.stored.get(prepared.sessionId);
+  assert.ok(execution.snapshotEvents().filter((event: any) => event.type === "user/message")
+    .every((event: any) => event.data.source.kind === "gatherthread"));
+  await f.facade.dispose();
+  const restarted = f.newFacade();
+  assert.equal((await restarted.prepareContextExecution!({ ...contextInput(), resume: true })).sessionId, prepared.sessionId);
+  await restarted.dispose();
+});
+
+test("format v4 DSH ownership admits only its exact migrated producer and still rejects manual input", { skip: !!publicSession }, async () => {
+  const f = fixture({ formatVersion: 4 });
+  const prepared = await f.facade.prepareContextExecution!(contextInput());
+  const execution = f.stored.get(prepared.sessionId);
+  const owner = execution.snapshotEvents().find((event: any) => event.type === "user/message"
+    && event.data.id.startsWith("gatherthread-execution-owner:"));
+  owner.data.source = { kind: "plugin:gatherthread", form: "relay" };
+  await f.facade.prepareContextExecution!(contextInput(7));
+  owner.data.source = { kind: "plugin:other-producer", form: "relay" };
+  await assert.rejects(f.facade.prepareContextExecution!(contextInput(8)), /ownership marker/);
+  owner.data.source = { kind: "gatherthread", form: "relay", plugin: "other-producer" };
+  await assert.rejects(f.facade.prompt("refuse forged owner", undefined, prepared.sessionId), /ownership marker/);
+  owner.data.source = { kind: "gatherthread", form: "relay" };
+  execution.append("user/message", { id: "manual-v4", role: "user", source: { kind: "user" },
+    content: [{ type: "text", text: "KEEP_LOCAL_INPUT" }] }, { surfaceOp: "append" });
+  const before = structuredClone(execution.snapshotEvents());
+  await assert.rejects(f.facade.prepareContextExecution!(contextInput(8)), /local manual input/);
+  assert.deepEqual(execution.snapshotEvents(), before);
+  await f.facade.dispose();
+});
+
+test("unsupported future DSH formats refuse context projection without appending messages", { skip: !!publicSession }, async () => {
+  const f = fixture({ formatVersion: 5 });
+  await assert.rejects(f.facade.projectCanonicalEvents!([
+    { eventId: "remote", canonicalSequence: 1, occurredAt: "2026-10-13T00:00:00Z", role: "assistant", content: "remote answer" },
+  ]), /Unsupported DSH Session format/);
+  assert.equal(f.stored.get("native-session").seq, 0);
+  await f.facade.dispose();
+});
 
 test("author deletion creates a verified fresh native DSH projection and leaves old local work private", async () => {
   const f = fixture({ preset: true });

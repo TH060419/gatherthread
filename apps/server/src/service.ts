@@ -6,6 +6,7 @@ import type {
   CommitLocalTurnResult,
   CreateHistorySummaryInput,
   HistoryContext,
+  HistorySummaryEvent,
   HostedAgentRequestInput,
   HostedHistorySummaryInput,
   JsonValue,
@@ -356,8 +357,8 @@ export class CollaborationService {
 
   reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
     endpoints: HostedAllocation[], limits: HostedRunLimits, onReserved?: (event: CanonicalEvent) => void,
-    summary?: HostedHistorySummaryInput) {
-    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input, endpoints, limits, onReserved, summary);
+    summary?: HostedHistorySummaryInput, team?: import("@gatherthread/protocol").AgentTeamRequestMetadata) {
+    const result = this.database.reserveHostedAgentRequest(actor, sessionId, input, endpoints, limits, onReserved, summary, team);
     if (result.created) this.publish(result.event);
     return result;
   }
@@ -389,8 +390,18 @@ export class CollaborationService {
     } catch { return false; /* Progress cannot replace or strand the canonical terminal. */ }
   }
 
-  pauseHostedAgentRequest(actor: Actor, sessionId: string, requestId: string) {
-    const event = this.database.pauseHostedAgentRequest(actor, sessionId, requestId);
+  appendTeamAgentRequest(actor: Actor, sessionId: string, input: AppendEventInput, onAccepted: (event: CanonicalEvent) => void) {
+    this.requireWrite(actor, sessionId);
+    const event = this.database.appendTeamAgentRequest(actor, sessionId, input, onAccepted); this.publish(event); return event;
+  }
+  pauseTeamAgentRequest(actor: Actor, sessionId: string, requestId: string) {
+    this.requireWrite(actor, sessionId);
+    const outcome = this.database.pauseTeamAgentRequest(actor, sessionId, requestId);
+    if (outcome.event) this.publish(outcome.event); return outcome.claim;
+  }
+
+  pauseHostedAgentRequest(actor: Actor, sessionId: string, requestId: string, internalTeam = false) {
+    const event = this.database.pauseHostedAgentRequest(actor, sessionId, requestId, internalTeam);
     if (event) this.publish(event);
     return { request_event_id: requestId, status: "paused" as const };
   }
@@ -410,8 +421,9 @@ export class CollaborationService {
     return event;
   }
 
-  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number): HistoryContext {
-    return this.database.readHistoryContext(actor, sessionId, view, throughSequence);
+  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number,
+    originalContent?: (event: HistorySummaryEvent, content: string) => string): HistoryContext {
+    return this.database.readHistoryContext(actor, sessionId, view, throughSequence, originalContent);
   }
 
   deleteMessage(actor: Actor, sessionId: string, eventId: string, idempotencyKey: string) {
@@ -578,7 +590,7 @@ export class CollaborationService {
     return role;
   }
 
-  private requireWrite(actor: Actor, sessionId: string): { role: MembershipRole; session: SessionRecord } {
+  requireWrite(actor: Actor, sessionId: string): { role: MembershipRole; session: SessionRecord } {
     this.database.assertActiveDevice(actor);
     const session = this.database.requireSession(sessionId);
     const role = this.database.membershipRole(sessionId, actor.user_id);

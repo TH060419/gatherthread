@@ -28,6 +28,22 @@ test("summary context replaces exact noncontiguous sources and leaves canonical 
   assert.equal(context.through_sequence, 5);
 });
 
+test("private content transforms run after summary folding and preserve canonical identities and default reads", () => {
+  const events = [event("a", 1), event("b", 2), event("c", 3), ...summary("s", 4, ["a", "c"])];
+  const original = JSON.stringify(events), visited: string[] = [];
+  const ordinary = buildHistoryContext(events);
+  const transformed = buildHistoryContext(events, "summary", (source, content) => {
+    visited.push(source.id); return `reference:${content}`;
+  });
+  assert.deepEqual(visited, ["b"], "covered sources and generated summaries must not be rewritten");
+  assert.deepEqual(transformed, { ...ordinary, items: ordinary.items.map(item =>
+    item.kind === "original" ? { ...item, content: "reference:b" } : item) });
+  assert.deepEqual(buildHistoryContext(events), ordinary);
+  assert.equal(JSON.stringify(events), original);
+  assert.throws(() => buildHistoryContext(events, "summary", () => "x".repeat(270000)), /256 KiB/,
+    "the transformed derived view remains bounded");
+});
+
 test("overlapping new versions keep old versions and restore uncovered originals without duplicates", () => {
   const events = [event("a", 1), event("b", 2), event("c", 3), event("d", 4),
     ...summary("older", 5, ["a", "b"]), ...summary("newer", 7, ["b", "c"]), ...summary("separate", 9, ["d"])];

@@ -534,7 +534,7 @@ export function failedRequestFor(events, responseEvent) {
 
 /** A retry is a new request by the original author, never an impersonation. */
 export function canRetryFailedAgentRequest(request, currentUser) {
-  return !request?.deleted && !request?.contentUnavailable && typeof request?.actor?.id === "string"
+  return !request?.payload?.agent_team && !request?.deleted && !request?.contentUnavailable && typeof request?.actor?.id === "string"
     && typeof currentUser?.id === "string"
     && request.actor.id === currentUser.id;
 }

@@ -17,6 +17,7 @@ import type {
   EventType,
   EventVisibility,
   HistoryContext,
+  HistorySummaryEvent,
   InvitationAuditRecord,
   InvitationRecord,
   InvitationRole,
@@ -61,6 +62,8 @@ import { cloudApiRunIsCurrent } from "./cloud-api.js";
 import { ApiError, agentRequestAlreadyClaimed, agentRequestAlreadyCompleted, agentRequestFailed, conflict, forbidden, idempotencyConflict, notFound, runtimeBusy, sessionQuotaExceeded, snapshotStorageQuotaExceeded, storageQuotaExceeded, unauthorized } from "./errors.js";
 import { redactJson } from "./redaction.js";
 import { hostedFailureCode, hostedFailureContent, hostedFailureOutcome } from "./hosted-agent-errors.js";
+import { AGENT_TEAM_SCHEMA } from "./agent-team-schema.js";
+import { AgentTeamRequestMetadataSchema, type AgentTeamRequestMetadata } from "@gatherthread/protocol";
 
 export interface Actor {
   user_id: string;
@@ -370,6 +373,9 @@ const MAX_HISTORY_SUMMARY_DEPENDENCY_EVENTS = 10_000;
 const MAX_HISTORY_SUMMARY_DEPENDENCY_BYTES = 16 * 1024 * 1024;
 
 function rejectHistorySummaryMetadata(payload: JsonValue): void {
+  if (payload !== null && typeof payload === "object" && !Array.isArray(payload) && Object.hasOwn(payload, "agent_team")) {
+    throw forbidden("agent_team is server-owned metadata; use the Agent team endpoint");
+  }
   if (payload !== null && typeof payload === "object" && !Array.isArray(payload)
     && Object.hasOwn(payload, "continue_from_event_id")) {
     throw forbidden("continue_from_event_id is server-owned metadata; use the Cloud Agent endpoint");
@@ -1052,6 +1058,13 @@ export class CollaborationDatabase {
     }
     this.migrateAgentClaimLease();
     this.migrateAgentClaimPause();
+    this.sqlite.exec(AGENT_TEAM_SCHEMA);
+    if (!(this.sqlite.prepare("PRAGMA table_info(agent_team_runs)").all() as Array<{ name: string }>).some(row => row.name === "content_revision")) {
+      this.sqlite.exec("ALTER TABLE agent_team_runs ADD COLUMN content_revision INTEGER NOT NULL DEFAULT 0 CHECK(content_revision>=0)");
+    }
+    if (!(this.sqlite.prepare("PRAGMA table_info(agent_team_controls)").all() as Array<{ name: string }>).some(row => row.name === "reserved")) {
+      this.sqlite.exec("ALTER TABLE agent_team_controls ADD COLUMN reserved INTEGER NOT NULL DEFAULT 0 CHECK(reserved IN (0,1))");
+    }
     this.initializeEventStorageUsage();
     this.sqlite.exec(REGISTRATION_SCHEMA);
     this.registration = new RegistrationStore(this.sqlite, (value) => this.tokenDigest(value), this.clock);
@@ -3167,6 +3180,23 @@ export class CollaborationDatabase {
           WHERE e.session_id=? AND p.type='agent_request' AND e.type IN ('agent_progress','agent_response','tool_call','tool_result')
           UNION SELECT e.id,j.value FROM events e,json_each(e.payload_json,'$.history_summary.source_event_ids') j
           WHERE e.session_id=? AND e.type='agent_request' AND json_type(e.payload_json,'$.history_summary.source_event_ids')='array'
+          -- Every later team prompt carries the original task; model-derived
+          -- delegated/returned tasks also depend on earlier same-run answers.
+          -- Canonical run IDs survive private cleanup; no private-cache lookup
+          -- is needed for erasure of these bounded (at most 48) generated calls.
+          UNION SELECT child.id,parent.id FROM events child JOIN events parent
+            ON parent.session_id=child.session_id AND parent.type='agent_request'
+              AND json_extract(parent.payload_json,'$.agent_team.run_id')=json_extract(child.payload_json,'$.agent_team.run_id')
+            WHERE child.session_id=? AND child.type='agent_request' AND child.sequence>parent.sequence
+              AND json_type(child.payload_json,'$.agent_team.run_id')='text'
+              AND json_type(parent.payload_json,'$.agent_team.run_id')='text'
+          UNION SELECT child.id,answer.id FROM events answer JOIN events request ON request.id=answer.reply_to_event_id
+            JOIN events child ON child.session_id=request.session_id
+              AND json_extract(child.payload_json,'$.agent_team.run_id')=json_extract(request.payload_json,'$.agent_team.run_id')
+            WHERE answer.session_id=? AND answer.type='agent_response' AND request.type='agent_request'
+              AND child.type='agent_request' AND child.sequence>answer.sequence
+              AND json_type(request.payload_json,'$.agent_team.run_id')='text'
+              AND json_type(child.payload_json,'$.agent_team.run_id')='text'
         ), gone(id) AS (SELECT ?
           UNION SELECT work.id FROM events work JOIN events request ON request.id=work.reply_to_event_id
             WHERE work.session_id=? AND request.session_id=work.session_id AND request.type='agent_request' AND request.id=?
@@ -3177,7 +3207,7 @@ export class CollaborationDatabase {
           UNION SELECT snapshot.id FROM events snapshot WHERE snapshot.session_id=? AND snapshot.type='context_snapshot' AND snapshot.sequence>=?
           UNION SELECT d.child FROM deps d JOIN gone g ON g.id=d.parent)
         SELECT e.* FROM events e JOIN gone g ON g.id=e.id WHERE e.session_id=? ORDER BY e.sequence`)
-        .all(sessionId, sessionId, eventId, sessionId, linkedRequestId, sessionId, erasureSequence, sessionId, erasureSequence, sessionId) as unknown as EventRow[];
+        .all(sessionId, sessionId, sessionId, sessionId, eventId, sessionId, linkedRequestId, sessionId, erasureSequence, sessionId, erasureSequence, sessionId) as unknown as EventRow[];
       const now = this.now();
       const revision = (session.content_revision ?? 0) + 1;
       const originals = new Map(affected.map((row) => [row.id, mapEvent(row)]));
@@ -3193,6 +3223,10 @@ export class CollaborationDatabase {
           .run('{"content":"[Message deleted]"}', now, reason, revision, row.id);
       }
       this.sqlite.prepare("UPDATE sessions SET content_revision=? WHERE id=?").run(revision, sessionId);
+      // Frozen team inputs and delegated tasks are derived execution caches.
+      // Erase their private copies in the author-deletion transaction. Ordered
+      // canonical tombstones and request revision fences remain authoritative.
+      this.sqlite.prepare("DELETE FROM agent_team_runs WHERE session_id=?").run(sessionId);
       this.sqlite.prepare(`INSERT INTO message_deletion_storage(id,generation,cleaned_generation,pending_since) VALUES(1,1,0,?)
         ON CONFLICT(id) DO UPDATE SET generation=generation+1,pending_since=COALESCE(pending_since,excluded.pending_since)`)
         .run(this.clock().getTime());
@@ -3389,7 +3423,8 @@ export class CollaborationDatabase {
     }));
   }
 
-  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number): HistoryContext {
+  readHistoryContext(actor: Actor, sessionId: string, view?: "summary" | "original", throughSequence?: number,
+    originalContent?: (event: HistorySummaryEvent, content: string) => string): HistoryContext {
     return historySummaryOperation(() => this.transaction(() => {
       this.assertActiveDevice(actor);
       const session = this.requireReadableSessionInsideTransaction(actor, sessionId);
@@ -3413,7 +3448,7 @@ export class CollaborationDatabase {
         const event = mapEvent(row);
         events.push({ ...event, payload: redactJson(event.payload) });
       }
-      const context = buildHistoryContext(events, resolvedView);
+      const context = buildHistoryContext(events, resolvedView, originalContent);
       // The frozen canonical head includes invisible/control events; it is not
       // the sequence of the last conversational item returned by the projection.
       context.through_sequence = through;
@@ -3493,7 +3528,7 @@ export class CollaborationDatabase {
             "SELECT runtime_id, status, attempt_count, lease_expires_at FROM agent_request_claims WHERE request_event_id = ?",
           ).get(replyTarget.id) as unknown as ClaimRow | undefined;
           if (runtimeId === undefined
-            || !this.isCurrentClaimAttempt(claim, runtimeId, input.claim_attempt, this.now())) {
+            || !this.isCurrentClaimAttempt(claim, runtimeId, input.claim_attempt, this.now()) || !this.teamRequestMayExecute(replyTarget.id)) {
             throw conflict("A matching active claim is required to append request-linked tool events");
           }
         }
@@ -3507,6 +3542,67 @@ export class CollaborationDatabase {
       }
       return this.appendInsideTransaction(actor.user_id, sessionId, input, provenance);
     });
+  }
+
+  /** Dedicated internal path; private step and canonical request commit together. */
+  appendTeamAgentRequest(actor: Actor, sessionId: string, input: AppendEventInput, onAccepted: (event: CanonicalEvent) => void): CanonicalEvent {
+    this.assertActiveDevice(actor);
+    return this.transaction(() => {
+      const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
+      if (session.state !== "active" || input.type !== "agent_request" || input.visibility !== "session"
+        || input.runtime_id || input.reply_to_event_id) throw conflict("Invalid internal team request");
+      const payload = input.payload as { agent_team?: unknown; history_summary?: unknown; continue_from_event_id?: unknown };
+      if (payload.history_summary !== undefined || payload.continue_from_event_id !== undefined) throw forbidden("Team requests cannot forge other request metadata");
+      this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(payload.agent_team));
+      const target = agentRequestTarget({ payload: input.payload });
+      if (!target.runtimeId) throw conflict("Team requests require an exact runtime");
+      const runtime = this.getRuntime(target.runtimeId);
+      if (runtime.user_id !== actor.user_id || runtime.session_id !== sessionId || runtime.purpose !== "execution"
+        || runtime.status !== "online" || !runtimeSupportsAgentTarget(runtime, target)) throw forbidden("Team node requires your exact online runtime and advertised model");
+      this.assertActiveDevice({ ...actor, device_id: runtime.device_id });
+      this.assertContextCapability(sessionId, runtime);
+      if (input.content_revision !== (session.content_revision ?? 0)) throw new ApiError(409,
+        "context_changed", "Shared history changed; start a new team task with current history");
+      const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
+      if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", input.payload, null, "session", null);
+      const event = this.appendInsideTransaction(actor.user_id, sessionId, input, null); onAccepted(event); return event;
+    });
+  }
+
+  private validateTeamReservation(actor: Actor, sessionId: string, metadata: AgentTeamRequestMetadata): void {
+    const row = this.sqlite.prepare(`SELECT r.user_id,r.session_id,r.status,r.deadline_at,r.current_step_id,r.calls_used,r.max_calls,r.content_revision,
+      s.status AS step_status,s.node_id,s.node_label,s.task FROM agent_team_runs r JOIN agent_team_steps s ON s.run_id=r.id
+      WHERE r.id=? AND s.id=?`).get(metadata.run_id, metadata.step_id);
+    if (!row || row.user_id !== actor.user_id || row.session_id !== sessionId || row.status !== "running"
+      || String(row.deadline_at) <= this.now() || row.current_step_id !== metadata.step_id || row.step_status !== "pending"
+      || Number(row.calls_used) >= Number(row.max_calls) || row.content_revision !== (this.requireSession(sessionId).content_revision ?? 0)
+      || row.node_id !== metadata.node_id
+      || row.node_label !== metadata.node_label || row.task !== metadata.task_content) throw forbidden("The team step is not authorized by an active bounded run");
+  }
+
+  teamRequestMayExecute(requestId: string): boolean {
+    const row = this.sqlite.prepare(`SELECT r.status,r.deadline_at,r.current_step_id,s.id FROM agent_team_steps s
+      JOIN agent_team_runs r ON r.id=s.run_id WHERE s.request_event_id=?`).get(requestId);
+    if (!row) {
+      // Canonical server-owned metadata is a permanent fence after private record clearing/pruning.
+      const request = this.sqlite.prepare("SELECT deleted_at,json_type(payload_json,'$.agent_team') AS team FROM events WHERE id=?").get(requestId);
+      return Boolean(request && request.deleted_at === null && request.team === null);
+    }
+    return row.status === "running" && String(row.deadline_at) > this.now() && row.current_step_id === row.id;
+  }
+
+  pauseTeamAgentRequest(actor: Actor, sessionId: string, requestId: string): AgentPauseOutcome {
+    this.assertActiveDevice(actor);
+    const request = this.getEvent(sessionId, requestId);
+    if (!this.sqlite.prepare("SELECT 1 FROM agent_team_steps WHERE request_event_id=?").get(requestId)
+      || request.actor_user_id !== actor.user_id) throw forbidden("Only the team requester may control this step");
+    if (!this.requireClaimRow(requestId)) {
+      const target = agentRequestTarget(request);
+      if (!target.runtimeId) throw conflict("Team request has no exact local runtime");
+      this.sqlite.prepare(`INSERT OR IGNORE INTO agent_request_claims(request_event_id,runtime_id,claimed_at,status,attempt_count,lease_expires_at)
+        VALUES(?,?,?,'claimed',1,NULL)`).run(requestId, target.runtimeId, this.now());
+    }
+    return this.pauseAgentRequest(actor, sessionId, requestId, true);
   }
 
   setHostedAgentUserLimit(userId: string, dailyRuns: number): void {
@@ -3560,6 +3656,7 @@ export class CollaborationDatabase {
     endpoints: HostedAllocation[], limits: HostedRunLimits,
     onReserved?: (event: CanonicalEvent) => void,
     summary?: HostedHistorySummaryInput,
+    team?: AgentTeamRequestMetadata,
   ): { event: CanonicalEvent; created: boolean; endpointId?: string } {
     this.assertActiveDevice(actor);
     if (!endpoints.length || endpoints.some((e) => e.profileId !== input.profile_id
@@ -3599,6 +3696,9 @@ export class CollaborationDatabase {
           || originalPin.config_revision !== personal.configRevision : originalPin !== undefined) {
           throw new ApiError(409, "cloud_api_changed", "Cloud continuation must keep its original API configuration revision");
         }
+        if (this.sqlite.prepare("SELECT 1 FROM agent_team_steps WHERE request_event_id=?").get(previous.id)) {
+          throw forbidden("Continue this request through its bounded team run");
+        }
         const recorded = previous.payload as { content?: unknown; profile_id?: unknown; include_code?: unknown;
           github_task_id?: unknown; execution_profile?: { harness?: unknown; provider?: unknown; model?: unknown } };
         const outcome = this.sqlite.prepare("SELECT outcome FROM hosted_agent_outcomes WHERE request_event_id=?")
@@ -3629,6 +3729,7 @@ export class CollaborationDatabase {
         profile_id: input.profile_id,
         ...(input.github_task_id ? { github_task_id: input.github_task_id } : {}),
         ...(input.continue_from_event_id ? { continue_from_event_id: input.continue_from_event_id } : {}),
+        ...(team ? { agent_team: AgentTeamRequestMetadataSchema.parse(team) } : {}),
         execution_profile: { harness: "opencode", provider: endpoints[0]!.provider,
           model: endpoints[0]!.model },
       });
@@ -3653,6 +3754,7 @@ export class CollaborationDatabase {
         }
         return { event, created: false };
       }
+      if (team) this.validateTeamReservation(actor, sessionId, team);
       if (input.continue_from_event_id && this.sqlite.prepare(`SELECT 1 FROM events WHERE session_id=? AND type='agent_request'
         AND actor_user_id=? AND id IN (SELECT request_event_id FROM hosted_agent_runs)
         AND json_extract(payload_json,'$.continue_from_event_id')=?`).get(sessionId, actor.user_id, input.continue_from_event_id)) {
@@ -3706,13 +3808,16 @@ export class CollaborationDatabase {
     }));
   }
 
-  pauseHostedAgentRequest(actor: Actor, sessionId: string, requestId: string): CanonicalEvent | undefined {
+  pauseHostedAgentRequest(actor: Actor, sessionId: string, requestId: string, internalTeam = false): CanonicalEvent | undefined {
     return this.transaction(() => {
       this.assertActiveDevice(actor);
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       if (session.state !== "active") throw conflict("Archived sessions do not accept Agent request control");
       const event = this.getEvent(sessionId, requestId);
       if (event.actor_user_id !== actor.user_id) throw forbidden("Only the author of an Agent request may pause it");
+      if (!internalTeam && this.sqlite.prepare("SELECT 1 FROM agent_team_steps WHERE request_event_id=?").get(requestId)) {
+        throw forbidden("Pause this request through its bounded team run");
+      }
       const payload = event.payload as { github_task_id?: unknown };
       const job = this.sqlite.prepare("SELECT status FROM hosted_agent_runs WHERE request_event_id=? AND session_id=? AND user_id=?")
         .get(requestId, sessionId, actor.user_id) as { status: string } | undefined;
@@ -3741,7 +3846,7 @@ export class CollaborationDatabase {
     return this.transaction(() => {
       const job = this.sqlite.prepare("SELECT * FROM hosted_agent_runs WHERE request_event_id=? AND status='running'")
         .get(requestId) as { session_id: string; user_id: string; device_id: string; provider: string; model: string } | undefined;
-      if (!job || this.isHostedAgentPaused(requestId) || !this.isRequestContextCurrent(job.session_id, requestId)
+      if (!job || this.isHostedAgentPaused(requestId) || !this.teamRequestMayExecute(requestId) || !this.isRequestContextCurrent(job.session_id, requestId)
         || !cloudApiRunIsCurrent(this, requestId)) return;
       const actor: Actor = { user_id: job.user_id, device_id: job.device_id, display_name: this.actorDisplayName(job.user_id) };
       this.assertActiveDevice(actor);
@@ -3791,7 +3896,7 @@ export class CollaborationDatabase {
       const device = this.sqlite.prepare(`SELECT 1 FROM devices WHERE id=? AND user_id=? AND revoked_at IS NULL
         AND (expires_at IS NULL OR expires_at > ?)`).get(job.device_id, job.user_id, this.now());
       const writer = this.membershipRole(job.session_id, job.user_id);
-      const authorized = Boolean(device && writer && writer !== "viewer" && session.state === "active" && cloudApiRunIsCurrent(this, requestId)
+      const authorized = Boolean(device && writer && writer !== "viewer" && session.state === "active" && cloudApiRunIsCurrent(this, requestId) && this.teamRequestMayExecute(requestId)
         && (session.mode !== "solo" || session.owner_user_id === job.user_id));
       const content = authorized ? outcome.content : undefined;
       let success = typeof content === "string" && content.trim().length > 0;
@@ -3989,6 +4094,9 @@ export class CollaborationDatabase {
         || event.actor_user_id !== actor.user_id || runtime.status === "revoked" || runtime.purpose !== "execution") {
         throw conflict("The request is eligible only for the initiating user's active runtime");
       }
+      if (!this.teamRequestMayExecute(requestEventId)) return { claim: {
+        request_event_id: requestEventId, runtime_id: runtimeId, status: "paused", attempt_count: 1,
+      } };
       const target = agentRequestTarget(event);
       const matching = this.listSessionRuntimesForUser(sessionId, actor.user_id).filter((candidate) =>
         candidate.purpose === "execution"
@@ -4032,7 +4140,8 @@ export class CollaborationDatabase {
         // The lease lapsed, so no accepted work is arriving. Exact-runtime
         // reclaim is bounded: past the budget the request ends visibly instead
         // of executing forever.
-        if ((existing.attempt_count ?? 1) >= MAX_AGENT_CLAIM_ATTEMPTS) {
+        if (this.sqlite.prepare("SELECT 1 FROM agent_team_steps WHERE request_event_id=?").get(requestEventId)
+          || (existing.attempt_count ?? 1) >= MAX_AGENT_CLAIM_ATTEMPTS) {
           const failure = this.failAbandonedClaim(sessionId, event, target.harness);
           return failure === undefined ? { failed: true } : { failed: true, event: failure };
         }
@@ -4072,12 +4181,15 @@ export class CollaborationDatabase {
    * whatever execution was holding it — and because a paused request is never
    * reclaimed, nothing can outlive that fence.
    */
-  pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string): AgentPauseOutcome {
+  pauseAgentRequest(actor: Actor, sessionId: string, requestEventId: string, internalTeam = false): AgentPauseOutcome {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
       const event = this.getEvent(sessionId, requestEventId);
       if (event.type !== "agent_request") throw conflict("Only agent_request events can be paused");
       this.assertRequestContextCurrent(sessionId, requestEventId);
+      if (!internalTeam && this.sqlite.prepare("SELECT 1 FROM agent_team_steps WHERE request_event_id=?").get(requestEventId)) {
+        throw forbidden("Pause this request through its bounded team run");
+      }
       if (event.actor_user_id !== actor.user_id) {
         throw forbidden("Only the author of an Agent request may pause it");
       }
@@ -4222,6 +4334,7 @@ export class CollaborationDatabase {
       if (!this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())) {
         throw conflict("A matching active claim is required to complete this request");
       }
+      if (!this.teamRequestMayExecute(requestEventId)) throw conflict("This team step has been stopped or exceeded its time limit");
       const provenance = {
         ...this.runtimeProvenance(runtime),
         ...(observedModel === undefined ? {} : { model: observedModel }),
@@ -4278,6 +4391,7 @@ export class CollaborationDatabase {
       if (!this.isCurrentClaimAttempt(claim, runtimeId, claimAttempt, this.now())) {
         throw conflict("A matching active claim is required to append progress for this request");
       }
+      if (!this.teamRequestMayExecute(requestEventId)) throw conflict("This team step has been stopped or exceeded its time limit");
       const provenance = {
         ...this.runtimeProvenance(runtime),
         ...(observedModel === undefined ? {} : { model: observedModel }),

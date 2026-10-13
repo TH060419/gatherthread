@@ -228,6 +228,9 @@
           </div>
           <span class="avatar" id="current-user-avatar" aria-hidden="true"></span>
           <span id="current-username" class="current-username"></span>
+          <button id="agent-team-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Agent team" title="Agent team" data-tooltip aria-haspopup="dialog" aria-controls="agent-team-dialog" disabled>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="8.5" width="6" height="7" rx="2"/><rect x="15.5" y="2.5" width="6" height="7" rx="2"/><rect x="15.5" y="14.5" width="6" height="7" rx="2"/><path d="M8.5 12h4V6h3M12.5 12v6h3"/></svg>
+          </button>
           <button id="project-code-button" class="icon-button topbar-icon-button workspace-icon-button" type="button" aria-label="Project file collaboration" title="Project file collaboration" data-tooltip aria-haspopup="dialog" aria-controls="project-code-dialog">
             <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="5" r="2.5"/><circle cx="6" cy="19" r="2.5"/><circle cx="18" cy="5" r="2.5"/><path d="M6 7.5v9M18 7.5v1a6 6 0 0 1-6 6H6"/></svg>
           </button>
@@ -635,6 +638,84 @@
         </aside>
       </div>
     </div>
+
+    <dialog id="agent-team-dialog" class="create-dialog agent-team-dialog" aria-labelledby="agent-team-title" aria-describedby="agent-team-description">
+      <header class="team-heading">
+        <div><p class="eyebrow">People choose. Agents work together.</p><h2 id="agent-team-title">Agent team</h2><p id="agent-team-description">Connect your own Agents, give each a role, then start one bounded task.</p>
+          <div id="agent-team-overview" class="team-overview" role="region" aria-label="Current team task" hidden>
+            <div class="team-overview-summary"><strong id="agent-team-overview-status" role="status"></strong><span id="agent-team-overview-budget" data-i18n-skip></span><span id="agent-team-overview-current" data-i18n-skip></span></div>
+            <button id="agent-team-edit" class="button button-secondary compact-button" type="button" hidden>Edit my team</button>
+            <div class="team-run-actions"><button id="agent-team-pause" class="button button-secondary compact-button" type="button" hidden>Pause team</button><button id="agent-team-resume" class="button button-primary compact-button" type="button" hidden>Resume team</button><button id="agent-team-continue" class="button button-primary compact-button" type="button" hidden>Continue</button><button id="agent-team-stop" class="text-button danger-text-button" type="button" hidden>Stop team</button></div>
+            <button id="agent-team-control-retry" class="button button-secondary compact-button" type="button" hidden>Check the last action</button>
+            <p id="agent-team-control-note" class="team-help" role="status" hidden>The last action is not confirmed. Check it before starting another action; this does not repeat Agent execution.</p>
+          </div>
+        </div>
+        <button id="agent-team-close" class="icon-button" type="button" aria-label="Close Agent team">×</button>
+      </header>
+      <div class="team-layout">
+        <section class="team-editor" aria-label="Team graph editor">
+          <div class="team-plan-fields">
+            <label>Team name<input id="agent-team-name" type="text" maxlength="120" autocomplete="off" data-i18n-skip /></label>
+            <label>Team instructions<textarea id="agent-team-prompt" rows="2" maxlength="2000" placeholder="For example: the director plans and reviews; the builder implements and reports observed tests."></textarea></label>
+          </div>
+          <div class="team-toolbar">
+            <label class="team-target-picker">My Agent<select id="agent-team-add-target" aria-label="Agent to add to the team"></select></label>
+            <button id="agent-team-add-node" class="button button-secondary compact-button" type="button">Add Agent</button>
+            <button id="agent-team-refresh" class="text-button" type="button">Refresh Agents</button>
+            <button id="agent-team-save" class="button button-secondary compact-button" type="button">Save team</button>
+            <button id="agent-team-reload" class="text-button" type="button">Reload saved team</button>
+          </div>
+          <p id="agent-team-graph-help" class="team-help">Drag a node to move it. Connect its output to another node's input, or use the connection controls below. Arrow keys move the selected node.</p>
+          <div id="agent-team-viewport" class="team-viewport" tabindex="0" aria-label="Agent graph. Scroll to explore the canvas." aria-describedby="agent-team-graph-help">
+            <div id="agent-team-canvas" class="team-canvas">
+              <svg id="agent-team-edges" class="team-edges" viewBox="0 0 1800 1200" width="1800" height="1200" aria-hidden="true"><defs><marker id="team-edge-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" /></marker></defs><g id="agent-team-edge-paths"></g></svg>
+              <div id="agent-team-nodes"></div>
+              <p id="agent-team-empty" class="team-empty">Add an Agent to begin. Your saved team is private; task messages are shared with this conversation.</p>
+            </div>
+          </div>
+          <div class="team-connections">
+            <label>From<select id="agent-team-edge-source" aria-label="Connection source"></select></label>
+            <label>To<select id="agent-team-edge-target" aria-label="Connection target"></select></label>
+            <label>Direction<select id="agent-team-edge-direction"><option value="one_way">One-way delegation</option><option value="bidirectional">Two-way delegation</option></select></label>
+            <button id="agent-team-connect" class="button button-secondary compact-button" type="button">Connect Agents</button>
+          </div>
+          <ul id="agent-team-edge-list" class="team-edge-list" aria-label="Team connections"></ul>
+          <p class="team-help">Arrows allow new delegation. A child's result can return to its parent without a reverse arrow. Every new call, including that return and timeout continuation, counts toward the limit.</p>
+        </section>
+        <aside class="team-inspector" aria-label="Agent role and team task">
+          <section id="agent-team-node-inspector" aria-labelledby="agent-team-node-title" hidden>
+            <h3 id="agent-team-node-title">Selected Agent</h3>
+            <label>Agent name<input id="agent-team-node-name" type="text" maxlength="80" autocomplete="off" data-i18n-skip /></label>
+            <label>Role instructions<textarea id="agent-team-node-role" rows="3" maxlength="1000" placeholder="Describe this Agent's responsibility and when it should delegate."></textarea></label>
+            <label>Exact Agent and model<select id="agent-team-node-target"></select></label>
+            <label id="agent-team-code-field" class="team-checkbox" hidden><input id="agent-team-node-code" type="checkbox" /> Share current GT Cloud files with this Cloud Agent</label>
+            <div class="team-node-actions"><button id="agent-team-make-entry" class="text-button" type="button">Start with this Agent</button><button id="agent-team-remove-node" class="text-button danger-text-button" type="button">Remove Agent</button></div>
+          </section>
+          <section class="team-start-section" aria-labelledby="agent-team-start-title">
+            <h3 id="agent-team-start-title">Start a team task</h3>
+            <form id="agent-team-start-form">
+              <label>First Agent<select id="agent-team-entry-node"></select></label>
+              <label>Task<textarea id="agent-team-task" rows="4" maxlength="3000" placeholder="What should the team accomplish?" required></textarea></label>
+              <div class="team-limits"><label>Maximum calls<input id="agent-team-max-calls" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]+" minlength="1" maxlength="2" value="12" required /></label><label>Total minutes<input id="agent-team-max-minutes" class="digits-only-input" type="text" inputmode="numeric" pattern="[0-9]+" minlength="1" maxlength="3" value="30" required /></label></div>
+              <p class="team-help">You start each task. Agents may then delegate along these connections. Team and role instructions, tasks and public results are shared with conversation members and the selected providers. Local tool approval stays with your local Agent.</p>
+              <button id="agent-team-start" class="button button-primary" type="submit">Start team task</button>
+            </form>
+          </section>
+          <section class="team-run-section" aria-labelledby="agent-team-run-title">
+            <h3 id="agent-team-run-title">Team activity</h3>
+            <label>Recent tasks<select id="agent-team-run-select"></select></label>
+            <p id="agent-team-run-status">No team task yet</p>
+            <p id="agent-team-failure-note" class="team-help" hidden></p>
+            <p id="agent-team-run-budget" class="team-help"></p>
+            <p id="agent-team-snapshot-note" class="team-help" hidden>This graph shows the configuration accepted for this task. Your editable team is kept separately.</p>
+            <p id="agent-team-run-note" class="team-help" hidden>Pause or stop prevents further calls. Already started local work may finish in its own app; a stopped request cannot publish its late result.</p>
+            <button id="agent-team-forget" class="text-button danger-text-button" type="button" hidden>Clear private task record</button>
+            <ol id="agent-team-step-list" class="team-step-list" aria-label="Agent calls"></ol>
+          </section>
+        </aside>
+      </div>
+      <footer class="team-footer"><p id="agent-team-error" class="form-error" role="alert"></p><p id="agent-team-status" role="status"></p><button id="agent-team-done" class="button button-secondary" type="button">Close</button></footer>
+    </dialog>
 
     <dialog id="project-code-dialog" class="create-dialog project-code-dialog" aria-labelledby="project-code-title" aria-describedby="project-code-description">
       <div class="code-dialog-content">

@@ -1,4 +1,7 @@
 import { HostedGithub, type HostedGithubOptions } from "./hosted-github.js";
+import { AgentTeams } from "./agent-teams.js";
+import { SaveAgentTeamPlanInputSchema, StartAgentTeamRunInputSchema, ControlAgentTeamRunInputSchema,
+  AgentTeamPlanResponseSchema, AgentTeamRunsResponseSchema, AgentTeamRunResponseSchema, AgentTeamRunAcceptedSchema } from "@gatherthread/protocol";
 import { stopInterruptedHostedContainers } from "./hosted-agent-recovery.js";
 import { HostedGithubRepositoryInputSchema, HostedGithubTaskInputSchema, HostedGithubPrInputSchema, HostedGithubCompleteInputSchema,
   HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
@@ -496,6 +499,7 @@ export async function startCollaborationServer(
   const codeRepository = new CodeRepository(database, options.codeRepositoryDirectory ?? ephemeralCodeDirectory ?? `${resolve(options.databasePath)}.code`);
   const hostedAgent = options.hostedAgent ? new HostedAgent(service, codeRepository, options.hostedAgent) : undefined;
   const personalApi = hostedAgent?.personalApi ?? new CloudApiStore(database);
+  const agentTeams = new AgentTeams(service, hostedAgent);
   if (options.hostedGithub && !hostedAgent) throw new Error("Cloud GitHub requires Cloud Agent");
   const hostedGithub = options.hostedGithub && options.hostedAgent && hostedAgent
     ? new HostedGithub(service, hostedAgent, options.hostedAgent, options.hostedGithub) : undefined;
@@ -1272,6 +1276,34 @@ export async function startCollaborationServer(
         const input = HostedGithubTaskInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 202, { data: HostedGithubTaskSchema.parse(hostedGithub.start(actor, sessionId, input)) }); return;
       }
+      if (sessionId && parts[3] === "agent-team-plan" && parts.length === 4) {
+        if (request.method === "GET") {
+          sendJson(response, 200, { data: AgentTeamPlanResponseSchema.parse(agentTeams.getPlan(actor, sessionId)) }); return;
+        }
+        if (request.method === "PUT") {
+          const input = SaveAgentTeamPlanInputSchema.parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: AgentTeamPlanResponseSchema.parse(agentTeams.savePlan(actor, sessionId, input.plan, input.expected_revision)) }); return;
+        }
+      }
+      if (sessionId && parts[3] === "agent-team-runs") {
+        if (parts.length === 4 && request.method === "GET") {
+          sendJson(response, 200, { data: AgentTeamRunsResponseSchema.parse(agentTeams.list(actor, sessionId)) }); return;
+        }
+        if (parts.length === 4 && request.method === "POST") {
+          const input = StartAgentTeamRunInputSchema.parse(await readAuthenticatedJson());
+          sendJson(response, 202, { data: AgentTeamRunAcceptedSchema.parse(agentTeams.start(actor, sessionId, input)) }); return;
+        }
+        if (parts.length === 5 && parts[4] && request.method === "GET") {
+          sendJson(response, 200, { data: AgentTeamRunResponseSchema.parse(agentTeams.read(actor, sessionId, parts[4])) }); return;
+        }
+        if (parts.length === 5 && parts[4] && request.method === "DELETE") {
+          z.object({}).strict().parse(await readAuthenticatedJson()); agentTeams.forget(actor, sessionId, parts[4]); response.writeHead(204); response.end(); return;
+        }
+        if (parts.length === 6 && parts[4] && parts[5] === "control" && request.method === "POST") {
+          const input = ControlAgentTeamRunInputSchema.parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: AgentTeamRunResponseSchema.parse(agentTeams.control(actor, sessionId, parts[4], input)) }); return;
+        }
+      }
       if (sessionId && parts[3] === "hosted-agent-requests" && parts.length === 4 && request.method === "POST") {
         if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
         const input = HostedAgentRequestInputSchema.parse(await readAuthenticatedJson());
@@ -1670,6 +1702,7 @@ export async function startCollaborationServer(
     service,
     origin: `http://${address.address.includes(":") ? `[${address.address}]` : address.address}:${address.port}`,
     async close() {
+      agentTeams.close();
       clearInterval(heartbeat);
       clearInterval(registrationCleanup);
       unsubscribe();
