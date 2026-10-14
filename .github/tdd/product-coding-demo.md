@@ -83,6 +83,13 @@ bounds. The four existing approved poster compositions are rerendered, not
 redesigned. Capture source and publishing mappings live in
 `docs/assets/product/README.md`.
 
+The independent Spec review caught desktop user agents in the first phone/tablet
+capture pass. The follow-up uses matching touch/mobile contexts, asserts the
+mobile layout and hidden local-connection control, and recaptures all forty
+scenes. All twelve homepage publishing copies and the official lockup were
+checked byte-for-byte; mobile images and the updated cover were visually reviewed.
+The capture helper's unused branch-opening mode was removed after Standards review.
+
 No real model, GitHub OAuth/repository write, private account or server is used.
 The new executable preview accepts only fixed authored fixtures, never uploaded
 HTML. Both nested frames retain opaque `allow-scripts` sandboxing; source code

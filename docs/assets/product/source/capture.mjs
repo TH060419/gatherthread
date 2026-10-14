@@ -15,11 +15,16 @@ const { chromium } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(
 const browser = await chromium.launch();
 await mkdir(output, { recursive: true });
 async function pageFor(locale, viewport = { width: 1440, height: 1000 }, mobile = false) {
-  const context = await browser.newContext({ viewport, deviceScaleFactor: 2, reducedMotion: 'reduce' });
+  const context = await browser.newContext({ viewport, deviceScaleFactor: 2, reducedMotion: 'reduce',
+    ...(mobile ? { isMobile: true, hasTouch: true, userAgent: viewport.width >= 768
+      ? 'Mozilla/5.0 (iPad; CPU OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1'
+      : 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Version/17.0 Mobile/15E148 Safari/604.1' } : {}) });
   const page = await context.newPage();
   page.on('pageerror', error => { throw error; });
   await page.goto(`${origin}/app/example.html?locale=${locale}&theme=light&topic=browse&layout=${mobile ? 'mobile' : 'desktop'}`);
   await page.locator('#session-view:not([hidden])').waitFor();
+  assert.equal(await page.locator('html').getAttribute('data-mobile-workspace'), String(mobile));
+  if (mobile) assert.equal(await page.locator('#connect-codex-button').isVisible(), false, 'actual phone/tablet layout does not offer a local connection');
   await page.evaluate(() => document.fonts.ready);
   return { page, context };
 }
@@ -29,11 +34,10 @@ async function reveal(page, selector) {
     scroller.scrollTop += node.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 10;
   });
 }
-async function code(page, branches = false) {
+async function code(page) {
   await page.locator('#project-code-button').click();
   await page.locator('#code-provider-gt-cloud').click();
   await page.locator('#code-enabled-content:not([hidden])').waitFor();
-  if (branches) await page.locator('#code-open-branches-view').click();
 }
 async function capture(locale, name, page) {
   const viewport = page.viewportSize();
@@ -136,7 +140,10 @@ try {
     }
     await writeFile(join(product, 'source', `capture-geometry.${locale}.json`), JSON.stringify(geometry, null, 2) + '\n');
     for (const [destination, source] of Object.entries({ desktop: '11-focused-workspace', phone: '12-phone', summary: '03-summary', github: '09-github', review: '08-review-changes', work: '04-agent-work' })) {
-      await copyFile(join(product, locale, ...(['desktop', 'phone'].includes(destination) ? [] : ['annotated']), `${source}.jpg`), join(root, 'site/assets/product', locale, `${destination}.jpg`));
+      const from = join(product, locale, ...(['desktop', 'phone'].includes(destination) ? [] : ['annotated']), `${source}.jpg`);
+      const to = join(root, 'site/assets/product', locale, `${destination}.jpg`);
+      await copyFile(from, to);
+      assert.deepEqual(await readFile(to), await readFile(from), 'homepage uses the identical reviewed capture');
     }
     console.log(`Captured ${geometry.length} full-view scenes: ${locale}`);
   }

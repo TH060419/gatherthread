@@ -307,9 +307,9 @@
     },
     "points": [
       {
-        "x": 0,
+        "x": 347,
         "y": 110,
-        "width": 1113,
+        "width": 766,
         "height": 890,
         "text": "Give the conversation more room"
       }
@@ -427,17 +427,17 @@
     },
     "points": [
       {
-        "x": 35,
-        "y": 581,
-        "width": 320,
-        "height": 75,
+        "x": 21,
+        "y": 678.609375,
+        "width": 348,
+        "height": 90.390625,
         "text": "Continue the discussion"
       },
       {
-        "x": 35,
-        "y": 672.25,
-        "width": 110.53125,
-        "height": 40,
+        "x": 69,
+        "y": 773,
+        "width": 92.34375,
+        "height": 44,
         "text": "Choose your online Agent"
       }
     ]
@@ -452,14 +452,14 @@
     "points": [
       {
         "x": 39,
-        "y": 462.765625,
+        "y": 485.78125,
         "width": 312,
         "height": 44,
         "text": "Choose a supported model"
       },
       {
         "x": 39,
-        "y": 547.765625,
+        "y": 570.78125,
         "width": 312,
         "height": 44,
         "text": "Adjust reasoning level"
@@ -475,17 +475,17 @@
     },
     "points": [
       {
-        "x": 265,
-        "y": 917,
-        "width": 520,
-        "height": 139.5,
+        "x": 21,
+        "y": 1014.609375,
+        "width": 778,
+        "height": 90.390625,
         "text": "Keep working on a tablet"
       },
       {
-        "x": 265,
-        "y": 1072.75,
-        "width": 110.53125,
-        "height": 40,
+        "x": 69,
+        "y": 1109,
+        "width": 92.34375,
+        "height": 44,
         "text": "Open compact Agent controls"
       }
     ]
@@ -500,14 +500,14 @@
     "points": [
       {
         "x": 171,
-        "y": 622.125,
+        "y": 645.15625,
         "width": 478,
         "height": 44,
         "text": "Choose a supported model"
       },
       {
         "x": 171,
-        "y": 707.125,
+        "y": 730.15625,
         "width": 478,
         "height": 44,
         "text": "Adjust reasoning level"

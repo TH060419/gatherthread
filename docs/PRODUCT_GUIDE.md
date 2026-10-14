@@ -98,7 +98,7 @@ For ongoing development, **choose GitHub first**. The project owner configures t
 
 Follow the pages in order: connect your account, choose a repository, then choose how to use its files. Owner and repository name are separate fields. For a new project, use **Create a repository on GitHub**, confirm visibility and add a README there, then return to connect it. Computer automatic uploads need a separate authorization for that device.
 
-![Full interface with annotations: GitHub connection and local file sync](assets/product/en/annotated/09-github.jpg)
+![Full interface with annotations: GitHub repository selection](assets/product/en/annotated/09-github.jpg)
 
 For a small trial, choose **GT Cloud**, GatherThread's file service with 128 MiB of current file versions per user. You can try file collaboration without setting up a GitHub repository first. The destinations are managed independently: switching the displayed service does not move, enable, or delete files.
 

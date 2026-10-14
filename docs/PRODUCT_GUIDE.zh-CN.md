@@ -98,7 +98,7 @@ signupButton.disabled = true;
 
 沿页面顺序连接账号、选择仓库，再选择文件的使用方式。所属账号和仓库名称分别填写；新项目可先点“在 GitHub 创建仓库”，在 GitHub 确认可见范围并添加 README 后回来连接。需要电脑自动上传时，再展开电脑同步设置，为那台电脑单独授权。
 
-![完整界面与重点标注：GitHub 连接与个人分支同步](assets/product/zh-CN/annotated/09-github.jpg)
+![完整界面与重点标注：GitHub 仓库选择](assets/product/zh-CN/annotated/09-github.jpg)
 
 **小项目和轻量体验可用 GT Cloud。** 每用户有 128 MiB 有效云端文件版本额度，无需先配置 GitHub，也能在工作页看版本、审查差异并发起恢复。
 
