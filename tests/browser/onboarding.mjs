@@ -5,6 +5,7 @@ import { mkdir } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { ExampleCollaborationApi } from '../../apps/web/src/example-api.js';
+import { examplePreviewDocument, EXAMPLE_REVIEWED_COMMIT } from '../../apps/web/src/example-project.js';
 import { guideSteps } from '../../apps/web/src/onboarding-content.js';
 const { chromium, webkit } = await import(process.env.PLAYWRIGHT_MODULE ? pathToFileURL(resolve(process.env.PLAYWRIGHT_MODULE)).href : 'playwright');
 const origin = process.env.ONBOARDING_ORIGIN ?? 'http://127.0.0.1:4173';
@@ -233,12 +234,12 @@ try {
     for (const branch of ['main', 'branch-maya']) {
       const { snapshot } = await api.getProjectCodeSnapshot('project-orbit', branch);
       const page = await browser.newPage();
-      await page.setContent(Buffer.from(snapshot.files[0].content_base64, 'base64').toString('utf8'));
-      assert.equal(await page.locator('[role=status]').isVisible(), false);
+      await page.setContent(examplePreviewDocument(locale, snapshot.commit === EXAMPLE_REVIEWED_COMMIT));
+      assert.equal(await page.locator('#confirmation').isVisible(), false);
       await page.getByRole('button', { name: locale === 'zh-CN' ? '我要报名' : 'Sign me up' }).click();
-      assert.equal(await page.locator('[role=status]').isVisible(), true);
-      assert.match(await page.locator('[role=status]').innerText(), locale === 'zh-CN' ? /报名成功/ : /signed up/);
-      if (branch === 'branch-maya') assert.match(await page.locator('[role=status]').innerText(), locale === 'zh-CN' ? /周六见/ : /See you Saturday/);
+      assert.equal(await page.locator('#confirmation').isVisible(), true);
+      assert.match(await page.locator('#confirmation').innerText(), locale === 'zh-CN' ? /报名成功/ : /signed up/);
+      if (branch === 'branch-maya') assert.match(await page.locator('#confirmation').innerText(), locale === 'zh-CN' ? /周六见/ : /See you Saturday/);
       await page.close();
     }
   }
@@ -285,6 +286,7 @@ try {
   await fresh.locator('#message-input').fill('Keep this practice message');
   await fresh.locator('#send-chat-button').click();
   await fresh.getByText('Keep this practice message', { exact: true }).waitFor();
+  assert.equal(await fresh.locator('html').getAttribute('lang'), 'en', 'reset preserves the requested example language');
   await fresh.locator('#settings-button').click();
   await fresh.locator('#settings-locale').selectOption('zh-CN');
   await fresh.getByText('Keep this practice message', { exact: true }).waitFor();
@@ -293,7 +295,20 @@ try {
   assert.equal(await fresh.locator('#current-username').innerText(), '陈晓');
   assert.match(await fresh.locator('#member-list').innerText(), /林悦/);
   assert.equal(await page.locator('html').getAttribute('lang'), 'en', 'sample language does not change real settings');
+  await fresh.evaluate(() => { window.exampleLastClick = ''; document.addEventListener('click', event => { window.exampleLastClick = event.target.id; }, true); });
   await fresh.locator('#cancel-settings-button').click();
+  try { await fresh.locator('#settings-dialog[open]').waitFor({ state: 'hidden', timeout: 3000 }); }
+  catch (error) { await page.screenshot({ path: `${artifacts}/cancel-failure.png` }); console.error('Cancel interaction', await fresh.evaluate(() => {
+    const box = document.getElementById('cancel-settings-button').getBoundingClientRect();
+    return { click: window.exampleLastClick, classes: document.body.className,
+      hit: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.id,
+      box: [box.x, box.y, box.width, box.height],
+      step: document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready'), dialogs: [...document.querySelectorAll('dialog[open]')].map(node => node.id) }; })); throw error; }
+  if (process.env.ONBOARDING_DEBUG) console.log('cancel language state', await fresh.evaluate(() => ({ lang: document.documentElement.lang,
+    name: document.getElementById('current-username').textContent,
+    locale: JSON.parse(localStorage.getItem('gatherthread.settings.v1')).general.locale,
+    settingsOpen: document.getElementById('settings-dialog').open,
+    tour: document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready') })));
   assert.equal(await fresh.locator('#current-username').innerText(), 'Alex', 'cancel restores authored language');
   await fresh.locator('#settings-button').click();
   await fresh.locator('#settings-locale').selectOption('zh-CN');
@@ -407,4 +422,4 @@ try {
   await context.close();
   assert.deepEqual(errors, []);
   console.log(`${browserName}: full guides on populated, empty and viewer accounts; isolated free practice; 1440/390/320 layouts, focus, ring geometry, privacy, toolbar, reset and language passed.`);
-} finally { await browser.close(); }
+} finally { if (errors.length) console.error('Example page errors:', errors); await browser.close(); }

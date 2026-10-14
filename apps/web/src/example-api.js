@@ -1,4 +1,5 @@
 import { MockCollaborationApi } from './api.js?v=20261012-content-1';
+import { exampleProjectFiles, EXAMPLE_REVIEWED_COMMIT } from './example-project.js';
 
 // This API is reachable only from the dedicated example document. Its mutations
 // are ordinary mock mutations in fresh memory, with no backend or local runtime.
@@ -20,12 +21,18 @@ export class ExampleCollaborationApi extends MockCollaborationApi {
     this.sessions[1].name = text('My checklist', '我的检查清单');
     this.sessions[1].description = text('Personal preparation, readable by the project.', '个人准备事项，项目成员仍可阅读。');
     const events = this.events.get('session-orbit');
+    const files = exampleProjectFiles(this.locale);
+    const buttonCode = files.find(file => file.path === 'src/signup.js').content;
     const copy = [
       text('Alex, shall we make a signup page for our club event? People just need to see when and where it is, then click “Sign me up”. Should we add photos too?', '陈晓，咱们给社团做个活动报名页吧？大家看见时间、地点，再点“我要报名”就行。要不要再放几张照片？'),
       text('Yes! Let’s leave photos for later. Put Saturday at 2 pm, at the school sports field. Clicking “Sign me up” should show “You’re signed up”. I’ll ask my AI agent to make it; could you check it afterwards?', '好！照片以后再说。这次写清“周六下午两点，学校操场”，点“我要报名”后显示“报名成功”。我请我的 AI agent 来做，你帮忙检查一下？'),
       text('Build the page using the requirements in the summary above. Keep it to those agreed features, then tell us what you made and checked.', '按上面的摘要把报名页做出来吧，只做已经确定的功能。完成后告诉我们做了什么、检查了什么。'),
-      text('Done: I created the page file with the event time, place and a “Sign me up” button. I checked that clicking it shows “You’re signed up”. The file is uploaded to Alex’s version for Maya to review. I followed the summarized requirements and left photos out.', '做好了：已生成页面文件，写上活动时间、地点和“我要报名”按钮。我检查了按钮，点击后会显示“报名成功”。文件已上传到陈晓的版本，林悦可以查看并继续修改。这次按摘要中的要求制作，没有加入照片。'),
-      text('@Alex Looks good! I asked my AI agent to make the confirmation friendlier: “You’re signed up! See you Saturday.” My updated file version is submitted for your review; once you approve it, we can bring it into the shared version.', '@陈晓 看过啦，时间地点都对！我让我的 AI agent 把提示改成“报名成功！周六见。”，并把改好的文件版本提交审核了。你确认后，我们就能整合到共享版本。'),
+      text('The signup page is ready. Open `index.html` and try the button.\n\n**Project files**\n', '报名页做好了。打开 `index.html`，就能试一下按钮。\n\n**项目文件**\n')
+        + '```text\nclub-signup/\n├── index.html\n├── styles.css\n├── src/signup.js\n├── tests/signup.test.cjs\n├── package.json\n└── README.md\n```\n\n'
+        + text('`index.html` holds the event; `styles.css` sets the appearance. The button behavior lives in `src/signup.js`:\n\n', '`index.html` 放活动内容，`styles.css` 管外观。按钮动作在 `src/signup.js`：\n\n')
+        + '```javascript\n' + buttonCode + '```\n\n'
+        + text('Checks: `npm test` — 3 passed. Clicking shows “You’re signed up”; the button then disables to prevent repeats. The files are saved to Alex’s version for review. Photos are left out. This frontend demo does not send or save signup data.', '检查：`npm test`，3 项通过。点击后显示“报名成功”，按钮随即禁用，避免重复点击。文件已保存到陈晓的版本供审核，没有加入照片。这是前端示例，不发送或保存实际报名数据。'),
+      text('@Alex I tried the page: the time, place and button are right. My Agent changed just one line in `src/signup.js`: “You’re signed up.” → “You’re signed up! See you Saturday.” I submitted my version for review. Check that change before merging it into the shared version.', '@陈晓 我试过页面了，时间、地点和按钮都对！我的 Agent 只改了 `src/signup.js` 中的一行：“报名成功。” → “报名成功！周六见。”，已提交审核。请看过这个改动，再合并到共享版本。'),
     ];
     events.forEach((event, index) => {
       const author = index === 0 || index === 4 ? 1 : 0;
@@ -33,12 +40,26 @@ export class ExampleCollaborationApi extends MockCollaborationApi {
       event.actor = { ...event.actor, id: this.sessions[0].members[author].userId, username: names[author] };
     });
     events[4].payload.mentions = [{ user_id: this.currentUser.id, display_name: names[0] }];
+    events[4].replyTo = events[3].id;
     events[3].replyTo = events[2].id;
     events[3].provenance.username = names[0]; events[3].provenance.model = 'gpt-5.6-sol';
     // Put completed summaries before production so the visible story follows
     // discussion → focused requirements → AI-built files → team review.
     const discussion = events.slice(0, 2);
-    const production = events.slice(2);
+    const [build, answer, feedback] = events.slice(2);
+    const progress = (id, kind, content, extra = {}) => ({ ...structuredClone(answer), id,
+      type: 'agent_progress', replyTo: build.id, payload: { content, phase: 'stream',
+        stream_mode: 'snapshot', stream_id: kind === 'plan' ? '11111111-1111-4111-8111-111111111111' : '22222222-2222-4222-8222-222222222222',
+        stream_kind: kind, stream_revision: 1, stream_state: 'completed', ...extra } });
+    const work = [
+      progress('example-build-plan', 'plan', '', { plan: [
+        { step: text('Build the page and button', '制作页面和报名按钮'), status: 'completed' },
+        { step: text('Run the three behavior checks', '运行三个行为检查'), status: 'completed' },
+        { step: text('Save files for teammate review', '保存文件，交给同伴检查'), status: 'completed' },
+      ] }),
+      progress('example-build-files', 'tool', text('Created: index.html, styles.css, src/signup.js\nAdded: tests/signup.test.cjs, package.json, README.md', '已创建：index.html、styles.css、src/signup.js\n已添加：tests/signup.test.cjs、package.json、README.md')),
+      progress('example-build-check', 'tool', 'npm test\n\n✓ confirmation starts hidden\n✓ clicking confirms signup\n✓ the button prevents repeated signup\n\n3 passed · 0 failed', { stream_id: '33333333-3333-4333-8333-333333333333' }),
+    ];
     const summaryEvents = [];
     for (let version = 0; version < 2; version++) {
       const request = { ...structuredClone(events[2]), id: `example-summary-${version}`, replyTo: null,
@@ -52,7 +73,7 @@ export class ExampleCollaborationApi extends MockCollaborationApi {
           : text('Agreed build checklist:\n- Event: Saturday at 2 pm, school sports field.\n- One button: “Sign me up”; clicking shows “You’re signed up”.\n- No photos in this version.', '已确定的制作清单：\n- 活动时间、地点：周六下午两点，学校操场。\n- 一个“我要报名”按钮，点击后显示“报名成功”。\n- 这次不放照片。') } };
       summaryEvents.push(request, response);
     }
-    events.splice(0, events.length, ...discussion, ...summaryEvents, ...production);
+    events.splice(0, events.length, ...discussion, ...summaryEvents, build, ...work, answer, feedback);
     // Keep sequence and timestamps ordered after arranging the authored story.
     const startTime = Date.parse(events[0].createdAt);
     events.forEach((event, index) => {
@@ -95,8 +116,10 @@ export class ExampleCollaborationApi extends MockCollaborationApi {
     const oldEvents = [...before.events.values()].flat();
     const newEvents = [...after.events.values()].flat();
     for (const event of [...this.events.values()].flat().concat(projections.events ?? [])) {
-      rename(event.payload, oldEvents.find((item) => item.id === event.id)?.payload,
-        newEvents.find((item) => item.id === event.id)?.payload, ['content']);
+      const oldPayload = oldEvents.find((item) => item.id === event.id)?.payload;
+      const nextPayload = newEvents.find((item) => item.id === event.id)?.payload;
+      rename(event.payload, oldPayload, nextPayload, ['content']);
+      if (oldPayload?.plan && JSON.stringify(event.payload.plan) === JSON.stringify(oldPayload.plan)) event.payload.plan = structuredClone(nextPayload.plan);
       renameMember(event.actor, event.actor.id);
       renameMember(event.provenance, event.actor.id);
       for (const mention of event.payload.mentions ?? []) {
@@ -109,21 +132,15 @@ export class ExampleCollaborationApi extends MockCollaborationApi {
   }
   async getProjectCodeSnapshot(projectId, branchId) {
     const response = await super.getProjectCodeSnapshot(projectId, branchId);
-    const zh = this.locale === 'zh-CN';
-    const improved = branchId === 'branch-maya';
-    const title = zh ? '社团活动报名' : 'Club event signup';
-    const button = zh ? '我要报名' : 'Sign me up';
-    const confirmation = zh ? `报名成功${improved ? '！周六见。' : '。'}` : `You’re signed up${improved ? '! See you Saturday.' : '.'}`;
-    const html = `<!doctype html>
-<html lang="${zh ? 'zh-CN' : 'en'}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${title}</title>
-<style>body{font:20px system-ui;background:#f2f8f5;color:#18382e;display:grid;place-items:center;min-height:100vh;margin:0}main{background:white;padding:40px;border-radius:24px;max-width:480px;margin:20px}button{font:inherit;color:white;background:#087f69;padding:14px 24px;border:0;border-radius:12px;cursor:pointer}</style>
-<main><h1>${title}</h1><p>${zh ? '时间：周六下午两点' : 'When: Saturday at 2 pm'}</p><p>${zh ? '地点：学校操场' : 'Where: school sports field'}</p><button type="button" id="signup">${button}</button><p id="confirmation" role="status" hidden>${confirmation}</p></main>
-<script>document.getElementById('signup').addEventListener('click',()=>{document.getElementById('confirmation').hidden=false;});</script></html>`;
-    response.snapshot.files = [{ path: 'signup.html', content_base64: btoa(String.fromCharCode(...new TextEncoder().encode(html))), executable: false }];
+    response.snapshot.files = exampleProjectFiles(this.locale, response.snapshot.commit === EXAMPLE_REVIEWED_COMMIT)
+      .map(file => ({ path: file.path, content_base64: btoa(String.fromCharCode(...new TextEncoder().encode(file.content))), executable: false }));
     return response;
   }
   async restoreSession() { return { ...this.currentUser, device_id: 'device-demo' }; }
+  async getHostedGithubStatus() {
+    return { enabled: true, connected: true, login: 'example-club', binding: { repository: 'example-club/signup-page', base_branch: 'main' } };
+  }
+  async listHostedGithubTasks() { return { tasks: [] }; }
   async createSnapshotRequest(...args) {
     const request = await super.createSnapshotRequest(...args);
     // No runtime is contacted. Status is deterministic and immediately usable.

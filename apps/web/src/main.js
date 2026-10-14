@@ -449,6 +449,7 @@ const onboarding = mountOnboarding({
   }),
   openSettings: openSettingsDialog,
   prepareScenario: exampleMode ? prepareExampleScenario : undefined,
+  exampleApi: exampleMode ? api : undefined,
 });
 for (const button of document.querySelectorAll("[data-onboarding-topic]")) {
   button.addEventListener("click", () => {
@@ -542,6 +543,7 @@ let renameProjectReturnFocus = null;
 let deleteCloudReturnFocus = null;
 let pendingCloudDeletion = null;
 let settingsReturnFocus = null;
+let exampleSettingsBeforePreview = null;
 let settingsPreview = state.settings;
 let currentDeviceName = "";
 let settingsDeviceLoadGeneration = 0;
@@ -4104,6 +4106,7 @@ function readSettingsForm(baseSettings = settingsPreview) {
 }
 
 function openSettingsDialog(sectionId) {
+  if (exampleMode && !settingsDialog.open) exampleSettingsBeforePreview = structuredClone(state.settings);
   settingsReturnFocus = document.activeElement;
   settingsPreview = normalizeSettings(state.settings);
   populateSettingsForm(settingsPreview);
@@ -4314,7 +4317,9 @@ function cancelSettingsDialog() {
   settingsDeviceLoadGeneration += 1;
   settingsHistoryPolicyGeneration += 1;
   settingsHistoryPolicy = null;
-  if (exampleMode) state.settings = settingsStore.get();
+  if (exampleMode) state.settings = exampleSettingsBeforePreview
+    ? settingsStore.set(exampleSettingsBeforePreview) : settingsStore.get();
+  exampleSettingsBeforePreview = null;
   applyVisualSettings(state.settings);
   settingsPreview = state.settings;
   if (settingsDialog.open) settingsDialog.close();
@@ -4439,6 +4444,7 @@ async function saveSettings(event) {
     }
     settingsPreview = nextSettings;
     state.settings = settingsStore.set(settingsPreview);
+    exampleSettingsBeforePreview = null;
     connectionNoticeState = advanceConnectionNotice(
       INITIAL_CONNECTION_NOTICE_STATE,
       state.sync,

@@ -82,11 +82,11 @@ test("illustrated guides use the current desktop Launcher and compact Agent cont
   for (const source of [en, zh]) assert.doesNotMatch(source, /Launcher v1|启动器 v1|production-origin-only|云端任务暂不支持/);
 });
 
-test("desktop and compact beginner guides point to the author's trash icon without adding steps", () => {
+test("desktop and compact beginner guides retain the author's trash control in the core workflow", () => {
   for (const layout of ["desktop", "mobile"]) {
     const basics = guideSteps("basics", { layout });
     const answer = basics.find(item => item.id === "answer");
-    assert.equal(basics.length, 10);
+    assert.equal(basics.length, 14);
     assert.match(answer.text[0], /trash icon.*your message or AI reply/);
     assert.match(answer.text[1], /垃圾桶.*自己的消息或 AI 回复/);
     const original = guideSteps("summaries", { layout }).find(item => item.id === "original");

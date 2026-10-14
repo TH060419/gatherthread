@@ -282,12 +282,12 @@ test("Beta product copy explains local execution, mobile requirements and cloud 
   const en = authoredCopy(html, "en");
   assert.match(zh, /电脑和连接器.*在线/u);
   assert.match(en, /computer and its connector.*online/iu);
-  assert.match(zh, /直接选择云端体验 Agent.*使用额度.*工作页/u);
-  assert.match(en, /Choose the cloud trial Agent.*usage allowances.*workspace/iu);
-  assert.match(zh, /自己已连接的 Codex\s*\/\s*DSH.*共享摘要/u);
-  assert.match(en, /connected Codex\s*\/\s*DSH.*(?:shared summary|summarize)/iu);
-  assert.match(zh, /电脑 Agent.*暂停/u);
-  assert.match(en, /computer Agent request.*(?:pause|continue)|pause a computer Agent/iu);
+  assert.match(zh, /直接选择云端体验 Agent.*额度.*工作页/u);
+  assert.match(en, /Choose the cloud trial Agent.*allowances.*workspace/iu);
+  assert.match(zh, /本地或云端 Agent.*共享摘要/u);
+  assert.match(en, /local or cloud Agent.*(?:shared summary|summarize)/iu);
+  assert.match(zh, /本地或云端 Agent.*暂停/u);
+  assert.match(en, /pause a local or cloud Agent/iu);
   assert.doesNotMatch(zh, /云端体验 Agent.*(?:后续开放|将提供)/u);
   assert.doesNotMatch(en, /cloud trial Agent.*(?:planned|coming later)/iu);
   const [settings, operations, readiness] = await Promise.all([

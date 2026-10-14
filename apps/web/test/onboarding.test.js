@@ -31,10 +31,10 @@ test("storage denial retains completion within the page and never breaks sign-in
 
 test("all account states get the complete isolated example guides", () => {
   for (const context of [{}, { session: { id: "s" } }, { project: null, session: null }, { writable: false }]) {
-    assert.equal(guideSteps("basics", context).length, 10);
+    assert.equal(guideSteps("basics", context).length, 14);
   }
   assert.equal(guideSteps("history").length, 5);
-  assert.equal(guideSteps("files").length, 14);
+  assert.equal(guideSteps("files").length, 16);
   assert.equal(guideSteps("members").length, 7);
   assert.equal(guideSteps("summaries").length, 5);
   assert.equal(guideSteps("account").length, 4);
@@ -43,6 +43,16 @@ test("all account states get the complete isolated example guides", () => {
   assert.deepEqual(Object.keys(GUIDE_LABELS), ["basics", "members", "history", "files", "summaries", "account"]);
   assert.equal(guideSteps("basics").find((item) => item.id === "create-conversation").target, "#new-session-button");
   assert.equal(guideSteps("members").find((item) => item.id === "invite").target, "#create-invitation-form button[type=submit]");
+});
+
+test("the beginner workflow reaches summaries, file review and a working coded result", () => {
+  for (const layout of ['desktop', 'mobile']) {
+    const items = guideSteps('basics', { layout });
+    const positions = ['chat', 'summary', 'request', 'answer', 'files', 'review', 'result'].map(id => items.findIndex(item => item.id === id));
+    assert.ok(positions.every((value, index) => value >= 0 && (!index || value > positions[index - 1])));
+    assert.equal(items.find(item => item.id === 'result').view, 'example-result');
+    assert.match(items.find(item => item.id === 'review').text[1], /文件|改动/);
+  }
 });
 
 test("mobile guide uses visible drawer and Agent controls without mobile installation instructions", () => {
