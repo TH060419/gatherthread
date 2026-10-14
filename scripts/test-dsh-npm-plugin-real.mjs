@@ -1148,7 +1148,34 @@ async function main() {
     await gatherthreadPage.locator("#project-code-button").click();
     await gatherthreadPage.locator("#project-code-dialog[open]").waitFor({ timeout: 30_000 });
     assert.equal((await gatherthreadPage.locator("#code-project-name").textContent())?.trim(), "DSH npm real project");
-    await gatherthreadPage.locator("#code-enable-button").click();
+    // The dialog now opens on the GitHub provider; this flow drives GT Cloud, so
+    // select that panel before reaching its controls.
+    await gatherthreadPage.locator("#code-provider-gt-cloud").click();
+    try {
+      await gatherthreadPage.locator("#code-enable-button").click({ timeout: 30_000 });
+    } catch (error) {
+      const probe = await gatherthreadPage.evaluate(() => {
+        const button = document.querySelector("#code-enable-button");
+        const dialog = document.querySelector("#project-code-dialog");
+        const box = button?.getBoundingClientRect();
+        return {
+          repositoryStatus: document.querySelector("#code-repository-status")?.textContent ?? null,
+          codeError: document.querySelector("#code-error")?.textContent ?? null,
+          buttonDisabled: button?.disabled ?? null,
+          buttonHasHiddenAttribute: button?.hasAttribute("hidden") ?? null,
+          buttonRendered: button !== null && button.getClientRects().length > 0,
+          buttonHeight: box?.height ?? null,
+          buttonDisplay: button === null ? null : getComputedStyle(button).display,
+          buttonVisibility: button === null ? null : getComputedStyle(button).visibility,
+          sectionHiddenAttr: document.querySelector("#code-enable-section")?.hasAttribute("hidden") ?? null,
+          dialogOpenAttr: dialog?.hasAttribute("open") ?? null,
+          dialogDisplay: dialog === null ? null : getComputedStyle(dialog).display,
+          openDialogs: [...document.querySelectorAll("dialog[open]")].map((item) => item.id),
+        };
+      });
+      process.stderr.write(`DSH stage: code-dialog=${JSON.stringify(probe)}\n`);
+      throw error;
+    }
     await gatherthreadPage.locator("#code-confirm-accept").click();
     await gatherthreadPage.locator("#code-enabled-content").waitFor({ state: "visible", timeout: 30_000 });
     await nativeCodeControls.getByLabel("允许此 DSH 同步该项目代码", { exact: true }).click();

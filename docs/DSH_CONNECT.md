@@ -92,7 +92,7 @@ Observed at the previously pinned DSH `0.1.2-rc.1` and not re-verified at the cu
 
 ### Upstream profile hot-reload failure
 
-A fresh DSH install can resolve newer transitive packages that fail its default `live` configuration reload. That was observed at the previously pinned `0.1.2-rc.1` and is not re-verified at the current pin. The Beta 1 isolated native/browser test passed the complete GatherThread flow with the supported **startup-only** configuration mode; it does not certify default live reload.
+A fresh DSH install can resolve newer transitive packages that fail its default `live` configuration reload. That was observed at the previously pinned `0.1.2-rc.1`. At the current pin the isolated native/browser gate passes the complete GatherThread flow with the default `live` reload, so default live reload is verified there; the workaround below remains only for that specific error if it reappears.
 
 Only if the exact HMR error above occurs: stop DSH, back up `<DSH_HOME>/profiles/web/package.json` (normally `~/.dsh/profiles/web/package.json`), and change the existing `dsh.profile.patchReload` value to `"startup"`. Preserve every other field, dependency and bundle; do not replace the whole manifest. Then start DSH again with the command in step 2. Configuration-layer changes now require restarting DSH; GatherThread history/realtime synchronization is not disabled. Do not clear credentials or install arbitrary upstream versions to bypass this error.
 
