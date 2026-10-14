@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS agent_team_runs (
   bytes INTEGER NOT NULL CHECK(bytes BETWEEN 1 AND 525312), UNIQUE(session_id,user_id,idempotency_key)
 ) STRICT;
 CREATE INDEX IF NOT EXISTS agent_team_runs_owner_idx ON agent_team_runs(user_id,session_id,created_at);
+CREATE INDEX IF NOT EXISTS agent_team_runs_expiry_idx ON agent_team_runs(finished_at)
+  WHERE status NOT IN ('running','paused');
 CREATE TABLE IF NOT EXISTS agent_team_steps (
   id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES agent_team_runs(id) ON DELETE CASCADE,
   node_id TEXT NOT NULL, node_label TEXT NOT NULL, task TEXT NOT NULL,

@@ -124,4 +124,5 @@ export const AGENT_TEAM_ZH_CN = Object.freeze({
   "This private team record is no longer available. Shared messages are kept.": "这条私有团队记录已不可用，共享消息仍保留。",
   "Current team task": "当前团队任务",
   "Current Agent": "当前 Agent",
+  "Team refresh timed out. Loaded tasks can still be paused or stopped. Try refreshing again.": "团队信息刷新超时。已加载任务的暂停和停止仍可使用，请重试刷新。",
 });

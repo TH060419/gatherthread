@@ -374,6 +374,9 @@ exact runtime/harness/provider/model/effort; personal cloud profiles also requir
 their original private configuration revision. Start pins `content_revision`;
 legacy omission is accepted only for pristine revision zero. Read/list are owner
 scoped; every mutation checks active device/current session write authority.
+Explicitly reported reasoning effort must match a frozen local-node effort before
+its answer can drive a decision. Legacy omission remains an unknown observation,
+not a conflicting or synthesized effort; all other exact-route checks still apply.
 
 `agent_team` request metadata is server-owned. One strict final fenced JSON
 `gatherthread-team` block carries version 1/current step ID and either complete
@@ -395,4 +398,9 @@ Controls retain durable same-key intent receipts, including no-ops; different
 intent under a used key conflicts. Receipt lifetime follows private record
 retention; it is not an indefinite deduplication promise. Server restart pauses
 active work; cleanup never permits executing an orphaned canonical team request.
+Ordinary Cloud Continue refuses canonical team metadata even after private record
+cleanup; continuation must stay within the original team's controls and budget.
+Browser background reads have independent cancellation and an eight-second
+deadline. Closing/scope changes and control mutations abort reads; a stalled
+read cannot disable the loaded task's Pause/Stop or overwrite their acknowledgments.
 See [ADR-0054](adr/0054-human-started-bounded-agent-teams.md).

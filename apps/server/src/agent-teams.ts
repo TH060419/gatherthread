@@ -185,6 +185,9 @@ export class AgentTeams {
   async pump() {
     if (this.closed || this.pumping) return; this.pumping = true;
     try {
+      // Retention also runs while nobody saves/starts a new plan, and reads
+      // independently enforce the same cutoff before returning private data.
+      this.store.prune();
       // Deadline checks do not wait for provider cooldown or an offline native connector.
       const all = this.store.sql.prepare("SELECT * FROM agent_team_runs WHERE status IN ('running','paused')").all() as unknown as TeamRunRow[];
       for (const run of all) if (this.store.clock().getTime() >= Date.parse(run.deadline_at)) this.end(run, "timed_out", "agent_team_deadline");
@@ -246,8 +249,13 @@ export class AgentTeams {
       const payload = object(response.payload), failure = payload?.status === "failed";
       if (!failure) {
         const provenance = response.runtime_provenance;
+        // Older producers may omit observed effort: keep that absence explicit,
+        // never invent it, and reject a reported conflict with the frozen effort.
+        const effortMismatch = node.target.kind === "local" && node.target.reasoning_effort !== undefined
+          && provenance?.reasoning_effort !== undefined && provenance.reasoning_effort !== node.target.reasoning_effort;
         if (!provenance || provenance.provider !== node.target.provider || provenance.model !== node.target.model
-          || (node.target.kind === "local" ? provenance.runtime_id !== node.target.runtime_id || provenance.harness !== node.target.harness : provenance.harness !== "opencode")) {
+          || (node.target.kind === "local" ? provenance.runtime_id !== node.target.runtime_id || provenance.harness !== node.target.harness
+            || effortMismatch : provenance.harness !== "opencode")) {
           throw new ApiError(409, "team_response_route_mismatch", "Team result does not match the selected exact Agent route");
         }
       }

@@ -21,6 +21,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Fixed
 
+- Keep team Stop capacity independent of repeated emergency pauses; reject explicitly conflicting observed reasoning effort before delegation while retaining an explicit legacy-omission policy. Enforce terminal private-record expiry during reads and maintenance, preserve ordinary Cloud continuation fencing after Forget, and keep loaded-task controls usable during cancellable, bounded background reads. Add full-quota, provenance, expiry, canonical-continuation and ordinary-pointer regressions. See [ADR-0054](docs/adr/0054-human-started-bounded-agent-teams.md).
+
 - Allow Codex/DSH canonical replay to consume server-contained Cloud replies whose provenance has no local runtime ID, as permitted by the existing protocol. Preserve exact local routing and echo suppression without fabricating a native identity.
 
 - Preserve GatherThread relay, execution ownership and retired-history fences with DSH Session format 4, while retaining format 2/3 message and surface shapes. Recognize upstream-migrated producer attribution without accepting another producer or manual input. Isolated SDK checks do not claim full Web-profile or real DeepSeek-provider acceptance. See [ADR-0055](docs/adr/0055-dsh-session-format-owned-context.md).

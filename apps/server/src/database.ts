@@ -3696,7 +3696,10 @@ export class CollaborationDatabase {
           || originalPin.config_revision !== personal.configRevision : originalPin !== undefined) {
           throw new ApiError(409, "cloud_api_changed", "Cloud continuation must keep its original API configuration revision");
         }
-        if (this.sqlite.prepare("SELECT 1 FROM agent_team_steps WHERE request_event_id=?").get(previous.id)) {
+        // Canonical metadata outlives private steps and remains an execution
+        // fence after Forget/retention. Keep the old step lookup for legacy data.
+        if (this.sqlite.prepare("SELECT 1 FROM events WHERE id=? AND json_type(payload_json,'$.agent_team') IS NOT NULL").get(previous.id)
+          || this.sqlite.prepare("SELECT 1 FROM agent_team_steps WHERE request_event_id=?").get(previous.id)) {
           throw forbidden("Continue this request through its bounded team run");
         }
         const recorded = previous.payload as { content?: unknown; profile_id?: unknown; include_code?: unknown;

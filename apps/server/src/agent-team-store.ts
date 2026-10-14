@@ -56,7 +56,7 @@ export class AgentTeamStore {
   row(id: string): TeamRunRow { const row = this.sql.prepare("SELECT * FROM agent_team_runs WHERE id=?").get(id) as unknown as TeamRunRow | undefined;
     if (!row) throw notFound("Agent team run"); return row; }
   own(actor: Actor, sessionId: string, id: string, write = false) {
-    this.authorize(actor, sessionId, write); const row = this.row(id);
+    this.authorize(actor, sessionId, write); this.prune(); const row = this.row(id);
     if (row.session_id !== sessionId || row.user_id !== actor.user_id) throw notFound("Agent team run");
     this.assertContext(row); return row;
   }
@@ -81,12 +81,12 @@ export class AgentTeamStore {
   }
   read(actor: Actor, sessionId: string, id: string) { return { run: this.detail(this.own(actor, sessionId, id)) }; }
   list(actor: Actor, sessionId: string) {
-    this.authorize(actor, sessionId);
+    this.authorize(actor, sessionId); this.prune();
     return { runs: (this.sql.prepare("SELECT * FROM agent_team_runs WHERE session_id=? AND user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 50")
       .all(sessionId, actor.user_id) as unknown as TeamRunRow[]).map(row => this.summary(row)) };
   }
   getPlan(actor: Actor, sessionId: string) {
-    this.authorize(actor, sessionId);
+    this.authorize(actor, sessionId); this.prune();
     const row = this.sql.prepare("SELECT plan_json,revision FROM agent_team_plans WHERE session_id=? AND user_id=?").get(sessionId, actor.user_id);
     return { plan: row ? AgentTeamPlanSchema.parse(JSON.parse(String(row.plan_json))) : null, revision: row ? Number(row.revision) : null };
   }
@@ -210,7 +210,9 @@ export class AgentTeamStore {
         if (input.action === "continue" && run.error_code !== "agent_timeout") throw conflict("Only a timed-out team step can be continued");
         if (input.action === "resume" && run.error_code === "agent_timeout") throw conflict("Continue the timed-out team step explicitly");
       }
-      const count = this.sql.prepare("SELECT COUNT(*) AS count,COALESCE(SUM(reserved),0) AS reserved FROM agent_team_controls WHERE run_id=?").get(id)!;
+      const count = this.sql.prepare(`SELECT COUNT(*) AS count,COALESCE(SUM(reserved),0) AS reserved,
+        COALESCE(SUM(reserved=1 AND action='pause'),0) AS pauses,
+        COALESCE(SUM(reserved=1 AND action='stop'),0) AS stops FROM agent_team_controls WHERE run_id=?`).get(id)!;
       const critical = !unchanged && (input.action === "stop" || input.action === "pause");
       let reserved = Number(count.count) - Number(count.reserved) >= 128;
       if (!reserved) {
@@ -220,9 +222,11 @@ export class AgentTeamStore {
           reserved = true;
         }
       }
-      // Two bounded, already-reserved records let a human pause and stop even at
-      // full ordinary capacity. Successful no-op acknowledgements are durable too.
-      if (reserved && (!critical || Number(count.reserved) >= 2)) {
+      // The prepaid 2048-byte fixed allowance includes two Pause receipts and
+      // one independent Stop receipt. Repeated pauses (including old records)
+      // cannot consume Stop's capacity. No-ops still require ordinary capacity.
+      const used = Number(input.action === "stop" ? count.stops : count.pauses);
+      if (reserved && (!critical || used >= (input.action === "stop" ? 1 : 2))) {
         throw new ApiError(429, "agent_team_storage_full", "This run has too many control changes; stop it and start a new task");
       }
       this.sql.prepare("INSERT INTO agent_team_controls(run_id,idempotency_key,action,created_at,reserved) VALUES(?,?,?,?,?)")
@@ -254,6 +258,6 @@ export class AgentTeamStore {
       if (usage + bytes > limit) throw new ApiError(429, "agent_team_storage_full", "Team control storage is full; clear an old completed team record");
     }
   }
-  private prune() { this.sql.prepare("DELETE FROM agent_team_runs WHERE status NOT IN ('running','paused') AND finished_at<?")
+  prune() { this.sql.prepare("DELETE FROM agent_team_runs WHERE status NOT IN ('running','paused') AND finished_at<=?")
     .run(new Date(this.clock().getTime() - 30 * 86400000).toISOString()); }
 }

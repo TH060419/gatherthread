@@ -68,6 +68,27 @@ test("team HTTP helpers retain strict wire envelopes, encoded IDs, cookies and r
   } finally { globalThis.fetch = previousFetch; }
 });
 
+test("team reads forward cancellation without attaching it to a later control mutation", async () => {
+  const previousFetch = globalThis.fetch, requests = [];
+  globalThis.fetch = (url, options) => {
+    requests.push({ url, options });
+    if (options.method === "POST") return Promise.resolve(Response.json({ data: { run: runDetail() } }));
+    return new Promise((_resolve, reject) => options.signal?.addEventListener("abort", () => reject(new DOMException("Synthetic cancellation", "AbortError")), { once: true }));
+  };
+  try {
+    const api = new HttpCollaborationApi({ baseUrl: "https://gatherthread.example" });
+    for (const read of [signal => api.getAgentTeamPlan("s:1", { signal }), signal => api.listAgentTeamRuns("s:1", { signal }),
+      signal => api.getAgentTeamRun("s:1", "run:1", { signal })]) {
+      const controller = new AbortController(), result = read(controller.signal);
+      assert.equal(requests.at(-1).options.signal, controller.signal); controller.abort();
+      await assert.rejects(result, error => error instanceof ApiError && error.code === "network_error");
+    }
+    await api.controlAgentTeamRun("s:1", "run:1", { action: "stop", idempotency_key: "stop-after-read-abort" });
+    assert.equal(requests.at(-1).options.signal, undefined);
+    assert.equal(JSON.parse(requests.at(-1).options.body).action, "stop");
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test("team starts use bounded protocol defaults and preserve exact DSH selections", async () => {
   const previousFetch = globalThis.fetch;
   const requests = [];

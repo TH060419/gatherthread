@@ -260,8 +260,12 @@ accepted-call checks. Explicit control markers are never repaired or ignored.
 Private records are capped: 64 KiB per saved plan, 512 KiB ordinary per-run
 accounting, 8 MiB per user, 16 MiB per session and 64 MiB per deployment; row caps
 are 100/200/2,000, with at most two active runs per user. There are 128 ordinary
-control receipts and only two reserved critical Pause/Stop receipts, each charged
-512 bytes. Ended records expire after 30 days; active/paused runs are deadline
+control receipts, two reserved critical Pause receipts and one independently
+reserved Stop receipt. Each receipt accounts for 512 bytes; reserved capacity
+is prepaid in the run's fixed allowance, including for existing runs. Pause
+cannot consume Stop's capacity. Ended records expire after 30 days; coordinator
+maintenance and authorized private reads remove expired runs, steps and receipts
+without requiring a new plan or task. Active/paused runs are deadline
 fenced. Author erasure removes derived session runs/steps/receipts atomically and follows canonical same-run request/answer dependencies to scrub copied task/result prompts, even after private records were cleared;
 canonical content-revision and team-metadata gates continue fencing late work
 and orphaned requests. Cleanup does not affect native histories/local files.

@@ -614,8 +614,8 @@ export class HttpCollaborationApi {
     return this.#append(sessionId, "agent_request", input);
   }
 
-  getAgentTeamPlan(sessionId) {
-    return agentTeamResponse(AgentTeamPlanResponseSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-plan`));
+  getAgentTeamPlan(sessionId, { signal } = {}) {
+    return agentTeamResponse(AgentTeamPlanResponseSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-plan`, { signal }));
   }
 
   saveAgentTeamPlan(sessionId, input) {
@@ -625,8 +625,8 @@ export class HttpCollaborationApi {
     }));
   }
 
-  listAgentTeamRuns(sessionId) {
-    return agentTeamResponse(AgentTeamRunsResponseSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs`), { listSessionId: sessionId });
+  listAgentTeamRuns(sessionId, { signal } = {}) {
+    return agentTeamResponse(AgentTeamRunsResponseSchema, this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs`, { signal }), { listSessionId: sessionId });
   }
 
   startAgentTeamRun(sessionId, input) {
@@ -636,9 +636,9 @@ export class HttpCollaborationApi {
     }), { sessionId });
   }
 
-  getAgentTeamRun(sessionId, runId) {
+  getAgentTeamRun(sessionId, runId, { signal } = {}) {
     return agentTeamResponse(AgentTeamRunResponseSchema,
-      this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(runId)}`), { sessionId, runId });
+      this.request(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(runId)}`, { signal }), { sessionId, runId });
   }
 
   controlAgentTeamRun(sessionId, runId, input) {

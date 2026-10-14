@@ -47,13 +47,19 @@ cannot restore terminated internal thought or unsaved work.
 
 Pause/Stop fence further calls and late publication. Lost HTTP acknowledgments
 retain the same intent and key; a successful no-op also has a durable receipt.
-Quota exhaustion cannot remove the reserved ability to pause/stop. Browser
+Quota exhaustion cannot remove the independent reserved Stop capacity. Bounded
+Pause receipts cannot borrow it, including when resuming between full-quota
+pauses. The existing fixed run allowance prepays the separately bounded receipts.
+Browser reads are cancellable and bounded independently of control mutations;
+loaded tasks remain pausable/stoppable while a refresh is stalled. Browser
 configuration editing never dispatches an Agent; the accepted run graph is
 read-only and separately displayed from the user's editable draft.
 
 Private control records are bounded and pruned after terminal retention. Their
-removal does not turn existing canonical team requests into ordinary requests:
-server-owned team metadata remains a permanent execution fence. Author erasure
+removal does not turn existing canonical team requests into ordinary requests,
+including ordinary Cloud continuation: server-owned team metadata remains a
+permanent execution fence. Expiry is enforced by background maintenance and
+authorized private reads, independently of saving or creating new plans. Author erasure
 under [ADR-0050](0050-author-message-erasure-and-context-revisions.md) clears derived
 team runs/steps/receipts for the affected session atomically and advances the
 ordinary content revision fence. Canonical same-run request/answer dependencies also erase later generated prompts containing copied tasks/results, including after private record cleanup; independent human inputs remain subject to ADR-0050's existing scope. Saved draft rules are independent human input.

@@ -15,7 +15,8 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
   const text = (node, value) => { if (node.textContent !== t(value)) localizer.setText(node, value); };
   let scope = "", generation = 0, plan = emptyPlan(), revision = null, selected = null, entry = "";
   let choices = [], runs = [], run = null, pending = false, loaded = false, dirty = false;
-  let poll, pollBusy = false, drag = null, connecting = null, returnFocus;
+  // pending belongs only to mutations; a background read must not gate Stop.
+  let poll, readBusy = false, readController = null, drag = null, connecting = null, returnFocus;
   let startAttempt = null;
   let controlAttempt = null;
   let runEpoch = 0;
@@ -39,13 +40,14 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
   function status(value) { text(el("status"), value); }
   function error(value) { text(el("error"), value); }
   function stoppedPolling() { clearTimeout(poll); poll = null; }
+  function cancelRead() { const controller = readController; readController = null; readBusy = false; controller?.abort(); }
   function current(gen) { return generation === gen && scope === getContext()?.scope; }
-  function locked() { return pending || viewingRun || Boolean(startAttempt) || Boolean(controlAttempt) || run && !terminal(run); }
+  function locked() { return pending || readBusy || viewingRun || Boolean(startAttempt) || Boolean(controlAttempt) || run && !terminal(run); }
   function updateContext() {
     const c = getContext();
     const next = c?.scope ?? "";
     if (next !== scope) {
-      scope = next; generation++; runEpoch++; stoppedPolling(); pollBusy = false; pending = false;
+      scope = next; generation++; runEpoch++; stoppedPolling(); cancelRead(); pending = false;
       plan = emptyPlan(); revision = null; selected = null; entry = ""; choices = []; runs = []; run = null;
       el("max-calls").value = "12"; el("max-minutes").value = "30";
       viewingRun = false; taskDraft = null; dirty = false; loaded = false; startAttempt = null; controlAttempt = null; connecting = null; drag = null;
@@ -214,25 +216,26 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
     el("add-node").disabled = !edit || plan.nodes.length >= 16 || !el("add-target").value;
     el("connect").disabled = !edit || plan.nodes.length < 2;
     el("save").disabled = !edit || !plan.nodes.length || !dirty;
-    el("reload").disabled = pending || Boolean(startAttempt);
-    el("refresh").disabled = pending;
+    el("reload").disabled = pending || readBusy || Boolean(startAttempt);
+    el("refresh").disabled = pending || readBusy;
+    el("refresh").setAttribute("aria-busy", String(readBusy));
     el("remove-node").disabled = !edit; el("make-entry").disabled = !edit;
     for (const button of el("nodes").querySelectorAll(".team-port")) button.disabled = !edit;
     for (const button of el("edge-list").querySelectorAll("button")) button.disabled = !edit;
     const live = runs.some(candidate => ["running", "paused"].includes(candidate.status));
     el("overview").hidden = !run || terminal(run) && !viewingRun;
     el("edit").hidden = !viewingRun;
-    el("edit").disabled = pending || Boolean(controlAttempt) || Boolean(startAttempt) || !c?.writable || run && !terminal(run);
+    el("edit").disabled = pending || readBusy || Boolean(controlAttempt) || Boolean(startAttempt) || !c?.writable || run && !terminal(run);
     el("snapshot-note").hidden = !viewingRun;
-    el("forget").hidden = !terminal(run); el("forget").disabled = pending || Boolean(controlAttempt) || Boolean(startAttempt) || !c?.writable;
-    el("start").disabled = viewingRun || pending || Boolean(controlAttempt) || !c?.writable || live || !plan.nodes.length || !entry;
-    if (startAttempt && !controlAttempt && !live && !pending) el("start").disabled = false;
+    el("forget").hidden = !terminal(run); el("forget").disabled = pending || readBusy || Boolean(controlAttempt) || Boolean(startAttempt) || !c?.writable;
+    el("start").disabled = viewingRun || pending || readBusy || Boolean(controlAttempt) || !c?.writable || live || !plan.nodes.length || !entry;
+    if (startAttempt && !controlAttempt && !live && !pending && !readBusy) el("start").disabled = false;
     text(el("start"), startAttempt ? "Retry the same team start" : "Start team task");
     for (const id of ["pause", "resume", "stop", "continue"]) el(id).disabled = pending || !c?.writable || Boolean(controlAttempt);
     el("control-retry").hidden = !controlAttempt || pending;
     el("control-retry").disabled = pending || !c?.writable;
     el("control-note").hidden = !controlAttempt || pending;
-    el("run-select").disabled = pending || Boolean(controlAttempt);
+    el("run-select").disabled = pending || readBusy || Boolean(controlAttempt);
     dialog.setAttribute("aria-busy", String(pending));
   }
   function renderRunSelect() {
@@ -267,16 +270,37 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
   }
   async function action(operation) {
     if (pending) return;
+    cancelRead(); stoppedPolling();
     const gen = generation; pending = true; error(""); renderControls();
     try { await operation(gen); }
     catch (failure) { if (current(gen)) error(teamFailureMessage(failure.code) ?? failure.message ?? "Agent team request failed. Refresh and try again."); }
     finally { if (current(gen)) { pending = false; renderControls(); schedulePoll(); } }
   }
-  async function readRun(sessionId, id, gen, epoch) {
-    try { return (await api.getAgentTeamRun(sessionId, id)).run; }
+  async function readAction(operation) {
+    if (pending) return;
+    cancelRead(); stoppedPolling();
+    const gen = generation, controller = new AbortController();
+    readController = controller; readBusy = true; error(""); renderControls();
+    let timedOut = false;
+    const cancelled = new Promise((_resolve, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Team read cancelled")), { once: true }));
+    const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, 8000);
+    timeout.unref?.();
+    try { await Promise.race([operation(gen, controller.signal), cancelled]); }
+    catch (failure) {
+      if (current(gen) && readController === controller) {
+        if (timedOut) error("Team refresh timed out. Loaded tasks can still be paused or stopped. Try refreshing again.");
+        else if (!controller.signal.aborted) error(teamFailureMessage(failure.code) ?? failure.message ?? "Agent team request failed. Refresh and try again.");
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (current(gen) && readController === controller) { readController = null; readBusy = false; renderControls(); schedulePoll(); }
+    }
+  }
+  async function readRun(sessionId, id, gen, epoch, signal) {
+    try { return (await api.getAgentTeamRun(sessionId, id, { signal })).run; }
     catch (failure) {
       if (failure.status !== 404) throw failure;
-      if (!current(gen) || epoch !== runEpoch) return null;
+      if (signal?.aborted || !current(gen) || epoch !== runEpoch) return null;
       if (controlAttempt?.runId === id) controlAttempt = null;
       if (run?.id === id) { showRun(false); run = null; }
       runs = runs.filter(candidate => candidate.id !== id); renderRunSelect(); renderRun();
@@ -284,11 +308,11 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
       return null;
     }
   }
-  async function load({ replacePlan = false, requestedRunId = null } = {}) {
+  async function load({ replacePlan = false, requestedRunId = null, signal } = {}) {
     const c = getContext(), gen = generation; if (!c?.sessionId) return;
     const epoch = ++runEpoch;
-    const [saved, listing] = await Promise.all([api.getAgentTeamPlan(c.sessionId), api.listAgentTeamRuns(c.sessionId)]);
-    if (!current(gen) || epoch !== runEpoch) return;
+    const [saved, listing] = await Promise.all([api.getAgentTeamPlan(c.sessionId, { signal }), api.listAgentTeamRuns(c.sessionId, { signal })]);
+    if (signal?.aborted || !current(gen) || epoch !== runEpoch) return;
     if (!loaded || replacePlan) {
       plan = clone(saved.plan ?? emptyPlan()); revision = saved.revision; loaded = true; dirty = false;
       selected = plan.nodes[0]?.id ?? null; entry = plan.entry_node_id ?? (entry && plan.nodes.some(node => node.id === entry) ? entry : plan.nodes[0]?.id ?? "");
@@ -297,38 +321,38 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
     runs = listing.runs;
     const active = runs.find(candidate => ["running", "paused"].includes(candidate.status));
     const selectedRun = controlAttempt ? { id: controlAttempt.runId } : (requestedRunId ? { id: requestedRunId } : null) ?? runs.find(candidate => candidate.id === run?.id) ?? active ?? runs[0];
-    const nextRun = selectedRun ? await readRun(c.sessionId, selectedRun.id, gen, epoch) : null;
-    if (!current(gen) || epoch !== runEpoch) return;
+    const nextRun = selectedRun ? await readRun(c.sessionId, selectedRun.id, gen, epoch, signal) : null;
+    if (signal?.aborted || !current(gen) || epoch !== runEpoch) return;
     run = nextRun;
     showRun(Boolean(run && (requestedRunId || viewingRun || !terminal(run))));
     refreshChoices(); renderRunSelect(); renderRun(); schedulePoll();
   }
   function schedulePoll() {
-    stoppedPolling(); if (pending || !dialog.open || !run || terminal(run)) return;
+    stoppedPolling(); if (pending || readBusy || !dialog.open || !run || terminal(run)) return;
     poll = setTimeout(() => void refreshRun(), 2000);
   }
   async function refreshRun() {
-    if (pending || pollBusy || !dialog.open || !run) return;
-    pollBusy = true; const gen = generation, c = getContext(), id = run.id, epoch = runEpoch;
-    try {
-      const nextRun = await readRun(c.sessionId, id, gen, epoch);
-      if (!nextRun || pending || epoch !== runEpoch || !current(gen) || run?.id !== id) return;
+    if (pending || readBusy || !dialog.open || !run) return;
+    return readAction(async (gen, signal) => {
+      const c = getContext(), id = run.id, epoch = runEpoch;
+      const nextRun = await readRun(c.sessionId, id, gen, epoch, signal);
+      if (signal.aborted || !nextRun || pending || epoch !== runEpoch || !current(gen) || run?.id !== id) return;
       run = nextRun; runs = runs.map(candidate => candidate.id === id ? run : candidate); renderRunSelect(); renderRun();
       for (const node of el("nodes").children) node.dataset.running = String(run.status === "running" && run.current_node_id === node.dataset.nodeId);
-    } catch (failure) { if (current(gen)) error(teamFailureMessage(failure.code) ?? failure.message ?? "Agent team request failed. Refresh and try again."); }
-    finally { if (current(gen)) { pollBusy = false; schedulePoll(); } }
+    });
   }
   async function open(requestedRunId = null) {
     updateContext(); if (openButton.disabled) return;
     returnFocus = doc.activeElement; onBeforeOpen(); dialog.showModal();
-    await action(async gen => {
+    renderRun();
+    await readAction(async (gen, signal) => {
       await getContext()?.refreshAgents?.();
-      if (current(gen)) await load({ requestedRunId });
+      if (!signal.aborted && current(gen)) await load({ requestedRunId, signal });
     });
   }
   openButton.addEventListener("click", () => void open());
   for (const id of ["close", "done"]) el(id).addEventListener("click", () => dialog.close());
-  dialog.addEventListener("close", () => { stoppedPolling(); drag = null; connecting = null; if (returnFocus?.isConnected) returnFocus.focus(); });
+  dialog.addEventListener("close", () => { stoppedPolling(); cancelRead(); runEpoch++; drag = null; connecting = null; if (returnFocus?.isConnected) returnFocus.focus(); });
   for (const [id, field] of [["name", "name"], ["prompt", "team_prompt"]]) el(id).addEventListener("input", () => { plan[field] = el(id).value; markDirty(); });
   el("add-target").addEventListener("change", renderControls);
   el("add-node").addEventListener("click", () => {
@@ -349,8 +373,8 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
   el("make-entry").addEventListener("click", () => { if (!selected || locked()) return; entry = selected; plan.entry_node_id = selected; markDirty(); renderGraph(); renderInspector(); });
   el("entry-node").addEventListener("change", () => { if (locked() || !getContext()?.writable) return; entry = el("entry-node").value; plan.entry_node_id = entry; markDirty(); renderGraph(); renderControls(); });
   el("connect").addEventListener("click", () => connectNodes(el("edge-source").value, el("edge-target").value));
-  el("refresh").addEventListener("click", () => void action(async () => { await getContext()?.refreshAgents?.(); refreshChoices(); await load(); }));
-  el("reload").addEventListener("click", () => { if (dirty && !globalThis.confirm(t("Discard unsaved team changes and reload the saved team?"))) return; void action(() => load({ replacePlan: true })); });
+  el("refresh").addEventListener("click", () => void readAction(async (gen, signal) => { await getContext()?.refreshAgents?.(); if (signal.aborted || !current(gen)) return; refreshChoices(); await load({ signal }); }));
+  el("reload").addEventListener("click", () => { if (dirty && !globalThis.confirm(t("Discard unsaved team changes and reload the saved team?"))) return; void readAction((_gen, signal) => load({ replacePlan: true, signal })); });
   el("save").addEventListener("click", () => void action(async gen => {
     const snapshot = clone(plan), saved = await api.saveAgentTeamPlan(getContext().sessionId, { plan: snapshot, expected_revision: revision });
     if (!current(gen)) return; plan = clone(saved.plan); revision = saved.revision; dirty = false; status("Team saved");
@@ -394,9 +418,9 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
     if (!run || el("forget").disabled || !globalThis.confirm(t("Clear this ended task's private team record? Shared messages and local work are kept."))) return;
     const id = run.id;
     void action(async gen => { await api.forgetAgentTeamRun(getContext().sessionId, id); if (!current(gen) || run?.id !== id) return;
-      showRun(false); run = null; await load(); });
+      showRun(false); run = null; runs = runs.filter(candidate => candidate.id !== id); renderRunSelect(); renderRun(); });
   });
   el("edit").addEventListener("click", () => { if (!el("edit").disabled) showRun(false); });
-  el("run-select").addEventListener("change", () => void action(async gen => { const id = el("run-select").value; if (!id) { run = null; showRun(false); renderRun(); return; } const epoch = ++runEpoch, nextRun = await readRun(getContext().sessionId, id, gen, epoch); if (!current(gen) || epoch !== runEpoch || !nextRun) return; run = nextRun; showRun(true); renderRun(); schedulePoll(); }));
+  el("run-select").addEventListener("change", () => void readAction(async (gen, signal) => { const id = el("run-select").value; if (!id) { run = null; showRun(false); renderRun(); return; } const epoch = ++runEpoch, nextRun = await readRun(getContext().sessionId, id, gen, epoch, signal); if (signal.aborted || !current(gen) || epoch !== runEpoch || !nextRun) return; run = nextRun; showRun(true); renderRun(); schedulePoll(); }));
   return { updateContext, open, refreshChoices, refreshLocale() { if (dialog.open) { refreshChoices(); renderRunSelect(); renderRun(); } } };
 }

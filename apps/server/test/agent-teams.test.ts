@@ -380,7 +380,7 @@ test("successful no-op control retries never operate a later run state", () => {
   } finally { f.close(); }
 });
 
-test("bounded control receipts reserve only two critical pause/stop slots", () => {
+test("ordinary control exhaustion keeps bounded Pause and independent Stop receipts", () => {
   const f = fixture();
   try {
     const run = f.start();
@@ -571,6 +571,111 @@ test("canonical team derivation remains erasable after its ended private record 
       assert.equal(f.db.teamRequestMayExecute(step.request_event_id!), false);
     }
   } finally { f.close(); }
+});
+
+test("repeated full-quota pauses cannot consume the independent emergency Stop receipt", async () => {
+  const f = fixture();
+  try {
+    const run = f.start();
+    for (let index = 0; index < 2; index++) {
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === index + 1);
+      f.db.sqlite.prepare("UPDATE agent_team_runs SET bytes=524288 WHERE id=?").run(run.id);
+      f.teams.control(f.actor, f.session.id, run.id, { action: "pause", idempotency_key: `full-pause-${index}` });
+      f.db.sqlite.prepare("UPDATE agent_team_runs SET bytes=400000 WHERE id=?").run(run.id);
+      f.teams.control(f.actor, f.session.id, run.id, { action: "resume", idempotency_key: `released-resume-${index}` });
+    }
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 3);
+    const request = f.teams.read(f.actor, f.session.id, run.id).run.steps.at(-1)!.request_event_id!;
+    f.db.sqlite.prepare("UPDATE agent_team_runs SET bytes=524288 WHERE id=?").run(run.id);
+    const stop = { action: "stop" as const, idempotency_key: "independent-emergency-stop" };
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, stop).run.status, "stopped");
+    assert.equal(f.teams.control(f.actor, f.session.id, run.id, stop).run.status, "stopped");
+    assert.equal(f.db.teamRequestMayExecute(request), false);
+    assert.equal(f.service.claimAgentRequest(f.actor, f.session.id, request, f.lead.id).status, "paused");
+    const receipts = f.db.sqlite.prepare("SELECT action,COUNT(*) AS count FROM agent_team_controls WHERE run_id=? AND reserved=1 GROUP BY action").all(run.id);
+    assert.deepEqual(receipts.map(row => [row.action, row.count]), [["pause", 2], ["stop", 1]]);
+  } finally { f.close(); }
+});
+
+test("explicit reasoning conflicts stop delegation while missing legacy provenance is defined separately", async () => {
+  for (const observed of ["low", "high", undefined]) {
+    const f = fixture();
+    try {
+      f.service.registerRuntime(f.actor, { runtime_id: f.lead.id, session_id: f.session.id, device_id: f.actor.device_id,
+        harness: "codex", provider: "openai", model: "fixture-gpt", context_deletion_version: 1,
+        execution_profiles: [{ provider: "openai", model: "fixture-gpt", reasoning_efforts: ["low", "high"] }],
+        local_session_id: "fixture-codex", capture_fidelity: "harness_transcript" });
+      const plan = structuredClone(f.plan);
+      plan.nodes[0]!.target = { kind: "local", runtime_id: f.lead.id, harness: "codex", provider: "openai", model: "fixture-gpt", reasoning_effort: "high" };
+      const run = f.start(plan);
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const step = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+      const claim = f.service.claimAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id);
+      const answer = f.service.completeAgentRequest(f.actor, f.session.id, step.request_event_id!, f.lead.id,
+        "observed-reasoning-response", { text: directive(step.id, "delegate") }, "fixture-gpt", observed, claim.attempt_count);
+      assert.equal(answer.runtime_provenance?.reasoning_effort, observed);
+      await f.teams.pump();
+      const result = f.teams.read(f.actor, f.session.id, run.id).run;
+      if (observed === "low") {
+        assert.equal(result.status, "failed"); assert.equal(result.error_code, "team_response_route_mismatch");
+        assert.equal(result.calls_used, 1); assert.equal(result.steps.length, 1);
+      } else {
+        await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+        assert.equal(f.teams.read(f.actor, f.session.id, run.id).run.current_node_id, "worker");
+      }
+    } finally { f.close(); }
+  }
+});
+
+test("terminal private records expire through reads or maintenance without creating another plan", async () => {
+  for (const path of ["detail", "list", "plan", "maintenance"]) {
+    const f = fixture();
+    try {
+      f.teams.savePlan(f.actor, f.session.id, f.plan, null);
+      const run = f.start(); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const request = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!;
+      f.teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "retention-stop" });
+      const head = f.db.requireSession(f.session.id).next_sequence;
+      f.advance((path === "maintenance" ? 31 : 30) * 86400000);
+      if (path === "detail") assert.throws(() => f.teams.read(f.actor, f.session.id, run.id), error => error instanceof ApiError && error.status === 404);
+      if (path === "list") assert.deepEqual(f.teams.list(f.actor, f.session.id).runs, []);
+      if (path === "plan") assert.equal(f.teams.getPlan(f.actor, f.session.id).revision, 1);
+      if (path === "maintenance") await f.teams.pump();
+      for (const table of ["agent_team_runs", "agent_team_steps", "agent_team_controls"]) {
+        assert.equal(f.db.sqlite.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()!.count, 0);
+      }
+      assert.equal(f.db.requireSession(f.session.id).next_sequence, head);
+      assert.equal(f.db.getEvent(f.session.id, request).type, "agent_request");
+      assert.equal(f.db.teamRequestMayExecute(request), false);
+      assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_plans").get()!.count, 1);
+    } finally { f.close(); }
+  }
+});
+
+test("Forget cannot turn a canonical timed-out team request into an executable ordinary continuation", { skip: process.platform === "win32" }, async () => {
+  const f = fixture(), directory = mkdtempSync(join(tmpdir(), "gt-team-forgotten-")); let calls = 0;
+  const hosted = new HostedAgent(f.service, new CodeRepository(f.db, directory), cloudOptions(async () => {
+    calls++; throw new Error("agent_timeout");
+  }));
+  f.teams.close(); const teams = new AgentTeams(f.service, hosted, { clock: f.clock, autoStart: false });
+  try {
+    const plan = structuredClone(f.plan); plan.nodes = [{ ...plan.nodes[0]!, target: { kind: "cloud", profile_id: "fixture-cloud",
+      provider: "deepseek", model: "fixture-cloud-model", include_code: false } }]; plan.edges = [];
+    const run = teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content: "One bounded cloud task",
+      max_calls: 1, max_duration_minutes: 30, idempotency_key: "forgotten-cloud-team" }).run;
+    await drive(teams, () => teams.read(f.actor, f.session.id, run.id).run.status === "paused");
+    const original = f.db.getEvent(f.session.id, teams.read(f.actor, f.session.id, run.id).run.steps[0]!.request_event_id!);
+    const continuation = { profile_id: "fixture-cloud", include_code: false, content: String((original.payload as { content: string }).content),
+      continue_from_event_id: original.id, idempotency_key: "ordinary-before-forget" };
+    await assert.rejects(hosted.start(f.actor, f.session.id, continuation), /bounded team/);
+    teams.control(f.actor, f.session.id, run.id, { action: "stop", idempotency_key: "stop-forgotten-cloud-team" });
+    teams.forget(f.actor, f.session.id, run.id); f.advance(1000);
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS count FROM agent_team_steps").get()!.count, 0);
+    const head = f.db.requireSession(f.session.id).next_sequence;
+    await assert.rejects(hosted.start(f.actor, f.session.id, { ...continuation, idempotency_key: "ordinary-after-forget" }), /bounded team/);
+    assert.equal(calls, 1); assert.equal(f.db.requireSession(f.session.id).next_sequence, head);
+    assert.equal(f.db.teamRequestMayExecute(original.id), false);
+  } finally { teams.close(); await hosted.close(); f.db.close(); rmSync(directory, { recursive: true, force: true }); }
 });
 
 test("deleting the original paused request also erases its resumed copy without needing a final response", async () => {

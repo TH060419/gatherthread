@@ -10,6 +10,7 @@ class Element {
   }
   addEventListener(type, listener) { const listeners = this.listeners.get(type) ?? []; listeners.push(listener); this.listeners.set(type, listeners); }
   dispatch(type, fields = {}) { for (const listener of this.listeners.get(type) ?? []) listener({ target: this, button: 0, pointerId: 1, preventDefault() {}, ...fields }); }
+  pointerClick() { if (!this.disabled) this.dispatch("click", { pointerType: "mouse" }); }
   append(...nodes) {
     for (const node of nodes) {
       if (node.fragment) this.append(...node.children);
@@ -195,6 +196,53 @@ test("a missing private record clears an uncertain control without discarding th
     assert.equal(f.el("task").value, "Keep my task"); assert.equal(f.el("save").disabled, false);
     assert.equal(f.el("error").textContent, "This private team record is no longer available. Shared messages are kept.");
     assert.equal(f.el("run-status").textContent, "No team task yet");
+  } finally { f.close(); }
+});
+
+test("hanging background reads do not disable ordinary pointer Pause or Stop", async () => {
+  for (const method of ["getAgentTeamPlan", "listAgentTeamRuns", "getAgentTeamRun"]) {
+    for (const command of ["pause", "stop"]) {
+      const f = fixture({ active: true }); const signals = [];
+      try {
+        await f.ui.open();
+        f.api[method] = (...args) => { signals.push(args.at(-1)?.signal); return new Promise(() => {}); };
+        f.el("refresh").pointerClick(); await flush();
+        assert.equal(signals.length, 1); assert.equal(f.el("pause").disabled, false); assert.equal(f.el("stop").disabled, false);
+        f.el(command).pointerClick(); await flush();
+        assert.equal(f.calls.length, 1); assert.equal(f.calls[0][3].action, command);
+        assert.equal(signals[0].aborted, true);
+        assert.equal(f.el("run-status").textContent, command === "pause" ? "Team paused" : "Team stopped");
+      } finally { f.close(); }
+    }
+  }
+});
+
+test("closing and reopening aborts a stuck read and keeps cached task emergency controls usable", async () => {
+  const f = fixture({ active: true }), signals = [];
+  try {
+    await f.ui.open();
+    f.api.getAgentTeamPlan = (_id, options) => { signals.push(options?.signal); return new Promise(() => {}); };
+    f.el("refresh").pointerClick(); await flush(); f.close(); await flush();
+    assert.equal(signals[0].aborted, true);
+    const reopening = f.ui.open(); await flush();
+    assert.equal(f.el("pause").disabled, false); assert.equal(f.el("stop").disabled, false);
+    f.el("stop").pointerClick(); await flush(); await reopening;
+    assert.equal(signals[1].aborted, true); assert.equal(f.el("run-status").textContent, "Team stopped");
+    assert.equal(f.calls.length, 1);
+  } finally { f.close(); }
+});
+
+test("a team read timeout cancels its transport without blocking Pause or Stop", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const f = fixture({ active: true }); let signal;
+  try {
+    await f.ui.open();
+    f.api.getAgentTeamPlan = (_id, options) => { signal = options?.signal; return new Promise(() => {}); };
+    f.el("refresh").pointerClick(); await flush(); t.mock.timers.tick(8000); await flush();
+    assert.equal(signal.aborted, true);
+    assert.equal(f.el("error").textContent, "Team refresh timed out. Loaded tasks can still be paused or stopped. Try refreshing again.");
+    assert.equal(f.el("pause").disabled, false); assert.equal(f.el("stop").disabled, false);
+    f.el("stop").pointerClick(); await flush(); assert.equal(f.el("run-status").textContent, "Team stopped");
   } finally { f.close(); }
 });
 
