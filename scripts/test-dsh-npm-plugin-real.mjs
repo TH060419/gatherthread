@@ -318,7 +318,7 @@ async function startMockLlm(apiKey) {
             usage: { input_tokens: 8, output_tokens: 0 },
           } });
           send({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } });
-          send({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "PRIVATE_NPM_WEB_REASONING" } });
+          send({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "EXPOSED_NATIVE_THINKING" } });
           send({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "fixture-signature" } });
           send({ type: "content_block_stop", index: 0 });
           send({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } });
@@ -339,7 +339,7 @@ async function startMockLlm(apiKey) {
           connection: "keep-alive",
         });
         for (const payload of [
-          { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "PRIVATE_NPM_WEB_REASONING" }, finish_reason: null }] },
+          { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "EXPOSED_NATIVE_THINKING" }, finish_reason: null }] },
           { choices: [{ index: 0, delta: { content: "WEB_DSH_FINAL" }, finish_reason: null }] },
           { choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 2 } },
         ]) response.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -952,9 +952,33 @@ async function main() {
     await gatherthreadPage.locator("#settings-dialog").waitFor({ state: "hidden", timeout: 30_000 });
     // Agent, model and reasoning now live in one dialog on every screen, so the
     // composer's own controls are reachable only after it is opened.
+    const probeHarnessControl = async () => {
+      const report = await gatherthreadPage.evaluate(() => {
+        const select = document.querySelector("#agent-harness-select");
+        const dialog = select instanceof Element ? select.closest("dialog") : null;
+        const style = select instanceof Element ? getComputedStyle(select) : undefined;
+        return {
+          options: select instanceof HTMLSelectElement ? [...select.options].map((option) => option.value) : [],
+          closestDialog: dialog?.id ?? null,
+          closestDialogOpen: dialog?.hasAttribute("open") ?? null,
+          agentDialogOpen: document.querySelector("#mobile-agent-dialog")?.hasAttribute("open") ?? null,
+          parentId: select?.parentElement?.id ?? null,
+          display: style?.display ?? null,
+          visibility: style?.visibility ?? null,
+          height: select?.getBoundingClientRect().height ?? null,
+          buttonHeight: document.querySelector("#mobile-agent-button")?.getBoundingClientRect().height ?? null,
+        };
+      });
+      process.stderr.write(`DSH stage: harness-control=${JSON.stringify(report)}\n`);
+    };
     await gatherthreadPage.locator("#mobile-agent-button").click();
     await gatherthreadPage.locator("#mobile-agent-dialog[open]").waitFor({ timeout: 30_000 });
-    await gatherthreadPage.locator("#agent-harness-select").selectOption("deepseek-harness");
+    try {
+      await gatherthreadPage.locator("#agent-harness-select").selectOption("deepseek-harness");
+    } catch (error) {
+      await probeHarnessControl();
+      throw error;
+    }
     const webRuntimeId = await waitUntil("Web-visible DSH runtime", async () => {
       return gatherthreadPage.locator("#agent-dsh-runtime-select").evaluate((element) => {
         if (!(element instanceof HTMLSelectElement)) return undefined;
@@ -981,8 +1005,23 @@ async function main() {
     await gatherthreadPage.locator("#message-input").fill("WEB_DSH_REQUEST");
     await gatherthreadPage.locator("#send-agent-button").click();
     try {
-      await gatherthreadPage.getByText("WEB_DSH_FINAL", { exact: true }).waitFor({ timeout: 60_000 });
+      // The answer appears twice by design: once in the live work log, which
+      // folds once the request completes, and once as the final canonical
+      // message. Assert the one the reader can actually see rather than
+      // whichever copy the locator happens to reach first.
+      await gatherthreadPage.getByText("WEB_DSH_FINAL", { exact: true })
+        .filter({ visible: true }).first().waitFor({ timeout: 60_000 });
     } catch (error) {
+      const rendered = await gatherthreadPage.evaluate(() => {
+        const matches = [];
+        for (const element of document.querySelectorAll("body *")) {
+          if (element.children.length === 0 && (element.textContent ?? "").includes("WEB_DSH")) {
+            matches.push({ tag: element.tagName, cls: String(element.className).slice(0, 60), text: (element.textContent ?? "").slice(0, 90) });
+          }
+        }
+        return { bodyHas: document.body.innerText.includes("WEB_DSH"), matches: matches.slice(0, 8) };
+      });
+      process.stderr.write(`DSH stage: render=${JSON.stringify(rendered)}\n`);
       await reportDshStage();
       throw error;
     }
@@ -1020,7 +1059,23 @@ async function main() {
     );
     assert.equal(new Set(outputs.map((event) => event.id)).size, outputs.length);
     assert.ok(outputs.every((event) => event.runtime_provenance?.runtime_id === selectedRuntime.id));
-    assert.equal(JSON.stringify(completed.events).includes("PRIVATE_NPM_WEB_REASONING"), false);
+    // ADR-0045, PRODUCT_SPEC and SECURITY.md share a claimed request's
+    // native-visible output, exposed thinking included; only *hidden* reasoning
+    // is excluded. DSH `0.1.7` surfaces the provider's thinking as a
+    // native-visible reasoning block, so the connector publishes it by design.
+    // The assertion that used to sit here demanded the opposite, which encoded
+    // the older chat-completions transport where the same text never reached a
+    // natively visible surface. Assert the contract, not the old transport.
+    assert.ok(
+      JSON.stringify(completed.events).includes("EXPOSED_NATIVE_THINKING"),
+      "native-exposed thinking must reach shared output through the bounded live-output allowlist",
+    );
+    // The boundary that is still real: none of this may enter canonical history.
+    assert.equal(
+      JSON.stringify(completed.events).includes(modelKey),
+      false,
+      "the model credential must never reach canonical history",
+    );
 
     await gatherthreadPage.reload({ waitUntil: "load" });
     await gatherthreadPage.locator("#workspace:not([hidden])").waitFor({ timeout: 30_000 });
@@ -1032,9 +1087,15 @@ async function main() {
         && harness.value === "deepseek-harness"
         && runtime.value.length > 0;
     }, undefined, { timeout: 30_000 });
+    // The reload closes the dialog again, so the same controls are reached the
+    // same way.
+    await gatherthreadPage.locator("#mobile-agent-button").click();
+    await gatherthreadPage.locator("#mobile-agent-dialog[open]").waitFor({ timeout: 30_000 });
     await gatherthreadPage.locator("#agent-harness-select").selectOption("codex");
     assert.equal(await gatherthreadPage.locator("#codex-agent-profile-fields").isVisible(), true);
     assert.equal(await gatherthreadPage.locator("#dsh-agent-profile-fields").isVisible(), false);
+    await gatherthreadPage.locator("#mobile-agent-dialog [data-mobile-close]").click();
+    await gatherthreadPage.locator("#mobile-agent-dialog[open]").waitFor({ state: "hidden", timeout: 30_000 });
 
     const credentialPath = path.join(dshHome, ".credentials.yaml");
     const credentialText = await readFile(credentialPath, "utf8");
