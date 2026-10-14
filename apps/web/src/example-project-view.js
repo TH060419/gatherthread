@@ -50,7 +50,7 @@ export function mountExampleProject({ document: doc, api }) {
     el('example-file-list').setAttribute('aria-label', text('Project files', '项目文件'));
     el('example-project-version').replaceChildren(...[
       ['main', text('Shared version', '共享版本')],
-      ['branch-maya', text('Maya · awaiting review', '林悦 · 待审核')],
+      ['branch-maya', text('Maya’s version', '林悦的版本')],
     ].map(([value, label]) => {
       const option = doc.createElement('option'); option.value = value; option.textContent = label; return option;
     }));

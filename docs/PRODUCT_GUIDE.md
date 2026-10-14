@@ -4,7 +4,7 @@
 
 From “shall we make a signup page?” to a button that works: follow one small project through discussion, AI work, review, and handoff. All screenshots show the full interface of the application running its disposable example, with key controls annotated. People, messages, and Agent replies are demonstration content.
 
-**Beta 1:** this release targets npm and the [isolated test service](https://test.gatherthread.cn/), not a production upgrade. The Cloud Agent entry is open; available models and allowances are shown in the workspace. Local Codex/DSH needs separate device authorization.
+Verify your email and choose a password to register. The example needs no sign-in or real model; available cloud models and allowances for real projects are shown in the workspace.
 
 On Windows or macOS, choose **Connect Codex → Open Launcher** with [Launcher v2](CODEX_CONNECT.md). On a Mac, open the DMG and drag GatherThread Launcher into Applications before opening it. The page fills in your email; enter your password only in the Launcher. It supports production and test accounts separately, with independent access for each computer device; your phone and browser stay signed in. The folded terminal option is a fallback for Linux, self-hosted sites or an unavailable Launcher.
 
@@ -58,7 +58,35 @@ Summaries are useful working notes, not a lossless replacement. Check important 
 
 Alex explicitly asks: “Build the signup page from the summary above.” The answer shows whose Agent did the work and which model it used. Teammates can follow public progress and results in the same conversation, without another round of copying into a group chat.
 
+![Full interface with annotations: the plan, created files and checks](assets/product/en/annotated/17-work-plan.jpg)
+
 ![Full interface with annotations: Alex's Agent answer and model](assets/product/en/annotated/04-agent-work.jpg)
+
+The answer includes a small, working project, not just a claim of completion:
+
+```text
+club-signup/
+├── index.html             Event content and button
+├── styles.css             Appearance
+├── src/signup.js          Button behavior
+├── tests/signup.test.cjs  Behavior checks
+├── package.json           Check command
+└── README.md              How to open and use it
+```
+
+You do not need to understand every line. These lines in `src/signup.js` set the confirmation, show it and prevent repeated clicks:
+
+```javascript
+confirmation.textContent = "You’re signed up.";
+confirmation.hidden = false;
+signupButton.disabled = true;
+```
+
+Open **Result → Project files** in the example. Choose a file on the left and inspect its code on the right, without installing tools. Compare what the team agreed with what was actually built.
+
+![Full interface with annotations: the project files and signup-button code](assets/product/en/annotated/16-project-code.jpg)
+
+The work log includes a plan, created files and `npm test`: three checks for the initial state, confirmation and repeated clicks. The checks correspond to the supplied files; opening the guide does not run a new model request.
 
 On computers, phones and tablets, the compact Agent button opens supported model and reasoning choices. For a supported DSH route, a GatherThread choice applies to that request without changing later model choices inside DSH. During supported computer or Cloud Agent work, the same request button offers **Pause Agent**, then **Resume Agent**; there is no extra control to hunt for.
 
@@ -67,6 +95,8 @@ Resume asks the original selected Agent again and can include newer shared discu
 ## 5. Give project files a home
 
 For ongoing development, **choose GitHub first**. The project owner configures the repository and base branch; each member signs in to GitHub on their computer and separately authorizes that connection. Files in this local sync path go straight from the computer to GitHub, to the member's personal branch. They do not use GatherThread's cloud file quota.
+
+Follow the pages in order: connect your account, choose a repository, then choose how to use its files. Owner and repository name are separate fields. For a new project, use **Create a repository on GitHub**, confirm visibility and add a README there, then return to connect it. Computer automatic uploads need a separate authorization for that device.
 
 ![Full interface with annotations: GitHub connection and local file sync](assets/product/en/annotated/09-github.jpg)
 
@@ -82,7 +112,7 @@ GitHub still enforces its own permissions and rules. Local transfer safety limit
 
 ## 6. Work on your own branch, then review together
 
-Alex makes the page. Maya improves the confirmation to “You're signed up! See you Saturday.” Each uploads to a separate personal branch. In this GT Cloud example, Maya submits her change for review, and Alex, the project owner, checks it before integrating it into the shared version.
+Alex makes the page. Maya changes one line in `src/signup.js` to say “You’re signed up! See you Saturday.” She quotes the original answer and mentions Alex to request a review. Each uploads to a separate personal branch. In this GT Cloud example, Alex checks the change before integrating it into the shared version.
 
 ![Full interface with annotations: personal file branches and review status](assets/product/en/annotated/07-file-versions.jpg)
 
@@ -94,11 +124,11 @@ A personal branch separates uploaded versions, **not local folders**. Use separa
 
 ## 7. Check the result, not just the answer
 
-The free example includes a clickable signup page. Press “Sign me up” and check the confirmation. Compare the result with what the team agreed; an Agent saying “done” is not a substitute for trying the button.
+Open **Result → Try the page** at the top of the free example. Press “Sign me up”: the confirmation appears and the button disables. Switch to **Project files** to inspect the six files, and select Maya’s version to compare the new message. Once you merge it in file collaboration, the shared version also uses the new code.
 
 ![Full interface with annotations: the working signup-page confirmation](assets/product/en/annotated/14-working-result.jpg)
 
-For real work, review the files and run the checks your project needs before approving a merge.
+This is a dependency-free frontend demo, not a service that saves real signup data. Ask your Agent to add that data feature when a real project needs it. Resetting the example does not affect your projects. For real work, inspect the files and run the checks your project needs before approving a merge.
 
 ## 8. Leave your desk without leaving the project
 
@@ -127,6 +157,8 @@ Connected Agents receive shared conversation history without every chat message 
 An import may need the Agent's native compaction for long history. Undeleted shared original records remain available; a compacted local task is not a lossless archive. See [Codex setup and history](CODEX_CONNECT.md) and [DSH setup](DSH_CONNECT.md) for supported installation and recovery paths.
 
 ## Know who can do what
+
+Already have a model API? Add it under **Settings → Personal API**, then select it in the Agent options for cloud tasks or summaries. Your model provider bills you; teammates cannot see your key. [Personal API setup and limits](HOSTED_AGENT_GUIDE.md#use-your-own-api)
 
 - **Multi:** the owner and participants can discuss and request their own Agents; viewers read.
 - **Solo:** only its creator can write while their project role allows it. Other project members can still read it, including the project owner. Solo does not mean private.

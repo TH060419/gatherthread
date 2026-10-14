@@ -146,7 +146,7 @@ If your Codex version cannot report a catalog, the Web workspace falls back to i
 | `Local workspace is already bound...` | Stop the connector and choose a new workspace, or reconnect the matching original project/server. |
 | `thread/start` or `thread/resume request timed out` | Leave the connector running. It retries and prints `recovered` when Codex App Server responds. Restart Codex Desktop if retries continue. |
 | Project appears but no task is visible | Keep the connector running and use **Import Codex history**. Empty sessions receive a local-only visibility marker; it is never uploaded to shared history. |
-| Web says Codex is offline | Confirm the terminal is still running and the connector URL is the same origin shown in the browser. |
+| Web says Codex is offline | Keep the Launcher (or fallback terminal) running, and confirm its server is the same one used in the browser. |
 | Hooks do not upload direct turns | Confirm `--plugin-hooks` is present, the plugin is installed, Hooks are enabled, and the task belongs to the managed workspace. Then ask the plugin to manually upload that session's completed local turns. |
 
 ## Security boundary

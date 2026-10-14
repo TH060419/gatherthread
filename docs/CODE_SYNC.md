@@ -29,7 +29,7 @@ GitHub 上传不计入共序的存储额度。表中数字是本地同步器的�
 ### Configure and authorize / 配置与授权
 
 1. Prepare the intended GitHub repository and grant each collaborator the required GitHub access. Review its visibility, branch rules and Actions workflows. The integration never creates a repository, invites GitHub members, grants privileges or opens/merges a pull request for you.
-2. As the GatherThread project owner, open **Project code → GitHub**, save `OWNER/REPO` and the shared base branch, then enable the connection. Enter only the repository slug, without a URL or `.git` suffix. Use a base such as `main`, outside the reserved `gatherthread/` namespace. Saving this metadata uploads no source and grants no local file access.
+2. Open **Project file collaboration → GitHub** and follow account connection, repository selection and file use in order. Owner and repository name are separate fields. For a new project, **Create a repository on GitHub** opens GitHub's own form; confirm visibility and add a README there, then return. For computer sync, expand its setup and, as project owner, save the same owner/name and shared base branch. Use a base such as `main`, outside the reserved `gatherthread/` namespace. Saving metadata uploads no source and grants no local file access. Cloud repository authorization and local computer authorization remain separate.
 3. On each local device, install Git 2.38+ and GitHub CLI. Select that device in the Web code panel and click **Connect GitHub on this device** for a Codex runtime, or click **连接 GitHub · 打开浏览器** in DSH settings. The local GitHub CLI opens browser sign-in when needed; complete authorization in that browser. GitHub CLI normally uses the local credential store, but [may fall back to a plain-text file when no credential store is available](https://cli.github.com/manual/gh_auth_login); inspect `gh auth status` on your device if this matters to you. If browser launching is unavailable, use the local CLI fallback:
 
    ```sh
@@ -39,7 +39,7 @@ GitHub 上传不计入共序的存储额度。表中数字是本地同步器的�
 
 4. Review eligible source files and separately authorize that exact repository/base configuration in Codex or DSH. A new local GitHub binding automatically uploads settled changes while the Agent is idle; the device switch can turn this off at any time. Existing explicit off choices survive reconnects. Repository/base changes and configuration revisions require renewed local authorization; an owner cannot silently redirect an already-authorized device to another repository.
 
-先在 GitHub 准备仓库，并独立授予协作者权限。项目创建者在共序“项目代码 → GitHub”填写 `OWNER/REPO` 和主分支；每位成员在自己的设备上安装 Git 与 GitHub CLI。Codex 可在网页选择自己的在线设备并点击“在此设备连接 GitHub”，DSH 可在插件设置点击“连接 GitHub · 打开浏览器”。本地 CLI 会在需要登录时打开浏览器，用户在 GitHub 完成确认；也可使用上方终端命令。检查上传范围并在 Codex 或 DSH 单独授权后，新设备默认会在 Agent 空闲时自动上传稳定的文件改动，可随时关闭，关闭状态在重连后保留。仓库、主分支或配置版本变化后需重新确认本地授权，包括暂停后重新开启；网页保存配置不能替代设备授权。
+在“项目文件协作 → GitHub”中，按页面顺序连接账号、选择仓库和文件使用方式。所属账号与仓库名称分别填写；新项目可点“在 GitHub 创建仓库”，在 GitHub 确认可见范围并添加 README 后回来连接。电脑同步收在单独的设置中：项目创建者保存仓库和主分支，每位成员在自己的设备上安装 Git 与 GitHub CLI。Codex 在网页选择自己的在线设备，再点“在此设备连接 GitHub”；DSH 在插件设置点“连接 GitHub · 打开浏览器”。检查上传范围并单独授权后，新设备默认在 Agent 空闲时自动上传稳定改动，可随时关闭，关闭状态在重连后保留。云端仓库授权不能替代电脑授权；仓库、主分支或配置版本变化后需重新确认。GitHub 仓库权限也需独立授予协作者。
 
 ### Codex source commands / Codex 源码命令
 
@@ -102,7 +102,9 @@ Cloud Git is used only to synchronize project code among that project's collabor
 
 ### Codex
 
-Keep the existing trusted plugin Hooks. Add `--code-sync` to the connection command:
+On supported Windows/macOS installations, use **Connect Codex → Open Launcher** and its explicit project-file authorization. The Launcher receives the signed-in email and asks for the password; it does not ask you to paste an account token. See [Launcher setup](CODEX_CONNECT.md). Keep the reviewed plugin Hooks. For Linux/self-hosted sites or a source-based terminal fallback, add `--code-sync` to the connection command:
+
+Windows/macOS 优先使用“连接 Codex → 打开启动器”，在启动器中单独授权项目文件。网页带入邮箱，用户输入密码，不再手动粘贴账号 token。以下命令仅为 Linux、自托管或源码方式的终端备用。
 
 ```sh
 npm run codex:connect -- --url http://127.0.0.1:18787 --project PROJECT_ID --create-workspace --plugin-hooks --code-sync

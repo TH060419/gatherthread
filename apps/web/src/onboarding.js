@@ -330,11 +330,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       element: () => {
         prepare(item);
         // All scrolling happens inside the disposable example, never real history.
-        if (item.target && !visibleGuideTarget(doc, item.target)) {
-          const node = [...doc.querySelectorAll(item.target)].find((candidate) => !candidate.closest("[hidden]"));
-          node?.scrollIntoView({ block: ["invite", "join"].includes(item.id) ? "center" : "nearest", inline: "nearest", behavior: "instant" });
-        }
-        lastTarget = item.target ? visibleGuideTarget(doc, item.target) : undefined;
+        lastTarget = resolveExampleTarget(item);
         if (lastTarget) {
           const box = lastTarget.getBoundingClientRect();
           const circular = ["quote", "mention", "create-conversation"].includes(item.id);
@@ -404,6 +400,16 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       if (pendingKey === key() && !modal() && !el("workspace").hidden) start("basics");
     });
   }
+  function resolveExampleTarget(item) {
+    if (!item.target) return undefined;
+    if (!visibleGuideTarget(doc, item.target)) {
+      // A read-only panel can finish loading after the step first opens. Retry
+      // its scroll when data arrives, not only on the initial Driver callback.
+      const node = [...doc.querySelectorAll(item.target)].find(candidate => !candidate.closest('[hidden]'));
+      node?.scrollIntoView({ block: ['invite', 'join', 'review'].includes(item.id) ? 'center' : 'nearest', inline: 'nearest', behavior: 'instant' });
+    }
+    return visibleGuideTarget(doc, item.target);
+  }
   function reconcileLayout() {
     if (!tour) return;
     win.cancelAnimationFrame(layoutFrame);
@@ -412,7 +418,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       const item = activeItems[tour.getActiveIndex()];
       prepare(item);
       const active = tour.getActiveElement();
-      const resolved = item.target ? visibleGuideTarget(doc, item.target) : undefined;
+      const resolved = resolveExampleTarget(item);
       // Loading, live updates, and scrolling may reveal, replace or hide a target.
       if (resolved !== (active?.id === "driver-dummy-element" ? undefined : active)) tour.drive(tour.getActiveIndex());
       else { tour.refresh(); positionCard(tour.getState("popover").wrapper, active); }

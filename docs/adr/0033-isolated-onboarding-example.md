@@ -23,3 +23,5 @@ The parent sends only locale, theme, the desktop/mobile presentation choice, a v
 ## Consequences
 
 Every account can inspect all supported scenarios without a real runtime or business write. Reset and exit discard practice state. The extra bundle increases static build size; it is fetched only when opening the example. Browser regressions must verify the opaque boundary, parent state preservation, targets and native-dialog layers as the shell evolves. The example does not promise real execution, filesystem access or provider behavior.
+
+The demo-only Result viewer displays the authored signup project's six files and executes only that fixture's frontend in a nested `sandbox="allow-scripts"` frame. Its CSS/JS are inline under the example's existing fixed public nonce, with no external resources or same-origin access. The version follows the mock repository commit, including after a reviewed merge. Uploaded or user-authored code is never passed to the executable preview; source remains text-only. The example's illustrative Agent messages are not evidence of a live provider execution.

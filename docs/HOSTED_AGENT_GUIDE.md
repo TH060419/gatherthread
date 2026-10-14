@@ -1,6 +1,6 @@
 # Try the cloud Agent
 
-**Beta 1 availability:** the Cloud Agent entry is open. Running a task still requires the operator's validated provider/container configuration; publishing npm or deploying the build does not supply API credentials or enable an unconfigured server. Check the workspace's current model/status before requesting a task. This release targets the isolated test service, not production activation.
+Platform trial models and personal APIs use the same Cloud Agent entry. Available models, allowances and status are shown in the workspace. Self-hosted model and executor setup is covered by the [administrator guide](HOSTED_AGENT.md).
 
 Choose the cloud Agent, describe a small task, and read its answer in the same shared conversation. No local Agent installation is needed. Platform trial models need no personal key; you can also add your own API in Settings. Available models, usage allowances and service status are shown in the workspace.
 

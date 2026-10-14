@@ -10,7 +10,7 @@ GatherThread puts your team's discussion, AI-assisted work, and file review in o
 
 Open source · Self-hostable · Current version identifier **0.1.0-beta.1** · [Apache 2.0](LICENSE)
 
-Beta 1 is the npm and isolated-test release. [Test service](https://test.gatherthread.cn/): enter your private tester code, then verify your email and sign in with a password. Production is upgraded separately; project invitations are not account registration codes. The Cloud Agent entry is open in Beta 1; usable models depend on the test operator's validated provider and container configuration, with availability shown in the workspace.
+Public-registration Beta: verify your email and choose a password to create an account. Available cloud models and allowances are shown in the workspace. Project invitations join a team; they are not account registration codes. [Release history](CHANGELOG.md) · [Developer test environment](docs/TEST_ENVIRONMENT.md)
 
 ## Your team. Your devices. Your Agents.
 
@@ -36,7 +36,7 @@ Maya wants a club signup page. Alex confirms the time, place, and button behavio
 
 ### 2. Turn decisions into work
 
-Choose or connect your Agent, then explicitly ask it to build. Everyone can follow the public progress and answer. If the discussion is long, first summarize the selected requirements; undeleted original messages remain available.
+Choose or connect your Agent, then explicitly ask it to build. The example shows a work plan, actual `index.html` and `src/signup.js` files, and behavior checks. Open **Result** to try the button or inspect the files. If discussion is long, summarize selected requirements with your local or cloud Agent; undeleted originals remain available.
 
 ![Full interface with annotations: Alex's Agent answer and model](docs/assets/product/en/annotated/04-agent-work.jpg)
 
@@ -79,17 +79,19 @@ Want to practice first? Open the [free example](https://gatherthread.cn/app/exam
 |---|---|
 | Multi and Solo | Collaborate in Multi; write your own Solo while project members can still read it. Solo is not a private conversation. |
 | Quotes and mentions | Reply to a specific chat or Agent answer; open the mentions inbox to find messages addressed to you. |
-| Shared summaries | Ask your own connected computer Agent (Codex/DSH) to summarize selected messages, keep undeleted originals and valid older versions, and summarize again. |
+| Shared summaries | Ask your own local or cloud Agent to summarize selected messages, keep undeleted originals and valid older versions, and summarize again. |
 | Delete your own messages | Use the trash icon on your chat, Agent request or Agent reply. Related generated work and summaries may also become unavailable; other members' messages are not yours to delete. |
 | Conversation synchronization | Send shared history to connected Agents; switch local-to-cloud automatic uploads on or off per conversation, or manually upload completed turns. |
 | Codex history import | Create a new visible local task from shared history. Review it and archive the old task yourself; live history delivery remains independent. |
-| Models and request controls | Choose supported models and reasoning levels. During a computer Agent request, the request button becomes Pause or Resume. |
+| Models and request controls | Choose supported models and reasoning levels. During local or cloud Agent work, the request button becomes Pause or Resume. |
 | Cloud trial Agent | Try small tasks in an isolated workspace without local installation or your own API key; workspace usage allowances apply. |
+| Personal model APIs | Add your own model account in Settings for cloud tasks and summaries. Your provider bills you; keys are not shared with teammates. |
 | GitHub cloud workspace | With a validated cloud coding model and your repository authorization, request an npm project change, review its saved source and explicitly create a draft PR. |
 | Members and invitations | Manage owner, participant, and viewer roles; leave another person's project or remove members after resolving shared files. |
 | Accounts and devices | Sign in on multiple devices, revoke a device independently, change your profile, or review the impact before deleting your account. |
 | Bilingual onboarding | Use Chinese or English and learn through visual guides tailored to computers, phones, and tablets. |
-| Rich answers | Read Markdown, code, formulas, and expandable public work progress without leaving the conversation. |
+| Live work progress | Follow growing answers and expand the Agent's available, shareable thinking, tool work and plans. Collapse sections independently; missing information is never invented. |
+| Rich answers | Read Markdown, code and formulas without leaving the conversation. |
 | Self-hosting | Run the collaboration service on your own server. |
 
 Summaries may omit details and use your Agent's quota. Later Agent requests default to the summarized history; Settings can select original history instead. Reading-view toggles are separate. Pause/Resume controls a GatherThread request, not an identical freeze and restart of a native Agent's internal reasoning.

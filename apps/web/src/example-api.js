@@ -58,7 +58,9 @@ export class ExampleCollaborationApi extends MockCollaborationApi {
         { step: text('Save files for teammate review', '保存文件，交给同伴检查'), status: 'completed' },
       ] }),
       progress('example-build-files', 'tool', text('Created: index.html, styles.css, src/signup.js\nAdded: tests/signup.test.cjs, package.json, README.md', '已创建：index.html、styles.css、src/signup.js\n已添加：tests/signup.test.cjs、package.json、README.md')),
-      progress('example-build-check', 'tool', 'npm test\n\n✓ confirmation starts hidden\n✓ clicking confirms signup\n✓ the button prevents repeated signup\n\n3 passed · 0 failed', { stream_id: '33333333-3333-4333-8333-333333333333' }),
+      progress('example-build-check', 'tool', text(
+        'npm test\n\n- ✓ Confirmation starts hidden\n- ✓ Clicking confirms signup\n- ✓ The button prevents repeated signup\n\n3 passed · 0 failed',
+        'npm test\n\n- ✓ 初始不显示成功提示\n- ✓ 点击后显示报名成功\n- ✓ 按钮不能重复点击\n\n3 项通过 · 0 项失败'), { stream_id: '33333333-3333-4333-8333-333333333333' }),
     ];
     const summaryEvents = [];
     for (let version = 0; version < 2; version++) {

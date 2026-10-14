@@ -40,22 +40,22 @@
     "points": [
       {
         "x": 381,
-        "y": 221.515625,
+        "y": 177.515625,
         "width": 698,
         "height": 156.84375,
         "text": "Suggest a goal"
       },
       {
         "x": 381,
-        "y": 390.359375,
+        "y": 346.359375,
         "width": 698,
         "height": 156.84375,
         "text": "Agree on the first version"
       },
       {
-        "x": 626,
-        "y": 892.5,
-        "width": 220,
+        "x": 797.34375,
+        "y": 884.5,
+        "width": 118.578125,
         "height": 40,
         "text": "Chat without starting AI"
       }
@@ -78,14 +78,14 @@
       },
       {
         "x": 381,
-        "y": 221.515625,
+        "y": 177.515625,
         "width": 698,
         "height": 278.390625,
         "text": "Keep an agreed checklist"
       },
       {
         "x": 949.015625,
-        "y": 120.5,
+        "y": 119.5,
         "width": 93.984375,
         "height": 36,
         "text": "Return to the originals"
@@ -101,23 +101,23 @@
     },
     "points": [
       {
-        "x": 381,
-        "y": 290.75,
-        "width": 698,
-        "height": 204.96875,
-        "text": "See whose Agent did the work"
+        "x": 442,
+        "y": 302.1875,
+        "width": 620,
+        "height": 176.171875,
+        "text": "Actual project files"
       },
       {
-        "x": 381,
-        "y": 507.71875,
-        "width": 698,
-        "height": 177.765625,
-        "text": "Teammates check the result"
+        "x": 442,
+        "y": 539.796875,
+        "width": 620,
+        "height": 219.078125,
+        "text": "Core button code"
       },
       {
-        "x": 858,
-        "y": 892.5,
-        "width": 220,
+        "x": 923.921875,
+        "y": 884.5,
+        "width": 154.078125,
         "height": 40,
         "text": "Explicitly ask your Agent"
       }
@@ -132,17 +132,17 @@
     },
     "points": [
       {
-        "x": 368,
+        "x": 382,
         "y": 737,
-        "width": 696,
+        "width": 1058,
         "height": 28,
         "text": "Reply to a specific message"
       },
       {
-        "x": 368,
+        "x": 382,
         "y": 770,
-        "width": 696,
-        "height": 40,
+        "width": 1058,
+        "height": 106.5,
         "text": "Mention a specific teammate"
       }
     ]
@@ -173,16 +173,16 @@
     },
     "points": [
       {
-        "x": 464.390625,
+        "x": 364,
         "y": 310.53125,
-        "width": 78.8125,
+        "width": 181.546875,
         "height": 44,
         "text": "GitHub for real development"
       },
       {
-        "x": 364,
+        "x": 553.546875,
         "y": 310.53125,
-        "width": 92.390625,
+        "width": 133.921875,
         "height": 44,
         "text": "GT Cloud for small trials"
       },
@@ -212,10 +212,10 @@
       },
       {
         "x": 364,
-        "y": 605.046875,
-        "width": 218.625,
-        "height": 44,
-        "text": "Ask for a human review"
+        "y": 549.90625,
+        "width": 116.640625,
+        "height": 17,
+        "text": "Review before integrating"
       }
     ]
   },
@@ -229,14 +229,14 @@
     "points": [
       {
         "x": 364,
-        "y": 514.734375,
+        "y": 460.734375,
         "width": 712,
-        "height": 326.75,
+        "height": 404.75,
         "text": "Inspect the actual files"
       },
       {
         "x": 364,
-        "y": 857.484375,
+        "y": 881.484375,
         "width": 218.59375,
         "height": 44,
         "text": "Integrate only after review"
@@ -253,48 +253,24 @@
     "points": [
       {
         "x": 364,
-        "y": 420.953125,
-        "width": 712,
-        "height": 272,
-        "text": "Choose a repository and base"
+        "y": 436.953125,
+        "width": 221.5,
+        "height": 44,
+        "text": "Create a repository if needed"
       },
       {
         "x": 364,
-        "y": 743.953125,
+        "y": 542.953125,
         "width": 712,
-        "height": 25,
-        "text": "Authorize your computer too"
-      }
-    ]
-  },
-  {
-    "name": "15-history-controls",
-    "locale": "en",
-    "viewport": {
-      "width": 1440,
-      "height": 1000
-    },
-    "points": [
-      {
-        "x": 678.625,
-        "y": 361.34375,
-        "width": 124.390625,
-        "height": 17,
-        "text": "Import into a new local task"
-      },
-      {
-        "x": 371.015625,
-        "y": 482.5625,
-        "width": 230.671875,
         "height": 48,
-        "text": "Control local-to-cloud upload"
+        "text": "Owner and repository are separate"
       },
       {
-        "x": 613.6875,
-        "y": 496.0625,
-        "width": 189.328125,
-        "height": 30,
-        "text": "Manually upload completed turns"
+        "x": 364,
+        "y": 627.953125,
+        "width": 712,
+        "height": 48,
+        "text": "Choose the project’s file home"
       }
     ]
   },
@@ -308,14 +284,14 @@
     "points": [
       {
         "x": 945,
-        "y": 317.46875,
+        "y": 317.34375,
         "width": 300,
         "height": 40,
         "text": "Choose summary or originals"
       },
       {
         "x": 415,
-        "y": 503.1875,
+        "y": 503.0625,
         "width": 830,
         "height": 192.75,
         "text": "Customize summary instructions"
@@ -333,9 +309,112 @@
       {
         "x": 0,
         "y": 110,
-        "width": 1426,
+        "width": 1113,
         "height": 890,
         "text": "Give the conversation more room"
+      }
+    ]
+  },
+  {
+    "name": "14-working-result",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 225,
+        "y": 221.890625,
+        "width": 113.875,
+        "height": 44,
+        "text": "Try the supplied code"
+      },
+      {
+        "x": 225,
+        "y": 307.390625,
+        "width": 990,
+        "height": 537.609375,
+        "text": "Check the agreed result"
+      }
+    ]
+  },
+  {
+    "name": "16-project-code",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 225,
+        "y": 307.390625,
+        "width": 210,
+        "height": 537.609375,
+        "text": "A complete small project"
+      },
+      {
+        "x": 453,
+        "y": 328.390625,
+        "width": 762,
+        "height": 516.609375,
+        "text": "Read the button’s actual code"
+      }
+    ]
+  },
+  {
+    "name": "17-work-plan",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 439,
+        "y": 204.078125,
+        "width": 674,
+        "height": 73.0625,
+        "text": "Follow the work plan"
+      },
+      {
+        "x": 371,
+        "y": 387.625,
+        "width": 742,
+        "height": 203.53125,
+        "text": "Inspect the behavior checks"
+      }
+    ]
+  },
+  {
+    "name": "15-history-controls",
+    "locale": "en",
+    "viewport": {
+      "width": 1440,
+      "height": 1000
+    },
+    "points": [
+      {
+        "x": 1019.625,
+        "y": 361.34375,
+        "width": 124.390625,
+        "height": 17,
+        "text": "Import into a new local task"
+      },
+      {
+        "x": 712.015625,
+        "y": 482.5625,
+        "width": 230.671875,
+        "height": 48,
+        "text": "Control local-to-cloud upload"
+      },
+      {
+        "x": 954.6875,
+        "y": 496.0625,
+        "width": 189.328125,
+        "height": 30,
+        "text": "Manually upload completed turns"
       }
     ]
   },
@@ -348,17 +427,17 @@
     },
     "points": [
       {
-        "x": 21,
-        "y": 678.609375,
-        "width": 348,
-        "height": 90.390625,
+        "x": 35,
+        "y": 581,
+        "width": 320,
+        "height": 75,
         "text": "Continue the discussion"
       },
       {
-        "x": 69,
-        "y": 773,
-        "width": 92.34375,
-        "height": 44,
+        "x": 35,
+        "y": 672.25,
+        "width": 110.53125,
+        "height": 40,
         "text": "Choose your online Agent"
       }
     ]
@@ -373,14 +452,14 @@
     "points": [
       {
         "x": 39,
-        "y": 490.546875,
+        "y": 462.765625,
         "width": 312,
         "height": 44,
         "text": "Choose a supported model"
       },
       {
         "x": 39,
-        "y": 573.546875,
+        "y": 547.765625,
         "width": 312,
         "height": 44,
         "text": "Adjust reasoning level"
@@ -396,17 +475,17 @@
     },
     "points": [
       {
-        "x": 21,
-        "y": 1014.609375,
-        "width": 778,
-        "height": 90.390625,
+        "x": 265,
+        "y": 917,
+        "width": 520,
+        "height": 139.5,
         "text": "Keep working on a tablet"
       },
       {
-        "x": 69,
-        "y": 1109,
-        "width": 92.34375,
-        "height": 44,
+        "x": 265,
+        "y": 1072.75,
+        "width": 110.53125,
+        "height": 40,
         "text": "Open compact Agent controls"
       }
     ]
@@ -421,41 +500,17 @@
     "points": [
       {
         "x": 171,
-        "y": 649.90625,
+        "y": 622.125,
         "width": 478,
         "height": 44,
         "text": "Choose a supported model"
       },
       {
         "x": 171,
-        "y": 732.90625,
+        "y": 707.125,
         "width": 478,
         "height": 44,
         "text": "Adjust reasoning level"
-      }
-    ]
-  },
-  {
-    "name": "14-working-result",
-    "locale": "en",
-    "viewport": {
-      "width": 1440,
-      "height": 1000
-    },
-    "points": [
-      {
-        "x": 553.84375,
-        "y": 536.296875,
-        "width": 146.1875,
-        "height": 51,
-        "text": "Try the real example button"
-      },
-      {
-        "x": 553.84375,
-        "y": 607.296875,
-        "width": 332.296875,
-        "height": 23,
-        "text": "Check the agreed result"
       }
     ]
   }

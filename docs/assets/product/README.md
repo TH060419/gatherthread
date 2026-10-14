@@ -6,20 +6,28 @@ These assets accompany the [English product guide](../../PRODUCT_GUIDE.md) and [
 
 - `cover.en.jpg` / `cover.zh-CN.jpg`: the approved white cover, combining the official GatherThread lockup with real desktop and phone screenshots.
 - `collaboration.en.jpg` / `collaboration.zh-CN.jpg`: the approved collaboration schematic. The illustration represents shared discussion and file versions, people explicitly calling their own Agents, and human review. It is not a screenshot or a claim that automatic Agent teams exist.
-- `en/annotated/` / `zh-CN/annotated/`: complete application-viewport captures with a separate layer of numbered thin outlines. Short explanations sit below, outside the captured interface. The interface is real; the people, conversation and Agent answers are demonstration content. `14-working-result.jpg` shows the existing example HTML after its real signup button was clicked, not a new model-generated result.
+- `en/annotated/` / `zh-CN/annotated/`: complete application-viewport captures with a separate layer of numbered thin outlines. Short explanations sit below, outside the captured interface. The interface is real; the people, conversation and Agent answers are authored demonstration content. `14-working-result.jpg` shows the six-file example's real signup button after a click. `16-project-code.jpg` shows its source files, and `17-work-plan.jpg` shows its illustrative plan and checks. No image represents a new live model run.
 - `en/` / `zh-CN/`: two additional plain, uncropped screenshots per language for the desktop-and-phone cover.
 - `gatherthread-lockup.svg`: the official light-background asset copied unchanged from `apps/web/brand/lockup-color-transparent-light.svg`.
 - `collaboration-illustration.png`: AI-generated conceptual artwork, with exact labels added separately in the editable HTML.
 
 ## Provenance
 
-Application source: `main` commit `ee540236a22f158424d718ff099cb82d26e4a54d`. Captures made on 2026-10-07, using the built app's `/app/example.html` with `locale=en` or `locale=zh-CN`, `theme=light`, and `topic=browse`. No production accounts, private conversations, credentials, real model calls or remote repositories were used.
+Application source: the `codex/product-docs-coding-demo` change based on `main` commit `2debc4049eb0e9b001b11cf752e65e25ac5a600f`; the final reviewed source is recorded by the accompanying PR. Captures refreshed on 2026-10-15, using the built app's `/app/example.html` with `locale=en` or `locale=zh-CN`, `theme=light`, and `topic=browse`. No production accounts, private conversations, credentials, real model calls or remote repositories were used.
 
-Capture viewports: desktop 1440×1000, phone 390×844, tablet 820×1180, all at 2× pixel density. Phone/tablet contexts use their corresponding device layout and touch settings. Every guide image preserves the complete viewport and original aspect ratio. The numbered frames are documentation annotations, not application controls. This is Chrome capture evidence, not native Safari certification.
+Capture viewports: desktop 1440×1000, phone 390×844, tablet 820×1180, all at 2× pixel density. Phone/tablet captures use the corresponding application layout. Every guide image preserves the complete viewport and original aspect ratio. The numbered frames are documentation annotations, not application controls. This is Chromium capture evidence, not native Safari certification; touch interaction is checked separately by the browser tests.
 
-The product homepage keeps byte-identical publishing copies in `site/assets/product/{en,zh-CN}/`: `desktop.jpg` maps to `11-focused-workspace.jpg`, `phone.jpg` to `12-phone.jpg`, and `summary.jpg`, `github.jpg`, and `review.jpg` to annotated images 03, 09, and 08 respectively. Rounded frames and glass materials are presentation CSS, not edits to the screenshot pixels. Homepage language switching selects the matching language folder.
+The product homepage keeps byte-identical publishing copies in `site/assets/product/{en,zh-CN}/`: `desktop.jpg` maps to the plain `11-focused-workspace.jpg`, `phone.jpg` to the plain `12-phone.jpg`, and `summary.jpg`, `github.jpg`, `review.jpg`, and `work.jpg` to annotated images 03, 09, 08, and 04 respectively. Rounded frames and glass materials are presentation CSS, not edits to the screenshot pixels. Homepage language switching selects the matching language folder.
 
-Export: annotated screenshots are JPEG at quality 88 with 4:4:4 chroma, capped at 2400 pixels wide without enlargement; phone images remain 780 pixels wide. Plain cover screenshots are capped at 2000 pixels. Poster exports are 2400×1500 JPEG at quality 91 with 4:4:4 chroma. Rendered-image metadata is stripped by the export pipeline. Raw captures and review boards remain local ignored artifacts, not duplicate repository assets.
+Export: the browser writes annotated JPEGs at quality 88, capped at 2400 pixels wide without enlargement; phone images remain 780 pixels wide. Plain cover captures retain the full 2× viewport (2880×2000 desktop and 780×1688 phone). Poster exports are 2400×1500 JPEG at quality 91. Raw captures remain local ignored artifacts, not duplicate repository assets.
+
+Reproduce after `npm run build:web` with a running loopback preview:
+
+```sh
+ONBOARDING_ORIGIN=http://127.0.0.1:4173 node docs/assets/product/source/capture.mjs
+```
+
+The script uses local Playwright, or an absolute module path supplied with `PLAYWRIGHT_MODULE`. It captures both languages, remeasures annotations, updates homepage copies and rerenders the approved posters. Review the exported images before committing them.
 
 ## Editing the annotations
 

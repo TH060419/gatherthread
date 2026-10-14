@@ -12,8 +12,10 @@ const origin = process.env.ONBOARDING_ORIGIN ?? 'http://127.0.0.1:4173';
 const artifacts = process.env.ONBOARDING_ARTIFACTS ?? '/tmp/gatherthread-onboarding';
 await mkdir(artifacts, { recursive: true });
 const browserName = process.env.ONBOARDING_BROWSER ?? 'chrome';
-const browser = browserName === 'webkit' ? await webkit.launch() : await chromium.launch({ headless: true, channel: browserName });
+const launchOptions = { headless: process.env.ONBOARDING_HEADLESS !== '0' };
+const browser = browserName === 'webkit' ? await webkit.launch(launchOptions) : await chromium.launch({ ...launchOptions, channel: browserName });
 const errors = [];
+const checkedCases = [];
 const popup = '.onboarding-popover';
 async function example(page) {
   await page.locator('.onboarding-example-dialog iframe').waitFor();
@@ -162,21 +164,29 @@ async function assertStep(frame, item, size) {
     const expected = [box.x - 7 - (layer?.x ?? 0), box.y - 7 - (layer?.y ?? 0), box.width + 14, box.height + 14];
     return ['x', 'y', 'width', 'height'].every((name, index) => Math.abs(Number(ring.getAttribute(name)) - expected[index]) < 1);
   }, { id: item.id, targeted: Boolean(item.target) }, { timeout: 5000 });
-  const state = await frame.evaluate(() => {
+  // Read geometry and verify its ring in one browser tick. Separate protocol
+  // reads can straddle an asynchronous scroll and compare different frames.
+  const handle = await frame.waitForFunction(({ id, targeted }) => {
     const card = document.querySelector('.onboarding-popover'), target = document.querySelector('.driver-active-element');
+    if (!card || card.getAttribute('data-onboarding-focus-ready') !== id) return false;
     const a = card.getBoundingClientRect(), b = target?.getBoundingClientRect();
     const ring = document.querySelector('.onboarding-ring');
     const modal = [...document.querySelectorAll('dialog[open]')].at(-1)?.getBoundingClientRect();
     const connector = document.querySelector('.onboarding-connector')?.getBoundingClientRect();
     const panel = target?.closest('.session-context-panel')?.getBoundingClientRect();
-    return { card: [a.x, a.y, a.width, a.height], target: target?.id, inviteSubmit: target?.matches('#create-invitation-form button[type=submit]'), hint: card.innerText.includes('正在准备') || card.innerText.includes('Preparing this example'),
+    const state = { card: [a.x, a.y, a.width, a.height], target: target?.id, inviteSubmit: target?.matches('#create-invitation-form button[type=submit]'), hint: card.innerText.includes('正在准备') || card.innerText.includes('Preparing this example'),
       overlap: b && Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)) * Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top)),
       panelOverlap: panel && Math.max(0, Math.min(a.right, panel.right) - Math.max(a.left, panel.left)) * Math.max(0, Math.min(a.bottom, panel.bottom) - Math.max(a.top, panel.top)),
       targetBox: b && [b.x, b.y, b.width, b.height], ring: ring && ['x', 'y', 'width', 'height'].map((name) => Number(ring.getAttribute(name))), layerOffset: [connector?.x ?? 0, connector?.y ?? 0],
       modalBox: modal && [modal.x, modal.y, modal.width, modal.height],
       focus: card.contains(document.activeElement) || Boolean(document.activeElement.closest('.example-toolbar')),
       closeOutline: getComputedStyle(card.querySelector('.driver-popover-close-btn')).outlineStyle };
-  });
+    if (targeted && (!state.targetBox || !state.ring || state.target === 'driver-dummy-element')) return false;
+    if (targeted && state.ring.some((value, index) => Math.abs(value - (state.targetBox[index] + (index < 2 ? -7 - state.layerOffset[index] : 14))) >= 1)) return false;
+    return state;
+  }, { id: item.id, targeted: Boolean(item.target) }, { timeout: 5000 });
+  const state = await handle.jsonValue();
+  await handle.dispose();
   assert.equal(state.hint, false, item.id);
   const [x, y, w, h] = state.card;
   assert.ok(x >= 0 && y >= 0 && x + w <= size.width + 1 && y + h <= size.height + 1, `${item.id}: ${JSON.stringify(state)}`);
@@ -185,9 +195,10 @@ async function assertStep(frame, item, size) {
     assert.ok(x >= mx - 1 && y >= my - 1 && x + w <= mx + mw + 1 && y + h <= my + mh + 1,
       `${item.id} card stays inside its dialog: ${JSON.stringify(state)}`);
   }
-  // Narrow WebKit suppresses scripted button focus before user activation.
+  // WebKit can suppress scripted focus in a newly inserted opaque frame before
+  // user activation, on desktop as well as touch layouts.
   // Require genuine keyboard entry and a working focus cycle in that case.
-  if (!state.focus && browserName === 'webkit' && size.width <= 760) {
+  if (!state.focus && browserName === 'webkit') {
     assert.equal(await frame.evaluate(() => document.activeElement === document.body), true);
     await frame.page().keyboard.press('Tab');
     state.focus = await frame.evaluate(() => Boolean(document.activeElement.closest('.onboarding-popover')));
@@ -213,7 +224,13 @@ async function walk(page, frame, topic, prefix) {
   for (let index = 0; index < steps.length; index++) {
     if (process.env.ONBOARDING_DEBUG) console.log(`  ${topic}/${steps[index].id}`);
     try { await assertStep(frame, steps[index], size); }
-    catch (error) { await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}-failure.png` }); error.message = `${prefix} ${topic}/${steps[index].id}: ${error.message}`; throw error; }
+    catch (error) { await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}-failure.png` });
+      if (process.env.ONBOARDING_DEBUG) console.log('Failed target', await frame.evaluate(selector => {
+        const node = selector ? document.querySelector(selector) : document.body, ancestors = [];
+        for (let parent = node?.parentElement; parent; parent = parent.parentElement) ancestors.push({ id: parent.id, tag: parent.tagName, hidden: parent.hidden, rect: parent.getBoundingClientRect().toJSON(), overflow: getComputedStyle(parent).overflow, scroll: parent.scrollTop });
+        return { target: node?.getBoundingClientRect().toJSON(), ancestors };
+      }, steps[index].target));
+      error.message = `${prefix} ${topic}/${steps[index].id}: ${error.message}`; throw error; }
     if (['welcome', 'create-conversation', 'model', 'answer', 'upload', 'roles', 'invite', 'enable', 'original'].includes(steps[index].id)) await page.screenshot({ path: `${artifacts}/${prefix}-${topic}-${steps[index].id}.png` });
     if (layout === 'mobile' && index === 1) {
       await frame.locator('.driver-popover-prev-btn').click();
@@ -252,6 +269,7 @@ try {
     { locale: 'zh-CN', width: 1024, height: 768, mobile: true },
   ].filter(options => !process.env.ONBOARDING_WIDTH || options.width === Number(process.env.ONBOARDING_WIDTH))) {
     console.log(`${browserName}: checking ${options.locale} ${options.width}×${options.height}${options.empty ? ' empty' : ''}${options.viewer ? ' viewer' : ''}`);
+    checkedCases.push(`${options.locale} ${options.width}×${options.height}`);
     const { page, context, frame } = await launchPage(options);
     const prefix = `${options.locale}-${options.width}`;
     await walk(page, frame, 'basics', prefix);
@@ -282,6 +300,27 @@ try {
   await frame.getByText('Temporary change', { exact: true }).waitFor();
   await frame.locator('.example-toolbar button').nth(1).click();
   let fresh = await example(page); assert.equal(await fresh.getByText('Temporary change', { exact: true }).count(), 0);
+  await fresh.locator('#example-project-open').evaluate(node => node.addEventListener('click', () => {
+    window.exampleResultReturnFocus = document.activeElement;
+  }, { capture: true, once: true }));
+  await fresh.locator('#example-project-open').click();
+  const result = fresh.frameLocator('#example-project-frame');
+  await result.locator('#signup').click();
+  assert.equal(await result.locator('#confirmation').innerText(), 'You’re signed up.');
+  assert.equal(await result.locator('#signup').isDisabled(), true);
+  await fresh.locator('#example-files-tab').click();
+  assert.equal(await fresh.locator('#example-file-list button').count(), 6);
+  assert.match(await fresh.locator('#example-source-code').innerText(), /addEventListener\('click'/);
+  await fresh.locator('#example-project-version').selectOption('branch-maya');
+  await fresh.waitForFunction(() => document.getElementById('example-source-code').textContent.includes('See you Saturday'));
+  await fresh.locator('#example-preview-tab').click();
+  await result.locator('#signup').click();
+  assert.equal(await result.locator('#confirmation').innerText(), 'You’re signed up! See you Saturday.');
+  await fresh.locator('#example-project-close').click();
+  await fresh.locator('#example-project-dialog[open]').waitFor({ state: 'hidden' });
+  // Native close queues its event after removing the open attribute.
+  await fresh.waitForFunction(() => document.activeElement === window.exampleResultReturnFocus, null, { timeout: 3000 });
+  assert.equal(await fresh.evaluate(() => document.activeElement === window.exampleResultReturnFocus), true, 'closing result restores the actual previous focus in each browser');
   // In-example language preview/cancel/save retains practice and stays local.
   await fresh.locator('#message-input').fill('Keep this practice message');
   await fresh.locator('#send-chat-button').click();
@@ -290,25 +329,14 @@ try {
   await fresh.locator('#settings-button').click();
   await fresh.locator('#settings-locale').selectOption('zh-CN');
   await fresh.getByText('Keep this practice message', { exact: true }).waitFor();
-  assert.match(await fresh.locator('.example-toolbar').innerText(), /自由浏览/);
+  assert.equal(await fresh.locator('.example-toolbar select option').first().textContent(), '自由浏览');
   assert.match(await fresh.locator('#event-timeline').innerText(), /林悦/);
   assert.equal(await fresh.locator('#current-username').innerText(), '陈晓');
   assert.match(await fresh.locator('#member-list').innerText(), /林悦/);
   assert.equal(await page.locator('html').getAttribute('lang'), 'en', 'sample language does not change real settings');
-  await fresh.evaluate(() => { window.exampleLastClick = ''; document.addEventListener('click', event => { window.exampleLastClick = event.target.id; }, true); });
   await fresh.locator('#cancel-settings-button').click();
   try { await fresh.locator('#settings-dialog[open]').waitFor({ state: 'hidden', timeout: 3000 }); }
-  catch (error) { await page.screenshot({ path: `${artifacts}/cancel-failure.png` }); console.error('Cancel interaction', await fresh.evaluate(() => {
-    const box = document.getElementById('cancel-settings-button').getBoundingClientRect();
-    return { click: window.exampleLastClick, classes: document.body.className,
-      hit: document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2)?.id,
-      box: [box.x, box.y, box.width, box.height],
-      step: document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready'), dialogs: [...document.querySelectorAll('dialog[open]')].map(node => node.id) }; })); throw error; }
-  if (process.env.ONBOARDING_DEBUG) console.log('cancel language state', await fresh.evaluate(() => ({ lang: document.documentElement.lang,
-    name: document.getElementById('current-username').textContent,
-    locale: JSON.parse(localStorage.getItem('gatherthread.settings.v1')).general.locale,
-    settingsOpen: document.getElementById('settings-dialog').open,
-    tour: document.querySelector('.onboarding-popover')?.getAttribute('data-onboarding-focus-ready') })));
+  catch (error) { await page.screenshot({ path: `${artifacts}/cancel-failure.png` }); throw error; }
   assert.equal(await fresh.locator('#current-username').innerText(), 'Alex', 'cancel restores authored language');
   await fresh.locator('#settings-button').click();
   await fresh.locator('#settings-locale').selectOption('zh-CN');
@@ -421,5 +449,5 @@ try {
   assert.equal(await page.locator('#session-context-details .session-context-panel').count(), 1, 'logout restores panel ownership');
   await context.close();
   assert.deepEqual(errors, []);
-  console.log(`${browserName}: full guides on populated, empty and viewer accounts; isolated free practice; 1440/390/320 layouts, focus, ring geometry, privacy, toolbar, reset and language passed.`);
+  console.log(`${browserName}: ${checkedCases.length ? `all guides at ${checkedCases.join('; ')}` : 'result and toolbar checks'}; isolated practice, focus, ring geometry, privacy, reset and language passed.`);
 } finally { if (errors.length) console.error('Example page errors:', errors); await browser.close(); }

@@ -1,4 +1,5 @@
 import { GUIDE_LABELS, createOnboardingProgress, guideText, onboardingKey } from './onboarding-content.js?v=20261012-content-1';
+import { mountExampleProject } from './example-project-view.js';
 
 // A sandboxed, opaque-origin document runs its own in-memory application.
 // Only presentation and an authored topic cross this boundary, never user data.
@@ -96,4 +97,3 @@ export function exampleToolbar(doc, { cancel, onExit, api }) {
   } };
 
 }
-import { mountExampleProject } from './example-project-view.js';
