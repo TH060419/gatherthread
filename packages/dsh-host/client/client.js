@@ -35,8 +35,21 @@ function GatherThreadStatusPanel({ connection, sessions }) {
   const [provider, setProvider] = React.useState("");
   const [model, setModel] = React.useState("");
   const visibleSessionSignature = React.useRef("");
-  /** Last recovery state the poll observed, so a revoked route is edge-triggered. */
+  /** Recovery observed from both status polls and action responses. */
   const lastRecoverableError = React.useRef(undefined);
+
+  const observeRouteRecovery = (next, configureResponse = false) => {
+    const recovery = next?.recoverableError;
+    // A failed configure is a new revoked choice even if the error code has not
+    // changed. Steady polls must leave an operator's new selection alone.
+    if (recovery === "route_unavailable"
+      && (configureResponse || lastRecoverableError.current !== "route_unavailable")) {
+      setCatalog(undefined);
+      setProvider("");
+      setModel("");
+    }
+    lastRecoverableError.current = recovery;
+  };
 
   React.useEffect(() => {
     let disposed = false;
@@ -62,20 +75,7 @@ function GatherThreadStatusPanel({ connection, sessions }) {
           }
           setSnapshot(result.snapshot);
           setNativeState(result.nativeState);
-          // A revoked route is a transition, not a steady state. The catalog and
-          // the provider/model selection are both held from the route the harness
-          // has since dropped, so they are discarded once, on the edge: the panel
-          // must read the harness's current catalog and be chosen from again
-          // rather than re-offering a model that is gone. Clearing on every poll
-          // would instead wipe the selection an operator is making right now,
-          // because the state stays revoked until a new route is confirmed.
-          const recovery = result.nativeState?.recoverableError;
-          if (recovery === "route_unavailable" && lastRecoverableError.current !== "route_unavailable") {
-            setCatalog(undefined);
-            setProvider("");
-            setModel("");
-          }
-          lastRecoverableError.current = recovery;
+          observeRouteRecovery(result.nativeState);
           setUnavailable(false);
           timer = setTimeout(refresh, POLL_INTERVAL_MS);
         }
@@ -111,10 +111,12 @@ function GatherThreadStatusPanel({ connection, sessions }) {
       const next = endpoint === "catalog/get" ? parseCatalog(value) : parseNativeState(value);
       if (endpoint === "catalog/get") {
         setCatalog(next);
-        const firstProvider = next.providers[0];
-        setProvider((current) => current || firstProvider?.id || "");
-        setModel((current) => current || firstProvider?.models[0]?.id || "");
+        const selectedProvider = next.providers.find((entry) => entry.id === provider) ?? next.providers[0];
+        setProvider(selectedProvider?.id ?? "");
+        setModel((current) => selectedProvider?.models.some((entry) => entry.id === current)
+          ? current : selectedProvider?.models[0]?.id ?? "");
       } else {
+        observeRouteRecovery(next, endpoint === "connection/configure");
         setNativeState(next);
         setSnapshot(next.runtime);
         if (endpoint === "connection/configure") await sessions.refresh();
@@ -452,8 +454,9 @@ function renderNativeControls(input) {
     );
   } else if (state.route === undefined) {
     const providers = input.catalog?.providers ?? [];
-    const selectedProvider = providers.find((entry) => entry.id === input.provider) ?? providers[0];
+    const selectedProvider = providers.find((entry) => entry.id === input.provider);
     const models = selectedProvider?.models ?? [];
+    const validSelection = models.some((entry) => entry.id === input.model);
     controls.push(
       connectionSummary(state),
       // Reaching this branch means authorization is already "paired": the
@@ -481,6 +484,7 @@ function renderNativeControls(input) {
           style: styles.form,
           onSubmit: (event) => {
             event.preventDefault();
+            if (input.busy || !validSelection) return;
             void input.runAction("connection/configure", {
               provider: input.provider,
               model: input.model,
@@ -509,7 +513,7 @@ function renderNativeControls(input) {
         )),
         React.createElement("button", {
           type: "submit",
-          disabled: input.busy || !input.provider || !input.model,
+          disabled: input.busy || !validSelection,
           style: styles.primaryButton,
         }, input.busy ? "正在连接…" : "连接全部可访问项目")),
       disconnectButton(input),
