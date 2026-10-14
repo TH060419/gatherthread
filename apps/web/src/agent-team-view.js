@@ -37,6 +37,13 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
 
   function emptyPlan() { return { name: t("My team"), team_prompt: "", nodes: [], edges: [] }; }
   function raw(node, value) { node.setAttribute("data-i18n-skip", ""); node.textContent = value; }
+  function symbol(paths) {
+    const svg = doc.createElementNS(SVG, "svg");
+    svg.setAttribute("class", "team-symbol"); svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true"); svg.setAttribute("focusable", "false");
+    for (const data of paths) { const path = doc.createElementNS(SVG, "path"); path.setAttribute("d", data); svg.append(path); }
+    return svg;
+  }
   function status(value) { text(el("status"), value); }
   function error(value) { text(el("error"), value); }
   function stoppedPolling() { clearTimeout(poll); poll = null; }
@@ -129,7 +136,7 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
       const source = shown.nodes.find(node => node.id === edge.source), target = shown.nodes.find(node => node.id === edge.target);
       const li = doc.createElement("li"), label = doc.createElement("span"), button = doc.createElement("button");
       raw(label, `${source?.label ?? "?"} ${edge.direction === "bidirectional" ? "↔" : "→"} ${target?.label ?? "?"}`);
-      button.type = "button"; button.className = "icon-button"; button.textContent = "×";
+      button.type = "button"; button.className = "icon-button team-edge-remove"; button.append(symbol(["m7 7 10 10M17 7 7 17"]));
       button.setAttribute("aria-label", `${t("Remove connection")}: ${source?.label} ${edge.direction === "bidirectional" ? "↔" : "→"} ${target?.label}`);
       button.disabled = locked() || !getContext()?.writable;
       button.addEventListener("click", () => { if (locked() || !getContext()?.writable) return; plan.edges = plan.edges.filter(candidate => candidate.id !== edge.id); markDirty(); renderGraph(); });
@@ -148,7 +155,7 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
       const header = doc.createElement("button"), label = doc.createElement("span"), tag = doc.createElement("span");
       header.type = "button"; header.className = "team-node-header";
       header.setAttribute("aria-label", `${t("Select and move Agent")}: ${node.label}`);
-      label.className = "team-node-label"; raw(label, node.label); tag.className = "team-node-entry";
+      label.className = "team-node-label"; raw(label, node.label); label.setAttribute("title", node.label); tag.className = "team-node-entry";
       if (visibleEntry() === node.id) text(tag, "First Agent"); header.append(label, tag);
       header.addEventListener("click", () => selectNode(node.id));
       header.addEventListener("pointerdown", event => {
@@ -166,12 +173,16 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
       });
       const model = doc.createElement("span"), role = doc.createElement("span"), available = doc.createElement("span");
       model.className = "team-node-model"; raw(model, `${node.target.harness === "deepseek-harness" ? "DSH" : node.target.kind === "cloud" ? "Cloud" : "Codex"} · ${node.target.model}`);
+      model.setAttribute("title", model.textContent);
       role.className = "team-node-role"; if (node.role) raw(role, node.role); else text(role, "Choose a role in the inspector");
+      role.setAttribute("title", node.role || t("Choose a role in the inspector"));
       available.className = "team-node-availability";
-      text(available, choices.find(choice => choice.key === teamTargetKey(node.target))?.available ? "Available" : "Unavailable");
+      const isAvailable = choices.find(choice => choice.key === teamTargetKey(node.target))?.available === true;
+      available.dataset.available = String(isAvailable); text(available, isAvailable ? "Available" : "Unavailable");
       const input = doc.createElement("button"), output = doc.createElement("button");
       for (const [port, direction] of [[input, "in"], [output, "out"]]) {
-        port.type = "button"; port.className = `team-port team-port-${direction}`; port.textContent = direction === "in" ? "•" : "＋";
+        port.type = "button"; port.className = `team-port team-port-${direction}`;
+        port.append(symbol([direction === "in" ? "M12 12h.01" : "M6 12h12M12 6v12"]));
         port.setAttribute("aria-label", `${t(direction === "in" ? "Connect to this Agent" : "Delegate from this Agent")}: ${node.label}`);
         port.disabled = locked() || !getContext()?.writable;
       }
@@ -244,6 +255,8 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
   }
   function renderRun() {
     text(el("run-status"), teamRunLabel(run)); text(el("overview-status"), teamRunLabel(run));
+    if (viewingRun && run && !controlAttempt) status(teamRunLabel(run));
+    el("overview-status").dataset.status = run?.status ?? "idle";
     const explanation = teamFailureMessage(run?.error_code); el("failure-note").hidden = !explanation;
     text(el("failure-note"), explanation ?? ""); el("run-budget").textContent = "";
     if (run) {
@@ -257,13 +270,17 @@ export function mountAgentTeams({ document: doc = document, api, localizer, getC
     for (const id of ["pause", "resume", "stop", "continue"]) el(id).hidden = !controls[id];
     el("run-note").hidden = !run || terminal(run);
     el("step-list").replaceChildren();
-    for (const step of run?.steps ?? []) {
-      const li = doc.createElement("li"), label = doc.createElement("span"); raw(label, step.node_label);
+    for (const [index, step] of (run?.steps ?? []).entries()) {
+      const li = doc.createElement("li"), label = doc.createElement("span"), badge = doc.createElement("span"), number = doc.createElement("span");
+      number.className = "team-step-number"; number.setAttribute("aria-hidden", "true"); raw(number, String(index + 1));
+      li.className = "team-step"; label.className = "team-step-name"; raw(label, step.node_label);
       const stepStatus = ["pending", "running"].includes(step.status) && run.status === "stopped" ? "Stopped"
         : ["pending", "running"].includes(step.status) && run.status === "paused" ? "Paused" : null;
-      li.append(label, doc.createTextNode(` · ${t(stepStatus ?? { pending: "Queued", queued: "Queued", running: "Working", completed: "Completed", failed: "Failed", paused: "Paused", timed_out: "Timed out", stopped: "Stopped", waiting: "Waiting" }[step.status] ?? step.status)}`));
+      badge.className = "team-step-status"; badge.dataset.status = stepStatus === "Stopped" ? "stopped" : stepStatus === "Paused" ? "paused" : step.status;
+      text(badge, stepStatus ?? { pending: "Queued", queued: "Queued", running: "Working", completed: "Completed", failed: "Failed", paused: "Paused", timed_out: "Timed out", stopped: "Stopped", waiting: "Waiting" }[step.status] ?? step.status);
+      li.append(number, label, badge);
       const eventId = step.response_event_id ?? step.request_event_id;
-      if (eventId) { const button = doc.createElement("button"); button.type = "button"; button.className = "text-button"; text(button, "View message"); button.addEventListener("click", () => { dialog.close(); onNavigateEvent(eventId); }); li.append(doc.createTextNode(" · "), button); }
+      if (eventId) { const button = doc.createElement("button"); button.type = "button"; button.className = "text-button team-step-link"; text(button, "View message"); button.addEventListener("click", () => { dialog.close(); onNavigateEvent(eventId); }); li.append(button); }
       el("step-list").append(li);
     }
     renderControls();

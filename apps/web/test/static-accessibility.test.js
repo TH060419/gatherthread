@@ -196,8 +196,9 @@ test("the shell exposes landmarks, labelled forms, status regions, and separate 
   }
   assert.match(html, /value="pronounced">Pronounced</);
   assert.doesNotMatch(html, /Subtle · recommended/);
-  assert.equal((html.match(/brand\/lockup-color-transparent-light\.svg/g) ?? []).length, 3);
-  assert.equal((html.match(/brand\/lockup-color-transparent-dark\.svg/g) ?? []).length, 3);
+  // The private team dialog uses the same approved theme-aware lockup as the shell.
+  assert.equal((html.match(/brand\/lockup-color-transparent-light\.svg/g) ?? []).length, 4);
+  assert.equal((html.match(/brand\/lockup-color-transparent-dark\.svg/g) ?? []).length, 4);
   assert.match(html, /M72 66 C210 62 218 190 356 194 C438 196 442 300 525 314/);
   assert.match(html, /M38 442 C176 438 225 338 350 336 C430 335 462 324 525 314/);
   assert.match(html, /M166 560 C254 470 283 434 376 390 C444 358 474 326 525 314/);

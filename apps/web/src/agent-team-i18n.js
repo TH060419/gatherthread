@@ -4,6 +4,7 @@ export const AGENT_TEAM_ZH_CN = Object.freeze({
   "People choose. Agents work together.": "你来配置，Agent 协同工作。",
   "Connect your own Agents, give each a role, then start one bounded task.": "连接自己的 Agent，设置分工，再启动有次数和时长上限的任务。",
   "Close Agent team": "关闭 Agent 团队",
+  "Close team": "关闭团队",
   "Team graph editor": "团队连线编辑器",
   "Team name": "团队名称",
   "Team instructions": "全队指令",

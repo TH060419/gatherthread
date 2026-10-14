@@ -641,7 +641,11 @@
 
     <dialog id="agent-team-dialog" class="create-dialog agent-team-dialog" aria-labelledby="agent-team-title" aria-describedby="agent-team-description">
       <header class="team-heading">
-        <div><p class="eyebrow">People choose. Agents work together.</p><h2 id="agent-team-title">Agent team</h2><p id="agent-team-description">Connect your own Agents, give each a role, then start one bounded task.</p>
+        <div class="team-heading-content"><div class="team-brand" aria-label="GatherThread">
+            <img class="brand-lockup-image brand-lockup-image-light" src="brand/lockup-color-transparent-light.svg" alt="" width="188" height="32" />
+            <img class="brand-lockup-image brand-lockup-image-dark" src="brand/lockup-color-transparent-dark.svg" alt="" width="188" height="32" />
+            <img class="team-brand-mark" src="../assets/mark-color-transparent-light.svg" alt="" width="28" height="24" />
+          </div><h2 id="agent-team-title">Agent team</h2><p id="agent-team-description">Connect your own Agents, give each a role, then start one bounded task.</p>
           <div id="agent-team-overview" class="team-overview" role="region" aria-label="Current team task" hidden>
             <div class="team-overview-summary"><strong id="agent-team-overview-status" role="status"></strong><span id="agent-team-overview-budget" data-i18n-skip></span><span id="agent-team-overview-current" data-i18n-skip></span></div>
             <button id="agent-team-edit" class="button button-secondary compact-button" type="button" hidden>Edit my team</button>
@@ -650,7 +654,7 @@
             <p id="agent-team-control-note" class="team-help" role="status" hidden>The last action is not confirmed. Check it before starting another action; this does not repeat Agent execution.</p>
           </div>
         </div>
-        <button id="agent-team-close" class="icon-button" type="button" aria-label="Close Agent team">×</button>
+        <button id="agent-team-close" class="icon-button" type="button" aria-label="Close Agent team"><svg class="team-symbol" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m7 7 10 10M17 7 7 17" /></svg></button>
       </header>
       <div class="team-layout">
         <section class="team-editor" aria-label="Team graph editor">
@@ -714,7 +718,7 @@
           </section>
         </aside>
       </div>
-      <footer class="team-footer"><p id="agent-team-error" class="form-error" role="alert"></p><p id="agent-team-status" role="status"></p><button id="agent-team-done" class="button button-secondary" type="button">Close</button></footer>
+      <footer class="team-footer"><p id="agent-team-error" class="form-error" role="alert"></p><p id="agent-team-status" role="status"></p><button id="agent-team-done" class="button button-secondary" type="button">Close team</button></footer>
     </dialog>
 
     <dialog id="project-code-dialog" class="create-dialog project-code-dialog" aria-labelledby="project-code-title" aria-describedby="project-code-description">
