@@ -766,7 +766,7 @@ test("Client paints the model dropdown and its option rows with an opaque themed
             authorization: "paired",
             serverUrl: "http://127.0.0.1:8787",
             deviceName: "DeepSeek Harness",
-            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
             runtime: {
               schemaVersion: 1,
               integration: "gatherthread",
