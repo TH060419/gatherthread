@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 interface Handoff {
   id: string;
@@ -72,7 +72,7 @@ async function loadClient(options: {
     URL,
     URLSearchParams,
   });
-  vm.runInContext(source, context, { filename: "gatherthread-dsh-client.js" });
+  vm.runInContext(source, context, { filename: pathToFileURL(path.join(packageRoot, "client", "client.js")).href });
   if (handoff === undefined) throw new Error("client bundle did not register");
   const plugin = handoff.factory((specifier) => {
     if (specifier !== "react") throw new Error(`unexpected client external: ${specifier}`);
