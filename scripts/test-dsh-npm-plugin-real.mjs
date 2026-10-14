@@ -290,9 +290,48 @@ async function startMockLlm(apiKey) {
     request.on("data", (chunk) => { body = boundedOutput(body, chunk); });
     request.on("end", () => {
       try {
-        assert.equal(request.headers.authorization, `Bearer ${apiKey}`);
-        assert.equal(request.url?.endsWith("/chat/completions"), true);
+        const pathname = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
         const parsed = JSON.parse(body);
+        if (pathname.endsWith("/messages")) {
+          // DSH 0.1.7 switched @deepseek-ai/dsh-llm-deepseek to the Anthropic
+          // Messages protocol: POST `/v1/messages`, `x-api-key` credential and
+          // `message_start`/`content_block_*`/`message_delta`/`message_stop`
+          // SSE events. `translate()` in the pinned adapter accepts exactly this
+          // sequence, and reasoning arrives as a signed `thinking` block so the
+          // private fixture text stays on the reasoning channel.
+          assert.equal(request.headers["x-api-key"], apiKey);
+          requests.push({ model: parsed.model, messages: parsed.messages });
+          response.writeHead(200, {
+            "content-type": "text/event-stream",
+            "cache-control": "no-store",
+            connection: "keep-alive",
+          });
+          const send = (payload) => response.write(`data: ${JSON.stringify(payload)}\n\n`);
+          send({ type: "message_start", message: {
+            id: `msg_${randomUUID()}`,
+            type: "message",
+            role: "assistant",
+            model: parsed.model,
+            content: [],
+            stop_reason: null,
+            stop_sequence: null,
+            usage: { input_tokens: 8, output_tokens: 0 },
+          } });
+          send({ type: "content_block_start", index: 0, content_block: { type: "thinking", thinking: "", signature: "" } });
+          send({ type: "content_block_delta", index: 0, delta: { type: "thinking_delta", thinking: "EXPOSED_NATIVE_THINKING" } });
+          send({ type: "content_block_delta", index: 0, delta: { type: "signature_delta", signature: "fixture-signature" } });
+          send({ type: "content_block_stop", index: 0 });
+          send({ type: "content_block_start", index: 1, content_block: { type: "text", text: "" } });
+          send({ type: "content_block_delta", index: 1, delta: { type: "text_delta", text: "WEB_DSH_FINAL" } });
+          send({ type: "content_block_stop", index: 1 });
+          send({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 2 } });
+          send({ type: "message_stop" });
+          response.end();
+          return;
+        }
+        // Legacy OpenAI chat-completions transport, kept for any non-0.1.7 pin.
+        assert.equal(request.headers.authorization, `Bearer ${apiKey}`);
+        assert.equal(pathname.endsWith("/chat/completions"), true);
         requests.push({ model: parsed.model, messages: parsed.messages });
         response.writeHead(200, {
           "content-type": "text/event-stream",
@@ -300,7 +339,7 @@ async function startMockLlm(apiKey) {
           connection: "keep-alive",
         });
         for (const payload of [
-          { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "PRIVATE_NPM_WEB_REASONING" }, finish_reason: null }] },
+          { choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "EXPOSED_NATIVE_THINKING" }, finish_reason: null }] },
           { choices: [{ index: 0, delta: { content: "WEB_DSH_FINAL" }, finish_reason: null }] },
           { choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 8, completion_tokens: 2 } },
         ]) response.write(`data: ${JSON.stringify(payload)}\n\n`);
@@ -411,11 +450,40 @@ async function readSessionEvents(origin, sessionId, token) {
   return result.data.events;
 }
 
+/**
+ * Read the open acknowledgement to its end so its control enables itself.
+ *
+ * DSH 0.1.7 gates the first-run notice behind reading it: the button ships
+ * `disabled` and only enables once the body has been scrolled to the bottom.
+ * Scroll the real scrollable regions inside the dialog and let the control
+ * decide; a forced click on a disabled control would be a lie about what the
+ * operator or the product actually did.
+ *
+ * @returns whether the dialog was found and scrolled.
+ */
+async function readNoticeToEnd(page) {
+  const dialog = page.locator('div[role="dialog"][aria-modal="true"]').last();
+  if (await dialog.count() === 0) return false;
+  await dialog.evaluate((node) => {
+    for (const element of [node, ...node.querySelectorAll("*")]) {
+      if (element.scrollHeight > element.clientHeight + 1) element.scrollTop = element.scrollHeight;
+    }
+  }).catch(() => undefined);
+  await page.waitForTimeout(200);
+  return true;
+}
+
 async function dismissOnboarding(page) {
   await page.waitForTimeout(800);
   for (let attempt = 0; attempt < 4; attempt += 1) {
     const button = page.getByRole("button", { name: /^(继续|Continue|稍后配置|Configure later)$/u }).first();
     if (await button.count() === 0 || !await button.isVisible()) break;
+    if (await button.isDisabled()) {
+      await readNoticeToEnd(page);
+      // Still disabled means this dialog is not one this fixture can
+      // acknowledge; fall through to the Escape path instead of forcing it.
+      if (!await button.isEnabled().catch(() => false)) break;
+    }
     await button.click();
     await page.waitForTimeout(400);
   }
@@ -636,7 +704,7 @@ async function main() {
     assert.equal(rpcPayload.result?.value?.authorization, "unpaired");
     assert.deepEqual(rpcPayload.result?.value?.compatibility, {
       package: "@deepseek-ai/dsh",
-      version: "0.1.2-rc.1",
+      version: "0.1.7-rc.2",
       profile: "web",
     });
     process.stderr.write("DSH gate: authenticated RPC verified; starting browser\n");
@@ -691,7 +759,7 @@ async function main() {
     await panel.getByRole("button", { name: "选择 DSH 模型", exact: true }).waitFor({ timeout: 30_000 });
     await panel.getByRole("button", { name: "选择 DSH 模型", exact: true }).click();
     await panel.getByLabel("DSH Provider").selectOption("deepseek-official");
-    await panel.getByLabel("DSH Model").selectOption("deepseek-v4-flash");
+    await panel.getByLabel("DSH Model").selectOption("deepseek-flash");
     await panel.getByRole("button", { name: "连接全部可访问项目", exact: true }).click();
     await panel.getByText("2 个可访问项目", { exact: true }).waitFor({ timeout: 30_000 });
     await panel.getByText(
@@ -699,17 +767,48 @@ async function main() {
       { exact: true },
     ).waitFor({ timeout: 30_000 });
 
-    let selectedRuntime = await waitUntil("published DSH runtime registration", async () => {
-      const result = await requestData(
+    /**
+     * Report which stage a failed registration reached, without echoing the run.
+     *
+     * Everything here is a contract value the product already publishes: the
+     * server's own runtime listing for this Session, the panel's fixed connection
+     * attribute, and which of the panel's fixed notices is on screen. Child output
+     * is deliberately not reproduced, because it carries the one-use launch token
+     * and private paths; a stage is what an operator needs, not a transcript.
+     */
+    const reportDshStage = async () => {
+      const runs = await requestData(
         collaboration.origin,
         "/v1/sessions/dsh-npm-real-session/runtimes",
         { token: owner.token },
-      );
-      return result.data.runtimes.find((runtime) => runtime.harness === "deepseek-harness"
-        && runtime.provider === "deepseek-official"
-        && runtime.model === "deepseek-v4-flash"
-        && runtime.status === "online");
-    });
+      ).catch(() => undefined);
+      const registered = (runs?.data?.runtimes ?? []).map((runtime) =>
+        `${runtime.harness}:${runtime.provider}/${runtime.model}/${runtime.status}`);
+      const panelState = await panel.getAttribute("data-gatherthread-status").catch(() => null) ?? "none";
+      const panelText = await panel.innerText().catch(() => "");
+      const notices = ["状态暂不可用", "DSH 当前已不再提供", "操作未完成", "选择 DSH 模型", "连接全部可访问项目"]
+        .filter((notice) => panelText.includes(notice));
+      const sessionEvents = await readSessionEvents(collaboration.origin, "dsh-npm-real-session", owner.token).catch(() => []);
+      const kinds = [...new Set(sessionEvents.map((event) => event.type))].join("|");
+      process.stderr.write(`DSH stage: panel=${panelState} registered=[${registered.join(", ")}] modelRequests=${String(mockLlm?.requests?.length ?? 0)} events=[${kinds}] notices=[${notices.join("|")}]\n`);
+    };
+    let selectedRuntime;
+    try {
+      selectedRuntime = await waitUntil("published DSH runtime registration", async () => {
+        const result = await requestData(
+          collaboration.origin,
+          "/v1/sessions/dsh-npm-real-session/runtimes",
+          { token: owner.token },
+        );
+        return result.data.runtimes.find((runtime) => runtime.harness === "deepseek-harness"
+          && runtime.provider === "deepseek-official"
+          && runtime.model === "deepseek-flash"
+          && runtime.status === "online");
+      });
+    } catch (error) {
+      await reportDshStage();
+      throw error;
+    }
     await waitUntil("second Project DSH runtime registration", async () => {
       const result = await requestData(
         collaboration.origin,
@@ -718,7 +817,7 @@ async function main() {
       );
       return result.data.runtimes.find((runtime) => runtime.harness === "deepseek-harness"
         && runtime.provider === "deepseek-official"
-        && runtime.model === "deepseek-v4-flash"
+        && runtime.model === "deepseek-flash"
         && runtime.status === "online");
     });
 
@@ -740,11 +839,43 @@ async function main() {
     assert.match(secondWorkspaceText, /DSH npm second session · 共序 · MULTI/u, secondWorkspaceText);
     assert.equal(mockLlm.requests.length, 0, "passive long-history projection must not invoke a model or compactor");
 
-    await page.locator('button[aria-label="新建会话"]:visible').first().click();
+    // DSH 0.1.7 turns a workspace title into a disclosure toggle, and the global
+    // "新建会话" control now opens a Session in whatever workspace is current —
+    // which is DSH's startup default workspace, not the project just browsed.
+    // Each project row owns an explicit per-workspace create control that passes
+    // its workspace id, so the native Session is born in the second project's
+    // workspace and is discoverable for cloud adoption.
+    await page
+      .locator('button[aria-label*="DSH npm second project"][aria-label*="新建会话"]:visible')
+      .first()
+      .click();
     const nativeComposer = page.locator('[contenteditable="true"][data-placeholder]:visible').first();
+    const nativeSend = page.getByRole("button", { name: "发送消息", exact: true });
     await nativeComposer.waitFor({ timeout: 30_000 });
-    await nativeComposer.fill("DSH_NATIVE_REQUEST");
-    await page.getByRole("button", { name: "发送消息", exact: true }).click();
+    // Creating a Session navigates the main view: the composer of the previous
+    // Session lingers briefly, then a fresh one mounts for the new Session. A
+    // draft typed into the outgoing editor is dropped, leaving the new send
+    // control disabled. Require the draft to persist in the live composer and
+    // the send control to stay enabled across consecutive polls before clicking
+    // it unforced, so the request is typed into the Session that is actually open.
+    let draftStablePolls = 0;
+    await waitUntil("native composer holds the request draft", async () => {
+      const composer = page.locator('[contenteditable="true"][data-placeholder]:visible').first();
+      if (await composer.count() === 0) {
+        draftStablePolls = 0;
+        return false;
+      }
+      const text = await composer.evaluate((node) => node.textContent ?? "").catch(() => "");
+      if (text.trim() !== "DSH_NATIVE_REQUEST") {
+        await composer.fill("DSH_NATIVE_REQUEST").catch(() => undefined);
+        draftStablePolls = 0;
+        return false;
+      }
+      const enabled = await nativeSend.isEnabled().catch(() => false);
+      draftStablePolls = enabled ? draftStablePolls + 1 : 0;
+      return draftStablePolls >= 8;
+    }, 45_000);
+    await nativeSend.click();
     await page.locator("p", { hasText: /^WEB_DSH_FINAL$/u }).first().waitFor({ timeout: 60_000 });
 
     let lastNativeAdoptionPoll = 0;
@@ -765,7 +896,24 @@ async function main() {
         && event.reply_to_event_id === request.id
         && event.payload?.text === "WEB_DSH_FINAL");
       return response ? { candidate, events } : undefined;
-    }, 60_000);
+    }, 60_000).catch(async (error) => {
+      const listed = await requestData(
+        collaboration.origin,
+        "/v1/projects/dsh-npm-real-project-2/sessions",
+        { token: owner.token },
+      ).catch(() => undefined);
+      const sessions = listed?.data?.sessions ?? [];
+      process.stderr.write(`ADOPT-DIAG sessions=${JSON.stringify(sessions.map((session) => session.id))}\n`);
+      for (const session of sessions) {
+        const events = await readSessionEvents(collaboration.origin, session.id, owner.token).catch(() => []);
+        process.stderr.write(`ADOPT-DIAG session=${session.id} events=${JSON.stringify(events.map((event) => ({
+          type: event.type,
+          content: event.payload?.content,
+          text: event.payload?.text,
+        }))).slice(0, 4000)}\n`);
+      }
+      throw error;
+    });
     assert.equal(adoptedNative.candidate.mode, "solo");
     assert.equal(adoptedNative.candidate.owner_user_id, "dsh-npm-real-owner");
     await page.waitForTimeout(1_000);
@@ -802,7 +950,35 @@ async function main() {
     await gatherthreadPage.locator("#settings-enabled-dsh").check();
     await gatherthreadPage.locator("#settings-dialog button[type='submit']").click();
     await gatherthreadPage.locator("#settings-dialog").waitFor({ state: "hidden", timeout: 30_000 });
-    await gatherthreadPage.locator("#agent-harness-select").selectOption("deepseek-harness");
+    // Agent, model and reasoning now live in one dialog on every screen, so the
+    // composer's own controls are reachable only after it is opened.
+    const probeHarnessControl = async () => {
+      const report = await gatherthreadPage.evaluate(() => {
+        const select = document.querySelector("#agent-harness-select");
+        const dialog = select instanceof Element ? select.closest("dialog") : null;
+        const style = select instanceof Element ? getComputedStyle(select) : undefined;
+        return {
+          options: select instanceof HTMLSelectElement ? [...select.options].map((option) => option.value) : [],
+          closestDialog: dialog?.id ?? null,
+          closestDialogOpen: dialog?.hasAttribute("open") ?? null,
+          agentDialogOpen: document.querySelector("#mobile-agent-dialog")?.hasAttribute("open") ?? null,
+          parentId: select?.parentElement?.id ?? null,
+          display: style?.display ?? null,
+          visibility: style?.visibility ?? null,
+          height: select?.getBoundingClientRect().height ?? null,
+          buttonHeight: document.querySelector("#mobile-agent-button")?.getBoundingClientRect().height ?? null,
+        };
+      });
+      process.stderr.write(`DSH stage: harness-control=${JSON.stringify(report)}\n`);
+    };
+    await gatherthreadPage.locator("#mobile-agent-button").click();
+    await gatherthreadPage.locator("#mobile-agent-dialog[open]").waitFor({ timeout: 30_000 });
+    try {
+      await gatherthreadPage.locator("#agent-harness-select").selectOption("deepseek-harness");
+    } catch (error) {
+      await probeHarnessControl();
+      throw error;
+    }
     const webRuntimeId = await waitUntil("Web-visible DSH runtime", async () => {
       return gatherthreadPage.locator("#agent-dsh-runtime-select").evaluate((element) => {
         if (!(element instanceof HTMLSelectElement)) return undefined;
@@ -824,9 +1000,31 @@ async function main() {
       activeWebSessionId = match.sessionId;
     }
     await gatherthreadPage.locator("#agent-dsh-runtime-select").selectOption(webRuntimeId);
+    await gatherthreadPage.locator("#mobile-agent-dialog [data-mobile-close]").click();
+    await gatherthreadPage.locator("#mobile-agent-dialog[open]").waitFor({ state: "hidden", timeout: 30_000 });
     await gatherthreadPage.locator("#message-input").fill("WEB_DSH_REQUEST");
     await gatherthreadPage.locator("#send-agent-button").click();
-    await gatherthreadPage.getByText("WEB_DSH_FINAL", { exact: true }).waitFor({ timeout: 60_000 });
+    try {
+      // The answer appears twice by design: once in the live work log, which
+      // folds once the request completes, and once as the final canonical
+      // message. Assert the one the reader can actually see rather than
+      // whichever copy the locator happens to reach first.
+      await gatherthreadPage.getByText("WEB_DSH_FINAL", { exact: true })
+        .filter({ visible: true }).first().waitFor({ timeout: 60_000 });
+    } catch (error) {
+      const rendered = await gatherthreadPage.evaluate(() => {
+        const matches = [];
+        for (const element of document.querySelectorAll("body *")) {
+          if (element.children.length === 0 && (element.textContent ?? "").includes("WEB_DSH")) {
+            matches.push({ tag: element.tagName, cls: String(element.className).slice(0, 60), text: (element.textContent ?? "").slice(0, 90) });
+          }
+        }
+        return { bodyHas: document.body.innerText.includes("WEB_DSH"), matches: matches.slice(0, 8) };
+      });
+      process.stderr.write(`DSH stage: render=${JSON.stringify(rendered)}\n`);
+      await reportDshStage();
+      throw error;
+    }
 
     const completed = await waitUntil("Web-selected DSH final", async () => {
       const events = await readSessionEvents(collaboration.origin, activeWebSessionId, owner.token);
@@ -840,7 +1038,7 @@ async function main() {
     assert.deepEqual(completed.request.payload.execution_profile, {
       harness: "deepseek-harness",
       provider: "deepseek-official",
-      model: "deepseek-v4-flash",
+      model: "deepseek-flash",
       reasoning_effort: "high",
       runtime_id: selectedRuntime.id,
     });
@@ -861,7 +1059,23 @@ async function main() {
     );
     assert.equal(new Set(outputs.map((event) => event.id)).size, outputs.length);
     assert.ok(outputs.every((event) => event.runtime_provenance?.runtime_id === selectedRuntime.id));
-    assert.equal(JSON.stringify(completed.events).includes("PRIVATE_NPM_WEB_REASONING"), false);
+    // ADR-0045, PRODUCT_SPEC and SECURITY.md share a claimed request's
+    // native-visible output, exposed thinking included; only *hidden* reasoning
+    // is excluded. DSH `0.1.7` surfaces the provider's thinking as a
+    // native-visible reasoning block, so the connector publishes it by design.
+    // The assertion that used to sit here demanded the opposite, which encoded
+    // the older chat-completions transport where the same text never reached a
+    // natively visible surface. Assert the contract, not the old transport.
+    assert.ok(
+      JSON.stringify(completed.events).includes("EXPOSED_NATIVE_THINKING"),
+      "native-exposed thinking must reach shared output through the bounded live-output allowlist",
+    );
+    // The boundary that is still real: none of this may enter canonical history.
+    assert.equal(
+      JSON.stringify(completed.events).includes(modelKey),
+      false,
+      "the model credential must never reach canonical history",
+    );
 
     await gatherthreadPage.reload({ waitUntil: "load" });
     await gatherthreadPage.locator("#workspace:not([hidden])").waitFor({ timeout: 30_000 });
@@ -873,9 +1087,15 @@ async function main() {
         && harness.value === "deepseek-harness"
         && runtime.value.length > 0;
     }, undefined, { timeout: 30_000 });
+    // The reload closes the dialog again, so the same controls are reached the
+    // same way.
+    await gatherthreadPage.locator("#mobile-agent-button").click();
+    await gatherthreadPage.locator("#mobile-agent-dialog[open]").waitFor({ timeout: 30_000 });
     await gatherthreadPage.locator("#agent-harness-select").selectOption("codex");
     assert.equal(await gatherthreadPage.locator("#codex-agent-profile-fields").isVisible(), true);
     assert.equal(await gatherthreadPage.locator("#dsh-agent-profile-fields").isVisible(), false);
+    await gatherthreadPage.locator("#mobile-agent-dialog [data-mobile-close]").click();
+    await gatherthreadPage.locator("#mobile-agent-dialog[open]").waitFor({ state: "hidden", timeout: 30_000 });
 
     const credentialPath = path.join(dshHome, ".credentials.yaml");
     const credentialText = await readFile(credentialPath, "utf8");
@@ -928,7 +1148,34 @@ async function main() {
     await gatherthreadPage.locator("#project-code-button").click();
     await gatherthreadPage.locator("#project-code-dialog[open]").waitFor({ timeout: 30_000 });
     assert.equal((await gatherthreadPage.locator("#code-project-name").textContent())?.trim(), "DSH npm real project");
-    await gatherthreadPage.locator("#code-enable-button").click();
+    // The dialog now opens on the GitHub provider; this flow drives GT Cloud, so
+    // select that panel before reaching its controls.
+    await gatherthreadPage.locator("#code-provider-gt-cloud").click();
+    try {
+      await gatherthreadPage.locator("#code-enable-button").click({ timeout: 30_000 });
+    } catch (error) {
+      const probe = await gatherthreadPage.evaluate(() => {
+        const button = document.querySelector("#code-enable-button");
+        const dialog = document.querySelector("#project-code-dialog");
+        const box = button?.getBoundingClientRect();
+        return {
+          repositoryStatus: document.querySelector("#code-repository-status")?.textContent ?? null,
+          codeError: document.querySelector("#code-error")?.textContent ?? null,
+          buttonDisabled: button?.disabled ?? null,
+          buttonHasHiddenAttribute: button?.hasAttribute("hidden") ?? null,
+          buttonRendered: button !== null && button.getClientRects().length > 0,
+          buttonHeight: box?.height ?? null,
+          buttonDisplay: button === null ? null : getComputedStyle(button).display,
+          buttonVisibility: button === null ? null : getComputedStyle(button).visibility,
+          sectionHiddenAttr: document.querySelector("#code-enable-section")?.hasAttribute("hidden") ?? null,
+          dialogOpenAttr: dialog?.hasAttribute("open") ?? null,
+          dialogDisplay: dialog === null ? null : getComputedStyle(dialog).display,
+          openDialogs: [...document.querySelectorAll("dialog[open]")].map((item) => item.id),
+        };
+      });
+      process.stderr.write(`DSH stage: code-dialog=${JSON.stringify(probe)}\n`);
+      throw error;
+    }
     await gatherthreadPage.locator("#code-confirm-accept").click();
     await gatherthreadPage.locator("#code-enabled-content").waitFor({ state: "visible", timeout: 30_000 });
     await nativeCodeControls.getByLabel("允许此 DSH 同步该项目代码", { exact: true }).click();
@@ -1041,7 +1288,7 @@ async function main() {
     process.stdout.write(`${JSON.stringify({
       passed: true,
       distribution: `${DSH_NPM_COMPATIBILITY.package}@${DSH_NPM_COMPATIBILITY.version}`,
-      command: "npx @deepseek-ai/dsh@0.1.2-rc.1 web",
+      command: "npx @deepseek-ai/dsh@0.1.7-rc.2 web",
       pluginMechanism: "dsh plugin --profile web add <package>",
       profile: "web",
       patchReloadFixture: startupFixture ? "startup" : "default",
@@ -1064,7 +1311,8 @@ async function main() {
     await stopDsh(host).catch(() => undefined);
     await collaboration?.close().catch(() => undefined);
     await mockLlm?.close().catch(() => undefined);
-    await rm(root, { recursive: true, force: true });
+    if (process.env.GATHERTHREAD_KEEP_TMP) process.stderr.write(`GATHERTHREAD_KEEP_TMP=${root}\n`);
+    else await rm(root, { recursive: true, force: true });
   }
 }
 

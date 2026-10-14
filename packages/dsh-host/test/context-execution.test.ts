@@ -56,8 +56,11 @@ function fixture(options: { preset?: boolean; workspacePath?: string; projection
           event = { type, seq: events.length, time: 1, data, ...options };
           if (options?.surfaceOp === "append") nodes.push(event.seq);
           else if (options?.surfaceOp?.op === "replace") {
-            const start = nodes.indexOf(options.surfaceOp.start);
-            const end = nodes.indexOf(options.surfaceOp.end);
+            // Mirrors the pinned DSH validator, which demands exactly the
+            // `op`/`startSeq`/`endSeq` triple and rejects the older spelling.
+            assert.deepEqual(Object.keys(options.surfaceOp).sort(), ["endSeq", "op", "startSeq"]);
+            const start = nodes.indexOf(options.surfaceOp.startSeq);
+            const end = nodes.indexOf(options.surfaceOp.endSeq);
             assert.ok(start >= 0 && end >= start);
             assert.deepEqual(options.sourceEventSeqs, nodes.slice(start, end + 1));
             nodes.splice(start, end - start + 1, event.seq);
@@ -86,7 +89,10 @@ function fixture(options: { preset?: boolean; workspacePath?: string; projection
         if (failPrompt) { failPrompt = false; throw new Error("simulated model failure"); }
       },
     };
-    Object.defineProperty(agent.ctx, "agent", { value: agent });
+    // The pinned DSH hands the unpublished Agent to `setup` as its second
+    // argument and does not expose it on the context, where reading it without an
+    // inject raises. The fixture models that, so a regression to the context read
+    // fails here instead of only against a real runtime.
     live.set(session.id, agent);
     return { agent, async dispose() { disposals += 1; live.delete(session.id); } };
   };
@@ -94,14 +100,14 @@ function fixture(options: { preset?: boolean; workspacePath?: string; projection
     agents: {
       get: (id: string) => live.get(id),
       async create(input: any) {
-        creates += 1; const handle = acquire(createSession(input.sessionId, input.meta)); await input.setup?.(handle.agent.ctx);
+        creates += 1; const handle = acquire(createSession(input.sessionId, input.meta)); await input.setup?.(handle.agent.ctx, handle.agent);
         if (input.sessionId.startsWith("gatherthread-projection-")) { projectionAcquired(); await options.projectionCreateGate; }
         return handle;
       },
       async resume(input: any) {
         const session = stored.get(input.resumeSessionId);
         if (!session) throw new Error("missing persisted session");
-        const handle = acquire(session); await input.setup?.(handle.agent.ctx); return handle;
+        const handle = acquire(session); await input.setup?.(handle.agent.ctx, handle.agent); return handle;
       },
     },
     sessionPersistence: { async stat(id: string) { return stored.has(id) ? { header: stored.get(id).header } : undefined; } },

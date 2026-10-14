@@ -7,10 +7,10 @@ installation, GatherThread does not load in DSH or alter the GatherThread
 server, Web app, Codex bridge, or Claude adapter.
 
 The normal path is the published `@deepseek-ai/dsh` CLI, not a DSH source
-checkout. The verified distribution is `@deepseek-ai/dsh@0.1.2-rc.1` with the
-`web` profile and its public `sessionPersistence.list` recovery surface. The
-earlier source-only PoC remains fixed to `dsh-v0.1.3-alpha.1`, commit
-`d347e703908d0406b7a7ef80e3a0e594d86b2215`, and is only an advanced diagnostic
+checkout. The verified distribution is `@deepseek-ai/dsh@0.1.7-rc.2` with the
+`web` profile and its public `sessionPersistence` recovery surface. The
+source-only path remains fixed to `dsh-v0.1.7-rc.2`, commit
+`477b4f420553e8a52c2fbccc464d7561b239c443`, and is only an advanced diagnostic
 fallback. All version-sensitive Host calls remain inside `src/dsh-compat.ts`.
 The package does not install a DSH runtime dependency.
 
@@ -19,23 +19,23 @@ The package does not install a DSH runtime dependency.
 Use **Connect DeepSeek Harness → Download packages for this server** in GatherThread to download its source-matched DSH plugin TGZ. Replace the example path below with the downloaded file's full path:
 
 ```text
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
-npx @deepseek-ai/dsh@0.1.2-rc.1 web
+npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.1.7-rc.2 web
 # In DSH: Settings -> GatherThread / 共序 -> Sign in and pair
 ```
 
 On Windows, use a quoted path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older build and does not include the current message-deletion safeguards. If server downloads are unavailable, [build the matching source checkout](../../docs/DSH_CONNECT.md#source-checkout-fallback); do not substitute the old npm build.
 
 Check the active CLI with `npx @deepseek-ai/dsh --version`. The normal start
-command already pins `0.1.2-rc.1`. DSH 0.1.2 does not
+command already pins `0.1.7-rc.2`. The pinned DSH does not
 expose the root CLI version as a stable Host service, so the package does not
 inspect npx cache paths or claim runtime-version introspection. The install
 command pins the exact verified CLI, while every required Host/Client service is
 validated structurally and fails closed before a request can be claimed.
 
-`dsh plugin --profile web add` is DSH 0.1.2's official package installation
+`dsh plugin --profile web add` is the pinned DSH release's official package installation
 mechanism. It initializes a missing `web` profile on first use, invokes pnpm,
-and appends only packages declaring `dsh.bundle`. DSH 0.1.2 has no verified
+and appends only packages declaring `dsh.bundle`. The pinned DSH has no verified
 public plugin marketplace, marketplace index, or registration workflow. This
 repository change prepares the package but does not publish it or modify a real
 DSH profile.
@@ -54,7 +54,7 @@ Before removal, use **Disconnect** inside the DSH panel to clear the local
 grant, then run:
 
 ```text
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web remove @gatherthread/dsh-host
+npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web remove @gatherthread/dsh-host
 ```
 
 The official command removes only this package dependency and profile layer;

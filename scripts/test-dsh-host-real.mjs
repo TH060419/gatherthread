@@ -22,7 +22,7 @@ const OUTPUT_LIMIT = 1_000_000;
 const PROJECT_ID = "dsh-real-loader-project";
 const SESSION_ID = "dsh-real-loader-session";
 const DEVICE_ID = "dsh-real-loader-device";
-const MODEL = "deepseek-v4-flash";
+const MODEL = "deepseek-flash";
 const PROVIDER = "deepseek-official";
 
 if (!DSH_SOURCE || !path.isAbsolute(DSH_SOURCE)) {

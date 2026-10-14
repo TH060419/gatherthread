@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import vm from "node:vm";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 interface Handoff {
   id: string;
@@ -72,7 +72,7 @@ async function loadClient(options: {
     URL,
     URLSearchParams,
   });
-  vm.runInContext(source, context, { filename: "gatherthread-dsh-client.js" });
+  vm.runInContext(source, context, { filename: pathToFileURL(path.join(packageRoot, "client", "client.js")).href });
   if (handoff === undefined) throw new Error("client bundle did not register");
   const plugin = handoff.factory((specifier) => {
     if (specifier !== "react") throw new Error(`unexpected client external: ${specifier}`);
@@ -99,6 +99,24 @@ function collectedText(node: unknown): string {
   if (Array.isArray(node)) return node.map(collectedText).join("");
   if (node === null || typeof node !== "object") return "";
   return collectedText((node as { children?: unknown }).children);
+}
+
+/** Find the first rendered element whose props satisfy a predicate, depth-first. */
+function findElement(
+  node: unknown,
+  predicate: (element: { readonly type: unknown; readonly props: Record<string, any> }) => boolean,
+): { readonly type: unknown; readonly props: Record<string, any> } | undefined {
+  if (node === null || typeof node !== "object") return undefined;
+  const element = node as { type?: unknown; props?: Record<string, any>; children?: unknown };
+  if (element.type !== undefined && element.props !== null && typeof element.props === "object"
+    && predicate({ type: element.type, props: element.props })) {
+    return { type: element.type, props: element.props };
+  }
+  for (const child of Array.isArray(element.children) ? element.children : []) {
+    const found = findElement(child, predicate);
+    if (found !== undefined) return found;
+  }
+  return undefined;
 }
 
 test("dsh.client bundle registers the official settings Slot without credential material", async () => {
@@ -170,7 +188,7 @@ test("Client renders the model-selection notice for a paired but unrouted connec
             authorization: "paired",
             serverUrl: "http://127.0.0.1:8787",
             deviceName: "DeepSeek Harness",
-            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
             runtime: {
               schemaVersion: 1,
               integration: "gatherthread",
@@ -209,6 +227,197 @@ test("Client renders the model-selection notice for a paired but unrouted connec
   );
 });
 
+test("Client asks for a new selection after DSH drops the model the connection ran", async () => {
+  // A dropped route lands in the same route-less branch as a fresh pairing, so the
+  // copy has to tell them apart: an operator whose model was retired must not be
+  // told they never chose one, and must be able to pick a replacement.
+  const loaded = await loadClient({
+    fetch: (async () => { throw new Error("native Client must not use the legacy Fetch route"); }) as typeof fetch,
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: {
+      rpc: {
+        async call() {
+          return { ok: true, value: {
+            schemaVersion: 2,
+            integration: "gatherthread",
+            authorization: "paired",
+            serverUrl: "http://127.0.0.1:8787",
+            deviceName: "DeepSeek Harness",
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
+            runtime: {
+              schemaVersion: 1,
+              integration: "gatherthread",
+              connection: "stopped",
+              bindingMode: "project",
+              projectName: "GatherThread / 共序",
+              activeSessionCount: 0,
+              sessions: [],
+              updatedAt: "2026-09-06T00:00:00.000Z",
+            },
+            // No `route`: DSH stopped offering the model this connection ran.
+            recoverableError: "route_unavailable",
+          } };
+        },
+      },
+    },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  assert.equal(typeof component, "function");
+  loaded.render(component as () => unknown);
+  const cleanup = loaded.getEffect()?.();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const rendered = collectedText(loaded.render(component as () => unknown));
+  cleanup?.();
+  assert.match(
+    rendered,
+    /DSH 当前已不再提供此前为该连接选择的模型/u,
+    `a dropped route must say the previous model is gone; rendered: ${rendered}`,
+  );
+  assert.doesNotMatch(
+    rendered,
+    /尚未选择 DSH Provider 与 Model/u,
+    "a dropped route must not be reported as a connection that never chose a model",
+  );
+  assert.match(rendered, /选择 DSH 模型/u, "the replacement selection must stay reachable");
+});
+
+test("Client clears revoked selections again when a replacement route also disappears", async () => {
+  // The transition, not the fresh panel: a connection that already configured a
+  // model must not keep offering it, or keep it selected, after the harness drops
+  // it. Both halves matter — a cleared catalog alone leaves the previous
+  // provider/model in state, and the next submission would re-send the retired
+  // model, which DSH accepts because it resolves any identifier.
+  const RETIRED_MODEL = "deepseek-v4-flash-vision-exp";
+  const currentCatalog = {
+    schemaVersion: 1,
+    projects: [{ id: "project-a", name: "Project A", role: "owner", state: "active", sessionCount: 1 }],
+    providers: [{ id: "deepseek-official", name: "DeepSeek", models: [{ id: "deepseek-flash", name: "Flash" }] }],
+  };
+  const staleCatalog = {
+    ...currentCatalog,
+    providers: [{ id: "deepseek-official", name: "DeepSeek", models: [{ id: RETIRED_MODEL, name: "Retired" }] }],
+  };
+  const newestCatalog = {
+    ...currentCatalog,
+    providers: [{ id: "deepseek-official", name: "DeepSeek", models: [{ id: "deepseek-v4-pro", name: "Pro" }] }],
+  };
+  const configuredPayloads: Array<{ provider: string; model: string }> = [];
+  let configured = false;
+  let catalogReads = 0;
+  const nativeState = () => ({
+    schemaVersion: 2,
+    integration: "gatherthread",
+    authorization: "paired",
+    serverUrl: "http://127.0.0.1:8787",
+    deviceName: "DeepSeek Harness",
+    compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
+    runtime: {
+      schemaVersion: 1, integration: "gatherthread", connection: "stopped", bindingMode: "project",
+      projectName: "GatherThread / 共序", activeSessionCount: 0, sessions: [],
+      updatedAt: "2026-09-06T00:00:00.000Z",
+    },
+    ...(configured ? { recoverableError: "route_unavailable" } : {}),
+  });
+  const timers: Array<() => void> = [];
+  const loaded = await loadClient({
+    setTimeout: ((callback: () => void) => { timers.push(callback); return timers.length; }) as unknown as typeof setTimeout,
+    clearTimeout: (() => undefined) as unknown as typeof clearTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: {
+      rpc: {
+        async call(_channel: string, endpoint: string, payload: { provider: string; model: string }) {
+          if (endpoint === "catalog/get") {
+            catalogReads += 1;
+            return { ok: true, value: catalogReads === 1 ? staleCatalog : catalogReads === 2 ? currentCatalog : newestCatalog };
+          }
+          if (endpoint === "connection/configure") {
+            configuredPayloads.push({ provider: payload.provider, model: payload.model });
+            configured = true;
+            return { ok: true, value: nativeState() };
+          }
+          return { ok: true, value: nativeState() };
+        },
+      },
+    },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  assert.equal(typeof component, "function");
+  const settle = async () => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
+  const render = () => loaded.render(component as () => unknown);
+  const clickLoadCatalog = async () => {
+    findElement(render(), (element) => element.props.key === "load-catalog")?.props.onClick();
+    await settle();
+  };
+  const submitBinding = async () => {
+    findElement(render(), (element) => element.props.key === "binding-form")
+      ?.props.onSubmit({ preventDefault() {} });
+    await settle();
+  };
+  render();
+  const cleanup = loaded.getEffect()?.();
+  await settle();
+
+  // Paired with no route, then configured against the catalog that names the
+  // model the harness is about to drop.
+  assert.match(collectedText(render()), /选择 DSH 模型/u);
+  await clickLoadCatalog();
+  await submitBinding();
+  assert.deepEqual(configuredPayloads, [{ provider: "deepseek-official", model: RETIRED_MODEL }]);
+
+  // The harness revokes the route. The next poll must discard both the catalog
+  // and the selection made from it, not merely re-render the notice.
+  const poll = timers.pop();
+  assert.equal(typeof poll, "function", "the panel must have scheduled its status poll");
+  poll?.();
+  await settle();
+  const revoked = collectedText(render());
+  assert.doesNotMatch(revoked, new RegExp(RETIRED_MODEL, "u"),
+    `a revoked route must stop offering the model it named; rendered: ${revoked}`);
+  assert.doesNotMatch(revoked, /连接全部可访问项目/u,
+    "the stale catalog's form must not stay submittable");
+  assert.match(revoked, /DSH 当前已不再提供/u, "the panel must explain why the selection was dropped");
+
+  // Re-selecting reads the harness's current catalog, and the submission must
+  // name a model from it rather than the retired one still held in state.
+  await clickLoadCatalog();
+  const steadyPoll = timers.pop();
+  steadyPoll?.();
+  await settle();
+  assert.match(collectedText(render()), /连接全部可访问项目/u,
+    "steady revoked-status polls must not erase the operator's replacement choice");
+  await submitBinding();
+  assert.equal(configuredPayloads.length, 2);
+  assert.deepEqual(configuredPayloads[1], { provider: "deepseek-official", model: "deepseek-flash" },
+    "the replacement selection must come from the current catalog, never the revoked one");
+
+  // The replacement was withdrawn before configure could register it. This
+  // response repeats the same recovery code; it must invalidate that choice
+  // even though the poll already observed route_unavailable before this attempt.
+  await clickLoadCatalog();
+  await submitBinding();
+  assert.equal(configuredPayloads.length, 3);
+  assert.deepEqual(configuredPayloads[2], { provider: "deepseek-official", model: "deepseek-v4-pro" },
+    "a second failed selection must not leave the previous replacement in the next submission");
+  cleanup?.();
+});
+
 test("Client primary actions keep a visible system foreground in light, dark, and Safari themes", async () => {
   const loaded = await loadClient();
   assert.match(
@@ -233,7 +442,7 @@ test("Client renders separate project code consent, manual actions and disabled-
     connection: { rpc: { async call(_channel: string, endpoint: string, payload: unknown) { calls.push({ endpoint, payload }); return { ok: true, value: {
       schemaVersion: 2, integration: "gatherthread", authorization: "paired",
       serverUrl: "http://127.0.0.1:18787", deviceName: "DSH",
-      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
       runtime: { schemaVersion: 1, integration: "gatherthread", connection: "connected", bindingMode: "project",
         projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
       route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
@@ -298,7 +507,7 @@ test("Client renders GitHub sync actions in English when DSH uses an English loc
     connection: { rpc: { async call() { return { ok: true, value: {
       schemaVersion: 2, integration: "gatherthread", authorization: "paired",
       serverUrl: "http://127.0.0.1:18787", deviceName: "DSH",
-      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+      compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
       runtime: { schemaVersion: 1, integration: "gatherthread", connection: "connected", bindingMode: "project",
         projectName: "Test", activeSessionCount: 0, sessions: [], updatedAt: "2026-09-22T00:00:00.000Z" },
       route: { provider: "deepseek", model: "deepseek-chat" }, projectCount: 1,
@@ -346,7 +555,7 @@ test("Client prefers the authenticated DSH RPC channel and accepts only the pinn
             schemaVersion: 2,
             integration: "gatherthread",
             authorization: "unpaired",
-            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.7-rc.2", profile: "web" },
             runtime: {
               schemaVersion: 1,
               integration: "gatherthread",

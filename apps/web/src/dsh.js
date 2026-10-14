@@ -1,6 +1,6 @@
 export const DSH_HARNESS = "deepseek-harness";
 export const CODEX_HARNESS = "codex";
-export const DSH_NPM_VERSION = "0.1.2-rc.1";
+export const DSH_NPM_VERSION = "0.1.7-rc.2";
 export const DSH_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;
 export const DSH_VERSION_COMMAND = "npx @deepseek-ai/dsh --version";
 export const DSH_PINNED_START_COMMAND = `npx @deepseek-ai/dsh@${DSH_NPM_VERSION} web`;

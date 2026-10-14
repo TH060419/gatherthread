@@ -19,7 +19,7 @@ npm install --global pnpm@10
 Download the DSH plugin TGZ from that index and add it to the DSH Web profile. Replace the placeholder below with the downloaded file's full path:
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
 On Windows, use a quoted full path such as `C:/Users/you/Downloads/your-plugin.tgz`. The registry's `@gatherthread/dsh-host@0.1.0-beta.1` is an older release, not this source-pinned build; it does not provide the current safe message-deletion handling.
@@ -27,7 +27,7 @@ On Windows, use a quoted full path such as `C:/Users/you/Downloads/your-plugin.t
 ### 2. Open DSH
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 web
+npx @deepseek-ai/dsh@0.1.7-rc.2 web
 ```
 
 Keep DSH running. Open **Settings → GatherThread / 共序**.
@@ -49,8 +49,8 @@ git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz
-npx @deepseek-ai/dsh@0.1.2-rc.1 web
+npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz
+npx @deepseek-ai/dsh@0.1.7-rc.2 web
 ```
 
 Do not add `--offline` unless the complete dependency metadata is already cached. DSH delegates profile package installation to `pnpm`; an incomplete offline mirror can fail before GatherThread is installed.
@@ -76,7 +76,7 @@ The plugin preserves redacted public cloud messages in the native conversation, 
 
 During normal turns, DSH manages its own context and automatic compaction using the selected provider/model metadata and native compaction configuration. GatherThread does not replace those settings, including for non-DeepSeek providers. The browser's Codex fallback budget does not apply to DSH. Keep native automatic compaction enabled if desired; a model name or an advertised window is not a guarantee that the provider accepts that much input.
 
-DSH `0.1.2-rc.1` has a first-import limitation: its automatic pre-step compaction requires a prior native request header. A newly imported history can already exceed the model window before that first native request. Its manual compactor also submits a bounded model request; it cannot reliably rescue an arbitrarily oversized prefix. If the provider rejects the context, the original cloud/native records remain available. Use DSH's native compact control where the input fits, or explicitly select a suitable configured model and retry. GatherThread does not silently choose another model, prune the cloud log, or run a paid summary during background polling. Fully automatic staged compaction for this case remains a compatibility follow-up, not a supported guarantee. [ADR-0026](adr/0026-native-first-context-management.md) records the boundary.
+Observed at the previously pinned DSH `0.1.2-rc.1` and not re-verified at the current pin: DSH has a first-import limitation where its automatic pre-step compaction requires a prior native request header. A newly imported history can already exceed the model window before that first native request. Its manual compactor also submits a bounded model request; it cannot reliably rescue an arbitrarily oversized prefix. If the provider rejects the context, the original cloud/native records remain available. Use DSH's native compact control where the input fits, or explicitly select a suitable configured model and retry. GatherThread does not silently choose another model, prune the cloud log, or run a paid summary during background polling. Fully automatic staged compaction for this case remains a compatibility follow-up, not a supported guarantee. [ADR-0026](adr/0026-native-first-context-management.md) records the boundary.
 
 ## Troubleshooting
 
@@ -92,7 +92,7 @@ DSH `0.1.2-rc.1` has a first-import limitation: its automatic pre-step compactio
 
 ### Upstream profile hot-reload failure
 
-A fresh DSH `0.1.2-rc.1` install can resolve newer transitive packages that fail its default `live` configuration reload. The Beta 1 isolated native/browser test passed the complete GatherThread flow with the supported **startup-only** configuration mode; it does not certify default live reload.
+A fresh DSH install can resolve newer transitive packages that fail its default `live` configuration reload. That was observed at the previously pinned `0.1.2-rc.1`. At the current pin the isolated native/browser gate passes the complete GatherThread flow with the default `live` reload, so default live reload is verified there; the workaround below remains only for that specific error if it reappears.
 
 Only if the exact HMR error above occurs: stop DSH, back up `<DSH_HOME>/profiles/web/package.json` (normally `~/.dsh/profiles/web/package.json`), and change the existing `dsh.profile.patchReload` value to `"startup"`. Preserve every other field, dependency and bundle; do not replace the whole manifest. Then start DSH again with the command in step 2. Configuration-layer changes now require restarting DSH; GatherThread history/realtime synchronization is not disabled. Do not clear credentials or install arbitrary upstream versions to bypass this error.
 

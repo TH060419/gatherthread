@@ -17,16 +17,16 @@ import { parseDshAssistantStreamFrame } from "./live-event-mapper.js";
 
 /** Exact upstream surface verified by the isolated Host and SDK PoCs. */
 export const DSH_COMPATIBILITY = Object.freeze({
-  tag: "dsh-v0.1.3-alpha.1",
-  version: "0.1.3-alpha.1",
-  commit: "d347e703908d0406b7a7ef80e3a0e594d86b2215",
+  tag: "dsh-v0.1.7-rc.2",
+  version: "0.1.7-rc.2",
+  commit: "477b4f420553e8a52c2fbccc464d7561b239c443",
   profile: "headless",
 });
 
 /** Published CLI package used by the mainstream `npx @deepseek-ai/dsh web` path. */
 export const DSH_NPM_COMPATIBILITY = Object.freeze({
   package: "@deepseek-ai/dsh",
-  version: "0.1.2-rc.1",
+  version: "0.1.7-rc.2",
   profile: "web",
   persistenceProbe: "list",
 });
@@ -89,13 +89,14 @@ interface DshAgentsServiceLike {
     meta: { cwd: string; agentPreset?: string; origin?: "subagent"; parentSession?: string };
     agentOptions: { provider: string; model: string };
     signal: AbortSignal;
-    setup?: (agentContext: unknown) => void | Promise<void>;
+    /** 0.1.7 passes the unpublished Agent as the second argument. */
+    setup?: (agentContext: unknown, agent: unknown) => void | Promise<void>;
   }): Promise<DshAgentHandleLike>;
   resume(options: {
     resumeSessionId: string;
     agentOptions: { provider: string; model: string };
     signal: AbortSignal;
-    setup?: (agentContext: unknown) => void | Promise<void>;
+    setup?: (agentContext: unknown, agent: unknown) => void | Promise<void>;
   }): Promise<DshAgentHandleLike>;
 }
 
@@ -539,7 +540,13 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         throw new Error("Pinned DSH public preset inheritance API is unavailable; refusing an isolated Agent without native tools");
       }
       parentPreset = presets.composedPreset(parent.ctx) as string | undefined;
-      if (parentPreset === undefined && (!Array.isArray(presets.roots) || presets.roots.length > 0)) {
+      // `roots` reports the composition DSH started the Agent with. A preset
+      // service that does not publish it (0.1.7 moved the registry) cannot be
+      // read as "this Agent has no roots", so only a reported, non-empty list
+      // refuses the Agent; an absent one leaves the composed preset as the
+      // evidence, and `composeFrom` still verifies the child inherits exactly it.
+      const roots = Array.isArray(presets.roots) ? presets.roots : undefined;
+      if (parentPreset === undefined && roots !== undefined && roots.length > 0) {
         throw new Error("Native DSH Agent has no composed preset; restore its tool composition before using summarized context");
       }
     }
@@ -615,9 +622,12 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
         const nodes = agent.session.surface?.nodes;
         if (!Array.isArray(nodes) || nodes.some((seq) => !Number.isSafeInteger(seq) || seq < 0 || seq >= agent.session.seq)
           || new Set(nodes).size !== nodes.length) throw new Error("Pinned DSH public Session surface API is unavailable or invalid");
+        // DSH 0.1.7 renamed the replace operation's range fields. Its validator
+        // demands exactly three keys (`op` + the two seqs), so the older
+        // `start`/`end` spelling is rejected outright and the two cannot coexist.
         agent.session.append("user/message", message, nodes.length === 0
           ? { surfaceOp: "append" }
-          : { surfaceOp: { op: "replace", start: nodes[0], end: nodes.at(-1) }, sourceEventSeqs: [...nodes] });
+          : { surfaceOp: { op: "replace", startSeq: nodes[0], endSeq: nodes.at(-1) }, sourceEventSeqs: [...nodes] });
       }
       await sessions.flush(agent.session);
       throwIfDisposed(disposed, lifecycleAbort.signal, "projection");
@@ -627,10 +637,14 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     }
   };
 
-  const setupNativeAgent = async (agentContext: unknown): Promise<void> => {
+  const setupNativeAgent = async (agentContext: unknown, agentValue: unknown): Promise<void> => {
     const presets = asObject(context.get("agentPresets"));
     if (presets === undefined || (Array.isArray(presets.roots) && presets.roots.length === 0)) return;
-    const agent = asAgent(asObject(agentContext)?.agent);
+    // DSH hands the unpublished Agent to setup as its second argument. Reading it
+    // off the context instead is not equivalent: Cordis refuses an uninjected
+    // property, and 0.1.7 both added the argument and stopped reporting `roots`, so
+    // the mount below now runs where an empty `roots` used to skip it.
+    const agent = asAgent(agentValue);
     const projections = asObject(context.get("sessionProjections"));
     if (agent === undefined || typeof presets.mount !== "function" || typeof projections?.stateOf !== "function") {
       throw new Error("Pinned DSH public native preset composition API is unavailable");

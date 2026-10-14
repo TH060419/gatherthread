@@ -1043,3 +1043,61 @@ test("an unconfirmed catalog publication is retried even when discovery returns 
   assert.equal(controller.publicState().recoverableError, undefined);
   await controller.dispose();
 });
+
+test("a model DSH stops offering abandons the route instead of keeping it advertised", async () => {
+  const routedGrant: DshNativeGrant = {
+    ...unboundGrant,
+    route: { provider: "deepseek-official", model: "deepseek-v4-flash-vision-exp" },
+  };
+  const credentials = credentialsFixture(routedGrant);
+  let catalog: Array<{ provider: string; model: string }> = [
+    { provider: "deepseek-official", model: "deepseek-v4-flash-vision-exp" },
+  ];
+  let clock = 3_000_000;
+  const stopped: string[] = [];
+  const controller = new DshNativeHostController({
+    context: { credentials: credentials.service },
+    status: status(),
+    workspacePath: "/readonly/workspace",
+    now: () => clock,
+    listExecutionProfiles: async (provider) => catalog.map((profile) => ({ ...profile, provider })),
+    listProjects: async () => [{
+      id: "project-a",
+      name: "Project A",
+      role: "owner",
+      state: "active",
+      sessionCount: 1,
+    }],
+    resolveWorkspace: async () => "/managed/project-a",
+    createOwner: async () => ({
+      async stop() { stopped.push("project-a"); },
+      async updateExecutionProfiles() {
+        throw new Error("a route DSH dropped must never be republished");
+      },
+    }),
+  });
+  await controller.start();
+  assert.equal(controller.publicState().recoverableError, undefined);
+
+  // The provider retires the model, so the harness stops advertising it. The
+  // connection must not keep offering it, and must not repoint itself either.
+  catalog = [{ provider: "deepseek-official", model: "deepseek-flash" }];
+  clock += 5 * 60 * 1_000;
+  await controller.refreshProjects();
+
+  const dropped = controller.publicState();
+  assert.equal(dropped.route, undefined, "the route is dropped, never repointed");
+  assert.equal(dropped.recoverableError, "route_unavailable");
+  assert.equal(dropped.runtime.connection, "stopped");
+  assert.deepEqual(stopped, ["project-a"], "owners stop advertising the dropped route");
+  const persisted = credentials.records.get(DSH_NATIVE_CREDENTIAL_KEY) as
+    { readonly payload: DshNativeGrant } | undefined;
+  assert.equal(persisted?.payload.route, undefined, "the dropped route is not restored on restart");
+
+  // It stays unconfigured, and unadvertised, until an explicit new selection.
+  clock += 5 * 60 * 1_000;
+  await controller.refreshProjects();
+  assert.equal(controller.publicState().recoverableError, "route_unavailable");
+  assert.equal(controller.publicState().route, undefined);
+  await controller.dispose();
+});

@@ -19,7 +19,7 @@ npm install --global pnpm@10
 下载配套的 DSH 插件 TGZ，把下方占位路径换成下载文件的完整路径，再加入 DSH Web profile：
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
+npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add "/absolute/path/to/LOCAL_DSH_PLUGIN.tgz"
 ```
 
 Windows 使用带引号的完整路径，例如 `C:/Users/you/Downloads/your-plugin.tgz`。npm 的 `@gatherthread/dsh-host@0.1.0-beta.1` 是旧发行版，不是此源码构建，也不包含本次安全删除消息的处理。
@@ -27,7 +27,7 @@ Windows 使用带引号的完整路径，例如 `C:/Users/you/Downloads/your-plu
 ### 2. 打开 DSH
 
 ```bash
-npx @deepseek-ai/dsh@0.1.2-rc.1 web
+npx @deepseek-ai/dsh@0.1.7-rc.2 web
 ```
 
 保持 DSH 运行，然后打开 **设置 → GatherThread / 共序**。
@@ -49,8 +49,8 @@ git checkout SOURCE_COMMIT_FROM_DOWNLOADS_PAGE
 npm ci
 npm run build
 npm run release:pack-npm
-npx @deepseek-ai/dsh@0.1.2-rc.1 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz
-npx @deepseek-ai/dsh@0.1.2-rc.1 web
+npx @deepseek-ai/dsh@0.1.7-rc.2 plugin --profile web add ./release-artifacts/npm/gatherthread-dsh-host-0.1.0-beta.1.tgz
+npx @deepseek-ai/dsh@0.1.7-rc.2 web
 ```
 
 除非依赖元数据已完整缓存，否则不要加 `--offline`。DSH 会把 profile 包安装交给 `pnpm`；离线镜像不完整时，共序插件尚未开始安装就会失败。
@@ -76,7 +76,7 @@ Beta 1 还允许会话写入者在共序网页选取已完成的公开消息，�
 
 正常回合由 DSH 根据模型信息及原生配置管理自动压缩，包括非 DeepSeek Provider。共序不覆盖这些设置，也不把网页中的 Codex 备用预算用于 DSH。原生压缩可能消耗模型额度，模型名称或窗口声明也不保证 Provider 一定接受相同输入量。
 
-DSH `0.1.2-rc.1` 存在首次导入限制：自动压缩需要之前的原生请求信息，首次同步的历史可能在建立这些信息前就已超窗；手动压缩本身也需要一次有输入上限的模型请求。若原生输入仍可接受，可使用 DSH 自带压缩；或明确选择已配置且适合该上下文的模型。共序不会在后台轮询时付费压缩、擅自换模型或删减云端记录。任意超长初始历史的自动分段救援尚未实现，详见 [ADR-0026](adr/0026-native-first-context-management.md)。
+以下限制在上一版固定的 DSH `0.1.2-rc.1` 上观察到，尚未在当前固定版本上重新验证：DSH 存在首次导入限制，自动压缩需要之前的原生请求信息，首次同步的历史可能在建立这些信息前就已超窗；手动压缩本身也需要一次有输入上限的模型请求。若原生输入仍可接受，可使用 DSH 自带压缩；或明确选择已配置且适合该上下文的模型。共序不会在后台轮询时付费压缩、擅自换模型或删减云端记录。任意超长初始历史的自动分段救援尚未实现，详见 [ADR-0026](adr/0026-native-first-context-management.md)。
 
 ## 常见问题
 
@@ -92,7 +92,7 @@ DSH `0.1.2-rc.1` 存在首次导入限制：自动压缩需要之前的原生请
 
 ### DSH 上游配置热重载失败
 
-新安装的 DSH `0.1.2-rc.1` 可能解析到较新的间接依赖，导致默认 `live` 配置热重载启动失败。Beta 1 已在隔离 DSH 和浏览器中用上游支持的“仅启动时加载配置”模式跑通完整共序流程；这不代表默认热重载通过验证。
+新安装的 DSH 可能解析到较新的间接依赖，导致默认 `live` 配置热重载启动失败。该现象在上一版固定的 `0.1.2-rc.1` 上观察到。在当前固定版本上，隔离的原生/浏览器门禁已用**默认 `live` 模式**跑通完整共序流程，因此默认热重载在当前 pin 上已验证；下方处理方式仅在该错误再次出现时使用。
 
 仅出现上述 HMR 错误时：先关闭 DSH，备份 `<DSH_HOME>/profiles/web/package.json`（一般为 `~/.dsh/profiles/web/package.json`），把现有 `dsh.profile.patchReload` 改为 `"startup"`，保留其他字段、依赖和 bundles，**不要替换整个文件**。再用第 2 步命令启动。之后修改用户配置层需要重启 DSH；共序会话历史与实时同步不会关闭。不要清空凭据或随意更换上游版本来绕过错误。
 

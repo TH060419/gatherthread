@@ -114,7 +114,7 @@ export interface DshNativePublicState {
   readonly authorization: "unpaired" | "pairing" | "paired";
   readonly compatibility: {
     readonly package: "@deepseek-ai/dsh";
-    readonly version: "0.1.2-rc.1";
+    readonly version: "0.1.7-rc.2";
     readonly profile: "web";
   };
   readonly runtime: DshPublicStatusSnapshot;
@@ -125,7 +125,7 @@ export interface DshNativePublicState {
   readonly projectCount?: number;
   readonly bindings?: readonly DshNativeBinding[];
   readonly pairing?: DshNativePairingView;
-  readonly recoverableError?: "pairing_failed" | "connection_failed";
+  readonly recoverableError?: "pairing_failed" | "connection_failed" | "route_unavailable";
   readonly localSync?: readonly DshNativeLocalSyncStatus[];
   readonly codeSync?: readonly (DshCodeSyncView & { projectId: string; projectName: string })[];
   readonly githubSync?: readonly (DshGitHubCodeSyncView & { projectId: string; projectName: string })[];
@@ -765,9 +765,13 @@ export class DshNativeHostController {
     const route = grant.route;
     if (route === undefined) return;
     throwIfAborted(signal);
-    const profilesChanged = await this.#refreshExecutionProfiles(route, signal);
+    const catalogUpdate = await this.#refreshExecutionProfiles(route, signal);
     throwIfAborted(signal);
-    if (profilesChanged) {
+    if (catalogUpdate === "route_unavailable") {
+      await this.#abandonUnavailableRoute(grant);
+      return;
+    }
+    if (catalogUpdate === "changed") {
       // Owners already running still advertise the catalog from before this
       // discovery. Owners activated below receive the new one at creation, so they
       // are deliberately not marked pending.
@@ -811,31 +815,34 @@ export class DshNativeHostController {
   /**
    * Re-read the harness catalog when the route changed or the entry went stale.
    *
-   * Returns whether the catalog differs from the one already advertised. Discovery
-   * is cached per route and also time-bounded: DSH publishes a model metadata
-   * catalog that can gain models while a connection stays open, so a connect-time
-   * snapshot would otherwise keep offering the old list for the life of the process.
+   * Returns whether the catalog differs from the one already advertised, or that
+   * DSH no longer offers the model this connection runs. Discovery is cached per
+   * route and also time-bounded: DSH publishes a model metadata catalog that can
+   * gain models while a connection stays open, so a connect-time snapshot would
+   * otherwise keep offering the old list for the life of the process.
    */
   async #refreshExecutionProfiles(
     route: DshNativeRoute,
     signal: AbortSignal,
-  ): Promise<boolean> {
+  ): Promise<"unchanged" | "changed" | "route_unavailable"> {
     const routeKey = `${route.provider}\u0000${route.model}`;
     const discoveredAt = this.#executionProfilesDiscoveredAt;
     if (this.#executionProfileRouteKey === routeKey
       && discoveredAt !== undefined
       && this.#now() - discoveredAt < EXECUTION_PROFILE_REFRESH_INTERVAL_MS) {
-      return false;
+      return "unchanged";
     }
     const previous = this.#executionProfiles;
-    const remember = (profiles: readonly DshRuntimeExecutionProfile[] | undefined): boolean => {
+    const remember = (
+      profiles: readonly DshRuntimeExecutionProfile[] | undefined,
+    ): "unchanged" | "changed" => {
       // A first discovery is not a change: nothing was advertised before it, and
       // owners created from it during this same reconcile already received it.
       const changed = previous !== undefined && !sameExecutionProfiles(previous, profiles);
       this.#executionProfiles = profiles;
       this.#executionProfileRouteKey = routeKey;
       this.#executionProfilesDiscoveredAt = this.#now();
-      return changed;
+      return changed ? "changed" : "unchanged";
     };
     if (route.provider !== "deepseek-official") return remember(undefined);
     const discovered = this.#options.listExecutionProfiles === undefined
@@ -843,10 +850,40 @@ export class DshNativeHostController {
       : await this.#options.listExecutionProfiles(route.provider, signal);
     throwIfAborted(signal);
     const profiles = normalizeExecutionProfiles(discovered, route.provider);
-    if (!profiles.some((profile) => profile.model === route.model)) {
-      throw new Error("DeepSeek Harness did not advertise the configured model as an execution profile");
-    }
+    // DSH is the authority on what this route can run. A catalog that no longer
+    // names the configured model means the harness dropped it, most often because
+    // the provider retired it, so the connection abandons the route instead of
+    // republishing a declaration that would keep a dead model on offer.
+    if (!profiles.some((profile) => profile.model === route.model)) return "route_unavailable";
     return remember(profiles);
+  }
+
+  /**
+   * Drop the route after DSH stops offering the model this connection runs.
+   *
+   * A harness catalog is the authority on what a runtime can run, so the route is
+   * abandoned instead of being repointed at another model: registering a
+   * replacement silently would run a model this device never selected. Clearing the
+   * stored route returns the connection to the state it has before its first
+   * selection, where the panel asks for an explicit provider and model against the
+   * harness's current catalog. Owners and the cached declaration go with it, so
+   * nothing keeps advertising the profiles and bindings built from the dropped route.
+   */
+  async #abandonUnavailableRoute(grant: DshNativeGrant): Promise<void> {
+    await this.#stopOwners();
+    this.#executionProfiles = undefined;
+    this.#executionProfileRouteKey = undefined;
+    this.#executionProfilesDiscoveredAt = undefined;
+    this.#grant = await this.#credentials.save({
+      schemaVersion: grant.schemaVersion,
+      serverUrl: grant.serverUrl,
+      apiUrl: grant.apiUrl,
+      deviceId: grant.deviceId,
+      deviceName: grant.deviceName,
+      token: grant.token,
+    });
+    this.#recoverableError = "route_unavailable";
+    this.#options.status.setConnection("stopped");
   }
 
   /**
