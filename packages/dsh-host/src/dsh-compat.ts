@@ -89,13 +89,14 @@ interface DshAgentsServiceLike {
     meta: { cwd: string; agentPreset?: string; origin?: "subagent"; parentSession?: string };
     agentOptions: { provider: string; model: string };
     signal: AbortSignal;
-    setup?: (agentContext: unknown) => void | Promise<void>;
+    /** 0.1.7 passes the unpublished Agent as the second argument. */
+    setup?: (agentContext: unknown, agent: unknown) => void | Promise<void>;
   }): Promise<DshAgentHandleLike>;
   resume(options: {
     resumeSessionId: string;
     agentOptions: { provider: string; model: string };
     signal: AbortSignal;
-    setup?: (agentContext: unknown) => void | Promise<void>;
+    setup?: (agentContext: unknown, agent: unknown) => void | Promise<void>;
   }): Promise<DshAgentHandleLike>;
 }
 
@@ -636,10 +637,14 @@ export function createDshHostFacade(options: DshCompatibilityOptions): DshHostFa
     }
   };
 
-  const setupNativeAgent = async (agentContext: unknown): Promise<void> => {
+  const setupNativeAgent = async (agentContext: unknown, agentValue: unknown): Promise<void> => {
     const presets = asObject(context.get("agentPresets"));
     if (presets === undefined || (Array.isArray(presets.roots) && presets.roots.length === 0)) return;
-    const agent = asAgent(asObject(agentContext)?.agent);
+    // DSH hands the unpublished Agent to setup as its second argument. Reading it
+    // off the context instead is not equivalent: Cordis refuses an uninjected
+    // property, and 0.1.7 both added the argument and stopped reporting `roots`, so
+    // the mount below now runs where an empty `roots` used to skip it.
+    const agent = asAgent(agentValue);
     const projections = asObject(context.get("sessionProjections"));
     if (agent === undefined || typeof presets.mount !== "function" || typeof projections?.stateOf !== "function") {
       throw new Error("Pinned DSH public native preset composition API is unavailable");
