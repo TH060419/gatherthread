@@ -288,7 +288,7 @@ test("Client asks for a new selection after DSH drops the model the connection r
   assert.match(rendered, /选择 DSH 模型/u, "the replacement selection must stay reachable");
 });
 
-test("Client drops the catalog and the stale selection when the harness revokes the route", async () => {
+test("Client clears revoked selections again when a replacement route also disappears", async () => {
   // The transition, not the fresh panel: a connection that already configured a
   // model must not keep offering it, or keep it selected, after the harness drops
   // it. Both halves matter — a cleared catalog alone leaves the previous
@@ -303,6 +303,10 @@ test("Client drops the catalog and the stale selection when the harness revokes 
   const staleCatalog = {
     ...currentCatalog,
     providers: [{ id: "deepseek-official", name: "DeepSeek", models: [{ id: RETIRED_MODEL, name: "Retired" }] }],
+  };
+  const newestCatalog = {
+    ...currentCatalog,
+    providers: [{ id: "deepseek-official", name: "DeepSeek", models: [{ id: "deepseek-v4-pro", name: "Pro" }] }],
   };
   const configuredPayloads: Array<{ provider: string; model: string }> = [];
   let configured = false;
@@ -334,7 +338,7 @@ test("Client drops the catalog and the stale selection when the harness revokes 
         async call(_channel: string, endpoint: string, payload: { provider: string; model: string }) {
           if (endpoint === "catalog/get") {
             catalogReads += 1;
-            return { ok: true, value: catalogReads === 1 ? staleCatalog : currentCatalog };
+            return { ok: true, value: catalogReads === 1 ? staleCatalog : catalogReads === 2 ? currentCatalog : newestCatalog };
           }
           if (endpoint === "connection/configure") {
             configuredPayloads.push({ provider: payload.provider, model: payload.model });
@@ -393,10 +397,24 @@ test("Client drops the catalog and the stale selection when the harness revokes 
   // Re-selecting reads the harness's current catalog, and the submission must
   // name a model from it rather than the retired one still held in state.
   await clickLoadCatalog();
+  const steadyPoll = timers.pop();
+  steadyPoll?.();
+  await settle();
+  assert.match(collectedText(render()), /连接全部可访问项目/u,
+    "steady revoked-status polls must not erase the operator's replacement choice");
   await submitBinding();
   assert.equal(configuredPayloads.length, 2);
   assert.deepEqual(configuredPayloads[1], { provider: "deepseek-official", model: "deepseek-flash" },
     "the replacement selection must come from the current catalog, never the revoked one");
+
+  // The replacement was withdrawn before configure could register it. This
+  // response repeats the same recovery code; it must invalidate that choice
+  // even though the poll already observed route_unavailable before this attempt.
+  await clickLoadCatalog();
+  await submitBinding();
+  assert.equal(configuredPayloads.length, 3);
+  assert.deepEqual(configuredPayloads[2], { provider: "deepseek-official", model: "deepseek-v4-pro" },
+    "a second failed selection must not leave the previous replacement in the next submission");
   cleanup?.();
 });
 
