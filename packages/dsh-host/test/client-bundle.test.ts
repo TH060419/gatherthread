@@ -523,3 +523,117 @@ test("Client transient retries are bounded", async () => {
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(callbacks.length, 3, "transient status failure must stop after three retries");
 });
+
+test("Client paints the model dropdown and its option rows with an opaque themed pair", async () => {
+  // A native <select> owns a popup it does not inherit: the list surface is painted
+  // from the control's own background and each row from its option, while the option
+  // text still follows the panel foreground. `background: transparent` with
+  // `color: inherit` therefore rendered the DSH model names white on the popup's
+  // white surface as soon as the harness theme was dark. Covering the control alone
+  // is not enough either — which of the two paints the row differs per engine — so
+  // both must name an opaque pair that the UA resolves against the used color scheme.
+  const catalog = {
+    schemaVersion: 1,
+    projects: [{ id: "project-a", name: "Project A", role: "owner", state: "active", sessionCount: 1 }],
+    providers: [{
+      id: "deepseek-official",
+      name: "DeepSeek",
+      models: [{ id: "deepseek-flash", name: "Flash" }, { id: "deepseek-pro", name: "Pro" }],
+    }],
+  };
+  const loaded = await loadClient({
+    fetch: (async () => { throw new Error("native Client must not use the legacy Fetch route"); }) as typeof fetch,
+    setTimeout: (() => 1 as unknown as ReturnType<typeof setTimeout>) as unknown as typeof setTimeout,
+  });
+  let component: (() => unknown) | undefined;
+  loaded.plugin.apply({
+    sessions: { async refresh() {} },
+    connection: {
+      rpc: {
+        async call(_channel: string, endpoint: string) {
+          return { ok: true, value: endpoint === "catalog/get" ? catalog : {
+            schemaVersion: 2,
+            integration: "gatherthread",
+            authorization: "paired",
+            serverUrl: "http://127.0.0.1:8787",
+            deviceName: "DeepSeek Harness",
+            compatibility: { package: "@deepseek-ai/dsh", version: "0.1.2-rc.1", profile: "web" },
+            runtime: {
+              schemaVersion: 1,
+              integration: "gatherthread",
+              connection: "stopped",
+              bindingMode: "project",
+              projectName: "GatherThread / 共序",
+              activeSessionCount: 0,
+              sessions: [],
+              updatedAt: "2026-09-06T00:00:00.000Z",
+            },
+            // No `route`: pairing succeeded, but no provider or model is chosen.
+          } };
+        },
+      },
+    },
+    slots: {
+      inject(_name: string, create: () => unknown) { create(); },
+      register(_options: unknown, value: () => unknown) { component = value; return () => undefined; },
+    },
+  });
+  assert.equal(typeof component, "function");
+
+  interface RenderedElement { readonly type: unknown; readonly props: Record<string, any>; readonly children?: unknown }
+  const flatten = (node: unknown, collected: RenderedElement[] = []): RenderedElement[] => {
+    if (Array.isArray(node)) {
+      for (const child of node) flatten(child, collected);
+      return collected;
+    }
+    if (node === null || typeof node !== "object") return collected;
+    const element = node as RenderedElement;
+    if (element.props !== undefined && element.props !== null) collected.push(element);
+    flatten(element.children, collected);
+    return collected;
+  };
+  const elementsOf = (node: unknown, type: string) =>
+    flatten(node).filter((element) => element.type === type);
+  const assertOpaquePair = (element: RenderedElement, what: string) => {
+    const style = element.props.style as Record<string, unknown> | undefined;
+    const background = style?.background ?? style?.backgroundColor;
+    const foreground = style?.color;
+    assert.equal(typeof background, "string", `${what} must paint its own surface; a popup surface is not inherited`);
+    assert.doesNotMatch(String(background), /^(?:transparent|inherit|currentColor)$/iu,
+      `${what} must not leave its surface to the UA default while its text keeps the panel color`);
+    assert.doesNotMatch(String(background), /rgba\([^)]*,\s*0(?:\.0+)?\s*\)$/iu, `${what} must be opaque`);
+    assert.equal(typeof foreground, "string", `${what} must name its own text color`);
+    assert.doesNotMatch(String(foreground), /^(?:inherit|currentColor)$/iu,
+      `${what} must not inherit a foreground that may match its surface`);
+    assert.notEqual(foreground, background, `${what} must not paint its text in its own surface color`);
+  };
+
+  const settle = async () => {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  };
+  const render = () => loaded.render(component as () => unknown);
+  render();
+  const cleanup = loaded.getEffect()?.();
+  await settle();
+  // The route-less panel only offers the dropdowns once the catalog is read.
+  flatten(render()).find((element) => element.props.key === "load-catalog")?.props.onClick();
+  await settle();
+
+  const tree = render();
+  const dropdowns = elementsOf(tree, "select");
+  const modelDropdown = dropdowns.find((dropdown) => elementsOf(dropdown, "option")
+    .some((option) => option.props.value === "deepseek-flash"));
+  assert.notEqual(modelDropdown, undefined,
+    "the model dropdown must be the one listing the catalog's models; the harness state was not reached");
+  assert.equal(dropdowns.length, 2, "the catalog must offer one provider and one model dropdown");
+
+  for (const dropdown of dropdowns) {
+    assertOpaquePair(dropdown, "each dropdown control");
+    const options = elementsOf(dropdown, "option");
+    assert.ok(options.length > 0, "each dropdown must offer at least one entry");
+    for (const option of options) assertOpaquePair(option, "each option row");
+  }
+  cleanup?.();
+});

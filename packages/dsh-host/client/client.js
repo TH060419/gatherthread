@@ -540,11 +540,12 @@ function selectControl(entries, value, setValue, keyOf, labelOf) {
   return React.createElement("select", {
     required: true,
     value,
-    style: styles.input,
+    style: styles.select,
     onChange: (event) => setValue(event.target.value),
   }, ...entries.map((entry) => React.createElement("option", {
     key: keyOf(entry),
     value: keyOf(entry),
+    style: styles.option,
   }, labelOf(entry))));
 }
 
@@ -845,6 +846,14 @@ const styles = {
   field: { display: "grid", gap: 6 },
   fieldLabel: { fontSize: 12, fontWeight: 600, opacity: 0.76 },
   input: { width: "100%", minHeight: 36, boxSizing: "border-box", padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(127,127,127,.28)", background: "transparent", color: "inherit", font: "inherit" },
+  // A dropdown owns a popup it cannot inherit: the list surface is painted from the
+  // control's own background and each row from its option, while the text keeps
+  // following the panel. Sharing `input` therefore drew the model names in the
+  // panel's foreground on the UA's own surface — white on white under a dark harness
+  // theme. Both the control and the rows name the system field pair instead, which
+  // the UA resolves against the used color scheme, so neither can match the other.
+  select: { width: "100%", minHeight: 36, boxSizing: "border-box", padding: "7px 10px", borderRadius: 9, border: "1px solid rgba(127,127,127,.28)", background: "Field", color: "FieldText", font: "inherit" },
+  option: { background: "Field", color: "FieldText" },
   primaryButton: { minHeight: 36, padding: "8px 12px", borderRadius: 9, border: "1px solid Highlight", background: "Highlight", color: "HighlightText", WebkitTextFillColor: "HighlightText", font: "inherit", fontWeight: 600, cursor: "pointer" },
   secondaryButton: { minHeight: 36, padding: "8px 12px", borderRadius: 9, border: "1px solid rgba(127,127,127,.3)", background: "transparent", color: "inherit", font: "inherit", cursor: "pointer" },
   linkButton: { display: "inline-flex", alignItems: "center", justifyContent: "center", minHeight: 36, padding: "0 12px", borderRadius: 9, border: "1px solid rgba(127,127,127,.3)", color: "inherit", textDecoration: "none", fontWeight: 600 },

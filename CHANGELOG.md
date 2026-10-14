@@ -17,6 +17,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ### Fixed
 
+- Keep the DeepSeek Harness plugin's DSH Provider and Model dropdowns readable under a dark harness theme. The control and every option row now name the system field pair instead of sharing the transparent, inherited pairing-input style, which left the option text in the panel's foreground on a popup surface the page does not paint — the model names rendered white on white. Reading the catalog, the exact selection and the pairing inputs are unchanged.
+
 - Distinguish Cloud Agent timeouts from ordinary failure while retaining legacy `status:"failed"`; add strict `outcome:"timed_out"|"failed"` and an additive durable outcome table. Bound trial, selected-summary and repository rounds to twelve minutes across both provider inference and the independent container final-response HTTP transport. Continue starts a separately charged, author-authorized fresh round with the original exact task/profile and recoverable public context; normal failures retain Retry. Preserve history-erasure/API-revision fences and existing resource limits. Repository continuation retains canonical instruction references through private ancestor snapshot deletion, expiry and restart, without duplicating instruction text or retaining erased history. Upgrade server/Web with a rebuilt matching immutable runner image; published Beta 1 metadata and deployment remain unchanged. See [ADR-0052](docs/adr/0052-cloud-timeouts-and-explicit-continuation.md).
 
 
