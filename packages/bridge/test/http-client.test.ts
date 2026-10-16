@@ -6,6 +6,26 @@ import {
   type RuntimeRegistration,
 } from "../src/index.js";
 
+test("HTTP canonical replay accepts Cloud provenance without inventing a local runtime identity", async () => {
+  const provenance: Record<string, unknown> = { ...wireProvenance(), harness: "opencode", local_session_id: "server-contained",
+    capture_fidelity: "canonical_history" };
+  delete provenance.runtime_id;
+  let response: unknown = { data: { events: [wireEvent("cloud-answer", 1, provenance)], cursor: 1, has_more: false } };
+  const client = new HttpCollaborationClient({ baseUrl: "https://collab.example/v1", bearerToken: "fixture",
+    fetch: async () => Response.json(response) });
+  const cloud = (await client.readEvents("s1", 0)).events[0]!;
+  assert.equal(cloud.runtime?.harness, "opencode");
+  assert.equal(cloud.runtime?.runtimeId, undefined);
+  assert.equal(Object.hasOwn(cloud.runtime!, "runtimeId"), false);
+  assert.equal(cloud.runtime?.captureFidelity, "canonical_history");
+  response = { data: { events: [wireEvent("native-answer", 1, wireProvenance())], cursor: 1, has_more: false } };
+  assert.equal((await client.readEvents("s1", 0)).events[0]?.runtime?.runtimeId, wireProvenance().runtime_id);
+  for (const bad of [null, 42, {}]) {
+    response = { data: { events: [wireEvent("invalid-answer", 1, { ...provenance, runtime_id: bad })], cursor: 1, has_more: false } };
+    await assert.rejects(client.readEvents("s1", 0), /runtime_provenance.runtime_id/);
+  }
+});
+
 test("HTTP native boundary preserves authoritative deletion revisions and rejects malformed revisions", async () => {
   let response: unknown = { data: { events: [{ ...wireEvent("removed-1", 1), content_revision: 4,
     payload: { content: "[Message deleted]" }, deleted: { deleted_at: "2026-10-12T00:00:00.000Z", reason: "author" } }],

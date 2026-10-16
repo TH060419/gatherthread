@@ -10,6 +10,8 @@ export * from "./github-sync.js";
 export * from "./history-summary.js";
 export * from "./test-gate.js";
 export * from "./agent-sharing.js";
+export * from "./agent-team.js";
+export * from "./agent-team-library.js";
 
 export const sessionModes = ["solo", "multi"] as const;
 export const membershipRoles = ["owner", "participant", "viewer"] as const;

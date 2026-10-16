@@ -1,0 +1,84 @@
+# ADR-0057: Account-private saved Agent Teams and independent modules
+
+- Status: proposed / local implementation preview
+- Date: 2026-10-16
+
+## Context
+
+The earlier unreleased Team prototype coupled one session plan, graph editing
+and execution. Users need a small reusable library, modules whose execution
+Agent can be configured independently, and a test gate before enabling a Team.
+Native Agent sharing now supplies an explicit grant boundary under ADR-0056;
+Team composition must reuse it rather than treating a borrowed runtime as owned.
+
+## Decision
+
+Separate account-private saved definitions and favorite module snapshots from
+immutable, requester-private session executions. The library is account-wide;
+its storage limits and graph/editor behavior are specified by
+[Product specification](../PRODUCT_SPEC.md#my-agent-teams-local-implementation-preview).
+A favorite is copied into a new module, never a live reference. A module can be
+saved before its exact Agent/model/effort is bound, without gaining execution
+authority.
+
+Permit a new task only through an explicitly human-started, saved, tested and
+enabled definition revision. A two-phase minimal test first probes every module's
+exact route, then transfers its verified public response token over each allowed
+graph direction to the destination and checks an exact echo. Each destination
+receives all of its incoming probe tokens in one call, so both directions of a
+bidirectional edge are exercised within bounded calls. Success is not substantive
+task validation. Configuration edits invalidate the test and block new starts.
+Existing accepted task snapshots retain their original graph and limits until
+their own controls or authority end them. New raw-plan HTTP starts are excluded.
+
+The orchestrator serializes calls and accepts only canonical, provenance-bound
+results and step-specific allowed delegation decisions. Own native, cloud and
+shared-native execution retain their existing authorization, quota, context and
+cleanup owners. Original authorizing-device revocation fences work even when
+the executor uses a separately valid device. Testing has a separate Team-run
+budget, while ordinary provider and shared-grant consumption remains real.
+
+Treat graph connections as allowed-call relationships, not a fixed execution
+sequence. Give each module a complete allowlisted public Team overview on its
+first invocation per run and refresh that same frozen public manifest on later
+calls, because fresh execution contexts may not remember previous ones. A
+per-node first-contact marker and current caller/return/phase/budget brief make
+the distinction explicit on every invocation. Do not include other modules'
+private prompts or native routing
+credentials in the overview. Identity defines responsibilities; a module prompt
+refines methods within them, and direct conflicts require human clarification
+instead of autonomous reinterpretation. A verified Clarify report pauses the run;
+explicit Resume freezes a later original-requester human message and report as
+erasure-aware dependencies and makes a new counted call to the same module.
+The original configuration and execution limits remain fixed. This is a
+behavioral conflict-reporting protocol, not semantic contradiction detection.
+Detailed behavior and disclosure limits
+remain owned by Product specification and Security.
+
+Stable exact-input receipts recover unknown acceptance; definition revision CAS
+prevents stale enable/save from undoing a newer disable. Emergency controls have
+independent admission capacity and transport recovery. Private run erasure never
+turns a canonical Team-owned request into an ordinary executable request.
+Detailed routes and compatibility belong to
+[Interface contracts](../INTERFACE_CONTRACTS.md#saved-agent-team-preview-contract),
+data flow to [Architecture](../ARCHITECTURE.md#saved-agent-teams-local-implementation-preview),
+and trust/retention to [Security](../SECURITY.md#agent-team-preview-boundary).
+
+## Consequences and verification
+
+The additive library stores reusable private configuration without changing
+canonical history or creating additional project membership. Account-wide
+reuse does not make a session-bound runtime portable: unavailable exact targets
+must be explicitly rebound and retested. Favorites cannot silently update other
+Teams. Cycles and parent returns remain bounded by the immutable run limits.
+
+Verification must cover atomic library caps and ownership, immutable copies,
+test/edit/enable revisions, exact target/provenance failures, shared quota and
+Solo acknowledgment, revoked original authorizers, lost receipts, emergency
+controls, retention and canonical ownership after Forget. Instruction coverage
+includes first-contact/refresh manifests, actual caller/return attribution,
+conflict reports, qualifying human clarification, same-key Resume and erasure
+of clarification dependencies after Forget. Graph/editor behavior
+also requires real Safari and Chromium checks. This record specifies the local
+implementation contract, not completed browser/provider acceptance or released
+availability. It changes no package version, tag, publication or deployment.

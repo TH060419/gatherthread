@@ -189,3 +189,37 @@ The trust controls and retention live in [Security](SECURITY.md#native-agent-sha
 routes and compatibility live in [Interface contracts](INTERFACE_CONTRACTS.md#native-agent-sharing-preview-contract).
 See [ADR-0056](adr/0056-project-scoped-native-agent-sharing.md). This is a local
 implementation preview, with no package version, publication or deployment change.
+
+## Saved Agent Teams (local implementation preview)
+
+`agent-team-library.ts` owns account-private saved definitions, favorite module
+snapshots, revisioned test/enable state and idempotent metadata receipts. These
+records are independent of any project or session. `agent-team-store.ts` owns
+requester-private, session-bound run/step/control snapshots; `agent-teams.ts`
+serializes the bounded delegation graph. Strict draft/library and execution
+shapes live in `packages/protocol/src/agent-team-library.ts` and `agent-team.ts`.
+The Web library and graph editor configure saved definitions; a human selects an
+enabled Team in the ordinary composer to start a task.
+
+Acceptance atomically freezes the saved definition revision, graph, limits,
+initiating device and session content revision. Each accepted step appends an
+ordinary canonical Agent request and consumes a call in that same write
+transaction. Own native steps reuse exact-runtime claims, cloud steps reuse the
+hosted reservation/proxy, and shared steps reserve through the ADR-0056 broker.
+The Team orchestrator receives no additional execution authority. Native source
+selection remains session-specific even though its saved configuration is
+account-wide; unavailable bindings require an explicit edit and retest.
+
+A connectivity run is a separate `purpose:test` snapshot. Its first phase probes
+every module with an execution-specific marker. The second calls each destination
+with incoming edges once, transferring all of its sources' public first-phase
+markers and requiring an exact line-by-line echo for every configured direction,
+including both directions of a bidirectional edge. Both phases validate canonical
+output provenance; structural reachability remains a separate preflight check.
+Only a successful test of the unchanged saved revision permits enablement. Content-free test
+stamps can outlive the private run record; edits invalidate them. Existing
+accepted task snapshots remain immutable when their saved definition is changed,
+disabled or deleted. Product flow, quotas, HTTP contracts and security controls
+are owned by their respective canonical documents; the durable split between
+configuration and execution is recorded in
+[ADR-0057](adr/0057-account-private-saved-agent-teams.md).

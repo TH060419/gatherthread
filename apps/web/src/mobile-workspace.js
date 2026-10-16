@@ -138,10 +138,10 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     if (workspace.hidden) closeAll();
     for (const note of doc.querySelectorAll(".mobile-device-note")) note.hidden = !mobileDevice || !active;
     const harnessSelect = el("agent-harness-select"), rawHarness = harnessSelect.value;
-    const harness = rawHarness.startsWith('["shared",') ? "shared" : rawHarness;
+    const harness = rawHarness.startsWith("team:") ? "team" : rawHarness.startsWith('["shared",') ? "shared" : rawHarness;
     const effortSelect = el(harness === "shared" ? "agent-sharing-effort" : harness === "deepseek-harness" ? "agent-dsh-effort-select" : "agent-effort-select");
-    const effort = harness === "cloud" || effortSelect?.hidden || effortSelect?.closest("[hidden]") ? "" : effortSelect?.value;
-    const sharedLabel = harness === "shared" ? harnessSelect.selectedOptions[0]?.textContent : null;
+    const effort = ["cloud", "team"].includes(harness) || effortSelect?.hidden || effortSelect?.closest("[hidden]") ? "" : effortSelect?.value;
+    const sharedLabel = ["shared", "team"].includes(harness) ? harnessSelect.selectedOptions[0]?.textContent : null;
     el("mobile-agent-label").textContent = sharedLabel ? `${sharedLabel}${effort ? ` · ${t(effort)}` : ""}` : mobileAgentLabel(harness, effort, t);
     const full = profile.querySelectorAll("select:not([hidden])");
     const description = [...full].filter(select => !select.closest("[hidden]"))

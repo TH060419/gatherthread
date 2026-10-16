@@ -263,7 +263,8 @@ function selectActiveHistorySummaries(versions: readonly HistorySummaryVersion[]
 }
 
 /** A derived read model, NOT a canonical replay stream or a replacement cursor. */
-export function buildHistoryContext(events: readonly HistorySummaryEvent[], view: "summary" | "original" = "summary"): HistoryContext {
+export function buildHistoryContext(events: readonly HistorySummaryEvent[], view: "summary" | "original" = "summary",
+  originalContent?: (event: HistorySummaryEvent, content: string) => string): HistoryContext {
   const sorted = [...events].sort((a, b) => a.sequence - b.sequence);
   const allVersions = view === "summary" ? historySummaryVersions(sorted) : [];
   const summaries = selectActiveHistorySummaries(allVersions);
@@ -288,7 +289,7 @@ export function buildHistoryContext(events: readonly HistorySummaryEvent[], view
       || !["human_chat", "agent_request", "agent_response"].includes(event.type)) continue;
     const content = historySummaryText(event.payload);
     if (content.trim()) items.push({ kind: "original", event_id: event.id, sequence: event.sequence,
-      actor_user_id: event.actor_user_id, content });
+      actor_user_id: event.actor_user_id, content: originalContent ? originalContent(event, content) : content });
   }
   const result = { view, through_sequence: sorted.at(-1)?.sequence ?? 0, items };
   if (utf8Bytes(JSON.stringify(result)) > HISTORY_SUMMARY_MAX_CONTEXT_BYTES) {

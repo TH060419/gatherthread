@@ -48,6 +48,7 @@ function harness(names, overrides = {}) {
     authView: element(), workspace: element(), emptyState: element(), sessionView: element(),
     hostedAgentStatus: { enabled: false },
     cloudGithubUi: { updateContext: noop, completeAuthorization: async () => {} },
+    teamsUi: { updateContext: noop, selected: () => null, pendingStart: () => false, activeRun: () => null, t: value => value },
     cloudCodeConsent: { updateContext: noop, refresh: noop, refreshLanguage: noop, includeCode: () => true,
       submission: () => ({ allowed: true, includeCode: true, reason: "" }) },
     deviceCredentialDialog: { open: false }, codeSyncUi: { showFirstLoginNotice: noop },

@@ -2,6 +2,7 @@
 @import "driver.js/dist/driver.css";
 @import "./onboarding.css";
 @import "./shared-agent.css";
+@import "./agent-team-library.css";
 
 :root {
   color-scheme: light;

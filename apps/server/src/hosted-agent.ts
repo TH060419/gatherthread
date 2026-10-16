@@ -10,7 +10,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { Actor } from "./database.js";
-import { isCodeSyncPathAllowed, HostedAgentSelectionSchema, type CanonicalEvent, type CloudApiPutInput, type CodeFile, type HostedAgentRequestInput, type HostedHistorySummaryInput, type HistoryContext, type JsonValue } from "@gatherthread/protocol";
+import { isCodeSyncPathAllowed, HostedAgentSelectionSchema, type AgentTeamRequestMetadata, type CanonicalEvent, type CloudApiPutInput, type CodeFile, type HostedAgentRequestInput, type HostedHistorySummaryInput, type HistoryContext, type JsonValue } from "@gatherthread/protocol";
 import { ApiError } from "./errors.js";
 import { redactJson } from "./redaction.js";
 import type { CollaborationService } from "./service.js";
@@ -32,6 +32,8 @@ const MAX_OUTPUT_TOKENS = 1_024;
 const MAX_CONTEXT_BYTES = 12_000;
 const MAX_WORKSPACE_FILES = 100;
 const MAX_WORKSPACE_BYTES = 512_000;
+export interface HostedTeamExecution { metadata: AgentTeamRequestMetadata; context: HistoryContext;
+  onReserved: (event: CanonicalEvent) => void }
 
 export interface HostedAgentOptions extends HostedRunLimits {
   endpoints: HostedEndpoint[];
@@ -478,6 +480,19 @@ export class HostedAgent {
       ...(input.api_config_revision ? { api_config_revision: input.api_config_revision } : {}) }, input);
   }
 
+  /** Internal coordinator only: public routes cannot submit metadata or reconstructed context. */
+  startTeam(actor: Actor, sessionId: string, input: HostedAgentRequestInput, team: HostedTeamExecution) {
+    const receipt = Promise.withResolvers<{ request_event: CanonicalEvent; replayed: boolean }>();
+    void this.request(actor, sessionId, input, event => receipt.resolve({ request_event: event, replayed: false }), undefined, team)
+      .then(result => receipt.resolve({ request_event: result.request_event, replayed: result.replayed }), receipt.reject);
+    return receipt.promise;
+  }
+
+  pauseTeam(actor: Actor, sessionId: string, requestId: string) {
+    try { return this.service.pauseHostedAgentRequest(actor, sessionId, requestId, true); }
+    finally { this.controllers.get(requestId)?.abort(); }
+  }
+
   pause(actor: Actor, sessionId: string, requestId: string) {
     const result = this.service.pauseHostedAgentRequest(actor, sessionId, requestId);
     this.controllers.get(requestId)?.abort();
@@ -507,13 +522,14 @@ export class HostedAgent {
   }
 
   async request(actor: Actor, sessionId: string, input: HostedAgentRequestInput, onAccepted?: (event: CanonicalEvent) => void,
-    summary?: HostedHistorySummaryInput) {
+    summary?: HostedHistorySummaryInput, team?: HostedTeamExecution) {
     if (input.github_task_id) throw new ApiError(400, "github_task_route_required", "Use the cloud repository task endpoint");
     const endpoints = this.endpointsFor(actor, input);
     if (!endpoints.length) throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
     this.assertDockerReady();
     const session = this.service.database.requireSession(sessionId);
-    const context = summary ? null : this.continuationContext(actor, sessionId, input, this.service.readHistoryContext(actor, sessionId));
+    if (team) this.service.requireWrite(actor, sessionId);
+    const context = summary ? null : team?.context ?? this.continuationContext(actor, sessionId, input, this.service.readHistoryContext(actor, sessionId));
     if (Buffer.byteLength(JSON.stringify(context)) > MAX_CONTEXT_BYTES) {
       throw new ApiError(413, "hosted_context_too_large", "Cloud Agent needs a shorter conversation context");
     }
@@ -531,7 +547,8 @@ export class HostedAgent {
       endpoints.map((endpoint) => ({ ...endpoint, blocked: (this.cooldowns.get(endpoint.quotaGroup) ?? 0) > Date.now() })), this.limitsFor(endpoints), (event) => {
         if (context && (event.content_revision ?? 0) !== (context.content_revision ?? 0)) throw new ApiError(409,
           "context_changed", "Shared history changed while preparing the task; start a new request");
-      }, summary);
+        team?.onReserved(event);
+      }, summary, team?.metadata);
     if (!reserved.created) return { request_event: reserved.event, replayed: true };
     const controller = new AbortController();
     this.controllers.set(reserved.event.id, controller);
@@ -550,7 +567,8 @@ export class HostedAgent {
       const session = this.service.database.requireSession(sessionId), role = this.service.requireMembership(actor, sessionId);
       const job = this.service.database.sqlite.prepare("SELECT 1 FROM hosted_agent_runs WHERE request_event_id=? AND user_id=? AND device_id=? AND status='running'")
         .get(reserved.event.id, actor.user_id, actor.device_id);
-      if (!job || this.service.database.isHostedAgentPaused(reserved.event.id) || role === "viewer" || session.state !== "active"
+      if (!job || this.service.database.isHostedAgentPaused(reserved.event.id) || !this.service.database.teamRequestMayExecute(reserved.event.id)
+        || role === "viewer" || session.state !== "active"
         || session.mode === "solo" && session.owner_user_id !== actor.user_id) throw new ApiError(403, "hosted_access_changed", "Cloud Agent access changed");
     };
     const authorizationWatch = setInterval(() => { try { authorize(); } catch { controller.abort(); } }, 2000);
@@ -624,18 +642,23 @@ export class HostedAgent {
       const run = JSON.parse(hostedContainerResult(output, live.accept)) as { answer?: unknown; files?: unknown; save_error?: unknown };
       content = typeof run.answer === "string" ? run.answer.trim().slice(0, 14_000) : "";
       if (!content) throw new Error("empty_agent_result");
+      if (!this.service.database.teamRequestMayExecute(reserved.event.id)) throw new Error("container_interrupted");
+      const notice = (value: string) => {
+        const terminal = team ? content.match(/(?:^|\n)```gatherthread-team[ \t]*\r?\n[\s\S]*?\r?\n```\s*$/u) : null;
+        content = terminal ? `${content.slice(0, terminal.index).trimEnd()}\n\n${value}\n\n${terminal[0].trimStart()}` : `${content}\n\n${value}`;
+      };
       if (branch) {
         if (run.save_error || !Array.isArray(run.files)) {
-          content += "\n\nThe Agent ran, but its files could not be saved to cloud code.";
+          notice("The Agent ran, but its files could not be saved to cloud code.");
         } else {
           const files = run.files as CodeFile[];
           if (JSON.stringify(files) !== JSON.stringify(branch.files)) {
             try {
               this.codeRepository.checkpoint(actor, session.project_id, { base_commit: branch.commit, files,
                 message: "Cloud Agent changes", idempotency_key: `hosted-code-${reserved.event.id}` }, authorize);
-              content += "\n\nChanges were saved to your cloud code branch for review.";
+              notice("Changes were saved to your cloud code branch for review.");
             } catch {
-              content += "\n\nThe Agent ran, but its changed files could not be saved to cloud code.";
+              notice("The Agent ran, but its changed files could not be saved to cloud code.");
             }
           }
         }

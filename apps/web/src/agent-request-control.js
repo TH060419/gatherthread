@@ -42,7 +42,7 @@ export function composerAgentAction(events, userId) {
   let request;
   // Keep the unbundled browser path compatible with Safari 15/Chrome 100.
   for (let index = history.length - 1; index >= 0; index--) {
-    if (history[index].type === "agent_request" && history[index].actor?.id === userId && !history[index].payload?.history_summary) {
+    if (history[index].type === "agent_request" && history[index].actor?.id === userId && !history[index].payload?.history_summary && !history[index].payload?.agent_team) {
       request = history[index];
       break;
     }
@@ -83,6 +83,7 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
 
   function view() {
     const context = getContext();
+    if (context.teamRun && ["running", "paused"].includes(context.teamRun.status)) return { ...context, action: "stop_team" };
     return { ...context, ...composerAgentAction(context.events, context.userId) };
   }
 
@@ -96,16 +97,16 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
       operation = null;
     }
     const busy = operation?.scope === current.scope;
-    const labels = { request: current.requestLabel ?? "Request my agent", wait: "Waiting for Agent…", pause: "Pause Agent", resume: "Resume Agent", stop: "Stop shared Agent" };
-    const label = busy ? operation.action === "stop" ? "Stopping…" : operation.action === "pause" ? "Pausing…" : "Resuming…" : labels[current.action];
+    const labels = { request: current.requestLabel ?? "Request my agent", wait: "Waiting for Agent…", pause: "Pause Agent", resume: "Resume Agent", stop: "Stop shared Agent", stop_team: "Stop Team" };
+    const label = busy ? ["stop", "stop_team"].includes(operation.action) ? "Stopping…" : operation.action === "pause" ? "Pausing…" : "Resuming…" : labels[current.action];
     // Reuse the same stable button and keep its accessible name meaningful.
     // A canonical shared request is independently stoppable even while its
     // original send/recovery HTTP response is still incomplete.
-    const independentStop = current.action === "stop";
+    const independentStop = ["stop", "stop_team"].includes(current.action);
     if (!current.sending || independentStop) {
       const icon = button.ownerDocument.createElement("span");
       icon.setAttribute("aria-hidden", "true");
-      icon.textContent = current.action === "stop" ? "■" : current.action === "pause" ? "Ⅱ" : current.action === "resume" ? "▶" : "✦";
+      icon.textContent = independentStop ? "■" : current.action === "pause" ? "Ⅱ" : current.action === "resume" ? "▶" : "✦";
       button.replaceChildren(icon, ` ${t(label)}`);
       button.setAttribute("aria-label", t(label));
     }
@@ -113,7 +114,7 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
     button.setAttribute("aria-busy", String(busy));
     if (current.action !== "request") {
       button.disabled = busy || current.sending && !independentStop || !current.writable || current.action === "wait";
-      targetLabel.textContent = t(current.action === "stop" ? "Stops your shared request and cancels queued work; your draft stays here." : current.action === "resume"
+      targetLabel.textContent = t(current.action === "stop_team" ? "Stops the Team task; your draft stays here." : current.action === "stop" ? "Stops your shared request and cancels queued work; your draft stays here." : current.action === "resume"
         ? "Starts a new request with latest history, using the original Agent and model."
         : current.action === "wait" ? current.cloud ? "Cloud Agent is working…" : "Waiting for your Agent to start this request."
           : "Pauses your current request; your draft stays here.");
@@ -144,7 +145,9 @@ export function mountAgentRequestControl({ button, targetLabel, errorNode, api, 
     const key = resumeIntent?.key;
     void (async () => {
       try {
-        if (current.action === "stop") {
+        if (current.action === "stop_team") {
+          await current.stopTeam();
+        } else if (current.action === "stop") {
           if (stopIntent?.requestId !== current.request.id || stopIntent.scope !== current.scope) {
             stopIntent = { requestId: current.request.id, scope: current.scope, key: makeKey("shared-cancel") };
           }
