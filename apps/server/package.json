@@ -9,7 +9,7 @@
   "dependencies": {
     "@gatherthread/protocol": "*",
     "undici": "^7.30.0",
-    "ws": "^8.18.3",
+    "ws": "^8.22.0",
     "zod": "^4.6.5"
   }
 }
