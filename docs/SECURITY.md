@@ -301,3 +301,105 @@ barriers retain their runtime lifetime. Canonical proof survives private job
 cleanup but is cleared/anonymized by applicable erasure/account deletion.
 See [ADR-0056](adr/0056-project-scoped-native-agent-sharing.md) and the
 [wire contract](INTERFACE_CONTRACTS.md#native-agent-sharing-preview-contract).
+
+## Agent Team preview boundary
+
+A saved Team and its favorite modules are private configuration, not an execution
+grant. Library mutations require the owning account's active browser session and
+normal Origin/admission/rate gates. Atomic owner-scoped counts enforce the
+five-Team/five-favorite limits across concurrent devices; revision comparison
+prevents stale edits or a delayed enable from undoing a newer disable. Empty
+drafts may persist without permitting execution. Recognizable credentials are
+rejected in names, rules, identities, prompts and targets before persistence.
+No new credential, arbitrary endpoint or local path is accepted by Team schemas.
+
+Only a human-started saved and tested revision may create a new task. Its
+immutable run pins the initiating authorizing device separately from the chosen
+executor device. Current actor/device, project/session write permission,
+content revision and exact target remain mandatory at reservation, native claim,
+progress, completion, cloud dispatch and shared broker operations. Revoking or
+expiring the original authorizing device fences later work even when the same
+account has another valid executor device. A graph edge never grants an Agent
+ordinary authority over another member's runtime: shared routes must still pass
+all ADR-0056 grant, Solo disclosure, quota, cleanup and project-file controls.
+Own local execution and cloud execution retain their existing boundaries.
+
+The public Team overview is an explicit allowlist, not a serialized private
+definition: it contains the overall task/rules, module names and identities,
+allowed-call directions, entry and limits. It excludes other modules' private
+prompts, native runtime routing identifiers and credentials. Only the selected
+module's own prompt belongs in its instruction block. Overview and per-step
+caller/return/phase/budget facts derive from frozen server state, never inferred
+from a model's text or untrusted room messages. The same public manifest is
+refreshed on later calls, with a per-node/per-run first-contact marker; fresh
+native/cloud/shared execution contexts are not assumed to remember prior calls.
+This allowlist does not change canonical session readership or make a separately
+published canonical message private. Identity bounds responsibility;
+module prompts only refine its methods. A direct contradiction must be surfaced
+for human clarification instead of silently broadening responsibility. These
+instruction rules do not replace exact-route, ACL, tool or quota enforcement.
+Complete overviews remain subject to existing dispatch size limits; an oversized
+brief must fail explicitly rather than be silently clipped and labelled complete.
+
+The orchestrator consumes only a canonical final response linked to its current
+request and matching frozen execution provenance. A step-bound terminal
+`gatherthread-team` directive can choose only an allowed graph direction; stale,
+malformed, extra or forbidden directives fail closed. A verified successful leaf
+may finish from its plain final answer. Prompts, graph roles, returned results
+and the model's compliance are not authorization boundaries. Each accepted
+delegate, parent return or explicit continuation consumes another call; the
+original total deadline and independent provider limits still apply. There is
+no parallel fan-out or model-controlled bypass of limits.
+
+Instruction clarification accepts only an exact current-step `action:clarify`
+directive with a verified public conflict explanation. A probe cannot request
+it. The resulting pause does not grant new model, tool or caller authority. Only
+the run's original requester may provide the subsequent same-session human
+clarification and explicitly resume with current write/device authority. The
+Resume transaction freezes the latest eligible message and report references;
+same-key recovery cannot substitute a later message or duplicate the new counted
+call. Both references participate in canonical erasure dependencies, including
+after private-run Forget, so deletion cannot leave an executable clarification
+copy in a continuation. Original plan/model/budget/deadline fences still apply.
+The Agent's detection of contradictions and the meaning of the human reply are
+behavioral matters, not a server-side semantic detector or a replacement for
+authorization checks.
+
+A connectivity run is marked `purpose:test`. It first verifies an execution-specific
+nonce at every module, then sends each destination its incoming sources' verified
+public probe tokens and requires an exact echo for every allowed direction. Both
+directions of a bidirectional edge are exercised. Canonical first-phase responses
+and current provenance are checked before route transfer; a missing, stale or
+incorrect token fails the test. The probe transfers only minimal public test
+data, without delegating arbitrary task text.
+Cloud and shared connectivity calls receive an empty history-item list plus the
+currently authorized canonical head/content revision; their nonce/route data is
+in the explicit current prompt. Cloud tests force `include_code:false`, so
+testing never uploads project code. Ordinary task history/code choices are unchanged.
+Its task call/time allowance is separate, but provider/shared allowances are
+charged normally. The minimal prompt requests no tool use; it does not establish
+a new sandbox or broaden a target's existing permissions. Testing is not proof
+of future availability or substantive task correctness. A changed definition
+cannot reuse an older test result. Test/enable/start cannot be bypassed by posting
+a raw plan to the run collection.
+
+Pause/Stop control admission has bounded independent emergency capacity. Unknown
+mutation acknowledgments preserve the original body/key for recovery rather
+than issuing a new task; reads and receipt recovery cannot hold Stop hostage.
+Canonical `agent_team` ownership is server reserved and continues fencing a
+request after private run Forget or pruning. Generic event writes, local-turn
+uploads and ordinary cloud continuation cannot turn such a request into an
+ordinary independently executable request.
+
+Saved definitions and favorites remain until their owner deletes them or the
+account is deleted. They are separate from session history and from private run
+retention. Account deletion cascades these records. Completed private runs and
+their step/control copies are pruned after 30 days; Forget can remove a terminal
+private run earlier, without deleting canonical messages. Metadata-only library
+receipts expire after 14 days. Author erasure invalidates affected active runs
+and removes their derived task caches under the existing content-revision rules;
+saved user-authored configuration is not a hidden transcript archive. Historical
+session-plan preview rows have no public execution route and are not silently
+promoted into enabled saved Teams. Existing backup/provider retention boundaries
+remain as defined above. See
+[ADR-0058](adr/0058-account-private-saved-agent-teams.md).

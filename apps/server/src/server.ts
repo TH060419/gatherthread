@@ -5,6 +5,12 @@ import { SaveAgentShareInputSchema, ControlAgentShareInputSchema, AgentSharesRes
   CompleteAgentShareJobInputSchema, AbortAgentShareJobInputSchema, ReportAgentShareAvailabilityInputSchema,
   AgentShareJobsResponseSchema, AgentShareSourcesResponseSchema, AgentShareAvailabilityResponseSchema,
   ReportAgentShareSourceAvailabilityInputSchema } from "@gatherthread/protocol";
+import { AgentTeams } from "./agent-teams.js";
+import { AgentTeamLibrary } from "./agent-team-library.js";
+import { AgentTeamLibrarySchema, AgentTeamDefinitionResponseSchema, AgentTeamFavoriteResponseSchema,
+  DeleteAgentTeamLibraryItemSchema } from "@gatherthread/protocol";
+import { ControlAgentTeamRunInputSchema,
+  AgentTeamRunsResponseSchema, AgentTeamRunResponseSchema, AgentTeamRunAcceptedSchema } from "@gatherthread/protocol";
 import { stopInterruptedHostedContainers } from "./hosted-agent-recovery.js";
 import { HostedGithubRepositoryInputSchema, HostedGithubTaskInputSchema, HostedGithubPrInputSchema, HostedGithubCompleteInputSchema,
   HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithubConnectionSchema, HostedGithubDisconnectionSchema,
@@ -503,6 +509,8 @@ export async function startCollaborationServer(
   const hostedAgent = options.hostedAgent ? new HostedAgent(service, codeRepository, options.hostedAgent) : undefined;
   const personalApi = hostedAgent?.personalApi ?? new CloudApiStore(database);
   const agentSharing = new AgentSharing(service);
+  const agentTeams = new AgentTeams(service, hostedAgent, { sharing: agentSharing });
+  const agentTeamLibrary = new AgentTeamLibrary(agentTeams);
   if (options.hostedGithub && !hostedAgent) throw new Error("Cloud GitHub requires Cloud Agent");
   const hostedGithub = options.hostedGithub && options.hostedAgent && hostedAgent
     ? new HostedGithub(service, hostedAgent, options.hostedAgent, options.hostedGithub) : undefined;
@@ -1316,7 +1324,31 @@ export async function startCollaborationServer(
         return;
       }
 
+      if (parts[0] === "v1" && ["agent-teams", "agent-team-modules"].includes(parts[1] ?? "")) {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Manage your Agent teams in the signed-in browser");
+        const team = parts[1] === "agent-teams";
+        if (team && parts.length === 2 && request.method === "GET") {
+          sendJson(response, 200, { data: AgentTeamLibrarySchema.parse(agentTeamLibrary.list(actor)) }); return;
+        }
+        const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/u).parse(parts[2]);
+        if (parts.length === 3 && request.method === "PUT") {
+          const input = await readAuthenticatedJson(70000);
+          sendJson(response, 200, { data: team ? AgentTeamDefinitionResponseSchema.parse(agentTeamLibrary.save(actor, id, input))
+            : AgentTeamFavoriteResponseSchema.parse(agentTeamLibrary.favorite(actor, id, input)) }); return;
+        }
+        if (parts.length === 3 && request.method === "DELETE") {
+          const input = DeleteAgentTeamLibraryItemSchema.parse(await readAuthenticatedJson(1024));
+          sendJson(response, 200, { data: agentTeamLibrary.delete(actor, team ? "team" : "favorite", id, input.idempotency_key) }); return;
+        }
+      }
       const sessionId = parts[0] === "v1" && parts[1] === "sessions" ? parts[2] : undefined;
+      if (sessionId && parts[3] === "agent-teams" && parts[4] && parts.length === 6 && request.method === "POST") {
+        if (authentication.kind !== "browser_session") throw new ApiError(403, "browser_session_required", "Configure and start teams in the signed-in browser");
+        const id = z.string().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/u).parse(parts[4]), input = await readAuthenticatedJson(8192);
+        if (parts[5] === "test") { sendJson(response, 202, { data: AgentTeamRunAcceptedSchema.parse(agentTeamLibrary.test(actor, id, sessionId, input)) }); return; }
+        if (parts[5] === "start") { sendJson(response, 202, { data: AgentTeamRunAcceptedSchema.parse(agentTeamLibrary.start(actor, id, sessionId, input)) }); return; }
+        if (parts[5] === "control") { sendJson(response, 200, { data: AgentTeamDefinitionResponseSchema.parse(agentTeamLibrary.control(actor, id, sessionId, input)) }); return; }
+      }
       if (sessionId && parts[3] === "shared-agent-requests") {
         if (parts.length === 4 && request.method === "POST") {
           const input = SharedAgentRequestInputSchema.parse(await readAuthenticatedJson());
@@ -1337,6 +1369,21 @@ export async function startCollaborationServer(
         if (!hostedGithub) throw new ApiError(503, "hosted_github_disabled", "Cloud GitHub is not enabled");
         const input = HostedGithubTaskInputSchema.parse(await readAuthenticatedJson());
         sendJson(response, 202, { data: HostedGithubTaskSchema.parse(hostedGithub.start(actor, sessionId, input)) }); return;
+      }
+      if (sessionId && parts[3] === "agent-team-runs") {
+        if (parts.length === 4 && request.method === "GET") {
+          sendJson(response, 200, { data: AgentTeamRunsResponseSchema.parse(agentTeams.list(actor, sessionId)) }); return;
+        }
+        if (parts.length === 5 && parts[4] && request.method === "GET") {
+          sendJson(response, 200, { data: AgentTeamRunResponseSchema.parse(agentTeams.read(actor, sessionId, parts[4])) }); return;
+        }
+        if (parts.length === 5 && parts[4] && request.method === "DELETE") {
+          z.object({}).strict().parse(await readAuthenticatedJson()); agentTeams.forget(actor, sessionId, parts[4]); response.writeHead(204); response.end(); return;
+        }
+        if (parts.length === 6 && parts[4] && parts[5] === "control" && request.method === "POST") {
+          const input = ControlAgentTeamRunInputSchema.parse(await readAuthenticatedJson());
+          sendJson(response, 200, { data: AgentTeamRunResponseSchema.parse(agentTeams.control(actor, sessionId, parts[4], input)) }); return;
+        }
       }
       if (sessionId && parts[3] === "hosted-agent-requests" && parts.length === 4 && request.method === "POST") {
         if (!hostedAgent) throw new ApiError(503, "hosted_agent_disabled", "Cloud Agent is not available on this server");
@@ -1737,6 +1784,7 @@ export async function startCollaborationServer(
     origin: `http://${address.address.includes(":") ? `[${address.address}]` : address.address}:${address.port}`,
     async close() {
       agentSharing.close();
+      agentTeams.close();
       clearInterval(heartbeat);
       clearInterval(registrationCleanup);
       unsubscribe();

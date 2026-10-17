@@ -438,3 +438,166 @@ schemas; unsupported native platforms refuse sharing rather than broadening tool
 Retention, erasure and native permission requirements are owned by
 [Security](SECURITY.md#native-agent-sharing-preview-boundary); the decision is in
 [ADR-0056](adr/0056-project-scoped-native-agent-sharing.md).
+
+## Saved Agent Team preview contract
+
+`packages/protocol/src/agent-team-library.ts` owns the strict account-library
+schemas; `agent-team.ts` owns frozen plans, targets, runs, steps, control actions
+and server-reserved request metadata. New library, test, enable and start routes
+require a browser session, with the normal active-device and mutation
+Origin/admission/JSON gates. All JSON fields use snake_case and the existing
+`{data}` / `{error:{code,message,details?}}` envelopes.
+
+| Route | Authority and shape |
+| --- | --- |
+| `GET /v1/agent-teams` | Current account only; `{teams,modules,team_limit:5,module_limit:5}`. Definitions and favorites are account-wide, not project-owned. |
+| `PUT /v1/agent-teams/:team` | Owner only; `{draft,max_calls?,max_duration_minutes?,expected_revision,idempotency_key}` returns `{team,replayed}`. Creation requires null revision; edits require the exact saved revision. |
+| `PUT /v1/agent-team-modules/:module` | Owner only; creates an immutable `{module,idempotency_key}` favorite and returns `{favorite,replayed}`. The module snapshot has `label,role,prompt?,target` without graph identity or position. |
+| `DELETE /v1/agent-teams/:team` / `DELETE /v1/agent-team-modules/:module` | Owner only; strict `{idempotency_key}` returns `{deleted:true,replayed}` and releases the library slot. Team deletion cancels its pending connectivity test, not accepted task snapshots. |
+| `POST /v1/sessions/:session/agent-teams/:team/test` | Saved owner/current session writer; `{expected_revision,content_revision,solo_transfer_ack?,idempotency_key}`. 202 `{run,replayed}` with `purpose:test`. |
+| `POST /v1/sessions/:session/agent-teams/:team/control` | Saved owner; `{enabled,expected_revision?,idempotency_key}` returns `{team,replayed}`. Enable requires exact passed revision plus current writable session and exact available targets. Disable may omit revision and does not require a new execution authorization. |
+| `POST /v1/sessions/:session/agent-teams/:team/start` | Saved owner/current session writer; test input plus nonblank `content` (at most 3,000 characters), optional `reply_to_event_id` (ID or null) and `mentions`. 202 `{run,replayed}`. The server supplies the saved plan and limits; client plans cannot override them. |
+| `GET /v1/sessions/:session/agent-team-runs` / `GET .../:run` | Authenticated requester with current session access; bounded own-run summaries or `{run}` detail. Another member's private run is not exposed. |
+| `POST /v1/sessions/:session/agent-team-runs/:run/control` | Original requester with current write access; `{action:pause\|resume\|stop\|continue,idempotency_key}` returns `{run}`. Resume/continue additionally recheck the frozen original device, remaining calls and original deadline. |
+| `DELETE /v1/sessions/:session/agent-team-runs/:run` | Original requester/current writer; strict `{}` forgets only a terminal private record and returns 204. Canonical events remain. |
+
+A draft contains `name,team_prompt,entry_node_id?,nodes,edges`, at most 16 modules,
+32 edges and 64 KiB serialized JSON. Module `target:null` supports saving an
+unbound draft; executable plans require every target and directional
+reachability from the entry module. Targets are an exact own local runtime,
+provider/model/effort; an exact shared grant/revision and advertised profile; or
+a cloud profile/provider/model with its private API configuration revision and
+explicit `include_code` flag. Missing or removed selections fail closed. A cloud
+target has no independently writable native reasoning-effort field. Edges use
+`source,target,direction:one_way|bidirectional`, with unique IDs/routes, existing
+endpoints and no self-loop. They are permission to call, not a mandatory task
+schedule or an extra tool grant; the subordinate's return follows the recorded
+caller stack without implicitly authorizing arbitrary reverse delegation.
+Bounds/defaults and library/editor behavior are owned
+by [Product specification](PRODUCT_SPEC.md#my-agent-teams-local-implementation-preview).
+
+Definition output adds `id,revision,enabled,tested_revision,test_run_id,
+test_session_id,test_status,updated_at` to the saved draft/limits. Test status is
+`not_tested|running|passed|failed`; enabling/disabling advances the revision and
+preserves a valid test stamp only while configuration is unchanged. A saved edit
+invalidates the stamp and disables future starts. A favorite inserted into a
+graph receives a new node identity and position. At the atomic five-item limit,
+new entries return 409 `agent_team_limit` or `agent_team_favorite_limit`; unbound
+or disconnected test/start inputs return 422 `agent_team_incomplete` or
+`agent_team_disconnected`. Stale revisions and changed idempotent retries conflict.
+
+Test/start acceptance binds its exact input digest, definition ID/revision,
+session content revision and caller's stable key. An exact retry recovers its
+original accepted run without reserving another task, including after the saved
+definition changes, is disabled or is deleted; current caller/session authority
+still applies. A different action/body with that key conflicts. Browser requests
+must bound response headers and bodies, preserve unknown acceptance and retain
+an independent Stop/recovery path. Saved-plan edits never rewrite a frozen run.
+While a start acknowledgment is unknown, composer recovery and Stop bind only
+to the same authenticated scope/current user, original start idempotency key
+and its verified run identity. Equal task text is not an identity match and
+cannot authorize stopping another device's run. Before a matching canonical
+request confirms that binding, recovery repeats the exact original body/key
+rather than guessing a run from conversation content.
+
+Saved-Team and internal formal-run start schemas accept the existing in-session
+quote and mention shapes. `mentions` uses `MessageMentionsSchema` (at most 32
+UTF-16 ranges in the exact submitted task `content`, not in the generated Team
+prompt). The browser omits empty quote/mention metadata. Parsed start input,
+including explicit null or empty arrays, participates in the original digest;
+omitted, null and empty values are not silently coalesced for same-key retries.
+A changed quote or mention list with the same key conflicts. New acceptance and
+first canonical publication enforce the existing quote visibility and current
+member/text-range checks from
+[Message quotes and mentions](#message-quotes-and-mentions). Receipt recovery
+retains the original metadata while rechecking caller/session authority and
+current deletion/context fences; it does not send another mention notification.
+
+Only the first formal canonical step carries the original quote and mentions,
+through own-native, cloud or shared execution. Its assembled prompt retains one
+server-owned step boundary before the assigned task. Redaction processes the
+whole assembled prompt, preserving cross-fragment credential detection. Only
+the final safe result may locate that unique boundary, verify the exact original
+task is unchanged and translate UTF-16 mention ranges; searching repeated task
+text or redacting fragments separately is not sufficient. Safe content must be
+a redaction fixed point before dispatch. Native, cloud and shared acceptance
+validate the actual final safe payload, including its mention ranges. Missing or
+ambiguous boundaries, changed task text, unstable redaction or invalid ranges
+fail closed before canonical step acceptance and call charging. Generated-prompt
+mapping failures use `agent_team_sensitive_input`; invalid reservation payloads
+retain the existing validation/authorization errors. This does not change the
+original parsed-start digest, wire fields or database schema.
+The mentions inbox uses the original `agent_team.task_content` for
+its excerpt. Later automatic steps do not re-notify the original mentions or
+repeat the quote. Connectivity-probe input rejects both fields, and probes do
+not publish them. This adds no new quote visibility or notification authority.
+
+Task dispatch derives its instruction brief from the frozen run and trusted
+step state. Each module's first invocation in that run includes an allowlisted
+public overview: overall task/Team rules, all module names and identities, the
+full directed relationships and entry, and run limits. Another module's private
+`prompt`, exact native runtime routing and credentials are not overview fields.
+Every invocation includes the current module, actual caller, allowed targets,
+return recipient, phase and remaining call/time allowance. A module's first-call
+status is scoped to its node in the run, not to a reused Agent connection.
+The brief marks `first_contact` on the first invocation and safely refreshes the
+same frozen public overview on later invocations; it does not assume persistent
+model memory across native, cloud or shared executions. This is instruction
+content, not permission to expose another module's prompt or serialize a private
+definition into the overview.
+Retries retain the accepted step identity; neither relationship nor budget is
+accepted from model assertions. Identity/prompt interpretation follows
+[Product specification](PRODUCT_SPEC.md#my-agent-teams-local-implementation-preview).
+
+Run summaries add optional `purpose:task|test` and `definition_id`; detail adds
+the frozen `plan,content,steps`. Canonical step requests use trusted `agent_team`
+metadata (`run_id,step_id,node_id,node_label,task_content,purpose?,clarification_event_id?,start_idempotency_key?`); generic
+client payloads cannot create it. Native/shared/cloud result provenance remains
+independently validated. `start_idempotency_key` is optional only for reading
+older canonical records; fresh engine dispatches always supply it, and a fresh
+Team reservation must match its run's original start key. It is an execution
+identity binding, not an authorization credential. The terminal version-1 directive is one final fenced
+`gatherthread-team` JSON block with `step_id` and `action:complete`,
+`action:delegate,target_node_id,task`, or strict
+`{"version":1,"step_id":"<current step>","action":"clarify"}`. Graph permission is checked server-side.
+Successful leaves may return plain final text. Clarify requires a current-step
+final response with verified provenance and a nonblank public explanation outside
+the directive. It pauses a task with `error_code:agent_team_instruction_conflict`;
+probe runs retain their exact marker protocol and do not accept Clarify.
+
+The existing `action:resume` control has no new input field. For a paused conflict,
+its first acceptance transaction selects and freezes the latest non-deleted,
+nonblank `human_chat` by the run's original requester in the same session after
+the conflict response, plus that response reference. Without such a message the
+run remains paused. Resume clears the current step and schedules a new counted
+call to the same module under the original plan, model, limits and deadline.
+The resumed request's optional server-owned `clarification_event_id` identifies
+the frozen human message; retries with the same control key neither replace that
+choice nor add another call. Both references remain canonical erasure
+dependencies after private-run Forget. Identity/rules/prompt/graph edits require
+a new saved/tested run rather than mutation of this snapshot. The server gates
+references and authorization, not semantic contradiction detection or proof of
+resolution.
+
+A test's first phase requires the exact `GT_TEAM_OK:<node_id>:<step_id>` marker.
+Its second calls each destination
+with incoming edges once, retains its current-step OK marker and requires one
+`GT_TEAM_ROUTE:<edge_id>:<source_id>:<target_id>:<source_first_phase_step_id>` line
+per incoming direction, including reverse directions for bidirectional edges.
+The prompt supplies the complete expected line array after `Respond exactly with
+these lines:`; the server checks its exact newline-joined response and source
+provenance rather than accepting a model-declared success or delegation. Total
+probe calls are module count plus distinct incoming destinations, at most 32.
+For cloud/shared test dispatch, the server supplies metadata-only context with
+`items:[]` and the currently authorized head/content revision; cloud test requests
+force `include_code:false`. Task dispatch retains its ordinary context/code contract.
+
+Persistence is additive: account definitions/favorites/metadata receipts plus
+private session runs/steps/controls and migration columns for purpose and library
+binding. Existing ordinary/shared requests retain their current contracts.
+Earlier unreleased session-plan schemas remain internal compatibility data;
+there is no public raw-plan save/start route or automatic enabled-Team migration.
+Older clients may ignore additive output but cannot start a saved Team through
+ordinary request/continuation paths. No new user-facing MCP execution authority,
+package version, publication or deployment is introduced by this preview. See
+[ADR-0058](adr/0058-account-private-saved-agent-teams.md) for the durable boundary.

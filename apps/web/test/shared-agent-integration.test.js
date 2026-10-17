@@ -184,6 +184,7 @@ function sendFixture({ mode = "solo", approve = true, apiOverride } = {}) {
     DSH_HARNESS: "deepseek-harness", CLOUD_AGENT_ENTRY_ENABLED: true,
     codeSyncUi: { updateContext() {} }, cloudCodeConsent: { updateContext() {} }, cloudGithubUi: { updateContext() {} },
     historySummaryUi: { updateContext() {} }, renderAgentProfileControls() {},
+    teamsUi: { updateContext() {}, selected: () => null, pendingStart: () => false, activeRun: () => null, t: value => value },
     currentCloudProfile: () => null, agentContextUpdateReason: () => "",
     messageActions: { metadata: () => metadata, sent() {} },
     sharedAgentsUi: { selected: () => ({ available: true, target: { kind: "shared", share_id: share.id, share_revision: share.revision, ...profile } }),
@@ -198,6 +199,26 @@ function sendFixture({ mode = "solo", approve = true, apiOverride } = {}) {
   vm.runInContext(`async function recoverSharedRequest() {${tail.slice(0, end)}\n}`, context);
   return { context, calls, confirmations, message, el, set metadata(value) { metadata = value; } };
 }
+
+test("shared Team steps cannot expose the ordinary borrower's raw Stop control", async () => {
+  const ordinary = { id: "ordinary-shared", actor: { id: "bob" }, type: "agent_request", payload: { shared_agent: shared, content: input.content } };
+  const teamStep = { id: "team-shared-step", actor: { id: "bob" }, type: "agent_request",
+    payload: { shared_agent: shared, agent_team: { run_id: "team-run", step_id: "team-step", node_id: "worker" }, content: "Frozen module assignment" } };
+  assert.equal(composerAgentAction([teamStep], "bob").action, "request", "Team steps are controlled only by their bounded run");
+  const action = composerAgentAction([ordinary, teamStep], "bob");
+  assert.equal(action.action, "stop"); assert.equal(action.request.id, ordinary.id, "a later Team step cannot steal an ordinary request's Stop");
+  const node = () => ({ setAttribute() {}, textContent: "" });
+  const button = { ownerDocument: { createElement: node }, disabled: false, dataset: {}, setAttribute() {}, replaceChildren() {} };
+  let stopped = 0;
+  const ui = mountAgentRequestControl({ button, targetLabel: node(), errorNode: node(),
+    api: { cancelSharedAgentRequest: async () => assert.fail("Team Stop must not cancel an individual shared broker job"),
+      pauseAgentRequest: async () => assert.fail("Team Stop must not pause an individual native step") },
+    getContext: () => ({ scope: "bob:session-b:team", sessionId: "session-b", userId: "bob", events: [ordinary, teamStep],
+      writable: true, sending: true, teamRun: { id: "team-run", status: "running" }, stopTeam: async () => { stopped++; } }),
+    makeKey: () => "unused-raw-control-key", onChange: () => ui.update() });
+  ui.update(); assert.equal(button.dataset.agentAction, "stop_team"); assert.equal(button.disabled, false);
+  ui.handleClick(); await flush(); assert.equal(stopped, 1);
+});
 
 test("manual Solo shared send requires disclosure even when ordinary request confirmation is off", async () => {
   const declined = sendFixture({ approve: false }); await declined.context.sendMessage("agent_request");

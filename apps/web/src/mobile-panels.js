@@ -177,7 +177,7 @@ export function mountMobilePanels({ document: doc, window: win, t = value => val
   const toolSections = [];
   const toolCaptions = [];
   for (const [title, ids] of [["Conversation", ["mentions-button", "history-summary-select-button", "history-summary-view-button", "history-summary-versions-button"]],
-    ["Project", ["project-code-button", "mobile-members-button"]],
+    ["Project", ["project-code-button", "mobile-members-button", "agent-teams-button"]],
     ["More", ["settings-button", "rename-session-button", "delete-session-button", "session-context-details", "logout-button"]]]) {
     const section = node("section", "mobile-tool-group"); section.hidden = true;
     section.append(text("h3", title, "mobile-panel-eyebrow"));

@@ -285,6 +285,8 @@ export class AgentSharingStore {
     return job;
   }
   assertJob(job: SharedJobRow) {
+    if (!this.service.database.teamRequestMayExecute(job.request_event_id)) throw new ApiError(409,
+      "agent_team_stopped", "The bounded team execution no longer authorizes this request");
     const row = this.row(job.share_id);
     if (!row.enabled || row.revision !== job.share_revision || row.source_runtime_id !== job.source_runtime_id
       || row.owner_device_id !== job.owner_device_id) throw new ApiError(409, "agent_share_revoked", "This sharing grant is no longer active");

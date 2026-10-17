@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isMobileDevice, usesMobileWorkspace, MOBILE_WORKSPACE_MAX_WIDTH, mobileAgentLabel, mobileControlLabel, isDialogBackdropPointer, mobileWorkspaceModeActive } from "../src/mobile-workspace.js";
+import { isMobileDevice, usesMobileWorkspace, MOBILE_WORKSPACE_MAX_WIDTH, mobileAgentLabel, mobileControlLabel, isDialogBackdropPointer,
+  mountMobileWorkspace, mobileWorkspaceModeActive } from "../src/mobile-workspace.js";
 
 test("local connection availability follows the platform, not a narrow desktop window", () => {
   assert.equal(isMobileDevice({ userAgent: "Macintosh Safari", platform: "MacIntel", maxTouchPoints: 0 }), false);
@@ -57,4 +58,32 @@ test("dialog backdrop hit testing excludes the sheet's border, padding and child
   }
   assert.equal(isDialogBackdropPointer(dialog, pointer(4, 4, {})), false);
   assert.equal(isDialogBackdropPointer(dialog, { target: dialog }), false);
+});
+
+test("selecting a Team on mobile shows its saved name without leaking the previous Codex reasoning choice", () => {
+  const nodes = new Map();
+  const create = () => ({ children: [], dataset: {}, attributes: {}, hidden: false, open: false, value: "", textContent: "",
+    tagName: "DIV", classList: { contains: () => false }, style: { setProperty() {} },
+    append(...items) { this.children.push(...items); }, before() {}, after() {}, addEventListener() {},
+    setAttribute(name, value) { this.attributes[name] = value; }, closest: () => null,
+    querySelector() { return create(); }, querySelectorAll: () => [], getClientRects: () => [{}], focus() {},
+    showModal() { this.open = true; }, close() { this.open = false; },
+  });
+  const el = id => { if (!nodes.has(id)) nodes.set(id, create()); return nodes.get(id); };
+  const dialogs = ["mobile-sessions-dialog", "mobile-agent-dialog", "mobile-tools-dialog", "mobile-members-dialog"].map(el);
+  const document = { body: create(), documentElement: create(), getElementById: el, createComment: create,
+    createElement: create, querySelectorAll: selector => selector === "dialog" ? dialogs : [], querySelector: () => null };
+  const window = { navigator: { userAgent: "iPhone", maxTouchPoints: 5 },
+    matchMedia: () => ({ matches: true, addEventListener() {} }), MutationObserver: class { observe() {} }, queueMicrotask };
+  const harness = el("agent-harness-select"); harness.value = "codex"; harness.selectedOptions = [{ textContent: "Codex" }];
+  el("agent-effort-select").value = "high"; el("agent-effort-select").selectedOptions = [{ textContent: "高" }];
+  el("agent-request-profile").querySelectorAll = () => [harness];
+  const translate = text => ({ high: "高", "Agent, model and reasoning": "Agent、模型和推理强度" })[text] ?? text;
+  const mobile = mountMobileWorkspace({ document, window, t: translate });
+  assert.equal(mobile.isActive(), true); assert.equal(el("mobile-agent-label").textContent, "Codex · 高");
+  harness.value = "team:team-a"; harness.selectedOptions = [{ textContent: "我的审查团队" }]; mobile.update();
+  assert.equal(el("mobile-agent-label").textContent, "我的审查团队");
+  assert.doesNotMatch(el("mobile-agent-label").textContent, /Codex|high|高/);
+  assert.equal(el("mobile-agent-button").attributes["aria-label"], "Agent、模型和推理强度 · 我的审查团队");
+  assert.equal(harness.value, "team:team-a", "presentation must not change the selected Team or its request route");
 });

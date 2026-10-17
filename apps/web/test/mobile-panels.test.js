@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { mountMobilePanels, sessionMatchesQuery, sessionNavigationLeavesPanel } from "../src/mobile-panels.js";
 
-function fixture() {
+function fixture({ teamEntry = true } = {}) {
   class Node {
     children = []; parentNode = null; attributes = new Map(); listeners = {}; hidden = false; value = ""; className = ""; _text = "";
     constructor(tag = "div", id = "") { this.tagName = tag.toUpperCase(); this.id = id; }
@@ -38,6 +38,9 @@ function fixture() {
   const list = add("session-list", rail, "ul");
   for (const name of ["Plan the launch", "Build the UI", "会议记录"]) { const row = add("", list, "li"); const button = add("", row, "button", "session-button"); button.textContent = name; }
   const projectActions = add("", rail, "div", "project-action-row"); add("rename-project-button", projectActions, "button");
+  const teamButton = teamEntry ? add("agent-teams-button", rail, "button", "button button-secondary button-wide") : null;
+  if (teamButton) teamButton.disabled = true;
+  const originalRailControls = [...rail.children];
   const memberPanel = add("member-panel"); const memberHeading = add("", memberPanel, "div", "member-heading");
   const memberList = add("member-list", memberPanel, "ul"); const owner = add("owner-invitations", memberPanel, "section", "invitation-card"); owner.hidden = true;
   add("create-invitation-form", owner, "form"); const joinSection = add("", memberPanel, "section", "invitation-card");
@@ -57,7 +60,7 @@ function fixture() {
     return { row, copy, select, remove };
   };
   return { document, panels, rail, list, select, projectCreate, sessionCreate, projectActions, memberPanel, memberHeading, memberList, owner, join, joinSection,
-    sessionsHost, membersHost, tools, originalTools, addMember, notify: () => notify(), el: document.getElementById };
+    sessionsHost, membersHost, tools, originalTools, teamButton, originalRailControls, addMember, notify: () => notify(), el: document.getElementById };
 }
 
 test("session search is literal, case-insensitive and works with full-width input", () => {
@@ -97,6 +100,33 @@ test("mobile panels move the original controls and restore their precise desktop
   assert.equal(f.joinSection.parentNode, f.memberPanel);
   for (const button of f.originalTools.values()) assert.equal(button.parentNode, f.tools);
   assert.equal(f.owner.hidden, true, "presentation never grants owner permissions");
+});
+
+test("the Team entry moves once into Project tools and restores its exact desktop node, order and handler", () => {
+  const f = fixture(); let opens = 0;
+  f.teamButton.addEventListener("click", () => opens++);
+  const countTeamNodes = node => Number(node.id === "agent-teams-button") + node.children.reduce((sum, child) => sum + countTeamNodes(child), 0);
+  for (let cycle = 0; cycle < 3; cycle++) {
+    f.panels.setActive(true); f.panels.setActive(true);
+    assert.equal(f.el("agent-teams-button"), f.teamButton);
+    assert.equal(f.teamButton.parentNode.className, "mobile-tool-group-items");
+    assert.equal(f.teamButton.parentNode.parentNode.querySelector("h3").textContent, "Project");
+    assert.equal(f.teamButton.disabled, cycle === 0, "presentation must retain the authenticated controller's disabled state");
+    assert.equal(countTeamNodes(f.document.body), 1); assert.equal(f.teamButton.listeners.click.length, 1);
+    f.teamButton.disabled = false; f.teamButton.fire("click");
+    f.panels.setActive(false); f.panels.setActive(false);
+    assert.equal(f.el("agent-teams-button"), f.teamButton); assert.equal(f.teamButton.parentNode, f.rail);
+    assert.deepEqual(f.rail.children.filter(node => node.tagName !== "#COMMENT"), f.originalRailControls);
+    assert.equal(countTeamNodes(f.document.body), 1); assert.equal(f.teamButton.listeners.click.length, 1);
+    f.teamButton.fire("click");
+  }
+  assert.equal(opens, 6, "mode changes must not attach duplicate Team actions");
+});
+
+test("mobile Project tools remain usable when the optional Team entry is absent", () => {
+  const f = fixture({ teamEntry: false }); f.panels.setActive(true);
+  assert.equal(f.el("agent-teams-button"), null); assert.equal(f.select.parentNode.className, "mobile-project-field");
+  f.panels.setActive(false); assert.equal(f.select.parentNode.parentNode, f.rail);
 });
 
 test("search filters newly rendered conversations and clears before desktop restoration", () => {

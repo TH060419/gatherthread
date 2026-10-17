@@ -6,6 +6,11 @@ import { HostedGithubStatusSchema, HostedGithubAuthorizationSchema, HostedGithub
   SaveAgentShareInputSchema, ControlAgentShareInputSchema, SharedAgentRequestInputSchema,
   AgentSharesResponseSchema, AgentShareResponseSchema, SharedAgentRequestAcceptedSchema, AgentShareSourcesResponseSchema,
   ClaimAgentShareJobInputSchema, AgentShareJobResponseSchema } from "@gatherthread/protocol";
+import { AgentTeamLibrarySchema, AgentTeamDefinitionResponseSchema, AgentTeamFavoriteResponseSchema,
+  AgentTeamRunAcceptedSchema, AgentTeamRunResponseSchema, AgentTeamRunsResponseSchema,
+  SaveAgentTeamDefinitionSchema, SaveAgentTeamFavoriteSchema, ControlAgentTeamDefinitionSchema,
+  TestAgentTeamDefinitionSchema, StartSavedAgentTeamSchema, ControlAgentTeamRunInputSchema,
+  DeleteAgentTeamLibraryItemSchema } from "@gatherthread/protocol";
 import {
   createIdempotencyKey,
   isExecutionRuntime,
@@ -27,6 +32,22 @@ async function hostedResponse(schema, request, errorMessage = "Cloud GitHub resp
 function sharingInput(schema, input) {
   const parsed = schema.safeParse(input);
   if (!parsed.success) throw new ApiError("Shared Agent input is invalid. Review the settings and try again.", { status: 422, code: "validation_error" });
+  return parsed.data;
+}
+
+function teamInput(schema, input) {
+  const parsed = schema.safeParse(input);
+  if (!parsed.success) throw new ApiError("Review the Team configuration and try again.", { status: 422, code: "validation_error" });
+  return parsed.data;
+}
+async function teamResponse(schema, request, { id, sessionId, definitionId, purpose } = {}) {
+  const parsed = schema.safeParse(await request);
+  if (!parsed.success || (id && (parsed.data.team ?? parsed.data.favorite ?? parsed.data.run)?.id !== id)
+    || (sessionId && (parsed.data.run ? parsed.data.run.session_id !== sessionId : parsed.data.runs?.some(run => run.session_id !== sessionId)))
+    || (definitionId && parsed.data.run?.definition_id !== definitionId)
+    || (purpose && parsed.data.run?.purpose !== purpose)) {
+    throw new ApiError("Team response is invalid. Check the previous action before trying again.", { status: 502, code: "invalid_team_response" });
+  }
   return parsed.data;
 }
 
@@ -641,6 +662,64 @@ export class HttpCollaborationApi {
     } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
   }
 
+  // The deadline includes the response body. Retries keep the original action key.
+  async teamRequest(path, options = {}) {
+    const controller = new AbortController(); let timer, abort;
+    const interrupted = new Promise((_, reject) => { abort = () => {
+      reject(new ApiError("Team action interrupted. Check the previous action.", { code: "request_aborted" })); controller.abort();
+    }; });
+    options.signal?.addEventListener("abort", abort, { once: true });
+    try {
+      if (options.signal?.aborted) { abort(); return await interrupted; }
+      return await Promise.race([this.request(path, { ...options, signal: controller.signal }), interrupted,
+        new Promise((_, reject) => { timer = setTimeout(() => {
+          reject(new ApiError("Team acknowledgement timed out. Check the previous action.", { code: "request_timeout" })); controller.abort();
+        }, this.sharingDeadlineMs); })]);
+    } finally { clearTimeout(timer); options.signal?.removeEventListener("abort", abort); }
+  }
+  listAgentTeams(options = {}) { return teamResponse(AgentTeamLibrarySchema, this.teamRequest("/v1/agent-teams", options)); }
+  saveAgentTeam(id, input, options = {}) {
+    return teamResponse(AgentTeamDefinitionResponseSchema, this.teamRequest(`/v1/agent-teams/${encodeURIComponent(id)}`, {
+      ...options, method: "PUT", body: JSON.stringify(teamInput(SaveAgentTeamDefinitionSchema, input)),
+    }), { id });
+  }
+  saveTeamModule(id, input, options = {}) {
+    return teamResponse(AgentTeamFavoriteResponseSchema, this.teamRequest(`/v1/agent-team-modules/${encodeURIComponent(id)}`, {
+      ...options, method: "PUT", body: JSON.stringify(teamInput(SaveAgentTeamFavoriteSchema, input)),
+    }), { id });
+  }
+  async deleteTeamItem(kind, id, input, options = {}) {
+    if (!["team", "module"].includes(kind)) throw new ApiError("Invalid Team item.", { status: 422 });
+    const data = await this.teamRequest(`/v1/${kind === "team" ? "agent-teams" : "agent-team-modules"}/${encodeURIComponent(id)}`, {
+      ...options, method: "DELETE", body: JSON.stringify(teamInput(DeleteAgentTeamLibraryItemSchema, input)),
+    });
+    if (data?.deleted !== true || typeof data.replayed !== "boolean" || Object.keys(data).some(key => !["deleted", "replayed"].includes(key))) {
+      throw new ApiError("Invalid Team deletion response.", { status: 502 });
+    }
+    return data;
+  }
+  controlAgentTeam(sessionId, id, input, options = {}) {
+    return teamResponse(AgentTeamDefinitionResponseSchema, this.teamRequest(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-teams/${encodeURIComponent(id)}/control`, {
+      ...options, method: "POST", body: JSON.stringify(teamInput(ControlAgentTeamDefinitionSchema, input)),
+    }), { id });
+  }
+  executeAgentTeam(sessionId, id, input, test = false, options = {}) {
+    return teamResponse(AgentTeamRunAcceptedSchema, this.teamRequest(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-teams/${encodeURIComponent(id)}/${test ? "test" : "start"}`, {
+      ...options, method: "POST", body: JSON.stringify(teamInput(test ? TestAgentTeamDefinitionSchema : StartSavedAgentTeamSchema, input)),
+    }), { sessionId, definitionId: id, purpose: test ? "test" : "task" });
+  }
+  listTeamRuns(sessionId, options = {}) {
+    return teamResponse(AgentTeamRunsResponseSchema, this.teamRequest(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs`, options), { sessionId });
+  }
+  getTeamRun(sessionId, id, options = {}) {
+    return teamResponse(AgentTeamRunResponseSchema, this.teamRequest(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(id)}`, options), { sessionId, id });
+  }
+  controlTeamRun(sessionId, id, input, options = {}) {
+    return teamResponse(AgentTeamRunResponseSchema, this.teamRequest(`/v1/sessions/${encodeURIComponent(sessionId)}/agent-team-runs/${encodeURIComponent(id)}/control`, {
+      ...options, method: "POST", body: JSON.stringify(teamInput(ControlAgentTeamRunInputSchema, input)),
+    }), { sessionId, id });
+  }
+
   listAgentShares(projectId, { signal } = {}) {
     return sharingResponse(AgentSharesResponseSchema,
       this.sharingRequest(`/v1/projects/${encodeURIComponent(projectId)}/agent-shares`, { signal }), { projectId });
@@ -897,6 +976,8 @@ const users = {
 };
 
 export class MockCollaborationApi {
+  async listAgentTeams() { return { teams: [], modules: [], team_limit: 5, module_limit: 5 }; }
+  async listTeamRuns() { return { runs: [] }; }
   async listAgentShares() { return { shares: [] }; }
   async listAgentSharingSources() { return []; }
   async getCloudApi() { return { enabled: false, providers: [], configurations: [] }; }
