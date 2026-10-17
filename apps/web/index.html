@@ -62,7 +62,10 @@
             <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
             <img class="brand-lockup-image brand-lockup-image-dark" src="./brand/lockup-color-transparent-dark.svg" alt="" />
           </a>
-          <button id="auth-language-button" class="auth-language-button" type="button" aria-label="Switch language / 切换语言" title="Switch language / 切换语言">中</button>
+          <div class="auth-view-options">
+            <label class="auth-interface-control"><span class="sr-only">Interface</span><select id="auth-interface-mode" aria-label="Interface"><option value="auto">Auto</option><option value="mobile">Mobile</option><option value="desktop">Desktop</option></select></label>
+            <button id="auth-language-button" class="auth-language-button" type="button" aria-label="Switch language / 切换语言" title="Switch language / 切换语言">中</button>
+          </div>
         </div>
         <h2 id="login-title" tabindex="-1">Enter your workspace</h2>
         <p id="invitation-auth-hint" class="field-help" hidden>Sign in or register to review your project invitation. Joining requires your confirmation.</p>
@@ -208,7 +211,7 @@
       <header class="topbar">
         <div class="topbar-brand-cluster">
           <button id="toggle-session-rail-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Collapse session sidebar" title="Collapse session sidebar" aria-controls="session-rail" aria-expanded="true" data-tooltip>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M8.5 4.5v15"/><path d="m14 9-3 3 3 3"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h12M4 18h8"/></svg>
           </button>
           <a class="wordmark" href="../" aria-label="GatherThread home">
             <img class="brand-lockup-image brand-lockup-image-light" src="./brand/lockup-color-transparent-light.svg" alt="" />
@@ -237,7 +240,7 @@
           <button id="logout-button" class="text-button" type="button">Log out</button>
           <button id="mobile-tools-button" class="icon-button workspace-icon-button mobile-workspace-only" type="button" aria-label="Conversation tools" title="Conversation tools" aria-haspopup="dialog" aria-controls="mobile-tools-dialog" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg></button>
           <button id="mobile-members-button" class="icon-button topbar-icon-button workspace-icon-button sidebar-toggle-button" type="button" aria-label="Collapse member sidebar" title="Collapse member sidebar" aria-controls="member-panel" aria-expanded="true" data-tooltip>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M15.5 4.5v15"/><path d="m10 9 3 3-3 3"/></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3 20v-2a6 6 0 0 1 12 0v2M16 5a3 3 0 0 1 0 6M18 14a5 5 0 0 1 3 4v2"/></svg>
           </button>
         </div>
       </header>
@@ -1253,6 +1256,11 @@ codex plugin add gatherthread@gatherthread-source</code>
                 <span><strong>Language</strong><small>English is the default. Product names stay in English.</small></span>
                 <select id="settings-locale" name="locale"><option value="en">English</option><option value="zh-CN">简体中文</option></select>
               </label>
+              <label class="settings-row" for="settings-interface-mode">
+                <span><strong>Interface</strong><small>Applies immediately to this browser only.</small></span>
+                <select id="settings-interface-mode"><option value="auto">Auto</option><option value="mobile">Mobile</option><option value="desktop">Desktop</option></select>
+              </label>
+              <p id="settings-interface-error" class="form-error" role="alert" hidden></p>
               <div class="onboarding-guides" role="group" aria-labelledby="onboarding-guides-title">
                 <strong id="onboarding-guides-title">Step-by-step guides</strong>
                 <p>Learn in an isolated example. Browse it freely at any time to see complete usage examples. No real project, conversation, file or AI agent is affected.</p>

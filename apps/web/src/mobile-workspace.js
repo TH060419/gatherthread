@@ -1,3 +1,5 @@
+import { mountMobilePanels, sessionNavigationLeavesPanel } from "./mobile-panels.js";
+
 // Presentation only: move the existing controls, never duplicate request paths.
 export const MOBILE_WORKSPACE_MAX_WIDTH = 1366;
 
@@ -27,12 +29,16 @@ export function isDialogBackdropPointer(dialog, event) {
     || event.clientY < bounds.top || event.clientY > bounds.bottom;
 }
 
-export function mountMobileWorkspace({ document: doc, window: win, t, enabled = true, onLayoutChange = () => {} }) {
+export function mobileWorkspaceModeActive(mode, navigator, width) {
+  return mode === "mobile" || mode !== "desktop" && usesMobileWorkspace(navigator, width);
+}
+
+export function mountMobileWorkspace({ document: doc, window: win, t, enabled = true, getMode = () => null, onLayoutChange = () => {} }) {
   const el = id => doc.getElementById(id);
   const workspace = el("workspace");
   const query = win.matchMedia(`(max-width: ${MOBILE_WORKSPACE_MAX_WIDTH}px)`);
   const mobileDevice = isMobileDevice(win.navigator);
-  doc.documentElement.dataset.mobileDevice = String(mobileDevice && enabled);
+  doc.documentElement.dataset.mobileDevice = String(mobileDevice);
   const rail = el("session-rail");
   const profile = el("agent-request-profile");
   const dialogs = [el("mobile-sessions-dialog"), el("mobile-agent-dialog"), el("mobile-tools-dialog"), el("mobile-members-dialog")];
@@ -55,6 +61,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
     "history-summary-versions-button", "download-codex-button"]) {
     remember(el(id), el("mobile-tools-content"));
   }
+  const panels = mountMobilePanels({ document: doc, window: win, t });
 
   function closeAll() {
     el("session-context-details").open = false;
@@ -63,6 +70,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   function open(dialog, trigger) {
     if ((!active && dialog !== dialogs[1]) || workspace.hidden) return;
     closeAll();
+    panels.open(dialog.id);
     returnFocus = trigger?.getClientRects().length ? trigger : el("mobile-tools-button");
     dialog.showModal();
     trigger?.setAttribute("aria-expanded", "true");
@@ -115,7 +123,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   el("mobile-compose-tools-button").addEventListener("click", () => open(dialogs[2], el("mobile-compose-tools-button")));
   // Close the navigation surface before existing handlers open another dialog.
   dialogs[0].addEventListener("click", event => {
-    if (event.target.closest("button")) closeDialog(dialogs[0]);
+    if (sessionNavigationLeavesPanel(event.target.closest("button"))) closeDialog(dialogs[0]);
   }, true);
   el("project-select").addEventListener("change", () => closeDialog(dialogs[0]));
   dialogs[2].addEventListener("click", event => {
@@ -123,19 +131,24 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   }, true);
 
   function update() {
-    const next = enabled && mobileDevice && query.matches;
+    const width = win.innerWidth ?? (query.matches ? MOBILE_WORKSPACE_MAX_WIDTH : MOBILE_WORKSPACE_MAX_WIDTH + 1);
+    const next = enabled && mobileWorkspaceModeActive(getMode(), win.navigator, width);
     const changed = next !== active;
     if (changed) {
       closeAll();
+      // Restore inner placements before their parent controls return to desktop.
+      panels.setActive(false);
       active = next;
       for (const { node, marker, target } of placements) {
         if (active) target.append(node);
         else marker.after(node);
       }
+      panels.setActive(active);
     }
     workspace.dataset.mobileUi = String(active);
     doc.documentElement.dataset.mobileWorkspace = String(active);
     if (workspace.hidden) closeAll();
+    panels.refresh();
     for (const note of doc.querySelectorAll(".mobile-device-note")) note.hidden = !mobileDevice || !active;
     const harnessSelect = el("agent-harness-select"), rawHarness = harnessSelect.value;
     const harness = rawHarness.startsWith("team:") ? "team" : rawHarness.startsWith('["shared",') ? "shared" : rawHarness;
@@ -193,7 +206,7 @@ export function mountMobileWorkspace({ document: doc, window: win, t, enabled = 
   return {
     update, close: closeAll,
     isActive: () => active,
-    canConnectLocally: () => !mobileDevice || !enabled,
+    canConnectLocally: () => !mobileDevice,
     toggleRail: () => {
       if (!active) return false;
       if (dialogs[0].open) closeDialog(dialogs[0]); else open(dialogs[0], triggers[0]);

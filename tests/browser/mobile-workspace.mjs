@@ -58,8 +58,17 @@ async function seed(locale) {
   return { email, password, identity, project, session, source, codex, dsh, foreign, locale };
 }
 
-async function login(page, f) {
+async function login(page, f, { mode = "mobile", expectSuggestion = true } = {}) {
   await page.goto(`${origin}/app/#project=${f.project.id}&session=${f.session.id}`);
+  if (expectSuggestion) {
+    await page.locator("#interface-mode-dialog[open]").waitFor();
+    await page.locator(`#interface-mode-use-${mode}`).click();
+  } else {
+    await page.locator("#auth-select-email-login").waitFor();
+    assert.equal(await page.locator("#interface-mode-dialog").evaluate(node => node.open), false);
+    await page.locator("#auth-interface-mode").selectOption(mode);
+  }
+  await page.waitForFunction(mode => document.documentElement.dataset.interfaceMode === mode, mode);
   await page.locator("#auth-select-email-login").click();
   await page.locator("#email-login-email").fill(f.email);
   await page.locator("#email-login-password").fill(f.password);
@@ -69,6 +78,21 @@ async function login(page, f) {
   await page.locator("#code-notice-continue").click();
   await page.locator("#session-view:not([hidden])").waitFor();
   await page.getByText(f.source.payload.content, { exact: true }).waitFor();
+}
+
+async function openSettings(page, section) {
+  const mobile = await page.locator("#workspace").getAttribute("data-mobile-ui") === "true";
+  if (mobile) await tools(page, "settings-button");
+  else await page.locator("#settings-button").click();
+  await page.locator("#settings-dialog[open]").waitFor();
+  if (section) await page.locator(`.settings-navigation a[href='#settings-${section}']`).click();
+}
+
+async function setInterfaceMode(page, mode) {
+  await openSettings(page, "general");
+  await page.locator("#settings-interface-mode").selectOption(mode);
+  await page.waitForFunction(mode => document.querySelector("#workspace").dataset.mobileUi === String(mode === "mobile"), mode);
+  await page.keyboard.press("Escape");
 }
 
 async function tools(page, id) {
@@ -134,11 +158,13 @@ async function exerciseAgent(page, f, harness, model, runtime) {
 }
 
 try {
-  for (const [name, engine] of [["chromium", chromium], ["webkit", webkit]]) {
+  for (const [name, engine] of [["chromium", chromium], ["webkit", webkit]].filter(([name]) =>
+    !process.env.BROWSER_ENGINES || process.env.BROWSER_ENGINES.split(",").includes(name))) {
     const browser = await engine.launch({ headless: true, ...(name === "chromium"
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ?? engine.executablePath() } : {}) });
     try {
-      for (const locale of ["en", "zh-CN"]) {
+      for (const locale of ["en", "zh-CN"].filter(locale => !process.env.BROWSER_LOCALES
+        || process.env.BROWSER_LOCALES.split(",").includes(locale))) {
         const f = await seed(locale), errors = [];
         const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true,
           hasTouch: true, userAgent: mobileUA, locale, reducedMotion: "reduce" });
@@ -153,6 +179,7 @@ try {
         const page = await context.newPage();
         page.on("pageerror", error => errors.push(error.message));
         try {
+          console.log(`RUN ${name} ${locale}: real mobile login and interface choice`);
           await login(page, f);
           const me = (await (await context.request.get(origin + "/v1/me")).json()).data;
           assert.equal(me.id, f.identity.actor.user_id);
@@ -162,20 +189,30 @@ try {
           assert.equal(await page.locator(".session-header").isVisible(), false);
           await page.locator("#toggle-session-rail-button").click();
           await page.locator("#mobile-sessions-dialog[open]").waitFor();
-          const createProject = await page.locator("#new-project-button").boundingBox();
+          const newConversation = await page.locator("#new-session-button").boundingBox();
           const projectSelect = await page.locator("#project-select").boundingBox();
-          assert.ok(createProject.y + createProject.height <= projectSelect.y || createProject.x >= projectSelect.x + projectSelect.width,
-            `create project does not overlap the project selector: ${JSON.stringify({ createProject, projectSelect })}`);
+          assert.ok(projectSelect.y + projectSelect.height <= newConversation.y,
+            `project picker precedes new conversation: ${JSON.stringify({ newConversation, projectSelect })}`);
+          assert.equal(await page.locator("#new-project-button").isVisible(), false, "project administration is a second page");
+          await page.locator("#mobile-session-search").fill("unmatched fixture search");
+          await page.locator("#mobile-session-search-empty").waitFor();
+          assert.equal(await page.locator("#session-list .session-button:visible").count(), 0);
+          await page.locator("#mobile-session-search").fill("shared conversation");
+          await page.locator("#session-list .session-button:visible").waitFor();
+          await page.screenshot({ path: join(output, `${name}-${locale}-conversations.png`) });
+          await page.locator("#mobile-project-options").click();
+          assert.equal(await page.locator("#new-project-button").isVisible(), true);
+          await page.locator("#mobile-project-management-back").click();
           assert.equal(await page.locator("#add-agent-button").isVisible(), false);
           assert.equal(await page.locator("#connect-dsh-button").isVisible(), false);
-          assert.equal(await page.locator(".mobile-device-note").first().isVisible(), true);
+          assert.equal(await page.locator("#session-rail").isVisible(), false, "desktop rail is not the mobile navigation");
           await page.keyboard.press("Escape");
           await page.waitForFunction(() => document.activeElement?.id === "toggle-session-rail-button");
-          await tools(page, "settings-button");
-          await page.locator("#settings-dialog[open]").waitFor();
-          await page.locator("#settings-enabled-dsh").check();
+          await openSettings(page, "composer");
+          assert.equal(await page.locator("#settings-enabled-dsh").isVisible(), false, "native Agent setup is desktop-only");
           await page.locator("#settings-confirm-agent").check();
           await page.locator("#settings-form button[type=submit]").click();
+          console.log(`RUN ${name} ${locale}: exact remote Codex/DSH routing and pause/resume`);
           await exerciseAgent(page, f, "codex", "gpt-6-sol", f.codex);
           await exerciseAgent(page, f, "deepseek-harness", "deepseek-v4-pro", f.dsh);
           // Quotes and @ still use the canonical metadata, not a second mobile implementation.
@@ -193,6 +230,14 @@ try {
           await tools(page, "mobile-members-button");
           await page.locator("#mobile-members-dialog[open]").waitFor();
           await page.locator("#member-list").getByText("Teammate", { exact: true }).waitFor();
+          await page.screenshot({ path: join(output, `${name}-${locale}-members.png`) });
+          assert.equal(await page.locator("#owner-invitations").isVisible(), false, "invitation setup stays off the member overview");
+          await page.locator("#mobile-open-invitations").click();
+          await page.locator("#owner-invitations").waitFor();
+          await page.locator("#mobile-invitations-page-back").click();
+          await page.locator("#mobile-open-join").click();
+          await page.locator("#accept-invitation-form").waitFor();
+          await page.locator("#mobile-join-page-back").click();
           await page.keyboard.press("Escape");
           await tools(page);
           await page.screenshot({ path: join(output, `${name}-${locale}-tools.png`) });
@@ -228,46 +273,59 @@ try {
           await tools(page, "history-summary-versions-button");
           await page.locator("#history-summary-versions-dialog[open]").waitFor();
           await page.keyboard.press("Escape");
+          // A quote stays expanded even on a short landscape screen; send/control
+          // buttons must remain reachable without hiding the quoted context.
+          await page.locator(".event-card").filter({ hasText: "Unsent deepseek-harness" })
+            .getByRole("button", { name: /Quote message|引用消息/ }).click();
+          await page.locator("#composer-quote").waitFor();
+          const quoteText = await page.locator("#composer-quote-text").innerText();
           // Draft and native control identity survive mobile/desktop reparenting.
           await page.locator("#message-input").fill("Resize draft");
           await page.evaluate(() => { window.originalProfile = document.querySelector("#agent-request-profile"); });
           for (const [width, height] of [[320, 720], [390, 460], [844, 390], [768, 1024], [820, 1180],
             [1024, 768], [1180, 820], [1366, 1024], [1440, 900], [390, 844]]) {
             await page.setViewportSize({ width, height });
-            await page.waitForFunction(width => document.querySelector("#workspace").dataset.mobileUi === String(width <= 1366), width);
+            await page.waitForFunction(() => document.querySelector("#workspace").dataset.mobileUi === "true");
             assert.equal(await page.locator("#message-input").inputValue(), "Resize draft");
             assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `${name} ${width}: no horizontal overflow`);
             assert.equal(await page.evaluate(() => window.originalProfile === document.querySelector("#agent-request-profile")), true);
-            if (width <= 1366) {
+            {
               await page.waitForFunction(() => Math.abs(document.querySelector('#workspace').getBoundingClientRect().height - visualViewport.height) < 2);
               const bounds = await page.locator("#composer").boundingBox();
               assert.ok(bounds.y + bounds.height <= height + 1, `composer fits ${width}x${height}: ${JSON.stringify(bounds)}`);
               for (const id of ["mobile-compose-tools-button", "mobile-agent-button", "send-chat-button", "send-agent-button"]) {
                 const button = await page.locator(`#${id}`).boundingBox();
                 assert.ok(button.x >= bounds.x && button.x + button.width <= bounds.x + bounds.width, `${id} stays inside composer at ${width}`);
+                assert.ok(button.y >= bounds.y && button.y + button.height <= Math.min(height, bounds.y + bounds.height) + 1,
+                  `${id} remains vertically reachable with quote at ${width}x${height}: ${JSON.stringify(button)}`);
               }
               assert.ok((await page.locator("#timeline-region").boundingBox()).height > 100);
               assert.ok((await page.locator("#mobile-agent-button").boundingBox()).height >= 44);
-            } else {
-              assert.equal(await page.locator("#agent-request-profile").evaluate(node => node.parentElement.id), "composer");
-              assert.equal(await page.locator("#settings-button").evaluate(node => node.parentElement.className), "account-cluster");
-              assert.match(await page.locator("#send-agent-button").innerText(), locale === "en" ? /Request my agent/ : /请求我的 Agent/);
-              assert.equal(await page.locator("#toggle-session-rail-button").getAttribute("aria-expanded"), "true");
-              assert.match(await page.locator("#toggle-session-rail-button").getAttribute("aria-label"), locale === "en" ? /Collapse session sidebar/ : /收起会话侧栏/);
-              assert.match(await page.locator("#mobile-members-button").getAttribute("aria-label"), locale === "en" ? /Expand member sidebar|Collapse member sidebar/ : /展开成员侧栏|收起成员侧栏/);
+              assert.equal(await page.locator("#composer-quote-text").innerText(), quoteText);
+              if (width === 844 && height === 390) {
+                await page.locator("#mobile-agent-button").click();
+                await page.locator("#mobile-agent-dialog[open]").waitFor();
+                await page.locator("#mobile-agent-dialog [data-mobile-close]").click();
+                assert.equal(await page.locator("#composer-quote").isVisible(), true);
+              }
             }
           }
-          // Closing a modal on resize must not overwrite the restored desktop disclosure state.
-          await page.locator("#toggle-session-rail-button").click();
-          await page.locator("#mobile-sessions-dialog[open]").waitFor();
-          await page.setViewportSize({ width: 1440, height: 900 });
-          await page.waitForFunction(() => document.querySelector("#workspace").dataset.mobileUi === "false");
-          await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+          // Explicit preference survives every viewport; General switches presentation without reload or draft loss.
+          await setInterfaceMode(page, "desktop");
           assert.equal(await page.locator("#mobile-sessions-dialog").evaluate(node => node.open), false);
           assert.equal(await page.locator("#toggle-session-rail-button").getAttribute("aria-expanded"), "true");
-          assert.match(await page.locator("#toggle-session-rail-button").getAttribute("aria-label"), locale === "en" ? /Collapse session sidebar/ : /收起会话侧栏/);
-          await page.setViewportSize({ width: 390, height: 844 });
-          await page.waitForFunction(() => document.querySelector("#workspace").dataset.mobileUi === "true");
+          assert.equal(await page.locator("#connect-codex-button").isVisible(), false, "forced desktop cannot grant native phone capability");
+          assert.equal(await page.locator("#message-input").inputValue(), "Resize draft");
+          assert.equal(await page.evaluate(() => window.originalProfile === document.querySelector("#agent-request-profile")), true);
+          assert.equal(await page.locator("#agent-request-profile").evaluate(node => node.parentElement.id), "mobile-agent-content");
+          await setInterfaceMode(page, "mobile");
+          assert.equal(await page.locator("#message-input").inputValue(), "Resize draft");
+          assert.equal(await page.locator("#composer-quote-text").innerText(), quoteText);
+          await page.locator("#cancel-message-quote").click();
+          await page.reload();
+          await page.locator("#session-view:not([hidden])").waitFor();
+          assert.equal(await page.locator("#interface-mode-dialog").evaluate(node => node.open), false, "remembered preference does not prompt again");
+          assert.equal(await page.locator("#workspace").getAttribute("data-mobile-ui"), "true");
           await page.screenshot({ path: join(output, `${name}-${locale}-workspace.png`) });
           await page.evaluate(() => document.documentElement.dataset.theme = "dark");
           await page.screenshot({ path: join(output, `${name}-${locale}-dark.png`) });
@@ -283,7 +341,7 @@ try {
           const grid = await page.locator(".workspace-grid").boundingBox();
           const conversation = await page.locator(".conversation").boundingBox();
           assert.ok(Math.abs(conversation.height - grid.height) < 2, "empty-project conversation fills its grid");
-          await tools(page, "settings-button");
+          await openSettings(page, "general");
           await page.locator("#settings-locale").selectOption(locale === "en" ? "zh-CN" : "en");
           await page.locator("#settings-form button[type=submit]").click();
           await tools(page);
@@ -294,6 +352,22 @@ try {
           console.log(`PASS ${name} ${locale}: mobile sheets, remote Codex/DSH, exact routing, pause/resume, draft, quote/@, empty project, resize, locale`);
         } catch (error) {
           if (errors.length) console.error("Browser page errors:", errors);
+          console.error("Open dialog geometry:", await page.locator("dialog[open]").evaluateAll(nodes => nodes.map(node => ({
+            id: node.id, bounds: node.getBoundingClientRect().toJSON(),
+            controls: [...node.querySelectorAll("button")].filter(button => button.getClientRects().length).map(button => {
+              const bounds = button.getBoundingClientRect();
+              return { id: button.id, bounds: bounds.toJSON(), hit: document.elementFromPoint(bounds.x + bounds.width / 2,
+                bounds.y + bounds.height / 2)?.outerHTML.slice(0, 220) };
+            }),
+          }))));
+          console.error("Interface geometry:", await page.evaluate(() => {
+            const button = document.getElementById("settings-button"), bounds = button.getBoundingClientRect();
+            return { viewport: { width: innerWidth, height: innerHeight, scrollX, scrollY,
+              visual: { width: visualViewport.width, height: visualViewport.height, offsetLeft: visualViewport.offsetLeft,
+                offsetTop: visualViewport.offsetTop } }, preference: document.documentElement.dataset.interfacePreference,
+              settings: bounds.toJSON(), hit: document.elementFromPoint(bounds.x + bounds.width / 2,
+                bounds.y + bounds.height / 2)?.outerHTML.slice(0, 220) };
+          }));
           await page.screenshot({ path: join(output, `${name}-${locale}-failure.png`) }).catch(() => {});
           throw error;
         } finally { await context.close(); }
@@ -306,7 +380,7 @@ try {
         { label: "android-tablet", mobile: true, userAgent: "Mozilla/5.0 (Linux; Android 16; Tablet) Chrome/154.0 Safari/537.36", platform: "Linux armv8l", touch: 5 },
         { label: "mac-desktop", mobile: false, userAgent: tabletUA, platform: "MacIntel", touch: 0 },
         { label: "windows-touch-laptop", mobile: false, userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/154.0 Safari/537.36", platform: "Win32", touch: 10 },
-      ]) {
+      ].filter(device => !process.env.BROWSER_DEVICE_LABELS || process.env.BROWSER_DEVICE_LABELS.split(",").includes(device.label))) {
         const f = layoutFixture;
         const context = await browser.newContext({ viewport: { width: 1024, height: 768 },
           userAgent: device.userAgent, hasTouch: device.touch > 0, reducedMotion: "reduce" });
@@ -323,17 +397,17 @@ try {
         const page = await context.newPage(), errors = [];
         page.on("pageerror", error => errors.push(error.message));
         try {
-          await login(page, f);
+          await login(page, f, { mode: device.mobile ? "mobile" : "desktop", expectSuggestion: device.touch > 0 });
           await page.locator("#message-input").fill("Device layout draft");
           await page.evaluate(() => { window.layoutProfile = document.querySelector("#agent-request-profile"); });
           for (const [width, height] of [[768, 1024], [820, 1180], [1024, 768], [1180, 820], [1366, 1024], [390, 844], [1440, 900]]) {
             await page.setViewportSize({ width, height });
-            const mobile = device.mobile && width <= 1366;
+            const mobile = device.mobile;
             await page.waitForFunction(mobile => document.querySelector("#workspace").dataset.mobileUi === String(mobile), mobile);
             assert.equal(await page.evaluate(() => window.layoutProfile === document.querySelector("#agent-request-profile")), true);
             assert.equal(await page.locator("#message-input").inputValue(), "Device layout draft");
-            assert.equal(await page.locator("#agent-request-profile").evaluate(node => node.parentElement.id), mobile ? "mobile-agent-content" : "composer");
-            assert.equal(await page.locator("#settings-button").evaluate(node => node.parentElement.className), mobile ? "" : "account-cluster");
+            assert.equal(await page.locator("#agent-request-profile").evaluate(node => node.parentElement.id), "mobile-agent-content");
+            assert.equal(await page.locator("#settings-button").evaluate(node => node.closest(".account-cluster") !== null), !mobile);
             assert.equal(await page.locator("#connect-codex-button").evaluate(node => getComputedStyle(node).display === "none"), device.mobile);
             assert.match(await page.locator("#send-agent-button").innerText(), mobile ? /Ask AI/ : /Request my agent/);
             if (mobile) {
@@ -350,7 +424,7 @@ try {
               await page.keyboard.press("Escape");
               if (width === 1024) await page.screenshot({ path: join(output, `${name}-${device.label}.png`) });
             } else {
-              assert.equal(await page.locator("#mobile-agent-button").isVisible(), false);
+              assert.equal(await page.locator("#mobile-agent-button").isVisible(), true, "Agent settings remain one disclosure on desktop");
               assert.equal(await page.locator("#mobile-tools-button").isVisible(), false);
               assert.equal(await page.locator("#settings-button").isVisible(), true);
             }

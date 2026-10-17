@@ -222,6 +222,8 @@ The published MCP surface is intentionally narrower than the internal collaborat
 
 ## Web presentation boundary
 
+`interface-mode.js` owns the non-secret `gatherthread.interface-mode.v1` browser preference and explicit detection confirmation. `html[data-interface-mode]`, `html[data-mobile-workspace]` and `#workspace[data-mobile-ui]` describe presentation; `data-mobile-device` remains a separate physical-device capability hint. Mobile/Desktop changes preserve original control IDs, handlers, drafts, form values and exact execution targets without authentication or business writes. The isolated example inherits the existing presentation hint. See [ADR-0057](adr/0057-explicit-browser-interface-and-mobile-navigation.md).
+
 Hosted memory, explicit single-CPU cpuset and Docker-client settings are private operator controls, not browser or public API fields. Their defaults, tightening bounds, local-daemon isolation and test-host acceptance are owned by [the hosted operator guide](HOSTED_AGENT.md#operator-setup). Cpuset opt-in retains the CFS default when absent, requires concurrency one and a guarded image, and never silently discards unsupported CPU quota arguments. It changes neither wire shapes nor persisted task/account quotas. A secondary private-resource cleanup failure must not hide an unconfirmed executor exit or release its reserved capacity.
 
 The Cloud Git dialog keeps `project-code-button` and `project-code-dialog` as its single entry/container. `code-provider-gt-cloud` and `code-provider-github` select peer views with `aria-pressed` and `aria-controls`; switching views has no repository mutation. Existing `github-code-*` local controls are retained. Private `cloud-github-*` account/task controls are inline in the GitHub view; the preview's separate `cloud-github-dialog`, `cloud-github-open`, `settings-cloud-github-open` and close button are removed with their bindings. Beta 2 opens the shared Cloud Agent Web entry for trial and eligible repository tasks without changing their separately configured server enablement, exact profile routing or default local Codex selection, as specified in [Product specification](PRODUCT_SPEC.md).
@@ -598,4 +600,4 @@ there is no public raw-plan save/start route or automatic enabled-Team migration
 Older clients may ignore additive output but cannot start a saved Team through
 ordinary request/continuation paths. No new user-facing MCP execution authority,
 package version, publication or deployment is introduced by this preview. See
-[ADR-0057](adr/0057-account-private-saved-agent-teams.md) for the durable boundary.
+[ADR-0058](adr/0058-account-private-saved-agent-teams.md) for the durable boundary.

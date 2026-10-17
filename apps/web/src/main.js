@@ -11,6 +11,9 @@ import { mountPersonalCloudApi } from "./personal-cloud-api.js?v=20261012-conten
 import { mountCloudCodeConsent } from "./cloud-code-consent.js?v=20261012-content-1";
 import { cloudRequestInput, continueCloudRequestInput, mountAgentRequestControl, retryAgentRequestPermission } from "./agent-request-control.js?v=20261012-content-1";
 import { mountMobileWorkspace, mobileControlLabel } from "./mobile-workspace.js?v=20261012-content-1";
+import { mountInterfaceMode } from "./interface-mode.js";
+import { mountMobileSettings } from "./mobile-settings-view.js";
+import { mountMobileCodeView } from "./mobile-code-view.js";
 import { mountRegistration } from "./registration.js";
 import { HttpCollaborationApi, MockCollaborationApi } from "./api.js?v=20261012-content-1";
 import { mountMessageActions, agentWorkStatus } from "./message-actions.js?v=20261012-content-1";
@@ -371,10 +374,38 @@ const avatarSettings = mountAvatarSettings({ document, api, localizer,
     renderTimeline({ preserveAnchor: true });
   },
 });
+const interfaceMode = exampleMode ? {
+  getMode: () => window.__examplePresentation?.layout === "mobile" ? "mobile" : "desktop",
+  getPreference: () => window.__examplePresentation?.layout === "mobile" ? "mobile" : "desktop",
+  setPreference: mode => {
+    window.__examplePresentation.layout = mode === "mobile" ? "mobile" : "desktop";
+    refreshInterfacePresentation();
+  },
+  maybePrompt() {}, refresh() {},
+} : mountInterfaceMode({ document, window, t: text => localizer.t(text),
+  onChange: () => queueMicrotask(refreshInterfacePresentation) });
 const mobileWorkspace = mountMobileWorkspace({ document, window, t: text => localizer.t(text),
-  enabled: !exampleMode || window.__examplePresentation?.layout === "mobile",
+  getMode: () => interfaceMode.getMode(),
   // Mount can change layout before mobileWorkspace is assigned. Refresh after it returns.
   onLayoutChange: () => queueMicrotask(() => handleWorkspaceBreakpointChange()) });
+const mobileSettings = mountMobileSettings({ document, window, t: text => localizer.t(text),
+  isMobile: () => mobileWorkspace.isActive() });
+mountMobileCodeView({ document, window, t: text => localizer.t(text),
+  isMobile: () => mobileWorkspace.isActive() });
+function refreshInterfacePresentation() {
+  document.documentElement.dataset.interfaceMode = interfaceMode.getMode();
+  document.documentElement.dataset.interfacePreference = interfaceMode.getPreference();
+  mobileWorkspace.update();
+  mobileSettings.refresh();
+  for (const id of ["auth-interface-mode", "settings-interface-mode"]) element(id).value = interfaceMode.getPreference();
+}
+for (const id of ["auth-interface-mode", "settings-interface-mode"]) {
+  element(id).addEventListener("change", event => {
+    element("settings-interface-error").hidden = true;
+    interfaceMode.setPreference(event.target.value);
+    refreshInterfacePresentation();
+  });
+}
 const accountDevices = mountAccountDevices({ document, api, localizer,
   getContext: () => settingsDialog.open && state.currentUser ? {
     scope: `${authenticationGeneration}:${state.currentUser.id}:${state.currentUser.device_id}`,
@@ -630,6 +661,8 @@ const invitationLink = mountInvitationLink({ document, location, history: window
 });
 
 applyVisualSettings(state.settings);
+refreshInterfacePresentation();
+interfaceMode.maybePrompt();
 element("auth-language-button").addEventListener("click", () => {
   const locale = state.settings.general.locale === "zh-CN" ? "en" : "zh-CN";
   state.settings = settingsStore.set({ ...state.settings, general: { locale } });
@@ -3822,6 +3855,8 @@ function applyVisualSettings(settings) {
   }
   root.lang = normalized.general.locale;
   localizer.apply(normalized.general.locale);
+  interfaceMode.refresh();
+  mobileSettings.refresh();
   if (localeChanged) { sharedAgentsUi.refreshLanguage(); teamsUi.refreshLanguage(); }
   if (localeChanged) accountDevices.refreshLanguage();
   if (localeChanged) personalCloudApi.refreshLanguage();
@@ -4206,6 +4241,7 @@ function syncSettingsAgentControls({ changedCheckbox } = {}) {
 function populateSettingsForm(settings) {
   const normalized = normalizeSettings(settings);
   element("settings-locale").value = normalized.general.locale;
+  element("settings-interface-mode").value = interfaceMode.getPreference();
   element("settings-history-summary-instructions").value = normalized.historySummaries.instructions;
   element("settings-theme").value = normalized.appearance.theme;
   element("settings-text-scale").value = String(normalized.appearance.textScalePercent);
@@ -4307,6 +4343,7 @@ function openSettingsDialog(sectionId) {
   deviceInput.disabled = true;
   element("settings-device-status").textContent = localizer.t("Loading this device…");
   settingsDialog.showModal();
+  mobileSettings.open(sectionId);
   void avatarSettings.load();
   void refreshHostedAgentStatus();
   void codeStorageSettings.load();
@@ -4317,7 +4354,7 @@ function openSettingsDialog(sectionId) {
   void loadHistoryContextPolicy();
   requestAnimationFrame(() => {
     const section = typeof sectionId === "string" ? settingsDialog.querySelector(`#${sectionId}`) : null;
-    if (!section) { element("close-settings-button").focus(); return; }
+    if (!section || !section.getClientRects().length) { element("close-settings-button").focus(); return; }
     section.tabIndex = -1;
     section.scrollIntoView({ block: "start", behavior: "instant" });
     section.focus({ preventScroll: true });
@@ -4579,6 +4616,7 @@ function handleSettingsControlChange(event) {
 
 async function saveSettings(event) {
   event.preventDefault();
+  element("settings-interface-error").hidden = true;
   const isCurrent = captureWorkspaceScope();
   const deviceId = state.currentUser?.device_id;
   const dialogGeneration = settingsDeviceLoadGeneration;
@@ -4586,6 +4624,7 @@ async function saveSettings(event) {
   element("settings-history-summary-error").textContent = "";
   if (!summaryInstructions.trim() || summaryInstructions.length > 4000) {
     element("settings-history-summary-error").textContent = localizer.t("Summary instructions must contain 1 to 4000 characters.");
+    mobileSettings.open("settings-summaries");
     element("settings-history-summary-instructions").focus();
     return;
   }
@@ -4597,6 +4636,14 @@ async function saveSettings(event) {
   );
   if (contextBytes == null || contextBytes < CONTEXT_BUDGET_MIN_BYTES || contextBytes > CONTEXT_BUDGET_MAX_BYTES) {
     renderContextDiagnostic(settingsPreview);
+    if (mobileWorkspace.isActive()) {
+      mobileSettings.open("settings-general");
+      const message = element("settings-interface-error");
+      message.textContent = localizer.t("Some desktop settings are invalid. Switch to Desktop to correct them, then save again.");
+      message.hidden = false;
+      element("settings-interface-mode").focus();
+      return;
+    }
     element("settings-context-budget").focus();
     return;
   }
@@ -4608,6 +4655,7 @@ async function saveSettings(event) {
   const nextDeviceName = deviceInput.value.trim();
   if (!deviceInput.disabled && (!nextDeviceName || nextDeviceName.length > 120)) {
     deviceStatus.textContent = localizer.t("Choose a device name between 1 and 120 characters.");
+    mobileSettings.open("settings-device");
     deviceInput.focus();
     return;
   }
@@ -4654,10 +4702,12 @@ async function saveSettings(event) {
     if (!isCurrent() || !settingsDialog.open || dialogGeneration !== settingsDeviceLoadGeneration) return;
     if (savingContextPolicy) {
       element("settings-history-context-status").textContent = localizer.t("Unable to save Agent context policy. Retry saving settings.");
+      mobileSettings.open("settings-summaries");
       element("settings-history-context-mode").focus();
       return;
     }
     deviceStatus.textContent = error.message ?? localizer.t("Unable to rename this device.");
+    mobileSettings.open("settings-device");
     if (!deviceInput.disabled) deviceInput.focus();
   } finally {
     if (submit) submit.disabled = false;

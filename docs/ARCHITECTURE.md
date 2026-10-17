@@ -222,4 +222,4 @@ accepted task snapshots remain immutable when their saved definition is changed,
 disabled or deleted. Product flow, quotas, HTTP contracts and security controls
 are owned by their respective canonical documents; the durable split between
 configuration and execution is recorded in
-[ADR-0057](adr/0057-account-private-saved-agent-teams.md).
+[ADR-0058](adr/0058-account-private-saved-agent-teams.md).

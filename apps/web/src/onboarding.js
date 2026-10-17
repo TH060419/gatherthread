@@ -32,6 +32,27 @@ export function visibleGuideTarget(doc, selectors) {
   return undefined;
 }
 
+// Navigation only: these authored buttons disclose existing mobile pages. Never
+// submit a form, authorize an account, or queue work while preparing a guide.
+export function prepareMobileGuidePage(doc, view) {
+  const el = id => doc.getElementById(id);
+  if (["mobile-members", "mobile-invite", "mobile-join"].includes(view)) {
+    for (const id of ["mobile-invitations-page", "mobile-join-page"]) {
+      if (el(id) && !el(id).hidden) el(`${id}-back`)?.click();
+    }
+    if (view === "mobile-invite") el("mobile-open-invitations")?.click();
+    if (view === "mobile-join") el("mobile-open-join")?.click();
+  }
+  if (view === "mobile-project") el("mobile-project-options")?.click();
+  if (view === "mobile-rail" && el("mobile-project-management") && !el("mobile-project-management").hidden) {
+    el("mobile-project-management-back")?.click();
+  }
+  const section = { "summary-settings": "settings-summaries", "account-device": "settings-device", "account-delete": "settings-account" }[view];
+  if (section && el("settings-dialog")?.dataset.settingsPage !== section) {
+    doc.querySelector(`#settings-dialog .settings-navigation a[href="#${section}"]`)?.click();
+  }
+}
+
 export function mountOnboarding({ document: doc, getContext, openSettings, storage = browserStorage(), createDriver = driver, prepareScenario, exampleApi }) {
   if (doc.documentElement.dataset.example !== "true") return mountExampleGateway({ document: doc, getContext, openSettings, storage });
   const win = doc.defaultView;
@@ -71,9 +92,9 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
       ownedSettingsDialog = true; openSettings();
     }
     if (mobile) {
-      const wanted = ({ "mobile-rail": "mobile-sessions-dialog", "mobile-agent": "mobile-agent-dialog",
+      const wanted = ({ "mobile-rail": "mobile-sessions-dialog", "mobile-project": "mobile-sessions-dialog", "mobile-agent": "mobile-agent-dialog",
         "mobile-tools": "mobile-tools-dialog", "mobile-details": "mobile-tools-dialog",
-        "mobile-members": "mobile-members-dialog" })[view];
+        "mobile-members": "mobile-members-dialog", "mobile-invite": "mobile-members-dialog", "mobile-join": "mobile-members-dialog" })[view];
       for (const id of mobileDialogs) if (el(id).open && id !== wanted) el(id).close();
       if (wanted && !el(wanted).open) {
         const trigger = ({ "mobile-sessions-dialog": "toggle-session-rail-button", "mobile-agent-dialog": "mobile-agent-button",
@@ -81,6 +102,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
         if (wanted === "mobile-members-dialog" && !el("mobile-tools-dialog").open) el("mobile-tools-button").click();
         el(trigger).click();
       }
+      prepareMobileGuidePage(doc, view);
     }
 
     const workspace = el("workspace");
@@ -133,6 +155,7 @@ export function mountOnboarding({ document: doc, getContext, openSettings, stora
           el("github-mode-cloud").click();
           if (view === "code-github-account") el("cloud-github-account-settings").click();
           if (view === "code-github-repository") el("cloud-github-edit").click();
+          if (view === "code-github-ready" && !el("cloud-github-back").hidden) el("cloud-github-back").click();
         }
       } else if (el("code-gt-cloud-panel").hidden) el("code-provider-gt-cloud").click();
       const viewButton = { "code-overview": "code-back-device-view", "code-device": "code-open-device-view", "code-branches": "code-open-branches-view" }[view];

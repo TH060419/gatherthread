@@ -1,0 +1,91 @@
+/* These surfaces are opt-in by mode, not by viewport. A large tablet and a
+   desktop explicitly using mobile mode receive the same compact navigation. */
+html[data-mobile-workspace="true"] .mobile-panel-button-caption { display: inline; }
+.mobile-panel-button-caption { display: none; }
+html[data-mobile-workspace="true"] :is(#mobile-sessions-content, #mobile-members-content) > :is(#session-rail, #member-panel) { display: none !important; }
+html[data-mobile-workspace="true"] :is(.mobile-navigation, .mobile-members-navigation) [hidden] { display: none !important; }
+html[data-mobile-workspace="true"] .mobile-sessions-dialog { width: min(440px, calc(100vw - 24px)); padding: 20px; }
+html[data-mobile-workspace="true"] .mobile-panel-page { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+html[data-mobile-workspace="true"] .mobile-project-row { display: flex; align-items: end; gap: 12px; }
+html[data-mobile-workspace="true"] .mobile-project-field { flex: 1; min-width: 0; }
+html[data-mobile-workspace="true"] .mobile-panel-eyebrow { display: block; margin: 0 0 8px; font-size: .75rem; font-weight: 600; color: var(--ink-soft); letter-spacing: .02em; }
+html[data-mobile-workspace="true"] .mobile-project-field .project-select { display: block; width: 100%; min-width: 0; margin: 0; min-height: 46px; font-size: 16px; border-radius: 15px; }
+html[data-mobile-workspace="true"] .mobile-project-options { flex: 0 0 44px; width: 44px; min-height: 46px; padding: 8px; border: 0; border-radius: 14px; color: var(--ink-soft); background: transparent; font-size: 1rem; letter-spacing: .08em; white-space: nowrap; }
+html[data-mobile-workspace="true"] .mobile-new-conversation #new-session-button,
+html[data-mobile-workspace="true"] .mobile-project-actions #new-project-button { display: flex; align-items: center; justify-content: flex-start; gap: 12px; width: 100%; min-height: 48px; height: auto; padding: 12px 15px; border: 1px solid var(--glass-hairline); border-radius: 16px; background: color-mix(in srgb, var(--teal) 7%, transparent); box-shadow: none; font-size: .9rem; }
+html[data-mobile-workspace="true"] .mobile-session-search input { width: 100%; min-height: 46px; padding: 10px 14px; border-radius: 15px; font-size: 16px; background: color-mix(in srgb, var(--paper) 60%, transparent); }
+html[data-mobile-workspace="true"] .mobile-conversation-list .session-list { display: flex; flex-direction: column; gap: 3px; margin: 0; padding: 0; max-height: none; }
+html[data-mobile-workspace="true"] .mobile-conversation-list .session-list > li[hidden] { display: none !important; }
+html[data-mobile-workspace="true"] .mobile-conversation-list .session-button { min-height: 58px; width: 100%; padding: 12px; border: 0; border-radius: 14px; background: transparent; box-shadow: none; }
+html[data-mobile-workspace="true"] .mobile-conversation-list .session-button-active { background: color-mix(in srgb, var(--teal) 10%, transparent); }
+html[data-mobile-workspace="true"] .mobile-conversation-list .session-button strong { font-size: .95rem; font-weight: 550; }
+html[data-mobile-workspace="true"] .mobile-conversation-list .session-button small { font-size: .72rem; }
+html[data-mobile-workspace="true"] .mobile-conversation-list .mode-badge { font-size: .63rem; padding: 4px 6px; border-radius: 7px; }
+html[data-mobile-workspace="true"] .mobile-panel-empty { margin: 12px 0; color: var(--ink-soft); font-size: .9rem; }
+html[data-mobile-workspace="true"] .mobile-panel-page-heading { display: grid; gap: 14px; }
+html[data-mobile-workspace="true"] .mobile-panel-page-heading h3 { margin: 0; font-size: 1.18rem; }
+html[data-mobile-workspace="true"] .mobile-panel-back { justify-self: start; min-height: 44px; margin-inline-start: -9px; padding: 8px 10px; border: 0; border-radius: 12px; background: transparent; color: var(--teal); font-size: .9rem; }
+html[data-mobile-workspace="true"] .mobile-panel-back::before { content: "‹"; margin-inline-end: 8px; font-size: 1.3em; }
+html[data-mobile-workspace="true"] .mobile-project-actions { display: grid; gap: 12px; }
+html[data-mobile-workspace="true"] .mobile-project-actions .project-action-row { display: flex; flex-direction: column; align-items: stretch; gap: 4px; margin: 0; }
+html[data-mobile-workspace="true"] .mobile-project-actions .project-action-row button { min-height: 48px; padding: 12px 15px; text-align: start; border-radius: 14px; text-decoration: none; }
+html[data-mobile-workspace="true"] .mobile-members-heading .member-heading { margin: 0; }
+html[data-mobile-workspace="true"] .mobile-members-heading .eyebrow,
+html[data-mobile-workspace="true"] .mobile-members-heading #close-members-button { display: none; }
+html[data-mobile-workspace="true"] .mobile-members-heading h2 { margin: 0; font-size: 1.2rem; }
+html[data-mobile-workspace="true"] .mobile-members-list .member-list { display: grid; gap: 0; padding: 0; margin: 0; }
+html[data-mobile-workspace="true"] .mobile-members-list .member-row { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 66px; padding: 12px 0; border-bottom: 1px solid var(--glass-hairline); }
+html[data-mobile-workspace="true"] .mobile-members-list .avatar { width: 36px; height: 36px; }
+html[data-mobile-workspace="true"] .mobile-members-list .member-copy { min-width: 0; }
+html[data-mobile-workspace="true"] .mobile-members-list .member-copy strong { font-size: .9rem; overflow-wrap: anywhere; }
+html[data-mobile-workspace="true"] .mobile-members-list .member-copy small { font-size: .72rem; }
+html[data-mobile-workspace="true"] .mobile-members-list :is(.member-runtime, .member-role-select, .member-remove-button) { display: none; }
+html[data-mobile-workspace="true"] .mobile-member-options { grid-column: 2 / -1; min-width: 0; margin-top: -4px; }
+html[data-mobile-workspace="true"] .mobile-member-options summary { display: flex; align-items: center; gap: 8px; width: fit-content; min-height: 36px; padding: 6px 0; color: var(--ink-soft); font-size: .76rem; cursor: pointer; list-style: none; }
+html[data-mobile-workspace="true"] .mobile-member-options summary::-webkit-details-marker { display: none; }
+html[data-mobile-workspace="true"] .mobile-member-options summary::after { content: "⌄"; font-size: 1rem; }
+html[data-mobile-workspace="true"] .mobile-member-options[open] summary::after { content: "⌃"; }
+html[data-mobile-workspace="true"] .mobile-members-list .mobile-member-options[open] :is(.member-role-select, .member-remove-button) { display: block; width: 100%; min-height: 44px; margin-block: 8px 0; }
+html[data-mobile-workspace="true"] .mobile-member-options .member-role-select { padding: 8px 12px; font-size: 16px; }
+html[data-mobile-workspace="true"] .mobile-member-options .member-remove-button { text-align: start; color: var(--coral); font-size: .82rem; }
+html[data-mobile-workspace="true"] .mobile-member-options [hidden] { display: none !important; }
+html[data-mobile-workspace="true"] .mobile-member-options summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; border-radius: 8px; }
+html[data-mobile-workspace="true"] .mobile-members-list .presence { max-width: 100px; padding: 0; font-size: .68rem; text-align: end; }
+html[data-mobile-workspace="true"] .mobile-member-actions { display: grid; gap: 4px; padding-block: 6px; }
+html[data-mobile-workspace="true"] .mobile-panel-row { display: flex; align-items: center; width: 100%; min-height: 50px; padding: 12px 15px; border: 1px solid var(--glass-hairline); border-radius: 15px; color: var(--ink); background: transparent; text-align: start; font-size: .9rem; }
+html[data-mobile-workspace="true"] .mobile-panel-row::after { content: "›"; margin-inline-start: auto; color: var(--ink-soft); font-size: 1.2em; }
+html[data-mobile-workspace="true"] :is(#mobile-invitations-page, #mobile-join-page) .invitation-card { margin: 0; padding: 0; border: 0; background: transparent; box-shadow: none; }
+html[data-mobile-workspace="true"] :is(#mobile-invitations-page, #mobile-join-page) .invitation-card > :is(h3, .invitation-heading) { display: none; }
+html[data-mobile-workspace="true"] :is(#mobile-invitations-page, #mobile-join-page) form { display: grid; gap: 12px; }
+html[data-mobile-workspace="true"] :is(#mobile-invitations-page, #mobile-join-page) :is(input, select) { min-height: 46px; font-size: 16px; }
+html[data-mobile-workspace="true"] #mobile-invitations-page .invitation-options { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+html[data-mobile-workspace="true"] #mobile-invitations-page .field-help { font-size: .76rem; }
+html[data-mobile-workspace="true"] #mobile-invitations-page .invitation-share-text { max-height: 170px; overflow: auto; }
+html[data-mobile-workspace="true"] #mobile-tools-content { display: block; }
+html[data-mobile-workspace="true"] .mobile-tool-group { margin-block: 0 18px; }
+html[data-mobile-workspace="true"] .mobile-tool-group[hidden] { display: none; }
+html[data-mobile-workspace="true"] .mobile-tool-group-items { display: grid; gap: 2px; }
+html[data-mobile-workspace="true"] .mobile-tool-group-items > :is(button, details) { width: 100%; min-height: 46px; height: auto; margin: 0; padding: 10px 12px; border: 0; border-radius: 13px; background: transparent; box-shadow: none; }
+html[data-mobile-workspace="true"] .mobile-tool-group-items > .icon-button { display: flex; flex-direction: row; align-items: center; justify-content: start; gap: 13px; }
+html[data-mobile-workspace="true"] .mobile-tool-group-items .icon-button > svg { width: 21px; height: 21px; flex: 0 0 21px; }
+html[data-mobile-workspace="true"] .mobile-tool-group-items .mobile-action-caption { display: inline; font-size: .88rem; text-align: start; }
+html[data-mobile-workspace="true"] .mobile-tool-group-items #logout-button { text-align: start; color: var(--ink-soft); }
+html[data-mobile-workspace="true"] #mobile-tools-content > #download-codex-button { display: none; }
+html[data-mobile-workspace="true"] .mobile-tool-group-items .session-context-details > summary::after { font-size: .88rem; }
+html[data-mobile-workspace="true"] :is(.mobile-panel-row, .mobile-project-options, .mobile-panel-back, .mobile-tool-group-items > button):focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+@media (max-width: 600px) {
+  html[data-mobile-workspace="true"] .mobile-sessions-dialog {
+    inset: 0 auto 0 0;
+    width: min(360px, 90vw);
+    height: 100dvh;
+    max-height: 100dvh;
+    margin: 0;
+    padding: max(18px, env(safe-area-inset-top)) 18px max(20px, env(safe-area-inset-bottom));
+    border-block: 0;
+    border-inline-start: 0;
+    border-radius: 0 26px 26px 0;
+  }
+  html[data-mobile-workspace="true"] .mobile-sessions-dialog > .mobile-dialog-heading { margin-bottom: 22px; }
+  html[data-mobile-workspace="true"] .mobile-conversation-list { flex: 1; }
+}

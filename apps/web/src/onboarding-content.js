@@ -80,13 +80,14 @@ const members = [
 ];
 
 const mobileBasics = {
-  project: { target: "#toggle-session-rail-button", view: "conversation", text: ["Open the top project and conversation drawer. Create a project, or join with an invitation key from its owner.", "打开顶部的项目与会话抽屉。你可以创建项目，或使用创建者给的邀请密钥加入。"] },
+  project: { target: "#toggle-session-rail-button", view: "conversation", text: ["Open Conversations to choose a project, search its conversations or start a new one. Project options are under •••. To join someone else, open Members from Conversation tools.", "打开“会话”可切换项目、搜索会话或新建会话。项目管理收在 ••• 中；加入他人的项目，可从会话工具打开“成员”。"] },
   conversation: { target: "#session-list", view: "mobile-rail" },
   "create-conversation": { target: "#new-session-button", view: "mobile-rail" },
   connect: { target: "#mobile-agent-button", view: "conversation", title: ["4 · Choose an AI agent on your phone", "4 · 在手机上选择 AI agent"], text: ["Choose Cloud Agent to work without a connected computer. To use your own Codex or DeepSeek Harness, sign in on a computer with this account and connect it there. Keep that computer online. When GatherThread is reachable from the internet, your phone can use it from another network; it need not share Wi-Fi. A localhost-only server cannot do this by itself. Sleep or disconnection makes the local AI agent unavailable.", "可直接选择云端 Agent，无需连接电脑。如果想用自己的 Codex 或 DeepSeek Harness，先在电脑用同一账号登录并连接，让电脑保持在线。GatherThread 服务器可从公网访问时，手机在其他网络也能使用电脑上的 AI agent，不必连接同一 Wi-Fi；仅在本机运行的服务不能直接跨网使用。电脑休眠或断网后，本地 AI agent 会暂时不可用。"] },
   model: { target: "#mobile-agent-button", view: "conversation", text: ["Tap the Agent button beside the composer to open the AI agent, model and reasoning choices. The available choices come from connected agents.", "点输入框旁的 Agent 按钮，即可展开 AI agent、模型和推理强度选项。可选内容取决于已连接的 AI agent。"] },
   summary: { view: "mobile-tools" },
   files: { target: "#mobile-tools-button", view: "conversation", text: ["Open conversation tools at the top or + beside the composer, then choose file sharing. Use GitHub for real development, or limited GT Cloud for a small trial.", "点顶部的会话工具或输入框旁的 +，打开文件共享。实际开发推荐 GitHub；小项目体验可用有限额的 GT Cloud。"] },
+  review: { target: "#code-repository-status", view: "code-overview", title: ["11 · Keep track of shared files", "11 · 关注共享文件状态"], text: ["Your phone shows the project's connection status. Review file changes and merge them on a computer or GitHub before using the shared version. Automatic upload never means automatic merge.", "手机可查看项目的文件连接状态。文件改动由团队在电脑或 GitHub 检查后再合并，自动上传不等于自动合并。"] },
   finish: { target: "#mobile-tools-button", view: "conversation", text: ["Open conversation tools from the top button or the + beside the composer. Settings, members, summaries and file sharing are there. The isolated example lets you explore without changing your projects.", "点顶部的会话工具按钮，或输入框旁的 +，可找到设置、成员、摘要和文件共享。独立示例可自由体验，不会改动自己的项目。"] },
 };
 const mobileMembers = {
@@ -95,27 +96,39 @@ const mobileMembers = {
     "输入 @ 并选成员可提醒对方。点顶部的会话工具或输入框旁的 +，再点 @ 查看提到你的消息。未读标记刷新后会重置。",
   ] },
   roles: { target: "#member-list > li:first-child", view: "mobile-members" },
-  invite: { target: "#create-invitation-form button[type=submit]", view: "mobile-members" },
-  join: { target: "#accept-invite-secret", view: "mobile-members" },
-  manage: { target: "#rename-project-button", view: "mobile-rail" },
-  leave: { target: "#leave-project-button", view: "mobile-rail" },
+  invite: { target: "#create-invitation-form button[type=submit]", view: "mobile-invite", text: ["In Members, open Invite people. Choose a role and expiry, then create and copy the invitation. Your teammate follows the link and confirms joining after signing in.", "在“成员”中点“邀请成员”，选择身份和有效期，再创建并复制邀请。对方打开链接，登录后确认加入即可。"] },
+  join: { target: "#accept-invite-secret", view: "mobile-join", text: ["In Members, open Join a project. Paste the invitation key supplied by the owner. The invitation determines whether you can participate or only view.", "在“成员”中点“加入项目”，粘贴创建者提供的邀请密钥。邀请会决定你加入后可以参与还是仅查看。"] },
+  manage: { target: "#rename-project-button", view: "mobile-project", text: ["Open Conversations, then ••• beside the project. The owner can rename or delete the cloud project here. Cloud deletion does not delete local computer files or tasks.", "打开“会话”，点项目旁的 •••。创建者可在这里重命名或删除云端项目；删除云端项目不会删除电脑上的文件或任务。"] },
+  leave: { target: "#leave-project-button", view: "mobile-project", text: ["Participants and viewers can leave through the project's ••• menu. If uploaded work still needs review, resolve it with the owner on a computer first. Local files remain on your devices.", "参与者和访者可从项目的 ••• 菜单退出。若已上传成果仍待审核，先在电脑与创建者处理好；设备上的本地文件会保留。"] },
 };
-const mobileHistory = {
-  upload: { view: "mobile-details" }, manual: { view: "mobile-details" }, import: { view: "mobile-details" },
-  snapshot: { view: "mobile-tools" },
-};
+const mobileHistory = [
+  step("sharing", "", "Continue the same discussion on your phone", "在手机继续同一段讨论", "Sign in with the same account to read your projects and shared conversations. Mobile messages are shared with authorized project members; you do not need to import or upload computer history from your phone.", "用同一账号登录，就能查看自己的项目与共享会话。手机发送的消息会分享给有权限的项目成员，不必在手机操作电脑历史的导入或上传。"),
+  step("mobile-agent", "#mobile-agent-button", "Choose an available Agent", "选择可用的 Agent", "Use Cloud Agent directly, or use Codex or DeepSeek Harness already connected on your computer with this account. Keep that computer and its connector online. Your phone can work from another network when the GatherThread server is internet-accessible.", "可直接使用云端 Agent，也可调用已用同一账号在电脑连接的 Codex 或 DeepSeek Harness。让电脑与连接程序保持在线；GatherThread 服务器可从公网访问时，手机可以在其他网络继续使用。", "conversation"),
+  step("mobile-chat", "#send-chat-button", "Share a new decision", "分享新的决定", "Send chat adds a message for your teammates without starting an Agent. These shared messages stay in the conversation when you move between phone and computer.", "“发送聊天”只与同伴分享消息，不会启动 Agent。手机和电脑都能接着查看这些共享消息。", "conversation"),
+  step("mobile-request", "#send-agent-button", "Ask the Agent to use the discussion", "请 Agent 接着讨论做事", "Use the Agent request button for a task. It uses the shared discussion and the exact Agent you selected. The phone does not need a local installation or access to the computer's folders.", "需要处理任务时，点请求 Agent。它会结合共享讨论，使用你选择的 Agent。手机不需要安装本地 Agent，也不需要访问电脑文件夹。", "conversation"),
+  step("mobile-summary", "#history-summary-select-button", "Keep the important conclusions", "留下重要结论", "Open Summaries in Conversation tools to organize completed messages into a short checklist. You can always switch back to the originals to check details.", "从会话工具打开摘要，将已完成的讨论整理成简短清单。需要核对细节时，仍可切回原文。", "mobile-tools"),
+];
 const mobileSummaries = {
   summary: { view: "mobile-tools" }, original: { view: "mobile-tools" }, versions: { view: "mobile-tools" },
 };
-const mobileFiles = {
-  files: { target: "#mobile-tools-button", view: "conversation", text: ["Open file sharing from Conversation tools at the top or the + beside the composer. For real development, connect your own GitHub repository; GT Cloud offers limited storage for a small trial. The two choices do not automatically move files between them.", "从顶部的会话工具或输入框旁的 + 打开文件共享。实际开发推荐连接自己的 GitHub 仓库；轻量体验可用有限额的 GT Cloud。两种方式不会自动互相迁移文件。"] },
-};
+const mobileFiles = [
+  step("files", "#mobile-tools-button", "Connect project files from your phone", "在手机连接项目文件", "Open Project files from Conversation tools. Connect GitHub for real development, or choose limited GT Cloud for a small trial. File connection and conversation history are independent.", "从会话工具打开“项目文件”。实际开发推荐 GitHub，轻量体验可选有限额的 GT Cloud。文件连接与会话历史互相独立。", "conversation"),
+  step("github", "#code-provider-github", "Use your own GitHub repository", "使用自己的 GitHub 仓库", "GitHub stores the files in your repository instead of GatherThread's limited storage. Repository access is managed on GitHub. Connecting it does not move or delete GT Cloud files.", "GitHub 将文件保存在自己的仓库中，不占 GatherThread 的有限存储；仓库权限由 GitHub 管理。连接后不会迁移或删除 GT Cloud 文件。", "code-github-ready"),
+  step("github-account", "#cloud-github-authorize", "1 · Connect GitHub", "1 · 连接 GitHub 账号", "Complete GitHub's sign-in and authorization page, then return here. This isolated example uses a fictional connection and never signs in to a real GitHub account.", "在 GitHub 页面完成登录与授权，再回到这里。此独立示例使用虚构连接，不会登录真实 GitHub 账号。", "code-github-account"),
+  step("github-repository", "#cloud-github-name", "2 · Choose your repository", "2 · 选择仓库", "Enter the GitHub account or organization and repository name separately. If needed, use Create a repository on GitHub, then come back to connect it. Keep private credentials out of project files.", "分别填写 GitHub 账号或组织和仓库名称。还没有仓库时，可点“在 GitHub 创建仓库”，完成后回来连接。不要把私密凭据放进项目文件。", "code-github-repository"),
+  step("github-status", "#cloud-github-status", "3 · Check the connection", "3 · 确认连接状态", "The connected account and repository appear here. You can change the connection later. Uploading, downloading and reviewing file merges belong on a computer; your phone stays focused on the discussion and Agent tasks.", "这里会显示已连接的账号与仓库，之后仍可调整连接。文件上传、下载与合并审核留在电脑处理；手机专注讨论与 Agent 任务。", "code-github-ready"),
+  step("gt-cloud", "#code-provider-gt-cloud", "Use GT Cloud for a small trial", "用 GT Cloud 轻量体验", "GT Cloud provides limited storage for trying a small project. Project members can read uploaded files; a Solo conversation does not make project files private. GitHub remains a separate connection.", "GT Cloud 提供有限额存储，适合体验小项目。项目成员可以读取已上传文件，Solo 会话不会让项目文件变成私密；GitHub 仍是另一种独立连接。", "code-enable"),
+  step("enable", "#code-enable-button", "The owner connects GT Cloud", "由创建者启用 GT Cloud", "The project owner enables GT Cloud here. Afterwards, check its status on your phone. Computer file synchronization and recovery are configured on the computer, not on the phone.", "项目创建者在这里启用 GT Cloud。之后可在手机查看连接状态；电脑文件同步与恢复在电脑端配置，不必在手机设置。", "code-enable"),
+  step("continue", "#mobile-agent-button", "Return to the conversation", "回到会话继续协作", "Choose the Agent and its available project workspace beside the composer, then describe the next task. Follow its work and results in the conversation. Available files depend on that Agent's workspace and permissions.", "回到输入框旁，选择 Agent 和可用的项目工作区，再说明接下来的任务。在会话中跟进工作过程与结果；可用文件取决于该 Agent 的工作区和授权。", "conversation"),
+];
 
 export function guideSteps(topic, context = {}) {
   // Every guide runs in the isolated, fully populated example, even for empty accounts.
   const items = { basics, members, history, files, summaries, account }[topic] ?? basics;
   if (context.layout !== "mobile") return items;
-  const overrides = { basics: mobileBasics, members: mobileMembers, history: mobileHistory, summaries: mobileSummaries, files: mobileFiles }[topic] ?? {};
+  if (topic === "history") return mobileHistory;
+  if (topic === "files") return mobileFiles;
+  const overrides = { basics: mobileBasics, members: mobileMembers, summaries: mobileSummaries }[topic] ?? {};
   return items.map((item) => ({ ...item, ...overrides[item.id] }));
 }
 

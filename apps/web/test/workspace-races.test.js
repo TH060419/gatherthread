@@ -299,9 +299,11 @@ test("context policy lookup failure stays disabled with an explicit retry instea
 
 function contextPolicySaveHarness(write) {
   const saved = [];
+  const openedSections = [];
   const app = harness(["captureWorkspaceScope", "saveSettings"], {
     settingsDeviceLoadGeneration: 1, settingsHistoryPolicy: { projectId: "p1", mode: "summary" },
     settingsDialog: { open: true, close() { this.open = false; } }, settingsPreview: {},
+    mobileSettings: { open: section => openedSections.push(section) },
     contextBudgetInputBytes: () => 262144, CONTEXT_BUDGET_MIN_BYTES: 8192, CONTEXT_BUDGET_MAX_BYTES: 5242880,
     DSH_HARNESS: "deepseek-harness", currentDeviceName: "Fixture device", readSettingsForm: () => ({ notifications: {} }),
     notificationPermissionNeeded: () => false, settingsStore: { set: (value) => { saved.push(value); return value; } },
@@ -313,7 +315,7 @@ function contextPolicySaveHarness(write) {
   app.element("settings-history-summary-instructions").value = "Preserve fixture details.";
   app.element("settings-history-context-mode").value = "original";
   app.element("settings-device-name").disabled = true;
-  return { app, saved, event: { preventDefault: noop, submitter: element() } };
+  return { app, saved, openedSections, event: { preventDefault: noop, submitter: element() } };
 }
 
 test("a profile poll started before a successful avatar save cannot restore the previous image", async () => {
@@ -517,9 +519,10 @@ test("avatar refresh failures release their own slot and a successful retry upda
 });
 
 test("context policy save failure stays in settings with a relevant bilingual error and no false local save", async () => {
-  const { app, saved, event } = contextPolicySaveHarness(async () => { throw new Error("Fixture server internal"); });
+  const { app, saved, openedSections, event } = contextPolicySaveHarness(async () => { throw new Error("Fixture server internal"); });
   await app.saveSettings(event);
   assert.equal(app.settingsDialog.open, true);
+  assert.deepEqual(openedSections, ["settings-summaries"]);
   assert.equal(saved.length, 0);
   assert.equal(app.element("settings-history-context-status").textContent, "Unable to save Agent context policy. Retry saving settings.");
   assert.equal(app.element("settings-device-status").textContent, "");

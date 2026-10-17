@@ -1,0 +1,48 @@
+.mobile-settings-back { display: none; }
+html[data-mobile-workspace="true"] .settings-dialog {
+  width: min(560px, 100vw); height: min(850px, 100dvh); max-height: 100dvh;
+  padding: 0; border-radius: 24px; overflow: hidden; background: var(--paper);
+}
+html[data-mobile-workspace="true"] #settings-form { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+html[data-mobile-workspace="true"] .settings-header { padding: 18px 20px; gap: 8px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+html[data-mobile-workspace="true"] .settings-header .eyebrow,
+html[data-mobile-workspace="true"] .settings-header p:not(.eyebrow) { display: none; }
+html[data-mobile-workspace="true"] .settings-header h2 { font-size: 1.2rem; margin: 0; }
+html[data-mobile-workspace="true"] .settings-layout { display: block; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+html[data-mobile-workspace="true"] .settings-navigation {
+  display: grid; gap: 0; padding: 12px 18px 24px; border: 0; overflow: visible;
+  background: transparent; position: static;
+}
+html[data-mobile-workspace="true"] .settings-navigation a {
+  display: flex; align-items: center; justify-content: space-between; min-height: 55px;
+  margin: 0; padding: 14px 16px; border: 0; border-bottom: 1px solid var(--line);
+  background: var(--paper-raised); border-radius: 0; color: var(--ink); text-decoration: none;
+}
+html[data-mobile-workspace="true"] .settings-navigation a::after { content: "›"; color: var(--ink-soft); font-size: 1.25rem; }
+html[data-mobile-workspace="true"] .settings-navigation a:first-child { border-radius: 16px 16px 0 0; }
+html[data-mobile-workspace="true"] .settings-navigation a:last-child { border-radius: 0 0 16px 16px; border-bottom: 0; }
+html[data-mobile-workspace="true"] .settings-dialog[data-settings-page="home"] .settings-sections,
+html[data-mobile-workspace="true"] .settings-dialog:not([data-settings-page="home"]) .settings-navigation,
+html[data-mobile-workspace="true"] .settings-dialog .mobile-setting-unavailable,
+html[data-mobile-workspace="true"] .settings-section:not(.mobile-setting-selected) { display: none !important; }
+html[data-mobile-workspace="true"] .settings-sections { padding: 10px 20px 28px; overflow: visible; }
+html[data-mobile-workspace="true"] .settings-section { padding-block: 14px; border: 0; }
+html[data-mobile-workspace="true"] .settings-section-heading { display: block; margin-bottom: 16px; }
+html[data-mobile-workspace="true"] .settings-section-heading .eyebrow { display: none; }
+html[data-mobile-workspace="true"] .settings-section-heading p { font-size: .85rem; }
+html[data-mobile-workspace="true"] .settings-row { display: grid; grid-template-columns: 1fr; gap: 10px; padding-block: 16px; }
+html[data-mobile-workspace="true"] .settings-toggle { grid-template-columns: minmax(0, 1fr) auto; }
+html[data-mobile-workspace="true"] .settings-row select { width: 100%; max-width: 100%; min-height: 44px; font-size: 16px; }
+html[data-mobile-workspace="true"] .settings-row small { line-height: 1.5; }
+html[data-mobile-workspace="true"] .mobile-settings-back:not([hidden]) { display: inline-flex; padding: 8px 0; background: none; border: 0; color: var(--teal); min-height: 44px; font: inherit; cursor: pointer; }
+html[data-mobile-workspace="true"] .settings-dialog:not([data-settings-page="home"]) .settings-header > div { display: none; }
+html[data-mobile-workspace="true"] .settings-dialog .settings-footer { padding: 12px 20px max(12px, env(safe-area-inset-bottom)); flex: 0 0 auto; }
+html[data-mobile-workspace="true"] .settings-row:has(#settings-density),
+html[data-mobile-workspace="true"] .settings-row:has(#settings-ambient-canvas),
+html[data-mobile-workspace="true"] .settings-row:has(#settings-enter-behavior) { display: none; }
+html[data-mobile-workspace="true"] .onboarding-guide-buttons { display: grid; grid-template-columns: 1fr; }
+html[data-mobile-workspace="true"] #reset-settings-button { display: none; }
+html[data-mobile-workspace="true"] .onboarding-guide-buttons .button { text-align: start; justify-content: flex-start; }
+@media (max-width: 600px) {
+  html[data-mobile-workspace="true"] .settings-dialog { width: 100vw; height: 100dvh; border-radius: 0; border: 0; }
+}

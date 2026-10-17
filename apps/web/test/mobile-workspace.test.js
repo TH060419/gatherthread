@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isMobileDevice, usesMobileWorkspace, MOBILE_WORKSPACE_MAX_WIDTH, mobileAgentLabel, mobileControlLabel, isDialogBackdropPointer, mountMobileWorkspace } from "../src/mobile-workspace.js";
+import { isMobileDevice, usesMobileWorkspace, MOBILE_WORKSPACE_MAX_WIDTH, mobileAgentLabel, mobileControlLabel, isDialogBackdropPointer,
+  mountMobileWorkspace, mobileWorkspaceModeActive } from "../src/mobile-workspace.js";
 
 test("local connection availability follows the platform, not a narrow desktop window", () => {
   assert.equal(isMobileDevice({ userAgent: "Macintosh Safari", platform: "MacIntel", maxTouchPoints: 0 }), false);
@@ -22,6 +23,16 @@ test("mobile presentation includes tablet portrait/landscape without replacing a
     assert.equal(usesMobileWorkspace(touchLaptop, width), false);
   }
   assert.equal(usesMobileWorkspace(ipad, MOBILE_WORKSPACE_MAX_WIDTH + 1), false);
+});
+
+test("an explicit interface choice overrides viewport detection without changing device identity", () => {
+  const phone = { userAgent: "iPhone" }, desktop = { userAgent: "Macintosh", maxTouchPoints: 0 };
+  assert.equal(mobileWorkspaceModeActive("mobile", desktop, 1920), true);
+  assert.equal(mobileWorkspaceModeActive("desktop", phone, 390), false);
+  assert.equal(mobileWorkspaceModeActive(null, phone, 390), true);
+  assert.equal(mobileWorkspaceModeActive(null, desktop, 390), false);
+  assert.equal(isMobileDevice(phone), true);
+  assert.equal(isMobileDevice(desktop), false);
 });
 
 test("small mobile labels preserve harness identity and request/pause/resume distinctions", () => {

@@ -4,6 +4,8 @@ All notable changes to GatherThread are documented here. The project follows Sem
 
 ## [Unreleased]
 
+- Redesign mobile conversations, members, invitations, settings and project-file connections as focused pages. Add a browser-local Mobile/Desktop choice on login and in General, with confirmation after device detection. Preserve drafts, exact remote/Cloud Agent selection and Pause/Resume; desktop-only file transfers and native setup stay off the phone interface.
+
 ## [0.1.0-beta.2] - 2026-10-15
 
 Beta 2 consolidates the reviewed updates since Beta 1 into matching packages,

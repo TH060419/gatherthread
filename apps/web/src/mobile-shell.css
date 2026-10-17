@@ -1,0 +1,66 @@
+/* Presentation is explicit. Physical-device capability is checked separately. */
+.auth-view-options { display: flex; align-items: center; gap: 8px; }
+.auth-interface-control select { width: auto; min-height: 32px; max-width: 112px; padding: 4px 20px 4px 8px; border: 1px solid var(--line); border-radius: 9px; background: var(--glass-surface); color: var(--ink-soft); font: inherit; font-size: .78rem; }
+html[data-mobile-workspace="true"] .auth-shell { display: block; height: auto; min-height: calc(100dvh - var(--test-environment-height, 0px)); padding: 20px 0; }
+html[data-mobile-workspace="true"] .auth-shell[hidden] { display: none; }
+html[data-mobile-workspace="true"] .auth-story { display: none; }
+html[data-mobile-workspace="true"] .login-panel { width: min(480px, calc(100% - 32px)); max-height: none; margin: 0 auto; padding: 24px 20px; border-radius: 24px; }
+html[data-mobile-workspace="true"] .login-panel::before,
+html[data-mobile-workspace="true"] .login-panel::after { display: none; }
+html[data-mobile-workspace="true"] .auth-panel-actions { margin-bottom: 28px; gap: 8px; }
+html[data-mobile-workspace="true"] .brand-lockup-login img { width: min(40vw, 180px); }
+html[data-mobile-workspace="true"] #login-title { font-size: 1.8rem; line-height: 1.25; margin-block: 0 12px; }
+html[data-mobile-workspace="true"] .login-intro { font-size: .9rem; }
+html[data-mobile-workspace="true"] .claim-identity-grid { grid-template-columns: 1fr; }
+html[data-mobile-workspace="true"] .login-panel input:not([type="checkbox"]) { font-size: 16px; min-height: 48px; }
+html[data-mobile-workspace="true"] .workspace .topbar { grid-template-columns: 44px minmax(0, 1fr) auto; }
+html[data-mobile-workspace="true"] .workspace .topbar-brand-cluster { gap: 0; }
+html[data-mobile-workspace="true"] .workspace .topbar-brand-cluster .wordmark { display: none; }
+html[data-mobile-workspace="true"] .workspace .topbar-session-context { max-width: 100%; }
+html[data-mobile-workspace="true"] .workspace .account-cluster { gap: 2px; }
+html[data-mobile-workspace="true"] .workspace .current-username,
+html[data-mobile-workspace="true"] .workspace .account-cluster > .avatar,
+html[data-mobile-workspace="true"] .workspace #global-connection { display: none; }
+html[data-mobile-workspace="true"] #toggle-session-rail-button svg,
+html[data-mobile-workspace="true"] #mobile-members-button svg { width: 24px; height: 24px; }
+html[data-mobile-workspace="true"] .workspace .conversation { width: 100%; min-width: 0; max-width: 960px; justify-self: center; }
+html[data-mobile-workspace="true"] .workspace #left-layout-resizer,
+html[data-mobile-workspace="true"] .workspace #right-layout-resizer,
+html[data-mobile-workspace="true"] #connect-codex-button,
+html[data-mobile-workspace="true"] #connect-dsh-button,
+html[data-mobile-workspace="true"] #add-agent-button,
+html[data-mobile-workspace="true"] #agent-sharing-button,
+html[data-mobile-workspace="true"] #download-codex-button,
+html[data-mobile-workspace="true"] #visible-history-controls,
+html[data-mobile-workspace="true"] #codex-local-sync-controls { display: none !important; }
+html[data-mobile-workspace="true"] .workspace .session-header { display: none; }
+html[data-mobile-workspace="true"] .workspace .composer { height: auto; max-height: min(46dvh, 320px); min-height: 0; flex: 0 0 auto; }
+html[data-mobile-workspace="true"] .workspace .composer-actions { flex-wrap: nowrap; }
+html[data-mobile-workspace="true"] .workspace .intent-help .button { padding-inline: 10px; white-space: nowrap; }
+html[data-mobile-workspace="true"] .workspace .composer-agent-button { max-width: 110px; min-width: 44px; flex: 0 1 auto; padding-inline: 8px; }
+html[data-mobile-workspace="true"] .workspace .mobile-agent-button { max-width: 110px; }
+html[data-mobile-workspace="true"] .workspace .event-bubble { min-width: 0; }
+html[data-mobile-workspace="true"] dialog input:not([type="checkbox"]),
+html[data-mobile-workspace="true"] dialog select,
+html[data-mobile-workspace="true"] dialog textarea { font-size: 16px; }
+html[data-mobile-workspace="true"] .create-dialog { width: min(560px, calc(100vw - 20px)); max-height: calc(100dvh - 20px); overflow-y: auto; }
+/* Choosing desktop on a phone keeps desktop navigation, rather than silently
+   replacing it with a second responsive mobile layout. It can be panned. */
+@media (max-width: 760px) {
+  html[data-interface-preference="desktop"] .workspace { width: 100%; min-width: 0; min-height: 0; overflow: hidden; }
+  html[data-interface-preference="desktop"] .workspace-grid { width: 100%; overflow-x: auto; grid-template-columns: 230px minmax(440px, 1fr); grid-template-rows: minmax(0, 1fr); }
+  html[data-interface-preference="desktop"] .topbar { width: 100%; gap: 6px; padding-inline: 8px; }
+  html[data-interface-preference="desktop"] .topbar-brand-cluster .wordmark { display: none; }
+  html[data-interface-preference="desktop"] .topbar-session-context { max-width: 100%; }
+  html[data-interface-preference="desktop"] .account-cluster { gap: 4px; }
+  html[data-interface-preference="desktop"] .session-rail { grid-row: 1; max-height: none; padding: 24px 16px; border-right: 1px solid var(--line); overflow-y: auto; }
+  html[data-interface-preference="desktop"] .session-list { display: grid; overflow: visible; }
+  html[data-interface-preference="desktop"] .rail-heading .eyebrow { display: block; }
+  html[data-interface-preference="desktop"] .auth-shell { min-width: 900px; grid-template-columns: minmax(0, 1fr) minmax(380px, .65fr); }
+  html[data-interface-preference="desktop"] .auth-story { min-height: 0; }
+  html[data-interface-preference="desktop"] .login-panel { width: auto; }
+  html[data-interface-preference="desktop"] .auth-view-options { position: fixed; top: calc(12px + var(--test-environment-height, 0px)); left: 12px; z-index: 10; }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .auth-interface-control select { background: var(--paper-raised); }
+}

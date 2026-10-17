@@ -1,6 +1,23 @@
 import { SHARED_AGENT_ZH_CN } from "./shared-agent-i18n.js";
 
 const ZH_CN = Object.freeze({
+  "Interface": "界面模式",
+  "Auto": "自动检测",
+  "Mobile": "移动端",
+  "Desktop": "电脑端",
+  "Applies immediately to this browser only.": "立即切换，仅应用于当前浏览器。",
+  "Project options": "项目选项",
+  "New conversation": "新建会话",
+  "Search conversations": "搜索会话",
+  "No matching conversations.": "没有找到匹配的会话。",
+  "Invite people": "邀请成员",
+  "Conversation": "会话",
+  "More": "更多",
+  "Manage member": "管理成员",
+  "Some desktop settings are invalid. Switch to Desktop to correct them, then save again.": "部分电脑端设置填写有误，请切换到电脑端修正后再保存。",
+  "Choose where your project files are saved.": "选择项目文件的保存位置。",
+  "Connect here. Upload, download and merge files on your computer.": "在这里管理连接，上传、下载和合并请在电脑上操作。",
+  "Connected on your computer": "电脑已连接的仓库",
   "Qwen · Alibaba Cloud (Beijing)": "Qwen · 阿里百炼（北京）",
   "GLM · Zhipu": "GLM · 智谱",
   "Doubao · Volcengine (Beijing)": "豆包 · 火山方舟（北京）",

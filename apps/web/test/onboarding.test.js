@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createOnboardingProgress, GUIDE_COPY, GUIDE_LABELS, guideSteps, guideText, onboardingKey } from "../src/onboarding-content.js";
 import { translateUiText } from "../src/i18n.js";
+import { prepareMobileGuidePage } from "../src/onboarding.js";
 
 test("tour progress is isolated by user, device and site, including delimiter-like IDs", () => {
   const identity = { userId: "u:a", deviceId: "d", origin: "https://example.test" };
@@ -65,6 +66,59 @@ test("mobile guide uses visible drawer and Agent controls without mobile install
   const mention = guideSteps("members", { layout: "mobile" }).find((item) => item.id === "mention");
   assert.equal(mention.view, "mobile-tools");
   assert.match(mention.text[1], /会话工具.*输入框旁的 \+.*再点 @/u);
+});
+
+test("mobile member guides select their focused invitation, join and project pages", () => {
+  const byId = new Map(guideSteps("members", { layout: "mobile" }).map(item => [item.id, item]));
+  assert.equal(byId.get("roles").view, "mobile-members");
+  assert.equal(byId.get("invite").view, "mobile-invite");
+  assert.equal(byId.get("join").view, "mobile-join");
+  assert.equal(byId.get("manage").view, "mobile-project");
+  assert.equal(byId.get("leave").view, "mobile-project");
+});
+
+test("guide preparation discloses only presentation pages and Settings sections", () => {
+  const clicks = [], nodes = new Map();
+  const add = (id, hidden = true) => { const node = { hidden, dataset: {}, click: () => clicks.push(id) }; nodes.set(id, node); return node; };
+  for (const id of ["mobile-invitations-page", "mobile-join-page", "mobile-project-management"]) add(id);
+  for (const id of ["mobile-invitations-page-back", "mobile-join-page-back", "mobile-project-management-back", "mobile-open-invitations", "mobile-open-join", "mobile-project-options"]) add(id);
+  add("settings-dialog");
+  const doc = { getElementById: id => nodes.get(id), querySelector: selector => ({ click: () => clicks.push(selector) }) };
+  prepareMobileGuidePage(doc, "mobile-invite"); assert.deepEqual(clicks.splice(0), ["mobile-open-invitations"]);
+  nodes.get("mobile-invitations-page").hidden = false;
+  prepareMobileGuidePage(doc, "mobile-join"); assert.deepEqual(clicks.splice(0), ["mobile-invitations-page-back", "mobile-open-join"]);
+  prepareMobileGuidePage(doc, "mobile-project"); assert.deepEqual(clicks.splice(0), ["mobile-project-options"]);
+  nodes.get("mobile-project-management").hidden = false;
+  prepareMobileGuidePage(doc, "mobile-rail"); assert.deepEqual(clicks.splice(0), ["mobile-project-management-back"]);
+  prepareMobileGuidePage(doc, "account-device"); assert.deepEqual(clicks.splice(0), ['#settings-dialog .settings-navigation a[href="#settings-device"]']);
+  prepareMobileGuidePage(doc, "conversation"); assert.deepEqual(clicks, [], "regular conversation steps never click transfer, account or task actions");
+});
+
+test("mobile history follows the remote Agent and discussion workflow, not computer import controls", () => {
+  const steps = guideSteps("history", { layout: "mobile" });
+  assert.deepEqual(steps.map(item => item.id), ["sharing", "mobile-agent", "mobile-chat", "mobile-request", "mobile-summary"]);
+  assert.ok(steps.some(item => item.target === "#send-chat-button"));
+  assert.ok(steps.some(item => item.target === "#send-agent-button"));
+  assert.ok(steps.some(item => item.target === "#history-summary-select-button"));
+  for (const item of steps) {
+    assert.notEqual(item.view, "mobile-details");
+    assert.doesNotMatch(item.target, /upload-local|import-visible|download-codex|auto-upload/);
+  }
+  assert.deepEqual(guideSteps("history").map(item => item.id), ["sharing", "upload", "manual", "import", "snapshot"]);
+});
+
+test("mobile file guides cover connection and status without hidden local file operations", () => {
+  const steps = guideSteps("files", { layout: "mobile" });
+  assert.deepEqual(steps.map(item => item.id), ["files", "github", "github-account", "github-repository", "github-status", "gt-cloud", "enable", "continue"]);
+  for (const item of steps) {
+    assert.doesNotMatch(item.target, /code-runtime|code-(?:upload|download|recover|branch|merge)|github-code/);
+    assert.ok(!["code-device", "code-branches", "code-github"].includes(item.view));
+    for (const pair of [item.title, item.text]) { assert.ok(pair[0]); assert.match(pair[1], /[\u4e00-\u9fff]/u); }
+  }
+  const review = guideSteps("basics", { layout: "mobile" }).find(item => item.id === "review");
+  assert.equal(review.target, "#code-repository-status");
+  assert.equal(review.view, "code-overview");
+  assert.equal(guideSteps("files").length, 16, "the complete desktop workflow is unchanged");
 });
 
 test("beginner copy explains shared history and summary limits without technical units", () => {

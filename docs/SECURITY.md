@@ -402,4 +402,4 @@ saved user-authored configuration is not a hidden transcript archive. Historical
 session-plan preview rows have no public execution route and are not silently
 promoted into enabled saved Teams. Existing backup/provider retention boundaries
 remain as defined above. See
-[ADR-0057](adr/0057-account-private-saved-agent-teams.md).
+[ADR-0058](adr/0058-account-private-saved-agent-teams.md).

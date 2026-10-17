@@ -1,0 +1,34 @@
+.interface-mode-dialog {
+  position: fixed;
+  inset: 0;
+  margin: auto;
+  transform: none;
+  box-sizing: border-box;
+  width: min(440px, calc(100vw - 32px));
+  height: fit-content;
+  max-height: calc(100dvh - 32px);
+  padding: clamp(22px, 5vw, 32px);
+  overflow: auto;
+  color: var(--ink, #18292c);
+  background: color-mix(in srgb, var(--paper-raised, #fff) 86%, transparent);
+  border: 1px solid var(--glass-edge, rgba(255, 255, 255, .75));
+  border-radius: 28px;
+  box-shadow: 0 24px 80px rgba(12, 30, 35, .2), inset 0 1px rgba(255, 255, 255, .35);
+  backdrop-filter: blur(28px) saturate(1.25);
+  -webkit-backdrop-filter: blur(28px) saturate(1.25);
+}
+.interface-mode-dialog::backdrop { background: rgba(17, 31, 36, .3); }
+.interface-mode-dialog h2 { margin: 0 0 12px; font-size: 1.25rem; line-height: 1.3; }
+.interface-mode-dialog p { margin: 0 0 12px; font-size: .95rem; line-height: 1.6; }
+.interface-mode-dialog .interface-mode-help { color: var(--ink-soft, #52646a); font-size: .8rem; }
+.interface-mode-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+.interface-mode-actions .button { flex: 1 1 140px; min-height: 46px; padding: 10px 12px; font-size: .85rem; }
+.interface-mode-dialog :focus-visible { outline: 3px solid var(--accent, #087e76); outline-offset: 4px; }
+.interface-mode-dialog h2:focus { outline: none; }
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more), (forced-colors: active) {
+  .interface-mode-dialog { background: var(--paper-raised, Canvas); backdrop-filter: none; -webkit-backdrop-filter: none; }
+}
+@media (forced-colors: active) {
+  .interface-mode-dialog { border: 1px solid CanvasText; box-shadow: none; }
+  .interface-mode-dialog::backdrop { background: Canvas; opacity: .65; }
+}
