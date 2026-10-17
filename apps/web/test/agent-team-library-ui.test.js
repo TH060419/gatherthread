@@ -381,6 +381,75 @@ for (const [errorCode, label, action] of [[null, "Resume", "resume"], ["agent_ti
 
 const startedRun = (id, status = "running") => ({ id, definition_id: "team-a", session_id: "session-a", purpose: "task", status,
   calls_used: 1, max_calls: 12 });
+
+test("a Team task sends its selected quote and member identities while ordinary starts omit empty metadata", async () => {
+  const enabled = team("team-a", { enabled: true, test_status: "passed", tested_revision: 1 });
+  for (const withMetadata of [false, true]) {
+    const f = fixture({ initial: [enabled] }); await flush(); f.ui.select("team:team-a");
+    let accepted = 0;
+    const mentions = [{ user_id: "bob", start: 3, end: 7 }];
+    await f.ui.startTask("😀 @Bob please review", { replyTo: withMetadata ? "quoted-message" : null,
+      mentions: withMetadata ? mentions : [], onAccepted: () => accepted++ });
+    const body = f.calls.find(call => call[0] === "execute")[3];
+    assert.equal(accepted, 1); assert.equal(body.content, "😀 @Bob please review");
+    if (withMetadata) {
+      assert.equal(body.reply_to_event_id, "quoted-message"); assert.deepEqual(body.mentions, mentions);
+    } else {
+      assert.equal(Object.hasOwn(body, "reply_to_event_id"), false); assert.equal(Object.hasOwn(body, "mentions"), false);
+    }
+  }
+});
+
+test("unknown Team acceptance retries the frozen quote and mentions even after the caller changes its selection", async () => {
+  let firstAccepted = 0, replacementAccepted = 0;
+  const f = fixture({ initial: [team("team-a", { enabled: true, test_status: "passed", tested_revision: 1 })], overrides: {
+    executeAgentTeam: async (session, id, body) => {
+      f.calls.push(["execute", session, id, structuredClone(body)]);
+      if (f.calls.length === 1) throw Object.assign(new Error("Unknown acknowledgement"), { status: 0, code: "request_timeout" });
+      return { run: startedRun("accepted-run"), replayed: true };
+    },
+  } });
+  await flush(); f.ui.select("team:team-a");
+  const mentions = [{ user_id: "bob", start: 0, end: 4 }];
+  await assert.rejects(f.ui.startTask("@Bob review", { replyTo: "original-quote", mentions,
+    onAccepted: () => firstAccepted++ }), /Unknown acknowledgement/);
+  assert.equal(f.ui.pendingStart(), true); assert.equal(firstAccepted, 0);
+  mentions[0].user_id = "charlie";
+  await f.ui.startTask("@Charlie a different task", { replyTo: "new-quote", mentions: [{ user_id: "charlie", start: 0, end: 8 }],
+    onAccepted: () => replacementAccepted++ });
+  assert.deepEqual(f.calls[0][3], f.calls[1][3], "retry must preserve all metadata and the original idempotency key");
+  assert.equal(f.calls[1][3].reply_to_event_id, "original-quote"); assert.equal(f.calls[1][3].mentions[0].user_id, "bob");
+  assert.equal(firstAccepted, 1); assert.equal(replacementAccepted, 0); assert.equal(f.ui.pendingStart(), false);
+});
+
+test("an unknown Team start recovered through the explicit recovery action retains its metadata", async () => {
+  let accepted = 0;
+  const f = fixture({ initial: [team("team-a", { enabled: true, test_status: "passed", tested_revision: 1 })], overrides: {
+    executeAgentTeam: async (session, id, body) => {
+      f.calls.push(["execute", session, id, structuredClone(body)]);
+      if (f.calls.length === 1) throw Object.assign(new Error("Lost response"), { status: 0 });
+      return { run: startedRun("recovered-run"), replayed: true };
+    },
+  } });
+  await flush(); f.ui.select("team:team-a");
+  await assert.rejects(f.ui.startTask("@Bob review", { replyTo: "original-quote", mentions: [{ user_id: "bob", start: 0, end: 4 }],
+    onAccepted: () => accepted++ }), /Lost response/);
+  await f.ui.recover();
+  assert.deepEqual(f.calls[1][3], f.calls[0][3]); assert.equal(accepted, 1); assert.equal(f.ui.pendingStart(), false);
+});
+
+test("a definitive deleted-source rejection preserves the caller's draft metadata and does not acknowledge acceptance", async () => {
+  let accepted = 0;
+  const f = fixture({ initial: [team("team-a", { enabled: true, test_status: "passed", tested_revision: 1 })], overrides: {
+    executeAgentTeam: async () => { throw Object.assign(new Error("Original message deleted"), { status: 410 }); },
+  } });
+  await flush(); f.ui.select("team:team-a");
+  const metadata = { replyTo: "deleted-quote", mentions: [{ user_id: "bob", start: 0, end: 4 }], onAccepted: () => accepted++ };
+  await assert.rejects(f.ui.startTask("@Bob review", metadata), /Original message deleted/);
+  assert.equal(accepted, 0); assert.equal(f.ui.pendingStart(), false); assert.equal(metadata.replyTo, "deleted-quote");
+  assert.deepEqual(metadata.mentions, [{ user_id: "bob", start: 0, end: 4 }]);
+});
+
 const startedEvent = (id, runId, key, content = "Same task") => ({ id, type: "agent_request", actor: { id: "alice" }, sessionId: "session-a",
   payload: { agent_team: { run_id: runId, node_id: "node-a", step_id: `${runId}-step`, node_label: "Planner", task_content: content,
     ...(key === undefined ? {} : { start_idempotency_key: key }) } } });

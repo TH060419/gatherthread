@@ -65,7 +65,7 @@ import { hostedFailureCode, hostedFailureContent, hostedFailureOutcome } from ".
 import { AGENT_SHARING_SCHEMA } from "./agent-sharing-schema.js";
 import { SharedExecutionCapabilitySchema, SharedAgentMetadataSchema, type SharedExecutionCapability } from "@gatherthread/protocol";
 import { AGENT_TEAM_SCHEMA } from "./agent-team-schema.js";
-import { AgentTeamRequestMetadataSchema, type AgentTeamRequestMetadata } from "@gatherthread/protocol";
+import { AgentTeamRequestMetadataSchema, type AgentTeamRequestMetadata, type StartAgentTeamRunInput } from "@gatherthread/protocol";
 
 export interface Actor {
   user_id: string;
@@ -3613,16 +3613,38 @@ export class CollaborationDatabase {
     });
   }
 
+  /** Called inside Team acceptance transactions; quoting never copies source text. */
+  validateTeamTaskReferences(sessionId: string, input: { content: unknown; reply_to_event_id?: string | null | undefined; mentions?: unknown }): void {
+    if (input.reply_to_event_id) {
+      const quote = this.getEvent(sessionId, input.reply_to_event_id);
+      if (quote.visibility !== "session") throw forbidden("Team requests cannot quote private history");
+      if (quote.deleted) throw new ApiError(409, "message_deleted", "The quoted message was deleted; select another message");
+    }
+    if (input.mentions === undefined) return;
+    const mentions = MessageMentionsSchema.safeParse(input.mentions);
+    if (!mentions.success || typeof input.content !== "string") throw conflict("Invalid message mentions");
+    let previousEnd = 0;
+    for (const mention of mentions.data) {
+      const user = this.sqlite.prepare("SELECT display_name FROM users WHERE id=?").get(mention.user_id);
+      if (!user || !this.membershipRole(sessionId, mention.user_id) || mention.start < previousEnd || mention.end <= mention.start
+        || input.content.slice(mention.start, mention.end) !== `@${String(user.display_name)}`) {
+        throw conflict("Mention must match a current session member and its exact text range");
+      }
+      previousEnd = mention.end;
+    }
+  }
+
   /** Dedicated internal path; private step and canonical request commit together. */
   appendTeamAgentRequest(actor: Actor, sessionId: string, input: AppendEventInput, onAccepted: (event: CanonicalEvent) => void): CanonicalEvent {
     this.assertActiveDevice(actor);
     return this.transaction(() => {
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       if (session.state !== "active" || input.type !== "agent_request" || input.visibility !== "session"
-        || input.runtime_id || input.reply_to_event_id) throw conflict("Invalid internal team request");
-      const payload = input.payload as { agent_team?: unknown; history_summary?: unknown; continue_from_event_id?: unknown };
+        || input.runtime_id) throw conflict("Invalid internal team request");
+      const payload = input.payload as { agent_team?: unknown; history_summary?: unknown; continue_from_event_id?: unknown; content?: unknown; mentions?: unknown };
       if (payload.history_summary !== undefined || payload.continue_from_event_id !== undefined) throw forbidden("Team requests cannot forge other request metadata");
-      this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(payload.agent_team));
+      this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(payload.agent_team),
+        { content: payload.content, mentions: payload.mentions, reply_to_event_id: input.reply_to_event_id });
       const target = agentRequestTarget({ payload: input.payload });
       if (!target.runtimeId) throw conflict("Team requests require an exact runtime");
       const runtime = this.getRuntime(target.runtimeId);
@@ -3633,14 +3655,15 @@ export class CollaborationDatabase {
       if (input.content_revision !== (session.content_revision ?? 0)) throw new ApiError(409,
         "context_changed", "Shared history changed; start a new team task with current history");
       const existing = this.findByIdempotencyKey(sessionId, input.idempotency_key);
-      if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", input.payload, null, "session", null);
+      if (existing) return this.requireIdempotencyMatch(existing, actor.user_id, "agent_request", input.payload, input.reply_to_event_id ?? null, "session", null);
       const event = this.appendInsideTransaction(actor.user_id, sessionId, input, null); onAccepted(event); return event;
     });
   }
 
-  private validateTeamReservation(actor: Actor, sessionId: string, metadata: AgentTeamRequestMetadata): void {
+  private validateTeamReservation(actor: Actor, sessionId: string, metadata: AgentTeamRequestMetadata,
+    input: { content: unknown; reply_to_event_id?: string | null | undefined; mentions?: unknown }): void {
     const row = this.sqlite.prepare(`SELECT r.user_id,r.session_id,r.status,r.deadline_at,r.current_step_id,r.calls_used,r.max_calls,r.content_revision,r.purpose,r.state_json,
-      r.idempotency_key AS run_idempotency_key,
+      r.idempotency_key AS run_idempotency_key,r.input_json,
       s.status AS step_status,s.node_id,s.node_label,s.task FROM agent_team_runs r JOIN agent_team_steps s ON s.run_id=r.id
       WHERE r.id=? AND s.id=?`).get(metadata.run_id, metadata.step_id);
     if (!row || row.user_id !== actor.user_id || row.session_id !== sessionId || row.status !== "running"
@@ -3651,6 +3674,23 @@ export class CollaborationDatabase {
       || row.purpose !== (metadata.purpose ?? "task") || metadata.start_idempotency_key !== row.run_idempotency_key) {
       throw forbidden("The team step is not authorized by an active bounded run");
     }
+    const original = JSON.parse(String(row.input_json)) as StartAgentTeamRunInput;
+    const initial = row.purpose === "task" && Number(row.calls_used) === 0;
+    if ((input.reply_to_event_id ?? null) !== (initial ? original.reply_to_event_id ?? null : null)
+      || (input.mentions === undefined) !== (!initial || original.mentions === undefined)) {
+      throw forbidden("The Team quote and mentions differ from its original human request");
+    }
+    if (initial && original.mentions !== undefined) {
+      const translated = MessageMentionsSchema.parse(input.mentions);
+      const offset = translated.length ? translated[0]!.start - (original.mentions[0]?.start ?? 0) : 0;
+      if (translated.length !== original.mentions.length || typeof input.content !== "string" || offset < 0
+        || translated.length && input.content.slice(offset, offset + original.content.length) !== original.content
+        || translated.some((mention, index) => {
+          const expected = original.mentions![index]!;
+          return mention.user_id !== expected.user_id || mention.start !== expected.start + offset || mention.end !== expected.end + offset;
+        })) throw forbidden("The Team mentions must retain their original task ranges");
+    }
+    this.validateTeamTaskReferences(sessionId, input);
     const state = JSON.parse(String(row.state_json)) as { clarification_event_id?: string };
     if (metadata.clarification_event_id !== state.clarification_event_id) throw forbidden("The Team clarification differs from its frozen run state");
     if (state.clarification_event_id) {
@@ -3755,7 +3795,7 @@ export class CollaborationDatabase {
       .get(this.now().slice(0, 10), endpoint.quotaGroup, endpoint.quotaGroup) as { daily: number; active: number };
   }
 
-  reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput,
+  reserveHostedAgentRequest(actor: Actor, sessionId: string, input: HostedAgentRequestInput & Pick<StartAgentTeamRunInput, "mentions">,
     endpoints: HostedAllocation[], limits: HostedRunLimits,
     onReserved?: (event: CanonicalEvent) => void,
     summary?: HostedHistorySummaryInput,
@@ -3767,6 +3807,7 @@ export class CollaborationDatabase {
       throw new ApiError(400, "hosted_profile_unavailable", "Select an available cloud model in Agent settings");
     }
     return historySummaryOperation(() => this.transaction(() => {
+      if (input.mentions !== undefined && !team) throw forbidden("Cloud mentions require a trusted Team reservation");
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       const contentRevision = session.content_revision ?? 0;
       if (input.content_revision === undefined && contentRevision > 0) {
@@ -3836,6 +3877,7 @@ export class CollaborationDatabase {
         ...(input.github_task_id ? { github_task_id: input.github_task_id } : {}),
         ...(input.continue_from_event_id ? { continue_from_event_id: input.continue_from_event_id } : {}),
         ...(team ? { agent_team: AgentTeamRequestMetadataSchema.parse(team) as unknown as JsonValue } : {}),
+        ...(team && input.mentions !== undefined ? { mentions: input.mentions } : {}),
         execution_profile: { harness: "opencode", provider: endpoints[0]!.provider,
           model: endpoints[0]!.model },
       });
@@ -3860,7 +3902,7 @@ export class CollaborationDatabase {
         }
         return { event, created: false };
       }
-      if (team) this.validateTeamReservation(actor, sessionId, team);
+      if (team) this.validateTeamReservation(actor, sessionId, team, input);
       if (input.continue_from_event_id && this.sqlite.prepare(`SELECT 1 FROM events WHERE session_id=? AND type='agent_request'
         AND actor_user_id=? AND id IN (SELECT request_event_id FROM hosted_agent_runs)
         AND json_extract(payload_json,'$.continue_from_event_id')=?`).get(sessionId, actor.user_id, input.continue_from_event_id)) {
@@ -4067,7 +4109,8 @@ export class CollaborationDatabase {
     if (!role) throw notFound("Project");
     const rows = this.sqlite.prepare(`
       SELECT e.id, e.session_id, e.sequence, e.created_at, e.actor_display_name, s.title AS session_title,
-        coalesce(substr(CAST(json_extract(e.payload_json, '$.content') AS TEXT), 1, 180), '') AS excerpt
+        coalesce(substr(CAST(CASE WHEN json_type(e.payload_json, '$.agent_team')='object'
+          THEN json_extract(e.payload_json, '$.agent_team.task_content') ELSE json_extract(e.payload_json, '$.content') END AS TEXT), 1, 180), '') AS excerpt
       FROM events e JOIN sessions s ON s.id = e.session_id
       JOIN project_memberships m ON m.project_id = s.project_id AND m.user_id = ?
       WHERE s.project_id = ? AND (e.visibility = 'session' OR ? = 'owner')
@@ -4228,7 +4271,8 @@ export class CollaborationDatabase {
         || metadata.executor_owner_user_id !== job.owner_user_id) throw forbidden("Invalid broker provenance");
       if (input.type === "agent_request") {
         if (input.event_id !== job.request_event_id || job.status !== "queued") throw forbidden("Invalid broker reservation");
-        if (raw.agent_team !== undefined) this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(raw.agent_team));
+        if (raw.agent_team !== undefined) this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(raw.agent_team),
+          { content: raw.content, mentions: raw.mentions, reply_to_event_id: input.reply_to_event_id });
         if (input.reply_to_event_id) {
           const quote = this.getEvent(sessionId, input.reply_to_event_id);
           if (quote.deleted) throw new ApiError(409, "message_deleted", "The quoted message was deleted; select another message");

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { AgentTeamEdgeSchema, AgentTeamNodeSchema, AgentTeamPlanSchema, AgentTeamTargetSchema } from "./agent-team.js";
+import { MessageMentionsSchema } from "./index.js";
 
 export const AGENT_TEAM_LIBRARY_LIMIT = 5;
 export const AGENT_TEAM_FAVORITES_LIMIT = 5;
@@ -45,4 +46,5 @@ export const ControlAgentTeamDefinitionSchema = z.object({ enabled: z.boolean(),
 export const DeleteAgentTeamLibraryItemSchema = z.object({ idempotency_key: key }).strict();
 export const TestAgentTeamDefinitionSchema = z.object({ expected_revision: z.number().int().positive(),
   content_revision: z.number().int().nonnegative(), solo_transfer_ack: z.boolean().default(false), idempotency_key: key }).strict();
-export const StartSavedAgentTeamSchema = TestAgentTeamDefinitionSchema.extend({ content: text(3000).refine(value => value.trim().length > 0) }).strict();
+export const StartSavedAgentTeamSchema = TestAgentTeamDefinitionSchema.extend({ content: text(3000).refine(value => value.trim().length > 0),
+  reply_to_event_id: id.nullable().optional(), mentions: z.lazy(() => MessageMentionsSchema).optional() }).strict();

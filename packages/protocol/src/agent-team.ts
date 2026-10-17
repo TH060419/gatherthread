@@ -1,10 +1,13 @@
 import { z } from "zod";
 import { PersonalCloudRevisionSchema, hasValidPersonalCloudRevision } from "./cloud-api.js";
+import { MessageMentionsSchema } from "./index.js";
 
 const id = z.string().trim().min(1).max(128).regex(/^[A-Za-z0-9._:-]+$/u);
 const key = z.string().trim().min(8).max(200).regex(/^[A-Za-z0-9._:-]+$/u);
 const line = (maximum: number) => z.string().trim().min(1).max(maximum).regex(/^[^\u0000-\u001f\u007f-\u009f]+$/u);
 const text = (maximum: number) => z.string().trim().max(maximum).refine(value => !value.includes("\0"));
+// Submitted task text and its UTF-16 mention ranges share one exact string.
+const taskText = z.string().max(3000).refine(value => !value.includes("\0") && value.trim().length > 0);
 export const AgentTeamTargetSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("local"), runtime_id: id, harness: z.enum(["codex", "deepseek-harness"]),
     provider: line(80), model: line(160), reasoning_effort: line(80).optional() }).strict(),
@@ -46,9 +49,10 @@ export const SaveAgentTeamPlanInputSchema = z.object({ plan: AgentTeamPlanSchema
 export const AgentTeamPlanResponseSchema = z.object({ plan: AgentTeamPlanSchema.nullable(),
   revision: z.number().int().positive().nullable() }).strict().refine(value => (value.plan === null) === (value.revision === null), "Plan and revision must exist together");
 export const StartAgentTeamRunInputSchema = z.object({ plan: AgentTeamPlanSchema, entry_node_id: id,
-  content: text(3000).refine(value => value.length > 0), max_calls: z.number().int().min(1).max(48).default(12),
+  content: taskText, max_calls: z.number().int().min(1).max(48).default(12),
   max_duration_minutes: z.number().int().min(1).max(120).default(30), idempotency_key: key,
-  content_revision: z.number().int().nonnegative().optional(), solo_transfer_ack: z.boolean().optional() }).strict()
+  content_revision: z.number().int().nonnegative().optional(), solo_transfer_ack: z.boolean().optional(),
+  reply_to_event_id: id.nullable().optional(), mentions: z.lazy(() => MessageMentionsSchema).optional() }).strict()
   .refine(input => input.plan.nodes.some(node => node.id === input.entry_node_id), { path: ["entry_node_id"], message: "Select a node in this team" });
 export type StartAgentTeamRunInput = z.infer<typeof StartAgentTeamRunInputSchema>;
 export const AgentTeamRunStatuses = ["running", "paused", "completed", "failed", "stopped", "timed_out", "call_limit"] as const;
@@ -63,7 +67,7 @@ export const AgentTeamStepSchema = z.object({ id, node_id: id, node_label: line(
   request_event_id: id.nullable(), response_event_id: id.nullable(), created_at: z.string().datetime(),
   finished_at: z.string().datetime().nullable(), parent_step_id: id.nullable() }).strict();
 export const AgentTeamRunDetailSchema = AgentTeamRunSummarySchema.safeExtend({ plan: AgentTeamPlanSchema,
-  content: text(3000).refine(value => value.length > 0), steps: z.array(AgentTeamStepSchema).max(49) }).strict();
+  content: taskText, steps: z.array(AgentTeamStepSchema).max(49) }).strict();
 export type AgentTeamRunDetail = z.infer<typeof AgentTeamRunDetailSchema>;
 export type AgentTeamRunSummary = z.infer<typeof AgentTeamRunSummarySchema>;
 export const AgentTeamRunsResponseSchema = z.object({ runs: z.array(AgentTeamRunSummarySchema).max(50) }).strict();
@@ -72,7 +76,7 @@ export const AgentTeamRunAcceptedSchema = AgentTeamRunResponseSchema.extend({ re
 export const ControlAgentTeamRunInputSchema = z.object({ action: z.enum(["pause", "resume", "stop", "continue"]), idempotency_key: key }).strict();
 export type ControlAgentTeamRunInput = z.infer<typeof ControlAgentTeamRunInputSchema>;
 export const AgentTeamRequestMetadataSchema = z.object({ run_id: id, step_id: id, node_id: id,
-  node_label: line(120), task_content: text(3000).refine(value => value.length > 0), purpose: z.enum(["task", "test"]).optional(),
+  node_label: line(120), task_content: taskText, purpose: z.enum(["task", "test"]).optional(),
   clarification_event_id: id.optional(), start_idempotency_key: key.optional() }).strict();
 export type AgentTeamRequestMetadata = z.infer<typeof AgentTeamRequestMetadataSchema>;
 export const AgentTeamDirectiveSchema = z.discriminatedUnion("action", [

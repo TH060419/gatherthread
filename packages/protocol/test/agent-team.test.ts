@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { AgentTeamPlanSchema, AgentTeamPlanResponseSchema, AgentTeamRequestMetadataSchema,
-  StartAgentTeamRunInputSchema, ControlAgentTeamRunInputSchema, AgentTeamDirectiveSchema } from "../src/index.js";
+  StartAgentTeamRunInputSchema, StartSavedAgentTeamSchema, TestAgentTeamDefinitionSchema,
+  ControlAgentTeamRunInputSchema, AgentTeamDirectiveSchema } from "../src/index.js";
 const node = { id: "lead", label: "Lead", role: "Direct the task", x: 0, y: 0,
   target: { kind: "local", harness: "codex", runtime_id: "runtime-1", provider: "openai", model: "fixture-model" } };
 const plan = { name: "Fixture", team_prompt: "Be concise", nodes: [node], edges: [] };
@@ -18,6 +19,25 @@ test("team contracts are strict, bounded, exact and default to twelve calls and 
   assert.equal(ControlAgentTeamRunInputSchema.safeParse({ action: "resume", idempotency_key: "fixture-control", device_token: "never" }).success, false);
   assert.equal(AgentTeamPlanResponseSchema.safeParse({ plan: null, revision: 1 }).success, false);
   assert.equal(AgentTeamRequestMetadataSchema.safeParse({ run_id: "run", step_id: "step", node_id: "lead", node_label: "Lead", task_content: "Task", actor_user_id: "spoof" }).success, false);
+});
+
+test("Team start keeps exact submitted task text and strict quote/mention identities without extending probe inputs", () => {
+  const content = "  🧪 @Fixture member please review @Fixture member  \n";
+  const start = content.indexOf("@"), end = start + "@Fixture member".length;
+  const input = { expected_revision: 1, content_revision: 0, content, reply_to_event_id: "quoted-event",
+    mentions: [{ user_id: "fixture-user", start, end }], idempotency_key: "team-reference-start" };
+  assert.deepEqual(StartSavedAgentTeamSchema.parse(input), { ...input, solo_transfer_ack: false });
+  const internal = { plan, entry_node_id: "lead", ...input }; delete (internal as { expected_revision?: number }).expected_revision;
+  assert.equal(StartAgentTeamRunInputSchema.parse(internal).content, content);
+  assert.equal(AgentTeamRequestMetadataSchema.parse({ run_id: "run", step_id: "step", node_id: "lead", node_label: "Lead", task_content: content }).task_content, content);
+  for (const replacement of [{ ...input, reply_to_event_id: "" }, { ...input, mentions: [{ ...input.mentions[0], private: true }] },
+    { ...input, mentions: Array(33).fill(input.mentions[0]) }, { ...input, mentions: [{ ...input.mentions[0], start: -1 }] },
+    { ...input, mentions: [{ ...input.mentions[0], end: 1.5 }] }, { ...input, content: " \n " }]) {
+    assert.equal(StartSavedAgentTeamSchema.safeParse(replacement).success, false);
+  }
+  assert.equal(StartSavedAgentTeamSchema.safeParse({ ...input, reply_to_event_id: null, mentions: [] }).success, true);
+  const { content: _content, ...probe } = input;
+  assert.equal(TestAgentTeamDefinitionSchema.safeParse(probe).success, false);
 });
 
 test("clarification directives and their human source references stay exact and cannot change the run's authority", () => {

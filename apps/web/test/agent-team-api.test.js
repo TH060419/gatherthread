@@ -128,17 +128,22 @@ async function partialServer(t, respond) {
 
 test("successful headers and a partial JSON body time out; recovery reuses exactly the original body and key", async t => {
   const starts = [];
+  const quotedStart = { ...start, content: "😀 @Bob review", reply_to_event_id: "quoted-event-fixture",
+    mentions: [{ user_id: "bob", start: 3, end: 7 }] };
   const baseUrl = await partialServer(t, (_path, body, response) => {
     starts.push(body);
     if (starts.length === 1) { response.writeHead(202, { "Content-Type": "application/json" }); response.write('{"data":'); }
     else response.end(JSON.stringify({ data: { run, replayed: true } }));
   });
   const api = new HttpCollaborationApi({ baseUrl, sharingDeadlineMs: 80 }), before = performance.now();
-  await assert.rejects(api.executeAgentTeam(summary.session_id, team.id, start), error => error.code === "request_timeout");
+  await assert.rejects(api.executeAgentTeam(summary.session_id, team.id, quotedStart), error => error.code === "request_timeout");
   assert.ok(performance.now() - before < 1500);
-  const recovered = await api.executeAgentTeam(summary.session_id, team.id, start);
+  // Only the intentionally stalled response needs an accelerated deadline.
+  // A normal retry must tolerate the full suite's parallel localhost workload.
+  const recoveryApi = new HttpCollaborationApi({ baseUrl, sharingDeadlineMs: 1500 });
+  const recovered = await recoveryApi.executeAgentTeam(summary.session_id, team.id, quotedStart);
   assert.equal(recovered.replayed, true); assert.equal(recovered.run.id, run.id);
-  assert.equal(starts.length, 2); assert.deepEqual(starts[0], starts[1]); assert.deepEqual(starts[0], start);
+  assert.equal(starts.length, 2); assert.deepEqual(starts[0], starts[1]); assert.deepEqual(starts[0], quotedStart);
 });
 
 test("a hung error response body also has the independent Team deadline", async t => {

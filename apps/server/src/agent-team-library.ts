@@ -190,6 +190,8 @@ export class AgentTeamLibrary {
     const team = this.checked(actor, id, input.expected_revision, true), plan = this.plan(team);
     return this.teams.start(actor, sessionId, { plan, entry_node_id: plan.entry_node_id ?? plan.nodes[0]!.id,
       content: input.content, max_calls: team.max_calls, max_duration_minutes: team.max_duration_minutes,
+      ...(input.reply_to_event_id === undefined ? {} : { reply_to_event_id: input.reply_to_event_id }),
+      ...(input.mentions === undefined ? {} : { mentions: input.mentions }),
       idempotency_key: input.idempotency_key, content_revision: input.content_revision, solo_transfer_ack: input.solo_transfer_ack }, {
       onCreated: run => { this.checked(actor, id, input.expected_revision, true); this.bindRun(run.id, id, input.expected_revision, input); },
     });

@@ -3256,7 +3256,7 @@ async function sendMessage(kind) {
     if (kind === "human_chat") await api.appendHumanChat(sessionId, input);
     else if (kind === "team_agent") {
       if (state.settings.composer.confirmAgentRequest && !window.confirm(teamsUi.t("Start this Team with its saved modules and limits?"))) return;
-      const receipt = await teamsUi.startTask(content, { onAccepted: () => {
+      const receipt = await teamsUi.startTask(content, { replyTo: input.replyTo, mentions: input.mentions, onAccepted: () => {
         if (isCurrent() && messageInput.value === draft && JSON.stringify(messageActions.metadata()) === metadataFingerprint) {
           messageInput.value = ""; messageActions.sent();
         }

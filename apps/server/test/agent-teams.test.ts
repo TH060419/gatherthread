@@ -62,6 +62,118 @@ function orientation(f: ReturnType<typeof fixture>, requestId: string) {
 function conflictAnswer(stepId: string, explanation = "The role and module instructions conflict; please clarify which permitted outcome is intended.") {
   return `${explanation}\n\n\`\`\`gatherthread-team\n${JSON.stringify({ version: 1, step_id: stepId, action: "clarify" })}\n\`\`\``;
 }
+
+test("one human Team send preserves its quote and exact UTF-16 mentions only on the first canonical request", async () => {
+  const f = fixture(); try {
+    const peer = f.db.createIdentity({ display_name: "Mention fixture", device_name: "Mention device", can_create_projects: true }).actor;
+    f.service.setMembership(f.actor, f.session.id, peer.user_id, "participant", "team-reference-member");
+    const quote = f.service.appendEvent(peer, f.session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "team-reference-source", payload: { content: "REFERENCE_SOURCE_BODY_MUST_NOT_BE_COPIED_TO_CONTROL_PROMPT" } });
+    const content = "  🧪 @Mention fixture review this with @Mention fixture  \n";
+    const first = content.indexOf("@"), last = content.lastIndexOf("@");
+    const mentions = [first, last].map(start => ({ user_id: peer.user_id, start, end: start + "@Mention fixture".length }));
+    const plan = structuredClone(f.plan); plan.team_prompt = `Rule preface\n${content}\nRule ending`; plan.nodes[0]!.role = `Role preface\n${content}\nRole ending`;
+    const input = { plan, entry_node_id: "lead", content, mentions, reply_to_event_id: quote.id,
+      max_calls: 12, max_duration_minutes: 30, content_revision: 0, idempotency_key: "team-reference-run" };
+    const { run } = f.teams.start(f.actor, f.session.id, input);
+    assert.equal(run.content, content); assert.equal(JSON.parse(f.teams.store.row(run.id).input_json).content, content);
+    assert.equal(f.teams.start(f.actor, f.session.id, input).replayed, true);
+    for (const changed of [{ ...input, reply_to_event_id: null }, { ...input, mentions: [] },
+      { ...input, mentions: [{ ...mentions[0]!, start: first + 1, end: mentions[0]!.end + 1 }] }]) {
+      assert.throws(() => f.teams.start(f.actor, f.session.id, changed), { code: "idempotency_conflict" });
+    }
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+    const step = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!, event = f.db.getEvent(f.session.id, step.request_event_id!);
+    const payload = event.payload as { content: string; mentions: typeof mentions; agent_team: { task_content: string } };
+    assert.equal(event.reply_to_event_id, quote.id); assert.equal(payload.agent_team.task_content, content);
+    assert.equal(payload.content.includes("REFERENCE_SOURCE_BODY_MUST_NOT_BE_COPIED_TO_CONTROL_PROMPT"), false);
+    const assignmentOffset = payload.content.indexOf("\n\nAssigned task:\n") + "\n\nAssigned task:\n".length;
+    assert.ok(assignmentOffset > payload.content.indexOf(content), "A repeated task in rules is not the selected mention occurrence");
+    assert.deepEqual(payload.mentions, mentions.map(mention => ({ ...mention, start: mention.start + assignmentOffset, end: mention.end + assignmentOffset })));
+    for (const mention of payload.mentions) assert.equal(payload.content.slice(mention.start, mention.end), "@Mention fixture");
+    assert.deepEqual(f.db.listProjectMentions(peer, f.session.project_id).mentions.map(item => [item.id, item.excerpt]), [[event.id, content]]);
+    f.complete(run.id, "delegate"); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+    f.complete(run.id); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 3);
+    f.complete(run.id); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+    for (const later of f.teams.read(f.actor, f.session.id, run.id).run.steps.slice(1)) {
+      const request = f.db.getEvent(f.session.id, later.request_event_id!);
+      assert.equal(request.reply_to_event_id, null); assert.equal((request.payload as { mentions?: unknown }).mentions, undefined);
+    }
+    assert.equal(f.db.listProjectMentions(peer, f.session.project_id).mentions.length, 1);
+    // A quote stays a reference: deleting its source retains the independent
+    // human Team task body, but invalidates model-derived output and old context.
+    f.db.deleteMessage(peer, f.session.id, quote.id, "team-reference-erase-source");
+    assert.equal(f.db.getEvent(f.session.id, event.id).deleted, undefined);
+    assert.equal((f.db.getEvent(f.session.id, event.id).payload as { agent_team: { task_content: string } }).agent_team.task_content, content);
+    assert.throws(() => f.teams.start(f.actor, f.session.id, input), { code: "context_changed" });
+  } finally { f.close(); }
+});
+
+test("Team reference acceptance rejects foreign/private/deleted quotes and stale, forged or overlapping mention ranges before allocating a run", async () => {
+  const f = fixture(); try {
+    const outsider = f.db.createIdentity({ display_name: "Outside member", device_name: "Outside device", can_create_projects: true }).actor;
+    const foreign = f.service.createSession(f.actor, { title: "Other reference session", mode: "multi", idempotency_key: "team-quote-other-session" }).session;
+    const append = (sessionId: string, visibility: "session" | "owner_only", key: string) => f.service.appendEvent(f.actor, sessionId,
+      { type: "human_chat", visibility, idempotency_key: key, payload: { content: "Synthetic quote" } });
+    const privateQuote = append(f.session.id, "owner_only", "team-private-quote"), foreignQuote = append(foreign.id, "session", "team-foreign-quote");
+    const erased = append(f.session.id, "session", "team-erased-quote"); f.db.deleteMessage(f.actor, f.session.id, erased.id, "team-erase-quote");
+    const input = { plan: f.plan, entry_node_id: "lead", content: "@Fixture owner review", max_calls: 12, max_duration_minutes: 30,
+      content_revision: 1, idempotency_key: "team-invalid-reference" };
+    const span = { user_id: f.actor.user_id, start: 0, end: "@Fixture owner".length };
+    const before = f.db.requireSession(f.session.id).next_sequence;
+    for (const changed of [{ reply_to_event_id: privateQuote.id }, { reply_to_event_id: foreignQuote.id }, { reply_to_event_id: erased.id },
+      { mentions: [{ ...span, user_id: outsider.user_id }] }, { mentions: [{ ...span, start: 1 }] },
+      { mentions: [span, span] }, { mentions: [{ ...span, end: 1 }] }]) {
+      assert.throws(() => f.teams.start(f.actor, f.session.id, { ...input, ...changed }));
+      assert.equal(f.teams.store.list(f.actor, f.session.id).runs.length, 0);
+      assert.equal(f.db.requireSession(f.session.id).next_sequence, before);
+    }
+    const valid = f.teams.start(f.actor, f.session.id, { ...input, mentions: [span] }).run;
+    // The saved range must still match a current member at actual dispatch.
+    f.db.sqlite.prepare("UPDATE users SET display_name=? WHERE id=?").run("Renamed fixture", f.actor.user_id);
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, valid.id).run.status === "failed");
+    assert.equal(f.teams.read(f.actor, f.session.id, valid.id).run.calls_used, 0);
+    assert.equal(f.db.requireSession(f.session.id).next_sequence, before);
+  } finally { f.close(); }
+});
+
+test("source erasure between Team acceptance and its first dispatch fences all quote work without consuming a call", async () => {
+  const f = fixture(); try {
+    const quote = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "team-quote-race-source", payload: { content: "Race source" } });
+    const started = f.teams.start(f.actor, f.session.id, { plan: f.plan, entry_node_id: "lead", content: "Quote race task",
+      reply_to_event_id: quote.id, max_calls: 12, max_duration_minutes: 30, content_revision: 0, idempotency_key: "team-quote-race-start" }).run;
+    f.db.deleteMessage(f.actor, f.session.id, quote.id, "team-quote-race-delete");
+    for (let index = 0; index < 5; index++) await f.teams.pump();
+    assert.equal(f.db.sqlite.prepare("SELECT 1 FROM agent_team_runs WHERE id=?").get(started.id), undefined,
+      "Erasure also removes the now-stale private pending snapshot");
+    assert.equal(f.db.sqlite.prepare("SELECT COUNT(*) AS n FROM events WHERE session_id=? AND json_extract(payload_json,'$.agent_team.run_id')=?")
+      .get(f.session.id, started.id)?.n, 0);
+  } finally { f.close(); }
+});
+
+test("trusted Team dispatch cannot omit or replace the original quote and selected recipients", async () => {
+  const f = fixture(); try {
+    const quote = f.service.appendEvent(f.actor, f.session.id, { type: "human_chat", visibility: "session", idempotency_key: "team-dispatch-quote",
+      payload: { content: "Synthetic dispatch quote" } });
+    const content = "@Fixture owner review", mentions = [{ user_id: f.actor.user_id, start: 0, end: "@Fixture owner".length }];
+    const run = f.teams.start(f.actor, f.session.id, { plan: f.plan, entry_node_id: "lead", content, mentions, reply_to_event_id: quote.id,
+      max_calls: 12, max_duration_minutes: 30, content_revision: 0, idempotency_key: "team-dispatch-reference-start" }).run;
+    const step = f.teams.store.pending(run.id), metadata = { run_id: run.id, step_id: step.id, node_id: "lead", node_label: "Director",
+      task_content: content, start_idempotency_key: "team-dispatch-reference-start" };
+    const payload = { content: `Prefix\n${content}`, mentions: mentions.map(mention => ({ ...mention, start: mention.start + 7, end: mention.end + 7 })),
+      execution_profile: { harness: "codex", provider: "openai", model: "fixture-gpt", reasoning_effort: "low", runtime_id: f.lead.id }, agent_team: metadata };
+    const input = { type: "agent_request" as const, visibility: "session" as const, payload, reply_to_event_id: quote.id,
+      content_revision: 0, idempotency_key: "team-forged-dispatch" };
+    for (const forged of [{ ...input, reply_to_event_id: null }, { ...input, payload: { ...payload, mentions: undefined } },
+      { ...input, payload: { ...payload, mentions } }, { ...input, payload: { ...payload, mentions: [] } }]) {
+      assert.throws(() => f.db.appendTeamAgentRequest(f.actor, f.session.id, forged as Parameters<typeof f.db.appendTeamAgentRequest>[2],
+        () => assert.fail("A forged dispatch must not be accepted")));
+      assert.equal(f.teams.store.row(run.id).calls_used, 0); assert.equal(f.teams.store.step(step.id).status, "pending");
+    }
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+  } finally { f.close(); }
+});
 test("human-started exact Codex -> DSH delegation returns the result to the director over a one-way edge", async () => {
   const f = fixture(); try {
     f.plan.nodes[1]!.role = `Implement and return the public result. ${"Keep the configured responsibility. ".repeat(5)}`.trimEnd();

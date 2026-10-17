@@ -454,7 +454,7 @@ Origin/admission/JSON gates. All JSON fields use snake_case and the existing
 | `DELETE /v1/agent-teams/:team` / `DELETE /v1/agent-team-modules/:module` | Owner only; strict `{idempotency_key}` returns `{deleted:true,replayed}` and releases the library slot. Team deletion cancels its pending connectivity test, not accepted task snapshots. |
 | `POST /v1/sessions/:session/agent-teams/:team/test` | Saved owner/current session writer; `{expected_revision,content_revision,solo_transfer_ack?,idempotency_key}`. 202 `{run,replayed}` with `purpose:test`. |
 | `POST /v1/sessions/:session/agent-teams/:team/control` | Saved owner; `{enabled,expected_revision?,idempotency_key}` returns `{team,replayed}`. Enable requires exact passed revision plus current writable session and exact available targets. Disable may omit revision and does not require a new execution authorization. |
-| `POST /v1/sessions/:session/agent-teams/:team/start` | Saved owner/current session writer; test input plus nonblank `content` (at most 3,000 characters). 202 `{run,replayed}`. The server supplies the saved plan and limits; client plans cannot override them. |
+| `POST /v1/sessions/:session/agent-teams/:team/start` | Saved owner/current session writer; test input plus nonblank `content` (at most 3,000 characters), optional `reply_to_event_id` (ID or null) and `mentions`. 202 `{run,replayed}`. The server supplies the saved plan and limits; client plans cannot override them. |
 | `GET /v1/sessions/:session/agent-team-runs` / `GET .../:run` | Authenticated requester with current session access; bounded own-run summaries or `{run}` detail. Another member's private run is not exposed. |
 | `POST /v1/sessions/:session/agent-team-runs/:run/control` | Original requester with current write access; `{action:pause\|resume\|stop\|continue,idempotency_key}` returns `{run}`. Resume/continue additionally recheck the frozen original device, remaining calls and original deadline. |
 | `DELETE /v1/sessions/:session/agent-team-runs/:run` | Original requester/current writer; strict `{}` forgets only a terminal private record and returns 204. Canonical events remain. |
@@ -497,6 +497,28 @@ and its verified run identity. Equal task text is not an identity match and
 cannot authorize stopping another device's run. Before a matching canonical
 request confirms that binding, recovery repeats the exact original body/key
 rather than guessing a run from conversation content.
+
+Saved-Team and internal formal-run start schemas accept the existing in-session
+quote and mention shapes. `mentions` uses `MessageMentionsSchema` (at most 32
+UTF-16 ranges in the exact submitted task `content`, not in the generated Team
+prompt). The browser omits empty quote/mention metadata. Parsed start input,
+including explicit null or empty arrays, participates in the original digest;
+omitted, null and empty values are not silently coalesced for same-key retries.
+A changed quote or mention list with the same key conflicts. New acceptance and
+first canonical publication enforce the existing quote visibility and current
+member/text-range checks from
+[Message quotes and mentions](#message-quotes-and-mentions). Receipt recovery
+retains the original metadata while rechecking caller/session authority and
+current deletion/context fences; it does not send another mention notification.
+
+Only the first formal canonical step carries the original quote and mentions,
+through own-native, cloud or shared execution. The prompt builder records the
+assigned-task fragment's position and shifts mention ranges to that exact UTF-16
+position in final `payload.content`; it must not guess by searching repeated
+task text. The mentions inbox uses the original `agent_team.task_content` for
+its excerpt. Later automatic steps do not re-notify the original mentions or
+repeat the quote. Connectivity-probe input rejects both fields, and probes do
+not publish them. This adds no new quote visibility or notification authority.
 
 Task dispatch derives its instruction brief from the frozen run and trusted
 step state. Each module's first invocation in that run includes an allowlisted

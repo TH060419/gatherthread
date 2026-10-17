@@ -129,6 +129,10 @@ export class AgentTeamStore {
         if (previous.input_json !== inputJson || previous.purpose !== purpose) throw idempotencyConflict("Team run retry must keep the original plan, task and limits");
         return { run: this.detail(previous), replayed: true };
       }
+      if (purpose === "test" && (input.reply_to_event_id !== undefined || input.mentions !== undefined)) {
+        throw conflict("Connectivity tests cannot quote or mention conversation members");
+      }
+      this.service.database.validateTeamTaskReferences(sessionId, input);
       const active = this.sql.prepare("SELECT COUNT(*) AS count FROM agent_team_runs WHERE user_id=? AND status IN ('running','paused')")
         .get(actor.user_id) as { count: number };
       if (active.count >= 2) throw new ApiError(429, "agent_team_busy", "Stop an existing team run before starting another");

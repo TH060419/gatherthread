@@ -114,6 +114,52 @@ test("shared timeout offers a counted explicit team continuation", async () => {
     assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 2);
   } finally { f.close(); }
 });
+test("a first shared-native Team request keeps its public quote and UTF-16 mentions without notifying again on timeout continuation", async () => {
+  const f = setup(); try {
+    const quote = f.service.appendEvent(f.b, f.solo.id, { type: "human_chat", visibility: "session", idempotency_key: "shared-team-quoted-source",
+      payload: { content: "Synthetic shared reference" } });
+    const content = "  😀 @Synthetic A compute the public result  \n", start = content.indexOf("@");
+    const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] };
+    const input = { plan, entry_node_id: "worker", content, reply_to_event_id: quote.id,
+      mentions: [{ user_id: f.a.user_id, start, end: start + "@Synthetic A".length }], max_calls: 12, max_duration_minutes: 30,
+      content_revision: 0, solo_transfer_ack: true, idempotency_key: "shared-team-reference-start" };
+    const run = f.teams.start(f.b, f.solo.id, input).run;
+    await drive(f, run.id, value => value.calls_used === 1);
+    const { claimed } = f.completeShared("timed_out");
+    assert.equal(claimed.capsule.reply_to_event_id, quote.id); assert.equal(claimed.capsule.quoted_message?.event_id, quote.id);
+    assert.equal(claimed.capsule.quoted_message?.content, "Synthetic shared reference");
+    const mention = claimed.capsule.mentions![0]!;
+    assert.equal(mention.user_id, f.a.user_id); assert.equal(claimed.capsule.content.slice(mention.start, mention.end), "@Synthetic A");
+    const request = f.db.getEvent(f.solo.id, claimed.job.request_event_id);
+    assert.equal((request.payload as { agent_team: { task_content: string } }).agent_team.task_content, content);
+    assert.equal(f.teams.start(f.b, f.solo.id, input).replayed, true);
+    assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 1);
+    await drive(f, run.id, value => value.status === "paused");
+    f.teams.control(f.b, f.solo.id, run.id, { action: "continue", idempotency_key: "shared-team-reference-continue" });
+    await drive(f, run.id, value => value.calls_used === 2);
+    const continued = f.completeShared();
+    assert.equal(continued.claimed.capsule.reply_to_event_id, null); assert.equal(continued.claimed.capsule.quoted_message, undefined);
+    assert.equal(continued.claimed.capsule.mentions, undefined);
+    await drive(f, run.id, value => value.status === "completed");
+    assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 2);
+    assert.deepEqual(f.db.listProjectMentions(f.a, f.source.project_id).mentions.map(item => [item.id, item.excerpt]), [[request.id, content]]);
+  } finally { f.close(); }
+});
+test("a stale selected mention at shared Team dispatch rolls back the broker reservation and its daily allowance", async () => {
+  const f = setup(); try {
+    const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] }, content = "@Synthetic A review";
+    const run = f.teams.start(f.b, f.solo.id, { plan, entry_node_id: "worker", content,
+      mentions: [{ user_id: f.a.user_id, start: 0, end: "@Synthetic A".length }], max_calls: 12, max_duration_minutes: 30,
+      content_revision: 0, solo_transfer_ack: true, idempotency_key: "shared-team-stale-mention" }).run;
+    const before = f.db.requireSession(f.solo.id).next_sequence;
+    f.db.sqlite.prepare("UPDATE users SET display_name=? WHERE id=?").run("Renamed A", f.a.user_id);
+    await drive(f, run.id, value => value.status === "failed");
+    assert.equal(f.teams.read(f.b, f.solo.id, run.id).run.calls_used, 0);
+    assert.equal(f.sharing.listJobs(f.a, f.source.project_id).jobs.length, 0);
+    assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 0);
+    assert.equal(f.db.requireSession(f.solo.id).next_sequence, before);
+  } finally { f.close(); }
+});
 test("shared call deadline never extends the human-started team's deadline", async () => {
   const f = setup(); try {
     const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] }, run = f.start(true, plan, 1);

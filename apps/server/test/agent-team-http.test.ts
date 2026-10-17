@@ -65,9 +65,17 @@ test("team HTTP routes enforce private ownership, writer/device authority, CSRF 
     assert.equal(library!.teams[0].test_status, "passed");
     const enabled = await web(`${teamPath}/control`, "POST", { enabled: true, expected_revision: revision, idempotency_key: "http-enable-tested" });
     assert.equal(enabled.status, 200);
-    const input = { expected_revision: enabled.body!.data.team.revision, content: "Human start", idempotency_key: "http-team-human-start", content_revision: 0 };
+    const quote = server.service.appendEvent(peer.actor, session.id, { type: "human_chat", visibility: "session",
+      idempotency_key: "http-team-reference-source", payload: { content: "Synthetic HTTP quote" } });
+    const content = `  🧪 @${peer.actor.display_name} Human start  \n`, mentionStart = content.indexOf("@");
+    const input = { expected_revision: enabled.body!.data.team.revision, content, reply_to_event_id: quote.id,
+      mentions: [{ user_id: peer.actor.user_id, start: mentionStart, end: mentionStart + `@${peer.actor.display_name}`.length }],
+      idempotency_key: "http-team-human-start", content_revision: 0 };
     const started = await web(`${teamPath}/start`, "POST", input); assert.equal(started.status, 202);
     const runId = started.body!.data.run.id;
+    assert.equal(started.body!.data.run.content, content);
+    assert.equal((await web(`${teamPath}/start`, "POST", { ...input, reply_to_event_id: null })).status, 409);
+    assert.equal((await web(`${teamPath}/start`, "POST", { ...input, mentions: [] })).status, 409);
     const replay = await web(`${teamPath}/start`, "POST", input); assert.equal(replay.body!.data.run.id, runId); assert.equal(replay.body!.data.replayed, true);
     assert.equal((await request(`${root}/agent-team-runs/${runId}`, "GET", undefined, peer.token)).status, 404);
     assert.deepEqual((await request(`${root}/agent-team-runs`, "GET", undefined, peer.token)).body!.data.runs, []);

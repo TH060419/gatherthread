@@ -51,6 +51,37 @@ function fixture() {
 }
 const code = (expected: string) => (error: unknown) => error instanceof ApiError && error.code === expected;
 
+test("saved Team starts bind exact quote and mention inputs to both lost-ack recovery and the original canonical request", async () => {
+  const f = fixture(); try {
+    f.service.setMembership(f.actor, f.session.id, f.peer.user_id, "participant", "library-reference-member");
+    const saved = f.save(), probe = f.probe(saved.id, saved.revision);
+    assert.equal((await f.finishProbe(probe.run.id)).status, "completed");
+    const enabled = f.library.control(f.actor, saved.id, f.session.id, { enabled: true,
+      expected_revision: saved.revision, idempotency_key: f.key() }).team;
+    const quote = f.service.appendEvent(f.peer, f.session.id, { type: "human_chat", visibility: "session",
+      payload: { content: "Synthetic saved-Team quote" }, idempotency_key: f.key() });
+    const content = "  😀 @Other library fixture please review  \n", start = content.indexOf("@");
+    const mentions = [{ user_id: f.peer.user_id, start, end: start + "@Other library fixture".length }];
+    const input = { content, reply_to_event_id: quote.id, mentions, expected_revision: enabled.revision, content_revision: 0, idempotency_key: f.key() };
+    const accepted = f.library.start(f.actor, saved.id, f.session.id, input);
+    assert.equal(accepted.run.content, content);
+    for (const changed of [{ ...input, reply_to_event_id: null }, { ...input, mentions: [] },
+      { ...input, mentions: [{ ...mentions[0]!, end: mentions[0]!.end - 1 }] }]) {
+      assert.throws(() => f.library.start(f.actor, saved.id, f.session.id, changed), code("idempotency_conflict"));
+    }
+    await f.teams.pump();
+    const run = f.readRun(accepted.run.id), request = f.database.getEvent(f.session.id, run.steps[0]!.request_event_id!);
+    const payload = request.payload as { content: string; mentions: typeof mentions; agent_team: { task_content: string } };
+    assert.equal(request.reply_to_event_id, quote.id); assert.equal(payload.agent_team.task_content, content);
+    assert.equal(payload.content.slice(payload.mentions[0]!.start, payload.mentions[0]!.end), "@Other library fixture");
+    assert.equal(f.library.start(f.actor, saved.id, f.session.id, input).replayed, true);
+    f.library.delete(f.actor, "team", saved.id, f.key());
+    assert.equal(f.library.start(f.actor, saved.id, f.session.id, input).run.id, run.id);
+    assert.equal(f.readRun(run.id).calls_used, 1);
+    assert.deepEqual(f.database.listProjectMentions(f.peer, f.session.project_id).mentions.map(item => item.excerpt), [content]);
+  } finally { f.close(); }
+});
+
 test("the five-team limit is account-wide, transactional, replayable and releases capacity after deletion", () => {
   const f = fixture(); try {
     const input = { draft: f.draft, expected_revision: null, idempotency_key: f.key() };

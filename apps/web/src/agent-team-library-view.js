@@ -445,7 +445,10 @@ export function mountAgentTeams({ document: doc, api, hostButton, getContext, on
     if (activeRun()) throw new Error(t("A Team task is already active. Stop or finish it before starting another."));
     if (!acknowledgeShared(team.draft)) return null;
     const previousEvents = new Set((ctx.events ?? []).map(event => event.id));
-    const pending = mutate("start-task", "start", team.id, { content, expected_revision: team.revision, content_revision: ctx.contentRevision ?? 0,
+    const pending = mutate("start-task", "start", team.id, { content,
+      ...(options.replyTo ? { reply_to_event_id: options.replyTo } : {}),
+      ...(options.mentions?.length ? { mentions: options.mentions } : {}),
+      expected_revision: team.revision, content_revision: ctx.contentRevision ?? 0,
       solo_transfer_ack: ctx.sessionMode === "solo", idempotency_key: makeKey("team-task") }, value => api.executeAgentTeam(ctx.sessionId, team.id, value), receipt => {
       options.onAccepted?.(receipt);
     });

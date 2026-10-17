@@ -20,6 +20,32 @@ const options = (runContainer: NonNullable<HostedAgentOptions["runContainer"]>):
   fetch: async () => { throw new Error("Synthetic connectivity tests must never call a real model"); }, runContainer,
 });
 
+test("a stale selected mention at cloud Team dispatch cannot reserve provider allowance or launch an executor", {
+  skip: process.platform === "win32",
+}, async () => {
+  const directory = mkdtempSync(join(tmpdir(), "gt-rm-")), database = new CollaborationDatabase(":memory:");
+  const service = new CollaborationService(database), actor = database.bootstrapIdentity({ display_name: "Cloud recipient", device_name: "Cloud reference device" }).actor;
+  const session = service.createSession(actor, { mode: "multi", title: "Cloud reference race", idempotency_key: "cloud-reference-race-session" }).session;
+  let launches = 0;
+  const hosted = new HostedAgent(service, new CodeRepository(database, directory), options(async () => { launches++; throw new Error("Must not execute"); }));
+  const teams = new AgentTeams(service, hosted, { autoStart: false });
+  try {
+    const plan: AgentTeamPlan = { name: "Cloud reference Team", team_prompt: "", nodes: [{ id: "lead", label: "Cloud module", role: "", x: 0, y: 0,
+      target: { kind: "cloud", profile_id: "synthetic-probe-cloud", provider: "deepseek", model: "synthetic-probe-model", include_code: false } }], edges: [] };
+    const run = teams.start(actor, session.id, { plan, entry_node_id: "lead", content: "@Cloud recipient review",
+      mentions: [{ user_id: actor.user_id, start: 0, end: "@Cloud recipient".length }], content_revision: 0,
+      max_calls: 12, max_duration_minutes: 30, idempotency_key: "cloud-reference-race-start" }).run;
+    const before = database.requireSession(session.id).next_sequence;
+    database.sqlite.prepare("UPDATE users SET display_name=? WHERE id=?").run("Renamed cloud recipient", actor.user_id);
+    for (let spin = 0; spin < 20 && teams.read(actor, session.id, run.id).run.status === "running"; spin++) {
+      await teams.pump(); await new Promise(resolve => setImmediate(resolve));
+    }
+    const failed = teams.read(actor, session.id, run.id).run;
+    assert.equal(failed.status, "failed"); assert.equal(failed.calls_used, 0); assert.equal(launches, 0);
+    assert.equal(hosted.status(actor).user_used_runs, 0); assert.equal(database.requireSession(session.id).next_sequence, before);
+  } finally { teams.close(); await hosted.close(); database.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
 test("cloud connectivity probes omit unrelated 20KiB history and opted-in code, while real tasks retain the existing context cap", {
   skip: process.platform === "win32",
 }, async () => {
@@ -125,11 +151,23 @@ test("a saved cloud Team's explicit timeout continuation keeps its accepted snap
       content_revision: 0, idempotency_key: "saved-cloud-timeout-test" }); await drive(probe.run.id, "completed");
     const enabled = library.control(actor, saved.id, session.id, { enabled: true, expected_revision: saved.revision,
       idempotency_key: "saved-cloud-timeout-enable" }).team;
-    const input = { expected_revision: enabled.revision, content: "Execute the immutable saved cloud task", content_revision: 0,
+    const quote = service.appendEvent(actor, session.id, { type: "human_chat", visibility: "session", idempotency_key: "saved-cloud-timeout-source",
+      payload: { content: "Synthetic cloud quote" } });
+    const content = `  😀 @${actor.display_name} Execute the immutable saved cloud task  \n`, start = content.indexOf("@");
+    const input = { expected_revision: enabled.revision, content, reply_to_event_id: quote.id,
+      mentions: [{ user_id: actor.user_id, start, end: start + `@${actor.display_name}`.length }], content_revision: 0,
       idempotency_key: "saved-cloud-timeout-start" };
     const accepted = library.start(actor, saved.id, session.id, input); await drive(accepted.run.id, "paused");
     const paused = teams.read(actor, session.id, accepted.run.id).run;
     assert.equal(paused.error_code, "agent_timeout"); assert.equal(paused.calls_used, 1); assert.equal(taskCalls, 1);
+    assert.equal(paused.content, content);
+    const first = database.getEvent(session.id, paused.steps[0]!.request_event_id!);
+    const firstPayload = first.payload as { content: string; mentions: typeof input.mentions; agent_team: { task_content: string } };
+    assert.equal(first.reply_to_event_id, quote.id); assert.equal(firstPayload.agent_team.task_content, content);
+    assert.equal(firstPayload.content.slice(firstPayload.mentions[0]!.start, firstPayload.mentions[0]!.end), `@${actor.display_name}`);
+    for (const changed of [{ ...input, reply_to_event_id: null }, { ...input, mentions: [] }]) {
+      assert.throws(() => library.start(actor, saved.id, session.id, changed), { code: "idempotency_conflict" });
+    }
     for (let spin = 0; spin < 3; spin++) await teams.pump(); assert.equal(taskCalls, 1, "No implicit retry follows a timeout");
     const replacement = structuredClone(plan); replacement.nodes[0]!.role = "Replacement model must not execute";
     replacement.nodes[0]!.target = { kind: "cloud", profile_id: "synthetic-probe-cloud", provider: "deepseek", model: "unadvertised-replacement-model", include_code: false };
@@ -148,5 +186,8 @@ test("a saved cloud Team's explicit timeout continuation keeps its accepted snap
     assert.equal(probeCalls, 1); assert.equal(taskCalls, 2); assert.equal(hosted.status(actor).user_used_runs, 3);
     assert.deepEqual(observedModels, Array(3).fill("hosted/synthetic-probe-model"));
     assert.notEqual(completed.steps[0]!.request_event_id, completed.steps[1]!.request_event_id);
+    const continued = database.getEvent(session.id, completed.steps[1]!.request_event_id!);
+    assert.equal(continued.reply_to_event_id, null); assert.equal((continued.payload as { mentions?: unknown }).mentions, undefined);
+    assert.deepEqual(database.listProjectMentions(actor, session.project_id).mentions.map(item => [item.id, item.excerpt]), [[first.id, content]]);
   } finally { teams.close(); await hosted.close(); database.close(); rmSync(directory, { recursive: true, force: true }); }
 });
