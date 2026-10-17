@@ -10,6 +10,7 @@ import { AgentTeams, parseTeamDirective } from "../src/agent-teams.js";
 import { HostedAgent, type HostedAgentOptions } from "../src/hosted-agent.js";
 import { CodeRepository } from "../src/code-repository.js";
 import { ApiError } from "../src/errors.js";
+import { redactJson } from "../src/redaction.js";
 import { randomBytes, randomUUID } from "node:crypto";
 
 const directive = (stepId: string, action: "complete" | "delegate" = "complete", target = "worker") =>
@@ -87,7 +88,9 @@ test("one human Team send preserves its quote and exact UTF-16 mentions only on 
     const payload = event.payload as { content: string; mentions: typeof mentions; agent_team: { task_content: string } };
     assert.equal(event.reply_to_event_id, quote.id); assert.equal(payload.agent_team.task_content, content);
     assert.equal(payload.content.includes("REFERENCE_SOURCE_BODY_MUST_NOT_BE_COPIED_TO_CONTROL_PROMPT"), false);
-    const assignmentOffset = payload.content.indexOf("\n\nAssigned task:\n") + "\n\nAssigned task:\n".length;
+    const assignmentBoundary = `[GT_TEAM_ASSIGNMENT:${step.id}]\n`;
+    const assignmentOffset = payload.content.indexOf(assignmentBoundary) + assignmentBoundary.length;
+    assert.equal(payload.content.split(assignmentBoundary).length, 2);
     assert.ok(assignmentOffset > payload.content.indexOf(content), "A repeated task in rules is not the selected mention occurrence");
     assert.deepEqual(payload.mentions, mentions.map(mention => ({ ...mention, start: mention.start + assignmentOffset, end: mention.end + assignmentOffset })));
     for (const mention of payload.mentions) assert.equal(payload.content.slice(mention.start, mention.end), "@Mention fixture");
@@ -106,6 +109,93 @@ test("one human Team send preserves its quote and exact UTF-16 mentions only on 
     assert.equal(f.db.getEvent(f.session.id, event.id).deleted, undefined);
     assert.equal((f.db.getEvent(f.session.id, event.id).payload as { agent_team: { task_content: string } }).agent_team.task_content, content);
     assert.throws(() => f.teams.start(f.actor, f.session.id, input), { code: "context_changed" });
+  } finally { f.close(); }
+});
+
+for (const harness of ["codex", "deepseek-harness"] as const) {
+  test(`whole-prompt redaction preserves final mention ranges for the first ${harness} Team step without duplicate notifications`, async () => {
+    const f = fixture(); try {
+      const peer = f.db.createIdentity({ display_name: "Synthetic owner", device_name: "Synthetic mention device", can_create_projects: true }).actor;
+      f.service.setMembership(f.actor, f.session.id, peer.user_id, "participant", "redaction-mention-member");
+      const quote = f.service.appendEvent(peer, f.session.id, { type: "human_chat", visibility: "session",
+        idempotency_key: "redaction-mention-source", payload: { content: "Independent quoted task" } });
+      const content = harness === "codex" ? "@Synthetic owner review" : "  🧪 @Synthetic owner review\r\n@Synthetic owner token:  ";
+      const role = "Return a verification token:";
+      assert.equal(redactJson(role), role, "the individual role has no secret and must remain accepted");
+      assert.equal(redactJson(content), content);
+      const plan = structuredClone(f.plan); plan.team_prompt = `Repeat the task without using it as a location: ${content}`;
+      plan.nodes[0]!.role = role;
+      if (harness === "deepseek-harness") {
+        const leadTarget = plan.nodes[0]!.target;
+        plan.nodes[0]!.target = plan.nodes[1]!.target; plan.nodes[1]!.target = leadTarget;
+      }
+      const mentions = [...new Set([content.indexOf("@"), content.lastIndexOf("@")])]
+        .map(start => ({ user_id: peer.user_id, start, end: start + "@Synthetic owner".length }));
+      const input = { plan, entry_node_id: "lead", content, mentions, reply_to_event_id: quote.id,
+        max_calls: 12, max_duration_minutes: 30, content_revision: 0, idempotency_key: "redaction-mention-start" };
+      const run = f.teams.start(f.actor, f.session.id, input).run;
+      await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 1);
+      const first = f.teams.read(f.actor, f.session.id, run.id).run.steps[0]!;
+      const event = f.db.getEvent(f.session.id, first.request_event_id!);
+      const payload = event.payload as { content: string; mentions: typeof mentions; agent_team: { task_content: string } };
+      assert.match(payload.content, /\[REDACTED\]/u, "whole-prompt filtering is still active across the generated prefix");
+      assert.equal(event.reply_to_event_id, quote.id); assert.equal(payload.agent_team.task_content, content);
+      assert.deepEqual(redactJson(payload), payload, "downstream persistence must not move the ranges again");
+      for (const mention of payload.mentions) assert.equal(payload.content.slice(mention.start, mention.end), "@Synthetic owner");
+      const boundary = `[GT_TEAM_ASSIGNMENT:${first.id}]\n`, offset = payload.content.indexOf(boundary) + boundary.length;
+      assert.equal(payload.content.split(boundary).length, 2);
+      assert.equal(payload.content.slice(offset, offset + content.length), content);
+      assert.deepEqual(payload.mentions, mentions.map(mention => ({ ...mention, start: mention.start + offset, end: mention.end + offset })));
+      assert.equal(f.teams.start(f.actor, f.session.id, input).replayed, true);
+      assert.equal(f.teams.store.row(run.id).calls_used, 1);
+      f.complete(run.id, "delegate"); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 2);
+      f.complete(run.id); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.calls_used === 3);
+      f.complete(run.id); await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "completed");
+      for (const later of f.teams.read(f.actor, f.session.id, run.id).run.steps.slice(1)) {
+        const event = f.db.getEvent(f.session.id, later.request_event_id!);
+        assert.equal(event.reply_to_event_id, null); assert.equal((event.payload as { mentions?: unknown }).mentions, undefined);
+      }
+      assert.deepEqual(f.db.listProjectMentions(peer, f.session.project_id).mentions.map(item => [item.id, item.excerpt]), [[event.id, content]]);
+    } finally { f.close(); }
+  });
+}
+
+test("whole-prompt redaction cannot be bypassed by individually safe role and task fragments", async () => {
+  const f = fixture(); try {
+    const role = ["-----BEGIN", "PRIVATE KEY-----"].join(" ");
+    const content = `@Fixture owner review\n${["-----END", "PRIVATE KEY-----"].join(" ")}`;
+    assert.equal(redactJson(role), role); assert.equal(redactJson(content), content);
+    const plan = structuredClone(f.plan); plan.nodes[0]!.role = role;
+    const mentions = [{ user_id: f.actor.user_id, start: 0, end: "@Fixture owner".length }];
+    const before = f.db.requireSession(f.session.id).next_sequence;
+    const run = f.teams.start(f.actor, f.session.id, { plan, entry_node_id: "lead", content, mentions,
+      max_calls: 12, max_duration_minutes: 30, content_revision: 0, idempotency_key: "redaction-cross-fragment-start" }).run;
+    await drive(f.teams, () => f.teams.read(f.actor, f.session.id, run.id).run.status === "failed");
+    const failed = f.teams.read(f.actor, f.session.id, run.id).run;
+    assert.equal(failed.error_code, "agent_team_sensitive_input"); assert.equal(failed.calls_used, 0);
+    assert.equal(f.db.requireSession(f.session.id).next_sequence, before);
+    assert.equal(f.db.listProjectMentions(f.actor, f.session.project_id).mentions.length, 0);
+    assert.ok(failed.steps.every(step => step.request_event_id === null));
+  } finally { f.close(); }
+});
+
+test("native Team reservations reject pre-redaction mention ranges before writing or charging a call", async () => {
+  const f = fixture(); try {
+    const content = "@Fixture owner review", mentions = [{ user_id: f.actor.user_id, start: 0, end: "@Fixture owner".length }];
+    const key = "redaction-native-final-payload", run = f.teams.start(f.actor, f.session.id, { plan: f.plan, entry_node_id: "lead", content, mentions,
+      max_calls: 12, max_duration_minutes: 30, content_revision: 0, idempotency_key: key }).run;
+    const step = f.teams.store.pending(run.id), prefix = "Return a verification token:\n\nAssigned task:\n";
+    const payload = { content: prefix + content, mentions: mentions.map(mention => ({ ...mention, start: mention.start + prefix.length, end: mention.end + prefix.length })),
+      agent_team: { run_id: run.id, step_id: step.id, node_id: "lead", node_label: "Director", task_content: content, start_idempotency_key: key },
+      execution_profile: { harness: "codex", provider: "openai", model: "fixture-gpt", reasoning_effort: "low", runtime_id: f.lead.id } };
+    assert.equal(payload.content.slice(payload.mentions[0]!.start, payload.mentions[0]!.end), "@Fixture owner");
+    assert.notEqual(redactJson(payload.content), payload.content, "this raw input shifts after whole-string filtering");
+    const before = f.db.requireSession(f.session.id).next_sequence;
+    assert.throws(() => f.db.appendTeamAgentRequest(f.actor, f.session.id, { type: "agent_request", visibility: "session",
+      idempotency_key: "redaction-native-forged-canonical", content_revision: 0, payload }, () => assert.fail("A shifted final range must not commit")), { code: "forbidden" });
+    assert.equal(f.teams.store.row(run.id).calls_used, 0); assert.equal(f.teams.store.step(step.id).status, "pending");
+    assert.equal(f.db.requireSession(f.session.id).next_sequence, before);
+    assert.equal(f.db.listProjectMentions(f.actor, f.session.project_id).mentions.length, 0);
   } finally { f.close(); }
 });
 

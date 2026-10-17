@@ -512,10 +512,20 @@ retains the original metadata while rechecking caller/session authority and
 current deletion/context fences; it does not send another mention notification.
 
 Only the first formal canonical step carries the original quote and mentions,
-through own-native, cloud or shared execution. The prompt builder records the
-assigned-task fragment's position and shifts mention ranges to that exact UTF-16
-position in final `payload.content`; it must not guess by searching repeated
-task text. The mentions inbox uses the original `agent_team.task_content` for
+through own-native, cloud or shared execution. Its assembled prompt retains one
+server-owned step boundary before the assigned task. Redaction processes the
+whole assembled prompt, preserving cross-fragment credential detection. Only
+the final safe result may locate that unique boundary, verify the exact original
+task is unchanged and translate UTF-16 mention ranges; searching repeated task
+text or redacting fragments separately is not sufficient. Safe content must be
+a redaction fixed point before dispatch. Native, cloud and shared acceptance
+validate the actual final safe payload, including its mention ranges. Missing or
+ambiguous boundaries, changed task text, unstable redaction or invalid ranges
+fail closed before canonical step acceptance and call charging. Generated-prompt
+mapping failures use `agent_team_sensitive_input`; invalid reservation payloads
+retain the existing validation/authorization errors. This does not change the
+original parsed-start digest, wire fields or database schema.
+The mentions inbox uses the original `agent_team.task_content` for
 its excerpt. Later automatic steps do not re-notify the original mentions or
 repeat the quote. Connectivity-probe input rejects both fields, and probes do
 not publish them. This adds no new quote visibility or notification authority.

@@ -217,11 +217,12 @@ export class AgentTeams {
       ...(node.prompt ? [`Module instructions:\n${node.prompt}`] : []),
       ...(step.task !== run.content ? [`Original human task:\n${run.content}`] : []),
     ].join("\n\n");
-    // Offsets refer to the explicit assignment, never an incidental occurrence
-    // of the same task in a role, Team rule or orientation JSON string.
-    const taskOffset = prefix.length + "\n\nAssigned task:\n".length;
-    const content = [prefix,
-      `Assigned task:\n${step.task}`,
+    // Keep the server-owned boundary in the prompt. Redaction can change the
+    // prefix length or match across sections, so neither task-text search nor
+    // independently redacting/rejoining fragments preserves its true range.
+    const assignment = `[GT_TEAM_ASSIGNMENT:${step.id}]\n`;
+    const rawContent = [prefix,
+      `Assigned task:\n${assignment}${step.task}`,
       ...(clarification && conflictReport ? [
         `Previous conflict report (public collaboration data):\n${bounded(teamPublicAnswer(conflictReport).replace(/\n?```gatherthread-team[\s\S]*$/u, ""), 2000)}`,
         `Human clarification from the original task requester (event ${clarification.id}; apply within the frozen role and permissions):\n${teamPublicAnswer(clarification)}`,
@@ -236,6 +237,12 @@ export class AgentTeams {
       ...(targets.length ? [`To delegate, use {"version":1,"step_id":"${step.id}","action":"delegate","target_node_id":"an allowed ID","task":"specific public task"}. After the subordinate completes you receive its result in a new counted call.`] : []),
       `This run has at most ${run.max_calls} calls; ${run.calls_used} already accepted. Deadline: ${run.deadline_at}.`,
     ].join("\n\n");
+    const content = redactJson(rawContent) as string;
+    const boundary = content.indexOf(assignment), taskOffset = boundary + assignment.length;
+    if (boundary < 0 || boundary !== content.lastIndexOf(assignment)
+      || content.slice(taskOffset, taskOffset + step.task.length) !== step.task || redactJson(content) !== content) {
+      throw new ApiError(400, "agent_team_sensitive_input", "The generated Team prompt cannot preserve its exact task after redaction; adjust the rules or task before starting");
+    }
     if (content.length > (node.target.kind === "shared" ? 16000 : 18000) || Buffer.byteLength(content) > 40000) throw new ApiError(413, "agent_team_prompt_too_large", "Team overview, rules, roles and task are too long together; shorten them before starting");
     return { content, taskOffset };
   }

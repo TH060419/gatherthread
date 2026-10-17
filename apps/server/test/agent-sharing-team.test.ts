@@ -8,6 +8,7 @@ import { AgentSharing } from "../src/agent-sharing.js";
 import { AgentTeams } from "../src/agent-teams.js";
 import { AgentTeamLibrary } from "../src/agent-team-library.js";
 import { ApiError } from "../src/errors.js";
+import { redactJson } from "../src/redaction.js";
 
 function setup(limits = AgentShareLimitsSchema.parse({})) {
   let now = Date.parse("2026-10-15T05:00:00.000Z"); const clock = () => new Date(now);
@@ -114,12 +115,12 @@ test("shared timeout offers a counted explicit team continuation", async () => {
     assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 2);
   } finally { f.close(); }
 });
-test("a first shared-native Team request keeps its public quote and UTF-16 mentions without notifying again on timeout continuation", async () => {
+test("a redacted shared-native Team prefix keeps its public quote and final UTF-16 mentions without notifying again on timeout continuation", async () => {
   const f = setup(); try {
     const quote = f.service.appendEvent(f.b, f.solo.id, { type: "human_chat", visibility: "session", idempotency_key: "shared-team-quoted-source",
       payload: { content: "Synthetic shared reference" } });
     const content = "  😀 @Synthetic A compute the public result  \n", start = content.indexOf("@");
-    const plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] };
+    const plan = { ...f.plan, nodes: [{ ...f.plan.nodes[1]!, role: "Return a verification token:" }], edges: [] };
     const input = { plan, entry_node_id: "worker", content, reply_to_event_id: quote.id,
       mentions: [{ user_id: f.a.user_id, start, end: start + "@Synthetic A".length }], max_calls: 12, max_duration_minutes: 30,
       content_revision: 0, solo_transfer_ack: true, idempotency_key: "shared-team-reference-start" };
@@ -131,7 +132,11 @@ test("a first shared-native Team request keeps its public quote and UTF-16 menti
     const mention = claimed.capsule.mentions![0]!;
     assert.equal(mention.user_id, f.a.user_id); assert.equal(claimed.capsule.content.slice(mention.start, mention.end), "@Synthetic A");
     const request = f.db.getEvent(f.solo.id, claimed.job.request_event_id);
-    assert.equal((request.payload as { agent_team: { task_content: string } }).agent_team.task_content, content);
+    const payload = request.payload as { content: string; mentions: typeof input.mentions; agent_team: { task_content: string } };
+    assert.equal(payload.agent_team.task_content, content); assert.match(payload.content, /\[REDACTED\]/u);
+    assert.equal(redactJson(payload.content), payload.content);
+    assert.equal(payload.content.slice(payload.mentions[0]!.start, payload.mentions[0]!.end), "@Synthetic A");
+    assert.equal(payload.content, claimed.capsule.content); assert.deepEqual(payload.mentions, claimed.capsule.mentions);
     assert.equal(f.teams.start(f.b, f.solo.id, input).replayed, true);
     assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 1);
     await drive(f, run.id, value => value.status === "paused");
@@ -143,6 +148,32 @@ test("a first shared-native Team request keeps its public quote and UTF-16 menti
     await drive(f, run.id, value => value.status === "completed");
     assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 2);
     assert.deepEqual(f.db.listProjectMentions(f.a, f.source.project_id).mentions.map(item => [item.id, item.excerpt]), [[request.id, content]]);
+  } finally { f.close(); }
+});
+test("shared Team broker allowance rolls back if a tampered final payload's redaction would invalidate its mention ranges", async () => {
+  const f = setup();
+  const append = f.db.appendSharedBrokerEventInsideTransaction.bind(f.db);
+  f.db.appendSharedBrokerEventInsideTransaction = (...args: Parameters<typeof f.db.appendSharedBrokerEventInsideTransaction>) => {
+    const input = args[1];
+    if (input.type === "agent_request") {
+      const payload = input.payload as { content: string; mentions: Array<{ user_id: string; start: number; end: number }> };
+      const prefix = "Return a verification token: ";
+      args[1] = { ...input, payload: { ...payload, content: prefix + payload.content,
+        mentions: payload.mentions.map(mention => ({ ...mention, start: mention.start + prefix.length, end: mention.end + prefix.length })) } };
+    }
+    return append(...args);
+  };
+  try {
+    const content = "@Synthetic A review", plan = { ...f.plan, nodes: [f.plan.nodes[1]!], edges: [] };
+    const run = f.teams.start(f.b, f.solo.id, { plan, entry_node_id: "worker", content,
+      mentions: [{ user_id: f.a.user_id, start: 0, end: "@Synthetic A".length }], max_calls: 2, max_duration_minutes: 30,
+      content_revision: 0, solo_transfer_ack: true, idempotency_key: "shared-final-redacted-payload" }).run;
+    const before = f.db.requireSession(f.solo.id).next_sequence;
+    await drive(f, run.id, value => value.status === "failed");
+    assert.equal(f.teams.read(f.b, f.solo.id, run.id).run.calls_used, 0);
+    assert.equal(f.sharing.listJobs(f.a, f.source.project_id).jobs.length, 0);
+    assert.equal(f.sharing.store.detail(f.b, f.sharing.store.row(f.share.id)).usage.calls, 0);
+    assert.equal(f.db.requireSession(f.solo.id).next_sequence, before);
   } finally { f.close(); }
 });
 test("a stale selected mention at shared Team dispatch rolls back the broker reservation and its daily allowance", async () => {

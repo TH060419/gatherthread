@@ -3641,6 +3641,7 @@ export class CollaborationDatabase {
       const session = this.requireWritableSessionInsideTransaction(actor, sessionId);
       if (session.state !== "active" || input.type !== "agent_request" || input.visibility !== "session"
         || input.runtime_id) throw conflict("Invalid internal team request");
+      input = { ...input, payload: redactJson(input.payload) };
       const payload = input.payload as { agent_team?: unknown; history_summary?: unknown; continue_from_event_id?: unknown; content?: unknown; mentions?: unknown };
       if (payload.history_summary !== undefined || payload.continue_from_event_id !== undefined) throw forbidden("Team requests cannot forge other request metadata");
       this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(payload.agent_team),
@@ -3662,6 +3663,9 @@ export class CollaborationDatabase {
 
   private validateTeamReservation(actor: Actor, sessionId: string, metadata: AgentTeamRequestMetadata,
     input: { content: unknown; reply_to_event_id?: string | null | undefined; mentions?: unknown }): void {
+    if (typeof input.content !== "string" || redactJson(input.content) !== input.content) {
+      throw forbidden("The Team reservation must validate its final stable redacted content");
+    }
     const row = this.sqlite.prepare(`SELECT r.user_id,r.session_id,r.status,r.deadline_at,r.current_step_id,r.calls_used,r.max_calls,r.content_revision,r.purpose,r.state_json,
       r.idempotency_key AS run_idempotency_key,r.input_json,
       s.status AS step_status,s.node_id,s.node_label,s.task FROM agent_team_runs r JOIN agent_team_steps s ON s.run_id=r.id
@@ -3902,7 +3906,11 @@ export class CollaborationDatabase {
         }
         return { event, created: false };
       }
-      if (team) this.validateTeamReservation(actor, sessionId, team, input);
+      if (team) {
+        const canonical = payload as { content?: unknown; mentions?: unknown; agent_team?: unknown };
+        this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(canonical.agent_team),
+          { content: canonical.content, mentions: canonical.mentions, reply_to_event_id: replyId });
+      }
       if (input.continue_from_event_id && this.sqlite.prepare(`SELECT 1 FROM events WHERE session_id=? AND type='agent_request'
         AND actor_user_id=? AND id IN (SELECT request_event_id FROM hosted_agent_runs)
         AND json_extract(payload_json,'$.continue_from_event_id')=?`).get(sessionId, actor.user_id, input.continue_from_event_id)) {
@@ -4256,6 +4264,8 @@ export class CollaborationDatabase {
   /** Internal broker only. Caller owns the same grant/quota/canonical SQLite transaction. */
   appendSharedBrokerEventInsideTransaction(jobId: string, input: AppendEventInput, provenance: RuntimeProvenance | null = null,
     terminalControl = false): CanonicalEvent {
+    if (input.type === "agent_request" && input.payload && typeof input.payload === "object" && !Array.isArray(input.payload)
+      && input.payload.agent_team !== undefined) input = { ...input, payload: redactJson(input.payload) };
     const job = this.sqlite.prepare("SELECT * FROM agent_share_jobs WHERE id=?").get(jobId);
     if (!job || !["agent_request", "agent_progress", "agent_response"].includes(input.type)
       || input.visibility !== "session" || input.runtime_id) throw forbidden("Invalid shared execution publication");
@@ -4271,8 +4281,11 @@ export class CollaborationDatabase {
         || metadata.executor_owner_user_id !== job.owner_user_id) throw forbidden("Invalid broker provenance");
       if (input.type === "agent_request") {
         if (input.event_id !== job.request_event_id || job.status !== "queued") throw forbidden("Invalid broker reservation");
-        if (raw.agent_team !== undefined) this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(raw.agent_team),
-          { content: raw.content, mentions: raw.mentions, reply_to_event_id: input.reply_to_event_id });
+        if (raw.agent_team !== undefined) {
+          if (raw.content !== job.content) throw forbidden("The Team canonical request must match its shared execution capsule");
+          this.validateTeamReservation(actor, sessionId, AgentTeamRequestMetadataSchema.parse(raw.agent_team),
+            { content: raw.content, mentions: raw.mentions, reply_to_event_id: input.reply_to_event_id });
+        }
         if (input.reply_to_event_id) {
           const quote = this.getEvent(sessionId, input.reply_to_event_id);
           if (quote.deleted) throw new ApiError(409, "message_deleted", "The quoted message was deleted; select another message");
