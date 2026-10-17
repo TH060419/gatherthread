@@ -135,12 +135,20 @@ test("successful headers and a partial JSON body time out; recovery reuses exact
     if (starts.length === 1) { response.writeHead(202, { "Content-Type": "application/json" }); response.write('{"data":'); }
     else response.end(JSON.stringify({ data: { run, replayed: true } }));
   });
-  const api = new HttpCollaborationApi({ baseUrl, sharingDeadlineMs: 80 }), before = performance.now();
-  await assert.rejects(api.executeAgentTeam(summary.session_id, team.id, quotedStart), error => error.code === "request_timeout");
-  assert.ok(performance.now() - before < 1500);
-  // Only the intentionally stalled response needs an accelerated deadline.
-  // A normal retry must tolerate the full suite's parallel localhost workload.
-  const recoveryApi = new HttpCollaborationApi({ baseUrl, sharingDeadlineMs: 1500 });
+  let delivered;
+  const headers = new Promise(resolve => { delivered = resolve; }), previousFetch = globalThis.fetch;
+  globalThis.fetch = async (...args) => { const response = await previousFetch(...args); delivered(); return response; };
+  t.after(() => { globalThis.fetch = previousFetch; });
+  // Advance the clock only after the real server has accepted the task and
+  // delivered its partial 202 response. Parallel CI load must not turn this
+  // into a different scenario where the request never reached the server.
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const api = new HttpCollaborationApi({ baseUrl, sharingDeadlineMs: 80 });
+  const pending = api.executeAgentTeam(summary.session_id, team.id, quotedStart);
+  await headers; t.mock.timers.tick(80);
+  await assert.rejects(pending, error => error.code === "request_timeout");
+  t.mock.timers.reset(); globalThis.fetch = previousFetch;
+  const recoveryApi = new HttpCollaborationApi({ baseUrl });
   const recovered = await recoveryApi.executeAgentTeam(summary.session_id, team.id, quotedStart);
   assert.equal(recovered.replayed, true); assert.equal(recovered.run.id, run.id);
   assert.equal(starts.length, 2); assert.deepEqual(starts[0], starts[1]); assert.deepEqual(starts[0], quotedStart);
